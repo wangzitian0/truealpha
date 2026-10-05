@@ -96,75 +96,68 @@ def capture_ticker_analyst_ratings(
         )
 
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
+    fetch_error = None
+    data_row = None
     try:
         from data_engine.sources.moomoo import get_analyst_consensus
 
         ret, df = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
         if ret == 0 and df is not None and not df.empty:
-            row = df.iloc[0]
-            raw_rating = row.get("consensus_rating")
-            consensus_rating = Decimal(str(raw_rating)) if raw_rating is not None and not pd.isna(raw_rating) else None
-            raw_count = row.get("analyst_count", row.get("recommend_num", 0))
-            count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 0
-
-            # If consensus_rating is None or count <= 0, there is no real analyst coverage
-            if consensus_rating is None or count <= 0:
-                record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-                return materialize_analyst_ratings(
-                    connection,
-                    run_id=run_id,
-                    cutoff=as_of,
-                    ratings_data=[record],
-                )
-
-            # Construct ratings items and evaluate factor
-            rating_val = int(round(float(consensus_rating)))
-            rating_val = max(1, min(5, rating_val))
-            items = [
-                AnalystRatingItem(
-                    analyst_id=f"moomoo:{ticker}:{i}",
-                    rating=rating_val,
-                    confidence=Decimal("0.85"),
-                )
-                for i in range(count)
-            ]
-            record = analyst_track_record(items, entity_id=company_id, as_of=as_of)
-            return materialize_analyst_ratings(
-                connection,
-                run_id=run_id,
-                cutoff=as_of,
-                ratings_data=[record],
-            )
-        else:
-            record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-            return materialize_analyst_ratings(
-                connection,
-                run_id=run_id,
-                cutoff=as_of,
-                ratings_data=[record],
-            )
+            data_row = df.iloc[0]
     except Exception as exc:
-        record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-        return materialize_analyst_ratings(
-            connection,
-            run_id=run_id,
-            cutoff=as_of,
-            ratings_data=[
+        fetch_error = exc
+
+    if fetch_error is not None:
+        ratings_data = [
+            {
+                "issuer_id": company_id,
+                "consensus_rating": None,
+                "analysts_count": 0,
+                "buy_count": 0,
+                "hold_count": 0,
+                "sell_count": 0,
+                "confidence": Decimal("0"),
+                "availability_status": "unavailable",
+                "source_evidence_status": "degraded",
+                "factor_validation_status": "not_evaluated",
+                "reason_codes": [f"fetch_error:{type(fetch_error).__name__}"],
+            }
+        ]
+    elif data_row is not None:
+        raw_rating = data_row.get("consensus_rating")
+        consensus_rating = Decimal(str(raw_rating)) if raw_rating is not None and not pd.isna(raw_rating) else None
+        raw_count = data_row.get("analyst_count", data_row.get("recommend_num", 0))
+        count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 0
+
+        if consensus_rating is None or count <= 0:
+            record = analyst_track_record([], entity_id=company_id, as_of=as_of)
+            ratings_data = [record]
+        else:
+            ratings_data = [
                 {
                     "issuer_id": company_id,
-                    "consensus_rating": None,
-                    "analysts_count": 0,
+                    "consensus_rating": consensus_rating,
+                    "analysts_count": count,
                     "buy_count": 0,
                     "hold_count": 0,
                     "sell_count": 0,
-                    "confidence": Decimal("0"),
-                    "availability_status": "unavailable",
-                    "source_evidence_status": "degraded",
-                    "factor_validation_status": "not_evaluated",
-                    "reason_codes": [f"fetch_error:{type(exc).__name__}"],
+                    "confidence": Decimal("0.85"),
+                    "availability_status": "available",
+                    "source_evidence_status": "verified",
+                    "factor_validation_status": "accepted",
+                    "reason_codes": [],
                 }
-            ],
-        )
+            ]
+    else:
+        record = analyst_track_record([], entity_id=company_id, as_of=as_of)
+        ratings_data = [record]
+
+    return materialize_analyst_ratings(
+        connection,
+        run_id=run_id,
+        cutoff=as_of,
+        ratings_data=ratings_data,
+    )
 
 
 def materialize_analyst_ratings(

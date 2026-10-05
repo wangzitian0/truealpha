@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
@@ -117,16 +118,20 @@ def governed_head(connection: Connection[Any], *, universe_prefix: str) -> Gover
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
         """
-        select issuer_id, availability_status, availability, reason_codes
+        select issuer_id, availability_status, availability, reason_codes, gppe
         from mart.topt_gppe_results where run_id = %s order by issuer_id
         """,
         (run_id,),
     ).fetchall()
     cells = []
-    for subject_id, availability_status, availability, reason_codes in rows:
+    for row in rows:
+        subject_id, availability_status, availability, reason_codes = row[:4]
+        gppe_val = row[4] if len(row) > 4 else Decimal("1")
         status = availability_status or availability  # rows written before #747 carry only `availability`
-        if status == "available":
+        if status == "available" and gppe_val is not None:
             cells.append(Cell(str(subject_id), True))
+        elif status == "available" and gppe_val is None:
+            cells.append(Cell(str(subject_id), False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [status or UNRECORDED_REASON])[0]
             cells.append(Cell(str(subject_id), False, str(reason)))
@@ -180,15 +185,19 @@ def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     """
     rows = connection.execute(
         """
-        select fund_id, availability_status, reason_codes
+        select fund_id, availability_status, reason_codes, weighted_valuation_gap
         from mart.fund_virtual_company where run_id = %s order by fund_id
         """,
         (run_id,),
     ).fetchall()
     cells = []
-    for fund_id, availability_status, reason_codes in rows:
-        if availability_status == "available":
+    for row in rows:
+        fund_id, availability_status, reason_codes = row[:3]
+        gap_val = row[3] if len(row) > 3 else Decimal("1")
+        if availability_status == "available" and gap_val is not None:
             cells.append(Cell(str(fund_id), True))
+        elif availability_status == "available" and gap_val is None:
+            cells.append(Cell(str(fund_id), False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
             cells.append(Cell(str(fund_id), False, str(reason)))
@@ -209,18 +218,22 @@ def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
     """
     rows = connection.execute(
         """
-        select issuer_id, availability_status, reason_codes
+        select issuer_id, availability_status, reason_codes, theme_share
         from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id
         """,
         (run_id,),
     ).fetchall()
     answered: dict[str, Cell] = {}
-    for issuer_id, availability_status, reason_codes in rows:
+    for row in rows:
+        issuer_id, availability_status, reason_codes = row[:3]
+        share_val = row[3] if len(row) > 3 else Decimal("1")
         subject = str(issuer_id)
         if answered.get(subject) and answered[subject].answered:
             continue
-        if availability_status == "available":
+        if availability_status == "available" and share_val is not None:
             answered[subject] = Cell(subject, True)
+        elif availability_status == "available" and share_val is None:
+            answered.setdefault(subject, Cell(subject, False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
             answered.setdefault(subject, Cell(subject, False, str(reason)))
@@ -353,7 +366,9 @@ def compile_report(
     funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
-        "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id) if prefix == "universe:topt-" else (),
+        "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
+        if prefix.startswith("universe:topt-")
+        else (),
         "mart.issuer_supply_chain_exposure.exposure_score": supply_chain_cells(connection, head.run_id),
         "mart.issuer_analyst_ratings.consensus_rating": analyst_rating_cells(connection, head.run_id),
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,

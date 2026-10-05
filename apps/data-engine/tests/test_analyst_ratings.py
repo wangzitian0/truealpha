@@ -92,8 +92,9 @@ def test_capture_ticker_analyst_ratings_success() -> None:
     _, params = conn.executed[0]
     assert params[0] == "run:test"
     assert params[1] == "issuer:nvda"
-    assert params[3] == Decimal("4.0")
+    assert params[3] == Decimal("4.2")
     assert params[4] == 25
+    assert params[5] is None or params[5] == 0  # No fake 25 buy_count!
     assert params[11] == "available"
     assert params[12] == "verified"
 

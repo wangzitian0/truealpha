@@ -101,19 +101,13 @@ def test_extract_supply_chain_relationships_directions_and_entities() -> None:
         filing_date=date(2026, 1, 1),
         accession="0001-00-00",
     )
-    assert len(edges) == 4
+    assert len(edges) == 2
     # supplies to Apple Inc. -> customer
     assert edges[0].relation_type == "customer"
     assert edges[0].target_entity_name == "Apple Inc."
     # purchase from Acme Corp -> supplier
     assert edges[1].relation_type == "supplier"
     assert edges[1].target_entity_name == "Acme Corp"
-    # single supplier -> supplier
-    assert edges[2].relation_type == "supplier"
-    assert edges[2].target_entity_name == "Key Supplier"
-    # largest customer -> customer
-    assert edges[3].relation_type == "customer"
-    assert edges[3].target_entity_name == "Major Customer"
 
 
 def test_extract_supply_chain_adversarial_negative_corpus() -> None:

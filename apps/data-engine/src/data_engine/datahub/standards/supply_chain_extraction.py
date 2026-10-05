@@ -140,7 +140,7 @@ def extract_supply_chain_relationships(
                 continue
             rel = "customer" if is_customer_context and not is_supplier_context else "supplier"
 
-            target_name = "Major Customer" if rel == "customer" else "Key Supplier"
+            target_name = None
             if rel == "customer":
                 m_sup = _SUPPLIES_TO_PATTERN.search(line_clean)
                 if m_sup:
@@ -149,6 +149,9 @@ def extract_supply_chain_relationships(
                 m_pur = _PURCHASES_FROM_PATTERN.search(line_clean)
                 if m_pur:
                     target_name = m_pur.group(1).strip()
+
+            if not target_name:
+                continue
 
             results.append(
                 SupplyChainEdgeCandidate(
@@ -268,8 +271,13 @@ def materialize_universe_supply_chain_exposure(
             res = cur.fetchone()
             has_edges_table = bool(res and res[0])
     except Exception:
+        try:
+            connection.rollback()
+        except Exception:
+            pass
         has_edges_table = False
 
+    cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
     for issuer_id, ticker in tickers.items():
         partners: list[SupplyChainPartner] = []
         if has_edges_table:
@@ -279,8 +287,9 @@ def materialize_universe_supply_chain_exposure(
                 from staging.kg_edges e
                 left join staging.kg_entities ent on ent.id = e.to_id
                 where e.from_id = %s and e.transaction_time <= %s
+                  and (e.valid_time is null or e.valid_time @> %s::date)
                 """,
-                (issuer_id, cutoff),
+                (issuer_id, cutoff, cutoff_date),
             ).fetchall()
             for r in rows:
                 p_id, p_name, r_type, conf = r
@@ -291,7 +300,7 @@ def materialize_universe_supply_chain_exposure(
                         partner_name=str(p_name),
                         relation_type=rel_direction,
                         revenue_share=None,
-                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0.8"),
+                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
                     )
                 )
 
