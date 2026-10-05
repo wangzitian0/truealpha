@@ -45,10 +45,13 @@ def test_sdk_release_identity_is_exactly_pinned(corpus: dict) -> None:
     extras = f"[{','.join(binding['extras'])}]" if binding.get("extras") else ""
     dependency = f"{binding['distribution']}{extras} @ {binding['wheel_url']}"
     assert dependency in pyproject["dependency-groups"]["dev"]
-    # libs/runtime pins the wheel too (no extras) and ships in every image; it drifted to a
-    # different release once while the root pin moved on (#759 follow-up, SDK 1.5.0).
+    # libs/runtime pins the wheel too and ships in every image; it drifted to a different
+    # release once while the root pin moved on (#759 follow-up, SDK 1.5.0). It carries its own
+    # extras (`otel`, the exporter stack of truealpha_runtime.telemetry, #1034), declared in the
+    # same fixture so the extras are as pinned as the wheel.
     runtime = tomllib.loads((REPO_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8"))
-    assert f"{binding['distribution']} @ {binding['wheel_url']}" in runtime["project"]["dependencies"]
+    runtime_extras = f"[{','.join(binding['runtime_extras'])}]" if binding.get("runtime_extras") else ""
+    assert f"{binding['distribution']}{runtime_extras} @ {binding['wheel_url']}" in runtime["project"]["dependencies"]
 
     lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
     package = next(item for item in lock["package"] if item["name"] == binding["distribution"])

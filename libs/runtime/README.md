@@ -30,3 +30,20 @@ the dependency instances and which tiers require each service remain TrueAlpha-o
 - Preview remains unprovisioned until the Web application needs per-PR visual review.
 - `python -m truealpha_runtime.cli check --live` asserts all declared runtime
   dependencies; absence is a failure, never a silent fallback.
+
+Telemetry (#1034):
+
+`truealpha_runtime.telemetry.init_telemetry()` exports OTLP/HTTP traces, metrics and ERROR
+logs to infra2's shared SigNoz through `infra2_sdk.runtime.otel`; there is no exporter code
+in this repository. It is the application half of infra2 `ops.observability` section 4.2:
+
+- Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (or when `OTEL_SDK_DISABLED=true`), so
+  local development, CI and every test are unaffected. A process that cannot reach the
+  collector (the Dagster roles run on the host network) is simply issued no endpoint.
+- On, the identity is consumed from infra2's deploy and never defaulted: `OTEL_SERVICE_NAME`
+  plus `deployment.environment.name`, `infra.service.id`, `service.version` and
+  `infra.iac.ref` in `OTEL_RESOURCE_ATTRIBUTES`. A missing key refuses startup by name.
+- Called once at startup by `llm_service.main` (which also instruments FastAPI) and
+  `data_engine.dagster_defs`. The Next.js app is not a Python service and is out of scope.
+- Complements init.md rule 9: Dagster's UI remains the surface for pipeline runs; this adds
+  application-level signals (request errors, latency, error logs) that infra2 can alert on.

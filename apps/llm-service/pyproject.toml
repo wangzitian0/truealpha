@@ -11,6 +11,10 @@ dependencies = [
     "mcp>=1.0.0",
     "truealpha-contracts",
     "truealpha-runtime",
+    # Server spans for every inbound request (#1034). truealpha_runtime.telemetry installs the
+    # global TracerProvider; this package only turns FastAPI requests into spans on it, and
+    # does nothing when telemetry is off (no global provider -> no-op tracer).
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
 ]
 
 [dependency-groups]
