@@ -180,6 +180,11 @@ git diff HEAD~3 -- '*.md' '*.json' '*.yaml' '*.toml' | grep -iE 'password|secret
   ```bash
   ps aux | grep -E 'subagent-worker|run_swarm_tournament' | grep -v grep || echo "CLEAN"
   ```
+- **Worktree 销毁前进程回收 (Worktree Process Teardown)**：
+  在执行 `git worktree remove` 或删除临时工作区前，必须确认无任何后台进程或定时任务占用该目录。严禁在后台进程未退出的情况下强行清理工作树：
+  ```bash
+  lsof +D "$WORKTREE_PATH" 2>/dev/null | grep -v 'COMMAND' || echo "CLEAN"
+  ```
 - **临时文件与 Scratch 归档**：
   本会话创建的临时文件/scratch 脚本是否已清理或归档；
 - **遗留 TODO/FIXME**：
