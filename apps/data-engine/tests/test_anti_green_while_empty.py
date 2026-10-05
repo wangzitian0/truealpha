@@ -17,6 +17,7 @@ from data_engine.datahub.question_coverage import (
     NO_ROW,
     analyst_rating_cells,
     classify_question,
+    gppe_cells,
     supply_chain_cells,
 )
 from truealpha_contracts.question_requirements import (
@@ -83,6 +84,15 @@ def test_anti_green_while_empty_rejects_null_metric_as_answered() -> None:
     assert len(cells_a) == 20
     assert all(not c.answered for c in cells_a)
     assert all(c.reason == "null_metric_value" for c in cells_a)
+
+    # 3. GPPE cells with null gppe
+    mock_conn.execute.return_value.fetchall.return_value = [
+        (f"issuer:{i}", "available", "available", [], None) for i in range(20)
+    ]
+    cells_g = gppe_cells(mock_conn, "run:test")
+    assert len(cells_g) == 20
+    assert all(not c.answered for c in cells_g)
+    assert all(c.reason == "null_metric_value" for c in cells_g)
 
     result = classify_question(
         REQ[Question.Q3_SUPPLY_CHAIN_EXPOSURE],

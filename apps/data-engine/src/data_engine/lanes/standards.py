@@ -528,16 +528,12 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
 
 @dg.job(name=HEAD_REPORTS_JOB_NAME)
 def head_reports_pipeline_job() -> None:
-    """Module 6 and the coverage report for the governed head, whenever it moves (#855 C1/C2).
+    """Modules 3, 4, 6 and the coverage report for the governed head, whenever it moves (#855, #771, #772).
 
-    The weekly backfill wrote both, so on every other day the head advanced and
-    `/research/themes` and `/admin/datahub` kept serving the previous one while
-    `/research/rankings` served the new one — the App contradicting its own pointer, with every
-    gate green (measured on staging 2026-09-16: rankings on `capture-run:15a2…`, themes and
-    coverage on `capture-run:8259…`). Purity replays every judgement it has already made, so
-    a head with the same filings costs no model call; the coverage report is SQL.
+    The weekly backfill wrote all three, so on every other day the head advanced and
+    the coverage report served no_row for the new head — contradicting its own pointer.
     """
-    run_question_coverage(run_theme_purity(head_reports_start()))
+    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start()))))
 
 
 def head_reports_request(
@@ -555,6 +551,8 @@ def head_reports_request(
                     executed_at=executed_at, universe=universe, only_if_stale=only_if_stale
                 ),
                 "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                "run_supply_chain_exposure": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                "run_analyst_ratings": StandardBackfillConfig(executed_at=executed_at, universe=universe),
                 "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
             }
         ),

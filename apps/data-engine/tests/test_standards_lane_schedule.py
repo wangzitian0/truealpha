@@ -216,6 +216,8 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
     assert [node.name for node in head_reports_pipeline_job.graph.node_defs] == [
         "head_reports_start",
         "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
         "run_question_coverage",
     ]
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 16, 23, 30, tzinfo=UTC))
@@ -225,7 +227,13 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"head_reports_start", "run_theme_purity", "run_question_coverage"}
+        assert set(ops) == {
+            "head_reports_start",
+            "run_theme_purity",
+            "run_supply_chain_exposure",
+            "run_analyst_ratings",
+            "run_question_coverage",
+        }
         assert all(op["config"]["universe"] == universe for op in ops.values())
     assert dg.validate_run_config(head_reports_pipeline_job, requests[0].run_config)
 
@@ -257,6 +265,19 @@ class _Connection:
 
     def commit(self) -> None:
         return None
+
+    def execute(self, *_a, **_k):
+        class _Result:
+            def fetchall(self):
+                return []
+
+            def fetchone(self):
+                return None
+
+        return _Result()
+
+    def cursor(self):
+        return self
 
 
 def _pointer(monkeypatch, *, heads: dict[str, str | None], stored: dict[str, str | None]) -> None:
@@ -314,7 +335,13 @@ def test_a_pointer_advance_launches_exactly_one_head_reports_run_for_that_univer
         "dagster/sensor_name": "head_reports_on_pointer_advance",
     }
     ops = request.run_config["ops"]
-    assert set(ops) == {"head_reports_start", "run_theme_purity", "run_question_coverage"}
+    assert set(ops) == {
+        "head_reports_start",
+        "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
+        "run_question_coverage",
+    }
     assert all(op["config"]["universe"] == "topt" for op in ops.values())
     assert ops["head_reports_start"]["config"]["only_if_stale"] is False, "an advance always recomputes"
     assert dg.validate_run_config(head_reports_pipeline_job, request.run_config)
@@ -374,8 +401,9 @@ def test_the_sensor_is_deployed_running_against_the_head_reports_job() -> None:
 def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list, list]:
     """Execute the fallback schedule's request for TOPT through the deployed job, with the head
     on TOPT_NEW and the newest stored report naming `stored`."""
-    from data_engine.datahub import question_coverage
+    from data_engine.datahub import analyst_ratings, question_coverage
     from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts
 
@@ -387,7 +415,18 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     monkeypatch.setattr(
         theme_purity, "materialize_theme_purity", lambda _c, **kwargs: purity_calls.append(kwargs) or ()
     )
+    monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: [])
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        supply_chain_extraction,
+        "materialize_universe_supply_chain_exposure",
+        lambda _c, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        analyst_ratings,
+        "materialize_universe_analyst_ratings",
+        lambda _c, **kwargs: 0,
+    )
     report = {"universe_id": TOPT_ID, "denominator": 20, "questions": {}}
     monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **kwargs: compiled.append(kwargs) or report)
     monkeypatch.setattr(question_coverage, "persist", lambda _c, r: persisted.append(r) or "question-coverage-report:x")
