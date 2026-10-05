@@ -22,10 +22,17 @@ IDENTITY = {
     "service.version": "v1.2.3",
     "infra.iac.ref": IAC_REF,
 }
+
+
+def _attributes(deployment_environment: str) -> str:
+    issued = {**IDENTITY, "deployment.environment.name": deployment_environment}
+    return ",".join(f"{key}={value}" for key, value in issued.items())
+
+
 DEPLOYED = {
     "OTEL_SERVICE_NAME": "truealpha-app",
     "APP_ENV": "staging",
-    "OTEL_RESOURCE_ATTRIBUTES": ",".join(f"{key}={value}" for key, value in IDENTITY.items()),
+    "OTEL_RESOURCE_ATTRIBUTES": _attributes(IDENTITY["deployment.environment.name"]),
 }
 
 STATE_PROBE = """
@@ -73,8 +80,16 @@ def test_without_an_endpoint_the_app_imports_with_telemetry_off() -> None:
     }
 
 
-def test_with_an_endpoint_and_the_rendered_identity_the_app_is_instrumented() -> None:
-    result = run_python_probe(STATE_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
+@pytest.mark.parametrize("deployment_environment", ["staging", "pr-12", "branch-main", "canary-preview"])
+def test_with_an_endpoint_and_the_rendered_identity_the_app_is_instrumented(deployment_environment: str) -> None:
+    """Preview stacks run with `APP_ENV=staging` and carry their own alias as the issued name."""
+    environ = {
+        **DEPLOYED,
+        "APP_ENV": "staging",
+        "OTEL_RESOURCE_ATTRIBUTES": _attributes(deployment_environment),
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
+    }
+    result = run_python_probe(STATE_PROBE, environ)
     assert result.returncode == 0, result.stderr
     state = json.loads(result.stdout.splitlines()[-1])
     assert state == {
@@ -96,13 +111,15 @@ def test_with_an_endpoint_but_without_the_identity_the_app_refuses_to_import(mis
 
 
 def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_identity() -> None:
+    """On the wire, in the shape infra2's preview compose renders: staging behaviour, own alias."""
+    preview = {**DEPLOYED, "APP_ENV": "staging", "OTEL_RESOURCE_ATTRIBUTES": _attributes("pr-12")}
     with OtlpCollectorStub() as collector:
-        result = run_python_probe(EXPORT_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
+        result = run_python_probe(EXPORT_PROBE, {**preview, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
     assert result.returncode == 0, result.stderr
 
     assert any("/mcp" in name for name in collector.span_names()), collector.span_names()
     assert "llm-service probe failure" in collector.log_bodies()
-    expected = {**IDENTITY, "service.name": "truealpha-app"}
+    expected = {**IDENTITY, "deployment.environment.name": "pr-12", "service.name": "truealpha-app"}
     for signal in ("traces", "metrics", "logs"):
         resources = collector.resources(signal)
         assert resources, f"no {signal} reached the collector"

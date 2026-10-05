@@ -141,7 +141,7 @@ def test_the_process_environment_is_the_default_source(monkeypatch: pytest.Monke
         monkeypatch.delenv(name, raising=False)
     assert init_telemetry() is None
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ENDPOINT)
-    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("APP_ENV", raising=False)
     with pytest.raises(TelemetryConfigError, match="OTEL_SERVICE_NAME"):
         init_telemetry()
 
@@ -198,18 +198,61 @@ def test_a_legacy_deployment_environment_key_does_not_stand_in_for_the_standard_
         init_telemetry(_environ(OTEL_RESOURCE_ATTRIBUTES=legacy))
 
 
-def test_a_deployment_environment_that_contradicts_app_env_is_refused() -> None:
-    """Staging telemetry labelled `production` would page the wrong environment."""
-    with pytest.raises(TelemetryConfigError, match="disagrees"):
-        init_telemetry(_environ(APP_ENV="production"))
+def _issued_attributes(deployment_environment: str) -> str:
+    return ",".join(
+        f"{key}={deployment_environment if key == 'deployment.environment.name' else value}"
+        for key, value in IDENTITY.items()
+    )
+
+
+def _exported_deployment_environment(environ: dict[str, str]) -> str:
+    providers = init_telemetry(environ, set_global=False)
+    assert providers is not None, "telemetry stayed off although an endpoint was configured"
+    try:
+        return str(providers.tracer_provider.resource.attributes["deployment.environment.name"])
+    finally:
+        providers.shutdown()
+
+
+@pytest.mark.parametrize("alias", ["pr-12", "branch-main", "commit-abc1234", "tag-v1-2-3", "canary-preview"])
+def test_a_preview_stack_starts_with_its_alias_although_app_env_says_staging(alias: str) -> None:
+    """The exact shape infra2's preview compose renders: `APP_ENV: staging` hard-coded (preview runs
+    with staging behaviour) next to the deploy's own `deployment.environment.name=<alias>`. APP_ENV is
+    the app's behavioural tier; the telemetry identity is what infra2 issued, and it must survive
+    unchanged rather than be reconciled against APP_ENV (which refused every preview boot)."""
+    environ = _environ(APP_ENV="staging", OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(alias))
+    assert _exported_deployment_environment(environ) == alias
+
+
+@pytest.mark.parametrize("tier", ["staging", "production"])
+def test_the_protected_environments_start_under_their_own_name(tier: str) -> None:
+    environ = _environ(APP_ENV=tier, OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(tier))
+    assert _exported_deployment_environment(environ) == tier
+
+
+def test_app_env_does_not_decide_whether_telemetry_starts_or_what_it_says() -> None:
+    """Absent, or unrelated to the issued name, APP_ENV changes nothing about the identity."""
+    issued = _issued_attributes("production")
+    assert _exported_deployment_environment(_environ(APP_ENV=None, OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
+    assert _exported_deployment_environment(_environ(APP_ENV="dev", OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
+
+
+def test_an_issued_name_the_sdk_does_not_know_is_refused() -> None:
+    """Fail fast stays strict: an identity nobody can classify is not a label an alert can rely on."""
+    with pytest.raises(TelemetryConfigError, match="unknown environment"):
+        init_telemetry(_environ(OTEL_RESOURCE_ATTRIBUTES=_issued_attributes("banana")))
     assert _exporters_created() == 0
 
 
-def test_a_missing_app_env_and_a_malformed_attribute_string_are_refused() -> None:
-    with pytest.raises(TelemetryConfigError, match="ENVIRONMENT"):
-        init_telemetry(_environ(APP_ENV=None))
-    with pytest.raises(TelemetryConfigError, match="key=value"):
-        init_telemetry(_environ(OTEL_RESOURCE_ATTRIBUTES="deployment.environment.name"))
+@pytest.mark.parametrize(
+    ("attributes", "reason"),
+    [("deployment.environment.name", "key=value"), ("deployment.environment.name=%zz", "percent escape")],
+)
+def test_a_malformed_attribute_string_is_refused_by_its_own_reason(attributes: str, reason: str) -> None:
+    """Not read as "identity missing": the SDK discards a malformed string quietly when it is not
+    strict, so the refusal has to carry the parse error itself."""
+    with pytest.raises(TelemetryConfigError, match=reason):
+        init_telemetry(_environ(APP_ENV=None, OTEL_RESOURCE_ATTRIBUTES=attributes))
     assert _exporters_created() == 0
 
 

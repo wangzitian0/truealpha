@@ -43,6 +43,8 @@ in this repository. It is the application half of infra2 `ops.observability` sec
 - On, the identity is consumed from infra2's deploy and never defaulted: `OTEL_SERVICE_NAME`
   plus `deployment.environment.name`, `infra.service.id`, `service.version` and
   `infra.iac.ref` in `OTEL_RESOURCE_ATTRIBUTES`. A missing key refuses startup by name.
+  `APP_ENV` is not consulted: a preview stack runs with `APP_ENV=staging` and its own
+  `deployment.environment.name` (`pr-12`, `canary-preview`, ...), which is exported as issued.
 - Called once at startup by `llm_service.main` (which also instruments FastAPI) and
   `data_engine.dagster_defs`. The Next.js app is not a Python service and is out of scope.
 - Complements init.md rule 9: Dagster's UI remains the surface for pipeline runs; this adds
