@@ -86,6 +86,15 @@ def capture_ticker_analyst_ratings(
         Number of rows inserted (1 on success).
     """
     as_of = cutoff or datetime.now(tz=UTC)
+    if ctx is None:
+        record = analyst_track_record([], entity_id=company_id, as_of=as_of)
+        return materialize_analyst_ratings(
+            connection,
+            run_id=run_id,
+            cutoff=as_of,
+            ratings_data=[record],
+        )
+
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
     try:
         from data_engine.sources.moomoo import get_analyst_consensus

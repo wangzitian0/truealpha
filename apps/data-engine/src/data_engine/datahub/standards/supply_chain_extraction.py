@@ -275,20 +275,22 @@ def materialize_universe_supply_chain_exposure(
         if has_edges_table:
             rows = connection.execute(
                 """
-                select target_entity_id, target_entity_name, relation_type, revenue_share, confidence
-                from staging.kg_edges
-                where source_entity_id = %s and valid_from <= %s and (valid_to is null or valid_to > %s)
+                select e.to_id, coalesce(ent.display_name, e.to_id), e.relation_type, e.confidence
+                from staging.kg_edges e
+                left join staging.kg_entities ent on ent.id = e.to_id
+                where e.from_id = %s and e.transaction_time <= %s
                 """,
-                (issuer_id, cutoff, cutoff),
+                (issuer_id, cutoff),
             ).fetchall()
             for r in rows:
-                p_id, p_name, r_type, rev_share, conf = r
+                p_id, p_name, r_type, conf = r
+                rel_direction = "customer" if str(r_type) in ("supplies_to", "customer") else "supplier"
                 partners.append(
                     SupplyChainPartner(
-                        partner_id=str(p_id or p_name),
+                        partner_id=str(p_id),
                         partner_name=str(p_name),
-                        relation_type=str(r_type),
-                        revenue_share=Decimal(str(rev_share)) if rev_share is not None else None,
+                        relation_type=rel_direction,
+                        revenue_share=None,
                         confidence=Decimal(str(conf)) if conf is not None else Decimal("0.8"),
                     )
                 )

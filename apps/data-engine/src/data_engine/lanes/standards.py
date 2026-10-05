@@ -269,7 +269,7 @@ def run_supply_chain_exposure(
     context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
     current = reports_current(purity_summary)
     if current is not None:
-        return current
+        return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
     prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with psycopg.connect(settings.database_url) as connection:
@@ -302,7 +302,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     context.log.info("analyst ratings follows supply chain exposure: %s", sc_summary[:200])
     current = reports_current(sc_summary)
     if current is not None:
-        return current
+        return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
     prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with psycopg.connect(settings.database_url) as connection:
@@ -312,9 +312,29 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        rows_count = materialize_universe_analyst_ratings(
-            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers
-        )
+        opend_ctx = None
+        try:
+            from data_engine.sources.moomoo import connect as moomoo_connect
+
+            opend_ctx = moomoo_connect()
+        except Exception as exc:
+            context.log.info("moomoo OpenD connect not available (%s); will record honest unavailable coverage", exc)
+
+        if opend_ctx is not None:
+            try:
+                with opend_ctx as ctx:
+                    rows_count = materialize_universe_analyst_ratings(
+                        connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=ctx
+                    )
+            except Exception as exc:
+                context.log.warning("OpenD connection failed (%s); recording unavailable analyst ratings", exc)
+                rows_count = materialize_universe_analyst_ratings(
+                    connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
+                )
+        else:
+            rows_count = materialize_universe_analyst_ratings(
+                connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
+            )
         connection.commit()
 
     context.log.info("published %s analyst ratings rows for %s", rows_count, config.universe)
