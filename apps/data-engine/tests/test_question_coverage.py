@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -301,9 +302,9 @@ def test_q6_is_bound_to_the_materialized_column_rather_than_left_missing() -> No
 
 def test_supply_chain_cells_records_status_and_reasons() -> None:
     rows = [
-        ("issuer:a", "available", []),
-        ("issuer:b", "unavailable", ["no_disclosed_suppliers"]),
-        ("issuer:c", "stale", ["stale_filing"]),
+        ("issuer:a", "available", [], Decimal("0.35")),
+        ("issuer:b", "unavailable", ["no_disclosed_suppliers"], None),
+        ("issuer:c", "stale", ["stale_filing"], None),
     ]
     cells = supply_chain_cells(_Rows(rows), "run")
     assert [c.answered for c in cells] == [True, False, False]
@@ -312,8 +313,8 @@ def test_supply_chain_cells_records_status_and_reasons() -> None:
 
 def test_analyst_rating_cells_records_status_and_reasons() -> None:
     rows = [
-        ("issuer:a", "available", []),
-        ("issuer:b", "unavailable", ["no_analyst_coverage"]),
+        ("issuer:a", "available", [], Decimal("4.2")),
+        ("issuer:b", "unavailable", ["no_analyst_coverage"], None),
     ]
     cells = analyst_rating_cells(_Rows(rows), "run")
     assert [c.answered for c in cells] == [True, False]

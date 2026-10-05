@@ -13,7 +13,6 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
@@ -239,10 +238,7 @@ def supply_chain_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
     ).fetchall()
     cells = []
     for row in rows:
-        issuer_id = row[0]
-        availability_status = row[1]
-        reason_codes = row[2]
-        score = row[3] if len(row) > 3 else (Decimal("1") if availability_status == "available" else None)
+        issuer_id, availability_status, reason_codes, score = row
         if availability_status == "available" and score is not None:
             cells.append(Cell(str(issuer_id), True))
         elif availability_status == "available" and score is None:
@@ -264,10 +260,7 @@ def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell
     ).fetchall()
     cells = []
     for row in rows:
-        issuer_id = row[0]
-        availability_status = row[1]
-        reason_codes = row[2]
-        rating = row[3] if len(row) > 3 else (Decimal("1") if availability_status == "available" else None)
+        issuer_id, availability_status, reason_codes, rating = row
         if availability_status == "available" and rating is not None:
             cells.append(Cell(str(issuer_id), True))
         elif availability_status == "available" and rating is None:

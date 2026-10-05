@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from data_engine.datahub.question_coverage import (
     NO_ROW,
+    analyst_rating_cells,
     classify_question,
     supply_chain_cells,
 )
@@ -71,16 +72,23 @@ def test_anti_green_while_empty_rejects_null_metric_as_answered() -> None:
     mock_conn = MagicMock()
     # 20 rows with status 'available' but exposure_score is None!
     mock_conn.execute.return_value.fetchall.return_value = [(f"issuer:{i}", "available", [], None) for i in range(20)]
-    cells = supply_chain_cells(mock_conn, "run:test")
-    assert len(cells) == 20
-    assert all(not c.answered for c in cells)
-    assert all(c.reason == "null_metric_value" for c in cells)
+    # 1. Supply chain cells with null exposure_score
+    cells_sc = supply_chain_cells(mock_conn, "run:test")
+    assert len(cells_sc) == 20
+    assert all(not c.answered for c in cells_sc)
+    assert all(c.reason == "null_metric_value" for c in cells_sc)
+
+    # 2. Analyst ratings cells with null consensus_rating
+    cells_a = analyst_rating_cells(mock_conn, "run:test")
+    assert len(cells_a) == 20
+    assert all(not c.answered for c in cells_a)
+    assert all(c.reason == "null_metric_value" for c in cells_a)
 
     result = classify_question(
         REQ[Question.Q3_SUPPLY_CHAIN_EXPOSURE],
         universe_id=TOPT_UNIVERSE,
         issuers=[f"issuer:{i}" for i in range(20)],
-        cells_by_column={"mart.issuer_supply_chain_exposure.exposure_score": cells},
+        cells_by_column={"mart.issuer_supply_chain_exposure.exposure_score": cells_sc},
     )
     assert result["answered"] == 0
     assert result["unavailable"] == {"null_metric_value": 20}
