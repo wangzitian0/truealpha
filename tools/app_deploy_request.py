@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType, validate_wire_shape
+from infra2_sdk.deploy import (
+    DeployOperation,
+    DeployRequest,
+    DeployType,
+    canonical_json,
+    validate_wire_shape,
+)
 
 SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
@@ -69,19 +74,6 @@ def render_request(
                 "reviewed_change_url": reviewed_change_url,
             },
         }
-    )
-
-
-def canonical_json(request: DeployRequest) -> str:
-    """Return stable wire bytes suitable for an explicitly separate sender."""
-    return (
-        json.dumps(
-            request.to_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        )
-        + "\n"
     )
 
 
