@@ -433,10 +433,15 @@ def test_an_unreachable_opend_still_records_honest_unavailable_rows(monkeypatch)
 # --- the lane fails AFTER the coverage report is written (#771, the #1016 pattern) --------
 #
 # The coverage report is the instrument that measures every lane. A lane that fails for every
-# ticker must not stop the instrument: the report has to show q4 as `unavailable:fetch_error`
-# first, and only then does the run end as FAILURE. These tests run the DEPLOYED jobs, with the
-# real analyst op, the real coverage op and a real Postgres. The connection is shared and
-# rolled back at the end: `commit` is counted, never executed, so no row outlives the test.
+# ticker must not stop the instrument: the report is written first, and only then does the run
+# end as FAILURE. These tests run the DEPLOYED jobs, with the real analyst op, the real coverage
+# op and a real Postgres. The connection is shared and rolled back at the end: `commit` is
+# counted, never executed, so no row outlives the test.
+#
+# These tests do not assert a Q4 coverage value. The coverage cells here use the issuer ids of
+# the analyst rows. Production joins `issuer:lei:...` analyst rows to UUID wide rows, so Q4
+# reads `unavailable:no_row` there (#1079). A Q4 assertion would pass only because of the fakes.
+# What this PR controls is asserted instead: the persisted analyst rows, the lane summary, the run.
 
 HEAD_RUN = "capture-run:" + "7" * 64
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
@@ -537,11 +542,20 @@ def _execute_job(monkeypatch, shared_connection, job_name: str, responses: dict[
     return getattr(standards, job_name).execute_in_process(run_config=run_config, raise_on_error=False)
 
 
-def _stored_q4(shared_connection) -> dict[str, Any] | None:
+def _stored_analyst_rows(shared_connection) -> dict[str, tuple[str, list[str]]]:
+    """issuer id -> (availability status, reason codes) of the analyst rows the job persisted."""
+    rows = shared_connection.execute(
+        "select issuer_id, availability_status, reason_codes from mart.issuer_analyst_ratings where run_id = %s",
+        (HEAD_RUN,),
+    ).fetchall()
+    return {issuer_id: (status, list(codes)) for issuer_id, status, codes in rows}
+
+
+def _coverage_report_exists(shared_connection) -> bool:
     row = shared_connection.execute(
-        "select payload->'questions'->'q4' from mart.question_coverage_report where run_id = %s", (HEAD_RUN,)
+        "select 1 from mart.question_coverage_report where run_id = %s", (HEAD_RUN,)
     ).fetchone()
-    return None if row is None else row[0]
+    return row is not None
 
 
 def _steps(result, *, failed: bool) -> list[str]:
@@ -555,10 +569,15 @@ def test_a_total_failure_fails_the_run_after_the_coverage_report_is_written(
     result = _execute_job(monkeypatch, shared_connection, job_name, FAILED)
 
     assert not result.success, "the run ends as FAILURE, not 'published 3 analyst ratings rows'"
-    q4 = _stored_q4(shared_connection)
-    assert q4 is not None, "the coverage report for the head exists although the lane failed"
-    assert q4["answered"] == 0
-    assert q4["unavailable"] == {"fetch_error:MoomooConnectionError": 3}, "q4 names the fetch error for every issuer"
+    assert _stored_analyst_rows(shared_connection) == {
+        issuer_id: ("unavailable", ["fetch_error:MoomooConnectionError"]) for issuer_id in TICKERS
+    }, "every persisted analyst row names the fetch error"
+    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert summary["fetch_errors"] == 3
+    assert "3 of 3" in summary["lane_failure"]
+    assert _coverage_report_exists(shared_connection), (
+        "the coverage report for the head exists although the lane failed"
+    )
     assert "run_analyst_ratings" in _steps(result, failed=False)
     assert "run_question_coverage" in _steps(result, failed=False)
     assert _steps(result, failed=True) == ["fail_if_a_lane_failed"]
@@ -574,17 +593,22 @@ def test_a_total_failure_fails_the_run_after_the_coverage_report_is_written(
 
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)
-def test_a_partial_failure_leaves_the_run_green_and_the_report_names_the_error(
+def test_a_partial_failure_leaves_the_run_green_and_the_rows_name_the_error(
     monkeypatch, shared_connection, job_name
 ) -> None:
     responses = {"US.DDOG": _sample("DDOG"), "US.NICE": "second failure", "US.SHOP": _sample("SHOP")}
     result = _execute_job(monkeypatch, shared_connection, job_name, responses)
 
     assert result.success
-    q4 = _stored_q4(shared_connection)
-    assert q4 is not None
-    assert q4["answered"] == 2
-    assert q4["unavailable"] == {"fetch_error:MoomooConnectionError": 1}
+    assert _stored_analyst_rows(shared_connection) == {
+        "issuer:ddog": ("available", []),
+        "issuer:nice": ("unavailable", ["fetch_error:MoomooConnectionError"]),
+        "issuer:shop": ("available", []),
+    }
+    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert summary["fetch_errors"] == 1
+    assert "lane_failure" not in summary
+    assert _coverage_report_exists(shared_connection)
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
     assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a partial failure is not red"
 
@@ -597,9 +621,8 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
     result = _execute_job(monkeypatch, shared_connection, job_name, responses)
 
     assert result.success
-    q4 = _stored_q4(shared_connection)
-    assert q4 is not None
-    assert (q4["answered"], q4["unavailable"]) == (3, {})
+    assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
+    assert _coverage_report_exists(shared_connection)
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
     assert shared_connection.commits == 4, "purity, supply chain, analyst ratings and coverage commit once each"
     assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a clean run has no red row"
