@@ -326,16 +326,23 @@ homeless — it is UNEXERCISED, and the difference matters:
 - **Selection is exercised at snapshot freeze.** `staging.topt_core_snapshots` is the
   durable "selected fact set", and every selected observation ID plus policy version is
   persisted in its manifest before any factor runs.
+- **Selection does not rank sources today.** `_load_observations` pins each obligation to
+  the source vintage of its terminal attempt. It refuses the run when that vintage holds
+  more than one candidate observation. The order `knowable_at desc, observation_id desc`
+  never decides, because a second candidate refuses the run. Ranking by `source_priority`
+  is not implemented in selection.
 - **What is missing is a second source, not a plane.** Every financial metric resolves
   from SEC alone today; Twelve Data is a second ORIGIN used for price reconciliation (a
   disagreement measure). For prices `source_priority` chooses only when the primary is
   absent: since #862 a cell Yahoo cannot serve is served by the next origin in the policy's
-  order, declared as a failover and graded on its own corroboration. Registering a second
-  source for an existing metric is what activates it, and by rule 22 that must change only
-  source-owned code and registrations.
+  order, declared as a failover and graded on its own corroboration. A second source for an
+  existing metric does not activate fusion by itself. Selection must first rank by
+  `source_priority`. Registering the source must change only source-owned code and
+  registrations (rule 22).
 
 ```sql
--- Selection at snapshot freeze: highest-priority source first, then restatement recency.
+-- Target selection, NOT implemented at snapshot freeze today: highest-priority source first,
+-- then restatement recency.
 select distinct on (o.subject_id, o.semantic_type)  o.*
 from staging.capture_normalized_observations o
 where o.knowable_at <= :as_of_timestamp
@@ -346,11 +353,12 @@ order by o.subject_id, o.semantic_type,
 ```
 
 This SQL is a financial-domain illustration, not the public snapshot API or a generic
-"latest row" rule. Every selected staging ID and policy version is persisted in the
-snapshot manifest before factor execution. Mart lineage points to that snapshot and its
-exact selected records, which in turn chain through mapping/extraction IDs to `raw_ref`
-and immutable bytes. Changing any selection policy creates a new snapshot/materialization;
-old evidence and results remain addressable.
+"latest row" rule. It shows the target rule. The snapshot freeze does not run it. Every
+selected staging ID and policy version is persisted in the snapshot manifest before factor
+execution. Mart lineage points to that snapshot and its exact selected records, which in
+turn chain through mapping/extraction IDs to `raw_ref` and immutable bytes. Changing any
+selection policy creates a new snapshot/materialization; old evidence and results remain
+addressable.
 
 **Factor-input projection (`staging.strategy_backtest_inputs`).** The provenance-neutral
 projection factors actually consume, and the only shape rule 3 permits them to see. Its
