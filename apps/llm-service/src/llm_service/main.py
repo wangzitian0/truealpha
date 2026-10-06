@@ -173,6 +173,9 @@ def health() -> dict[str, Any]:
         # The governed pointer per universe and when it last advanced (#536's gate can
         # withhold it for days with every deploy check green; the admin funnel showed
         # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
+        # Each entry also says whether the head is fresh or stale for its data cadence, the
+        # limit, a reason code and its availability (#1062). `status` stays "ok" for a stale
+        # head: it says the service is up, and a frozen head is the freshness check's page.
         # "unknown" when the read failed; an empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
         # #876: the newest verdict of each nightly in-environment check (the Dagster quality
@@ -193,6 +196,17 @@ NIGHTLY_VERDICTS_SQL = """
 select distinct on (check_name) check_name, ran_at, ok, summary
 from mart.nightly_verdicts
 order by check_name, ran_at desc, recorded_at desc
+"""
+
+
+#: The newest governed head per universe, aged at read time (#1062). `mart.served_head` holds
+#: the one definition of age, limit and label; this query only picks the newest row of each
+#: universe and never subtracts a clock of its own.
+GOVERNED_POINTERS_SQL = """
+select distinct on (universe_id)
+       universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
+from mart.served_head
+order by universe_id, advanced_at desc
 """
 
 
@@ -237,19 +251,29 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             try:
                 # Per universe, never collapsed (the funnel's lesson): one universe's fresh
                 # pointer must not hide another's frozen one. The newest head per universe
-                # across its factors and versions is what "still advancing" means.
-                rows = connection.execute(
-                    "select universe_id, max(advanced_at), "
-                    "extract(epoch from (now() - max(advanced_at))) / 3600.0 "
-                    "from mart.current_pointer_head group by universe_id order by universe_id"
-                ).fetchall()
+                # across its factors and versions is what "still advancing" means. The age,
+                # the limit and the label come from mart.served_head (#1062), the one read
+                # point: this service never computes a head age of its own.
+                rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
                 pointers = [
                     {
                         "universe_id": str(universe_id),
                         "advanced_at": advanced_at.isoformat(),
                         "age_hours": round(float(age_hours), 1),
+                        "freshness": str(freshness),
+                        "limit_hours": int(limit_hours),
+                        "staleness_reason": None if staleness_reason is None else str(staleness_reason),
+                        "availability": str(availability),
                     }
-                    for universe_id, advanced_at, age_hours in rows
+                    for (
+                        universe_id,
+                        advanced_at,
+                        age_hours,
+                        freshness,
+                        limit_hours,
+                        staleness_reason,
+                        availability,
+                    ) in rows
                 ]
             except psycopg.Error:
                 connection.rollback()

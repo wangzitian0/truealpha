@@ -1,7 +1,19 @@
+import json
+import os
+import uuid
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from urllib.parse import urlsplit, urlunsplit
+
+import psycopg
+import pytest
 from fastapi.testclient import TestClient
 from llm_service import main
 from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
+from psycopg import sql
+from truealpha_runtime.testing import apply_migration_chain, load_tool, skip_or_fail
 
 
 def test_health():
@@ -144,6 +156,211 @@ def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
             "summary": "no scheduled or forced run yet",
         }
     ]
+
+
+class _PointersOnly(_VerdictsOnly):
+    """A connection whose only readable relation is mart.served_head (#1062): every other read
+    fails the way a database that predates it does, and must not take this one down."""
+
+    def execute(self, sql, *_args):
+        self.asked.append(sql)
+        if "mart.served_head" in sql:
+            return _Rows(self.rows)
+        raise psycopg.errors.UndefinedTable("relation does not exist")
+
+
+#: Newest head per universe as `mart.served_head` returns it: a fresh head, a stale head and a
+#: withheld head, each with its own cadence limit.
+SERVED_ROWS = [
+    (
+        "universe:canary-us-2026-06-30",
+        datetime(2026, 9, 3, 23, 47, tzinfo=UTC),
+        Decimal("771.0123"),
+        "stale",
+        72,
+        "older_than_30d",
+        "unavailable",
+    ),
+    (
+        "universe:qqq-us-2026-06-30",
+        datetime(2026, 9, 23, 23, 20, tzinfo=UTC),
+        Decimal("311.04"),
+        "stale",
+        72,
+        "older_than_3d",
+        "available",
+    ),
+    (
+        "universe:topt-us-2026-03-31",
+        datetime(2026, 10, 6, 1, 0, tzinfo=UTC),
+        Decimal("5.04"),
+        "fresh",
+        72,
+        None,
+        "available",
+    ),
+]
+
+#: The keys `/health` answered before #1062 and still answers. A new top-level key breaks the
+#: tools and tests that compare the whole answer.
+TOP_LEVEL_KEYS = {
+    "status",
+    "git_sha",
+    "data_engine_parser",
+    "data_engine_git_sha",
+    "data_engine_image_digest",
+    "governed_pointers",
+    "nightly_verdicts",
+}
+
+
+def test_health_reports_each_pointer_with_its_label_limit_reason_and_availability(monkeypatch) -> None:
+    """#1062: the endpoint reports what `mart.served_head` says, per universe, and adds no key
+    at the top level. The age keeps the one-decimal rounding it always had."""
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
+    payload = TestClient(app).get("/health").json()
+    assert set(payload) == TOP_LEVEL_KEYS
+    assert payload["governed_pointers"] == [
+        {
+            "universe_id": "universe:canary-us-2026-06-30",
+            "advanced_at": "2026-09-03T23:47:00+00:00",
+            "age_hours": 771.0,
+            "freshness": "stale",
+            "limit_hours": 72,
+            "staleness_reason": "older_than_30d",
+            "availability": "unavailable",
+        },
+        {
+            "universe_id": "universe:qqq-us-2026-06-30",
+            "advanced_at": "2026-09-23T23:20:00+00:00",
+            "age_hours": 311.0,
+            "freshness": "stale",
+            "limit_hours": 72,
+            "staleness_reason": "older_than_3d",
+            "availability": "available",
+        },
+        {
+            "universe_id": "universe:topt-us-2026-03-31",
+            "advanced_at": "2026-10-06T01:00:00+00:00",
+            "age_hours": 5.0,
+            "freshness": "fresh",
+            "limit_hours": 72,
+            "staleness_reason": None,
+            "availability": "available",
+        },
+    ]
+
+
+def test_a_stale_or_withheld_head_does_not_turn_the_status_red(monkeypatch) -> None:
+    """`status` is liveness: the deploy walk treats it as "the service is up". A frozen head is
+    the freshness check's page, not a reason to take the service out of rotation."""
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert {entry["freshness"] for entry in response.json()["governed_pointers"]} >= {"stale", "fresh"}
+
+
+def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monkeypatch) -> None:
+    connection = _PointersOnly(SERVED_ROWS)
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
+    TestClient(app).get("/health")
+    (pointer_sql,) = [sql for sql in connection.asked if "mart.served_head" in sql]
+    lowered = " ".join(pointer_sql.lower().split())
+    assert "from mart.served_head" in lowered
+    assert "distinct on (universe_id)" in lowered and "order by universe_id, advanced_at desc" in lowered
+    assert "current_pointer" not in lowered, "the endpoint must read the served head, not the raw pointer"
+    assert "now()" not in lowered and "extract(" not in lowered, "the endpoint must not compute an age"
+    assert pointer_sql == main.GOVERNED_POINTERS_SQL
+
+
+def test_the_freshness_tool_still_reads_the_new_entries(monkeypatch) -> None:
+    """`tools/datahub_freshness.py` reads universe_id, advanced_at and age_hours only. It must
+    parse the richer entries unchanged and judge the head on its own clock."""
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
+    body = TestClient(app).get("/health").text
+    tool = load_tool("datahub_freshness")
+    heads = tool.read_pointers("https://example.invalid/api/health", lambda _url: (200, body))
+    assert [head.universe_id for head in heads] == [row[0] for row in SERVED_ROWS]
+    assert [head.age_hours for head in heads] == [771.0, 311.0, 5.0]
+    reference = datetime(2026, 10, 6, 6, 0, tzinfo=UTC)
+    assert (
+        tool.check_pointer_freshness(
+            "https://example.invalid/api/health", http_get=lambda _url: (200, body), now=reference
+        )
+        == 1
+    )
+
+
+def _named(database: str) -> str:
+    base = urlsplit(os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha"))
+    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
+
+
+@pytest.fixture(scope="module")
+def seeded_database() -> Iterator[str]:
+    """A scratch database with the real chain and three committed heads of known ages."""
+    name = f"truealpha_health_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    try:
+        with psycopg.connect(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
+            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
+    try:
+        apply_migration_chain(_named(name))
+        with psycopg.connect(_named(name)) as connection:
+            environment = connection.execute("select environment from mart.environment_identity").fetchone()[0]
+            for universe, age in (
+                ("universe:topt-us-health", timedelta(days=4)),
+                ("universe:qqq-us-health", timedelta(days=1)),
+                ("universe:canary-us-health", timedelta(days=31)),
+            ):
+                digest = uuid.uuid4().hex * 2
+                run_id = f"capture-run:{digest}"
+                connection.execute(
+                    "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, "
+                    "transaction_time, recorded_at) values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
+                    (run_id, digest),
+                )
+                connection.execute(
+                    "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
+                    "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+                    "values (%s, %s, %s, %s, 'v1', 'f', %s, 0, null, now() - %s)",
+                    (f"current-pointer:{digest}", digest, environment, universe, run_id, age),
+                )
+            connection.commit()
+        yield _named(name)
+    finally:
+        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, seeded_database: str) -> None:
+    """The endpoint, the real SQL and the real view together: a 4 day head reads stale, a 1 day
+    head reads fresh and a 31 day head is withheld, each with its registry cadence."""
+    real_connect = psycopg.connect
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: real_connect(seeded_database))
+    payload = TestClient(app).get("/health").json()
+    by_universe = {entry["universe_id"]: entry for entry in payload["governed_pointers"]}
+    assert set(by_universe) == {"universe:topt-us-health", "universe:qqq-us-health", "universe:canary-us-health"}
+    assert payload["status"] == "ok"
+    topt, qqq, canary = (by_universe[f"universe:{name}-us-health"] for name in ("topt", "qqq", "canary"))
+    assert (topt["freshness"], topt["availability"], topt["staleness_reason"], topt["limit_hours"]) == (
+        "stale",
+        "available",
+        "older_than_3d",
+        72,
+    )
+    assert topt["age_hours"] == pytest.approx(96.0, abs=0.2)
+    assert (qqq["freshness"], qqq["availability"], qqq["staleness_reason"]) == ("fresh", "available", None)
+    assert (canary["freshness"], canary["availability"], canary["staleness_reason"]) == (
+        "stale",
+        "unavailable",
+        "older_than_30d",
+    )
+    assert json.dumps(payload)  # the whole answer stays JSON
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
