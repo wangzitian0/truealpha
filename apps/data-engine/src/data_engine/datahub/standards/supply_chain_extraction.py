@@ -196,7 +196,12 @@ def materialize_supply_chain_exposure(
         else:
             issuer_id = str(item["issuer_id"])
             if "partners" in item:
-                rec = supply_chain_exposure(item["partners"], entity_id=issuer_id, as_of=as_of)
+                rec = supply_chain_exposure(
+                    item["partners"],
+                    entity_id=issuer_id,
+                    as_of=as_of,
+                    supplies_to_edges_exist=bool(item["supplies_to_edges_exist"]),
+                )
                 exposure_score = rec.exposure_score
                 direct_partners = rec.direct_partners
                 suppliers_count = rec.suppliers_count
@@ -278,33 +283,38 @@ def materialize_universe_supply_chain_exposure(
         has_edges_table = False
 
     cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
+    # One measurement per run, taken before any issuer: does the graph hold a supplier edge at all?
+    # A false value means no extraction has run. A row then says so, instead of claiming that the
+    # company disclosed no supplier (#772).
+    supplies_to_edges_exist = has_edges_table and _supplies_to_edges_exist(connection, cutoff)
     for issuer_id, ticker in tickers.items():
         partners: list[SupplyChainPartner] = []
         if has_edges_table:
             rows = connection.execute(
                 """
-                select e.to_id, coalesce(ent.display_name, e.to_id), e.relation_type, e.confidence
+                select e.to_id, coalesce(ent.display_name, e.to_id), e.confidence
                 from staging.kg_edges e
                 left join staging.kg_entities ent on ent.id = e.to_id
-                where e.from_id = %s and e.transaction_time <= %s
+                where e.from_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
                   and (e.valid_time is null or e.valid_time @> %s::date)
                 """,
                 (issuer_id, cutoff, cutoff_date),
             ).fetchall()
-            for r in rows:
-                p_id, p_name, r_type, conf = r
-                rel_direction = "customer" if str(r_type) in ("supplies_to", "customer") else "supplier"
+            for p_id, p_name, conf in rows:
+                # The edge runs from the issuer to the partner, so the partner buys from the issuer.
                 partners.append(
                     SupplyChainPartner(
                         partner_id=str(p_id),
                         partner_name=str(p_name),
-                        relation_type=rel_direction,
+                        relation_type="customer",
                         revenue_share=None,
                         confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
                     )
                 )
 
-        record = supply_chain_exposure(partners, entity_id=issuer_id, as_of=cutoff)
+        record = supply_chain_exposure(
+            partners, entity_id=issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
+        )
         count += materialize_supply_chain_exposure(
             connection,
             run_id=run_id,
@@ -312,3 +322,16 @@ def materialize_universe_supply_chain_exposure(
             exposure_data=[record],
         )
     return count
+
+
+def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> bool:
+    """True when the graph holds a `supplies_to` edge for ANY issuer that was knowable at the cutoff.
+
+    The test uses transaction time only. An edge whose validity ended before the cutoff still
+    proves that an extraction ran. An edge recorded after the cutoff was not knowable then.
+    """
+    row = connection.execute(
+        "select exists (select 1 from staging.kg_edges where relation_type = 'supplies_to' and transaction_time <= %s)",
+        (cutoff,),
+    ).fetchone()
+    return bool(row and row[0])
