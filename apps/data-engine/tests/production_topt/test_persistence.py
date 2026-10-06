@@ -1994,12 +1994,12 @@ def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violat
 
 
 def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, capsys) -> None:
-    """#1061: the nightly invariant is the guard that judges priority against recency, so
-    its third clause needs its own red case. A failover cell is served by Twelve Data
-    (rank 1). Relabel the corroborating observation of the same session as the primary
-    family (rank 0): a higher-ranked origin asserted the cell and the snapshot passed it
-    over. The payload still declares the substitution, and the origin is still ranked, so
-    only the passed-over clause can turn this red."""
+    """#1061: the nightly invariant judges priority against recency. Its third clause needs
+    its own red case. Twelve Data (rank 1) serves a failover cell. Relabel the corroborating
+    observation of the same session as the primary family (rank 0). Now a higher-ranked
+    origin asserted the cell, and the snapshot passed it over. The payload still declares
+    the substitution, and the origin is still ranked. So only the passed-over clause can
+    turn the invariant red."""
     tool = _output_invariants_tool()
     fusion = next(
         invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"

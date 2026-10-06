@@ -57,8 +57,8 @@ def connection():
 
 def _materialized_run(connection):
     """A complete production run, frozen and materialized, with no governed pointer in this
-    transaction. Clearing the factor's pointers makes the head deterministic on any database;
-    the append-only trigger is bypassed for that delete only, and the rollback restores it."""
+    transaction. Clearing the factor's pointers makes the head the same on any database. The
+    delete bypasses the append-only trigger. The rollback restores every row."""
     connection.execute("set session_replication_role = replica")
     connection.execute(
         "delete from mart.current_pointer where environment = 'production' and factor_id = %s",
@@ -117,10 +117,9 @@ def test_quality_report_read(connection) -> None:
 
 
 def test_current_head_is_acceptance_gated(connection) -> None:
-    # The governed head is resolved by joining the quality report, so a run it returns must
-    # carry an accepted quality report — never a captured-but-unreported run. Each state is
-    # driven with data, in the deployed order: the report persists first, then the pointer
-    # advances.
+    # The governed head joins the quality report. A run it returns must carry an accepted
+    # quality report, never a run that was captured and not reported. Each state runs with
+    # data, in the deployed order. The report persists first. Then the pointer advances.
     run, release_manifest_id = _materialized_run(connection)
     repo = PostgresToptReadRepository(connection)
     assert repo.current_run_id() != run.run_id, "a captured, materialized, unreported run must not be the head"

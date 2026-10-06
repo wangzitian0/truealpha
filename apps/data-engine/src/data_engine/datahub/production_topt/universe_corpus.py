@@ -1,14 +1,16 @@
 """Generic frozen-universe corpus loading (#539 QQQ expansion).
 
-The TOPT 20 corpus predates this module and keeps its hand-pinned loader
-(`frozen_topt_list_version` below, whose mapping sha is a literal pin). It lived in
-`medium_replay` until #795 because that is where it was first needed — which meant the
-deployed tick imported a replay harness to mint one list version. Every universe after
-it loads through here: the corpus file is SELF-pinned — its denominator carries the
-sha256 of its own instrument mapping, computed by the builder script
-(`scripts/build_universe_corpus.py`) and re-verified at load, so an edited or
-truncated corpus refuses to load rather than silently shrinking a denominator
-(the #543/#569 identity-anchor pattern applied to scope configuration).
+The TOPT 20 corpus predates this module. It keeps its hand-pinned loader,
+`frozen_topt_list_version`, below. Its mapping sha is a literal pin.
+
+That loader lived in `medium_replay` until #795, because it was first needed there. The
+deployed tick then imported a replay harness to mint one list version.
+
+Every universe after it loads through here. The corpus file is SELF-pinned. Its denominator
+carries the sha256 of its own instrument mapping. The builder script
+(`scripts/build_universe_corpus.py`) computes that sha, and the loader re-verifies it. An
+edited or truncated corpus refuses to load, so a denominator never shrinks silently. This
+is the #543/#569 identity-anchor pattern applied to scope configuration.
 """
 
 from __future__ import annotations
@@ -68,8 +70,8 @@ def _mapping_sha256(denominator: Mapping[str, Any]) -> str:
 def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
     """A self-pinned corpus becomes the content-addressed list version.
 
-    The shared denominator check runs first. The pin is read from the corpus itself instead
-    of a module literal: the mapping sha must reproduce, and any drift refuses the load.
+    The shared denominator check runs first. The pin comes from the corpus, not from a
+    module literal. The mapping sha must reproduce. Any drift refuses the load.
     """
     denominator = corpus["topt_denominator"]
     instruments = denominator["instruments"]

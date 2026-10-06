@@ -969,8 +969,8 @@ def test_a_listing_without_the_exact_four_semantic_cells_is_refused_by_the_membe
 def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_refused(
     connection, monkeypatch
 ) -> None:
-    """#1061: one listing holds three cells and another holds five, so the row count equals
-    the obligation count and `listings * 4 == obligations` holds. The removed run-wide
+    """#1061: one listing holds three cells and another holds five. The row count equals the
+    obligation count. The sum `listings * 4 == obligations` holds. The removed run-wide
     equality passed this input. The member builder refuses it, and nothing is stored."""
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
     repository = PostgresToptCoreRepository(connection)
@@ -992,7 +992,7 @@ def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_
 
 def _insert_snapshot_row(connection, run_id: str, release_manifest_id: str, *, instruments: int, observations: int):
     """A hand-written snapshot row. Every column except the counts satisfies the snapshot
-    trigger, so a refusal names the count rule and not an unrelated column."""
+    trigger. So a refusal names the count rule, not an unrelated column."""
     universe_id, universe_version, universe_sha256, cutoff = connection.execute(
         "select universe_id, universe_version, universe_sha256, cutoff from mart.topt_capture_status where run_id = %s",
         (run_id,),

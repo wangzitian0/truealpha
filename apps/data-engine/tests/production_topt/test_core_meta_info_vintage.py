@@ -37,28 +37,15 @@ ENVELOPE_KEYS = {
 
 @pytest.fixture
 def connection():
+    """One transaction per test. The view tests only read. The seeded tests write, and the
+    rollback removes every row they seed."""
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         # The repository's convention, which this file did not follow when it landed
         # (review on #798): an UNCONDITIONAL skip silently drops this coverage in CI, where
         # a Postgres service exists and a connection failure is a real failure. A guard that
         # cannot go red where production runs is the shape AGENTS.md rule 7 forbids.
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.close()
-
-
-@pytest.fixture
-def seeded_connection():
-    """A transaction for tests that seed a run. The rollback removes every seeded row."""
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
@@ -101,13 +88,13 @@ def test_the_view_does_not_read_vintage_from_the_envelope(connection) -> None:
     )
 
 
-def test_the_envelope_carries_no_business_fields(seeded_connection) -> None:
-    """Why the wrong column was silent, pinned as a fact rather than left as a comment. If
-    the envelope ever gains business fields this test goes red and the reasoning above needs
-    revisiting — which is the point. The run is seeded, so the test examines 21 envelopes in
-    every database, including the empty one CI starts with."""
-    (_, run, *_rest) = _seed_complete_production_run(seeded_connection)
-    envelopes = seeded_connection.execute(
+def test_the_envelope_carries_no_business_fields(connection) -> None:
+    """Why the wrong column was silent, pinned as a fact and not left as a comment. If the
+    envelope gains business fields, this test goes red and the reasoning above needs a new
+    review. The run is seeded. So the test examines 21 envelopes in every database, including
+    the empty database that CI starts with."""
+    (_, run, *_rest) = _seed_complete_production_run(connection)
+    envelopes = connection.execute(
         """
         select observation.payload
         from staging.capture_normalized_observations observation
@@ -128,12 +115,12 @@ def test_the_envelope_carries_no_business_fields(seeded_connection) -> None:
             )
 
 
-def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(seeded_connection) -> None:
-    """The other half: a vintage written to the payload table reaches `mart.topt_core_meta_info`.
-    The seeded financial-fact payloads carry a vintage, so a green projection test cannot be
-    green because nothing has a vintage at all. The adapter side is covered by
-    test_sec_financial_adapter.py: `test_the_bundle_names_the_filing_behind_each_input` pins the
-    entry shape and `test_the_headcounts_evidence_travels_on_the_row` pins the payload."""
+def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(connection) -> None:
+    """The other half: a vintage in the payload table reaches `mart.topt_core_meta_info`.
+    The seeded financial-fact payloads carry a vintage. So a green projection test cannot be
+    green because no row has a vintage. test_sec_financial_adapter.py covers the adapter side.
+    `test_the_bundle_names_the_filing_behind_each_input` pins the entry shape.
+    `test_the_headcounts_evidence_travels_on_the_row` pins the payload."""
     filing = {
         "accession": "0000320193-26-000010",
         "document": None,
@@ -145,14 +132,12 @@ def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(
         "statement_form": True,
     }
     vintage = {"revenue": filing, "total_assets": filing}
-    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
-        seeded_connection, financial_vintage=vintage
-    )
-    core = PostgresToptCoreRepository(seeded_connection)
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection, financial_vintage=vintage)
+    core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 
-    lineages = seeded_connection.execute(
+    lineages = connection.execute(
         "select lineage from mart.topt_core_meta_info where run_id = %s", (run.run_id,)
     ).fetchall()
     items = [item for (lineage,) in lineages for item in lineage]
