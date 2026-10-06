@@ -97,7 +97,7 @@ def test_the_quality_report_points_at_the_section() -> None:
 def test_the_section_holds_only_its_own_text() -> None:
     """The subsection once sat before an unrelated paragraph of section 8. That text then read as part of it."""
     body = section()
-    assert body.lstrip().startswith("The served head ages when a consumer reads it.")
+    assert body.lstrip().startswith("`mart.served_head` computes the age")
     assert "Environment and evidence scale" not in body
     assert "Release gates define claims" not in body
     assert "Known Risks" not in body

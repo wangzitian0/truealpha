@@ -550,14 +550,16 @@ merge enforcement.
 
 ### Served freshness (read time)
 
-The served head ages when a consumer reads it. `mart.served_head` computes the age, the limit,
-the `freshness` label and the `availability` at each read. It uses the time of the last good
-refresh and the data cadence. A stamp written at publication never decides freshness. Before
-#1062, a head 13 days old read `fresh`.
+`mart.served_head` computes the age, the limit, the `freshness` label and the `availability`
+at each read. It uses the time of the last good refresh and the data cadence. The target state
+is that no consumer relies on a stamp written at publication. Before #1062, a head 13 days old
+read `fresh`. Today `/api/health` reads the view. The readers in the guard baseline do not yet.
 
-The limits live in `mart.freshness_limit`. Git is the authority. The seed in
-`db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores them at every boot.
-Change a limit with a reviewed edit to that seed. The table cannot hold a limit above 720 hours.
+The limits live in `mart.freshness_limit`. Git is the authority for the rows that the seed
+lists. The seed in `db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores
+them at every boot. A row removed from the seed stays in deployed databases until a migration
+removes it. Change a limit with a reviewed edit to that seed. The table cannot hold a limit
+above 720 hours.
 
 | Cadence family | Limit (hours) | Limit (days) | Data in this family |
 |---|---|---|---|
@@ -565,6 +567,8 @@ Change a limit with a reviewed edit to that seed. The table cannot hold a limit 
 | `weekly` | 336 | 14 | Universe refresh, standards backfill, entity identity |
 | `quarterly` | 720 | 30 | Filing-derived facts, checked monthly |
 | `withhold` | 720 | 30 | Cap for every family: no value older than this is served |
+
+These rules describe what `mart.served_head` and `mart.head_freshness` return.
 
 - **Age** is the time since the last good refresh. An age equal to the limit reads `fresh`.
   An age above the limit reads `stale`.
@@ -591,13 +595,22 @@ enforces it.
 The target state is one read point. A consumer reads `mart.served_head` and not
 `mart.current_pointer_head`. A consumer computes no head age of its own. That is not true today.
 Follow-up changes 2 to 4 of #1062 move the readers that still read the pointer.
-`libs/runtime/tests/test_served_head_guard.py` fails on a new bypass. Its BASELINE lists today's
-exceptions, and it can only shrink. The guard works per file. It cannot prove that a run id flows
-from the head into a result query.
+`libs/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
+heuristic, and a new shape can pass it. Its BASELINE lists today's exceptions, and it can only
+shrink. The guard works per file. It cannot prove that a run id flows from the head into a result
+query. The per-reader behaviour tests of PRs 2 to 4 are the real proof.
 
 `/api/health` already reads the head. It reports each governed pointer with `freshness`,
 `limit_hours`, `staleness_reason` and `availability`. Its `status` stays `ok` for a stale head.
 It reports `governed_pointers: "unknown"` when heads exist that this database does not serve.
+
+Four limits are accepted:
+- The word `unknown` has two uses. It is the `freshness` value for a missing refresh time. It is
+  also the health marker for pointers that cannot be read. Both keys are frozen.
+- A refresh time in the future counts as age 0.
+- `/api/health` rounds `age_hours` to one decimal. An entry can show `72.0` and `stale`.
+- The environment filter appears in `mart.served_head` and in `mart.served_head_environments`.
+  One scenario test ties the two views to each other.
 
 This is a different measure from three others. The capture-time windows in
 `raw.capture_schedule_policies` judge one observation when it is captured. They are 5 days for
