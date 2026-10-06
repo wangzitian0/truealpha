@@ -1,11 +1,10 @@
 """Generic frozen-universe corpus loading (#539 QQQ expansion).
 
 The TOPT 20 corpus predates this module and keeps its hand-pinned loader
-(`frozen_topt_list_version` below, whose expected counts and mapping sha are
-literals guarded by its own tests). It lived in `medium_replay` until #795
-because that is where it was first needed — which meant the deployed tick
-imported a replay harness to mint one list version. Every universe after it loads
-through here: the corpus file is SELF-pinned — its denominator carries the
+(`frozen_topt_list_version` below, whose mapping sha is a literal pin). It lived in
+`medium_replay` until #795 because that is where it was first needed — which meant the
+deployed tick imported a replay harness to mint one list version. Every universe after
+it loads through here: the corpus file is SELF-pinned — its denominator carries the
 sha256 of its own instrument mapping, computed by the builder script
 (`scripts/build_universe_corpus.py`) and re-verified at load, so an edited or
 truncated corpus refuses to load rather than silently shrinking a denominator
@@ -43,27 +42,39 @@ def corpus_universe(corpus: dict[str, Any]) -> UniverseRef:
     )
 
 
-def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
-    """A self-pinned corpus becomes the content-addressed list version.
+def _check_denominator(denominator: Mapping[str, Any], *, subject: str) -> None:
+    """The counts and identities a denominator declares must match its instrument rows.
 
-    Validation mirrors `frozen_topt_list_version` field for field, with the pins
-    read from the corpus itself instead of module literals: declared counts must
-    match the instrument rows, identities must not duplicate, and the mapping
-    sha must reproduce — any drift refuses the load.
+    Both loaders run this one check. Each then compares `_mapping_sha256` with its own pin.
     """
-    denominator = corpus["topt_denominator"]
     instruments = denominator["instruments"]
     if int(denominator["instrument_count"]) != len(instruments):
-        raise ValueError("universe corpus instrument count drift")
+        raise ValueError(f"{subject} instrument denominator shrink")
     issuer_ids = {str(row[0]) for row in instruments}
     if int(denominator["issuer_count"]) != len(issuer_ids):
-        raise ValueError("universe corpus issuer count drift")
+        raise ValueError(f"{subject} issuer denominator drift")
     for column, label in ((1, "security"), (2, "listing")):
         values = [str(row[column]) for row in instruments]
         if len(values) != len(set(values)):
-            raise ValueError(f"universe corpus {label} denominator contains duplicates")
-    mapping_sha256 = canonical_sha256({"fields": denominator["instrument_tuple_fields"], "instruments": instruments})
-    if mapping_sha256 != denominator["instrument_mapping_sha256"]:
+            raise ValueError(f"{subject} {label} denominator contains duplicates")
+
+
+def _mapping_sha256(denominator: Mapping[str, Any]) -> str:
+    return canonical_sha256(
+        {"fields": denominator["instrument_tuple_fields"], "instruments": denominator["instruments"]}
+    )
+
+
+def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
+    """A self-pinned corpus becomes the content-addressed list version.
+
+    The shared denominator check runs first. The pin is read from the corpus itself instead
+    of a module literal: the mapping sha must reproduce, and any drift refuses the load.
+    """
+    denominator = corpus["topt_denominator"]
+    instruments = denominator["instruments"]
+    _check_denominator(denominator, subject="universe corpus")
+    if _mapping_sha256(denominator) != denominator["instrument_mapping_sha256"]:
         raise ValueError("universe corpus instrument mapping drift")
     return CaptureListVersion(
         universe=corpus_universe(corpus),
@@ -82,36 +93,16 @@ def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
 #: second identity for the same 21 listings. Was `medium_replay._CUTOFFS[0]` before #795,
 #: where it was shared with that module's replay cutoffs by coincidence of value.
 _FROZEN_TOPT_EFFECTIVE_AT = datetime(2026, 4, 1, tzinfo=UTC)
-_EXPECTED_ISSUER_COUNT = 20
-_EXPECTED_INSTRUMENT_COUNT = 21
 _EXPECTED_INSTRUMENT_MAPPING_SHA256 = "e240ebf2239b94f2eb6463ad73aba89525787b52e6614b382428e8135a1a0c2e"
 
 
 def frozen_topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
+    """The frozen TOPT list. The mapping sha pin fixes the 21 listings and 20 issuers."""
     denominator = corpus["topt_denominator"]
-    instruments = denominator["instruments"]
-    if (
-        int(denominator["instrument_count"]) != _EXPECTED_INSTRUMENT_COUNT
-        or len(instruments) != _EXPECTED_INSTRUMENT_COUNT
-    ):
-        raise ValueError("TOPT instrument denominator shrink")
-    issuer_ids = {str(row[0]) for row in instruments}
-    if int(denominator["issuer_count"]) != _EXPECTED_ISSUER_COUNT or len(issuer_ids) != _EXPECTED_ISSUER_COUNT:
-        raise ValueError("TOPT issuer denominator drift")
-    instrument_ids = tuple(str(row[1]) for row in instruments)
-    if len(instrument_ids) != len(set(instrument_ids)):
-        raise ValueError("TOPT security denominator contains duplicates")
-    listings = tuple(str(row[2]) for row in instruments)
-    if len(listings) != len(set(listings)):
-        raise ValueError("TOPT listing denominator contains duplicates")
-    mapping_sha256 = canonical_sha256(
-        {
-            "fields": denominator["instrument_tuple_fields"],
-            "instruments": instruments,
-        }
-    )
-    if mapping_sha256 != _EXPECTED_INSTRUMENT_MAPPING_SHA256:
+    _check_denominator(denominator, subject="TOPT")
+    if _mapping_sha256(denominator) != _EXPECTED_INSTRUMENT_MAPPING_SHA256:
         raise ValueError("frozen TOPT instrument mapping drift")
+    listings = tuple(str(row[2]) for row in denominator["instruments"])
     version = CaptureListVersion(
         universe=frozen_topt_universe(corpus),
         members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
