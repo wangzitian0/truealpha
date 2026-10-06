@@ -3,22 +3,6 @@
   "corpus_id": "i0-infra-boundary-corpus-v1",
   "batch_id": "I0-infra-boundary-decoupling",
   "claim_ceiling": "Repository-boundary and DeployRequest fixtures only; these bytes authorize no dispatch, activate no infra2 receiver, cause no deployment side effect, and prove no live-environment or Production readiness.",
-  "sdk_binding": {
-    "distribution": "infra2-sdk",
-    "version": "3.0.0",
-    "contract_version": 1,
-    "module": "infra2_sdk.deploy",
-    "request_type": "DeployRequest",
-    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v3.0.0",
-    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl",
-    "wheel_sha256": "e2c2a26a7b873bd7d2bd60dc5305822b8d6827376007c6530b9a294f0861231a",
-    "extras": [
-      "http"
-    ],
-    "runtime_extras": [
-      "otel"
-    ]
-  },
   "repository_boundary": {
     "application_repository": "wangzitian0/truealpha",
     "infrastructure_repository": "wangzitian0/infra2",

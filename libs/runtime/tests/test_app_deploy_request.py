@@ -37,32 +37,25 @@ def _merged(base: dict, override: dict) -> dict:
     return result
 
 
-def test_sdk_release_identity_is_exactly_pinned(corpus: dict) -> None:
-    binding = corpus["sdk_binding"]
-    assert importlib.metadata.version(binding["distribution"]) == binding["version"]
+def test_sdk_release_identity_is_exactly_pinned() -> None:
+    """uv.lock is the one pin: the installed SDK, the root dev pin and libs/runtime's pin
+    (which ships in every image and once drifted to another release, #759) all name the
+    locked wheel. Each pyproject keeps its own extras; nothing restates the version."""
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    (package,) = [item for item in lock["package"] if item["name"] == "infra2-sdk"]
+    wheel_url = package["source"]["url"]
+    assert package["wheels"] == [{"url": wheel_url, "hash": package["wheels"][0]["hash"]}]
+    assert package["wheels"][0]["hash"].startswith("sha256:")
+    assert importlib.metadata.version("infra2-sdk") == package["version"]
+
+    def pins(dependencies: list[str]) -> list[str]:
+        return [item for item in dependencies if item.split(" ", 1)[0].split("[", 1)[0] == "infra2-sdk"]
 
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = f"[{','.join(binding['extras'])}]" if binding.get("extras") else ""
-    dependency = f"{binding['distribution']}{extras} @ {binding['wheel_url']}"
-    assert dependency in pyproject["dependency-groups"]["dev"]
-    # libs/runtime pins the wheel too and ships in every image; it drifted to a different
-    # release once while the root pin moved on (#759 follow-up, SDK 1.5.0). It carries its own
-    # extras (`otel`, the exporter stack of truealpha_runtime.telemetry, #1034), declared in the
-    # same fixture so the extras are as pinned as the wheel.
     runtime = tomllib.loads((REPO_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8"))
-    runtime_extras = f"[{','.join(binding['runtime_extras'])}]" if binding.get("runtime_extras") else ""
-    assert f"{binding['distribution']}{runtime_extras} @ {binding['wheel_url']}" in runtime["project"]["dependencies"]
-
-    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
-    package = next(item for item in lock["package"] if item["name"] == binding["distribution"])
-    assert package["version"] == binding["version"]
-    assert package["source"] == {"url": binding["wheel_url"]}
-    assert package["wheels"] == [
-        {
-            "url": binding["wheel_url"],
-            "hash": f"sha256:{binding['wheel_sha256']}",
-        }
-    ]
+    for pin in (*pins(pyproject["dependency-groups"]["dev"]), *pins(runtime["project"]["dependencies"])):
+        assert pin.endswith(f" @ {wheel_url}"), pin
+    assert len(pins(runtime["project"]["dependencies"])) == 1
 
 
 def test_valid_staging_request_round_trips_and_is_canonical(corpus: dict) -> None:

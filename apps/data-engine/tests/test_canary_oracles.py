@@ -1,10 +1,8 @@
 """The canary's oracles about the deployed IMAGE itself.
 
-The infra2-sdk pin the canary asserts in the deployed image is the repository's pin.
-
-`PINNED_INFRA2_SDK` read 1.2.0 while pyproject pinned 1.3.2: the oracle would have called
-every correctly built image a failure, because the constant was updated by hand and the pin
-was not. This is the check that runs again (AGENTS.md rule 7).
+The infra2-sdk pin the canary asserts is read from the installed `truealpha-runtime`
+package metadata, the locked wheel URL. A hand-kept constant once read 1.2.0 while the lock
+pinned 1.3.2 and called every correctly built image a failure; there is no copy left to drift.
 """
 
 from __future__ import annotations
@@ -19,28 +17,44 @@ import psycopg
 import pytest
 from data_engine import release_identity
 from data_engine.config import settings
-from data_engine.datahub.canary_oracles import PINNED_INFRA2_SDK, failures_for_run, image_content_failures
+from data_engine.datahub import canary_oracles
+from data_engine.datahub.canary_oracles import failures_for_run, image_content_failures, pinned_infra2_sdk
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl$")
 
 
-def _pyproject_pin() -> str:
-    pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    pins = [item for item in pyproject["dependency-groups"]["dev"] if item.startswith("infra2-sdk")]
+def _runtime_pyproject_pin() -> str:
+    """The pin as the workspace source declares it (libs/runtime/pyproject.toml)."""
+    runtime = tomllib.loads((REPOSITORY_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8"))
+    pins = [item for item in runtime["project"]["dependencies"] if item.startswith("infra2-sdk")]
     assert len(pins) == 1, pins
     match = _WHEEL_PIN.search(pins[0])
     assert match, f"the infra2-sdk pin is not a release wheel URL: {pins[0]}"
     return match.group("version")
 
 
-def test_the_canary_asserts_the_version_the_repository_pins() -> None:
-    assert PINNED_INFRA2_SDK == _pyproject_pin()
+def test_the_oracle_reads_the_pin_from_the_installed_package_metadata() -> None:
+    assert pinned_infra2_sdk() == _runtime_pyproject_pin()
 
 
 def test_the_installed_sdk_is_the_pinned_one() -> None:
     """What the oracle checks inside the image, checked here against the workspace."""
-    assert importlib.metadata.version("infra2-sdk") == PINNED_INFRA2_SDK
+    assert importlib.metadata.version("infra2-sdk") == pinned_infra2_sdk()
+
+
+def test_a_loaded_sdk_other_than_the_pin_is_a_finding(monkeypatch) -> None:
+    real = importlib.metadata.version
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.0.1" if name == "infra2-sdk" else real(name))
+    assert f"infra2-sdk 0.0.1 loaded, truealpha-runtime pins {pinned_infra2_sdk()}" in image_content_failures()
+
+
+def test_a_pin_that_is_not_a_release_wheel_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(
+        importlib.metadata, "requires", lambda name: ["infra2-sdk[otel] @ https://example.invalid/sdk.whl"]
+    )
+    with pytest.raises(ValueError, match="without a release wheel"):
+        canary_oracles.pinned_infra2_sdk()
 
 
 # --- what the deployed image contains (#784) --------------------------------------------
