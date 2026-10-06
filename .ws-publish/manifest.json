@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "14659a041d3cba178fcdf7aaf6375db4421c77dec6be6630163c5d3af716df61",
     "root": "b0c1243f33abf788e9b08ad8b962004df40f8372faff27d326e6425d93b891cc",
-    "skills": "b799bb901485589faa83e62cec7e19b6363c1fea3b14d5a9c817b6b9b4eda916"
+    "skills": "b5a3d54c9c84a3fe5a29102b1258f711b1bb7297f031eee78ed3061187aa6fec"
   },
   "language": "en",
   "outputs": {
@@ -19,7 +19,7 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/audit/SKILL.md": "70e6059ff5059ce1cf2b9ba7a39fce43586c9be17fef69addba5724aa8b84874",
+      "skills/audit/SKILL.md": "e747dba2219e923692ac6561d40e78760f63d50a0c9edc609928d0b9bb29ee77",
       "skills/auto/SKILL.md": "7448a07fe2313fc05bdaa2456411ccce089075f398701dfdd9639e3e411fb121",
       "skills/close/SKILL.md": "f8dfd0ad608df0ce60212aa53572d7778b2109aa6085d17cdd43b73021428534",
       "skills/codegraph/SKILL.md": "974b470fa5d208da9aba8caf99e85fe50aad4f43e758a9058f6505bec057956f",
@@ -61,7 +61,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "db95c1b2871a86c4cbcf1729487ffc967b1d7945",
+  "source_revision": "53c773129bf9198d321d708fc3122fdc82300606",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",

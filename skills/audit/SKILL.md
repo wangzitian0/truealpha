@@ -69,10 +69,15 @@ Use all nine only for a large or risky change. Lean mode uses one scout per cate
 The Director cross-checks scouts. A doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature.
 A completeness claim (T1) against empty-run tests (G3) is false prosperity.
 
-## Convergence
+## Swarm mode (10 Interns, 3 to 5 rounds)
 
-A round with zero HIGH and zero new middle findings converges. The last round is audit-only: it edits nothing.
-Swarm mode runs 10 scouts for 3 rounds: find, refute, judge. Use it for architecture changes.
+Use swarm mode for complex refactors, architecture migrations, or high-risk changes.
+
+1. **Round 1 (Propose):** 10 parallel Interns inspect the system across distinct dimensions. Each Intern writes sharp defect hypotheses.
+2. **Rounds 2 to 4 (Cross-Falsify):** Interns cross-examine each other's claims. Interns take opposing hypotheses and attempt to disprove them using verbatim source code and physical facts. They mark hypotheses as DISPROVEN or CONFIRMED.
+3. **Final Round (Director Triangulation):** The Director reviews surviving claims, verifies physical anchors (Touch Reality), and rejects false positives.
+
+A round with zero HIGH and zero new middle findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
 
 ## Scout liveness
 
