@@ -1,42 +1,23 @@
 ---
 name: recall
-description: 开工前先检索跨 Agent 持久记忆库。在会话开始、接手新任务、或排查涉及“历史决策/踩坑/旧约定/之前怎么做的”问题时调用。
+description: Search the persistent cross-agent memory before work. Use at session start, when you take a new task, or when a question depends on a past decision, pitfall, or convention.
 ---
 
-# Recall — 跨 Agent 记忆检索
+# recall: look up before you act
 
-从工作区统一记忆库精准召回历史决策、技术真理与避坑指南，避免同一个坑踩两次。
+The commands for this environment are in `local.md`. This file holds only when to recall and how to use the result.
 
-**本文件只讲何时召回与怎么用召回结果。具体用哪条命令由本环境的 `local.md` 提供**——
-它属于实现，会随环境变化；判据不会。没有 `local.md` 的环境按自己的记忆工具替换即可。
+## When
 
----
+1. Session start or a new repository: read the latest architecture facts first.
+2. A hard bug or an architecture change: search by keyword for past pitfalls (deadlock, config key, permission boundary).
+3. The owner asks "how did we decide X" or "what did we find last time": recall first, then answer. Never invent history.
 
-## 触发时机
+## How to use results
 
-1. **会话开启 / 接手新工程**：先取本仓库最近的架构演变与关键上下文，再动手。
-2. **处理复杂 Bug / 架构调整**：按关键词定向检索历史踩坑点（死锁、配置参数、权限边界这类）。
-3. **用户提及历史上下文**：当用户说「之前怎么定案的」「记不记得上次的排查结果」时，
-   **先召回再回答，严禁凭空臆造**。
-
----
-
-## 消费与执行准则
-
-1. **先查后做，宁静不扰**
-   检索结果为空时，静默视为无历史记录，直接继续正常开发流程。除非用户主动询问，
-   不要特地汇报「没有找到相关记忆」——空结果不是一条值得占用注意力的信息。
-
-2. **高信噪比引用**
-   只提取核心结论与环境真理注入上下文，不要整条粘贴。保留原条目的 ID 或日期标记，
-   使结论可被溯源；一条无法溯源的「记忆」和臆造没有区别。
-
-3. **真实物理代码优先**
-   记忆反映的是**过去做过的决策**，而当前代码库是**现在的事实**。两者冲突时以代码为准，
-   并向用户指出漂移——记忆过期本身就是一条值得报告的发现。
-
-4. **防初筛信息销毁与锚点复核 (Anti-Lossy Compression & Spot-Check)**
-   当使用轻量模型（如 `glm-5.3-flash`）做知识库或记忆库批量初筛时，必须严格执行防有损压缩契约：
-   - **强制源码物理锚点**：初筛输出**严禁仅提供纯文本转述或二手摘要**，必须严格输出 `[Raw Anchors]`（包含文件相对/绝对路径与精确行号范围 `file_path#Lxx-Lyy` 或 note ID）；
-   - **决策前原位抽检**：下游 President/Lead 在根据初筛做关键技术选型或架构调整前，必须对至少 1~2 个关键锚点执行原位代码读取（Spot-check），验证上下文与负向约束未被曲解，阻断虚假引用（Hallucinated Citation）毒化决策链。
-
+1. **Empty result:** continue silently. Report "no memory found" only when the owner asks.
+2. **Cite briefly:** take the conclusion, not the whole entry. Keep the entry id or date. A memory without a source equals an invention.
+3. **Code wins over memory.** Memory records a past decision. The code is the present fact. On conflict, follow the code and report the drift.
+4. **Anchor small-model screening.** When a light model screens notes or a knowledge base, its output must carry anchors
+   (`file#Lxx-Lyy` or a note id), not paraphrase only. Before a design decision, read 1 to 2 anchors yourself.
+   Lossy summaries drop negative constraints and invite fake citations.

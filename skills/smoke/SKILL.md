@@ -1,114 +1,33 @@
 ---
 name: smoke
-description: >-
-  快速冒烟验证。改完代码后 30 秒内跑通编译、核心测试、环境体检与
-  基础设施连通性检查，确认没搞炸。当用户说"跑一下/冒烟/smoke/验证一下"时激活。
+description: Step 4 of the five-step flow. Run a fast check in about 30 seconds after an edit. Compile, focused tests, then connectivity. Not a deep audit.
 ---
 
-# Smoke — 快速冒烟验证
+# smoke: fast, cheap, honest
 
-改完代码后的第一道防线：30 秒内确认没搞炸。
+Smoke is the first guard after an edit. Use `audit` for depth and `close` for the exit gate.
 
-> **定位**：`/smoke` 是开发中随手跑的快速验证，不是深度审计。
-> 深度审计用 `/audit`，收尾门禁用 `/close`。
+## Order (left to right, fail fast)
 
----
+1. **Compile or syntax** on the changed files only (`python -m py_compile`, `ruff check --select E,F`, `go build ./...`, `tsc --noEmit`).
+2. **Focused tests** that touch the change, with `-x`. Never run the full suite per round.
+   The owner stopped agents that waited minutes on slow CI. Cut slow tests and report what you cut.
+3. **Connectivity** of what the code depends on: credentials, services, MCP servers. Commands are in `local.md`.
 
-## 触发时机 (When to Use)
+Stop at the first red. Smoke reports the problem. It does not fix it, and it changes no file.
 
-1. 用户说："跑一下"、"冒烟"、"smoke"、"验证一下"、"没搞炸吧"；
-2. 完成一轮代码修改后，提交前的快速自检；
-3. 环境配置变更后，验证基础设施连通性。
+## Rules that came from failures
 
----
+- **Existence is not validity.** "The variable is set" and "the process is alive" prove nothing.
+  Call a read-only endpoint, or do not claim green.
+- **No `grep PONG` probes.** A string match hides truncation, token overflow, and silent downgrade.
+  A probe must check three things: exit code 0, wall time, and a non-empty payload of the expected shape.
+- **Skipped is not passed.** Report a check that did not run as `SKIPPED`. Do not count it green.
+- **Use the small model tier.** A smoke run with a large model or deep reasoning burns the rolling quota.
+  Put concrete model names and flags in `local.md`. They change often.
+- **Do not wait on slow CI.** When a run exceeds the budget, run the focused checks yourself and report the CI status separately.
 
-## 检查清单 (30 秒内完成)
+## Report
 
-### 1. 编译 / 语法检查
-
-```bash
-# Python 项目
-python -m py_compile <changed_files>
-# 或整体 lint
-ruff check <path> --select E,F
-
-# Go 项目
-go build ./...
-
-# Node 项目
-npx tsc --noEmit
-```
-
-判定：零编译错误。
-
-### 2. 核心测试
-
-```bash
-# 只跑与改动相关的测试，不跑全量
-python -m pytest <test_file_or_dir> -q --tb=short -x
-
-# 如果有 Makefile
-make test-quick
-```
-
-判定：全部 PASS，0 failures。`-x` 第一个失败即停止，快速反馈。
-
-### 3. 环境连通性与模型基线探针
-
-编译与测试证明**代码**没坏，不证明**它依赖的东西**还在。第三步检查本环境的
-基础设施是否可达：凭证是否仍被 provider 接受、MCP 服务是否起得来、各宿主模型是否健康。
-
-**存在性不是有效性。** 「变量已设置」「进程活着」都不构成可用的证据——
-要么打一次只读端点，要么不要声称它是绿的。本环境的具体探针见 `local.md`。
-
-#### 3.1 根除 PONG Blindness（假绿盲区）
-严禁简单通过 `grep PONG` 判定模型或接口可用（容易掩盖长上下文截断、token 溢出、空跑或静默降级）：
-- **结构化探针要求**：模型/接口探针必须输出可解析的结构化结果，校验三要素：
-  1. 退出码 `exit_code == 0`；
-  2. 壁钟耗时（捕获超长冷启动或近死锁卡顿）；
-  3. 非空响应与有效载荷校验（严格校验返回预期的结构或签名，而非包含某字符串）。
-
-#### 3.2 多端小杯 (Small-Cup) 秒级冒烟基线
-在冒烟阶段，严格使用各端小杯执行器，**严禁触发大杯深度长思考，防止高频自动化烧穿官方账号滚动配额**：
-- **Google (Agy)**: `gemini-3.8-flash-low`
-- **Claude Code**: `claude -p --model sonnet --effort low`
-- **Codex (OpenAI)**: `codex exec -c model=gpt-6-astra -c model_reasoning_effort=medium`
-- **Pi Coding Agent**: `pi -p --provider zai-coding-cn --model glm-5.3-flash`
-- **马仔 (Swarm Worker)**: `glm-5.3-flash`（并发秒级自检）
-
----
-
-## 汇报模板
-
-跑完后用一张表交代，不要逐条流水账——读的人要的是「哪一项红了」，不是过程。
-
-| # | 检查项 | 结果 | 耗时 |
-|---|---|---|---|
-| 1 | 编译 / 语法 | ✅/❌ | Xs |
-| 2 | 核心测试 | ✅/❌ (N passed) | Xs |
-| 3 | 环境体检 | ✅/❌ (N/N PASS) | Xs |
-| 4 | 基础设施 | ✅/❌/⏭️ | Xs |
-| 5 | Git 状态 | N files changed | — |
-
-**总耗时**: Xs | **结论**: 🟢 没搞炸 / 🔴 有问题
-
-⏭️ 表示**没跑成**，不是通过。把「没测成」记成绿的，正是这份清单要防的事。
-
----
-
-## 常见问题排查
-
-| 现象 | 可能原因 | 解决动作 |
-|------|----------|----------|
-| Codex 把某个 stdio MCP 显示为 `Unsupported` | Codex CLI 对非内置 stdio 传输统称 Unsupported，但实际能正常调用 | 运行 `codex exec` 验证真实调用 |
-| Claude Code `Failed to authenticate` | OAuth 凭证过期或 `CLAUDE_CONFIG_DIR` 错误 | 移除自定义环境变量，使用工作区 `.mcp.json` |
-| Worker 报 `HTTP 429 / 余额不足` | 平台额度耗尽 | 充值或切换底座模型 |
-| 凭证解析明显变慢 | 密钥缓存未命中，回源到 provider | 预热缓存（命令见 local.md） |
-
----
-
-## 执行准则
-
-1. **快是核心价值**：30 秒内出结果，超时即剪裁（跳过慢测试、跳过非必要宿主）；
-2. **只读不改**：冒烟过程不修改任何文件；
-3. **失败不阻塞**：报告问题但不自动修复，修复是人的决策。
+One table, one row per check: result (`PASS`, `FAIL`, `SKIPPED`), seconds, and the count (`N passed`).
+Add the total time and one sentence: which row is red.
