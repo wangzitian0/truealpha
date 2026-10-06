@@ -6,7 +6,9 @@ Materialized table: mart.issuer_analyst_ratings.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -21,11 +23,16 @@ from psycopg import Connection
 __all__ = (
     "AnalystRatingItem",
     "AnalystTrackRecord",
+    "FetchFailure",
+    "TickerCapture",
+    "UniverseCapture",
     "analyst_track_record",
     "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
     "materialize_universe_analyst_ratings",
 )
+
+log = logging.getLogger(__name__)
 
 _INSERT_SQL = """
 insert into mart.issuer_analyst_ratings (
@@ -62,6 +69,43 @@ on conflict (run_id, issuer_id) do update set
 
 _RATING_MIN = 1
 _RATING_MAX = 5
+
+
+@dataclass(frozen=True)
+class FetchFailure:
+    """One ticker whose consensus fetch raised. `error` reads `ExceptionType: message`."""
+
+    ticker: str
+    error: str
+
+
+@dataclass(frozen=True)
+class TickerCapture:
+    """The outcome of one ticker: the rows persisted and the fetch failure, if any."""
+
+    rows: int
+    failure: FetchFailure | None = None
+
+
+@dataclass(frozen=True)
+class UniverseCapture:
+    """The outcome of one universe run. The caller commits the rows, then calls
+    `raise_if_every_ticker_failed` so a run with no usable row ends as a failure."""
+
+    rows: int
+    failures: tuple[FetchFailure, ...] = ()
+
+    def raise_if_every_ticker_failed(self) -> None:
+        """Raise RuntimeError when every ticker of a non-empty run ended in a fetch error.
+
+        A partial failure stays as unavailable rows with a reason code and does not raise.
+        """
+        if self.rows > 0 and len(self.failures) == self.rows:
+            first = self.failures[0]
+            raise RuntimeError(
+                f"analyst ratings fetch failed for {len(self.failures)} of {self.rows} tickers; "
+                f"first error: {first.ticker}: {first.error}"
+            )
 
 
 def _count_from_share(total: int, share: float | None) -> int:
@@ -116,7 +160,7 @@ def capture_ticker_analyst_ratings(
     run_id: str,
     cutoff: datetime | None = None,
     raw_store: Any | None = None,
-) -> int:
+) -> TickerCapture:
     """Capture analyst consensus for a single ticker via moomoo API and persist.
 
     Args:
@@ -129,25 +173,31 @@ def capture_ticker_analyst_ratings(
         raw_store: Optional raw evidence object store.
 
     Returns:
-        Number of rows inserted (1 on success).
+        The rows inserted (1) and the fetch failure, if the fetch raised. A fetch failure
+        is logged at ERROR level with the ticker, the message and the traceback. It is
+        persisted as an unavailable row with the reason code `fetch_error:<ExceptionType>`.
     """
     as_of = cutoff or datetime.now(tz=UTC)
     if ctx is None:
         record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-        return materialize_analyst_ratings(
+        rows = materialize_analyst_ratings(
             connection,
             run_id=run_id,
             cutoff=as_of,
             ratings_data=[record],
         )
+        return TickerCapture(rows=rows)
 
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
+    failure: FetchFailure | None = None
     try:
         from data_engine.sources.moomoo import get_analyst_consensus
 
         payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
         consensus_row = _consensus_row(payload, company_id)
     except Exception as exc:
+        failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
+        log.exception("analyst consensus fetch failed for %s (%s): %s", ticker, company_id, failure.error)
         ratings_data = [
             {
                 "issuer_id": company_id,
@@ -169,12 +219,13 @@ def capture_ticker_analyst_ratings(
         else:
             ratings_data = [consensus_row]
 
-    return materialize_analyst_ratings(
+    rows = materialize_analyst_ratings(
         connection,
         run_id=run_id,
         cutoff=as_of,
         ratings_data=ratings_data,
     )
+    return TickerCapture(rows=rows, failure=failure)
 
 
 def materialize_analyst_ratings(
@@ -279,11 +330,16 @@ def materialize_universe_analyst_ratings(
     cutoff: datetime,
     tickers: Mapping[str, str],
     ctx: Any | None = None,
-) -> int:
-    """Capture and materialize analyst ratings for all issuers in a universe run."""
-    count = 0
+) -> UniverseCapture:
+    """Capture and materialize analyst ratings for all issuers in a universe run.
+
+    The caller owns the transaction. Commit the rows first, then call
+    `UniverseCapture.raise_if_every_ticker_failed` on the result.
+    """
+    rows = 0
+    failures: list[FetchFailure] = []
     for issuer_id, ticker in tickers.items():
-        count += capture_ticker_analyst_ratings(
+        captured = capture_ticker_analyst_ratings(
             ctx,
             ticker=ticker,
             company_id=issuer_id,
@@ -291,4 +347,7 @@ def materialize_universe_analyst_ratings(
             run_id=run_id,
             cutoff=cutoff,
         )
-    return count
+        rows += captured.rows
+        if captured.failure is not None:
+            failures.append(captured.failure)
+    return UniverseCapture(rows=rows, failures=tuple(failures))

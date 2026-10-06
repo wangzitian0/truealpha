@@ -323,23 +323,38 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         if opend_ctx is not None:
             try:
                 with opend_ctx as ctx:
-                    rows_count = materialize_universe_analyst_ratings(
+                    captured = materialize_universe_analyst_ratings(
                         connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=ctx
                     )
             except Exception as exc:
                 context.log.warning("OpenD connection failed (%s); recording unavailable analyst ratings", exc)
-                rows_count = materialize_universe_analyst_ratings(
+                captured = materialize_universe_analyst_ratings(
                     connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
                 )
         else:
-            rows_count = materialize_universe_analyst_ratings(
+            captured = materialize_universe_analyst_ratings(
                 connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
             )
         connection.commit()
 
-    context.log.info("published %s analyst ratings rows for %s", rows_count, config.universe)
-    context.add_output_metadata({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
-    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+    context.add_output_metadata(
+        {
+            "universe": config.universe,
+            "run_id": head.run_id,
+            "rows": captured.rows,
+            "fetch_errors": len(captured.failures),
+        }
+    )
+    # After the commit and outside the OpenD try block: the unavailable rows stay, and the
+    # op, the job and the head-report run end as FAILURE instead of "published N rows" (#771).
+    captured.raise_if_every_ticker_failed()
+    context.log.info(
+        "published %s analyst ratings rows for %s (%s fetch errors)",
+        captured.rows,
+        config.universe,
+        len(captured.failures),
+    )
+    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": captured.rows})
 
 
 @dg.op

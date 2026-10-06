@@ -425,7 +425,7 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     monkeypatch.setattr(
         analyst_ratings,
         "materialize_universe_analyst_ratings",
-        lambda _c, **kwargs: 0,
+        lambda _c, **kwargs: analyst_ratings.UniverseCapture(rows=0),
     )
     report = {"universe_id": TOPT_ID, "denominator": 20, "questions": {}}
     monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **kwargs: compiled.append(kwargs) or report)
