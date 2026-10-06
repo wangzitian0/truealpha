@@ -1,5 +1,8 @@
-# CI and governance changes need explicit owner routing. A required independent
-# approval can be enabled after the repository has a second write collaborator.
+# This file requests a review from the owner. It does not make owner approval a merge condition.
+# The merge condition for a change that does not reach production is `ci-required` and
+# AGENTS.md rule 4. The agent that owns the change merges it when both pass.
+# Only a production deployment needs the owner's approval of the exact release SHA
+# and the owner's presence (docs/release-protocol.md, "Production needs the owner").
 /.github/ @wangzitian0
 /AGENTS.md @wangzitian0
 /governance/ @wangzitian0

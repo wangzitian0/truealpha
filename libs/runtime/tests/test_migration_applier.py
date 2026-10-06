@@ -248,6 +248,11 @@ TARGETS_THE_RESET_MUST_REFUSE = (
     ("postgresql://postgres:hunter2@db.example.invalid:5432/truealpha", "is not a local target"),
     ("postgresql://postgres@127.0.0.1:5432/postgres", "maintenance database"),
     ("postgresql://postgres@127.0.0.1:5432/two words", "not a plain identifier"),
+    # #1056: on the operator's machine an SSH tunnel to the VPS reads as the loopback.
+    # Production's Postgres is published on the VPS loopback at :15433 and staging's at
+    # :15432 (AGENTS.md), so the port, not the host, says which server this is.
+    ("postgresql://postgres@127.0.0.1:15433/truealpha", "is not a local target"),
+    ("postgresql://postgres@localhost:15432/truealpha", "is not a local target"),
     ("host=127.0.0.1 dbname=truealpha", "must be a postgresql:// URI"),
     ("", "takes no default target"),
 )
@@ -310,6 +315,31 @@ LOCALITY_CASES = (
     ("postgresql:///truealpha?user=postgres", "local"),
     ("postgresql://postgres@/truealpha?host=/var/run/postgresql", "local"),
     ("postgres://u@db.example.invalid:15433/truealpha?sslmode=require", "remote"),
+    # #1056: the production port is never local, whatever host spelling reaches it.
+    # Production Postgres is `truealpha-postgres` on the VPS loopback :15433 and staging is
+    # :15432; an SSH tunnel makes both read as the operator's own loopback.
+    ("postgresql://postgres@127.0.0.1:15433/truealpha", "remote"),
+    ("postgresql://postgres:secret@localhost:15433/truealpha", "remote"),
+    ("postgresql://user@[::1]:15433/db", "remote"),
+    ("postgresql://postgres@127.0.0.1:15432/truealpha", "remote"),
+    # The same port in every other place libpq reads one. Each of these reaches the
+    # production server, so each one has to be remote.
+    ("postgresql://postgres@127.0.0.1/truealpha?port=15433", "remote"),
+    ("postgresql://postgres@127.0.0.1/truealpha?sslmode=disable&port=15433&x=y", "remote"),
+    ("postgresql://postgres@127.0.0.1:5432,127.0.0.1:15433/truealpha", "remote"),
+    ("postgresql://postgres@127.0.0.1/truealpha?port=5432,15433", "remote"),
+    ("postgresql://postgres@127.0.0.1:015433/truealpha", "remote"),
+    ("postgresql://postgres@/truealpha?host=/var/run/postgresql&port=15433", "remote"),
+    # Percent-encoded digits are decoded by libpq, so `1%35433` is 15433. A port that is
+    # not plain digits cannot be proven different, so it fails closed.
+    ("postgresql://postgres@127.0.0.1/truealpha?port=1%35433", "remote"),
+    # The negative controls: a neighbouring port, the local compose port, and a port-shaped
+    # string that is not the `port` parameter. Without these the rule could be "everything
+    # on the loopback is remote" and the cases above would still pass.
+    ("postgresql://postgres@127.0.0.1:15434/truealpha", "local"),
+    ("postgresql://postgres@127.0.0.1:5433/truealpha", "local"),
+    ("postgresql://postgres@127.0.0.1:5432/truealpha?port=5432", "local"),
+    ("postgresql://postgres@127.0.0.1:5432/truealpha?application_name=port=15433", "local"),
     ("postgresql://u:p@truealpha-postgres-staging:5432/truealpha", "remote"),
     ("postgresql://u@10.0.0.7/truealpha", "remote"),
     # A hostname that resolves to the loopback today is still another machine: this has
@@ -319,7 +349,9 @@ LOCALITY_CASES = (
 )
 
 
-def _classify(dsn: str) -> subprocess.CompletedProcess[str]:
+def _classify(dsn: str, **environment: str) -> subprocess.CompletedProcess[str]:
+    # A clean environment: libpq reads PGPORT when a DSN names no port, so the operator's
+    # own PGPORT must not decide what these tests expect.
     return subprocess.run(
         ["sh", str(REPO_ROOT / LOCAL_TARGET)],
         input=dsn,
@@ -327,6 +359,7 @@ def _classify(dsn: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
         timeout=60,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", **environment},
     )
 
 
@@ -336,6 +369,28 @@ def test_the_shared_classifier_says_which_server_this_is(dsn: str, locality: str
     assert completed.returncode == 0, completed.stderr
     parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
     assert parsed["ta_locality"] == locality, completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("dsn", "environment", "locality"),
+    [
+        # libpq applies PGPORT when the DSN names no port, so a tunnel can hide in the
+        # environment instead of the string.
+        ("postgresql://postgres@127.0.0.1/truealpha", {"PGPORT": "15433"}, "remote"),
+        ("postgresql://postgres@127.0.0.1/truealpha", {"PGPORT": "0015432"}, "remote"),
+        # An explicit port in the DSN wins over PGPORT, so it decides alone.
+        ("postgresql://postgres@127.0.0.1:5432/truealpha", {"PGPORT": "15433"}, "local"),
+        ("postgresql://postgres@127.0.0.1/truealpha", {"PGPORT": "5432"}, "local"),
+        ("postgresql://postgres@127.0.0.1/truealpha", {}, "local"),
+    ],
+)
+def test_the_shared_classifier_reads_the_port_libpq_would_use_from_pgport(
+    dsn: str, environment: dict[str, str], locality: str
+) -> None:
+    completed = _classify(dsn, **environment)
+    assert completed.returncode == 0, completed.stderr
+    parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
+    assert parsed["ta_locality"] == locality, (dsn, environment, completed.stdout)
 
 
 def test_the_shared_classifier_redacts_the_password_it_was_given() -> None:

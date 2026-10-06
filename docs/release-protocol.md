@@ -116,8 +116,9 @@ On 2026-09-17 green merges to main sat untagged for up to 16.5 minutes because
 nobody ran this ceremony by hand (#860). `auto-release-staging.yml` now runs
 `tools/cut_release.sh --auto` for you, on one condition the owner set that day:
 "先在 staging 做吧，prod 回头再说" — staging only, full stop. Production still
-moves only on a deliberate `--prod` run; nothing about the automatic path
-changes that.
+moves only on a deliberate `--prod` run that carries the owner's approval of
+the exact SHA ("Production needs the owner" below); nothing about the automatic
+path changes that.
 
 The workflow triggers on every green `ci-required` push to main, then waits
 20 minutes before it does anything — not a courtesy delay, a debounce. A
@@ -145,9 +146,11 @@ things: it writes that trailer, and it refuses outright if `--prod` is also
 given. That refusal is the second, independent lock on "staging only" — the
 first is that `auto-release-staging.yml` never types `--prod` anywhere in the
 file at all (`libs/runtime/tests/test_ci_workflows.py` greps the literal
-string). Promotion after an automatic release is unchanged: an operator reads
-staging's evidence and runs `cut_release.sh vX.Y.Z --prod` by hand, same as
-after a hand-cut one. `libs/runtime/tests/test_auto_release.py` and the
+string). Promotion after an automatic release is unchanged: an agent reads
+staging's evidence and asks the owner to approve the exact release SHA. After
+the owner approves it, the agent runs
+`cut_release.sh vX.Y.Z --prod --owner-approved-sha <sha>`, same as after a
+hand-cut one. `libs/runtime/tests/test_auto_release.py` and the
 `--auto`/`--prod` cases in `test_cut_release.py` hold all of this against the
 unfixed code, not just the fixed one.
 
@@ -157,6 +160,41 @@ production) counts as a production pipeline. Normal PR merges to `main` never
 reach production (they feed the staging release flow); once a PR is merge-ready
 under `AGENTS.md` rule 4, the agent that owns it merges it without waiting for
 owner approval.
+
+## Production needs the owner
+
+Owner instruction, 2026-10-06:
+
+> 只有 prod 环境部署需要我批准和在场。其他的事情 agent 都可以自己干，但是需要满足每个 stage 的 checklist（部分是文字描述、部分是 skill、部分是门禁）。
+
+Production promotion needs two things from the owner: approval of the exact
+release SHA, and the owner's presence while the promotion runs. Every other
+action is the agent's task when the checklist of its stage passes. This covers
+merging any PR, including a CI or governance change, cutting a release, and a
+staging deploy. `.github/CODEOWNERS` asks the owner for a review of CI and
+governance paths. It is not a merge condition.
+
+Two entry points reach production, and both refuse without the approval:
+
+| Entry point | Input | Refusal |
+|---|---|---|
+| `tools/cut_release.sh <tag> --prod` | `--owner-approved-sha <sha>` | Exit 2, before any `git` or `gh` call when the flag is missing. Exit 2, before the tag push, when the value is not main HEAD. `--dry-run` runs the same check. |
+| `deploy-release.yml` with `deploy_type=prod` | `owner_approved_sha` | The first step after checkout fails the run, before any install or dispatch to infra2. |
+
+Both run `tools/owner_approval_gate.sh`, the one implementation. It passes only
+when the value is exactly 40 lowercase hex characters and equals the commit
+being promoted. An abbreviated SHA, an uppercase SHA, and the SHA of an older
+commit are refusals. `--owner-approved-sha` without `--prod` is also a refusal.
+`libs/runtime/tests/test_cut_release.py` and `test_ci_workflows.py` run both
+entry points, and `tools/mutations.json` holds a mutation that removes each check.
+
+The value proves that the caller named the exact commit. It does not prove who
+typed it, because the agent runs `gh` as the owner's account. The owner's
+presence stays a human fact: the agent passes the SHA only after the owner
+approved that SHA in the conversation. A required reviewer on a GitHub
+`production` environment would prove who approved. That environment does not
+exist in this repository today (infra2#1035 tracks it), so the check above is
+the only mechanical guard.
 
 ## Staging verification is two facts, not one
 

@@ -26,6 +26,12 @@ on:
         description: Optional override — derived from the PR whose merge commit is the release SHA when blank.
         required: false
         type: string
+      owner_approved_sha:
+        description: >-
+          Required when deploy_type is prod, ignored otherwise. The full 40-character SHA of the release
+          commit that the owner approved. A prod run refuses unless it equals the commit version_ref names.
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -50,6 +56,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Only a production deployment needs the owner (owner instruction 2026-10-06, #1056;
+      # AGENTS.md rule 4). This is the FIRST step after checkout, so a prod dispatch
+      # with no owner approval fails in seconds, before any install or evidence read.
+      # tools/owner_approval_gate.sh is the one implementation, shared with
+      # tools/cut_release.sh --prod. Any other deploy_type passes through untouched.
+      # The input proves the caller named the exact commit; it cannot prove who typed it.
+      - name: Require the owner's approval of the release SHA for production
+        env:
+          DEPLOY_TYPE: ${{ inputs.deploy_type }}
+          VERSION_REF: ${{ inputs.version_ref }}
+          OWNER_APPROVED_SHA: ${{ inputs.owner_approved_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOY_TYPE" != "prod" ]]; then
+            echo "deploy_type=${DEPLOY_TYPE}: no owner approval is needed"
+            exit 0
+          fi
+          release_sha="$(git rev-list -n 1 "refs/tags/${VERSION_REF}^{commit}" 2>/dev/null || true)"
+          if ! sh tools/owner_approval_gate.sh "$OWNER_APPROVED_SHA" "$release_sha"; then
+            echo "::error::production needs the owner's approval of the exact release SHA: set owner_approved_sha to the 40-character SHA the owner approved"
+            exit 1
+          fi
+          echo "owner approval covers ${release_sha}"
       - uses: astral-sh/setup-uv@v5
       - name: Install the pinned SDK contract and the workspace
         # --all-packages, not --no-install-workspace: three later steps run

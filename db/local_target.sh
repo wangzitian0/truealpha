@@ -29,7 +29,8 @@
 #   ta_scheme ta_authority ta_database ta_query ta_host ta_redacted ta_locality
 #
 # `ta_redacted` has the password removed and is the ONLY form safe to print or log.
-# `ta_locality` is `local` or `remote`.
+# `ta_locality` is `local` or `remote`. A loopback or socket host is `remote` anyway when
+# the DSN names a port where a deployed Postgres listens (see `deployed_ports` below).
 # Exit 0 when the DSN parsed, 2 when it is not a postgresql:// URI.
 set -eu
 
@@ -79,6 +80,119 @@ case "$authority" in
 esac
 redacted="${redacted}/${database}"
 
+# The VPS publishes its Postgres containers on the VPS's own loopback: production on
+# 15433 and staging on 15432 (AGENTS.md, "Environments and source gotchas"). An operator
+# reaches them through an SSH tunnel, so on the operator's machine the DSN reads
+# `127.0.0.1:15433` and the host test below calls it local, while the database behind it
+# is production. The host cannot tell the two apart. The port can: no local database in
+# this repository uses either port (compose publishes 5432), so a DSN that names one is
+# a deployed server whatever its host says. It stays reachable the way every remote
+# target does, through the caller's explicit override, which says the operator means it.
+#
+# A port can arrive in four spellings, and each one reaches the same server:
+#   * `host:port` in the authority, one per comma-separated host (libpq tries them in
+#     order, so `127.0.0.1:5432,127.0.0.1:15433` reaches production the day the first is
+#     down);
+#   * `?port=` in the query string, which overrides the authority;
+#   * a port with leading zeros, `015433`, which libpq reads as 15433;
+#   * PGPORT in the environment, which libpq applies when the DSN names no port at all.
+# A port that is not plain digits (`1%35433` is 15433 once percent-decoded) cannot be
+# proven different, so it counts as deployed. An undecidable input fails closed, never
+# open.
+deployed_ports="15432 15433"
+
+# Success when `$1` is, or cannot be proven not to be, a deployed port.
+port_is_deployed() {
+    pd_port="$1"
+    case "$pd_port" in
+        '') return 1 ;;
+        *[!0-9]*) return 0 ;;
+    esac
+    while :; do
+        case "$pd_port" in
+            0?*) pd_port="${pd_port#0}" ;;
+            *) break ;;
+        esac
+    done
+    for pd_known in $deployed_ports; do
+        if [ "$pd_port" = "$pd_known" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Every port the DSN names, from the authority and from `port=` in the query. `names_port`
+# records whether it named any, because PGPORT only applies when it named none.
+names_port=no
+names_deployed_port=no
+remaining_hosts="$hostport"
+while :; do
+    case "$remaining_hosts" in
+        *,*)
+            element="${remaining_hosts%%,*}"
+            remaining_hosts="${remaining_hosts#*,}"
+            more_hosts=yes
+            ;;
+        *)
+            element="$remaining_hosts"
+            more_hosts=no
+            ;;
+    esac
+    case "$element" in
+        \[*) element_port="${element#*\]}" ;;
+        *:*) element_port=":${element#*:}" ;;
+        *) element_port="" ;;
+    esac
+    element_port="${element_port#:}"
+    if [ -n "$element_port" ]; then
+        names_port=yes
+        if port_is_deployed "$element_port"; then
+            names_deployed_port=yes
+        fi
+    fi
+    [ "$more_hosts" = yes ] || break
+done
+remaining_query="${query#\?}"
+while [ -n "$remaining_query" ]; do
+    case "$remaining_query" in
+        *\&*)
+            pair="${remaining_query%%\&*}"
+            remaining_query="${remaining_query#*\&}"
+            ;;
+        *)
+            pair="$remaining_query"
+            remaining_query=""
+            ;;
+    esac
+    case "$pair" in
+        port=*)
+            query_ports="${pair#port=}"
+            names_port=yes
+            while :; do
+                case "$query_ports" in
+                    *,*)
+                        query_port="${query_ports%%,*}"
+                        query_ports="${query_ports#*,}"
+                        more_ports=yes
+                        ;;
+                    *)
+                        query_port="$query_ports"
+                        more_ports=no
+                        ;;
+                esac
+                if port_is_deployed "$query_port"; then
+                    names_deployed_port=yes
+                fi
+                [ "$more_ports" = yes ] || break
+            done
+            ;;
+    esac
+done
+if [ "$names_port" = no ] && port_is_deployed "${PGPORT:-}"; then
+    names_deployed_port=yes
+fi
+
 # An empty host is libpq's default, which is a Unix socket on this machine — that is how
 # the compose container's own psql and the postgres image's initdb hook connect, and an
 # explicit leading `/` is a socket directory. Everything else is another machine until
@@ -89,6 +203,10 @@ case "$host" in
     '' | localhost | 127.0.0.1 | '[::1]' | ::1 | /*) locality=local ;;
     *) locality=remote ;;
 esac
+# A deployed server's port outranks a loopback host (see `deployed_ports` above).
+if [ "$names_deployed_port" = yes ]; then
+    locality=remote
+fi
 
 # POSIX single-quote escaping, in the shell rather than through sed: a value reaching a
 # caller's `eval` must not be able to end its own quoting. A URI cannot legally contain a

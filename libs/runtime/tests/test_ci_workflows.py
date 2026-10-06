@@ -21,8 +21,10 @@ from __future__ import annotations
 import ast
 import importlib.metadata
 import importlib.util
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -2692,3 +2694,137 @@ def test_the_publish_record_root_holds_only_the_record() -> None:
         f"publish record and nothing else; git tracks {entries}. Scan what was added, or remove "
         f"the exclusion."
     )
+
+
+# --- #1056: only a production deployment needs the owner ----------------------------
+# Owner instruction, 2026-10-06 (infra2#1035): production needs the owner's approval of
+# the exact SHA and the owner's presence. `deploy-release.yml` with `deploy_type=prod` is
+# the second path to production beside `tools/cut_release.sh --prod`, so it carries the
+# same gate. The tests run the step's own script text, not a copy of it: a workflow edit
+# that loosens the step changes what these tests execute.
+
+OWNER_GATE_STEP = "Require the owner's approval of the release SHA for production"
+RELEASE_TAG = "v1.2.3"
+SHA_THE_OWNER_DID_NOT_APPROVE = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+def _repo_with_a_release_tag(tmp_path: Path) -> tuple[Path, str]:
+    """A throwaway checkout holding the gate script and one annotated release tag, which
+    is all the step reads: it resolves the tag to a commit with `git rev-list`."""
+    repo = tmp_path / "release_checkout"
+    (repo / "tools").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "tools" / "owner_approval_gate.sh", repo / "tools" / "owner_approval_gate.sh")
+    identity = ["-c", "user.name=release-test", "-c", "user.email=release-test@example.invalid"]
+    signing = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+    environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *identity, *signing, *arguments],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=environment,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "release")
+    git("tag", "-a", RELEASE_TAG, "-m", RELEASE_TAG)
+    return repo, git("rev-parse", "HEAD")
+
+
+def _run_owner_gate_step(
+    repo: Path, *, deploy_type: str, approved: str, version_ref: str = RELEASE_TAG
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", str(step(RELEASE, OWNER_GATE_STEP)["run"])],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOY_TYPE": deploy_type,
+            "VERSION_REF": version_ref,
+            "OWNER_APPROVED_SHA": approved,
+        },
+    )
+
+
+def test_a_prod_dispatch_carrying_the_approved_sha_passes_the_owner_gate(tmp_path: Path) -> None:
+    repo, release_sha = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert f"owner approval covers {release_sha}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("approved", "refusal"),
+    [
+        ("", "needs the owner's approval of the exact release SHA"),
+        (SHA_THE_OWNER_DID_NOT_APPROVE, "does not cover this commit"),
+        ("not-a-sha", "exactly 40 characters"),
+    ],
+)
+def test_a_prod_dispatch_without_a_matching_approval_stops_at_the_owner_gate(
+    tmp_path: Path, approved: str, refusal: str
+) -> None:
+    repo, _ = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=approved)
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert refusal in result.stderr, result.stderr
+    assert "::error::production needs the owner's approval" in result.stdout, result.stdout
+
+
+def test_a_prod_dispatch_for_a_missing_tag_stops_at_the_owner_gate(tmp_path: Path) -> None:
+    repo, release_sha = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha, version_ref="v9.9.9")
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "release SHA is not a 40-character" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("deploy_type", ["staging", "preview/tag"])
+def test_a_deploy_that_is_not_production_needs_no_owner_approval(tmp_path: Path, deploy_type: str) -> None:
+    """The other half of the owner's instruction: staging and preview are the agent's."""
+    repo, _ = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type=deploy_type, approved="")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "no owner approval is needed" in result.stdout
+
+
+def test_the_owner_gate_runs_first_cannot_be_skipped_and_reads_the_input() -> None:
+    inputs = triggers(RELEASE)["workflow_dispatch"]["inputs"]
+    assert "owner_approved_sha" in inputs, "deploy-release.yml has no way to carry the owner's approval"
+    assert inputs["owner_approved_sha"]["required"] is False, (
+        "the input is required only for prod; a required input would force an approval onto staging"
+    )
+
+    gate = step(RELEASE, OWNER_GATE_STEP)
+    assert gate["env"]["OWNER_APPROVED_SHA"] == "${{ inputs.owner_approved_sha }}"
+    assert gate["env"]["DEPLOY_TYPE"] == "${{ inputs.deploy_type }}"
+    assert "if" not in gate, "an `if` on the gate step can skip it; the script decides by deploy_type itself"
+    assert "continue-on-error" not in gate, "a gate that may fail without failing the job is not a gate"
+    assert "continue-on-error" not in job(RELEASE, "request"), "the job must fail when the gate fails"
+
+    names = [spec.get("name") or spec.get("uses") for spec in job(RELEASE, "request")["steps"]]
+    gate_at = names.index(OWNER_GATE_STEP)
+    for later in (
+        "astral-sh/setup-uv@v5",
+        "Install the pinned SDK contract and the workspace",
+        "Verify release evidence and render request",
+        "Dispatch the validated request to infra2",
+    ):
+        assert gate_at < names.index(later), (
+            f"{later!r} runs before the owner gate: a prod dispatch must fail in seconds, before any "
+            f"install, evidence read or dispatch to infra2"
+        )
