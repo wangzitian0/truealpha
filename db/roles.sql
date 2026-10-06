@@ -158,7 +158,8 @@ grant select on staging.api_call_ledger to app_ops_reader;
 grant select on staging.capture_entity_refs to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
--- #1062: the served head (age, limit, label, availability) and the two tables behind it.
+-- #1062: the served head, with its age, limit, label and availability.
+-- Also its two tables and the view of the environments that hold heads.
 -- Consumers read mart.served_head, not mart.current_pointer_head. mart_readonly already
 -- holds select on every mart relation; the explicit lines keep the grant visible here.
 grant select on mart.served_head to mart_readonly;
@@ -167,6 +168,8 @@ grant select on mart.served_artifact to mart_readonly;
 grant select on mart.served_artifact to app_ops_reader;
 grant select on mart.freshness_limit to mart_readonly;
 grant select on mart.freshness_limit to app_ops_reader;
+grant select on mart.served_head_environments to mart_readonly;
+grant select on mart.served_head_environments to app_ops_reader;
 -- #712: the data-engine build behind the newest run, for the /admin deployments card.
 grant select on mart.data_engine_identity to app_ops_reader;
 -- #756: the database environment identity, for admin / status readers.

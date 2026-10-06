@@ -3,14 +3,15 @@
 -- Problem: a head stamps `freshness = 'fresh'` when it is published and never again.
 -- A head that stopped advancing 13 days ago still reads fresh.
 --
--- This file adds four objects. It changes no existing table, view or column.
---   mart.freshness_limit   the limits, in hours, one row per cadence
---   mart.served_artifact   the registry: which cadence each served artifact has
---   mart.head_freshness    the one function that turns a refresh time into an age and a label
---   mart.served_head       the one view consumers read instead of mart.current_pointer_head
+-- This file adds five objects. It changes no existing table, view or column.
+--   mart.freshness_limit          the limits, in hours, one row per cadence
+--   mart.served_artifact          the registry: which cadence each served artifact has
+--   mart.head_freshness           the one function that turns a refresh time into an age and a label
+--   mart.served_head              the one view consumers read instead of mart.current_pointer_head
+--   mart.served_head_environments the environments that hold heads, and whether this database serves them
 --
--- Owner limits (2026-10-06): daily data 3 days, weekly data 14 days, quarterly data
--- checked monthly with a limit of 30 days. No limit is longer than 30 days.
+-- Owner limits (2026-10-06): 3 days for daily data and 14 days for weekly data.
+-- Quarterly data is checked monthly, with a limit of 30 days. No limit is longer than 30 days.
 -- Past its limit, a value is served with freshness 'stale'. Past 30 days it is withheld.
 --
 -- Git is the authority for every value in this file. A boot replays the seed below, and the
@@ -18,9 +19,12 @@
 -- seed in this file in a reviewed change. Do not add a second migration for the same row:
 -- the two files would overwrite each other on every boot.
 --
--- Boot-lock rules (libs/runtime/tests/test_migration_boot_locks.py): every statement here
--- takes only ROW EXCLUSIVE or ACCESS SHARE locks. A seed row is written only when it differs.
--- The view is replaced only when its definition differs.
+-- Boot-lock rules (libs/runtime/tests/test_migration_boot_locks.py): on a settled database,
+-- every statement here takes only three lock modes on a mart relation.
+-- They are ACCESS SHARE, ROW EXCLUSIVE and SHARE UPDATE EXCLUSIVE. COMMENT ON takes the last one.
+-- A seed row is updated only when it differs. Postgres locks the conflicting row before it
+-- tests the WHERE clause. That lock is a row lock, not a table lock.
+-- A view is replaced only when its definition differs.
 
 -- 1. The limits.
 create table if not exists mart.freshness_limit (
@@ -43,8 +47,11 @@ on conflict (limit_key) do update
     where mart.freshness_limit.hours is distinct from excluded.hours;
 
 -- 2. The registry: one row per served artifact, each with one cadence.
--- `wired` is true when a stored "last refreshed" time exists for the artifact.
--- An unwired row has no refresh evidence yet. No code may invent one for it.
+-- `wired` is a readiness flag. It is true when an age source is wired for the artifact.
+-- Today the only age source is the pointer's `advanced_at`, reached through `universe_like`.
+-- A false row has no wired age source yet. Other tables hold a time, for example
+-- `staging.accepted_rulesets.advanced_at` and `mart.nightly_verdicts.ran_at`. No row uses them.
+-- Nothing in the database reads `wired`, and nothing enforces it.
 -- `served_to` names the audience: consumers (Web App, MCP, chat), operators (admin pages
 -- and deploy checks) or internal.
 create table if not exists mart.served_artifact (
@@ -70,7 +77,9 @@ values
     ('head-reports', 'standards', 'head_reports_schedule', null, 'daily', 'operators', false),
     ('standards-backfill', 'standards', 'standard_backfill_schedule', null, 'weekly', 'consumers', false),
     ('universe-refresh', 'universe_refresh', 'universe_refresh_schedule', null, 'weekly', 'consumers', false),
-    ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'weekly', 'consumers', false),
+    -- market-data: the lane runs on weekdays only (cron `15 21 * * 1-5`).
+    -- After a long weekend the age can pass 72 hours. Decide the family again when it is wired.
+    ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'daily', 'internal', false),
     ('output-invariants', 'quality', 'output_invariants_schedule', null, 'daily', 'operators', false),
     ('datahub-confidence-report', 'quality', 'datahub_confidence_report_schedule', null, 'daily', 'operators', false),
     ('model-key-health', 'quality', 'model_key_health_schedule', null, 'daily', 'operators', false),
@@ -116,7 +125,7 @@ as $$
         -- A refresh time in the future counts as age 0. A null refresh time has no age.
         select case
                    when p_refreshed_at is null then null
-                   else greatest(0, extract(epoch from p_as_of - p_refreshed_at) / 3600)
+                   else greatest(0, extract(epoch from p_as_of - p_refreshed_at)::numeric / 3600)
                end as hours
     ),
     cap as (
@@ -216,6 +225,36 @@ $$;
 
 comment on view mart.served_head is
     '#1062: The newest governed head per key with its age, limit, label and availability. The one read point for consumers.';
+
+-- 5. The environments that hold heads.
+-- `mart.served_head` shows only the heads of this database's own environment. A database can
+-- hold heads of other environments, or have no environment identity row. Then the view is
+-- empty although heads exist. A reader that sees no rows needs to tell that case apart from a
+-- database with no head at all. This view says which environments hold heads and which one
+-- this database serves. It holds counts only and no run id.
+do $$
+declare
+    wanted constant text := $view$
+select h.environment,
+       count(*) as heads,
+       h.environment is not distinct from (select environment from mart.environment_identity) as served
+from mart.current_pointer_head h
+group by h.environment
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.served_head_environments') is null
+       or pg_get_viewdef(to_regclass('mart.served_head_environments'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.served_head_environments as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
+
+comment on view mart.served_head_environments is
+    '#1062: Per environment, the number of governed heads and whether this database serves them.';
 
 -- `mart_readonly` and `app_ops_reader` receive select on these relations from db/roles.sql,
 -- which runs after migrations. No grant here: the roles do not exist yet during a fresh pass.

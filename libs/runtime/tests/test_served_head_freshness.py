@@ -1,17 +1,17 @@
 """The served head ages at read time (#1062).
 
-`mart.head_freshness` turns a refresh time and a cadence family into an age, a limit, a
-label, an availability and a reason code. `mart.served_head` applies it to every governed
-head. The limits live in `mart.freshness_limit`. Git is their authority: a replay of the
-migration restores the shipped values.
+`mart.head_freshness` turns a refresh time and a cadence family into five values. They are an
+age, a limit, a label, an availability and a reason code. `mart.served_head` applies it to
+every governed head. The limits live in `mart.freshness_limit`. Git is their authority. A replay of
+the migration restores the shipped values.
 
-Every test builds a scratch database from the real migration chain, so a change to the
-migration shows in the result. Rows are seeded inside a transaction that is rolled back.
-Each time is relative to one fixed instant, so no test depends on the wall clock.
+Every test builds a scratch database from the real migration chain. A change to the migration
+shows in the result. Rows are seeded inside a transaction that is rolled back. Each time is
+relative to one fixed instant, so no test depends on the wall clock.
 
-The owner limits (2026-10-06): daily data 3 days, weekly data 14 days, quarterly data
-30 days, and no limit above 30 days. Past its limit a value reads stale. Past 30 days it
-is withheld.
+The owner limits (2026-10-06) are 3 days for daily data and 14 days for weekly data. They are
+30 days for quarterly data. No limit is above 30 days. Past its limit a value reads stale. Past 30 days
+it is withheld.
 """
 
 from __future__ import annotations
@@ -216,6 +216,12 @@ def test_a_limit_that_is_not_whole_days_is_named_in_hours(conn: psycopg.Connecti
     assert read(conn, 2 * DAY, "daily").staleness_reason == "older_than_36h"
 
 
+def test_the_age_is_numeric(conn: psycopg.Connection) -> None:
+    """The cast is explicit, so the type does not depend on the Postgres version."""
+    row = conn.execute("select pg_typeof(age_hours)::text from mart.head_freshness(now(), 'daily')").fetchone()
+    assert row == ("numeric",)
+
+
 # --- T5: the served head ------------------------------------------------------------------
 
 
@@ -366,13 +372,59 @@ def test_a_head_that_matches_two_registry_rows_takes_the_strictest_and_appears_o
     assert (row["artifact_key"], row["limit_hours"], row["freshness"]) == ("head:topt", 72, "stale")
 
 
+# --- the environments that hold heads ------------------------------------------------------
+
+
+def test_the_environments_view_counts_heads_per_environment_and_marks_the_served_one(
+    conn: psycopg.Connection,
+) -> None:
+    environment = _environment(conn)
+    seed_head(conn, "universe:topt-us-env-a", DAY)
+    seed_head(conn, "universe:qqq-us-env-a", DAY)
+    seed_head(conn, "universe:topt-us-env-b", DAY, environment="other-environment")
+    rows = dict(
+        conn.execute(
+            "select environment, heads::text || ':' || served::text from mart.served_head_environments"
+        ).fetchall()
+    )
+    assert rows == {environment: "2:true", "other-environment": "1:false"}
+
+
+def test_a_staging_database_serves_only_its_own_heads_although_it_holds_both(conn: psycopg.Connection) -> None:
+    """Measured on Staging: the identity row says `staging`, and the pointer view holds the heads
+    of `production` and of `staging`."""
+    conn.execute("update mart.environment_identity set environment = 'staging'")
+    seed_head(conn, "universe:topt-us-staging-1", DAY, environment="staging")
+    seed_head(conn, "universe:qqq-us-staging-1", DAY, environment="staging")
+    seed_head(conn, "universe:topt-us-production-1", DAY, environment="production")
+    seed_head(conn, "universe:qqq-us-production-1", DAY, environment="production")
+    universes = conn.execute("select universe_id from mart.served_head order by universe_id").fetchall()
+    assert universes == [("universe:qqq-us-staging-1",), ("universe:topt-us-staging-1",)]
+    rows = dict(
+        conn.execute(
+            "select environment, heads::text || ':' || served::text from mart.served_head_environments"
+        ).fetchall()
+    )
+    assert rows == {"staging": "2:true", "production": "2:false"}
+
+
+def test_no_environment_is_served_when_the_identity_row_is_missing(conn: psycopg.Connection) -> None:
+    seed_head(conn, "universe:topt-us-env-none", DAY)
+    conn.execute("delete from mart.environment_identity")
+    assert conn.execute("select count(*) from mart.served_head").fetchone() == (0,)
+    assert conn.execute(
+        "select count(*) filter (where served), count(*) from mart.served_head_environments"
+    ).fetchone() == (0, 1)
+
+
 # --- the reader roles ---------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("role", ["mart_readonly", "app_ops_reader"])
 def test_the_reader_roles_can_read_the_served_head_and_its_tables(conn: psycopg.Connection, role: str) -> None:
-    """`db/roles.sql` grants the served head and the two tables behind it to the roles that read
-    the pointer head today: the Web App (`mart_readonly`) and the admin pages (`app_ops_reader`)."""
+    """`db/roles.sql` grants the served head and its tables to two roles. They are the roles that
+    read the pointer head today: the Web App (`mart_readonly`) and the admin pages
+    (`app_ops_reader`)."""
     run_id, _ = seed_head(conn, "universe:topt-us-roles", 4 * DAY)
     conn.execute(sql.SQL("set local role {}").format(sql.Identifier(role)))
     (row,) = served(conn, "universe:topt-us-roles")
@@ -428,7 +480,7 @@ def test_a_replay_of_the_migration_restores_the_shipped_limits(conn: psycopg.Con
     assert served(conn, "universe:topt-us-t6-replay")[0]["freshness"] == "stale"
 
 
-def test_a_replay_restores_a_deleted_limit_and_a_changed_registry_row(conn: psycopg.Connection) -> None:
+def test_a_replay_restores_a_changed_and_a_deleted_registry_row(conn: psycopg.Connection) -> None:
     conn.execute("update mart.served_artifact set family = 'weekly', wired = false where artifact_key = 'head:topt'")
     conn.execute("update mart.served_artifact set wired = true where artifact_key = 'market-data'")
     conn.execute("delete from mart.served_artifact where artifact_key = 'head:qqq'")
@@ -441,13 +493,32 @@ def test_a_replay_restores_a_deleted_limit_and_a_changed_registry_row(conn: psyc
             "where artifact_key in ('head:topt', 'market-data', 'head:qqq')"
         ).fetchall()
     )
-    assert rows == {"head:topt": "daily:true", "market-data": "weekly:false", "head:qqq": "daily:true"}
+    assert rows == {"head:topt": "daily:true", "market-data": "daily:false", "head:qqq": "daily:true"}
+
+
+def test_a_replay_restores_a_deleted_limit_row(conn: psycopg.Connection) -> None:
+    """The insert path of the seed: a limit row that is gone comes back with its shipped value."""
+    conn.execute("delete from mart.freshness_limit where limit_key = 'withhold'")
+    assert conn.execute("select count(*) from mart.freshness_limit where limit_key = 'withhold'").fetchone() == (0,)
+
+    conn.execute(MIGRATION.read_text(encoding="utf-8"))
+
+    assert conn.execute("select hours from mart.freshness_limit where limit_key = 'withhold'").fetchone() == (720,)
+
+
+def test_a_missing_withhold_limit_fails_closed(conn: psycopg.Connection) -> None:
+    """Without a cap, nothing is served: a value never reads available by the lack of a limit."""
+    run_id, _ = seed_head(conn, "universe:topt-us-t6-nocap", DAY)
+    conn.execute("delete from mart.freshness_limit where limit_key = 'withhold'")
+    assert read(conn, DAY, "daily").availability == "unavailable"
+    (row,) = served(conn, "universe:topt-us-t6-nocap")
+    assert (row["availability"], row["run_id"], row["head_run_id"]) == ("unavailable", None, run_id)
 
 
 def test_a_replay_with_no_change_takes_no_strong_lock(conn: psycopg.Connection) -> None:
-    """Boot-lock rule: a replay on a settled database holds only ACCESS SHARE, ROW EXCLUSIVE
-    and the SHARE UPDATE EXCLUSIVE of a comment. A strong lock on a mart relation would queue
-    the boot behind every open reader."""
+    """Boot-lock rule: a replay on a settled database holds only three lock modes. They are
+    ACCESS SHARE, ROW EXCLUSIVE and the SHARE UPDATE EXCLUSIVE of a comment. A strong lock on a
+    mart relation would queue the boot behind every open reader."""
     conn.execute(MIGRATION.read_text(encoding="utf-8"))
     held = conn.execute(
         """

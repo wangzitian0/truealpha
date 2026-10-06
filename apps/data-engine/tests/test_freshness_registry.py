@@ -3,10 +3,11 @@
 `mart.served_artifact` maps every served artifact to a cadence family, and the family names the
 read-time age limit. A lane that has no registry row would serve data with no limit at all.
 
-No database here. The registry is the seed in `db/migrations/20261006T1020_datahub_served_head_
-freshness.sql`, read from the file text, and the lanes are the Dagster definitions the
-deployed image loads. `libs/runtime/tests/test_served_head_freshness.py` proves that the file
-text and the real database agree, so reading the text is reading the registry.
+No database here. The registry is the seed in
+`db/migrations/20261006T1020_datahub_served_head_freshness.sql`, read from the file text. The
+lanes are the Dagster definitions that the deployed image loads.
+`libs/runtime/tests/test_served_head_freshness.py` proves that the file text and the real
+database agree. So reading the text is reading the registry.
 
 A new lane, a new schedule, a renamed schedule or a dead registry row turns a test red.
 """
@@ -47,8 +48,8 @@ def lane_schedules() -> dict[str, set[str]]:
     }
 
 
-# The three checks as pure functions, so a test can run each on a synthetic registry and show
-# that it reports what it must.
+# The three checks are pure functions. A test runs each on a synthetic registry.
+# That shows that each check reports what it must.
 
 
 def lanes_without_a_row(modules: Iterable[str], rows: Iterable[Row]) -> list[str]:
@@ -113,13 +114,21 @@ def test_every_row_has_a_known_cadence_and_never_the_withhold_limit() -> None:
     assert [row["artifact_key"] for row in rows if row["family"] == "withhold"] == []
 
 
-def test_a_row_is_wired_only_when_it_names_the_pointer_it_ages() -> None:
-    """Unwired means no stored refresh time exists yet. Only a governed head has one today:
-    the pointer's `advanced_at`. A wired row without a universe pattern claims evidence that no
-    table holds."""
+def test_a_wired_row_names_the_universe_pattern_that_its_age_source_reads() -> None:
+    """`wired` is a readiness flag. Today the only age source is the pointer's `advanced_at`.
+    The view reaches it through `universe_like`. A wired row with no pattern names a source that
+    no view reads. This test checks that fact in the data. It does not stop a consumer from
+    reading an artifact that is not wired. Nothing enforces that."""
     wired = {str(row["artifact_key"]): row["universe_like"] for row in registry() if row["wired"]}
     assert wired, "no row is wired, so the registry ages nothing"
     assert [key for key, universe_like in wired.items() if universe_like is None] == []
+
+
+def test_market_data_is_daily_and_internal_until_it_is_wired() -> None:
+    """The lane runs on weekdays only. After a long weekend its age can pass 72 hours.
+    Decide the family again when the row is wired."""
+    (row,) = [row for row in registry() if row["artifact_key"] == "market-data"]
+    assert (row["family"], row["served_to"], row["wired"]) == ("daily", "internal", False)
 
 
 def test_the_artifact_keys_and_schedule_names_are_unique() -> None:
