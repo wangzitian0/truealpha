@@ -147,8 +147,9 @@ def _seed_complete_production_run(
     valid_to_by_semantic: dict[str, datetime] | None = None,
     cutoff: datetime = CUTOFF,
     financial_vintage: dict[str, Any] | None = None,
+    environment: CaptureEnvironment = CaptureEnvironment.PRODUCTION,
 ):
-    """Seed one complete run.
+    """Seed one complete run in the given capture environment.
 
     A semantic type that `valid_from_by_semantic` omits gets valid_from = cutoff - 2 days.
     A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
@@ -176,7 +177,7 @@ def _seed_complete_production_run(
     )
     campaign = CaptureCampaign(
         campaign_policy_id="capture-policy:production-topt-integration-v1",
-        environment=CaptureEnvironment.PRODUCTION,
+        environment=environment,
         cutoff=cutoff,
         universe_refs=(list_version.universe,),
     )
@@ -1185,21 +1186,76 @@ def test_the_capture_status_counts_partition_the_results_of_a_run(connection, ho
     assert complete is (terminal == obligations)
 
 
-def test_the_database_refuses_a_snapshot_for_a_run_of_another_environment(connection) -> None:
-    """#1061: freeze no longer compares the run's environment with the declared identity;
-    the snapshot trigger does. The same run freezes once the identity matches again."""
+def _forbid_loading_observations(monkeypatch) -> list[str]:
+    """Make any observation load fail the test. The list records the run ids that were loaded."""
+    loaded: list[str] = []
+
+    def load(self, run_id, *, cutoff):
+        loaded.append(run_id)
+        raise AssertionError("freeze loaded observations for a run that it must refuse first")
+
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", load)
+    return loaded
+
+
+def _snapshot_count(connection, run_id: str) -> tuple[int]:
+    return connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run_id,)
+    ).fetchone()
+
+
+def test_freeze_refuses_a_staging_run_when_the_environment_identity_is_empty(connection, monkeypatch) -> None:
+    """#1061: with an empty identity table the snapshot trigger compares with NULL and does
+    not fire. The control row at the end shows that gap. Only the freeze check refuses."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, environment=CaptureEnvironment.STAGING
+    )
+    connection.execute("delete from mart.environment_identity")
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a production run, found a staging run"):
+            PostgresToptCoreRepository(connection).freeze_snapshot(
+                run_id=run.run_id, release_manifest_id=release_manifest_id
+            )
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_freeze_refuses_a_run_of_another_environment_when_the_identity_is_populated(connection, monkeypatch) -> None:
+    """#1061: the freeze check refuses before it loads any observation. The same run freezes
+    once the identity matches again."""
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
     repository = PostgresToptCoreRepository(connection)
     connection.execute("update mart.environment_identity set environment = 'staging'")
-
-    with pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"):
-        repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
-    assert connection.execute(
-        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
-    ).fetchone() == (0,)
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a staging run, found a production run"):
+            repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
 
     connection.execute("update mart.environment_identity set environment = 'production'")
     assert len(repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id).members) == 21
+
+
+def test_the_database_refuses_a_snapshot_for_a_run_of_another_environment(connection) -> None:
+    """#1061: the snapshot trigger is the second guard. It refuses a hand-written row when the
+    identity is populated. The same row passes once the identity matches."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
 
 
 class _BorrowedConnection:

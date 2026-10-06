@@ -431,7 +431,7 @@ class PostgresToptCoreRepository:
             )
         status = self._connection.execute(
             """
-            select cutoff, universe_id, universe_version, universe_sha256,
+            select environment, cutoff, universe_id, universe_version, universe_sha256,
                    obligation_count, success_count, unchanged_count
             from mart.topt_capture_status where run_id = %s
             """,
@@ -439,10 +439,15 @@ class PostgresToptCoreRepository:
         ).fetchone()
         if status is None:
             raise LookupError(f"capture run not found: {run_id}")
-        cutoff, universe_id, universe_version, universe_sha256, obligations, success, unchanged = status
-        # One result exists per obligation, and each result has one terminal state. A total of
-        # success plus unchanged that equals the obligations leaves no other state and no gap.
-        # The snapshot trigger still checks the environment and every state.
+        environment, cutoff, universe_id, universe_version, universe_sha256, obligations, success, unchanged = status
+        # The snapshot trigger compares the environment too. With an empty identity table the
+        # comparison is with NULL, and the trigger does not fire. This check covers that case.
+        identity_row = self._connection.execute("select environment from mart.environment_identity").fetchone()
+        governed_env = identity_row[0] if identity_row is not None else "production"
+        if environment != governed_env:
+            raise ValueError(f"core snapshot requires a {governed_env} run, found a {environment} run")
+        # At most one result exists per obligation, and each result has one terminal state.
+        # So success plus unchanged equal to the obligations leaves no gap and no other state.
         if success + unchanged != obligations:
             raise ValueError("core snapshot requires a completely successful run")
         rows = self._load_observations(run_id, cutoff=cutoff)
