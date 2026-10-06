@@ -6,6 +6,7 @@ import psycopg
 import pytest
 from botocore.exceptions import ClientError
 from infra2_sdk.runtime.probes import DependencyStatus, ProbeResult
+from truealpha_runtime import checks as checks_module
 from truealpha_runtime.checks import (
     DatabaseCheck,
     GraphStoreCheck,
@@ -83,6 +84,76 @@ def test_database_check_redacts_credentials_on_connection_failure(
     assert result.name == "database"
     assert secret_password not in result.detail
     assert "<redacted>" in result.detail
+
+
+LEAKED_PASSWORD = "supersecretpassword123"
+LEAKED_DSN = f"postgresql://user:{LEAKED_PASSWORD}@localhost:5432/testdb"
+
+
+class LeakyError(Exception):
+    """An error whose message carries the DSN and the bare password."""
+
+    def __init__(self) -> None:
+        super().__init__(f"cannot use {LEAKED_DSN}; password {LEAKED_PASSWORD} rejected")
+
+
+def _leaky_settings() -> RuntimeSettings:
+    return RuntimeSettings(database_url=LEAKED_DSN, _env_file=None)
+
+
+def _raise_leaky(*args, **kwargs):
+    raise LeakyError
+
+
+def test_database_check_redacts_dsn_and_password_when_the_probe_itself_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(checks_module, "probe_postgres", _raise_leaky)
+
+    result = DatabaseCheck(_leaky_settings()).probe()
+
+    assert result.status is DependencyStatus.ABSENT
+    assert result.detail.startswith("LeakyError: ")
+    assert LEAKED_PASSWORD not in result.detail
+    assert LEAKED_DSN not in result.detail
+    assert "<redacted-postgres-dsn>" in result.detail
+
+
+def test_database_check_reports_only_the_error_type_when_settings_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(checks_module, "PostgresSettings", _raise_leaky)
+
+    result = DatabaseCheck(_leaky_settings()).probe()
+
+    assert result.status is DependencyStatus.ABSENT
+    assert result.detail == "LeakyError"
+
+
+def test_graph_store_check_redacts_dsn_and_password_on_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(psycopg, "connect", _raise_leaky)
+
+    result = GraphStoreCheck(_leaky_settings()).probe()
+
+    assert result.status is DependencyStatus.ABSENT
+    assert result.detail.startswith("LeakyError: ")
+    assert LEAKED_PASSWORD not in result.detail
+    assert LEAKED_DSN not in result.detail
+    assert "<redacted-postgres-dsn>" in result.detail
+
+
+def test_graph_store_check_reports_only_the_error_type_when_settings_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(psycopg, "connect", _raise_leaky)
+    monkeypatch.setattr(checks_module, "PostgresSettings", _raise_leaky)
+
+    result = GraphStoreCheck(_leaky_settings()).probe()
+
+    assert result.status is DependencyStatus.ABSENT
+    assert result.detail == "LeakyError"
 
 
 def test_graph_store_check_reports_present_when_tables_exist(monkeypatch: pytest.MonkeyPatch) -> None:
