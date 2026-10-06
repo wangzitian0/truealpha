@@ -87,17 +87,19 @@ class S3RawObjectStore:
         )
         self.ensure_bucket()
 
-        exists = False
+        existing_length: int | None = None
         try:
             existing = self.client.head_object(Bucket=self.bucket, Key=key)
-            exists = True
-            if int(existing.get("ContentLength", -1)) != len(capture.body):
-                raise StorageError(f"content-address collision for {key}")
+            existing_length = int(existing.get("ContentLength", -1))
         except Exception as exc:
             if not is_not_found(exc):
                 raise StorageError(f"cannot inspect {key}") from exc
 
-        if not exists:
+        # Compare outside the try scope: the broad except must not replace this message.
+        if existing_length is not None and existing_length != len(capture.body):
+            raise StorageError(f"content-address collision for {key}")
+
+        if existing_length is None:
             try:
                 self.client.put_object(
                     Bucket=self.bucket,

@@ -11,6 +11,22 @@ from truealpha_runtime.config import RuntimeSettings
 from truealpha_runtime.storage import S3RawObjectStore
 
 
+def _redacted_detail(exc: Exception, settings: RuntimeSettings) -> str:
+    """Describe a database error without the DSN or the password.
+
+    Return only the error type when the Postgres settings cannot be built.
+    No settings object exists then, and the message can echo the DSN.
+    """
+    try:
+        postgres_settings = PostgresSettings(
+            dsn=settings.database_url,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+        )
+    except Exception:  # noqa: BLE001
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {_redact_error(str(exc), postgres_settings)}"
+
+
 class DatabaseCheck:
     name = "database"
 
@@ -29,7 +45,7 @@ class DatabaseCheck:
             return ProbeResult(
                 self.name,
                 DependencyStatus.ABSENT,
-                f"{type(exc).__name__}: {exc}",
+                _redacted_detail(exc, self.settings),
                 (time.perf_counter() - started) * 1000,
             )
 
@@ -64,19 +80,10 @@ class GraphStoreCheck:
                 (time.perf_counter() - started) * 1000,
             )
         except Exception as exc:  # noqa: BLE001
-            detail = f"{type(exc).__name__}: {exc}"
-            try:
-                ps_settings = PostgresSettings(
-                    dsn=self.settings.database_url,
-                    connect_timeout_seconds=self.settings.database_connect_timeout_seconds,
-                )
-                detail = f"{type(exc).__name__}: {_redact_error(str(exc), ps_settings)}"
-            except Exception:
-                pass
             return ProbeResult(
                 self.name,
                 DependencyStatus.ABSENT,
-                detail,
+                _redacted_detail(exc, self.settings),
                 (time.perf_counter() - started) * 1000,
             )
 
