@@ -1,4 +1,7 @@
 -- D5 E0: additive, append-only storage for list capture control identities.
+--
+-- #1061: raw.capture_checkpoints and raw.recapture_plans are retired.
+-- 20261006T1325_datahub_retire_empty_planes.sql drops them in deployed databases.
 
 create extension if not exists pgcrypto;
 
@@ -163,54 +166,6 @@ begin
             return false;
         end if;
         previous_key := current_key;
-    end loop;
-    return true;
-end;
-$$;
-
-create or replace function raw.has_canonical_text_json_array(values_json jsonb, allow_empty boolean)
-returns boolean language plpgsql immutable strict as $$
-declare
-    item_json jsonb;
-    item text;
-    previous_item text;
-begin
-    if jsonb_typeof(values_json) <> 'array' then
-        return false;
-    end if;
-    if jsonb_array_length(values_json) = 0 then
-        return allow_empty;
-    end if;
-    for item_json in select value from jsonb_array_elements(values_json) loop
-        if jsonb_typeof(item_json) <> 'string' then
-            return false;
-        end if;
-        item := item_json#>>'{}';
-        if item !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
-           or (previous_item is not null and previous_item collate "C" >= item collate "C") then
-            return false;
-        end if;
-        previous_item := item;
-    end loop;
-    return true;
-end;
-$$;
-
-create or replace function raw.has_canonical_obligation_ids(ids text[], allow_empty boolean)
-returns boolean language plpgsql immutable strict as $$
-declare
-    item_index integer;
-begin
-    if cardinality(ids) = 0 then
-        return allow_empty;
-    end if;
-    for item_index in 1..cardinality(ids) loop
-        if ids[item_index] is null or ids[item_index] !~ '^capture-list-obligation:[0-9a-f]{64}$' then
-            return false;
-        end if;
-        if item_index > 1 and ids[item_index - 1] collate "C" >= ids[item_index] collate "C" then
-            return false;
-        end if;
     end loop;
     return true;
 end;
@@ -399,34 +354,6 @@ create table if not exists raw.capture_attempt_results (
         or (outcome = 'unchanged' and reused_source_vintage_id is not null and source_vintage_id is null)
         or (outcome not in ('success', 'unchanged') and source_vintage_id is null and reused_source_vintage_id is null)
     )
-);
-
-create table if not exists raw.capture_checkpoints (
-    checkpoint_id              text primary key check (checkpoint_id ~ '^capture-checkpoint:[0-9a-f]{64}$'),
-    run_id                     text not null references raw.capture_runs(run_id),
-    sequence                   integer not null check (sequence > 0),
-    phase                      text not null check (phase in ('planned', 'raw_landed', 'normalized', 'manifest_persisted')),
-    completed_obligation_ids   text[] not null check (
-        raw.has_canonical_obligation_ids(completed_obligation_ids, true)
-    ),
-    recorded_at                timestamptz not null,
-    recorded_at_canonical      text not null,
-    content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
-    unique (run_id, sequence)
-);
-
-create table if not exists raw.recapture_plans (
-    plan_id                    text primary key check (plan_id ~ '^capture-list-recapture-plan:[0-9a-f]{64}$'),
-    selection_cutoff           timestamptz not null,
-    selection_cutoff_canonical text not null,
-    predicate_sha256           text not null check (predicate_sha256 ~ '^[0-9a-f]{64}$'),
-    predicate                  jsonb not null check (jsonb_typeof(predicate) = 'object'),
-    selected_obligation_ids    text[] not null check (
-        raw.has_canonical_obligation_ids(selected_obligation_ids, false)
-    ),
-    planner_version            text not null,
-    content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
-    created_at                 timestamptz not null default now()
 );
 
 create or replace function raw.validate_capture_campaign_address()
@@ -779,156 +706,6 @@ begin
 end
 $$;
 
-create or replace function raw.validate_capture_checkpoint_address()
-returns trigger language plpgsql as $$
-declare
-    identity_payload jsonb;
-    content_payload jsonb;
-begin
-    new.recorded_at_canonical := raw.persisted_canonical_timestamp(new.recorded_at, new.recorded_at_canonical);
-    identity_payload := jsonb_build_object('run_id', new.run_id, 'sequence', new.sequence);
-    content_payload := identity_payload || jsonb_build_object(
-        'phase', new.phase,
-        'completed_obligation_ids', to_jsonb(new.completed_obligation_ids),
-        'recorded_at', new.recorded_at_canonical
-    );
-    perform raw.assert_content_address(
-        new.checkpoint_id, 'capture-checkpoint', identity_payload, new.content_sha256, content_payload
-    );
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'raw.capture_checkpoints'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_checkpoint_address BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_checkpoint_address()'
-    ) then
-        drop trigger if exists zz_validate_checkpoint_address on raw.capture_checkpoints;
-        create trigger zz_validate_checkpoint_address
-        before insert on raw.capture_checkpoints
-        for each row execute function raw.validate_capture_checkpoint_address();
-    end if;
-end
-$$;
-
-create or replace function raw.validate_recapture_plan_address()
-returns trigger language plpgsql as $$
-declare
-    payload jsonb;
-    predicate_identity jsonb;
-    dimension text;
-    bounded boolean := false;
-begin
-    new.selection_cutoff_canonical := raw.persisted_canonical_timestamp(
-        new.selection_cutoff, new.selection_cutoff_canonical
-    );
-    if jsonb_typeof(new.predicate) <> 'object'
-       or (select count(*) from jsonb_object_keys(new.predicate)) <> 12
-       or not new.predicate ?& array[
-           'predicate_id', 'content_sha256', 'universe_refs', 'subject_ids',
-           'source_policy_ids', 'semantic_types', 'partitions', 'terminal_states',
-           'freshness_states', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
-       ]
-       or jsonb_typeof(new.predicate->'predicate_id') <> 'string'
-       or new.predicate->>'predicate_id' !~ '^recapture-predicate:[0-9a-f]{64}$'
-       or jsonb_typeof(new.predicate->'content_sha256') <> 'string'
-       or new.predicate->>'content_sha256' !~ '^[0-9a-f]{64}$'
-       or jsonb_typeof(new.predicate->'universe_refs') <> 'array'
-       or (
-           jsonb_array_length(new.predicate->'universe_refs') > 0
-           and not raw.has_canonical_universe_refs(new.predicate->'universe_refs')
-       ) then
-        raise check_violation using message = 'recapture predicate does not match the typed contract';
-    end if;
-    foreach dimension in array array[
-        'subject_ids', 'source_policy_ids', 'semantic_types', 'partitions', 'terminal_states',
-        'freshness_states', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
-    ] loop
-        if not raw.has_canonical_text_json_array(new.predicate->dimension, true) then
-            raise check_violation using message = 'recapture predicate arrays must be canonical';
-        end if;
-        if dimension = 'terminal_states' and exists (
-            select 1 from jsonb_array_elements_text(new.predicate->dimension) as state(value)
-             where value not in ('success', 'unchanged', 'unavailable', 'skipped_by_policy', 'failed')
-        ) then
-            raise check_violation using message = 'recapture terminal state is unknown';
-        end if;
-        if dimension = 'freshness_states' and exists (
-            select 1 from jsonb_array_elements_text(new.predicate->dimension) as state(value)
-             where value not in ('fresh', 'stale', 'unknown')
-        ) then
-            raise check_violation using message = 'recapture freshness state is unknown';
-        end if;
-        if dimension = any(array[
-            'source_policy_ids', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
-        ]) and exists (
-            select 1
-              from jsonb_array_elements_text(new.predicate->dimension) as coordinate(value)
-             where lower(value) ~ '(^|[._:/@+\-])(latest|current|default|stable|main|head|tip)($|[._:/@+\-])'
-        ) then
-            raise check_violation using message = 'recapture predicate version coordinates must not be mutable';
-        end if;
-        bounded := bounded or jsonb_array_length(new.predicate->dimension) > 0;
-    end loop;
-    bounded := bounded or jsonb_array_length(new.predicate->'universe_refs') > 0;
-    if not bounded then
-        raise check_violation using message = 'an unbounded recapture predicate is forbidden';
-    end if;
-    predicate_identity := new.predicate - 'predicate_id' - 'content_sha256';
-    perform raw.assert_content_address(
-        new.predicate->>'predicate_id',
-        'recapture-predicate',
-        jsonb_build_object('kind', 'recapture-predicate', 'identity', predicate_identity),
-        new.predicate->>'content_sha256',
-        predicate_identity
-    );
-    if new.predicate_sha256 <> new.predicate->>'content_sha256' then
-        raise check_violation using message = 'recapture predicate hash does not match typed content';
-    end if;
-    if new.planner_version !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
-       or lower(new.planner_version) ~
-           '(^|[._:/@+\-])(latest|current|default|stable|main|head|tip)($|[._:/@+\-])' then
-        raise check_violation using message = 'recapture planner version must not be mutable';
-    end if;
-    payload := jsonb_build_object(
-        'selection_cutoff', new.selection_cutoff_canonical,
-        'predicate', new.predicate,
-        'selected_obligation_ids', to_jsonb(new.selected_obligation_ids),
-        'planner_version', new.planner_version
-    );
-    perform raw.assert_content_address(
-        new.plan_id,
-        'capture-list-recapture-plan',
-        jsonb_build_object('kind', 'capture-list-recapture-plan', 'identity', payload),
-        new.content_sha256,
-        payload
-    );
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'raw.recapture_plans'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_recapture_plan_address BEFORE INSERT ON raw.recapture_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_recapture_plan_address()'
-    ) then
-        drop trigger if exists zz_validate_recapture_plan_address on raw.recapture_plans;
-        create trigger zz_validate_recapture_plan_address
-        before insert on raw.recapture_plans
-        for each row execute function raw.validate_recapture_plan_address();
-    end if;
-end
-$$;
-
 create or replace function raw.validate_capture_list_member()
 returns trigger language plpgsql as $$
 declare
@@ -1098,139 +875,6 @@ begin
 end
 $$;
 
-create or replace function raw.enforce_capture_checkpoint_progress()
-returns trigger language plpgsql as $$
-declare
-    previous_sequence integer;
-    previous_phase text;
-    previous_completed text[];
-    previous_recorded_at timestamptz;
-    previous_phase_rank integer;
-    new_phase_rank integer;
-begin
-    perform pg_advisory_xact_lock(hashtextextended(new.run_id, 0));
-    select sequence, phase, completed_obligation_ids, recorded_at
-      into previous_sequence, previous_phase, previous_completed, previous_recorded_at
-      from raw.capture_checkpoints
-     where run_id = new.run_id
-     order by sequence desc
-     limit 1;
-    if previous_sequence is null then
-        if new.sequence <> 1 then
-            raise exception 'first capture checkpoint sequence must be one';
-        end if;
-        return new;
-    end if;
-    if new.sequence <> previous_sequence + 1 then
-        raise exception 'capture checkpoint sequences must be contiguous';
-    end if;
-    previous_phase_rank := array_position(
-        array['planned', 'raw_landed', 'normalized', 'manifest_persisted'], previous_phase
-    );
-    new_phase_rank := array_position(
-        array['planned', 'raw_landed', 'normalized', 'manifest_persisted'], new.phase
-    );
-    if new_phase_rank < previous_phase_rank then
-        raise exception 'capture checkpoint phase cannot regress';
-    end if;
-    if new.recorded_at < previous_recorded_at then
-        raise exception 'capture checkpoint time cannot regress';
-    end if;
-    if not previous_completed <@ new.completed_obligation_ids then
-        raise exception 'capture checkpoint obligations cannot regress';
-    end if;
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'raw.capture_checkpoints'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER enforce_checkpoint_progress BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.enforce_capture_checkpoint_progress()'
-    ) then
-        drop trigger if exists enforce_checkpoint_progress on raw.capture_checkpoints;
-        create trigger enforce_checkpoint_progress
-        before insert on raw.capture_checkpoints
-        for each row execute function raw.enforce_capture_checkpoint_progress();
-    end if;
-end
-$$;
-
-create or replace function raw.validate_checkpoint_obligation_refs()
-returns trigger language plpgsql as $$
-declare
-    persisted_count integer;
-begin
-    if not raw.has_canonical_obligation_ids(new.completed_obligation_ids, true) then
-        return new;
-    end if;
-    select count(*) into persisted_count
-      from raw.capture_obligations
-     where run_id = new.run_id
-       and obligation_id = any(new.completed_obligation_ids);
-    if persisted_count <> cardinality(new.completed_obligation_ids) then
-        raise exception 'capture checkpoint references an unknown or cross-run obligation';
-    end if;
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'raw.capture_checkpoints'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_checkpoint_obligation_refs BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.validate_checkpoint_obligation_refs()'
-    ) then
-        drop trigger if exists validate_checkpoint_obligation_refs on raw.capture_checkpoints;
-        create trigger validate_checkpoint_obligation_refs
-        before insert on raw.capture_checkpoints
-        for each row execute function raw.validate_checkpoint_obligation_refs();
-    end if;
-end
-$$;
-
-create or replace function raw.validate_recapture_obligation_refs()
-returns trigger language plpgsql as $$
-declare
-    persisted_count integer;
-begin
-    if not raw.has_canonical_obligation_ids(new.selected_obligation_ids, false) then
-        return new;
-    end if;
-    select count(*) into persisted_count
-      from raw.capture_obligations
-     where obligation_id = any(new.selected_obligation_ids);
-    if persisted_count <> cardinality(new.selected_obligation_ids) then
-        raise exception 'recapture plan references an unknown obligation';
-    end if;
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'raw.recapture_plans'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_recapture_obligation_refs BEFORE INSERT ON raw.recapture_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_recapture_obligation_refs()'
-    ) then
-        drop trigger if exists validate_recapture_obligation_refs on raw.recapture_plans;
-        create trigger validate_recapture_obligation_refs
-        before insert on raw.recapture_plans
-        for each row execute function raw.validate_recapture_obligation_refs();
-    end if;
-end
-$$;
-
 create or replace function raw.enforce_capture_attempt_sequence()
 returns trigger language plpgsql as $$
 declare
@@ -1359,7 +1003,7 @@ begin
         'capture_campaign_list_versions',
         'capture_obligations', 'capture_work_items',
         'capture_obligation_work_bindings', 'capture_attempts',
-        'capture_attempt_results', 'capture_checkpoints', 'recapture_plans'
+        'capture_attempt_results'
     ] loop
         -- Boot-lock guard: drop + create takes SHARE ROW EXCLUSIVE on the table; skip it
         -- when the trigger is already exactly this one (the literal is its pg_get_triggerdef).

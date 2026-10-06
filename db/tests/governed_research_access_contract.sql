@@ -8,8 +8,7 @@ begin
     if to_regnamespace('app') is null then
         raise exception 'app schema is missing';
     end if;
-    if to_regclass('app.private_research_objects') is null
-       or to_regclass('app.authorization_decisions') is null
+    if to_regclass('app.authorization_decisions') is null
        or to_regclass('app.authorization_decision_grants') is null
        or to_regclass('app.access_audit_events') is null
        or to_regclass('app.publication_policy_sets') is null
@@ -17,24 +16,6 @@ begin
        or to_regclass('app.publication_policy_set_seals') is null
        or to_regclass('app.access_audit_metadata') is null then
         raise exception 'governed access storage boundary is incomplete';
-    end if;
-    if not exists (
-        select 1
-        from pg_class
-        where oid = 'app.private_research_objects'::regclass
-          and relrowsecurity
-          and relforcerowsecurity
-    ) then
-        raise exception 'private research objects must force row-level security';
-    end if;
-    if not exists (
-        select 1
-        from pg_policies
-        where schemaname = 'app'
-          and tablename = 'private_research_objects'
-          and policyname = 'private_research_owner_isolation'
-    ) then
-        raise exception 'private research owner policy is missing';
     end if;
 
     select count(*) into append_only_trigger_count
@@ -44,11 +25,8 @@ begin
       and tgrelid in (
           'app.tenants'::regclass,
           'app.principals'::regclass,
-          'app.tenant_memberships'::regclass,
           'app.entitlement_grants'::regclass,
           'app.grant_revocations'::regclass,
-          'app.publication_policies'::regclass,
-          'app.private_research_objects'::regclass,
           'app.authorization_decisions'::regclass,
           'app.authorization_decision_grants'::regclass,
           'app.publication_policy_sets'::regclass,
@@ -56,7 +34,7 @@ begin
           'app.publication_policy_set_seals'::regclass,
           'app.access_audit_events'::regclass
       );
-    if append_only_trigger_count <> 13 then
+    if append_only_trigger_count <> 10 then
         raise exception 'all governed access records must be append-only';
     end if;
 
@@ -95,24 +73,6 @@ values
     ('principal:alpha:alice', 'tenant:alpha', 'member', '2026-07-15T00:00:00Z'),
     ('principal:beta:bob', 'tenant:beta', 'member', '2026-07-15T00:00:00Z'),
     ('principal:platform:admin', 'tenant:platform', 'administrator', '2026-07-15T00:00:00Z');
-
-insert into app.tenant_memberships (
-    membership_event_id,
-    tenant_id,
-    principal_id,
-    membership_state,
-    effective_at,
-    recorded_at
-)
-values
-    (
-        'membership-event:alpha:alice:001',
-        'tenant:alpha',
-        'principal:alpha:alice',
-        'granted',
-        '2026-07-15T00:00:00Z',
-        '2026-07-15T00:00:00Z'
-    );
 
 insert into app.entitlement_grants (
     grant_id,
@@ -162,35 +122,6 @@ values
         '2026-07-15T00:10:00Z',
         'delegation_revoked',
         '2026-07-15T00:10:00Z'
-    );
-
-insert into app.publication_policies (
-    publication_policy_event_id,
-    publication_policy_id,
-    publication_class_id,
-    permitted,
-    successor_policy_id,
-    effective_at,
-    recorded_at
-)
-values
-    (
-        'publication-policy-event:001',
-        'publication-policy:research:v1',
-        'publication-class:standard:v1',
-        true,
-        null,
-        '2026-07-15T00:00:00Z',
-        '2026-07-15T00:00:00Z'
-    ),
-    (
-        'publication-policy-event:002',
-        'publication-policy:research:v1',
-        'publication-class:standard:v1',
-        true,
-        'publication-policy:research:v2',
-        '2026-07-15T00:20:00Z',
-        '2026-07-15T00:20:00Z'
     );
 
 insert into app.publication_policy_sets (
@@ -355,48 +286,6 @@ begin
     end;
 end;
 $$;
-
-insert into app.private_research_objects (
-    resource_id,
-    tenant_id,
-    owner_principal_id,
-    resource_type,
-    object_ref,
-    recorded_at
-)
-values
-    (
-        'document:alpha:private-001',
-        'tenant:alpha',
-        'principal:alpha:alice',
-        'private_document',
-        'object:alpha:001',
-        '2026-07-15T00:00:00Z'
-    ),
-    (
-        'conversation:alpha:private-001',
-        'tenant:alpha',
-        'principal:alpha:alice',
-        'private_conversation',
-        'object:alpha:conversation:001',
-        '2026-07-15T00:00:00Z'
-    ),
-    (
-        'document:beta:private-001',
-        'tenant:beta',
-        'principal:beta:bob',
-        'private_document',
-        'object:beta:001',
-        '2026-07-15T00:00:00Z'
-    ),
-    (
-        'conversation:beta:private-001',
-        'tenant:beta',
-        'principal:beta:bob',
-        'private_conversation',
-        'object:beta:conversation:001',
-        '2026-07-15T00:00:00Z'
-    );
 
 insert into app.authorization_decisions (
     decision_id,
@@ -770,11 +659,8 @@ begin
     foreach table_name in array array[
         'tenants',
         'principals',
-        'tenant_memberships',
         'entitlement_grants',
         'grant_revocations',
-        'publication_policies',
-        'private_research_objects',
         'authorization_decisions',
         'authorization_decision_grants',
         'publication_policy_sets',
@@ -807,9 +693,6 @@ begin
        or (select count(*) from app.grant_revocations where grant_id = 'grant:alpha:alice:001') <> 1 then
         raise exception 'grant-then-revoke history was not preserved';
     end if;
-    if (select count(*) from app.publication_policies where publication_policy_id = 'publication-policy:research:v1') <> 2 then
-        raise exception 'publication policy supersession history was not preserved';
-    end if;
     if (select count(*) from app.publication_policy_set_seals where publication_policy_set_id = 'publication-policy-set:research:v2') <> 1 then
         raise exception 'publication policy set was not sealed exactly once';
     end if;
@@ -832,26 +715,9 @@ end;
 $$;
 
 set local role app_runtime;
-select set_config('truealpha.tenant_id', 'tenant:alpha', true);
-select set_config('truealpha.principal_id', 'principal:alpha:alice', true);
 
 do $$
-declare
-    own_count integer;
-    cross_tenant_count integer;
 begin
-    select count(*) into own_count
-    from app.private_research_objects
-    where tenant_id = 'tenant:alpha';
-    select count(*) into cross_tenant_count
-    from app.private_research_objects
-    where tenant_id = 'tenant:beta';
-    if own_count <> 2 then
-        raise exception 'owner must see private conversation and document rows through RLS';
-    end if;
-    if cross_tenant_count <> 0 then
-        raise exception 'cross-tenant object-ID guessing bypassed RLS';
-    end if;
     if has_table_privilege('app_runtime', 'app.authorization_decisions', 'select')
        or has_table_privilege('app_runtime', 'app.access_audit_events', 'select') then
         raise exception 'app runtime must not read immutable audit base tables';

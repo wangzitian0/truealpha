@@ -1,5 +1,8 @@
 -- Governed multi-user research identity and private-state boundary.
 -- Authorization remains a server-side decision; these tables never feed factors.
+--
+-- #1061: app.tenant_memberships, app.publication_policies and app.private_research_objects
+-- are retired. 20261006T1325_datahub_retire_empty_planes.sql drops them in deployed databases.
 
 create schema if not exists app;
 
@@ -20,16 +23,6 @@ create table if not exists app.principals (
     tenant_id      text not null references app.tenants (tenant_id),
     principal_kind text not null check (principal_kind in ('member', 'administrator', 'service')),
     recorded_at    timestamptz not null default now()
-);
-
-create table if not exists app.tenant_memberships (
-    membership_event_id text primary key check (length(membership_event_id) > 0),
-    tenant_id            text not null references app.tenants (tenant_id),
-    principal_id         text not null references app.principals (principal_id),
-    membership_state     text not null check (membership_state in ('granted', 'revoked')),
-    effective_at         timestamptz not null,
-    recorded_at          timestamptz not null default now(),
-    check (recorded_at >= effective_at)
 );
 
 create table if not exists app.entitlement_grants (
@@ -54,75 +47,6 @@ create table if not exists app.grant_revocations (
     recorded_at   timestamptz not null default now(),
     check (recorded_at >= revoked_at)
 );
-
-create table if not exists app.publication_policies (
-    publication_policy_event_id text primary key check (length(publication_policy_event_id) > 0),
-    publication_policy_id       text not null check (length(publication_policy_id) > 0),
-    publication_class_id        text not null check (length(publication_class_id) > 0),
-    permitted                   boolean not null,
-    successor_policy_id         text,
-    effective_at                timestamptz not null,
-    recorded_at                 timestamptz not null default now(),
-    check (recorded_at >= effective_at),
-    check (successor_policy_id is null or successor_policy_id <> publication_policy_id)
-);
-
-create table if not exists app.private_research_objects (
-    resource_id       text primary key check (length(resource_id) > 0),
-    tenant_id         text not null references app.tenants (tenant_id),
-    owner_principal_id text not null references app.principals (principal_id),
-    resource_type     text not null check (resource_type in ('private_conversation', 'private_document')),
-    object_ref        text not null check (length(object_ref) > 0),
-    recorded_at       timestamptz not null default now()
-);
-
-do $$
-begin
-    if to_regclass('app.idx_private_research_objects_owner') is null then
-        create index if not exists idx_private_research_objects_owner
-            on app.private_research_objects (tenant_id, owner_principal_id, resource_id);
-    end if;
-end
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_class
-        where oid = 'app.private_research_objects'::regclass
-          and relrowsecurity
-          and relforcerowsecurity
-    ) then
-        alter table app.private_research_objects enable row level security;
-        alter table app.private_research_objects force row level security;
-    end if;
-end
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_policy
-        where polrelid = 'app.private_research_objects'::regclass
-          and polname = 'private_research_owner_isolation'
-          and polcmd = 'r'
-          and polpermissive
-          and polroles = '{0}'::oid[]
-          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
-          and pg_get_expr(polwithcheck, polrelid) is not distinct from null
-    ) then
-        drop policy if exists private_research_owner_isolation on app.private_research_objects;
-        create policy private_research_owner_isolation on app.private_research_objects
-            for select
-            using (
-                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-            );
-    end if;
-end
-$$;
 
 create table if not exists app.authorization_decisions (
     decision_id           text primary key check (decision_id ~ '^access-decision:[0-9a-f]{64}$'),
@@ -247,11 +171,8 @@ begin
     foreach table_name in array array[
         'tenants',
         'principals',
-        'tenant_memberships',
         'entitlement_grants',
         'grant_revocations',
-        'publication_policies',
-        'private_research_objects',
         'authorization_decisions',
         'access_audit_events'
     ]

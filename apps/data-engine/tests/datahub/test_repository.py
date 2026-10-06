@@ -14,11 +14,7 @@ from data_engine.config import settings
 from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
 from data_engine.datahub.control_plane import AttemptLedger, frozen_topt_universe, replay_retry_policy
 from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
-from truealpha_contracts.capture_control import (
-    CaptureCheckpoint,
-    CaptureObligationWorkBinding,
-    CheckpointPhase,
-)
+from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
     CaptureCampaign,
@@ -163,13 +159,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         final_attempt_id=attempt.attempt_id,
         reason_codes=("success",),
     )
-    checkpoint = CaptureCheckpoint(
-        run_id=run.run_id,
-        sequence=1,
-        phase=CheckpointPhase.MANIFEST_PERSISTED,
-        completed_obligation_ids=(obligation.obligation_id,),
-        recorded_at=STARTED_AT + timedelta(seconds=3),
-    )
     repository = PostgresCaptureControlRepository(connection)
 
     raw_fetch_id = connection.execute(
@@ -212,7 +201,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         freshness_state="fresh",
     )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result)
-    assert repository.put_checkpoint(checkpoint)
 
     status = repository.status(run.run_id)
     assert (status.obligation_count, status.terminal_count, status.success_count) == (1, 1, 1)
@@ -256,7 +244,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
             confidence=Decimal("0.95"),
         )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result) is False
-    assert repository.put_checkpoint(checkpoint) is False
 
     mismatched_result = ListObligationResult(
         obligation_id="list-obligation:" + "0" * 64,

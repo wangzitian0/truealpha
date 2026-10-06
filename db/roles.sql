@@ -24,9 +24,8 @@ end $$;
 alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
-grant select on app.publication_policies, app.publication_policy_sets,
+grant select on app.publication_policy_sets,
     app.publication_policy_entitlements, app.publication_policy_set_seals to app_runtime;
-grant select on app.private_research_objects to app_runtime;
 revoke select on app.access_audit_metadata from app_runtime;
 grant insert on app.authorization_decisions, app.authorization_decision_grants,
     app.access_audit_events to app_runtime;
@@ -54,10 +53,9 @@ grant execute on function app.validate_authorization_decision_required_grants() 
 grant select, insert, update on app.principal_credentials to app_runtime;
 grant select on app.principals, app.tenants to app_runtime;
 
--- Conversation persistence (#396, migration 0030). RLS-scoped like
--- private_research_objects: app_runtime authenticates as itself, then the
--- transaction-local tenant/principal GUCs (set by withOwnerScopedRuntime)
--- are what the row security policies actually check.
+-- Conversation persistence (#396, migration 0030). RLS-scoped: app_runtime
+-- authenticates as itself, then the transaction-local tenant/principal GUCs
+-- (set by withOwnerScopedRuntime) are what the row security policies actually check.
 grant select, insert on app.conversations, app.conversation_messages, app.research_gap_requests to app_runtime;
 grant select, insert, update (redeemed_at) on app.clarification_tokens to app_runtime;
 revoke select on app.conversation_audit_metadata from app_runtime;

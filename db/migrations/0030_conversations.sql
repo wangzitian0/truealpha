@@ -1,7 +1,7 @@
 -- Owner-scoped conversation persistence + clarification tokens — see #396
 -- (#225's discovery, #371's /conversations route). Mirrors app.principal_credentials
--- (0029) and app.private_research_objects (0022): RLS-isolated per owner via the
--- same transaction-local truealpha.tenant_id / truealpha.principal_id GUCs.
+-- (0029): RLS-isolated per owner via the same transaction-local
+-- truealpha.tenant_id / truealpha.principal_id GUCs.
 
 create table if not exists app.conversations (
     conversation_id    text primary key check (length(conversation_id) > 0),
