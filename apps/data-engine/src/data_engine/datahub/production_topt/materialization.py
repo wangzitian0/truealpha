@@ -431,50 +431,23 @@ class PostgresToptCoreRepository:
             )
         status = self._connection.execute(
             """
-            select environment, cutoff, universe_id, universe_version, universe_sha256,
-                   obligation_count, terminal_count, success_count, unchanged_count,
-                   unavailable_count, skipped_count, failed_count, complete
+            select cutoff, universe_id, universe_version, universe_sha256,
+                   obligation_count, success_count, unchanged_count
             from mart.topt_capture_status where run_id = %s
             """,
             (run_id,),
         ).fetchone()
         if status is None:
             raise LookupError(f"capture run not found: {run_id}")
-        (
-            environment,
-            cutoff,
-            universe_id,
-            universe_version,
-            universe_sha256,
-            obligations,
-            terminal,
-            success,
-            unchanged,
-            unavailable,
-            skipped,
-            failed,
-            complete,
-        ) = status
-        identity_row = self._connection.execute("select environment from mart.environment_identity").fetchone()
-        governed_env = identity_row[0] if identity_row is not None else "production"
-        if (
-            environment != governed_env
-            or complete is not True
-            or (
-                terminal,
-                success + unchanged,
-                unavailable,
-                skipped,
-                failed,
-            )
-            != (obligations, obligations, 0, 0, 0)
-        ):
-            raise ValueError(f"core snapshot requires a completely successful {governed_env.title()} run")
+        cutoff, universe_id, universe_version, universe_sha256, obligations, success, unchanged = status
+        # One result exists per obligation, and each result has one terminal state. A total of
+        # success plus unchanged that equals the obligations leaves no other state and no gap.
+        # The snapshot trigger still checks the environment and every state.
+        if success + unchanged != obligations:
+            raise ValueError("core snapshot requires a completely successful run")
         rows = self._load_observations(run_id, cutoff=cutoff)
         if len(rows) != obligations:
-            raise ValueError(
-                f"complete {governed_env.title()} run does not expose one normalized payload per obligation"
-            )
+            raise ValueError("complete run does not expose one normalized payload per obligation")
         grouped: dict[str, dict[str, _ObservationRow]] = {}
         for row in rows:
             by_type = grouped.setdefault(row.listing_id, {})

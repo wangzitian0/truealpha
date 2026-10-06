@@ -1082,6 +1082,116 @@ def test_the_database_refuses_a_snapshot_member_that_repeats_an_observation(conn
         insert_member("repeated", [ids[0], ids[0], ids[1], ids[2]])
 
 
+_NOT_SUCCESSFUL = ("unavailable", "skipped_by_policy", "failed", "missing")
+
+
+def _spoil_one_result(connection, run_id: str, how: str) -> None:
+    """Leave one obligation of a complete run without a successful terminal result.
+
+    Results are append-only by trigger, so the change bypasses the trigger for this
+    transaction only. The test's rollback restores everything."""
+    connection.execute("set local session_replication_role = replica")
+    result_id = connection.execute(
+        """
+        select result.result_id
+        from raw.capture_obligation_results result
+        join raw.capture_obligations obligation on obligation.obligation_id = result.capture_obligation_id
+        where obligation.run_id = %s
+        order by result.result_id limit 1
+        """,
+        (run_id,),
+    ).fetchone()[0]
+    if how == "missing":
+        connection.execute("delete from raw.capture_obligation_results where result_id = %s", (result_id,))
+    else:
+        connection.execute(
+            """
+            update raw.capture_obligation_results
+               set terminal_state = %s,
+                   final_attempt_id = case when %s = 'skipped_by_policy' then null else final_attempt_id end
+             where result_id = %s
+            """,
+            (how, how, result_id),
+        )
+    connection.execute("set local session_replication_role = origin")
+    assert connection.execute(
+        "select success_count + unchanged_count, obligation_count from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone() == (83, 84)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_freeze_refuses_a_run_with_one_obligation_that_did_not_succeed(connection, how: str) -> None:
+    """#1061: `success + unchanged == obligations` is the one status condition freeze keeps.
+    It leaves no room for an unavailable, skipped or failed obligation, or for a gap."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with pytest.raises(ValueError, match="core snapshot requires a completely successful run"):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_the_database_refuses_a_snapshot_for_a_run_with_one_obligation_that_did_not_succeed(
+    connection, how: str
+) -> None:
+    """#1061: the kept database check for the same input. The row binds 21 instruments and
+    84 observations, so only the run's own status can make the snapshot trigger refuse."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+@pytest.mark.parametrize("how", (None, *_NOT_SUCCESSFUL))
+def test_the_capture_status_counts_partition_the_results_of_a_run(connection, how: str | None) -> None:
+    """#1061: freeze drops its `unavailable == 0`, `skipped == 0`, `failed == 0` and
+    `terminal == obligations` terms because the status view makes them follow from
+    `success + unchanged == obligations`. This pins the view facts that argument uses."""
+    (_, run, _, _, *_rest) = _seed_complete_production_run(connection)
+    if how is not None:
+        _spoil_one_result(connection, run.run_id, how)
+
+    (obligations, terminal, success, unchanged, unavailable, skipped, failed, complete) = connection.execute(
+        """
+        select obligation_count, terminal_count, success_count, unchanged_count,
+               unavailable_count, skipped_count, failed_count, complete
+        from mart.topt_capture_status where run_id = %s
+        """,
+        (run.run_id,),
+    ).fetchone()
+
+    assert success + unchanged + unavailable + skipped + failed == terminal
+    assert terminal <= obligations
+    assert complete is (terminal == obligations)
+
+
+def test_the_database_refuses_a_snapshot_for_a_run_of_another_environment(connection) -> None:
+    """#1061: freeze no longer compares the run's environment with the declared identity;
+    the snapshot trigger does. The same run freezes once the identity matches again."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+
+    with pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"):
+        repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    assert len(repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id).members) == 21
+
+
 class _BorrowedConnection:
     """Lends the test's own transaction to code that would open a fresh psycopg
     connection: `PostgresToptGppeRepository` connects per call, but the governed
