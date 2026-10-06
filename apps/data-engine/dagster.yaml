@@ -30,3 +30,16 @@ compute_logs:
 # No anonymous phone-home from a bounded, isolated canary stack.
 telemetry:
   enabled: false
+
+# Tick retention (#1072). Three sensors poll every 30 seconds. Each poll that does no work
+# writes a SKIPPED tick to dagster.job_ticks. Dagster keeps SKIPPED sensor ticks for 7 days
+# by default. Here they expire after 3 days. The other statuses stay for ever (-1), so
+# every tick that did work or failed remains. Schedule ticks keep the Dagster defaults.
+# The daemon deletes expired ticks after each sensor tick.
+retention:
+  sensor:
+    purge_after_days:
+      skipped: 3
+      started: -1
+      success: -1
+      failure: -1
