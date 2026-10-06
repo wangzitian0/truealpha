@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
 from data_engine.datahub.standards.supply_chain_extraction import (
     extract_supply_chain_relationships,
     materialize_supply_chain_exposure,
@@ -50,7 +51,7 @@ def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> N
     partners = [
         SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")),
     ]
-    rec = supply_chain_exposure(partners, entity_id="issuer:nvda", as_of=now)
+    rec = supply_chain_exposure(partners, entity_id="issuer:nvda", as_of=now, supplies_to_edges_exist=True)
     count = materialize_supply_chain_exposure(
         conn,
         run_id="run:sc_both",
@@ -139,3 +140,25 @@ def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> No
     )
     assert total == 2
     assert len(conn.executed) == 2
+    # The mock holds no `staging.kg_edges` table, so no extraction exists: both rows say so.
+    reasons = [params[9] for _, params in conn.executed]
+    assert reasons == [["no_supply_chain_extraction"], ["no_supply_chain_extraction"]]
+
+
+def test_materialize_dict_with_partners_states_the_graph_measurement() -> None:
+    conn = _MockConnection()
+    now = datetime(2026, 9, 25, tzinfo=UTC)
+    materialize_supply_chain_exposure(
+        conn,
+        run_id="run:sc_dict",
+        cutoff=now,
+        exposure_data=[
+            {"issuer_id": "issuer:a", "partners": [], "supplies_to_edges_exist": True},
+            {"issuer_id": "issuer:b", "partners": [], "supplies_to_edges_exist": False},
+        ],
+    )
+    assert [params[9] for _, params in conn.executed] == [["no_disclosed_suppliers"], ["no_supply_chain_extraction"]]
+    with pytest.raises(KeyError, match="supplies_to_edges_exist"):
+        materialize_supply_chain_exposure(
+            conn, run_id="run:sc_dict", cutoff=now, exposure_data=[{"issuer_id": "issuer:c", "partners": []}]
+        )

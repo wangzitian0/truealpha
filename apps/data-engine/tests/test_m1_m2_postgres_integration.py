@@ -25,6 +25,7 @@ from data_engine.datahub.question_coverage import (
 from data_engine.datahub.standards.supply_chain_extraction import (
     SupplyChainPartner,
     materialize_supply_chain_exposure,
+    materialize_universe_supply_chain_exposure,
     supply_chain_exposure,
 )
 
@@ -82,7 +83,7 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
             "p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")
         ),
     ]
-    rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now)
+    rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now, supplies_to_edges_exist=True)
     count_sc = materialize_supply_chain_exposure(conn, run_id=run_id, cutoff=now, exposure_data=[rec_sc])
     assert count_sc == 1
 
@@ -106,3 +107,102 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
         cur.execute("delete from mart.issuer_analyst_ratings where run_id = %s", (run_id,))
         cur.execute("delete from mart.issuer_supply_chain_exposure where run_id = %s", (run_id,))
     conn.commit()
+
+
+# #772: the reason an unavailable supply-chain row carries must match what the graph knows.
+# The cutoff lies before every row any other test commits. The graph read is point in time,
+# so edges knowable after the cutoff stay invisible and these tests see only their own seed.
+_T772_CUTOFF = datetime(1990, 6, 30, tzinfo=UTC)
+_T772_KNOWABLE = datetime(1990, 1, 1, tzinfo=UTC)
+_T772_ISSUERS = {"issuer:t772:a": "AAA", "issuer:t772:b": "BBB"}
+
+
+def _seed_edge(
+    conn: psycopg.Connection[Any],
+    *,
+    from_id: str,
+    to_id: str,
+    relation_type: str,
+    knowable_at: datetime = _T772_KNOWABLE,
+    valid: str = "[1989-01-01,)",
+) -> None:
+    for entity_id in (from_id, to_id):
+        conn.execute(
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) "
+            "on conflict (id) do nothing",
+            (entity_id, entity_id),
+        )
+    conn.execute(
+        "insert into staging.kg_edges "
+        "(from_id, to_id, relation_type, valid_time, transaction_time, confidence, source, raw_ref) "
+        "values (%s, %s, %s, %s::daterange, %s, 0.9, 'test:t772', 'raw:t772')",
+        (from_id, to_id, relation_type, valid, knowable_at),
+    )
+
+
+def _materialize_t772(conn: psycopg.Connection[Any], run_id: str) -> dict[str, tuple[str, list[str], int]]:
+    written = materialize_universe_supply_chain_exposure(
+        conn, run_id=run_id, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+    )
+    assert written == len(_T772_ISSUERS)
+    rows = conn.execute(
+        "select issuer_id, availability_status, reason_codes, direct_partners "
+        "from mart.issuer_supply_chain_exposure where run_id = %s",
+        (run_id,),
+    ).fetchall()
+    return {str(row[0]): (str(row[1]), list(row[2]), int(row[3])) for row in rows}
+
+
+def test_a_graph_with_no_supplies_to_edge_says_no_extraction_ran(connection: psycopg.Connection[Any]) -> None:
+    # `holds` and `same_as` edges exist, as on Staging. Neither is a supplier edge, so neither
+    # may count as an extraction and neither may turn an issuer into a supply-chain partner.
+    _seed_edge(connection, from_id="fund:t772", to_id="issuer:t772:a", relation_type="holds")
+    _seed_edge(connection, from_id="issuer:t772:a", to_id="figi:t772:a", relation_type="same_as")
+    rows = _materialize_t772(connection, "run:t772:no-extraction")
+    assert rows == {
+        "issuer:t772:a": ("unavailable", ["no_supply_chain_extraction"], 0),
+        "issuer:t772:b": ("unavailable", ["no_supply_chain_extraction"], 0),
+    }
+
+
+def test_edges_for_one_issuer_leave_the_other_with_no_disclosed_suppliers(
+    connection: psycopg.Connection[Any],
+) -> None:
+    _seed_edge(connection, from_id="issuer:t772:a", to_id="customer:t772", relation_type="supplies_to")
+    rows = _materialize_t772(connection, "run:t772:edges-for-a")
+    assert rows == {
+        "issuer:t772:a": ("available", [], 1),
+        "issuer:t772:b": ("unavailable", ["no_disclosed_suppliers"], 0),
+    }
+
+
+def test_an_edge_knowable_after_the_cutoff_is_not_an_extraction(connection: psycopg.Connection[Any]) -> None:
+    _seed_edge(
+        connection,
+        from_id="issuer:t772:a",
+        to_id="customer:t772",
+        relation_type="supplies_to",
+        knowable_at=datetime(1991, 1, 1, tzinfo=UTC),
+    )
+    rows = _materialize_t772(connection, "run:t772:edge-after-cutoff")
+    assert rows == {
+        "issuer:t772:a": ("unavailable", ["no_supply_chain_extraction"], 0),
+        "issuer:t772:b": ("unavailable", ["no_supply_chain_extraction"], 0),
+    }
+
+
+def test_an_expired_edge_still_proves_an_extraction_ran(connection: psycopg.Connection[Any]) -> None:
+    # The relationship ended before the cutoff, so no issuer has a partner at the cutoff.
+    # The graph still holds a supplier edge, so the system did extract: not "no extraction".
+    _seed_edge(
+        connection,
+        from_id="issuer:t772:a",
+        to_id="customer:t772",
+        relation_type="supplies_to",
+        valid="[1980-01-01,1985-01-01)",
+    )
+    rows = _materialize_t772(connection, "run:t772:expired-edge")
+    assert rows == {
+        "issuer:t772:a": ("unavailable", ["no_disclosed_suppliers"], 0),
+        "issuer:t772:b": ("unavailable", ["no_disclosed_suppliers"], 0),
+    }
