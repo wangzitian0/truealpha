@@ -4,18 +4,32 @@
 availability of every governed head. A consumer that reads a pointer relation gets a head with
 no age. A consumer that subtracts a clock from `advanced_at` makes a second definition of age.
 
-The scope is what the guard must govern, not what passes today. It reads every file under the
-three consumer-reachable trees. Three rules run without a database:
+This guard is a heuristic. It catches the shapes that it knows, and the self-tests list them.
+A new shape can pass it. The per-reader behaviour tests of the follow-up changes (#1062 PR 2
+to PR 4) are the real proof. Each of them must show that its reader serves the head's run.
+
+The scope is what the guard must govern, not what passes today. It reads the Python and
+TypeScript files under the three consumer-reachable trees. Those are the suffixes in
+`TS_SUFFIXES` and `.py`. It does not read `.sql`, `.json` or `.md` files in those trees. It
+skips `node_modules`, `.next`, `dist`, `build` and `__pycache__`. Three rules run without a
+database:
 
   A  no SQL text reads a pointer relation. It reads `mart.served_head`.
   B  a file that reads a run-addressed relation also has SQL text on `mart.served_head`.
-  C  no file computes a head age: `now() - advanced_at`, `STALE_AFTER`, or a clock next to
-     an `advanced*` name.
+  C  no file computes a head age. These shapes count:
+     `now() - advanced_at` and its SQL variants; `STALE_AFTER`;
+     a clock next to an `advanced*` name;
+     a call to an age helper that receives an `advanced*` value.
 
 Rule B works per file, and a static scan cannot do better. The scan cannot prove that a run id
 flows from the head into a result query. A file that reads the head in one statement and the
 newest run in another passes rule B. Rule B finds files that never read the head. Review finds
-the rest. The follow-up changes of #1062 must check each reader by hand.
+the rest.
+
+Known limits. SQL built from `sql.Identifier` or other dynamic pieces is not read. A helper
+whose name has none of the age words (see `AGE_HELPER`) is not found. JSX text with an
+apostrophe or `//` can hide the rest of one line. A string that only talks about a pointer
+relation after `from` is a false positive. Review decides it.
 
 A fourth rule runs on a scratch migrated database. Every `mart` relation with a run key must be
 in SERVED or NOT_SERVED. A relation in NOT_SERVED must not appear in any consumer file.
@@ -58,9 +72,8 @@ SKIP_DIRECTORIES = {"node_modules", ".next", "__pycache__", "dist", "build"}
 #: Rule A: relations that hold a head with no age.
 POINTER_RELATIONS = ("mart.current_pointer_head", "mart.current_pointer", "mart.governed_strategy_run")
 
-#: The one read point, and the view of environments beside it. The second is not a head.
+#: The one read point. `mart.served_head_environments` is a different view and is not a head.
 SERVED_HEAD = "mart.served_head"
-HEAD_ENVIRONMENTS = "mart.served_head_environments"
 
 #: Columns that address a run, or the artifacts of one run. A mart relation with one of them
 #: holds results that a head must select.
@@ -129,6 +142,8 @@ class Source:
     code: str
     #: Lines where code subtracts or compares a clock against an `advanced*` name.
     head_age_lines: list[int]
+    #: Lines where a call to an age helper receives an `advanced*` value.
+    age_helper_lines: list[int]
 
 
 def _line_of(text: str, index: int) -> int:
@@ -265,12 +280,33 @@ def read_typescript(text: str) -> Source:
             literals.append(Literal(value, _line_of(text, start)))
         previous_end = end
     age_lines = [1] if TS_CLOCK_CALL.search(stripped) and ADVANCED_NAME.search(stripped) else []
-    return Source(literals, stripped, age_lines)
+    return Source(literals, stripped, age_lines, _typescript_age_helper_lines(stripped))
+
+
+def _typescript_age_helper_lines(code: str) -> list[int]:
+    """Lines where a call to a function with an age word in its name passes an `advanced*` value.
+
+    `hoursSince(row.advanced_at)` counts, wherever `hoursSince` is defined. The arguments are
+    read up to the matching parenthesis, at most 400 characters.
+    """
+    lines: list[int] = []
+    for call in re.finditer(r"([A-Za-z_$][\w$]*)\s*\(", code):
+        if not AGE_HELPER.search(call.group(1)):
+            continue
+        depth, position = 1, call.end()
+        while position < len(code) and depth and position - call.end() < 400:
+            depth += {"(": 1, ")": -1}.get(code[position], 0)
+            position += 1
+        if ADVANCED_NAME.search(code[call.end() : position]):
+            lines.append(_line_of(code, call.start()))
+    return lines
 
 
 def _fold(node: ast.AST) -> str | None:
     """The text of a string expression, `${}` for a part that is not a constant."""
     if isinstance(node, ast.Constant):
+        if isinstance(node.value, bytes):
+            return node.value.decode("utf-8", errors="replace")
         return node.value if isinstance(node.value, str) else None
     if isinstance(node, ast.JoinedStr):
         return "".join(
@@ -314,53 +350,109 @@ def _holds_a_clock(node: ast.AST) -> bool:
     return False
 
 
-def _holds_an_advanced_name(node: ast.AST) -> bool:
+def _holds_an_advanced_name(node: ast.AST, aliases: set[str] | frozenset[str] = frozenset()) -> bool:
+    """Whether an expression holds a head's time: an `advanced*` name, or an alias of one."""
     for child in ast.walk(node):
-        if isinstance(child, ast.Name) and child.id.startswith("advanced"):
+        if isinstance(child, ast.Name) and (ADVANCED_IDENTIFIER.fullmatch(child.id) or child.id in aliases):
             return True
-        if isinstance(child, ast.Attribute) and child.attr.startswith("advanced"):
+        if isinstance(child, ast.Attribute) and ADVANCED_IDENTIFIER.fullmatch(child.attr):
             return True
-        if isinstance(child, ast.Constant) and isinstance(child.value, str) and child.value.startswith("advanced"):
+        if (
+            isinstance(child, ast.Constant)
+            and isinstance(child.value, str)
+            and ADVANCED_IDENTIFIER.fullmatch(child.value)
+        ):
             return True
     return False
 
 
-def _python_head_age_lines(tree: ast.AST) -> list[int]:
-    """Lines where a clock and an `advanced*` name meet in a subtraction or a comparison.
+def _own_nodes(scope: ast.AST) -> Iterator[ast.AST]:
+    """The nodes of one scope. A nested function, class or lambda is a node but not entered."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
+            stack.extend(ast.iter_child_nodes(node))
 
-    Both `datetime.now(UTC) - head.advanced_at` and `advanced_at < now - timedelta(days=3)` count.
+
+def _aliases_of_the_head_time(nodes: list[ast.AST]) -> set[str]:
+    """Names that receive a head's time in one scope: `stamp = row.advanced_at`, and a copy of it."""
+    aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            elif isinstance(node, ast.NamedExpr):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if _holds_an_advanced_name(value, aliases):
+                for target in targets:
+                    for name in ast.walk(target):
+                        if isinstance(name, ast.Name) and name.id not in aliases:
+                            aliases.add(name.id)
+                            changed = True
+    return aliases
+
+
+def _python_head_age_lines(tree: ast.AST) -> tuple[list[int], list[int]]:
+    """(lines where a clock meets an `advanced*` value, lines of age-helper calls on one).
+
+    A clock meets a head's time in a subtraction or a comparison. Both
+    `datetime.now(UTC) - head.advanced_at` and `advanced_at < now - timedelta(days=3)` count.
+    So does `stamp = row.advanced_at` followed by `now - stamp` in the same function.
     The check reads the syntax tree, so spaces and line breaks do not matter.
     """
-    lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
-            operands = [node.left, node.right]
-        elif isinstance(node, ast.Compare):
-            operands = [node.left, *node.comparators]
-        else:
-            continue
-        if any(
-            _holds_a_clock(first) and _holds_an_advanced_name(second)
-            for first in operands
-            for second in operands
-            if first is not second
-        ):
-            lines.append(getattr(node, "lineno", 1))
-    return lines
+    clock_lines: list[int] = []
+    helper_lines: list[int] = []
+    scopes = [
+        tree,
+        *(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda)
+        ),
+    ]
+    for scope in scopes:
+        nodes = list(_own_nodes(scope))
+        aliases = _aliases_of_the_head_time(nodes)
+        for node in nodes:
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
+                operands = [node.left, node.right]
+            elif isinstance(node, ast.Compare):
+                operands = [node.left, *node.comparators]
+            elif isinstance(node, ast.Call):
+                function = node.func
+                name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", "")
+                arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+                if AGE_HELPER.search(name) and any(_holds_an_advanced_name(arg, aliases) for arg in arguments):
+                    helper_lines.append(getattr(node, "lineno", 1))
+                continue
+            else:
+                continue
+            if any(
+                _holds_a_clock(first) and _holds_an_advanced_name(second, aliases)
+                for first in operands
+                for second in operands
+                if first is not second
+            ):
+                clock_lines.append(getattr(node, "lineno", 1))
+    return clock_lines, helper_lines
 
 
 def read_python(text: str) -> Source:
     tree = ast.parse(text)
+    # A string that is a whole statement is documentation: a docstring, or a note under an
+    # attribute. It runs nothing, so it is not SQL.
     docstrings: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-            first = node.body[0] if node.body else None
-            if (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)
-            ):
-                docstrings.add(id(first.value))
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            docstrings.add(id(node.value))
     literals: list[Literal] = []
 
     def visit(node: ast.AST) -> None:
@@ -384,7 +476,8 @@ def read_python(text: str) -> Source:
         if token.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
         and not (token.type == tokenize.STRING and token.start in docstring_positions)
     ]
-    return Source(literals, " ".join(pieces), _python_head_age_lines(tree))
+    clock_lines, helper_lines = _python_head_age_lines(tree)
+    return Source(literals, " ".join(pieces), clock_lines, helper_lines)
 
 
 # --- reading SQL text -----------------------------------------------------------------------
@@ -400,7 +493,33 @@ def normalise(text: str) -> str:
 
 
 def _without_sql_comments(text: str) -> str:
-    return re.sub(r"--[^\n]*|/\*.*?\*/", " ", text, flags=re.DOTALL)
+    """Remove `--` and `/* */` comments. A quoted string stays whole, so `'--'` hides nothing."""
+    kept: list[str] = []
+    position, count = 0, len(text)
+    while position < count:
+        if text[position] == "'":
+            end = position + 1
+            while end < count:
+                if text[end] == "'":
+                    if end + 1 < count and text[end + 1] == "'":
+                        end += 2
+                        continue
+                    break
+                end += 1
+            kept.append(text[position : end + 1])
+            position = end + 1
+        elif text.startswith("--", position):
+            end = text.find("\n", position)
+            kept.append(" ")
+            position = count if end < 0 else end
+        elif text.startswith("/*", position):
+            end = text.find("*/", position + 2)
+            kept.append(" ")
+            position = count if end < 0 else end + 2
+        else:
+            kept.append(text[position])
+            position += 1
+    return "".join(kept)
 
 
 def is_sql(text: str) -> bool:
@@ -415,17 +534,24 @@ def is_sql(text: str) -> bool:
 def relation_references(text: str, relation: str) -> int:
     """How many times SQL text reads `relation`, after normalising the text.
 
-    A schema-qualified name counts in any SQL statement. In a fragment with no `select`, a name
-    counts after `from`, `join`, `update` or `into`. An unqualified name counts there too. The
-    schema may be `mart` or an interpolation: `${}.current_pointer_head`.
+    A schema-qualified name counts in any SQL statement. A fragment has no `select`. In it, a
+    name counts after `from`, `join`, `update` or `into`. It also counts after a comma in a
+    `from` list. An unqualified name counts there too. The schema may be `mart`, an interpolation
+    (`${}.current_pointer_head`) or a placeholder of `.format` or `%` (`{schema}.`, `{}.`, `%s.`).
     """
-    short = relation.split(".", 1)[1]
+    short = re.escape(relation.split(".", 1)[1])
     cleaned = normalise(_without_sql_comments(text))
-    qualified = rf"(?:\bmart|\$\{{\}})\.{re.escape(short)}\b"
-    after_keyword = rf"\b(?:from|join|update|into)\s*\(?\s*(?:only\s+)?(?:(?:mart|\$\{{\}})\.)?{re.escape(short)}\b"
+    schema = r"(?:mart|\$\{\}|\{\w*\}|%s|%\(\w+\)s)"
+    qualified = rf"(?<![\w.]){schema}\.{short}\b"
+    after_keyword = rf"\b(?:from|join|update|into)\s*\(?\s*(?:only\s+)?(?:{schema}\.)?{short}\b"
     ends = {match.end() for match in re.finditer(after_keyword, cleaned)}
     if is_sql(cleaned):
         ends |= {match.end() for match in re.finditer(qualified, cleaned)}
+    for from_clause in re.finditer(r"\bfrom\b", cleaned):
+        rest = cleaned[from_clause.end() :]
+        stop = FROM_LIST_END.search(rest)
+        segment = rest[: stop.start()] if stop else rest
+        ends |= {from_clause.end() + match.end() for match in re.finditer(rf",\s*(?:{schema}\.)?{short}\b", segment)}
     return len(ends)
 
 
@@ -436,18 +562,44 @@ def _bare_relation(text: str, relations: tuple[str, ...]) -> str | None:
     return f"mart.{match.group(1)}" if match else None
 
 
-#: Rule C, in SQL text.
+#: The end of a `from` list: the next clause, or the end of the statement or subquery.
+FROM_LIST_END = re.compile(
+    r"\b(?:where|group\s+by|order\s+by|having|limit|union|offset|window|returning|on|using)\b|;|\)"
+)
+
+#: Rule C, in SQL text. A clock, in any of the forms that Postgres has.
+_CLOCK = (
+    r"(?:\bnow\(\)|\bcurrent_timestamp\b|\bclock_timestamp\(\)|\bstatement_timestamp\(\)"
+    r"|\btransaction_timestamp\(\)|\blocaltimestamp\b|\bcurrent_date\b)"
+)
+_ADVANCED_IN_SQL = r"[(\w.]*advanced"
 SQL_AGE_PATTERNS = {
-    "now-minus-advanced": re.compile(
-        r"(?:\bnow\(\)|\bcurrent_timestamp\b|\bclock_timestamp\(\))\s*-\s*[(\w.]*advanced"
+    # clock - advanced_at, also (now() at time zone 'utc') - advanced_at and current_date - advanced_at::date
+    "now-minus-advanced": re.compile(_CLOCK + r"[^;]{0,40}?-\s*" + _ADVANCED_IN_SQL),
+    # advanced_at < now(), advanced_at + interval '3 days' < now(), now() - interval '3 days' > advanced_at
+    "advanced-compared-to-now": re.compile(
+        r"advanced\w*[^;<>=]{0,60}?[<>]=?[^;]{0,60}?"
+        + _CLOCK
+        + "|"
+        + _CLOCK
+        + r"[^;<>]{0,60}?[<>]=?\s*"
+        + _ADVANCED_IN_SQL
     ),
-    "advanced-compared-to-now": re.compile(r"advanced\w*\s*[<>]=?\s*\(?\s*(?:now\(\)|current_timestamp)"),
     "extract-epoch-from-now": re.compile(r"extract\s*\(\s*epoch\s+from\s*\(\s*now\(\)"),
-    "age-of-advanced": re.compile(r"\bage\s*\([^)]*advanced"),
+    "age-of-advanced": re.compile(r"\bage\s*\((?:[^()]|\([^()]*\))*advanced"),
 }
 STALE_AFTER = re.compile(r"\bstale_after\w*")
 TS_CLOCK_CALL = re.compile(r"Date\.now\(\)|new Date\(\)")
-ADVANCED_NAME = re.compile(r"\badvanced\w*")
+
+#: A name that holds a head's time: `advanced_at`, `advancedAt`, `advanced_at_iso`. The bare word
+#: `advanced` is not one, so "advanced filters" in a string is not a head's time.
+ADVANCED_IDENTIFIER = re.compile(r"advanced(?:_\w+|[A-Z]\w*)")
+ADVANCED_NAME = re.compile(r"\badvanced(?:_\w+|[A-Z]\w*)")
+
+#: A function name with an age word in it. `hoursSince(row.advanced_at)` is a head age, wherever
+#: `hoursSince` is defined. The match is a substring, so a name such as `message` also matches.
+#: That costs a false positive only when such a call receives an `advanced*` value.
+AGE_HELPER = re.compile(r"since|age|ago|elapsed|stale|fresh|hours|days", re.IGNORECASE)
 
 
 # --- the rules ---------------------------------------------------------------------------
@@ -494,6 +646,7 @@ def violations_of(relative: str, source: Source) -> list[Violation]:
             found += [Violation("C", relative, label, literal.line) for _ in pattern.finditer(text)]
     found += [Violation("C", relative, "stale-after-constant", 1) for _ in STALE_AFTER.finditer(source.code.casefold())]
     found += [Violation("C", relative, "clock-with-advanced", line) for line in source.head_age_lines]
+    found += [Violation("C", relative, "age-helper-on-advanced", line) for line in source.age_helper_lines]
     return found
 
 
@@ -631,6 +784,7 @@ BASELINE: tuple[Offender, ...] = (
     ),
     Offender("B", "apps/app-web/src/server/mart/topt-gppe-repository.ts", "mart.topt_capture_status", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/topt-gppe-repository.ts", "mart.topt_gppe_results", 1, "#1062 PR 3"),
+    Offender("C", "apps/app-web/src/app/admin/page.tsx", "age-helper-on-advanced", 1, "#1062 PR 4"),
     Offender("C", "apps/app-web/src/app/admin/page.tsx", "clock-with-advanced", 1, "#1062 PR 4"),
     Offender("A", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.current_pointer_head", 1, "#1062 PR 4"),
     Offender("B", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.datahub_confidence_report", 1, "#1062 PR 4"),
@@ -729,7 +883,8 @@ def test_the_baseline_is_well_formed() -> None:
         if entry.rule == "B":
             assert entry.pattern in SERVED, entry
         if entry.rule == "C":
-            assert entry.pattern in {*SQL_AGE_PATTERNS, "stale-after-constant", "clock-with-advanced"}, entry
+            known = {*SQL_AGE_PATTERNS, "stale-after-constant", "clock-with-advanced", "age-helper-on-advanced"}
+            assert entry.pattern in known, entry
 
 
 def test_the_health_endpoint_reads_the_served_head() -> None:
@@ -873,6 +1028,54 @@ TYPESCRIPT_BYPASSES = {
         A_HEAD,
     ),
     "upper-case-result-relation": ("export const SQL = `select 1 from MART.TOPT_GPPE_RESULTS`;\n", B_GPPE),
+    # M1: a helper that lives in another module still receives the head's time.
+    "age-helper-from-another-module": (
+        "export const label = (row: Row) => hoursSince(row.advanced_at);\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "age-helper-with-a-camel-case-attribute": (
+        "export const label = (pointer: Pointer) => ageLabel(pointer.advancedAt);\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "stale-check-helper": (
+        "export const bad = (head: Head) => isStale(head.advanced_at);\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "days-ago-helper-with-a-nested-call": (
+        "export const text = (row: Row) => daysAgo(new Date(row.advanced_at));\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    # M1: SQL shapes that compute a head age.
+    "sql-age-function": (
+        "export const SQL = `select age(now(), advanced_at) from mart.served_head`;\n",
+        ("C", "age-of-advanced"),
+    ),
+    "sql-clock-minus-interval-above-advanced": (
+        "export const SQL = `select 1 from mart.served_head where now() - interval '3 days' > advanced_at`;\n",
+        ("C", "advanced-compared-to-now"),
+    ),
+    "sql-advanced-plus-interval-below-clock": (
+        "export const SQL = `select 1 from mart.served_head where advanced_at + interval '3 days' < now()`;\n",
+        ("C", "advanced-compared-to-now"),
+    ),
+    "sql-current-date-minus-advanced-date": (
+        "export const SQL = `select current_date - advanced_at::date from mart.served_head`;\n",
+        ("C", "now-minus-advanced"),
+    ),
+    "sql-statement-timestamp": (
+        "export const SQL = `select statement_timestamp() - advanced_at from mart.served_head`;\n",
+        ("C", "now-minus-advanced"),
+    ),
+    "sql-clock-at-time-zone": (
+        "export const SQL = `select (now() at time zone 'utc') - advanced_at from mart.served_head`;\n",
+        ("C", "now-minus-advanced"),
+    ),
+    # L3: shapes of rules A and B.
+    "comma-join": ("export const SQL = `select 1 from served_head a, current_pointer_head b`;\n", A_HEAD),
+    "dashes-in-a-string-before-the-relation": (
+        "export const SQL = `select '--' as sep, run_id from mart.current_pointer_head`;\n",
+        A_HEAD,
+    ),
     "the-environments-view-is-not-the-served-head": (
         "export const SQL = `select 1 from mart.topt_gppe_results r join mart.served_head_environments e on true`;\n",
         B_GPPE,
@@ -888,6 +1091,67 @@ PYTHON_BYPASSES = {
     "fragment-join-without-select": ('JOIN = " join mart.current_pointer_head h on h.x = y.x"\n', A_HEAD),
     "interpolated-schema": ('def sql(s):\n    return f"select 1 from {s}.current_pointer_head"\n', A_HEAD),
     "upper-case-result-relation": ('SQL = "select 1 from MART.TOPT_GPPE_RESULTS"\n', B_GPPE),
+    # M1: a helper that lives in another module still receives the head's time.
+    "age-helper-from-another-module": (
+        "def label(row):\n    return hours_since(row.advanced_at)\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "age-helper-with-a-subscript": (
+        "def label(row):\n    return elapsed(row['advanced_at'])\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "age-helper-with-a-keyword-argument": (
+        "def label(head):\n    return head_age(since=head.advanced_at)\n",
+        ("C", "age-helper-on-advanced"),
+    ),
+    "alias-of-the-head-time-minus-a-clock-variable": (
+        "def age(row, now):\n    stamp = row.advanced_at\n    return (now - stamp).total_seconds()\n",
+        C_AGE,
+    ),
+    "alias-of-the-head-time-minus-a-clock-call": (
+        "from datetime import UTC, datetime\n\n\ndef age(row):\n    stamp = row['advanced_at']\n"
+        "    return datetime.now(UTC) - stamp\n",
+        C_AGE,
+    ),
+    "alias-of-an-alias": (
+        "def age(row, now):\n    first = row.advanced_at\n    second = first\n    return now - second\n",
+        C_AGE,
+    ),
+    "sql-age-function": ('SQL = "select age(now(), advanced_at) from mart.served_head"\n', ("C", "age-of-advanced")),
+    "sql-clock-minus-interval-above-advanced": (
+        "SQL = \"select 1 from mart.served_head where now() - interval '3 days' > advanced_at\"\n",
+        ("C", "advanced-compared-to-now"),
+    ),
+    "sql-advanced-plus-interval-below-clock": (
+        "SQL = \"select 1 from mart.served_head where advanced_at + interval '3 days' < now()\"\n",
+        ("C", "advanced-compared-to-now"),
+    ),
+    "sql-current-date-minus-advanced-date": (
+        'SQL = "select current_date - advanced_at::date from mart.served_head"\n',
+        ("C", "now-minus-advanced"),
+    ),
+    "sql-statement-timestamp": (
+        'SQL = "select statement_timestamp() - advanced_at from mart.served_head"\n',
+        ("C", "now-minus-advanced"),
+    ),
+    "sql-clock-at-time-zone": (
+        "SQL = \"select (now() at time zone 'utc') - advanced_at from mart.served_head\"\n",
+        ("C", "now-minus-advanced"),
+    ),
+    # L3: shapes of rules A and B.
+    "format-placeholder-schema": (
+        'SQL = "select run_id from {schema}.current_pointer_head".format(schema="mart")\n',
+        A_HEAD,
+    ),
+    "empty-format-placeholder-schema": ('SQL = "select run_id from {}.current_pointer_head".format(s)\n', A_HEAD),
+    "percent-placeholder-schema": ('SQL = "select run_id from %s.current_pointer_head" % schema\n', A_HEAD),
+    "bytes-sql": ('SQL = b"select run_id from mart.current_pointer_head"\n', A_HEAD),
+    "comma-join": ('SQL = "select 1 from served_head a, current_pointer_head b"\n', A_HEAD),
+    "comma-join-qualified": ('SQL = "select 1 from mart.served_head a, mart.current_pointer_head b"\n', A_HEAD),
+    "dashes-in-a-string-before-the-relation": (
+        "SQL = \"select '--' as sep, run_id from mart.current_pointer_head\"\n",
+        A_HEAD,
+    ),
     "head-age-from-the-clock": (
         "from datetime import UTC, datetime\n\n\ndef age(head):\n    return datetime.now(UTC) - head.advanced_at\n",
         C_AGE,
@@ -935,6 +1199,39 @@ def test_a_regex_literal_does_not_hide_a_compliant_statement_or_invent_a_violati
         "apps/app-web/src/server/mart/regex.ts",
         "export const TICK = /`/;\nconst half = total / 2 / count;\nconst tag = '</div>';\n"
         "export const SQL = `select run_id from mart.served_head`;\n",
+    )
+    assert _found(tmp_path) == set()
+
+
+def test_the_words_advanced_filters_in_a_string_are_not_a_head_time(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "apps/app-web/src/app/research/filters.tsx",
+        'export const LABEL = "Show advanced filters";\nexport const nowMs = () => Date.now();\n',
+    )
+    _write(
+        tmp_path,
+        "libs/contracts/src/truealpha_contracts/filters.py",
+        "from datetime import UTC, datetime\n\n\ndef f(parse, started_at):\n"
+        "    return datetime.now(UTC) - parse('advanced filters') - started_at\n",
+    )
+    assert _found(tmp_path) == set()
+
+
+def test_a_date_constructor_on_the_head_time_is_not_an_age_helper(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "apps/app-web/src/server/admin/format.ts",
+        "export const iso = (row: Row) => new Date(row.advanced_at).toISOString();\n",
+    )
+    assert _found(tmp_path) == set()
+
+
+def test_a_bare_string_statement_is_documentation_and_not_a_reader(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "libs/contracts/src/truealpha_contracts/doc.py",
+        'SQL = "select run_id from mart.served_head"\n"""Read from mart.governed_strategy_run in the old code."""\n',
     )
     assert _found(tmp_path) == set()
 
@@ -999,13 +1296,25 @@ def _named(database: str) -> str:
     return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 
-@pytest.fixture(scope="module")
-def run_key_columns() -> Iterator[list[tuple[str, str]]]:
-    """(relation, column) for every `mart` table or view column that looks like a run key.
+#: Every column of a `mart` table, view, materialized view or partitioned table that looks like a
+#: run key. `information_schema.tables` lists no materialized view, so this reads `pg_class`.
+#: The name pattern matches whole tokens: `run_id` and `target_run_id` match, `truncated_at` does not.
+RUN_LIKE_COLUMNS_SQL = """
+select 'mart.' || c.relname, a.attname
+from pg_attribute a
+join pg_class c on c.oid = a.attrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'mart'
+  and c.relkind in ('r', 'v', 'm', 'p')
+  and a.attnum > 0
+  and not a.attisdropped
+  and (a.attname ~ '(^|_)run($|_)' or a.attname ~ '(^|_)(snapshot|invocation)_id$')
+"""
 
-    The filter is wide on purpose. A column that has `run` in its name, or ends in `snapshot_id`
-    or `invocation_id`, is listed. The tests then decide which ones are real keys.
-    """
+
+@pytest.fixture(scope="module")
+def migrated_database() -> Iterator[str]:
+    """The name of a scratch database with the declared chain applied."""
     name = f"truealpha_served_guard_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     try:
         with psycopg.connect(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
@@ -1016,23 +1325,20 @@ def run_key_columns() -> Iterator[list[tuple[str, str]]]:
         skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
     try:
         apply_migration_chain(_named(name))
-        with psycopg.connect(_named(name)) as connection:
-            rows = connection.execute(
-                """
-                select 'mart.' || c.table_name, c.column_name
-                from information_schema.columns c
-                join information_schema.tables t using (table_schema, table_name)
-                where c.table_schema = 'mart'
-                  and t.table_type in ('BASE TABLE', 'VIEW')
-                  and (c.column_name like '%run%'
-                       or c.column_name like '%snapshot_id'
-                       or c.column_name like '%invocation_id')
-                """
-            ).fetchall()
-        yield [(row[0], row[1]) for row in rows]
+        yield name
     finally:
         with psycopg.connect(_named("postgres"), autocommit=True) as admin:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+@pytest.fixture(scope="module")
+def run_key_columns(migrated_database: str) -> list[tuple[str, str]]:
+    """(relation, column) for every `mart` column that looks like a run key.
+
+    The filter is wide on purpose. The tests then decide which of the columns are real keys.
+    """
+    with psycopg.connect(_named(migrated_database)) as connection:
+        return [(row[0], row[1]) for row in connection.execute(RUN_LIKE_COLUMNS_SQL).fetchall()]
 
 
 def run_addressed_relations(columns: list[tuple[str, str]]) -> set[str]:
@@ -1090,3 +1396,26 @@ def test_a_new_relation_or_a_new_key_name_is_reported() -> None:
     assert unclassified(run_addressed_relations(columns), SERVED, NOT_SERVED) == ["mart.brand_new_results"]
     assert unknown_run_columns(columns) == ["mart.other.release_run_id"]
     assert unclassified({"mart.strategy_decisions"}, ("mart.topt_gppe_results",), {}) == ["mart.strategy_decisions"]
+
+
+def test_the_catalog_read_sees_a_materialized_view_and_ignores_a_name_that_only_contains_run(
+    migrated_database: str,
+) -> None:
+    """A copy of the migrated database gets two probes. The shared database stays unchanged."""
+    probe = f"{migrated_database}_probe"
+    with psycopg.connect(_named("postgres"), autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("create database {} template {}").format(sql.Identifier(probe), sql.Identifier(migrated_database))
+        )
+    try:
+        with psycopg.connect(_named(probe), autocommit=True) as connection:
+            connection.execute("create materialized view mart.probe_matview as select 1 as run_id")
+            connection.execute("create table mart.probe_table (truncated_at timestamptz, prune_count int)")
+            columns = connection.execute(RUN_LIKE_COLUMNS_SQL).fetchall()
+    finally:
+        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(probe)))
+    found = {(row[0], row[1]) for row in columns}
+    assert ("mart.probe_matview", "run_id") in found
+    assert not {relation for relation, _ in found if relation == "mart.probe_table"}
+    assert "mart.probe_matview" in run_addressed_relations(list(found))
