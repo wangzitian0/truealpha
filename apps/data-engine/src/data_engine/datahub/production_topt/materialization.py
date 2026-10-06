@@ -188,8 +188,9 @@ class SnapshotMember(_FrozenModel):
     @field_validator("observation_ids")
     @classmethod
     def canonical_observations(cls, values: tuple[str, str, str, str]) -> tuple[str, str, str, str]:
-        if len(set(values)) != 4 or tuple(sorted(values)) != values:
-            raise ValueError("snapshot member requires four sorted unique observations")
+        # The snapshot model refuses a repeated observation. This check keeps the hash canonical.
+        if tuple(sorted(values)) != values:
+            raise ValueError("snapshot member requires sorted observations")
         return values
 
 
@@ -480,8 +481,6 @@ class PostgresToptCoreRepository:
             if row.semantic_type in by_type:
                 raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
-        if len(grouped) * _SEMANTICS_PER_LISTING != obligations:
-            raise ValueError("Production normalized payloads do not cover 21 listings")
         members = tuple(self._snapshot_member(listing_id, by_type) for listing_id, by_type in grouped.items())
         snapshot = ToptCoreSnapshot(
             run_id=run_id,
@@ -612,8 +611,6 @@ class PostgresToptCoreRepository:
         financial_row = by_type["financial-fact"]
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
-        if len(observation_ids) != 4:
-            raise ValueError(f"listing {listing_id} does not bind exactly four observations")
         return SnapshotMember(
             issuer_id=listing.issuer_id,
             instrument_id=listing.instrument_id,

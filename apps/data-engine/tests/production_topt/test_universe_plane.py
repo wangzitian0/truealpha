@@ -350,6 +350,26 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
             ),
         )
 
+    # #1061: one member that repeats an observation is refused by the same snapshot check.
+    # Its set of observations is one short of four per member, so no member-level check is needed.
+    first, second = member(4), member(5)
+    repeating = SnapshotMember.model_validate(
+        {**first.model_dump(), "observation_ids": (*first.observation_ids[:3], first.observation_ids[2])}
+    )
+    with _pytest.raises(ValueError, match="four distinct observations per member"):
+        ToptCoreSnapshot(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            universe_id="universe:test-2026-06-30",
+            universe_version="test-2026-06-30-v1",
+            universe_sha256="c" * 64,
+            cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+            members=(repeating, second),
+        )
+    # An unsorted member would hash to a second identity for the same observations.
+    with _pytest.raises(ValueError, match="snapshot member requires sorted observations"):
+        SnapshotMember.model_validate({**first.model_dump(), "observation_ids": tuple(reversed(first.observation_ids))})
+
     # The INSERT itself must carry the snapshot's own counts — the first scheduled
     # QQQ run passed every model check and then died on `values (..., 20, 21, 84, ...)`
     # hardcoded in _put_snapshot's SQL, which the 0042 trigger rightly refused

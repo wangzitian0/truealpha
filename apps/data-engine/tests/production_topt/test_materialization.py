@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from datetime import UTC, date, datetime, timedelta
@@ -19,10 +20,12 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations,
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
+from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition, ToptCoreAvailability
+from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
+from psycopg.types.json import Jsonb
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -918,6 +921,165 @@ def test_snapshot_rejects_unknown_run(connection) -> None:
             run_id=f"capture-run:{'0' * 64}",
             release_manifest_id=f"release-manifest:{'1' * 64}",
         )
+
+
+def _cell_row(listing_id: str, semantic_type: str, ordinal: int) -> _ObservationRow:
+    return _ObservationRow(
+        obligation_id=f"capture-list-obligation:{ordinal:064x}",
+        listing_id=listing_id,
+        semantic_type=semantic_type,
+        observation_id=f"normalized-observation:{ordinal:064x}",
+        confidence=Decimal("0.9"),
+        freshness=MetricFreshness.FRESH,
+        knowable_at=CUTOFF,
+        payload={},
+    )
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        pytest.param(SEMANTIC_TYPES[:3], id="one-cell-missing"),
+        pytest.param((*SEMANTIC_TYPES, "extra-cell"), id="one-cell-too-many"),
+        pytest.param((*SEMANTIC_TYPES[:3], "extra-cell"), id="one-cell-replaced"),
+    ],
+)
+def test_a_listing_without_the_exact_four_semantic_cells_is_refused_by_the_member_builder(
+    cells: tuple[str, ...],
+) -> None:
+    """#1061: this is the only per-listing count guard. The snapshot model and the run-wide
+    equality it replaced both run later or are weaker: neither names the missing cell."""
+    by_type = {semantic: _cell_row("listing:probe", semantic, ordinal) for ordinal, semantic in enumerate(cells)}
+
+    with pytest.raises(ValueError, match="listing:probe does not have the exact four TOPT semantic cells"):
+        PostgresToptCoreRepository._snapshot_member("listing:probe", by_type)
+
+
+def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_refused(
+    connection, monkeypatch
+) -> None:
+    """#1061: one listing holds three cells and another holds five, so the row count equals
+    the obligation count and `listings * 4 == obligations` holds. The removed run-wide
+    equality passed this input. The member builder refuses it, and nothing is stored."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    rows = list(repository._load_observations(run.run_id, cutoff=CUTOFF))
+    assert len(rows) == 84
+    donor, receiver = rows[0], rows[-1]
+    assert donor.listing_id != receiver.listing_id
+    moved = dataclasses.replace(donor, listing_id=receiver.listing_id, semantic_type="extra-cell")
+    unbalanced = tuple([moved, *rows[1:]])
+    assert len(unbalanced) == 84
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", lambda self, run_id, *, cutoff: unbalanced)
+
+    with pytest.raises(ValueError, match="does not have the exact four TOPT semantic cells"):
+        repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+def _insert_snapshot_row(connection, run_id: str, release_manifest_id: str, *, instruments: int, observations: int):
+    """A hand-written snapshot row. Every column except the counts satisfies the snapshot
+    trigger, so a refusal names the count rule and not an unrelated column."""
+    universe_id, universe_version, universe_sha256, cutoff = connection.execute(
+        "select universe_id, universe_version, universe_sha256, cutoff from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone()
+    payload = {"probe": run_id, "instruments": instruments}
+    digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(payload),)).fetchone()[0]
+    return connection.execute(
+        """
+        insert into staging.topt_core_snapshots (
+            snapshot_id, content_sha256, run_id, release_manifest_id, universe_id, universe_version,
+            universe_sha256, cutoff, issuer_count, instrument_count, observation_count, payload
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+        """,
+        (
+            f"topt-core-snapshot:{digest}",
+            digest,
+            run_id,
+            release_manifest_id,
+            universe_id,
+            universe_version,
+            universe_sha256,
+            cutoff,
+            instruments,
+            observations,
+            Jsonb(payload),
+        ),
+    )
+
+
+def test_the_database_refuses_a_snapshot_that_does_not_bind_four_observations_per_instrument(connection) -> None:
+    """#1061: the kept database check. The run has 84 obligations, so the snapshot trigger
+    accepts observation_count 84 and the CHECK alone refuses 20 instruments."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with pytest.raises(psycopg.errors.CheckViolation) as refused, connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=84)
+    assert refused.value.diag.constraint_name == "topt_core_snapshots_observation_count_check"
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_with_fewer_members_than_the_run_has_obligations(connection) -> None:
+    """#1061: the kept database check for the same input the removed run-wide equality
+    refused. 20 instruments with 80 observations satisfy the CHECK and miss the run's 84."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=80)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_member_that_repeats_an_observation(connection) -> None:
+    """#1061: the kept database check for the repeated-observation input. The control row
+    differs only in distinct ids, so the member trigger's other clauses all hold."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+    ids = list(snapshot.members[0].observation_ids)
+
+    def insert_member(label: str, observation_ids: list[str]) -> None:
+        factor_input = {
+            "snapshot_id": snapshot.snapshot_id,
+            "instrument_id": f"security:probe:{label}",
+            "issuer_id": f"issuer:probe:{label}",
+            "listing_id": f"listing:probe:{label}",
+        }
+        digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(factor_input),)).fetchone()[0]
+        connection.execute(
+            """
+            insert into staging.topt_core_snapshot_members (
+                snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input
+            ) values (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                snapshot.snapshot_id,
+                factor_input["instrument_id"],
+                factor_input["issuer_id"],
+                factor_input["listing_id"],
+                observation_ids,
+                digest,
+                Jsonb(factor_input),
+            ),
+        )
+
+    with connection.transaction():
+        insert_member("distinct", ids)
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="member identity or payload drifted"),
+        connection.transaction(),
+    ):
+        insert_member("repeated", [ids[0], ids[0], ids[1], ids[2]])
 
 
 class _BorrowedConnection:
