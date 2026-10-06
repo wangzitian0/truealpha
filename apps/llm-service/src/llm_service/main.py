@@ -173,12 +173,12 @@ def health() -> dict[str, Any]:
         # The governed pointer per universe and when it last advanced (#536's gate can
         # withhold it for days with every deploy check green; the admin funnel showed
         # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
-        # Each entry also says whether the head is fresh or stale for its data cadence, the
-        # limit, a reason code and its availability (#1062). `status` stays "ok" for a stale
-        # head: it says the service is up, and a frozen head is the freshness check's page.
-        # "unknown" when the read failed, or when heads exist that this database does not serve
-        # (the identity row is missing or names another environment). An empty list when no
-        # pointer has ever advanced.
+        # Each entry also carries the freshness label, the limit, a reason code and the
+        # availability (#1062). `status` stays "ok" for a stale head, because it reports
+        # liveness. The freshness check pages for a frozen head.
+        # "unknown" when the read failed. Also "unknown" when heads exist that this database
+        # does not serve, because the identity row is missing or names another environment.
+        # An empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
         # #876: the newest verdict of each nightly in-environment check (the Dagster quality
         # and head-report jobs, the model-provider key probe), green or red. The runner that
@@ -259,9 +259,9 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             try:
                 # Per universe, never collapsed (the funnel's lesson): one universe's fresh
                 # pointer must not hide another's frozen one. The newest head per universe
-                # across its factors and versions is what "still advancing" means. The age,
-                # the limit and the label come from mart.served_head (#1062), the one read
-                # point: this service never computes a head age of its own.
+                # across its factors and versions is what "still advancing" means.
+                # The age, the limit and the label come from mart.served_head (#1062).
+                # That view is the one read point. This service computes no head age.
                 rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
                 # An empty answer means "no head yet" only when no environment holds a head. When
                 # one does, the identity row hides every head. Then `pointers` stays "unknown",

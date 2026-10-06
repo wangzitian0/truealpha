@@ -281,7 +281,17 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
     assert "distinct on (universe_id)" in lowered and "order by universe_id, advanced_at desc" in lowered
     assert "current_pointer" not in lowered, "the endpoint must read the served head, not the raw pointer"
     assert "now()" not in lowered and "extract(" not in lowered, "the endpoint must not compute an age"
-    assert pointer_sql == main.GOVERNED_POINTERS_SQL
+    # The endpoint unpacks the columns by position, so their order is part of the contract.
+    select_list = lowered.split("select distinct on (universe_id)")[1].split(" from ")[0]
+    assert [column.strip() for column in select_list.split(",")] == [
+        "universe_id",
+        "advanced_at",
+        "age_hours",
+        "freshness",
+        "limit_hours",
+        "staleness_reason",
+        "availability",
+    ]
 
 
 def test_the_freshness_tool_still_reads_the_new_entries(monkeypatch) -> None:
