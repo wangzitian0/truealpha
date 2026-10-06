@@ -506,7 +506,7 @@ class PostgresToptCoreRepository:
                     observation.observation_id,
                     observation.confidence,
                     case
-                        when %s - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
+                        when %(cutoff)s - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
                         else 'stale'
                     end as cutoff_freshness_state,
                     observation.knowable_at,
@@ -543,7 +543,7 @@ class PostgresToptCoreRepository:
                      vintage.source_request_id = work.source_request_id
                      or terminal_attempt.reused_source_vintage_id = observation.source_vintage_id
                  )
-                where obligation.run_id = %s
+                where obligation.run_id = %(run_id)s
                   and observation.source_vintage_id = coalesce(
                       terminal_attempt.source_vintage_id,
                       terminal_attempt.reused_source_vintage_id
@@ -553,13 +553,17 @@ class PostgresToptCoreRepository:
                   and observation.semantic_type = regexp_replace(
                       obligation.capture_requirement_id, ':v1$', ''
                   )
-                  and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                  and (observation.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
+                  -- Valid time is judged at the run's cutoff day, never at the partition.
+                  -- The partition_key is the universe anchor. An adapter writes valid_from
+                  -- as the date of the fact itself, which can follow the anchor (#1060).
+                  and (observation.valid_from at time zone 'UTC')::date
+                      <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
                   and (
                       observation.valid_to is null
-                      or (observation.valid_to at time zone 'UTC')::date >= obligation.partition_key::date
+                      or (observation.valid_to at time zone 'UTC')::date
+                          >= (%(cutoff)s::timestamptz at time zone 'UTC')::date
                   )
-                  and observation.knowable_at <= %s
+                  and observation.knowable_at <= %(cutoff)s
             )
             select obligation_id, subject_id,
                    regexp_replace(capture_requirement_id, ':v1$', ''),
@@ -568,7 +572,7 @@ class PostgresToptCoreRepository:
             from selected where selection_rank = 1
             order by subject_id, capture_requirement_id
             """,
-            (cutoff, run_id, cutoff),
+            {"cutoff": cutoff, "run_id": run_id},
         ).fetchall()
         ambiguous = [row[0] for row in rows if row[8] != 1]
         if ambiguous:

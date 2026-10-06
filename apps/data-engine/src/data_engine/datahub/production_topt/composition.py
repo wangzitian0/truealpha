@@ -637,20 +637,19 @@ def _satisfy_from_recent_observations(
     plan coordinates for the subject, so equally-keyed universes still share
     vendor bytes and differently-keyed ones capture fresh.
 
-    Reuse additionally requires PARTITION VALIDITY (#877 H1): the anchor must be valid
-    for THIS obligation's partition — `valid_from` on or before it, `valid_to` open or
-    on or after it — which is exactly the window `freeze_snapshot` reads. An
-    observation's `valid_from` is the partition start of the run that captured it, and
-    universes freeze different partitions (TOPT 2026-03-31, the planes 2026-06-30). Once
-    two universes key an issuer alike, a TOPT tick inside a QQQ tick's window would
-    otherwise bind QQQ's observations, resolve the cells UNCHANGED, and then fail to
-    freeze them: a manual or forced tick after another universe's must never reuse what
-    its own freeze refuses.
+    Reuse additionally requires VALIDITY AT THE CUTOFF (#877 H1, #1060).
+    The anchor must be valid on THIS run's cutoff day.
+    Its `valid_from` is on or before that day, and its `valid_to` is open or on or after it.
+    This is exactly the window that `freeze_snapshot` reads.
+    An observation's `valid_from` is the date of the fact itself, not the partition anchor.
+    Reuse of a fact that starts after the cutoff day would resolve the cell UNCHANGED.
+    The freeze would then refuse that cell.
+    The partition is the universe anchor. It does not bound validity.
 
-    The bound set is taken WHOLE OR NOT AT ALL (#885 item 4): every member must carry
-    this run's trio, be knowable by this run's cutoff and be valid for this run's
-    partition, or the obligation fetches. Dropping the members that fail would reuse a
-    cell one origin short and still resolve it UNCHANGED.
+    The bound set is taken WHOLE OR NOT AT ALL (#885 item 4).
+    Every member must carry this run's trio and be knowable by this run's cutoff.
+    Every member must also be valid on this run's cutoff day. Otherwise the obligation fetches.
+    Dropping the members that fail would reuse a cell one origin short and still resolve it UNCHANGED.
 
     A forced run (#874) never calls this, and is the preferred anchor when it ties
     with the unforced run of the same tick.
@@ -666,7 +665,6 @@ def _satisfy_from_recent_observations(
         with mine as (
             select ob.obligation_id, ob.subject_kind, ob.subject_id,
                    regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type,
-                   ob.partition_key,
                    coordinate.issuer_id, coordinate.instrument_id, coordinate.listing_id
             from raw.capture_obligations ob
             join jsonb_to_recordset(%(coordinates)s::jsonb)
@@ -677,9 +675,6 @@ def _satisfy_from_recent_observations(
               -- run's identity and must come from THIS run's own governed corpus
               -- (#684). Deriving them fresh costs no vendor call.
              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
-              -- The freeze step reads a date partition only (materialization); an
-              -- obligation it could not freeze has nothing to reuse into either.
-             and ob.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
         ), anchors as (
             select m.obligation_id as target_obligation_id,
                    m.semantic_type,
@@ -726,13 +721,15 @@ def _satisfy_from_recent_observations(
              -- the first tick after a parser bump, and it is what makes an ad-hoc
              -- re-run of ANY tick work right after a release (#788).
              and o.parser_version = %(parser_version)s
-             -- #877 H1: valid for THIS obligation's partition, by the same predicate
-             -- `freeze_snapshot` applies. `valid_from` is the capturing run's partition
-             -- start, so an observation another universe captured for a later partition
-             -- would resolve the cell UNCHANGED here and then be refused at freeze.
+             -- #877 H1, #1060: valid on THIS run's cutoff day, by the same predicate
+             -- `freeze_snapshot` applies. `valid_from` is the date of the fact itself.
+             -- An observation that starts after the cutoff day would resolve the cell
+             -- UNCHANGED here. The freeze would then refuse it.
+             -- The partition is the universe anchor and does not bound validity.
              -- Filtered before ranking, so an older anchor that IS valid still qualifies.
-             and (o.valid_from at time zone 'UTC')::date <= m.partition_key::date
-             and (o.valid_to is null or (o.valid_to at time zone 'UTC')::date >= m.partition_key::date)
+             and (o.valid_from at time zone 'UTC')::date <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
+             and (o.valid_to is null
+                  or (o.valid_to at time zone 'UTC')::date >= (%(cutoff)s::timestamptz at time zone 'UTC')::date)
             -- Bounding the age of the original observation (#635):
             -- `done.completed_at` is reset to `cutoff` on an `unchanged` run, creating
             -- an infinite renewal chain across 26.8h. Bounding the age requires checking
@@ -766,11 +763,13 @@ def _satisfy_from_recent_observations(
                        -- nothing knowable after THIS run's cutoff may ride into it
                        -- (review on #664).
                        and bound.knowable_at <= %(cutoff)s
-                       -- #877 H1 on the whole set too: every member valid for THIS
-                       -- obligation's partition.
-                       and (bound.valid_from at time zone 'UTC')::date <= m.partition_key::date
+                       -- #877 H1, #1060 on the whole set too: every member valid on THIS
+                       -- run's cutoff day.
+                       and (bound.valid_from at time zone 'UTC')::date
+                           <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
                        and (bound.valid_to is null
-                            or (bound.valid_to at time zone 'UTC')::date >= m.partition_key::date),
+                            or (bound.valid_to at time zone 'UTC')::date
+                               >= (%(cutoff)s::timestamptz at time zone 'UTC')::date),
                        false
                    ) as qualifies
             from anchors a
