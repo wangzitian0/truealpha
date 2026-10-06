@@ -29,15 +29,32 @@ def seed() -> dict[str, int]:
     return {str(row["limit_key"]): int(str(row["hours"])) for row in read_seed_rows(MIGRATION, "mart.freshness_limit")}
 
 
-def section() -> str:
-    text = INIT.read_text(encoding="utf-8")
+def init_text() -> str:
+    return INIT.read_text(encoding="utf-8")
+
+
+def section(text: str | None = None) -> str:
+    """The text of the subsection: from its heading to the next heading or horizontal rule."""
+    text = init_text() if text is None else text
     assert text.count(HEADING) == 1, f"init.md must hold exactly one {HEADING!r}"
     body = text.split(HEADING, 1)[1]
-    return re.split(r"^#{1,3} ", body, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.split(r"^(?:#{1,3} |---$)", body, maxsplit=1, flags=re.MULTILINE)[0]
 
 
-def documented() -> dict[str, tuple[int, int]]:
-    return {match["key"]: (int(match["hours"]), int(match["days"])) for match in _ROW.finditer(section())}
+def own_table(text: str | None = None) -> str:
+    """The first table of the subsection. Rows of any other table are not limits."""
+    lines = section(text).splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith("|"))
+    block = []
+    for line in lines[start:]:
+        if not line.startswith("|"):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def documented(text: str | None = None) -> dict[str, tuple[int, int]]:
+    return {match["key"]: (int(match["hours"]), int(match["days"])) for match in _ROW.finditer(own_table(text))}
 
 
 def test_the_init_table_equals_the_migration_seed() -> None:
@@ -75,3 +92,24 @@ def test_the_section_names_the_reason_code_of_every_limit() -> None:
 def test_the_quality_report_points_at_the_section() -> None:
     assert HEADING.removeprefix("### ").strip() in INIT.read_text(encoding="utf-8")
     assert '"Served freshness (read time)"' in QUALITY_REPORT.read_text(encoding="utf-8")
+
+
+def test_the_section_holds_only_its_own_text() -> None:
+    """The subsection once sat before an unrelated paragraph of section 8. That text then read as part of it."""
+    body = section()
+    assert body.lstrip().startswith("The served head ages when a consumer reads it.")
+    assert "Environment and evidence scale" not in body
+    assert "Release gates define claims" not in body
+    assert "Known Risks" not in body
+    text = init_text()
+    assert text.index(HEADING) > text.index("Environment and evidence scale"), "the subsection ends section 8"
+    assert text.index(HEADING) < text.index("## 9. Known Risks")
+
+
+def test_the_reader_takes_the_first_table_only_and_stops_at_a_rule() -> None:
+    synthetic = (
+        f"intro\n\n{HEADING}\n\ntext\n\n| Family | Hours | Days |\n|---|---|---|\n"
+        "| `daily` | 72 | 3 |\n\n| Other | Hours | Days |\n|---|---|---|\n| `other` | 5 | 1 |\n\n---\n\n"
+        "| `after` | 9 | 9 |\n"
+    )
+    assert documented(synthetic) == {"daily": (72, 3)}
