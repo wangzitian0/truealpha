@@ -1,6 +1,6 @@
 """Capture and materialize analyst ratings for issuers (#771, init.md §0 q4).
 
-Source: moomoo / OpenD get_analyst_consensus / get_rating_summary.
+Source: moomoo / OpenD `get_research_analyst_consensus`.
 Materialized table: mart.issuer_analyst_ratings.
 """
 
@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-import pandas as pd
 from factors.base.analyst_track_record import (
     AnalystRatingItem,
     AnalystTrackRecord,
@@ -61,6 +60,53 @@ on conflict (run_id, issuer_id) do update set
 """
 
 
+_RATING_MIN = 1
+_RATING_MAX = 5
+
+
+def _count_from_share(total: int, share: float | None) -> int:
+    """Analysts behind a rating, from moomoo's share in percent (12.34 means 12.34 percent)."""
+    if share is None:
+        return 0
+    percent = float(share)
+    if not 0 <= percent <= 100:
+        raise ValueError(f"analyst share {percent} is outside 0 to 100 percent")
+    return round(total * percent / 100)
+
+
+def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
+    """Turn one `get_research_analyst_consensus` payload into a rating row.
+
+    Return None when the payload holds no consensus: no rating, rating 0 (unknown), or no
+    analysts. The wrapper `get_analyst_consensus` returns the payload alone, without the
+    return code. The SDK builds the payload as a dict and omits each field moomoo leaves unset.
+    Fields: `rating` is moomoo ResearchRatingType (1 to 5, 0 is unknown), `total` is the
+    analyst count of the last 3 months, `buy`, `hold` and `sell` are shares in percent.
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"get_research_analyst_consensus returned {type(payload).__name__}, expected a mapping")
+    rating = payload.get("rating")
+    total = payload.get("total")
+    if rating is None or total is None or rating == 0 or int(total) <= 0:
+        return None
+    if not _RATING_MIN <= int(rating) <= _RATING_MAX:
+        raise ValueError(f"moomoo rating {rating!r} is outside {_RATING_MIN} to {_RATING_MAX}")
+    count = int(total)
+    return {
+        "issuer_id": company_id,
+        "consensus_rating": Decimal(int(rating)),
+        "analysts_count": count,
+        "buy_count": _count_from_share(count, payload.get("buy")),
+        "hold_count": _count_from_share(count, payload.get("hold")),
+        "sell_count": _count_from_share(count, payload.get("sell")),
+        "confidence": Decimal("0.85"),
+        "availability_status": "available",
+        "source_evidence_status": "verified",
+        "factor_validation_status": "accepted",
+        "reason_codes": [],
+    }
+
+
 def capture_ticker_analyst_ratings(
     ctx: Any,
     *,
@@ -96,18 +142,12 @@ def capture_ticker_analyst_ratings(
         )
 
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
-    fetch_error = None
-    data_row = None
     try:
         from data_engine.sources.moomoo import get_analyst_consensus
 
-        ret, df = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
-        if ret == 0 and df is not None and not df.empty:
-            data_row = df.iloc[0]
+        payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
+        consensus_row = _consensus_row(payload, company_id)
     except Exception as exc:
-        fetch_error = exc
-
-    if fetch_error is not None:
         ratings_data = [
             {
                 "issuer_id": company_id,
@@ -120,37 +160,14 @@ def capture_ticker_analyst_ratings(
                 "availability_status": "unavailable",
                 "source_evidence_status": "degraded",
                 "factor_validation_status": "not_evaluated",
-                "reason_codes": [f"fetch_error:{type(fetch_error).__name__}"],
+                "reason_codes": [f"fetch_error:{type(exc).__name__}"],
             }
         ]
-    elif data_row is not None:
-        raw_rating = data_row.get("consensus_rating")
-        consensus_rating = Decimal(str(raw_rating)) if raw_rating is not None and not pd.isna(raw_rating) else None
-        raw_count = data_row.get("analyst_count", data_row.get("recommend_num", 0))
-        count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 0
-
-        if consensus_rating is None or count <= 0:
-            record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-            ratings_data = [record]
-        else:
-            ratings_data = [
-                {
-                    "issuer_id": company_id,
-                    "consensus_rating": consensus_rating,
-                    "analysts_count": count,
-                    "buy_count": 0,
-                    "hold_count": 0,
-                    "sell_count": 0,
-                    "confidence": Decimal("0.85"),
-                    "availability_status": "available",
-                    "source_evidence_status": "verified",
-                    "factor_validation_status": "accepted",
-                    "reason_codes": [],
-                }
-            ]
     else:
-        record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-        ratings_data = [record]
+        if consensus_row is None:
+            ratings_data = [analyst_track_record([], entity_id=company_id, as_of=as_of)]
+        else:
+            ratings_data = [consensus_row]
 
     return materialize_analyst_ratings(
         connection,
