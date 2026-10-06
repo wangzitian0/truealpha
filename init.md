@@ -501,6 +501,57 @@ golden/holdout gate. Only applicable, available, fresh outputs from an accepted 
 version count toward the module's versioned usable-coverage SLO. Consumers display all
 three dimensions rather than conflating source evidence with formula validation.
 
+### Served freshness (read time)
+
+The served head ages when a consumer reads it. `mart.served_head` computes the age, the
+limit, the `freshness` label and the `availability` at each read, from the time of the last
+good refresh and the data cadence. A stamp written at publication never decides freshness
+(#1062: a head 13 days old read `fresh`).
+
+The limits live in `mart.freshness_limit`. Git is the authority: the seed in
+`db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores them at every boot.
+Change a limit with a reviewed edit to that seed. The table cannot hold a limit above
+720 hours.
+
+| Cadence family | Limit (hours) | Limit (days) | Data in this family |
+|---|---|---|---|
+| `daily` | 72 | 3 | Governed heads from the daily capture ticks; daily quality checks |
+| `weekly` | 336 | 14 | Universe refresh, standards backfill, market data |
+| `quarterly` | 720 | 30 | Filing-derived facts, checked monthly |
+| `withhold` | 720 | 30 | Cap for every family: no value older than this is served |
+
+- **Age** is the time since the last good refresh. An age equal to the limit is `fresh`.
+  An age above the limit is `stale`.
+- **Past its family limit**, a value is served with `freshness = 'stale'`, its `age_hours`
+  and a reason code: `older_than_3d` or `older_than_14d`.
+- **Past the `withhold` limit** (30 days), the value is withheld: `availability =
+  'unavailable'`, reason `older_than_30d`, and `run_id` is null. No number is shown.
+- **A quarterly value** reaches its limit at the `withhold` limit. It goes from `fresh`
+  straight to withheld. It is never served `stale`.
+- **A head with no registry row** gets the strictest limit. **A missing refresh time** reads
+  `unknown` and `unavailable`, reason `refresh_time_unknown`.
+
+`mart.served_artifact` is the registry. Each row maps one served artifact to one cadence
+family, and each scheduled lane has a row. The `wired` column is true when a stored "last
+refreshed" time exists for the artifact. Today only the three governed heads are wired: their
+time is the pointer's `advanced_at`. No code invents a refresh time for an unwired row.
+`apps/data-engine/tests/test_freshness_registry.py` fails when a lane or a schedule has no
+row.
+
+A consumer reads `mart.served_head` and never `mart.current_pointer_head`. A consumer never
+computes a head age of its own. `libs/runtime/tests/test_served_head_guard.py` fails when
+consumer-reachable code bypasses the view. Its baseline lists the readers that still read the
+pointer directly. The baseline can only shrink. `/api/health` reports each governed pointer
+with `freshness`, `limit_hours`, `staleness_reason` and `availability`; its `status` stays
+`ok` for a stale head.
+
+This is a different measure from two others. The capture-time windows in
+`raw.capture_schedule_policies` (5 days for `market-price`, 730 days for `financial-fact`)
+judge the age of one observation when it is captured. The two-day maximum age in
+`docs/datahub-service-demand.md` is the demand objective of one capture requirement. Neither
+changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, equal to the `daily`
+limit.
+
 Environment and evidence scale are part of the gate contract. Local/CI exist
 throughout; Dagster is introduced early in Gate 1 and is the only authority for real
 scheduled runs; Production remains isolated shadow output until Gate 4 data, strategy,
