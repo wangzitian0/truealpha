@@ -14,6 +14,7 @@ A new lane, a new schedule, a renamed schedule or a dead registry row turns a te
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 
@@ -72,6 +73,13 @@ def rows_without_a_schedule(schedules: Mapping[str, Collection[str]], rows: Iter
     )
 
 
+def schedules_in_more_than_one_row(rows: Iterable[Row]) -> list[str]:
+    """Schedule names that appear in two or more rows. The table has no unique constraint on
+    the name. With one, an upsert keyed on `artifact_key` would fail after a rename."""
+    counts = Counter(row["schedule_name"] for row in rows if row["schedule_name"] is not None)
+    return sorted(str(name) for name, count in counts.items() if count > 1)
+
+
 def test_every_lane_module_has_a_registry_row() -> None:
     assert lanes_without_a_row(LANE_MODULES, registry()) == []
 
@@ -82,6 +90,19 @@ def test_every_schedule_a_lane_declares_is_in_the_registry() -> None:
 
 def test_every_registry_schedule_exists_in_a_lane() -> None:
     assert rows_without_a_schedule(lane_schedules(), registry()) == []
+
+
+def test_each_declared_schedule_appears_in_exactly_one_row() -> None:
+    rows = registry()
+    assert schedules_in_more_than_one_row(rows) == []
+    for names in lane_schedules().values():
+        for name in names:
+            assert sum(1 for row in rows if row["schedule_name"] == name) == 1, name
+
+
+def test_a_schedule_in_two_rows_is_reported() -> None:
+    rows = [*registry(), {"artifact_key": "twin", "lane": "capture", "schedule_name": "topt_live_schedule"}]
+    assert schedules_in_more_than_one_row(rows) == ["topt_live_schedule"]
 
 
 def test_a_registry_schedule_belongs_to_the_lane_the_row_names() -> None:

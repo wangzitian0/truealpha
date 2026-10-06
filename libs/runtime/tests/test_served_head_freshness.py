@@ -434,6 +434,9 @@ def test_the_reader_roles_can_read_the_served_head_and_its_tables(conn: psycopg.
     assert conn.execute("select count(*) from mart.served_artifact").fetchone() == (registry_rows,)
     assert conn.execute("select count(*) from mart.freshness_limit").fetchone() == (limit_rows,)
     assert conn.execute("select freshness from mart.head_freshness(now(), 'daily')").fetchone() == ("fresh",)
+    # `mart.served_head_environments` is read by both roles too (the health endpoint reads it).
+    environments = conn.execute("select count(*) from mart.served_head_environments").fetchone()
+    assert environments is not None and environments[0] >= 1
 
 
 # --- T6: the limits are shipped state, and git is their authority --------------------------

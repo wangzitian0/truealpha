@@ -14,10 +14,11 @@
 -- Quarterly data is checked monthly, with a limit of 30 days. No limit is longer than 30 days.
 -- Past its limit, a value is served with freshness 'stale'. Past 30 days it is withheld.
 --
--- Git is the authority for every value in this file. A boot replays the seed below, and the
--- replay restores any value changed by hand. To change a limit or a registry row, edit the
--- seed in this file in a reviewed change. Do not add a second migration for the same row:
--- the two files would overwrite each other on every boot.
+-- Git is the authority for the rows that the seed below lists. A boot replays the seed. The
+-- replay restores any listed value that was changed by hand. A row that is removed from the
+-- seed stays in deployed databases. Only a migration that deletes it removes it.
+-- To change a listed row, edit the seed in this file in a reviewed change. Do not add a second
+-- migration for the same row: the two files would overwrite each other on every boot.
 --
 -- Boot-lock rules (libs/runtime/tests/test_migration_boot_locks.py): on a settled database,
 -- every statement here takes only three lock modes on a mart relation.
@@ -34,7 +35,7 @@ create table if not exists mart.freshness_limit (
 );
 
 comment on table mart.freshness_limit is
-    '#1062: Read-time age limits in hours, one row per cadence. Seeded by git; a replay restores the shipped values.';
+    '#1062: Read-time age limits in hours, one row per cadence. Seeded by git. A replay restores each listed value.';
 
 insert into mart.freshness_limit (limit_key, hours)
 values
@@ -54,10 +55,13 @@ on conflict (limit_key) do update
 -- Nothing in the database reads `wired`, and nothing enforces it.
 -- `served_to` names the audience: consumers (Web App, MCP, chat), operators (admin pages
 -- and deploy checks) or internal.
+-- Each schedule appears in exactly one row. The registry test checks that over this seed.
+-- A unique constraint on `schedule_name` would fail a boot after a rename. The upsert below
+-- names `artifact_key` as its only arbiter, so a renamed key with the same schedule collides.
 create table if not exists mart.served_artifact (
     artifact_key text primary key,
     lane text not null,
-    schedule_name text unique,
+    schedule_name text,
     universe_like text,
     family text not null references mart.freshness_limit (limit_key),
     served_to text not null,
