@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlsplit, urlunsplit
@@ -159,18 +159,27 @@ def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
 
 
 class _PointersOnly(_VerdictsOnly):
-    """A connection whose only readable relation is mart.served_head (#1062): every other read
-    fails the way a database that predates it does, and must not take this one down."""
+    """A connection whose only readable relations are the two the pointer read uses (#1062).
+    Every other read fails the way a database that predates it does, and must not take this one
+    down. `environments` are the rows of `mart.served_head_environments`; None makes that read fail."""
+
+    def __init__(self, rows, environments=()):
+        super().__init__(rows)
+        self.environments = environments
 
     def execute(self, sql, *_args):
         self.asked.append(sql)
+        if "mart.served_head_environments" in sql:
+            if self.environments is None:
+                raise psycopg.errors.UndefinedTable("relation does not exist")
+            return _Rows(list(self.environments))
         if "mart.served_head" in sql:
             return _Rows(self.rows)
         raise psycopg.errors.UndefinedTable("relation does not exist")
 
 
-#: Newest head per universe as `mart.served_head` returns it: a fresh head, a stale head and a
-#: withheld head, each with its own cadence limit.
+#: The newest head per universe, as `mart.served_head` returns it. One head is fresh, one is
+#: stale and one is withheld. Each has its own cadence limit.
 SERVED_ROWS = [
     (
         "universe:canary-us-2026-06-30",
@@ -265,7 +274,8 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
     connection = _PointersOnly(SERVED_ROWS)
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
     TestClient(app).get("/health")
-    (pointer_sql,) = [sql for sql in connection.asked if "mart.served_head" in sql]
+    (pointer_sql,) = [sql for sql in connection.asked if sql == main.GOVERNED_POINTERS_SQL]
+    assert connection.asked.count(pointer_sql) == 1 and len(connection.asked) >= 1
     lowered = " ".join(pointer_sql.lower().split())
     assert "from mart.served_head" in lowered
     assert "distinct on (universe_id)" in lowered and "order by universe_id, advanced_at desc" in lowered
@@ -292,17 +302,60 @@ def test_the_freshness_tool_still_reads_the_new_entries(monkeypatch) -> None:
     )
 
 
+def test_a_head_list_never_runs_the_environments_read(monkeypatch) -> None:
+    connection = _PointersOnly(SERVED_ROWS, environments=[(1,)])
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
+    TestClient(app).get("/health")
+    assert main.HEAD_ENVIRONMENTS_SQL not in connection.asked
+
+
+def test_no_served_row_and_a_head_in_some_environment_reports_unknown(monkeypatch) -> None:
+    """The identity row hides every head. An empty list would read as a database that never advanced."""
+    connection = _PointersOnly([], environments=[(1,)])
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
+    payload = TestClient(app).get("/health").json()
+    assert payload["governed_pointers"] == "unknown"
+    assert payload["status"] == "ok"
+    assert main.HEAD_ENVIRONMENTS_SQL in connection.asked
+
+
+def test_no_served_row_and_no_head_anywhere_reports_an_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=[]))
+    assert TestClient(app).get("/health").json()["governed_pointers"] == []
+
+
+def test_an_unreadable_environments_view_reports_unknown_not_an_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=None))
+    assert TestClient(app).get("/health").json()["governed_pointers"] == "unknown"
+
+
+def test_the_freshness_tool_fails_on_unknown_pointers(monkeypatch) -> None:
+    """The marker is the one `tools/datahub_freshness.py` already fails on, with a clear text."""
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=[(1,)]))
+    body = TestClient(app).get("/health").text
+    tool = load_tool("datahub_freshness")
+    url = "https://example.invalid/api/health"
+    with pytest.raises(tool.PointerFreshnessFailure, match="could not read its governed pointers"):
+        tool.read_pointers(url, lambda _url: (200, body))
+    assert tool.check_pointer_freshness(url, http_get=lambda _url: (200, body)) == 1
+
+
+#: The real `psycopg.connect`, kept before any test replaces it. A fixture that runs its teardown
+#: while a test's patch is still in place must still reach the database.
+REAL_CONNECT = psycopg.connect
+
+
 def _named(database: str) -> str:
     base = urlsplit(os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha"))
     return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 
 @pytest.fixture(scope="module")
-def seeded_database() -> Iterator[str]:
-    """A scratch database with the real chain and three committed heads of known ages."""
+def template_database() -> Iterator[str]:
+    """A scratch database with the real chain and no head. Each test clones it."""
     name = f"truealpha_health_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     try:
-        with psycopg.connect(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
+        with REAL_CONNECT(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
             admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL"):
@@ -310,13 +363,41 @@ def seeded_database() -> Iterator[str]:
         skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
     try:
         apply_migration_chain(_named(name))
-        with psycopg.connect(_named(name)) as connection:
-            environment = connection.execute("select environment from mart.environment_identity").fetchone()[0]
-            for universe, age in (
-                ("universe:topt-us-health", timedelta(days=4)),
-                ("universe:qqq-us-health", timedelta(days=1)),
-                ("universe:canary-us-health", timedelta(days=31)),
-            ):
+        yield name
+    finally:
+        with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+#: Three heads of known age, for the universes the registry knows.
+THREE_HEADS = (
+    ("universe:topt-us-health", timedelta(days=4), None),
+    ("universe:qqq-us-health", timedelta(days=1), None),
+    ("universe:canary-us-health", timedelta(days=31), None),
+)
+
+
+@pytest.fixture
+def clone(template_database: str) -> Iterator[Callable[..., str]]:
+    """Make a database from the template, with committed heads and an identity row to order.
+
+    A head is (universe, age, environment). An environment of None means the identity row's own.
+    `identity` is "keep", "missing", or the environment name to store.
+    """
+    made: list[str] = []
+
+    def make(heads=(), identity: str = "keep") -> str:
+        name = f"truealpha_health_clone_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+        made.append(name)
+        with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("create database {} template {}").format(
+                    sql.Identifier(name), sql.Identifier(template_database)
+                )
+            )
+        with REAL_CONNECT(_named(name)) as connection:
+            own = connection.execute("select environment from mart.environment_identity").fetchone()[0]
+            for universe, age, environment in heads:
                 digest = uuid.uuid4().hex * 2
                 run_id = f"capture-run:{digest}"
                 connection.execute(
@@ -328,21 +409,30 @@ def seeded_database() -> Iterator[str]:
                     "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
                     "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
                     "values (%s, %s, %s, %s, 'v1', 'f', %s, 0, null, now() - %s)",
-                    (f"current-pointer:{digest}", digest, environment, universe, run_id, age),
+                    (f"current-pointer:{digest}", digest, environment or own, universe, run_id, age),
                 )
+            if identity == "missing":
+                connection.execute("delete from mart.environment_identity")
+            elif identity != "keep":
+                connection.execute("update mart.environment_identity set environment = %s", (identity,))
             connection.commit()
-        yield _named(name)
-    finally:
-        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
+        return _named(name)
+
+    yield make
+    with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
+        for name in made:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
 
 
-def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, seeded_database: str) -> None:
-    """The endpoint, the real SQL and the real view together: a 4 day head reads stale, a 1 day
-    head reads fresh and a 31 day head is withheld, each with its registry cadence."""
-    real_connect = psycopg.connect
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: real_connect(seeded_database))
-    payload = TestClient(app).get("/health").json()
+def health_of(monkeypatch, database: str) -> dict:
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: REAL_CONNECT(database))
+    return TestClient(app).get("/health").json()
+
+
+def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, clone) -> None:
+    """The endpoint, the real SQL and the real view together. A 4 day head reads stale. A 1 day
+    head reads fresh. A 31 day head is withheld. Each uses its registry cadence."""
+    payload = health_of(monkeypatch, clone(THREE_HEADS))
     by_universe = {entry["universe_id"]: entry for entry in payload["governed_pointers"]}
     assert set(by_universe) == {"universe:topt-us-health", "universe:qqq-us-health", "universe:canary-us-health"}
     assert payload["status"] == "ok"
@@ -361,6 +451,38 @@ def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, seeded
         "older_than_30d",
     )
     assert json.dumps(payload)  # the whole answer stays JSON
+
+
+def test_a_missing_identity_row_with_heads_present_reports_unknown(monkeypatch, clone) -> None:
+    payload = health_of(monkeypatch, clone(THREE_HEADS, identity="missing"))
+    assert payload["governed_pointers"] == "unknown"
+    assert payload["status"] == "ok"
+
+
+def test_an_identity_that_matches_no_head_environment_reports_unknown(monkeypatch, clone) -> None:
+    payload = health_of(monkeypatch, clone(THREE_HEADS, identity="somewhere-else"))
+    assert payload["governed_pointers"] == "unknown"
+
+
+def test_no_head_in_any_environment_reports_an_empty_list(monkeypatch, clone) -> None:
+    assert health_of(monkeypatch, clone())["governed_pointers"] == []
+
+
+def test_a_database_that_holds_two_environments_lists_only_the_one_it_serves(monkeypatch, clone) -> None:
+    """Measured on Staging: the identity row says `staging` and the pointer view holds heads of
+    both `production` and `staging`. The old query listed all of them."""
+    heads = (
+        ("universe:topt-us-health", timedelta(days=1), "staging"),
+        ("universe:qqq-us-health", timedelta(days=1), "staging"),
+        ("universe:topt-us-health", timedelta(days=9), "production"),
+        ("universe:canary-us-health", timedelta(days=9), "production"),
+    )
+    payload = health_of(monkeypatch, clone(heads, identity="staging"))
+    assert [entry["universe_id"] for entry in payload["governed_pointers"]] == [
+        "universe:qqq-us-health",
+        "universe:topt-us-health",
+    ]
+    assert {entry["freshness"] for entry in payload["governed_pointers"]} == {"fresh"}
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:

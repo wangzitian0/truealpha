@@ -176,7 +176,9 @@ def health() -> dict[str, Any]:
         # Each entry also says whether the head is fresh or stale for its data cadence, the
         # limit, a reason code and its availability (#1062). `status` stays "ok" for a stale
         # head: it says the service is up, and a frozen head is the freshness check's page.
-        # "unknown" when the read failed; an empty list when no pointer has ever advanced.
+        # "unknown" when the read failed, or when heads exist that this database does not serve
+        # (the identity row is missing or names another environment). An empty list when no
+        # pointer has ever advanced.
         "governed_pointers": pointers,
         # #876: the newest verdict of each nightly in-environment check (the Dagster quality
         # and head-report jobs, the model-provider key probe), green or red. The runner that
@@ -200,14 +202,20 @@ order by check_name, ran_at desc, recorded_at desc
 
 
 #: The newest governed head per universe, aged at read time (#1062). `mart.served_head` holds
-#: the one definition of age, limit and label; this query only picks the newest row of each
-#: universe and never subtracts a clock of its own.
+#: the one definition of age, limit and label. This query picks the newest row of each universe.
+#: It never subtracts a clock of its own.
 GOVERNED_POINTERS_SQL = """
 select distinct on (universe_id)
        universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
 from mart.served_head
 order by universe_id, advanced_at desc
 """
+
+#: Runs only when the query above returns no row. `mart.served_head` shows the heads of this
+#: database's own environment. It is empty when the identity row is missing or names another
+#: environment, even though heads exist. This view lists the environments that hold heads. A row
+#: here with no served row means the heads exist and this database cannot serve them.
+HEAD_ENVIRONMENTS_SQL = "select 1 from mart.served_head_environments limit 1"
 
 
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
@@ -255,26 +263,31 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                 # the limit and the label come from mart.served_head (#1062), the one read
                 # point: this service never computes a head age of its own.
                 rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
-                pointers = [
-                    {
-                        "universe_id": str(universe_id),
-                        "advanced_at": advanced_at.isoformat(),
-                        "age_hours": round(float(age_hours), 1),
-                        "freshness": str(freshness),
-                        "limit_hours": int(limit_hours),
-                        "staleness_reason": None if staleness_reason is None else str(staleness_reason),
-                        "availability": str(availability),
-                    }
-                    for (
-                        universe_id,
-                        advanced_at,
-                        age_hours,
-                        freshness,
-                        limit_hours,
-                        staleness_reason,
-                        availability,
-                    ) in rows
-                ]
+                # An empty answer means "no head yet" only when no environment holds a head. When
+                # one does, the identity row hides every head. Then `pointers` stays "unknown",
+                # the marker that `tools/datahub_freshness.py` fails on. An empty list would
+                # read as a database that has never advanced.
+                if rows or connection.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is None:
+                    pointers = [
+                        {
+                            "universe_id": str(universe_id),
+                            "advanced_at": advanced_at.isoformat(),
+                            "age_hours": round(float(age_hours), 1),
+                            "freshness": str(freshness),
+                            "limit_hours": int(limit_hours),
+                            "staleness_reason": None if staleness_reason is None else str(staleness_reason),
+                            "availability": str(availability),
+                        }
+                        for (
+                            universe_id,
+                            advanced_at,
+                            age_hours,
+                            freshness,
+                            limit_hours,
+                            staleness_reason,
+                            availability,
+                        ) in rows
+                    ]
             except psycopg.Error:
                 connection.rollback()
             try:
