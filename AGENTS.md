@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=1faaf54be8881dbc0514e84186f8ae8b37605be9cafb3f2d33a78893379e3ba6 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=fcaa728e56c46ddc3c0aebb708ec0df1c53e41e0bf03d5d691cfbdcef80d7e22 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -24,13 +24,13 @@
 
 - **Reason from the worst case.** For environment changes, wrappers, redirection, or interception rules, check for no-TTY deadlock in CI or child processes, concurrent shared-file truncation/races, and network or cold-start failure cascades. Reject a proposal whose lack of backlash cannot be established.
 - **Treat three hidden green failures as defects:** WRONG FORMULA (an incorrect formula passes assertions), GREEN-WHILE-EMPTY (filtering removes all output but reports success), and STALE-REPORTED-AS-FRESH (old data is labeled fresh). Implausible output is evidence of a defect.
-- **Protect ambient services.** Default unit tests and Executor tasks must not destructively act on host ports, shared background processes, or development databases (`DROP`, `TRUNCATE`, `--clear`, forced restart). Resets require an isolated sandbox/worktree with a dedicated random port, or an explicit `CI=true` or `ALLOW_CLEAR_TEST=1` guard; otherwise skip safely with a warning.
+- **Protect ambient services.** Default unit tests and Junior tasks must not destructively act on host ports, shared background processes, or development databases (`DROP`, `TRUNCATE`, `--clear`, forced restart). Resets require an isolated sandbox/worktree with a dedicated random port, or an explicit `CI=true` or `ALLOW_CLEAR_TEST=1` guard; otherwise skip safely with a warning.
 - **Two triggers:** Every background job or batch process needs both scheduled execution and manual replay.
 - **Do not steal CD locks:** A trigger is instant but publication is delayed. Do not interrupt a running deployment; the next run must coalesce commits accumulated while it was busy.
 
 # TrueAlpha Agent Contract
 
-> **Protected file**: AI may modify this file only with explicit user authorization.
+> **Rule source**: This file is generated. Change its dev_env source and pass the rule-text checklist; do not hand-edit it.
 > **Repository language**: Code, commits, branches, pull requests, and issues are written
 > in English. User-facing conversation may follow the user's language.
 > **Architecture authority**: `init.md` wins on architecture and public contracts;
@@ -70,9 +70,9 @@ tests prove it, review and green CI gate the merge.
    Evaluate unresolved actionable findings against the budget of High = 0, Medium <= 2, and
    Low <= 4 on the exact head immediately before merge readiness is declared. A green
    `ci-required`, a deployable `main`, and backward-compatible migrations are also required.
-   Once a PR is merge-ready, the agent that owns it merges it. Only a merge whose pipeline
+   Once a PR is merge-ready, the agent that owns it merges it. A merge whose pipeline
    reaches production (a release promote, see `docs/release-protocol.md`) waits for the
-   owner's approval of that exact head SHA.
+   owner. **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. Until the owner signs off an unbypassable production lock, through the commit of the PR that drops this sentence (tracked in infra2 #1035), the owner also approves edits to any workflow, to merge-gate code or data, and to code that a release workflow runs, even when a gate calls the edit a proven tightening.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are

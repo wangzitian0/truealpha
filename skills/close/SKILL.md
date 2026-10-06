@@ -1,333 +1,140 @@
 ---
 name: close
-description: >-
-  会话收尾检查清单。在关闭对话前执行，确认代码入库、测试通过、本机部署生效、
-  无安全隐患。当用户说"收工/收尾/关闭/close"或 Agent 认为任务已完成时激活。
+description: Step 6 of the flow. End a session. Choose Complete or Suspend, write the handover, update the issue, ask the production question, route lessons, and clean up.
 ---
 
-# Close — 会话收尾门禁
+# close: exit gate
 
-与 `start` skill 对称：start 负责进入，close 负责退出或挂起。
+Run this when you stop, for any reason. Each rule came from a session that ended wrongly.
 
-close 有两个模式，进入 close 后先判定模式：
+## 1. Choose the mode
 
-| 模式 | 触发条件 | 行为 |
-|---|---|---|
-| **Complete** | PR 已 merged，**且**（无服务影响 **或** 已获 owner 明确 Prod 处置（部署或显式 hold））| 执行完整 7 项检查清单 → 清理 worktree → 关闭/更新 issue |
-| **Suspend** | 工作未完成，需要中断留现场 | 执行第 1 项（代码入库状态）+ 第 7 项（评审蒸馏）→ 写 handover 断点 |
-
-**模式判定（必须先执行物理脚本检测）**：
 ```bash
 BRANCH="$(git branch --show-current)"
-if [ "$BRANCH" != "main" ]; then
-    PR_STATE=$(gh pr view "$BRANCH" --json state -q .state 2>/dev/null || echo "NONE")
-    if [ "$PR_STATE" != "MERGED" ]; then
-        echo "❌ 模式拦截：当前分支 $BRANCH 对应的 PR 状态为 $PR_STATE (未合入 main)。"
-        echo "严禁进入 Complete 模式！强制降级进入 Suspend 模式！"
-    fi
-fi
-```
-- 若分支不是 `main` 且 PR 未合入 (`PR_STATE != "MERGED"`) → **强制进入 Suspend 模式**，严禁清理 worktree 或关闭 Issue。
-- 若 PR 已 merged 或已处于最新 `main` 分支 → 执行物理检测，判定是否涉及服务或底层部署变更：
-```bash
-git diff origin/main...HEAD --name-only | grep -E '^(platform/|deploy/|bootstrap/|docker|.*\.service)' || true
-```
-- 若**无服务影响**（命令输出为空，纯文档/测试/CI配置）→ 进入 Complete 模式。
-- 若**有服务影响**（命令输出非空）：必须检查当前会话中是否已获得 Owner 明确的 Prod 处置（`deploy` 授权或显式 `hold` 观察）。
-  - **未获 owner 明确 prod 处置时，禁止进入 Complete 模式，严禁清理 worktree 或关闭 Issue**。
-  - 立即打出三阶段状态表格向 owner 汇报并显式请示：
-    ```text
-    [PROD GATEKEEPER CHECKPOINT]
-    - Stage 1 (Merge): Commit SHA <sha>
-    - Stage 2 (Staging Soak): Run URL <url>, Soak Duration <duration>, Health: PASS
-    - Stage 3 (Prod Baseline): Image <digest>, Watchdog: OK
-    
-    请示：是否授权部署 Prod？（回复 "deploy" 授权部署，或回复 "hold" 保持暂不上线）
-    ```
-  - 降级进入 **Suspend 模式**，写出 Handover 断点后结束当前 Turn，出让控制权等待 Owner 响应。获得授权后，由新会话拉起执行 Prod 部署与物理验证。
-否则（PR 未 merged 或任务放弃）→ Suspend 模式。
-
-
-### Suspend 模式 — Handover 写入
-
-将以下信息写入跨会话记忆库，供下次 `/start` 扫到（本环境的写入命令见 `local.md`；
-没有记忆库的环境直接退化到下面那条 issue comment）：
-
-```bash
-save --tag "handover issue-<N>" --content "   # 记忆库写入命令，见 local.md
-## Handover: Issue #<N> — <title>
-- **做了什么**: ...
-- **卡在哪**: ...
-- **关键决策**: ...
-- **当前 git 状态**: `git status -s` + `git log --oneline -3`
-- **未完成项**: ...
-- **下次接手建议**: ...
-"
+gh pr view "$BRANCH" --json state,mergedAt
+git status -sb
+git log --branches --not --remotes --oneline | wc -l   # commits that exist only on this machine
 ```
 
-没有记忆库时退化到 issue comment：`gh issue comment <N> --body "..."`。**退化不是降级**——
-issue 是所有人都能读到的通信总线，记忆库只是让下次会话少翻一遍。
+| Condition | Mode |
+|---|---|
+| PR merged on main, and no service or runtime-config impact (a workflow change is an impact) | **Complete**, production disposition `none` |
+| PR merged, but the repository has no production release pipeline or production already runs the merged SHA | **Complete**, production disposition `none` |
+| PR merged, service impact, and the owner gave "deploy" or "hold" | **Complete** |
+| PR merged, service impact, no answer yet | **Complete** after the production question; the issue stays open (section 3) |
+| Anything else (unmerged, uncommitted) | **Suspend** |
 
----
+Unmerged work is never Complete. Do not close the issue and do not delete the worktree in Suspend.
+Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
+while the docs described it as existing. Push the branch or write it into the handover.
 
-## 触发时机 (When to Use)
+## 2. Prove the running process is new
 
-1. 用户主动说：`/close`、"收工"、"收尾"、"关闭对话"；
-2. Agent 自认所有任务已完成，准备交付给用户测试；
-3. 长时间运行的循环任务（如 `/loop`）达到终止条件时；
-4. 用户说"先到这"、"中断"、"暂停" → 直接进入 Suspend 模式。
-
----
-
-## 检查清单 (Complete 模式 — 全部用 Bash 物理探测)
-
-> Suspend 模式只执行第 1 项和第 7 项，其余跳过。
-
-### 1. 代码合流 (PR Merged & Main Synced)
+Skip this step when no process serves the change. Otherwise compare the process age with the file edit time.
 
 ```bash
-# 对本会话修改过的仓库执行物理合流核验：
-CURRENT_BRANCH=$(git -C <repo> branch --show-current)
-if [ "$CURRENT_BRANCH" != "main" ]; then
-    PR_STATE=$(gh pr view "$CURRENT_BRANCH" --repo <repo_owner/name> --json state -q .state 2>/dev/null || echo "NONE")
-    if [ "$PR_STATE" != "MERGED" ]; then
-        echo "❌ 失败：当前分支 $CURRENT_BRANCH 对应 PR 状态为 $PR_STATE，未合入 main！禁止 Complete！"
-        exit 1
-    fi
-fi
-# 确认本地 main 分支与远程 origin/main 零偏移且 working tree 干净
-git -C <repo> fetch origin main --quiet
-git -C <repo> status -sb | grep -q '## main...origin/main'
-```
-
-判定标准：
-- 若在 feature/worktree 分支，PR 状态物理必须为 `MERGED`（未合流必须报 ❌ 并降级 Suspend）；
-- 本地 `main` 与 `origin/main` 无偏移（0 ahead, 0 behind）；
-- Working tree clean（无 `M`/`?` 行）。
-
-### 2. 测试通过 (Tests Green)
-
-```bash
-# 运行仓库的核心测试套件
-python -m pytest <tests_dir> -q   # 或 make test, npm test 等
-```
-
-判定标准：
-- 全部 PASS，0 failures，0 errors
-
-### 3. 本机部署生效 (Deployment Effective)
-
-检查本会话引入的变更是否真正作用于运行时环境：
-
-- **规则投影**: 目标配置文件是否包含预期标记 (`grep` 验证)
-- **服务运行**: 守护进程/服务是否存活 (`launchctl list`, `kill -0`, `systemctl`)
-- **配置文件**: symlink 是否正确 (`ls -la`, `readlink`)
-- **运行体检**: 如有环境体检工具，执行之
-- **⚠️ 运行时是否是新版 (GREEN-WHILE-STALE)**: 进程活着 ≠ 跑的是你刚改的代码
-
-```bash
-# 文件改动时间 vs 进程已运行时长：进程若比文件还老，跑的就不是你刚改的代码。
-#
-# 用 `ps -o etime=`，不用 `stat -f` / `date -j`（macOS 专有，Linux 上直接失败），
-# 也不用 `ps -o etimes=`（Linux 专有：macOS 的 ps 不认这个关键字，会把**全部合法
-# 关键字列表**打到 stdout，于是拿到一个非空字符串，`int()` 抛异常或被误读成时长）。
-# `etime` 是 POSIX 关键字，格式 `[[DD-]HH:]MM:SS`，两边都在。
-#
-# 测不出来必须说测不出来：解析不出数字就报「无法判定」，绝不退化成「不陈旧」。
-# 用一次没做成的测量换一个「通过」的结论，就是 GREEN-WHILE-EMPTY。
-FILE=<改动的文件>; PID=<进程 pid>
 python3 - "$FILE" "$PID" <<'PROBE'
 import os, re, subprocess, sys, time
 
 path, pid = sys.argv[1], sys.argv[2]
 age = time.time() - os.stat(path).st_mtime
-r = subprocess.run(["ps", "-o", "etime=", "-p", pid],
-                   capture_output=True, text=True)
+r = subprocess.run(["ps", "-o", "etime=", "-p", pid], capture_output=True, text=True)
 raw = r.stdout.strip()
 m = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
-print(f"文件改动于 {age:.0f}s 前，ps 报告 etime={raw!r}")
+print(f"file changed {age:.0f}s ago; ps reports etime={raw!r}")
 if r.returncode != 0 or not m:
-    print("无法判定：ps 没有给出可解析的 etime"
-          "（进程已退出 / 无权限 / 该平台格式不同）")
+    print("verdict: UNDETERMINED (ps gave no parseable etime: process gone, no permission, or other platform format)")
     sys.exit(2)
 d, h, mi, sec = (int(x or 0) for x in m.groups())
 elapsed = ((d * 24 + h) * 60 + mi) * 60 + sec
-print(f"进程已运行 {elapsed}s")
-print("进程比改动更老 → 跑的是旧代码" if elapsed > age
-      else "进程晚于改动 → 可能是新代码")
+print(f"process running for {elapsed}s")
+print("verdict: STALE (process is older than the edit, so it runs old code)" if elapsed > age
+      else "verdict: FRESH (process started after the edit)")
 PROBE
 ```
 
-判定标准：
-- 无 STALE 输出；若有，必须说明「本次修复需 X 重启后才生效」，不得宣称已生效
+Use `ps -o etime=`. The keyword `etimes` exists only in procps-ng: macOS prints its keyword list to stdout and the output looks like a measurement.
+Report "cannot measure" as UNDETERMINED. Never turn it into "not stale".
 
-### 4. 安全审计 (Security Quick Scan)
+## 3. Production gatekeeper (service changes)
+
+Merge, staging deploy, and production deploy are three separate stages. Report all three with evidence, then ask:
+
+```text
+[PROD GATEKEEPER]
+- Stage 1 merge: release tag vX.Y.Z = commit <sha>
+- Stage 2 staging: run <url>, soak <duration>, health <result>
+- Stage 3 production: image <digest>, watchdog <state>
+Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
+```
+
+- Claim "deployed" only with an evidence chain: image digest, ledger entry, and a real end-to-end probe (the real browser or TUI).
+  The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
+- Only a production change requires owner approval, with the owner present (owner instruction, 2026-10-06). Ask once, then finish the non-production close.
+  Closing in silence is forbidden.
+- Without an answer, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
+  Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
+- A "deploy" covers only the release it names. Immediately before dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production.
+- After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
+
+## 4. Suspend: handover and issue
+
+Write the handover with four parts. Include the exact next command.
+
+1. **Done:** commit SHAs, changed files, tests that passed.
+2. **Blocked:** the cause (CI, open design question, waiting for approval).
+3. **Decisions:** contracts you fixed and assumptions you overturned.
+4. **Next:** the first command for the next session.
 
 ```bash
-# 检查是否有敏感信息暴露
-git diff HEAD~3 -- '*.md' '*.json' '*.yaml' '*.toml' | grep -iE 'password|secret|token|api.?key|credential' || echo "CLEAN"
+ws-bm write-note --folder memory/handover --tags handover --title "Handover: issue-<N> <slug>" --content "..."
 ```
 
-判定标准：
-- 无硬编码凭证
-- 云同步功能关闭（若涉及记忆/数据系统）
-- 无意外公网暴露
+Also update the issue with the same four parts. Search for an existing issue first. Create one only when none matches.
+Commands for this machine are in `local.md`.
 
-### 5. 残留清理与马仔清场 (Loose Ends & Worker Recovery)
+## 5. Complete: clean up
 
-- **后台马仔与并发槽清场**：
-  检查并清理本会话创建的后台 `subagent-worker`、悬空 CLI 进程（`codex`、`claude`、`pi` 等），释放 50 并发槽，严防后台孤儿进程持续轮询触发 429 限流或耗尽宿主资源：
-  ```bash
-  ps aux | grep -E 'subagent-worker|run_swarm_tournament' | grep -v grep || echo "CLEAN"
-  ```
-- **Worktree 销毁前进程回收 (Worktree Process Teardown)**：
-  在执行 `git worktree remove` 或删除临时工作区前，必须确认无任何后台进程或定时任务占用该目录。严禁在后台进程未退出的情况下强行清理工作树：
-  ```bash
-  lsof +D "$WORKTREE_PATH" 2>/dev/null | grep -v 'COMMAND' || echo "CLEAN"
-  ```
-- **临时文件与 Scratch 归档**：
-  本会话创建的临时文件/scratch 脚本是否已清理或归档；
-- **遗留 TODO/FIXME**：
-  是否有遗留项需要记录到记忆系统（Handover）；
-- **终态判定硬约束**：
-  终态只认退出码 `exit=0` 与物理磁盘上的 `git diff` / commit，严禁把自然语言自述“已收工”作为交付证据。
+1. Kill every background task, watcher, and subagent bound to the worktree. Check with `lsof +D "$WORKTREE"`.
+   Removing a tree under a running task corrupts it.
+2. `git worktree remove ../<repo>_issue<N>_<slug>`.
+3. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
+   With `pending`, keep it open (section 3).
+4. Delete scratch files. Record each leftover TODO in the handover.
 
-### 6. 未推送的本地工作 (Unpushed Work)
+## 6. Route each lesson (distill)
 
-第 1 项只看当前分支与 origin 的偏移，看不见**其他分支**上只有本机知道的工作。
-这是空头承诺的温床：功能活在未推送的分支里，文档却凭记忆把它写成既有能力。
+Every finding from the session has exactly one destination, or an announced discard. Use a read-only agent to decide.
+The agent that wrote the code does not judge its own lessons.
 
-```bash
-# 无 upstream 的本地分支（别人完全看不到）
-git branch -vv | grep -v '\[.*\]'
-# 所有分支上未推送的 commit 总数
-git log --branches --not --remotes --oneline | wc -l
-```
+Ask in order. The first YES decides:
 
-判定标准：
-- 逐条确认：这些工作**不会被任何文档/规则当成既有能力来描述**
-- 真实案例：`a3a8e08` 在一个被弃置 9 秒、从未推送的分支上实现了日志功能，
-  两天后规则文档把它写成了既有承诺——该承诺写下的那一刻就是假的，存活了三天
-- 是否需要更新 AGENTS.md 或其他文档
+1. True only this time (one SHA, one count, one temp path)? **Discard, and say so in the report.**
+2. Can an automatic check catch it? **Build the check. Do not write a rule.** A red assertion works every time. Prose works when read.
+3. Would it change a future judgment? **Write it as a criterion.** Choose the tier by what it depends on:
+   - holds on any machine: Root rules;
+   - holds only with this environment's shared infrastructure: Workspace rules;
+   - holds only for this project's goal: Repo rules.
 
----
+   If you cannot name the tier, you do not yet know what it depends on. Do not write it.
+4. Unfinished work, or state for someone else? **Issue or handover.**
+5. A location of an external thing (dashboard, ticket, log path)? **Memory reference.**
+6. True only for this checkout, or tier unclear? **Put it in the local holding area** for the read-only agent to place.
 
-### 7. 评审蒸馏 (Review Distillation)
+Red lines:
 
-前 6 项问「机器状态对不对」。这一项问「本会话学到的东西，有没有落到会被再次读到的
-地方」。不做这一步，发现就只活在 transcript 里——下一个会话从零开始，同一个坑再踩
-一次，而且没人知道它被踩过第二次。
+- **R1** No rule without the measurement that triggered it: which session, what went wrong, what it cost.
+- **R2** Resident text holds criteria only. Move steps, lists, and templates to a skill and leave a pointer.
+- **R3** The distiller is not the executor.
+- **R4** Discard out loud.
+- **R5** One invariant lives in one tier. Copies drift. Skills may restate a criterion but must point back to the owner.
+  (2026-09-22: "the president writes no code" lived in two tiers, and one copy missed the stop condition added that day.)
+- **R6** A pointer must resolve to the same literal string in the target. A pointer to a dropped invariant disguises the loss as convergence.
 
-**输入**：本会话产生的每一条发现——根因、被推翻的假设、近失、判错的地方，以及
-「这次做对是因为运气好」的地方。
-**输出**：每条发现恰好一个去处，或被显式丢弃。没有第三种状态。
+A finding that is both a criterion and unfinished work becomes two records. One record inside an issue dies when the issue closes.
 
-先读取目标 checkout 的手改候选与来源版本；由没写过这些内容的只读 agent
-按下述判据定层。写入权威真源并确认下一轮静态投影后，才清理已上游化的候选。
-本环境的命令和路径见 `local.md`。
+## 7. Report
 
-判定按序问，第一个 YES 即定去处：
-
-1. **它只在这次为真吗？**（某个 SHA、某次失败计数、某条临时路径）→ **丢弃**，但要
-   出声（R4）。
-2. **它是一道能自动跑的检查吗？** → **造检查，不要写规则**。一条「要小心 X」的散文
-   只在有人读到时起作用，而一条会红的断言每次都起作用。本路由表长期只有「三层常驻
-   规则」这一个判据去处，于是每个真发现都被推成更多常驻文本——而常驻越长红线越不被
-   遵守，方向恰好与 dev_env#83（Root 块削到 ≤ 2,000 字符）相反。实测 2026-09-23：
-   一条「护栏读的是代理」的元判据，真正起作用的是那条构造真实异常对象的测试，
-   规则文本只是围着它讲的故事。**先问能不能变成断言；不能，才往下问。**
-3. **下次遇到同类情况，它会改变我的判断吗？** → 它是**判据**，进常驻规则。
-   **进之前先看预算**：Root 常驻块有 ≤ 2,000 字符的上限（#83），超了就不是「再加一条」
-   而是「先下沉四节程序性内容」。落在哪一层，看它**依赖什么才成立**——三层，
-   与记忆模型同构（Root / Workspace / Repo）：
-   - **换一套环境、换一台机器仍然成立**：方法、协作分层、怎么判断本身、自我修养级
-     准则 → **Root 级**（`workspace-iac/etc/rules/`，对所有 workspace 生效）
-   - **依赖这一套环境的共有基建才成立**：凭证域与 vault 边界、有哪些 MCP、CLI 的语义、
-     运行时副本在哪个路径、这套里的仓库互为什么关系 → **workspace 级**
-     （`workspace-iac/workspaces/<ws>/agents.md`）
-   - **依赖这个项目要达成什么才成立**：评什么、什么算通过、边界画在哪 → **repo 级**
-     （仓库层的权威源；仓库 `AGENTS.md` 可能只是投影，按本环境契约核实）
-   - **判不出是哪一层，说明还没想清楚它依赖什么。不要写。** 越往上写错越贵：Root 级
-     的一条错规则污染每一个 workspace 的每一个项目。
-   - 反向症状同样要认：一条 workspace 级的事实写进了 repo 级，通常不是作者偷懒，是
-     **workspace 级在那个宿主上根本不可见**，写在那里等于没写。先修投影，再搬内容。
-4. **它是还没做完的事，或别人要接手的状态吗？** → **issue** 或记忆 `project`。
-5. **它是一个外部位置吗？**（dashboard、wiki、ticket、日志路径）→ 记忆 `reference`。
-6. **它只对这个 checkout 成立，或者你还判不准该进哪一层？** →
-   写进该 checkout 的本地留存区，**交给独立只读 agent 定层**。
-   这不是垃圾桶，是一个有出口的暂存区：静态投影遇到手改会保全原文并阻断覆盖，
-   不把未经审阅的内容自动发布到仓库；蒸馏再按第 3 条的判据裁决它该升到哪一层。
-   升层并重新渲染之后，那段才能从 `local.md` 移除。**判不准就放这里，不要硬塞进某一层**
-   ——猜错层的代价是污染每个 workspace 的每个项目，而放这里的代价只是晚几天。
-
-**红线**
-
-- **R1 无测量不立规**：一条新判据必须带上触发它的那次测量——哪次会话、什么被判错
-  了、代价是什么。没有测量的规则是猜想，而猜想会污染之后每一次判断。
-- **R2 常驻只放判据**：新增的常驻文本逐条过一遍「它会改变某个判断吗」。会，留下；
-  不会（是步骤、清单、模板、参考数据），下沉到 skill/SSOT，原处只留一根指针。
-  **长度是症状，判据/程序之分才是判准**——把阈值定在行数上会逼出两种坏结果：
-  该进的判据被挡住，和为了腾位置删掉一条仍然有效的红线。
-  唯一按长度算的账是全系统常驻总量，且只在**合并层级**这种一次性整理里算，
-  不用来卡单次新增。
-- **R3 蒸馏者 ≠ 执行者**：本会话写实现的 agent 不做本会话的蒸馏裁决。自评会把
-  「我当时是这么想的」直接当成「规则本来就该这么写」。派只读 agent 做这一项，
-  与第 2 项的自测同理。
-- **R4 丢弃要出声**：判为一次性的发现要在收尾报告里列出来。静默丢弃与「忘了」在
-  事后无法区分，而「忘了」正是这一项要防的东西。
-- **R5 一条不变量只有一个层**：同一条判据不得同时出现在两层。复制即漂移，而漂移的
-  那一份往往先被读到。实测（2026-09-22）：`总裁不写代码` 同时存在于 Root 级
-  `etc/rules/subagents.md` 与 workspace 级 `workspaces/zitian/config.yml`，后者已经
-  缺失 Root 级当天新增的停止条件。上层已有的，下层只留一根指针。
-  **skill 不是第四层**，是层内的按需部分：它被单独加载时必须自足，所以允许重述判据。
-  只有**权威定义**受本条约束——它只能有一处，skill 里的重述要指得回去。
-- **R6 指针必须指得到**：一根指针写「X 是 Root 级判据」，Root 就必须真有 X，且**字面
-  可检**。假出处比重复更坏：重复至少两份都在，假出处让人以为已经落位而其实被删了。
-  实测（2026-09-22）：一条 workflow 指针声称「单一真源是 Root 级判据」，而那条不变量
-  在拆分中被整条丢掉了，指针把丢失伪装成了收敛。**指针与被指对象要用同一个字符串**，
-  否则这条就只能靠人读，不能靠 grep 守。
-
-**一条发现同时命中 2 和 3**（既是判据又有未完成的活）要拆成两条分别落位。合成一条
-写进 issue，判据就随 issue 关闭而消失。
-
----
-
-## 输出格式 (Report Template)
-
-向用户汇报时，使用以下格式：
-
-```markdown
-## 🔒 Close Checklist
-
-| # | 检查项 | 结果 | 备注 |
-|---|--------|------|------|
-| 1 | 代码合流 | ✅/❌ | `<repo>`: PR #N merged, main in sync |
-| 2 | 测试通过 | ✅/❌ | X/X PASS |
-| 3 | 部署生效 | ✅/❌ | 规则投影/服务存活/配置正确 |
-| 4 | 安全审计 | ✅/❌ | 无敏感信息暴露 |
-| 5 | 残留清理 | ✅/❌ | 无临时文件残留 |
-| 6 | 未推送工作 | ✅/❌ | N 个 commit / M 个无 upstream 分支 |
-| 7 | 评审蒸馏 | ✅/❌ | 落位 N 条 / 丢弃 M 条 |
-
-**裁决**: ✅ CLOSE / ❌ KEEP OPEN (原因: ...)
-```
-
-第 7 项额外附一张蒸馏台账，每条发现一行：
-
-```markdown
-| 发现 | 去处 | 依据 |
-|------|------|------|
-| 投影工具用 symlink 直投规则真源的工作树，未提交的改动即时上线 | workspace 级规则 | 实测：并发 actor 两次切分支，live 规则随之改变 |
-| 新 worktree 未装 submodule 依赖会伪装成 drift 回归 | repo 级 AGENTS.md | 本会话实测：10 个失败全部来自缺 chalk，非平台漂移 |
-| platform pin fc1696cc → e697e102 | 丢弃（一次性） | SHA 本身不构成判据 |
-```
-
----
-
-## 执行准则 (Rules of Engagement)
-
-1. **物理测量，不信口头**：每一项必须有命令输出佐证，严禁"我觉得应该没问题"；
-2. **最小侵入**：检查过程只读，不修改任何文件；
-3. **快速失败**：遇到第一个 ❌ 不必中断，跑完全部清单后统一汇报；
-4. **记忆沉淀**：按第 7 项的路由判据逐条落位。自动蒸馏管线
-   只负责搬运，不负责裁决——去哪一层、要不要写，是第 7 项的判断，不能外包给 daemon。
+Report in the owner's language, in a short table. Show the mode, merge proof, verification that ran on which machine,
+the oracles you did not touch, the sample size, the data age, and the discarded findings.
+End with two answers: "Sufficient?" and "MECE?".

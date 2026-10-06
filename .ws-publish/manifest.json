@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "1ddebdfa6343f48fb2545aa09fb98606924ec10025c93b75f8c7e2e16306d3cc",
-    "root": "77a0f07f693247f372f94c6905d5e29e2fc30706cb3bb5221d054d202b495ba9",
-    "skills": "5129777b70d72edd28d19839a710f10315d2d3300b4741e6660c9ece947cca75"
+    "repo": "14659a041d3cba178fcdf7aaf6375db4421c77dec6be6630163c5d3af716df61",
+    "root": "b0c1243f33abf788e9b08ad8b962004df40f8372faff27d326e6425d93b891cc",
+    "skills": "b799bb901485589faa83e62cec7e19b6363c1fea3b14d5a9c817b6b9b4eda916"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "0d50e7c5971962953d524fccdfeee676a1060b3f32aa8c89b37ec47790c0fac7",
+    "AGENTS.md": "ad631207331b0d073c490cbafef89fc86bfdcf77ed4c814163e4d298dfe5f24a",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -19,16 +19,17 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/audit/SKILL.md": "50f721df45da65f421032c7b7bc3890a7a6a25380c34684c1366dc4cfc65d39a",
-      "skills/close/SKILL.md": "39173a95b0a18473fe818c772b57ea4d369ff42722f6c0e7c751c3f0678af9d9",
-      "skills/codegraph/SKILL.md": "846a10e24f95f87ebf4a6f8a2f9cb715476dcde4f3ac06de3bd29d0d4dda32fc",
+      "skills/audit/SKILL.md": "70e6059ff5059ce1cf2b9ba7a39fce43586c9be17fef69addba5724aa8b84874",
+      "skills/auto/SKILL.md": "7448a07fe2313fc05bdaa2456411ccce089075f398701dfdd9639e3e411fb121",
+      "skills/close/SKILL.md": "f8dfd0ad608df0ce60212aa53572d7778b2109aa6085d17cdd43b73021428534",
+      "skills/codegraph/SKILL.md": "974b470fa5d208da9aba8caf99e85fe50aad4f43e758a9058f6505bec057956f",
       "skills/deploy-evidence/SKILL.md": "822c1cb774dc65a122e2d858387e23e87147062e080d2bebee990a1162a41b7f",
       "skills/factor-acceptance/SKILL.md": "a45c2b5d6d5138f433052f868996d117d569b58aa23c32409f6e7676c49c62b8",
-      "skills/prr/SKILL.md": "a07a5a27e4b4e4f72f99e18d40451aa33401b5a68d370eb808a7e343688a75b7",
-      "skills/recall/SKILL.md": "a5f59d1cc77831b3f848c04a426177585c1dac3e0bd8f43e2bd84a3715aeaa76",
-      "skills/smoke/SKILL.md": "88c20db19e4d7355fb3cd707515e4b312ff8e66b166fcbe9e82004af1d43da8f",
-      "skills/ssot/SKILL.md": "a6e04d3bd2dcc8a5a98e3a8b8010a99501932b3a22a5cc1532179dc8db52cac9",
-      "skills/start/SKILL.md": "d6db080443d3973c8ca9230e447e783b606ae203840c2ce2585eda5f9d5bdcf8"
+      "skills/init/SKILL.md": "b39c661214babd98228c4b76692f5f5c810c1f0a991b8eafc92c86c0253aba6c",
+      "skills/prr/SKILL.md": "402e84b362610e044e7a18113ce245f40e437c01362967e47d1e96a31d1ba4e4",
+      "skills/recall/SKILL.md": "aca4bdbd0d78c56665f92de0fc6d5c8be7a850c6013cb0849beb876f97a23f3e",
+      "skills/smoke/SKILL.md": "68c96f32ee06bf478ccf53c7d0df7669bfb9ad3bf360b54cf137437f9ef34516",
+      "skills/ssot/SKILL.md": "2ee3a76e6367e4ace08d1959b505647d201ad16b8a24d5ea6103b9a58ec18b18"
     },
     "link_dirs": [
       ".claude/skills",
@@ -36,29 +37,31 @@
     ],
     "links": {
       ".agents/skills/audit": "../../skills/audit",
+      ".agents/skills/auto": "../../skills/auto",
       ".agents/skills/close": "../../skills/close",
       ".agents/skills/codegraph": "../../skills/codegraph",
       ".agents/skills/deploy-evidence": "../../skills/deploy-evidence",
       ".agents/skills/factor-acceptance": "../../skills/factor-acceptance",
+      ".agents/skills/init": "../../skills/init",
       ".agents/skills/prr": "../../skills/prr",
       ".agents/skills/recall": "../../skills/recall",
       ".agents/skills/smoke": "../../skills/smoke",
       ".agents/skills/ssot": "../../skills/ssot",
-      ".agents/skills/start": "../../skills/start",
       ".claude/skills/audit": "../../skills/audit",
+      ".claude/skills/auto": "../../skills/auto",
       ".claude/skills/close": "../../skills/close",
       ".claude/skills/codegraph": "../../skills/codegraph",
       ".claude/skills/deploy-evidence": "../../skills/deploy-evidence",
       ".claude/skills/factor-acceptance": "../../skills/factor-acceptance",
+      ".claude/skills/init": "../../skills/init",
       ".claude/skills/prr": "../../skills/prr",
       ".claude/skills/recall": "../../skills/recall",
       ".claude/skills/smoke": "../../skills/smoke",
-      ".claude/skills/ssot": "../../skills/ssot",
-      ".claude/skills/start": "../../skills/start"
+      ".claude/skills/ssot": "../../skills/ssot"
     },
     "root": "skills"
   },
-  "source_revision": "8415c3c8268f1569da72c517a7ab80fc713d8b9d",
+  "source_revision": "db95c1b2871a86c4cbcf1729487ffc967b1d7945",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
