@@ -445,11 +445,17 @@ JOB_NAMES = ("head_reports_pipeline_job", "standard_backfill_pipeline_job")
 
 
 class _SharedConnection:
-    """One real connection for every op of a job. `commit` is recorded, not executed."""
+    """One real connection for every op of a job. `commit` is recorded, not executed.
+
+    `events` holds, in order, every commit and every verdict row the job writes, so a test
+    can assert what happened before what.
+    """
 
     def __init__(self, connection: psycopg.Connection[Any]):
         self.connection = connection
         self.commits = 0
+        self.events: list[str] = []
+        self.verdicts: list[dict[str, Any]] = []
 
     def __enter__(self):
         return self
@@ -459,6 +465,7 @@ class _SharedConnection:
 
     def commit(self) -> None:
         self.commits += 1
+        self.events.append("commit")
 
     def __getattr__(self, name: str):
         return getattr(self.connection, name)
@@ -506,7 +513,12 @@ def _execute_job(monkeypatch, shared_connection, job_name: str, responses: dict[
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda _c, **_k: ())
     monkeypatch.setattr(supply_chain_extraction, "materialize_universe_supply_chain_exposure", lambda _c, **_k: 0)
-    monkeypatch.setattr(nightly_verdicts, "record", lambda *_a, **_k: None)
+
+    def record_verdict(name: str, **row: Any) -> None:
+        shared_connection.verdicts.append({"check": name, **row})
+        shared_connection.events.append(f"verdict:{name}:{row['ok']}")
+
+    monkeypatch.setattr(nightly_verdicts, "record", record_verdict)
     monkeypatch.setattr(
         standards,
         "_run_standard_backfill",
@@ -574,6 +586,7 @@ def test_a_partial_failure_leaves_the_run_green_and_the_report_names_the_error(
     assert q4["answered"] == 2
     assert q4["unavailable"] == {"fetch_error:MoomooConnectionError": 1}
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
+    assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a partial failure is not red"
 
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)
@@ -589,18 +602,75 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
     assert (q4["answered"], q4["unavailable"]) == (3, {})
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
     assert shared_connection.commits == 4, "purity, supply chain, analyst ratings and coverage commit once each"
+    assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a clean run has no red row"
 
 
-def test_the_terminal_op_raises_the_summarys_failure_and_nothing_else() -> None:
-    from data_engine.lanes.standards import REPORTS_CURRENT, fail_if_a_lane_failed
+QQQ = "universe-list:qqq"
+RED_SUMMARY = "failed: analyst ratings fetch failed for 3 of 3 tickers"
+LANE_MESSAGE = "analyst ratings fetch failed for 3 of 3 tickers; first error: DDOG: X: first failure"
 
-    message = "analyst ratings fetch failed for 3 of 3 tickers; first error: DDOG: X: first failure"
+
+def _lane_summary(**extra: Any) -> str:
+    return json.dumps({"universe": QQQ, "executed_at": EXECUTED_AT, "rows": 3, "fetch_errors": 3, **extra})
+
+
+def test_the_terminal_op_records_a_red_verdict_then_raises_the_summarys_failure(monkeypatch) -> None:
+    """#771: a red run must also be a red verdict. The verdict text carries counts, no error text."""
+    from data_engine.lanes.standards import fail_if_a_lane_failed
+    from data_engine.quality import nightly_verdicts
+
+    rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: rows.append({"check": name, **row}))
+
     with pytest.raises(RuntimeError) as raised:
-        fail_if_a_lane_failed(json.dumps({"rows": 3, "lane_failure": message}), json.dumps({"report_id": "r"}))
-    assert str(raised.value) == message
+        fail_if_a_lane_failed(
+            dg.build_op_context(), _lane_summary(lane_failure=LANE_MESSAGE), json.dumps({"report_id": "r"})
+        )
 
-    fail_if_a_lane_failed(json.dumps({"rows": 3, "fetch_errors": 1}), json.dumps({"report_id": "r"}))
-    fail_if_a_lane_failed(json.dumps({REPORTS_CURRENT: HEAD_RUN}), json.dumps({REPORTS_CURRENT: HEAD_RUN}))
+    assert str(raised.value) == LANE_MESSAGE
+    [row] = rows
+    assert (row["check"], row["ok"]) == (f"question_coverage@{QQQ}", False)
+    assert row["summary"] == RED_SUMMARY
+    assert row["ran_at"] == datetime.fromisoformat(EXECUTED_AT), "dated by the tick, like the green coverage verdict"
+
+
+def test_the_terminal_op_writes_no_verdict_and_does_not_raise_without_a_lane_failure(monkeypatch) -> None:
+    from data_engine.lanes.standards import REPORTS_CURRENT, fail_if_a_lane_failed
+    from data_engine.quality import nightly_verdicts
+
+    rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: rows.append({"check": name, **row}))
+    report = json.dumps({"report_id": "r"})
+
+    fail_if_a_lane_failed(dg.build_op_context(), _lane_summary(), report)
+    fail_if_a_lane_failed(dg.build_op_context(), json.dumps({REPORTS_CURRENT: HEAD_RUN}), report)
+
+    assert rows == []
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_a_total_failure_commits_the_rows_then_turns_the_coverage_verdict_red(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    """Both jobs, through the deployed ops: the coverage op writes its green verdict, as the
+    report is persisted. The terminal op then writes the red one, which is the newest row."""
+    result = _execute_job(monkeypatch, shared_connection, job_name, FAILED)
+
+    assert not result.success
+    verdict_name = f"question_coverage@{QQQ}"
+    assert shared_connection.events == [
+        "commit",  # theme purity
+        f"verdict:theme_purity@{QQQ}:True",
+        "commit",  # supply chain
+        "commit",  # analyst ratings: the unavailable rows are committed BEFORE the run fails
+        "commit",  # coverage report
+        f"verdict:{verdict_name}:True",
+        f"verdict:{verdict_name}:False",
+    ]
+    red = shared_connection.verdicts[-1]
+    assert (red["check"], red["ok"], red["summary"]) == (verdict_name, False, RED_SUMMARY)
+    assert red["run_id"] == result.run_id
+    assert "first failure" not in red["summary"], "the verdict is public: no exception text"
 
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)

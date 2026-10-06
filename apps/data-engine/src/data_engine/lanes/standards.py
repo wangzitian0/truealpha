@@ -344,6 +344,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
 
     summary: dict[str, Any] = {
         "universe": config.universe,
+        "executed_at": config.executed_at,
         "run_id": head.run_id,
         "rows": captured.rows,
         "fetch_errors": len(captured.failures),
@@ -410,18 +411,32 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 
 
 @dg.op
-def fail_if_a_lane_failed(analyst_summary: str, coverage_summary: str) -> None:
+def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
     """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
 
     A lane's total failure is a fact the coverage report must show, so this op depends on the
     coverage op and runs only after the report is persisted. `coverage_summary` is unused on
     purpose: consuming it is what orders this op after the report.
 
+    A red run must also be a red verdict. The coverage op wrote its green verdict as the report
+    persisted. This op then records `question_coverage@<universe>` red with the same tick. The
+    newest row per check wins, so the health endpoint reads the red one. The text carries counts
+    only, because the verdict is public.
+
     The retry happens with the next head. `head_reports_start` counts a stored report for the
     same run as current (`stored_report_run`), so a failed lane is not run again for this head.
     """
-    failure = json.loads(analyst_summary).get(LANE_FAILURE)
-    if failure:
+    parsed = json.loads(analyst_summary)
+    failure = parsed.get(LANE_FAILURE)
+    if not failure:
+        return
+    with verdict(
+        check_name(QUESTION_COVERAGE_VERDICT, parsed["universe"]),
+        registered=NIGHTLY_VERDICTS,
+        run_id=context.run_id,
+        tick=tick_from_config(parsed["executed_at"]),
+    ) as outcome:
+        outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
         raise RuntimeError(failure)
 
 
