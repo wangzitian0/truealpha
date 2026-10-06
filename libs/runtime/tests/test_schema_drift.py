@@ -272,6 +272,19 @@ def test_building_a_reference_on_a_remote_server_is_refused(monkeypatch) -> None
     )
 
 
+def test_building_a_reference_beside_a_tunnelled_production_server_is_refused(monkeypatch) -> None:
+    """#1056: production Postgres listens on the VPS loopback at :15433, so over an SSH
+    tunnel its DSN names 127.0.0.1 and the host test alone calls it local. The drift
+    check would then CREATE and DROP ... WITH (FORCE) a database beside production. The
+    port says which server this is; the guard has to refuse it like any remote one."""
+    monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
+    monkeypatch.delenv("PGPORT", raising=False)
+    with pytest.raises(RuntimeError, match="not a local server") as raised:
+        with drift.reference_database("postgresql://postgres:hunter2@127.0.0.1:15433/truealpha"):
+            pass  # pragma: no cover - the guard raises before the body runs
+    assert "hunter2" not in str(raised.value)
+
+
 def test_the_cli_refuses_the_same_way_and_says_so(monkeypatch, capsys) -> None:
     monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
     assert drift.main(["--database-url", REMOTE_URL]) == 2

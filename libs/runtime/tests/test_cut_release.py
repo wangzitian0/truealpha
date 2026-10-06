@@ -441,3 +441,205 @@ def test_a_manual_release_never_explicitly_dispatches_the_walk(ceremony: Ceremon
     assert walk_calls == [], (
         f"a manual release must rely on the workflow_run cascade, not dispatch directly: {walk_calls}"
     )
+
+
+# --- #1056: only a production deployment needs the owner ---------------------
+# Owner instruction, 2026-10-06 (infra2#1035): production needs the owner's
+# approval of the exact SHA and the owner's presence; everything else is the
+# agent's. `--prod` is the one path in this script that reaches production, so it
+# refuses unless `--owner-approved-sha` names, in full, the commit it promotes.
+# The value cannot prove who typed it; it proves the caller named THIS commit, so
+# a promotion cannot happen by accident, from the automatic path, or for a commit
+# other than the one that was approved.
+
+GATE = REPO_ROOT / "tools" / "owner_approval_gate.sh"
+FULL_SHA = "0123456789abcdef0123456789abcdef01234567"
+OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+def head_sha(ceremony: Ceremony) -> str:
+    return git(ceremony.work, "rev-parse", "HEAD")
+
+
+def prod_dispatches(calls: list) -> list[list[str]]:
+    return [call for call in workflow_dispatches(calls, "deploy-release.yml") if "deploy_type=prod" in call]
+
+
+def test_prod_without_the_owners_approval_is_refused_before_anything_happens(ceremony: Ceremony) -> None:
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--prod")
+
+    assert result.returncode == 2, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # The script's OWN message, not owner_approval_gate.sh's: the gate would also refuse an
+    # empty approval, but only after `git fetch`, and this check exists to fire before it.
+    assert "cut_release: --prod needs the owner's approval of the exact release SHA" in result.stderr, result.stderr
+    assert "--owner-approved-sha" in result.stderr, "the refusal must name the way forward"
+    assert ceremony.remote_tags() == before, "a refused promotion must not claim the tag number"
+    assert calls == [], "must refuse before a single gh call, not merely before the prod dispatch"
+
+
+def test_an_empty_approval_is_no_approval(ceremony: Ceremony) -> None:
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", "")
+
+    assert result.returncode == 2
+    assert "cut_release: --prod needs the owner's approval of the exact release SHA" in result.stderr, result.stderr
+    assert calls == []
+
+
+def test_a_dangling_owner_approved_sha_flag_is_refused_with_its_own_message(ceremony: Ceremony) -> None:
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha")
+
+    assert result.returncode == 2
+    assert "--owner-approved-sha needs a value" in result.stderr, result.stderr
+    assert calls == []
+
+
+def test_an_approval_without_prod_is_refused(ceremony: Ceremony) -> None:
+    """An approval with nothing to promote is an operator mistake, and silently ignoring
+    it would let the operator believe an approval was recorded."""
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--owner-approved-sha", head_sha(ceremony))
+
+    assert result.returncode == 2
+    assert "applies only with --prod" in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before
+    assert calls == []
+
+
+def test_the_approval_must_be_the_commit_being_promoted(ceremony: Ceremony) -> None:
+    """The realistic mistake: the owner approved the SHA that was main HEAD yesterday and
+    main has moved. The approval must equal main HEAD, not merely be a real commit."""
+    approved_yesterday = head_sha(ceremony)
+    ceremony.commit("later (#13)")
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", approved_yesterday)
+
+    assert result.returncode == 2, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "does not cover this commit" in result.stderr, result.stderr
+    assert approved_yesterday in result.stderr and head_sha(ceremony) in result.stderr
+    assert ceremony.remote_tags() == before, "a mismatch must not claim the tag number"
+    assert calls == [], "a mismatch must fail before any PR is verified or any workflow is dispatched"
+
+
+def test_an_abbreviated_approval_is_refused(ceremony: Ceremony) -> None:
+    """A seven-character prefix names a commit loosely. The owner approves one exact SHA."""
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", head_sha(ceremony)[:7])
+
+    assert result.returncode == 2
+    assert "exactly 40 characters" in result.stderr, result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("mode", ["--resume", "--redeploy"])
+def test_a_resumed_prod_promotion_needs_the_approval_too(ceremony: Ceremony, mode: str) -> None:
+    """--resume and --redeploy reach the same prod dispatch, so they may not skip the gate."""
+    ceremony.tag("v0.0.2")
+
+    refused, refused_calls = ceremony.run("v0.0.2", mode, "--prod")
+
+    assert refused.returncode == 2, f"stdout:\n{refused.stdout}\nstderr:\n{refused.stderr}"
+    assert not dispatched(refused_calls)
+
+    allowed, allowed_calls = ceremony.run("v0.0.2", mode, "--prod", "--owner-approved-sha", head_sha(ceremony))
+
+    assert allowed.returncode == 0, f"stdout:\n{allowed.stdout}\nstderr:\n{allowed.stderr}"
+    assert len(prod_dispatches(allowed_calls)) == 1
+
+
+def test_prod_with_the_approved_sha_dispatches_prod_carrying_that_sha(ceremony: Ceremony) -> None:
+    sha = head_sha(ceremony)
+
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    [prod] = prod_dispatches(calls)
+    assert f"owner_approved_sha={sha}" in prod, "deploy-release.yml checks the approval again, so it must receive it"
+    [staging] = [call for call in workflow_dispatches(calls, "deploy-release.yml") if "deploy_type=staging" in call]
+    assert not any("owner_approved_sha" in argument for argument in staging), (
+        "staging is not a production deployment and carries no approval"
+    )
+
+
+def test_the_dry_run_checks_the_approval_and_dispatches_nothing(ceremony: Ceremony) -> None:
+    """--dry-run is how an agent proves, before asking, that the SHA it holds is the one
+    the ceremony would promote: it runs the same gate and then stops."""
+    before = ceremony.remote_tags()
+
+    refused, refused_calls = ceremony.run("v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", OTHER_SHA)
+
+    assert refused.returncode == 2, f"stdout:\n{refused.stdout}\nstderr:\n{refused.stderr}"
+    assert "does not cover this commit" in refused.stderr, refused.stderr
+    assert not dispatched(refused_calls)
+
+    allowed, allowed_calls = ceremony.run("v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", head_sha(ceremony))
+
+    assert allowed.returncode == 0, f"stdout:\n{allowed.stdout}\nstderr:\n{allowed.stderr}"
+    assert "dry run: would tag" in allowed.stdout and "then prod" in allowed.stdout
+    assert not dispatched(allowed_calls)
+    assert ceremony.remote_tags() == before, "a dry run must not claim the tag number"
+
+
+def test_a_staging_release_still_needs_no_approval_and_prints_the_promotion_rule(ceremony: Ceremony) -> None:
+    """The other half of the owner's instruction: everything that is not production is the
+    agent's, so a staging release must not start asking for an approval."""
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert not prod_dispatches(calls)
+    assert f"production needs the owner's approval of release SHA {head_sha(ceremony)}" in result.stdout
+    assert "--prod --owner-approved-sha <the SHA the owner approved>" in result.stdout
+
+
+# The gate both entry points run (this script and deploy-release.yml): one rule, one file.
+
+
+def run_gate(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(GATE), *arguments],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=TIMEOUT_SECONDS,
+    )
+
+
+def test_the_gate_passes_only_when_the_approval_equals_the_release_sha() -> None:
+    result = run_gate(FULL_SHA, FULL_SHA)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ((), "the release SHA is not a 40-character"),
+        (("", FULL_SHA), "needs the owner's approval of the exact release SHA"),
+        ((OTHER_SHA, FULL_SHA), "does not cover this commit"),
+        ((FULL_SHA[:7], FULL_SHA), "exactly 40 characters"),
+        ((FULL_SHA.upper(), FULL_SHA), "exactly 40 characters"),
+        ((FULL_SHA + "0", FULL_SHA), "exactly 40 characters"),
+        (("z" * 40, FULL_SHA), "exactly 40 characters"),
+        ((FULL_SHA, ""), "the release SHA is not a 40-character"),
+        ((FULL_SHA, FULL_SHA[:7]), "the release SHA is not a 40-character"),
+    ],
+)
+def test_the_gate_refuses_everything_else(arguments: tuple[str, ...], refusal: str) -> None:
+    result = run_gate(*arguments)
+
+    assert result.returncode == 2, (arguments, result.stdout, result.stderr)
+    assert refusal in result.stderr, result.stderr
+
+
+def test_the_gate_never_echoes_an_unvalidated_approval() -> None:
+    """The approval is typed by a person and lands in a CI log, where a line that starts
+    with `::error::` is a workflow command."""
+    crafted = "::error::forged\n" + "a" * 40
+
+    result = run_gate(crafted, FULL_SHA)
+
+    assert result.returncode == 2
+    assert "::error::" not in result.stderr + result.stdout, result.stderr
