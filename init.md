@@ -557,6 +557,78 @@ delivery is conventional: one issue, one pull request, tests and review before m
 defined in `AGENTS.md`. The former capability dependency graph was planning information,
 never merge enforcement.
 
+### Served freshness (read time)
+
+`mart.served_head` computes the age, the limit, the `freshness` label and the `availability`
+at each read. It uses the time of the last good refresh and the data cadence. The target state
+is that no consumer relies on a stamp written at publication. Before #1062, a head 13 days old
+read `fresh`. Today `/api/health` reads the view. The readers in the guard baseline do not yet.
+
+The limits live in `mart.freshness_limit`. Git is the authority for the rows that the seed
+lists. The seed in `db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores
+them at every boot. A row removed from the seed stays in deployed databases until a migration
+removes it. Change a limit with a reviewed edit to that seed. The table cannot hold a limit
+above 720 hours.
+
+| Cadence family | Limit (hours) | Limit (days) | Data in this family |
+|---|---|---|---|
+| `daily` | 72 | 3 | Governed heads from the daily capture ticks; daily quality checks; market data (weekdays only) |
+| `weekly` | 336 | 14 | Universe refresh, standards backfill, entity identity |
+| `quarterly` | 720 | 30 | Filing-derived facts, checked monthly |
+| `withhold` | 720 | 30 | Cap for every family: no value older than this is served |
+
+These rules describe what `mart.served_head` and `mart.head_freshness` return.
+
+- **Age** is the time since the last good refresh. An age equal to the limit reads `fresh`.
+  An age above the limit reads `stale`.
+- **Past its family limit**, a value is served with `freshness = 'stale'`, its `age_hours` and
+  a reason code. The codes are `older_than_3d` and `older_than_14d`.
+- **Past the `withhold` limit** (30 days), the value is withheld. Then `availability =
+  'unavailable'`, the reason is `older_than_30d`, and `run_id` is null. No number is shown.
+- **A quarterly value** reaches its limit at the `withhold` limit. It goes from `fresh`
+  straight to withheld. It is never served `stale`.
+- **A head with no registry row** gets the strictest limit.
+- **A missing refresh time** reads `unknown` and `unavailable`. The reason is
+  `refresh_time_unknown`.
+
+`mart.served_artifact` is the registry. Each row maps one served artifact to one cadence
+family. Each scheduled lane has a row. `apps/data-engine/tests/test_freshness_registry.py` fails
+when a lane or a schedule has no row.
+
+The `wired` column is a readiness flag. It is true when an age source is wired for the artifact.
+Today only the three governed heads are wired. Their age source is the pointer's `advanced_at`.
+Other tables hold a time, for example `staging.accepted_rulesets.advanced_at` and
+`mart.nightly_verdicts.ran_at`. No row uses them yet. Nothing reads `wired`, and nothing
+enforces it.
+
+The target state is one read point. A consumer reads `mart.served_head` and not
+`mart.current_pointer_head`. A consumer computes no head age of its own. That is not true today.
+Follow-up changes 2 to 4 of #1062 move the readers that still read the pointer.
+`libs/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
+heuristic, and a new shape can pass it. Its BASELINE lists today's exceptions, and it can only
+shrink. The guard works per file. It cannot prove that a run id flows from the head into a result
+query. The per-reader behaviour tests of PRs 2 to 4 are the real proof.
+
+`/api/health` already reads the head. It reports each governed pointer with `freshness`,
+`limit_hours`, `staleness_reason` and `availability`. Its `status` stays `ok` for a stale head.
+It reports `governed_pointers: "unknown"` when heads exist that this database does not serve.
+
+Four limits are accepted:
+- The word `unknown` has two uses. It is the `freshness` value for a missing refresh time. It is
+  also the health marker for pointers that cannot be read. Both keys are frozen.
+- A refresh time in the future counts as age 0.
+- `/api/health` rounds `age_hours` to one decimal. An entry can show `72.0` and `stale`.
+- The environment filter appears in `mart.served_head` and in `mart.served_head_environments`.
+  One scenario test ties the two views to each other.
+
+This is a different measure from three others. The capture-time windows in
+`raw.capture_schedule_policies` judge one observation when it is captured. They are 5 days for
+`market-price` and 730 days for `financial-fact`. The two-day maximum age in
+`docs/datahub-service-demand.md` is the demand objective of one capture requirement.
+`tools/nightly_verdicts.py` ages each nightly verdict at twice the cadence of its check. None of
+the three changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, equal to the
+`daily` limit.
+
 ---
 
 ## 9. Known Risks / Pitfalls
