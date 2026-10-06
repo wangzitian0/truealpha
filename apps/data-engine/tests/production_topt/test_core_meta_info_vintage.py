@@ -13,10 +13,17 @@ future reader does not "fix" this back), and the view really does read the paylo
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.datahub.production_topt import PostgresToptCoreRepository
+from factors.production_topt import GppeV0Definition
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
 
 ENVELOPE_KEYS = {
     "content_sha256",
@@ -43,6 +50,23 @@ def connection():
     try:
         yield active
     finally:
+        active.close()
+
+
+@pytest.fixture
+def seeded_connection():
+    """A transaction for tests that seed a run. The rollback removes every seeded row."""
+    try:
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
+    try:
+        active.execute("select 1")
+        yield active
+    finally:
+        active.rollback()
         active.close()
 
 
@@ -77,40 +101,64 @@ def test_the_view_does_not_read_vintage_from_the_envelope(connection) -> None:
     )
 
 
-def test_the_envelope_carries_no_business_fields(connection) -> None:
+def test_the_envelope_carries_no_business_fields(seeded_connection) -> None:
     """Why the wrong column was silent, pinned as a fact rather than left as a comment. If
     the envelope ever gains business fields this test goes red and the reasoning above needs
-    revisiting — which is the point."""
-    row = connection.execute(
-        "select payload from staging.capture_normalized_observations where semantic_type = 'financial-fact' limit 1"
-    ).fetchone()
-    if row is None:
-        pytest.skip("no financial-fact observation in this database")
-    keys = set(row[0])
-    assert ENVELOPE_KEYS <= keys, f"the envelope's shape changed: {sorted(keys)}"
-    assert "vintage" not in keys, "the envelope gained a vintage; the projection should read it directly"
-    for business_field in ("revenue", "gross_profit", "total_assets", "headcount"):
-        assert business_field not in keys, (
-            f"the envelope now carries {business_field!r}; this test's premise needs revisiting"
-        )
+    revisiting — which is the point. The run is seeded, so the test examines 21 envelopes in
+    every database, including the empty one CI starts with."""
+    (_, run, *_rest) = _seed_complete_production_run(seeded_connection)
+    envelopes = seeded_connection.execute(
+        """
+        select observation.payload
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_obligations usage using (observation_id)
+        join raw.capture_obligations obligation on obligation.obligation_id = usage.capture_obligation_id
+        where obligation.run_id = %s and observation.semantic_type = 'financial-fact'
+        """,
+        (run.run_id,),
+    ).fetchall()
+    assert len(envelopes) >= 21, "the run must expose one financial-fact envelope per listing"
+    for (envelope,) in envelopes:
+        keys = set(envelope)
+        assert ENVELOPE_KEYS <= keys, f"the envelope's shape changed: {sorted(keys)}"
+        assert "vintage" not in keys, "the envelope gained a vintage; the projection should read it directly"
+        for business_field in ("revenue", "gross_profit", "total_assets", "headcount"):
+            assert business_field not in keys, (
+                f"the envelope now carries {business_field!r}; this test's premise needs revisiting"
+            )
 
 
-def test_a_financial_observation_has_a_vintage_in_the_payload_table(connection) -> None:
-    """The other half: the data the view must reach is really there, so a green projection
-    test cannot be green because nothing has a vintage at all."""
-    row = connection.execute(
-        """
-        select p.normalized_payload -> 'vintage'
-        from staging.capture_normalized_observations o
-        join staging.capture_observation_payloads p using (observation_id)
-        where o.semantic_type = 'financial-fact'
-          and p.normalized_payload ? 'vintage'
-        limit 1
-        """
-    ).fetchone()
-    if row is None:
-        pytest.skip("no financial-fact observation carries a vintage in this database (pre-parser-v9)")
-    vintage = row[0]
-    assert isinstance(vintage, dict) and vintage, "a vintage must name at least one input"
-    sample = next(iter(vintage.values()))
+def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(seeded_connection) -> None:
+    """The other half: a vintage written to the payload table reaches `mart.topt_core_meta_info`.
+    The seeded financial-fact payloads carry a vintage, so a green projection test cannot be
+    green because nothing has a vintage at all. The adapter side is covered by
+    test_sec_financial_adapter.py: `test_the_bundle_names_the_filing_behind_each_input` pins the
+    entry shape and `test_the_headcounts_evidence_travels_on_the_row` pins the payload."""
+    filing = {
+        "accession": "0000320193-26-000010",
+        "document": None,
+        "filed": "2026-02-01",
+        "form": "10-K",
+        "fp": "FY",
+        "fy": 2025,
+        "period_end": "2025-12-31",
+        "statement_form": True,
+    }
+    vintage = {"revenue": filing, "total_assets": filing}
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        seeded_connection, financial_vintage=vintage
+    )
+    core = PostgresToptCoreRepository(seeded_connection)
+    snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
+
+    lineages = seeded_connection.execute(
+        "select lineage from mart.topt_core_meta_info where run_id = %s", (run.run_id,)
+    ).fetchall()
+    items = [item for (lineage,) in lineages for item in lineage]
+    financial = [item for item in items if item["semantic_type"] == "financial-fact"]
+    assert len(financial) == 21, "every listing's financial-fact observation must appear in the lineage"
+    assert all(item["vintage"] == vintage for item in financial)
+    sample = next(iter(financial[0]["vintage"].values()))
     assert {"accession", "form", "filed"} <= set(sample), f"a vintage entry must name its filing: {sample}"
+    assert all(item["vintage"] is None for item in items if item["semantic_type"] != "financial-fact")

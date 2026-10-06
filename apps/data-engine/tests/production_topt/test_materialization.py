@@ -6,6 +6,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -81,7 +82,9 @@ def connection():
 def _normalized_payload(
     coordinates: tuple[str, str, str, str],
     semantic_type: str,
-) -> dict[str, str | None]:
+    *,
+    financial_vintage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     issuer_id, instrument_id, listing_id, ticker = coordinates
     identity = {
         "issuer_id": issuer_id,
@@ -98,7 +101,7 @@ def _normalized_payload(
         # (the SEC financial-fact adapter provides them), so a financial issuer now
         # takes the uniform capital-adjusted path -- gross_profit stays None for a
         # bank (it reports pre-provision profit as its industry-branch numerator).
-        return {
+        payload: dict[str, Any] = {
             **identity,
             "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
@@ -109,6 +112,9 @@ def _normalized_payload(
             "shares_outstanding": "10000000",
             "pre_provision_profit": "80000000" if financial else None,
         }
+        if financial_vintage is not None:
+            payload["vintage"] = financial_vintage
+        return payload
     raise AssertionError(f"unexpected semantic type: {semantic_type}")
 
 
@@ -140,12 +146,14 @@ def _seed_complete_production_run(
     valid_from_by_semantic: dict[str, datetime] | None = None,
     valid_to_by_semantic: dict[str, datetime] | None = None,
     cutoff: datetime = CUTOFF,
+    financial_vintage: dict[str, Any] | None = None,
 ):
     """Seed one complete run.
 
     A semantic type that `valid_from_by_semantic` omits gets valid_from = cutoff - 2 days.
     A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
     The capture sink writes an open valid_to only.
+    A `financial_vintage` is written into every financial-fact payload as its `vintage`.
     """
     valid_from_by_semantic = valid_from_by_semantic or {}
     valid_to_by_semantic = valid_to_by_semantic or {}
@@ -245,7 +253,9 @@ def _seed_complete_production_run(
         repository.put_binding(binding)
 
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
-        normalized_payload = _normalized_payload(coordinates[obligation.subject.id], semantic_type)
+        normalized_payload = _normalized_payload(
+            coordinates[obligation.subject.id], semantic_type, financial_vintage=financial_vintage
+        )
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": normalized_payload})
         source_record_id = f"production-topt-integration:{ordinal}"
         raw_fetch_id = connection.execute(

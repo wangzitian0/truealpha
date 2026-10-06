@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.datahub import quality_report
+from data_engine.datahub.a1_evidence import register_run_evidence
+from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.topt_read import PostgresToptReadRepository
+from factors.production_topt import GppeV0Definition
 from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from production_topt.test_materialization import _CORPUS_OBJECTIVES, _seed_complete_production_run  # noqa: E402
 
 
 class _FakeCursor:
@@ -45,40 +55,97 @@ def connection():
         active.close()
 
 
+def _materialized_run(connection):
+    """A complete production run, frozen and materialized, with no governed pointer in this
+    transaction. Clearing the factor's pointers makes the head deterministic on any database;
+    the append-only trigger is bypassed for that delete only, and the rollback restores it."""
+    connection.execute("set session_replication_role = replica")
+    connection.execute(
+        "delete from mart.current_pointer where environment = 'production' and factor_id = %s",
+        ("gross_profit_per_employee",),
+    )
+    connection.execute("set session_replication_role = origin")
+    _repository, run, _list_version, release_manifest_id, *_ = _seed_complete_production_run(connection)
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
+    return run, release_manifest_id
+
+
+def _accepted_run(connection):
+    """The same run after its quality report persists and its pointer advances."""
+    run, release_manifest_id = _materialized_run(connection)
+    graded = quality_report.build_report(connection, run.run_id)
+    quality_report.persist(connection, graded)
+    registration = register_run_evidence(
+        connection,
+        run_id=run.run_id,
+        release_manifest_id=release_manifest_id,
+        quality_report=graded,
+        objectives=_CORPUS_OBJECTIVES,
+    )
+    assert registration.accepted, registration.summary
+    return run
+
+
 def test_read_returns_mart_results_without_a_hash_tuple(connection) -> None:
+    run = _accepted_run(connection)
     repo = PostgresToptReadRepository(connection)
     run_id = repo.current_run_id()
-    if run_id is None:
-        pytest.skip("no complete production TOPT run in this DB")
+    assert run_id == run.run_id
     results = repo.gppe_results(run_id)
-    assert results, "expected GPPE results from mart"
+    assert len(results) == 20
     assert {"listing_id", "availability", "gppe", "confidence"} <= set(results[0])
     # every availability is a terminal value; available rows carry a numeric gppe
     for r in results:
         assert r["availability"] in {"available", "unavailable"}
         if r["availability"] == "available":
             assert r["gppe"] is not None
+    assert {r["availability"] for r in results} == {"available"}
+    assert {Decimal(r["gppe"]) for r in results} == {Decimal("2000000"), Decimal("700000")}
 
 
 def test_quality_report_read(connection) -> None:
+    run = _accepted_run(connection)
     repo = PostgresToptReadRepository(connection)
-    run_id = repo.current_run_id()
-    if run_id is None:
-        pytest.skip("no complete production TOPT run in this DB")
-    report = repo.quality_report(run_id)
-    if report is not None:
-        assert report["requested_count"] == 84
-        assert "denominator_mean_confidence" in report
+    report = repo.quality_report(run.run_id)
+    assert report is not None
+    assert report["run_id"] == run.run_id
+    assert report["requested_count"] == 84
+    assert "denominator_mean_confidence" in report
+    assert repo.quality_report("capture-run:" + "a" * 64) is None
 
 
 def test_current_head_is_acceptance_gated(connection) -> None:
-    # The governed head is resolved by joining the quality report, so any run it returns
-    # must carry an accepted quality report — never a captured-but-unreported run.
+    # The governed head is resolved by joining the quality report, so a run it returns must
+    # carry an accepted quality report — never a captured-but-unreported run. Each state is
+    # driven with data, in the deployed order: the report persists first, then the pointer
+    # advances.
+    run, release_manifest_id = _materialized_run(connection)
     repo = PostgresToptReadRepository(connection)
-    run_id = repo.current_run_id()
-    if run_id is None:
-        pytest.skip("no accepted production TOPT run in this DB")
-    assert repo.quality_report(run_id) is not None
+    assert repo.current_run_id() != run.run_id, "a captured, materialized, unreported run must not be the head"
+
+    graded = quality_report.build_report(connection, run.run_id)
+    quality_report.persist(connection, graded)
+    assert repo.current_run_id() == run.run_id, "the acceptance-gated fallback must serve the reported run"
+    assert repo.quality_report(run.run_id) is not None
+
+    registration = register_run_evidence(
+        connection,
+        run_id=run.run_id,
+        release_manifest_id=release_manifest_id,
+        quality_report=graded,
+        objectives=_CORPUS_OBJECTIVES,
+    )
+    assert registration.accepted, registration.summary
+    assert repo.current_run_id() == run.run_id, "the governed pointer must serve the accepted run"
+
+    # Remove the report. The fallback now has nothing to serve, so only the pointer can name the
+    # head. The report is append-only by trigger; the delete bypasses it in this transaction only.
+    connection.execute("set local session_replication_role = replica")
+    connection.execute("delete from mart.datahub_quality_report where run_id = %s", (run.run_id,))
+    connection.execute("set local session_replication_role = origin")
+    assert repo.current_run_id() == run.run_id, "the pointer path must not depend on the fallback"
 
 
 def test_limit_is_bounded(connection) -> None:
