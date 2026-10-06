@@ -1993,6 +1993,72 @@ def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violat
     assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
 
 
+def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, capsys) -> None:
+    """#1061: the nightly invariant judges priority against recency. Its third clause needs
+    its own red case. Twelve Data (rank 1) serves a failover cell. Relabel the corroborating
+    observation of the same session as the primary family (rank 0). Now a higher-ranked
+    origin asserted the cell, and the snapshot passed it over. The payload still declares
+    the substitution, and the origin is still ranked. So only the passed-over clause can
+    turn the invariant red."""
+    tool = _output_invariants_tool()
+    fusion = next(
+        invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
+    )
+    plan = _capture(connection, version="test-1061-passed-over", corroborate=True, outage=_PrimaryOutage())
+    victim_listing, _ticker = _victim(plan)
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
+    )
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    run = lambda: tool.check(  # noqa: E731
+        "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
+    )
+    assert run() == 0
+    capsys.readouterr()
+    victim_listing_id = plan.coordinates[victim_listing][2]
+    selected_id = next(m for m in snapshot.members if m.listing_id == victim_listing_id).market_price.input_id
+    # Observations are append-only by trigger; the red case bypasses it for this transaction.
+    connection.execute("set local session_replication_role = replica")
+    relabelled = connection.execute(
+        """
+        update staging.capture_normalized_observations peer
+           set parser_version = %s || ':v1',
+               knowable_at = selected.knowable_at
+          from staging.capture_normalized_observations selected
+         where selected.observation_id = %s
+           and peer.observation_id <> selected.observation_id
+           and peer.semantic_type = 'market-price'
+           and peer.observation_id in (
+               select oo.observation_id
+               from staging.capture_observation_obligations oo
+               join staging.capture_observation_obligations chosen
+                 on chosen.capture_obligation_id = oo.capture_obligation_id
+               where chosen.observation_id = selected.observation_id
+           )
+        returning peer.observation_id
+        """,
+        (tool.PRIMARY_MARKET_PRICE_PARSER, selected_id),
+    ).fetchall()
+    assert len(relabelled) >= 1
+    assert run() == 1
+    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+
+
 def test_when_every_origin_fails_the_cell_stays_unavailable_as_before(connection) -> None:
     """#862: no registered origin holds the victim's close. The obligation resolves exactly
     as it did before failover existed — UNAVAILABLE after three transport errors, the

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -19,10 +21,12 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations,
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
+from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition, ToptCoreAvailability
+from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
+from psycopg.types.json import Jsonb
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -78,7 +82,9 @@ def connection():
 def _normalized_payload(
     coordinates: tuple[str, str, str, str],
     semantic_type: str,
-) -> dict[str, str | None]:
+    *,
+    financial_vintage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     issuer_id, instrument_id, listing_id, ticker = coordinates
     identity = {
         "issuer_id": issuer_id,
@@ -95,7 +101,7 @@ def _normalized_payload(
         # (the SEC financial-fact adapter provides them), so a financial issuer now
         # takes the uniform capital-adjusted path -- gross_profit stays None for a
         # bank (it reports pre-provision profit as its industry-branch numerator).
-        return {
+        payload: dict[str, Any] = {
             **identity,
             "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
@@ -106,6 +112,9 @@ def _normalized_payload(
             "shares_outstanding": "10000000",
             "pre_provision_profit": "80000000" if financial else None,
         }
+        if financial_vintage is not None:
+            payload["vintage"] = financial_vintage
+        return payload
     raise AssertionError(f"unexpected semantic type: {semantic_type}")
 
 
@@ -137,12 +146,15 @@ def _seed_complete_production_run(
     valid_from_by_semantic: dict[str, datetime] | None = None,
     valid_to_by_semantic: dict[str, datetime] | None = None,
     cutoff: datetime = CUTOFF,
+    financial_vintage: dict[str, Any] | None = None,
+    environment: CaptureEnvironment = CaptureEnvironment.PRODUCTION,
 ):
-    """Seed one complete run.
+    """Seed one complete run in the given capture environment.
 
     A semantic type that `valid_from_by_semantic` omits gets valid_from = cutoff - 2 days.
     A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
     The capture sink writes an open valid_to only.
+    A `financial_vintage` is written into every financial-fact payload as its `vintage`.
     """
     valid_from_by_semantic = valid_from_by_semantic or {}
     valid_to_by_semantic = valid_to_by_semantic or {}
@@ -165,7 +177,7 @@ def _seed_complete_production_run(
     )
     campaign = CaptureCampaign(
         campaign_policy_id="capture-policy:production-topt-integration-v1",
-        environment=CaptureEnvironment.PRODUCTION,
+        environment=environment,
         cutoff=cutoff,
         universe_refs=(list_version.universe,),
     )
@@ -242,7 +254,9 @@ def _seed_complete_production_run(
         repository.put_binding(binding)
 
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
-        normalized_payload = _normalized_payload(coordinates[obligation.subject.id], semantic_type)
+        normalized_payload = _normalized_payload(
+            coordinates[obligation.subject.id], semantic_type, financial_vintage=financial_vintage
+        )
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": normalized_payload})
         source_record_id = f"production-topt-integration:{ordinal}"
         raw_fetch_id = connection.execute(
@@ -918,6 +932,330 @@ def test_snapshot_rejects_unknown_run(connection) -> None:
             run_id=f"capture-run:{'0' * 64}",
             release_manifest_id=f"release-manifest:{'1' * 64}",
         )
+
+
+def _cell_row(listing_id: str, semantic_type: str, ordinal: int) -> _ObservationRow:
+    return _ObservationRow(
+        obligation_id=f"capture-list-obligation:{ordinal:064x}",
+        listing_id=listing_id,
+        semantic_type=semantic_type,
+        observation_id=f"normalized-observation:{ordinal:064x}",
+        confidence=Decimal("0.9"),
+        freshness=MetricFreshness.FRESH,
+        knowable_at=CUTOFF,
+        payload={},
+    )
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        pytest.param(SEMANTIC_TYPES[:3], id="one-cell-missing"),
+        pytest.param((*SEMANTIC_TYPES, "extra-cell"), id="one-cell-too-many"),
+        pytest.param((*SEMANTIC_TYPES[:3], "extra-cell"), id="one-cell-replaced"),
+    ],
+)
+def test_a_listing_without_the_exact_four_semantic_cells_is_refused_by_the_member_builder(
+    cells: tuple[str, ...],
+) -> None:
+    """#1061: this is the only per-listing count guard. The snapshot model and the run-wide
+    equality it replaced both run later or are weaker: neither names the missing cell."""
+    by_type = {semantic: _cell_row("listing:probe", semantic, ordinal) for ordinal, semantic in enumerate(cells)}
+
+    with pytest.raises(ValueError, match="listing:probe does not have the exact four TOPT semantic cells"):
+        PostgresToptCoreRepository._snapshot_member("listing:probe", by_type)
+
+
+def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_refused(
+    connection, monkeypatch
+) -> None:
+    """#1061: one listing holds three cells and another holds five. The row count equals the
+    obligation count. The sum `listings * 4 == obligations` holds. The removed run-wide
+    equality passed this input. The member builder refuses it, and nothing is stored."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    rows = list(repository._load_observations(run.run_id, cutoff=CUTOFF))
+    assert len(rows) == 84
+    donor, receiver = rows[0], rows[-1]
+    assert donor.listing_id != receiver.listing_id
+    moved = dataclasses.replace(donor, listing_id=receiver.listing_id, semantic_type="extra-cell")
+    unbalanced = tuple([moved, *rows[1:]])
+    assert len(unbalanced) == 84
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", lambda self, run_id, *, cutoff: unbalanced)
+
+    with pytest.raises(ValueError, match="does not have the exact four TOPT semantic cells"):
+        repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+def _insert_snapshot_row(connection, run_id: str, release_manifest_id: str, *, instruments: int, observations: int):
+    """A hand-written snapshot row. Every column except the counts satisfies the snapshot
+    trigger. So a refusal names the count rule, not an unrelated column."""
+    universe_id, universe_version, universe_sha256, cutoff = connection.execute(
+        "select universe_id, universe_version, universe_sha256, cutoff from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone()
+    payload = {"probe": run_id, "instruments": instruments}
+    digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(payload),)).fetchone()[0]
+    return connection.execute(
+        """
+        insert into staging.topt_core_snapshots (
+            snapshot_id, content_sha256, run_id, release_manifest_id, universe_id, universe_version,
+            universe_sha256, cutoff, issuer_count, instrument_count, observation_count, payload
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+        """,
+        (
+            f"topt-core-snapshot:{digest}",
+            digest,
+            run_id,
+            release_manifest_id,
+            universe_id,
+            universe_version,
+            universe_sha256,
+            cutoff,
+            instruments,
+            observations,
+            Jsonb(payload),
+        ),
+    )
+
+
+def test_the_database_refuses_a_snapshot_that_does_not_bind_four_observations_per_instrument(connection) -> None:
+    """#1061: the kept database check. The run has 84 obligations, so the snapshot trigger
+    accepts observation_count 84 and the CHECK alone refuses 20 instruments."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with pytest.raises(psycopg.errors.CheckViolation) as refused, connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=84)
+    assert refused.value.diag.constraint_name == "topt_core_snapshots_observation_count_check"
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_with_fewer_members_than_the_run_has_obligations(connection) -> None:
+    """#1061: the kept database check for the same input the removed run-wide equality
+    refused. 20 instruments with 80 observations satisfy the CHECK and miss the run's 84."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=80)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_member_that_repeats_an_observation(connection) -> None:
+    """#1061: the kept database check for the repeated-observation input. The control row
+    differs only in distinct ids, so the member trigger's other clauses all hold."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+    ids = list(snapshot.members[0].observation_ids)
+
+    def insert_member(label: str, observation_ids: list[str]) -> None:
+        factor_input = {
+            "snapshot_id": snapshot.snapshot_id,
+            "instrument_id": f"security:probe:{label}",
+            "issuer_id": f"issuer:probe:{label}",
+            "listing_id": f"listing:probe:{label}",
+        }
+        digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(factor_input),)).fetchone()[0]
+        connection.execute(
+            """
+            insert into staging.topt_core_snapshot_members (
+                snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input
+            ) values (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                snapshot.snapshot_id,
+                factor_input["instrument_id"],
+                factor_input["issuer_id"],
+                factor_input["listing_id"],
+                observation_ids,
+                digest,
+                Jsonb(factor_input),
+            ),
+        )
+
+    with connection.transaction():
+        insert_member("distinct", ids)
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="member identity or payload drifted"),
+        connection.transaction(),
+    ):
+        insert_member("repeated", [ids[0], ids[0], ids[1], ids[2]])
+
+
+_NOT_SUCCESSFUL = ("unavailable", "skipped_by_policy", "failed", "missing")
+
+
+def _spoil_one_result(connection, run_id: str, how: str) -> None:
+    """Leave one obligation of a complete run without a successful terminal result.
+
+    Results are append-only by trigger, so the change bypasses the trigger for this
+    transaction only. The test's rollback restores everything."""
+    connection.execute("set local session_replication_role = replica")
+    result_id = connection.execute(
+        """
+        select result.result_id
+        from raw.capture_obligation_results result
+        join raw.capture_obligations obligation on obligation.obligation_id = result.capture_obligation_id
+        where obligation.run_id = %s
+        order by result.result_id limit 1
+        """,
+        (run_id,),
+    ).fetchone()[0]
+    if how == "missing":
+        connection.execute("delete from raw.capture_obligation_results where result_id = %s", (result_id,))
+    else:
+        connection.execute(
+            """
+            update raw.capture_obligation_results
+               set terminal_state = %s,
+                   final_attempt_id = case when %s = 'skipped_by_policy' then null else final_attempt_id end
+             where result_id = %s
+            """,
+            (how, how, result_id),
+        )
+    connection.execute("set local session_replication_role = origin")
+    assert connection.execute(
+        "select success_count + unchanged_count, obligation_count from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone() == (83, 84)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_freeze_refuses_a_run_with_one_obligation_that_did_not_succeed(connection, how: str) -> None:
+    """#1061: `success + unchanged == obligations` is the one status condition freeze keeps.
+    It leaves no room for an unavailable, skipped or failed obligation, or for a gap."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with pytest.raises(ValueError, match="core snapshot requires a completely successful run"):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_the_database_refuses_a_snapshot_for_a_run_with_one_obligation_that_did_not_succeed(
+    connection, how: str
+) -> None:
+    """#1061: the kept database check for the same input. The row binds 21 instruments and
+    84 observations, so only the run's own status can make the snapshot trigger refuse."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+@pytest.mark.parametrize("how", (None, *_NOT_SUCCESSFUL))
+def test_the_capture_status_counts_partition_the_results_of_a_run(connection, how: str | None) -> None:
+    """#1061: freeze drops its `unavailable == 0`, `skipped == 0`, `failed == 0` and
+    `terminal == obligations` terms because the status view makes them follow from
+    `success + unchanged == obligations`. This pins the view facts that argument uses."""
+    (_, run, _, _, *_rest) = _seed_complete_production_run(connection)
+    if how is not None:
+        _spoil_one_result(connection, run.run_id, how)
+
+    (obligations, terminal, success, unchanged, unavailable, skipped, failed, complete) = connection.execute(
+        """
+        select obligation_count, terminal_count, success_count, unchanged_count,
+               unavailable_count, skipped_count, failed_count, complete
+        from mart.topt_capture_status where run_id = %s
+        """,
+        (run.run_id,),
+    ).fetchone()
+
+    assert success + unchanged + unavailable + skipped + failed == terminal
+    assert terminal <= obligations
+    assert complete is (terminal == obligations)
+
+
+def _forbid_loading_observations(monkeypatch) -> list[str]:
+    """Make any observation load fail the test. The list records the run ids that were loaded."""
+    loaded: list[str] = []
+
+    def load(self, run_id, *, cutoff):
+        loaded.append(run_id)
+        raise AssertionError("freeze loaded observations for a run that it must refuse first")
+
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", load)
+    return loaded
+
+
+def _snapshot_count(connection, run_id: str) -> tuple[int]:
+    return connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run_id,)
+    ).fetchone()
+
+
+def test_freeze_refuses_a_staging_run_when_the_environment_identity_is_empty(connection, monkeypatch) -> None:
+    """#1061: with an empty identity table the snapshot trigger compares with NULL and does
+    not fire. The control row at the end shows that gap. Only the freeze check refuses."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, environment=CaptureEnvironment.STAGING
+    )
+    connection.execute("delete from mart.environment_identity")
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a production run, found a staging run"):
+            PostgresToptCoreRepository(connection).freeze_snapshot(
+                run_id=run.run_id, release_manifest_id=release_manifest_id
+            )
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_freeze_refuses_a_run_of_another_environment_when_the_identity_is_populated(connection, monkeypatch) -> None:
+    """#1061: the freeze check refuses before it loads any observation. The same run freezes
+    once the identity matches again."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a staging run, found a production run"):
+            repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    assert len(repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id).members) == 21
+
+
+def test_the_database_refuses_a_snapshot_for_a_run_of_another_environment(connection) -> None:
+    """#1061: the snapshot trigger is the second guard. It refuses a hand-written row when the
+    identity is populated. The same row passes once the identity matches."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
 
 
 class _BorrowedConnection:

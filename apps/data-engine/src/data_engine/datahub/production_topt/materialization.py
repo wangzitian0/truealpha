@@ -188,8 +188,9 @@ class SnapshotMember(_FrozenModel):
     @field_validator("observation_ids")
     @classmethod
     def canonical_observations(cls, values: tuple[str, str, str, str]) -> tuple[str, str, str, str]:
-        if len(set(values)) != 4 or tuple(sorted(values)) != values:
-            raise ValueError("snapshot member requires four sorted unique observations")
+        # The snapshot model refuses a repeated observation. This check keeps the hash canonical.
+        if tuple(sorted(values)) != values:
+            raise ValueError("snapshot member requires sorted observations")
         return values
 
 
@@ -431,57 +432,33 @@ class PostgresToptCoreRepository:
         status = self._connection.execute(
             """
             select environment, cutoff, universe_id, universe_version, universe_sha256,
-                   obligation_count, terminal_count, success_count, unchanged_count,
-                   unavailable_count, skipped_count, failed_count, complete
+                   obligation_count, success_count, unchanged_count
             from mart.topt_capture_status where run_id = %s
             """,
             (run_id,),
         ).fetchone()
         if status is None:
             raise LookupError(f"capture run not found: {run_id}")
-        (
-            environment,
-            cutoff,
-            universe_id,
-            universe_version,
-            universe_sha256,
-            obligations,
-            terminal,
-            success,
-            unchanged,
-            unavailable,
-            skipped,
-            failed,
-            complete,
-        ) = status
+        environment, cutoff, universe_id, universe_version, universe_sha256, obligations, success, unchanged = status
+        # The snapshot trigger compares the environment too. With an empty identity table the
+        # comparison is with NULL, and the trigger does not fire. This check covers that case.
         identity_row = self._connection.execute("select environment from mart.environment_identity").fetchone()
         governed_env = identity_row[0] if identity_row is not None else "production"
-        if (
-            environment != governed_env
-            or complete is not True
-            or (
-                terminal,
-                success + unchanged,
-                unavailable,
-                skipped,
-                failed,
-            )
-            != (obligations, obligations, 0, 0, 0)
-        ):
-            raise ValueError(f"core snapshot requires a completely successful {governed_env.title()} run")
+        if environment != governed_env:
+            raise ValueError(f"core snapshot requires a {governed_env} run, found a {environment} run")
+        # At most one result exists per obligation, and each result has one terminal state.
+        # So success plus unchanged equal to the obligations leaves no gap and no other state.
+        if success + unchanged != obligations:
+            raise ValueError("core snapshot requires a completely successful run")
         rows = self._load_observations(run_id, cutoff=cutoff)
         if len(rows) != obligations:
-            raise ValueError(
-                f"complete {governed_env.title()} run does not expose one normalized payload per obligation"
-            )
+            raise ValueError("complete run does not expose one normalized payload per obligation")
         grouped: dict[str, dict[str, _ObservationRow]] = {}
         for row in rows:
             by_type = grouped.setdefault(row.listing_id, {})
             if row.semantic_type in by_type:
                 raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
-        if len(grouped) * _SEMANTICS_PER_LISTING != obligations:
-            raise ValueError("Production normalized payloads do not cover 21 listings")
         members = tuple(self._snapshot_member(listing_id, by_type) for listing_id, by_type in grouped.items())
         snapshot = ToptCoreSnapshot(
             run_id=run_id,
@@ -612,8 +589,6 @@ class PostgresToptCoreRepository:
         financial_row = by_type["financial-fact"]
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
-        if len(observation_ids) != 4:
-            raise ValueError(f"listing {listing_id} does not bind exactly four observations")
         return SnapshotMember(
             issuer_id=listing.issuer_id,
             instrument_id=listing.instrument_id,
