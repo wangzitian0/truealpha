@@ -757,22 +757,24 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         plan = composition.plan_and_persist(probe, cutoff=cutoff, version="run-scope-h1-probe")
         assert all(plan.coordinates[listing][:2] == ids for listing, ids in shared.items())
         satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
-        # #530 item 1 (owner decision): scoped to market-price, not every semantic type.
-        # A session-bound price from QQQ's 2026-06-30 partition is correctly ineligible
-        # for TOPT's 2026-03-31 obligations (valid_from <= partition_key is false) --
-        # that is what this test protects. financial-fact is a different question: this
-        # fixture's _bundle() knowable_at (2026-02-01) legitimately predates BOTH
-        # universes' partitions, so it satisfies both by construction, same as it would
-        # in production for a fact whose validity window covers both dates -- reusing it
-        # is correct, not a cross-universe leak, and asserting on it here would make this
-        # test depend on the fixture's specific financial-fact date rather than on the
-        # market-price/partition invariant it names.
+        # Scoped to market-price, not every semantic type. The old expectation (nothing is
+        # reused) held only while validity was judged at the partition anchor: QQQ's bar
+        # (valid from 2026-06-30) was ineligible for TOPT's 2026-03-31 obligations. #1060
+        # judges validity at the cutoff day (2026-07-14), so the bar is valid and the 13
+        # shared listings ARE reused. The invariant "reuse never binds what the freeze
+        # refuses" is covered by
+        # test_reuse_binds_a_bar_and_a_filing_dated_after_the_partition_anchor and
+        # test_freeze_selects_a_fact_dated_after_the_anchor_and_before_the_cutoff.
+        # The financial-fact cells are out of scope: this fixture's _bundle() knowable_at
+        # (2026-02-01) predates both anchors, so it satisfies both universes by construction.
         reused = [
             binding.obligation.subject.id
             for work_item_id, binding in plan.bindings.items()
             if work_item_id in satisfied and binding.obligation.capture_requirement_id == "market-price:v1"
         ]
-        assert reused == [], f"a price frozen for a later partition must not be reused: {sorted(set(reused))}"
+        assert sorted(reused) == sorted(shared), (
+            f"a price valid on the cutoff day is reused by every shared listing: {sorted(set(reused))}"
+        )
     finally:
         probe.rollback()
         probe.close()
@@ -822,13 +824,14 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
     from data_engine.datahub.production_topt import plausibility_gate
 
     # Both legs date their bar as production does (#530 item 1, #1060): `as_of` (-> valid_from)
-    # is the settled session of the tick, 2026-07-14. That day follows both corpus anchors
+    # is the settled session of the tick, 2026-07-15. That day follows both corpus anchors
     # (QQQ 2026-06-30, TOPT 2026-03-31), so the reuse and the freeze must judge it at the
     # cutoff day. A bar valid on the cutoff day is shared across universes (#635, #684).
     # The TOPT leg is forced, so it captures its own price and the two runs hold different
-    # prices.
-    day = date(2026, 7, 14)
-    cutoff = datetime(2026, 7, 14, 22, 15, tzinfo=UTC)
+    # prices. The #1019 test above commits its runs at 2026-07-14 22:15 in the same database.
+    # This cutoff is one day later, so those runs stay outside the 12 hour reuse window.
+    day = date(2026, 7, 15)
+    cutoff = datetime(2026, 7, 15, 22, 15, tzinfo=UTC)
     shared = _key_topt_like_the_planes(monkeypatch)
     assert len(shared) == 13, "TOPT and QQQ share 13 listings"
     aapl_issuer = shared["listing:xnas:aapl"][0]
