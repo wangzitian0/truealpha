@@ -20,13 +20,15 @@ from data_engine.lanes.standards import (
 
 def test_the_job_chains_all_modules_to_coverage() -> None:
     """Each op consumes the one before it, so the chain is enforced by the dependency rather
-    than by ordering luck: backfill -> theme purity -> supply chain -> analyst ratings -> coverage."""
+    than by ordering luck: backfill -> theme purity -> supply chain -> analyst ratings -> coverage
+    -> the terminal op that fails the run when a lane failed (#771)."""
     assert [node.name for node in standard_backfill_pipeline_job.graph.node_defs] == [
         "run_standard_backfill",
         "run_theme_purity",
         "run_supply_chain_exposure",
         "run_analyst_ratings",
         "run_question_coverage",
+        "fail_if_a_lane_failed",
     ]
 
 
@@ -219,6 +221,7 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
         "run_supply_chain_exposure",
         "run_analyst_ratings",
         "run_question_coverage",
+        "fail_if_a_lane_failed",
     ]
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 16, 23, 30, tzinfo=UTC))
     requests = list(head_reports_schedule.evaluate_tick(context).run_requests)

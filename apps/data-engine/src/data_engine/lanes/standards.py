@@ -65,6 +65,7 @@ __all__ = (
     "THEME_PURITY_VERDICT",
     "analyst_ratings",
     "defs",
+    "fail_if_a_lane_failed",
     "run_analyst_ratings",
     "run_supply_chain_exposure",
     "supply_chain_extraction",
@@ -160,6 +161,10 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
 #: The key a head-reports start op sets, to the head's run id, when the fallback finds that
 #: head's reports already written; the ops after it pass it on and recompute nothing.
 REPORTS_CURRENT = "reports_current"
+
+#: The key the analyst ratings op sets, to the failure message, when every ticker of the run
+#: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
+LANE_FAILURE = "lane_failure"
 
 
 def reports_current(upstream_summary: str) -> str | None:
@@ -337,24 +342,26 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             )
         connection.commit()
 
-    context.add_output_metadata(
-        {
-            "universe": config.universe,
-            "run_id": head.run_id,
-            "rows": captured.rows,
-            "fetch_errors": len(captured.failures),
-        }
-    )
-    # After the commit and outside the OpenD try block: the unavailable rows stay, and the
-    # op, the job and the head-report run end as FAILURE instead of "published N rows" (#771).
-    captured.raise_if_every_ticker_failed()
+    summary: dict[str, Any] = {
+        "universe": config.universe,
+        "run_id": head.run_id,
+        "rows": captured.rows,
+        "fetch_errors": len(captured.failures),
+    }
+    # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
+    # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
+    lane_failure = captured.lane_failure()
+    if lane_failure is not None:
+        summary[LANE_FAILURE] = lane_failure
+        context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
+    context.add_output_metadata(summary)
     context.log.info(
         "published %s analyst ratings rows for %s (%s fetch errors)",
         captured.rows,
         config.universe,
         len(captured.failures),
     )
-    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": captured.rows})
+    return json.dumps(summary)
 
 
 @dg.op
@@ -402,9 +409,26 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     return json.dumps({"report_id": report_id, "summary": summary_line(report)})
 
 
+@dg.op
+def fail_if_a_lane_failed(analyst_summary: str, coverage_summary: str) -> None:
+    """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
+
+    A lane's total failure is a fact the coverage report must show, so this op depends on the
+    coverage op and runs only after the report is persisted. `coverage_summary` is unused on
+    purpose: consuming it is what orders this op after the report.
+
+    The retry happens with the next head. `head_reports_start` counts a stored report for the
+    same run as current (`stored_report_run`), so a failed lane is not run again for this head.
+    """
+    failure = json.loads(analyst_summary).get(LANE_FAILURE)
+    if failure:
+        raise RuntimeError(failure)
+
+
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
 def standard_backfill_pipeline_job() -> None:
-    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(run_standard_backfill()))))
+    analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(run_standard_backfill())))
+    fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
 
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
@@ -548,7 +572,8 @@ def head_reports_pipeline_job() -> None:
     The weekly backfill wrote all three, so on every other day the head advanced and
     the coverage report served no_row for the new head — contradicting its own pointer.
     """
-    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start()))))
+    analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
+    fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
 
 def head_reports_request(

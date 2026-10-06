@@ -89,23 +89,24 @@ class TickerCapture:
 
 @dataclass(frozen=True)
 class UniverseCapture:
-    """The outcome of one universe run. The caller commits the rows, then calls
-    `raise_if_every_ticker_failed` so a run with no usable row ends as a failure."""
+    """The outcome of one universe run. The caller commits the rows, then reports
+    `lane_failure` in the run summary. A later op raises it, after the coverage report."""
 
     rows: int
     failures: tuple[FetchFailure, ...] = ()
 
-    def raise_if_every_ticker_failed(self) -> None:
-        """Raise RuntimeError when every ticker of a non-empty run ended in a fetch error.
+    def lane_failure(self) -> str | None:
+        """The message of a total failure: every ticker of a non-empty run ended in a fetch error.
 
-        A partial failure stays as unavailable rows with a reason code and does not raise.
+        Return None otherwise. A partial failure stays as unavailable rows with a reason code.
         """
         if self.rows > 0 and len(self.failures) == self.rows:
             first = self.failures[0]
-            raise RuntimeError(
+            return (
                 f"analyst ratings fetch failed for {len(self.failures)} of {self.rows} tickers; "
                 f"first error: {first.ticker}: {first.error}"
             )
+        return None
 
 
 def _count_from_share(total: int, share: float | None) -> int:
@@ -333,8 +334,8 @@ def materialize_universe_analyst_ratings(
 ) -> UniverseCapture:
     """Capture and materialize analyst ratings for all issuers in a universe run.
 
-    The caller owns the transaction. Commit the rows first, then call
-    `UniverseCapture.raise_if_every_ticker_failed` on the result.
+    The caller owns the transaction. Commit the rows first, then pass
+    `UniverseCapture.lane_failure()` on in the run summary.
     """
     rows = 0
     failures: list[FetchFailure] = []

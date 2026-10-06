@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ import dagster as dg
 import moomoo
 import psycopg
 import pytest
+from data_engine.config import settings
 from data_engine.datahub.analyst_ratings import (
     capture_ticker_analyst_ratings,
     materialize_analyst_ratings,
@@ -255,7 +257,7 @@ def test_one_failing_ticker_stays_unavailable_with_a_code_and_is_logged(caplog) 
 
     assert result.rows == 3
     assert [f.ticker for f in result.failures] == ["NICE"]
-    result.raise_if_every_ticker_failed()  # a partial failure does not raise
+    assert result.lane_failure() is None, "a partial failure is not a lane failure"
 
     rows = {params[1]: params for _, params in conn.executed}
     assert rows["issuer:ddog"][11] == "available"
@@ -299,21 +301,20 @@ def test_a_payload_that_breaks_the_vendor_contract_is_a_logged_fetch_error(
     assert message in records[0].getMessage()
 
 
-def test_every_ticker_failing_persists_the_rows_and_then_raises() -> None:
+def test_every_ticker_failing_persists_the_rows_and_names_the_lane_failure() -> None:
     conn, result = _run_universe({"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"})
 
     assert result.rows == 3
     assert len(conn.executed) == 3, "the unavailable rows are persisted before the run fails"
     assert [params[11] for _, params in conn.executed] == ["unavailable"] * 3
-    with pytest.raises(RuntimeError) as raised:
-        result.raise_if_every_ticker_failed()
-    text = str(raised.value)
+    text = result.lane_failure()
+    assert text is not None
     assert "3 of 3" in text
     assert "first failure" in text
     assert "second failure" not in text
 
 
-def test_an_empty_universe_and_a_run_without_a_context_do_not_raise() -> None:
+def test_an_empty_universe_and_a_run_without_a_context_are_not_a_lane_failure() -> None:
     conn = _MockConnection()
     empty = materialize_universe_analyst_ratings(
         conn, run_id="run:none", cutoff=datetime(2026, 10, 6, tzinfo=UTC), tickers={}, ctx=_FakeQuoteContext({})
@@ -322,8 +323,8 @@ def test_an_empty_universe_and_a_run_without_a_context_do_not_raise() -> None:
         conn, run_id="run:none", cutoff=datetime(2026, 10, 6, tzinfo=UTC), tickers=TICKERS, ctx=None
     )
     assert (empty.rows, no_ctx.rows) == (0, 3)
-    empty.raise_if_every_ticker_failed()
-    no_ctx.raise_if_every_ticker_failed()
+    assert empty.lane_failure() is None
+    assert no_ctx.lane_failure() is None
     assert [params[9] for _, params in conn.executed] == [["no_analyst_coverage"]] * 3
 
 
@@ -390,20 +391,21 @@ def _run_op(monkeypatch, responses: dict[str, Any], *, opend_connect_fails: bool
     return result, events
 
 
-def test_the_op_fails_after_it_commits_when_every_ticker_fails(monkeypatch) -> None:
+def test_the_op_commits_and_reports_a_total_failure_without_raising(monkeypatch) -> None:
+    """#771: the lane failure travels in the summary. The op that measures the lane (coverage)
+    must still run, so this op does not raise; the terminal op `fail_if_a_lane_failed` does."""
     result, events = _run_op(
         monkeypatch, {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"}
     )
 
-    assert not result.success, "the job reports FAILURE, not 'published 3 analyst ratings rows'"
-    [step_failure] = [e for e in result.all_events if e.is_step_failure]
-    assert step_failure.step_key == "run_analyst_ratings"
-    cause = step_failure.step_failure_data.error.cause
-    assert cause is not None and cause.cls_name == "RuntimeError"
-    assert "3 of 3" in cause.message
-    assert "first failure" in cause.message
+    assert result.success
+    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert summary["rows"] == 3
+    assert summary["fetch_errors"] == 3
+    assert "3 of 3" in summary["lane_failure"]
+    assert "first failure" in summary["lane_failure"]
     assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"], (
-        "the unavailable rows are committed, and the connection closes without a rollback, before the op fails"
+        "the unavailable rows are committed before the op returns"
     )
 
 
@@ -413,7 +415,10 @@ def test_the_op_succeeds_on_a_partial_failure(monkeypatch) -> None:
     )
 
     assert result.success
-    assert json.loads(result.output_for_node("run_analyst_ratings"))["rows"] == 3
+    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert summary["rows"] == 3
+    assert summary["fetch_errors"] == 1
+    assert "lane_failure" not in summary
     assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
 
 
@@ -423,3 +428,189 @@ def test_an_unreachable_opend_still_records_honest_unavailable_rows(monkeypatch)
 
     assert result.success
     assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
+
+
+# --- the lane fails AFTER the coverage report is written (#771, the #1016 pattern) --------
+#
+# The coverage report is the instrument that measures every lane. A lane that fails for every
+# ticker must not stop the instrument: the report has to show q4 as `unavailable:fetch_error`
+# first, and only then does the run end as FAILURE. These tests run the DEPLOYED jobs, with the
+# real analyst op, the real coverage op and a real Postgres. The connection is shared and
+# rolled back at the end: `commit` is counted, never executed, so no row outlives the test.
+
+HEAD_RUN = "capture-run:" + "7" * 64
+EXECUTED_AT = "2026-10-06T04:00:00+00:00"
+FAILED = {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"}
+JOB_NAMES = ("head_reports_pipeline_job", "standard_backfill_pipeline_job")
+
+
+class _SharedConnection:
+    """One real connection for every op of a job. `commit` is recorded, not executed."""
+
+    def __init__(self, connection: psycopg.Connection[Any]):
+        self.connection = connection
+        self.commits = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def __getattr__(self, name: str):
+        return getattr(self.connection, name)
+
+
+@pytest.fixture
+def shared_connection():
+    try:
+        connection = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            raise
+        pytest.skip("no local Postgres")
+    try:
+        yield _SharedConnection(connection)
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _execute_job(monkeypatch, shared_connection, job_name: str, responses: dict[str, Any]):
+    """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL."""
+    from data_engine.datahub import question_coverage
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.standards import planner, supply_chain_extraction
+    from data_engine.lanes import standards
+    from data_engine.quality import nightly_verdicts
+
+    head = question_coverage.GovernedHead("universe:qqq-us-2026-06-30", HEAD_RUN, datetime(2026, 10, 6, tzinfo=UTC))
+    issuers = [SimpleNamespace(issuer_id=i, ticker=t) for i, t in TICKERS.items()]
+    ctx = _FakeQuoteContext(responses)
+
+    @contextmanager
+    def fake_connect():
+        yield ctx
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
+    monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head)
+    monkeypatch.setattr(question_coverage, "stored_report_run", lambda _c, _universe: None)
+    monkeypatch.setattr(question_coverage, "declared_environment", lambda _c: "test")
+    monkeypatch.setattr(
+        question_coverage, "gppe_cells", lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in TICKERS)
+    )
+    monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: issuers)
+    monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: issuers)
+    monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda _c, **_k: ())
+    monkeypatch.setattr(supply_chain_extraction, "materialize_universe_supply_chain_exposure", lambda _c, **_k: 0)
+    monkeypatch.setattr(nightly_verdicts, "record", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        standards,
+        "_run_standard_backfill",
+        lambda *_a, **_k: SimpleNamespace(
+            summary=lambda: {"standard": "stub"}, issuers=3, open=0, open_by_reason={}, outcomes={}
+        ),
+    )
+    monkeypatch.setattr(mm, "connect", fake_connect)
+
+    if job_name == "head_reports_pipeline_job":
+        run_config = standards.head_reports_request(
+            "universe-list:qqq", EXECUTED_AT, run_key="test", only_if_stale=False
+        ).run_config
+    else:
+        run_config = standards.backfill_run_config(EXECUTED_AT, "universe-list:qqq")
+    return getattr(standards, job_name).execute_in_process(run_config=run_config, raise_on_error=False)
+
+
+def _stored_q4(shared_connection) -> dict[str, Any] | None:
+    row = shared_connection.execute(
+        "select payload->'questions'->'q4' from mart.question_coverage_report where run_id = %s", (HEAD_RUN,)
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def _steps(result, *, failed: bool) -> list[str]:
+    return [e.step_key for e in result.all_events if (e.is_step_failure if failed else e.is_step_success)]
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_a_total_failure_fails_the_run_after_the_coverage_report_is_written(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    result = _execute_job(monkeypatch, shared_connection, job_name, FAILED)
+
+    assert not result.success, "the run ends as FAILURE, not 'published 3 analyst ratings rows'"
+    q4 = _stored_q4(shared_connection)
+    assert q4 is not None, "the coverage report for the head exists although the lane failed"
+    assert q4["answered"] == 0
+    assert q4["unavailable"] == {"fetch_error:MoomooConnectionError": 3}, "q4 names the fetch error for every issuer"
+    assert "run_analyst_ratings" in _steps(result, failed=False)
+    assert "run_question_coverage" in _steps(result, failed=False)
+    assert _steps(result, failed=True) == ["fail_if_a_lane_failed"]
+    events = [(e.step_key, e.is_step_success or e.is_step_failure) for e in result.all_events if e.is_step_event]
+    coverage_done = events.index(("run_question_coverage", True))
+    assert events.index(("fail_if_a_lane_failed", True)) > coverage_done, "the terminal op runs after coverage"
+    [failure] = [e for e in result.all_events if e.is_step_failure]
+    cause = failure.step_failure_data.error.cause
+    assert cause is not None and cause.cls_name == "RuntimeError"
+    assert "3 of 3" in cause.message
+    assert "first failure" in cause.message
+    assert "second failure" not in cause.message
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_a_partial_failure_leaves_the_run_green_and_the_report_names_the_error(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    responses = {"US.DDOG": _sample("DDOG"), "US.NICE": "second failure", "US.SHOP": _sample("SHOP")}
+    result = _execute_job(monkeypatch, shared_connection, job_name, responses)
+
+    assert result.success
+    q4 = _stored_q4(shared_connection)
+    assert q4 is not None
+    assert q4["answered"] == 2
+    assert q4["unavailable"] == {"fetch_error:MoomooConnectionError": 1}
+    assert "fail_if_a_lane_failed" in _steps(result, failed=False)
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    responses = {f"US.{t}": _sample(t) for t in ("DDOG", "NICE", "SHOP")}
+    result = _execute_job(monkeypatch, shared_connection, job_name, responses)
+
+    assert result.success
+    q4 = _stored_q4(shared_connection)
+    assert q4 is not None
+    assert (q4["answered"], q4["unavailable"]) == (3, {})
+    assert "fail_if_a_lane_failed" in _steps(result, failed=False)
+    assert shared_connection.commits == 4, "purity, supply chain, analyst ratings and coverage commit once each"
+
+
+def test_the_terminal_op_raises_the_summarys_failure_and_nothing_else() -> None:
+    from data_engine.lanes.standards import REPORTS_CURRENT, fail_if_a_lane_failed
+
+    message = "analyst ratings fetch failed for 3 of 3 tickers; first error: DDOG: X: first failure"
+    with pytest.raises(RuntimeError) as raised:
+        fail_if_a_lane_failed(json.dumps({"rows": 3, "lane_failure": message}), json.dumps({"report_id": "r"}))
+    assert str(raised.value) == message
+
+    fail_if_a_lane_failed(json.dumps({"rows": 3, "fetch_errors": 1}), json.dumps({"report_id": "r"}))
+    fail_if_a_lane_failed(json.dumps({REPORTS_CURRENT: HEAD_RUN}), json.dumps({REPORTS_CURRENT: HEAD_RUN}))
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_the_terminal_op_follows_coverage_and_the_analyst_summary(job_name) -> None:
+    from data_engine.lanes import standards
+
+    job = getattr(standards, job_name)
+    structure = job.graph.dependency_structure
+    upstream = {
+        handle.input_name: [output.node_name for output in outputs]
+        for handle, outputs in structure.input_to_upstream_outputs_for_node("fail_if_a_lane_failed").items()
+    }
+    assert upstream == {"analyst_summary": ["run_analyst_ratings"], "coverage_summary": ["run_question_coverage"]}
