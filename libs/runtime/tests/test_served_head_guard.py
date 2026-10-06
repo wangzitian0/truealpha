@@ -1019,6 +1019,10 @@ TYPESCRIPT_BYPASSES = {
     "fragment-from-without-select": ("export const FROM = `from mart.current_pointer_head h`;\n", A_HEAD),
     "fragment-join-without-select": ("export const JOIN = ` join mart.current_pointer_head h on h.x = y.x`;\n", A_HEAD),
     "interpolated-schema": ("export const SQL = (S: string) => `select 1 from ${S}.current_pointer_head`;\n", A_HEAD),
+    "interpolated-schema-in-a-fragment": (
+        "export const FROM = (S: string) => `from ${S}.current_pointer_head h`;\n",
+        A_HEAD,
+    ),
     "regex-literal-with-a-backtick": (
         "export const TICK = /`/;\nexport const SQL = `select run_id from mart.current_pointer_head`;\n",
         A_HEAD,
@@ -1090,6 +1094,7 @@ PYTHON_BYPASSES = {
     "fragment-from-without-select": ('FROM = "from mart.current_pointer_head h"\n', A_HEAD),
     "fragment-join-without-select": ('JOIN = " join mart.current_pointer_head h on h.x = y.x"\n', A_HEAD),
     "interpolated-schema": ('def sql(s):\n    return f"select 1 from {s}.current_pointer_head"\n', A_HEAD),
+    "interpolated-schema-in-a-fragment": ('def frm(s):\n    return f"from {s}.current_pointer_head h"\n', A_HEAD),
     "upper-case-result-relation": ('SQL = "select 1 from MART.TOPT_GPPE_RESULTS"\n', B_GPPE),
     # M1: a helper that lives in another module still receives the head's time.
     "age-helper-from-another-module": (
