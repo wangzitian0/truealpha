@@ -960,3 +960,283 @@ def test_reuse_refuses_when_configured_origin_sources_differ(tick_database_url, 
     finally:
         probe.rollback()
         probe.close()
+
+
+# -- valid time of a reuse anchor and of its bound set (#1060) ----------------------------
+#
+# Two committed captures of one UTC day. Capture B is forced, so it holds its own
+# observations and ranks first as the anchor. Each test edits observations inside a probe
+# transaction, which it rolls back. The observation table is append-only, so the edit turns
+# the mutation trigger off for that transaction only.
+
+_WINDOW_DAY = date(2026, 8, 10)
+_WINDOW_CUTOFF_A = datetime(2026, 8, 10, 20, 30, tzinfo=UTC)
+_WINDOW_CUTOFF_B = datetime(2026, 8, 10, 21, 15, tzinfo=UTC)
+_WINDOW_TARGET = datetime(2026, 8, 10, 22, 15, tzinfo=UTC)
+_DAY_START = datetime(2026, 8, 10, tzinfo=UTC)
+_NEXT_DAY_START = datetime(2026, 8, 11, tzinfo=UTC)
+_PREVIOUS_DAY_START = datetime(2026, 8, 9, tzinfo=UTC)
+_EARLIER_START = datetime(2026, 8, 5, tzinfo=UTC)
+_WINDOW_ZONES = ("America/Los_Angeles", "Asia/Shanghai")
+
+
+def _arm_window(monkeypatch, *, close: Decimal) -> None:
+    second_origin = CorroboratingOrigin(
+        origin=twelve_data_origin.ORIGIN,
+        parser_version=twelve_data_origin.PARSER_VERSION,
+        mapping_version=twelve_data_origin.MAPPING_VERSION,
+        value_key=twelve_data_origin.VALUE_KEY,
+        confidence=Decimal("0.80"),
+        fetch=lambda symbol, cutoff: MarketPriceQuote(
+            raw_bytes=f"second:{symbol}:{close}".encode(),
+            close=close,
+            as_of=_WINDOW_DAY,
+            knowable_at=datetime(2026, 8, 10, 20, 10, tzinfo=UTC),
+        ),
+        raw_source=DataSource.TWELVE_DATA,
+    )
+    _arm(
+        monkeypatch,
+        quote=lambda: _quote(_WINDOW_DAY, close),
+        price_cutoff=_WINDOW_DAY,
+        cutoff_date=_WINDOW_DAY,
+        corroborating_origins=(second_origin,),
+        origin_settings=_TWELVE_DATA_CONFIGURED,
+    )
+
+
+@pytest.fixture(scope="module")
+def window_sources(tick_database_url) -> tuple[str, str]:
+    """The run ids of capture A and capture B."""
+    with pytest.MonkeyPatch.context() as patch:
+        _arm_window(patch, close=Decimal("40"))
+        first = _run_tick(tick_database_url, version="window-source-a", cutoff=_WINDOW_CUTOFF_A)
+        _arm_window(patch, close=Decimal("41"))
+        second = _run_tick(tick_database_url, version="window-source-b", cutoff=_WINDOW_CUTOFF_B, force_fetch=True)
+    return first.run_id, second.run_id
+
+
+def _run_observations(probe, run_id: str) -> set[str]:
+    rows = probe.execute(
+        """
+        select link.observation_id
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+        where ob.run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def _edit_window(
+    probe,
+    run_id: str,
+    *,
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+    parser: str | None = None,
+) -> None:
+    """Set valid_from and valid_to of a capture's observations. A None keeps the stored value."""
+    edited = probe.execute(
+        """
+        update staging.capture_normalized_observations
+        set valid_from = coalesce(%(valid_from)s, valid_from), valid_to = coalesce(%(valid_to)s, valid_to)
+        where observation_id in (
+            select link.observation_id
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+            where ob.run_id = %(run_id)s
+        ) and (%(parser)s::text is null or parser_version = %(parser)s)
+        """,
+        {"valid_from": valid_from, "valid_to": valid_to, "run_id": run_id, "parser": parser},
+    )
+    assert edited.rowcount > 0, "the edit matched no observation"
+
+
+def _reuse_after_edits(
+    url: str,
+    monkeypatch,
+    *,
+    cutoff: datetime,
+    version: str,
+    edits=(),
+    zone: str | None = None,
+) -> tuple[Counter[str], dict[str, set[str]]]:
+    """Run the reuse query for a new plan after the edits. Returns the reused cells per
+    semantic type and the observations the reuse bound per semantic type."""
+    _arm(monkeypatch, origin_settings=_TWELVE_DATA_CONFIGURED)
+    probe = psycopg.connect(url)
+    try:
+        if zone is not None:
+            probe.execute("select set_config('TimeZone', %s, false)", (zone,))
+        plan = composition.plan_and_persist(probe, cutoff=cutoff, version=version)
+        probe.execute("set local session_replication_role = replica")
+        for edit in edits:
+            edit(probe)
+        probe.execute("set local session_replication_role = origin")
+        satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
+        reused = Counter(
+            binding.obligation.capture_requirement_id.removesuffix(":v1")
+            for work_item_id, binding in plan.bindings.items()
+            if work_item_id in satisfied
+        )
+        bound: dict[str, set[str]] = {}
+        for semantic, observation_id in probe.execute(
+            """
+            select regexp_replace(ob.capture_requirement_id, ':v1$', ''), link.observation_id
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+            where ob.run_id = %s
+            """,
+            (plan.run_id,),
+        ).fetchall():
+            bound.setdefault(semantic, set()).add(observation_id)
+        return reused, bound
+    finally:
+        probe.rollback()
+        probe.close()
+
+
+@pytest.mark.parametrize("cutoff", [_WINDOW_TARGET, datetime(2026, 8, 10, 23, 59, 59, tzinfo=UTC)])
+def test_reuse_binds_the_unedited_window_sources(tick_database_url, window_sources, monkeypatch, cutoff) -> None:
+    """The control for the edited cases below: the same sources are reusable without an edit."""
+    reused, _bound = _reuse_after_edits(
+        tick_database_url, monkeypatch, cutoff=cutoff, version=f"control-{cutoff:%H%M%S}"
+    )
+
+    assert (reused["market-price"], reused["financial-fact"]) == (21, 21)
+
+
+def test_reuse_skips_an_anchor_that_starts_after_the_cutoff_day(tick_database_url, window_sources, monkeypatch) -> None:
+    run_a, run_b = window_sources
+    probe = psycopg.connect(tick_database_url)
+    try:
+        observations_a, observations_b = _run_observations(probe, run_a), _run_observations(probe, run_b)
+    finally:
+        probe.close()
+    assert observations_a and observations_b and observations_a.isdisjoint(observations_b)
+
+    reused, bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=_WINDOW_TARGET,
+        version="anchor-starts-after",
+        edits=[lambda probe: _edit_window(probe, run_b, valid_from=_NEXT_DAY_START)],
+    )
+
+    # The newer anchor is out of window, so the older anchor that is in window serves the cells.
+    assert (reused["market-price"], reused["financial-fact"]) == (21, 21)
+    vendor_bound = bound["market-price"] | bound["financial-fact"]
+    assert vendor_bound <= observations_a
+    assert vendor_bound.isdisjoint(observations_b)
+
+
+def test_reuse_skips_an_anchor_that_ended_before_the_cutoff_day(tick_database_url, window_sources, monkeypatch) -> None:
+    run_a, run_b = window_sources
+    probe = psycopg.connect(tick_database_url)
+    try:
+        observations_a, observations_b = _run_observations(probe, run_a), _run_observations(probe, run_b)
+    finally:
+        probe.close()
+
+    reused, bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=_WINDOW_TARGET,
+        version="anchor-ended-before",
+        edits=[lambda probe: _edit_window(probe, run_b, valid_from=_EARLIER_START, valid_to=_PREVIOUS_DAY_START)],
+    )
+
+    assert (reused["market-price"], reused["financial-fact"]) == (21, 21)
+    vendor_bound = bound["market-price"] | bound["financial-fact"]
+    assert vendor_bound <= observations_a
+    assert vendor_bound.isdisjoint(observations_b)
+
+
+def test_reuse_refuses_a_bound_set_with_a_member_that_starts_after_the_cutoff_day(
+    tick_database_url, window_sources, monkeypatch
+) -> None:
+    _run_a, run_b = window_sources
+    second_origin = twelve_data_origin.PARSER_VERSION
+
+    reused, bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=_WINDOW_TARGET,
+        version="bound-set-starts-after",
+        edits=[lambda probe: _edit_window(probe, run_b, valid_from=_NEXT_DAY_START, parser=second_origin)],
+    )
+
+    # The anchor is in window and its second origin is not: the whole set stays unbound.
+    assert reused["market-price"] == 0
+    assert "market-price" not in bound
+    assert reused["financial-fact"] == 21
+
+
+def test_reuse_refuses_a_bound_set_with_a_member_that_ended_before_the_cutoff_day(
+    tick_database_url, window_sources, monkeypatch
+) -> None:
+    _run_a, run_b = window_sources
+    second_origin = twelve_data_origin.PARSER_VERSION
+
+    reused, bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=_WINDOW_TARGET,
+        version="bound-set-ended-before",
+        edits=[
+            lambda probe: _edit_window(
+                probe, run_b, valid_from=_EARLIER_START, valid_to=_PREVIOUS_DAY_START, parser=second_origin
+            )
+        ],
+    )
+
+    assert reused["market-price"] == 0
+    assert "market-price" not in bound
+    assert reused["financial-fact"] == 21
+
+
+@pytest.mark.parametrize("zone", _WINDOW_ZONES)
+def test_reuse_keeps_a_window_ending_at_midnight_of_the_cutoff_day_in_any_session_time_zone(
+    tick_database_url, window_sources, monkeypatch, zone: str
+) -> None:
+    run_a, run_b = window_sources
+    edits = [
+        lambda probe, run_id=run_id: _edit_window(probe, run_id, valid_from=_EARLIER_START, valid_to=_DAY_START)
+        for run_id in (run_a, run_b)
+    ]
+
+    reused, _bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=_WINDOW_TARGET,
+        version=f"midnight-end-{zone[:3]}",
+        edits=edits,
+        zone=zone,
+    )
+
+    assert (reused["market-price"], reused["financial-fact"]) == (21, 21)
+
+
+@pytest.mark.parametrize("zone", _WINDOW_ZONES)
+def test_reuse_refuses_a_valid_from_on_the_next_utc_day_in_any_session_time_zone(
+    tick_database_url, window_sources, monkeypatch, zone: str
+) -> None:
+    run_a, run_b = window_sources
+    edits = [
+        lambda probe, run_id=run_id: _edit_window(probe, run_id, valid_from=_NEXT_DAY_START)
+        for run_id in (run_a, run_b)
+    ]
+
+    reused, bound = _reuse_after_edits(
+        tick_database_url,
+        monkeypatch,
+        cutoff=datetime(2026, 8, 10, 23, 59, 59, tzinfo=UTC),
+        version=f"next-day-start-{zone[:3]}",
+        edits=edits,
+        zone=zone,
+    )
+
+    assert (reused["market-price"], reused["financial-fact"]) == (0, 0)
+    assert "market-price" not in bound and "financial-fact" not in bound

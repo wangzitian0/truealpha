@@ -1,17 +1,20 @@
--- #1060: mart.topt_capture_meta_info judges valid time at the run's cutoff day.
+-- #1060: mart.topt_capture_meta_info judges valid time at the cutoff day of the run.
 --
--- 0039 compared observation valid_from and valid_to with obligation.partition_key. The
--- partition_key is the universe anchor. Since #1016 the capture sink writes valid_from as the
--- date of the fact itself, and that date can follow the anchor. The view then hid the
--- selected observation of every financial-fact and market-price cell: observation_id and
--- freshness_state were null. The materializer freezes the same observation with the window
--- judged at the cutoff day, and this definition applies the same rule through campaign.cutoff.
+-- File 0039 compared valid_from and valid_to with obligation.partition_key.
+-- The partition_key is the universe anchor.
+-- Since #1016, the capture sink writes valid_from as the date of the fact itself.
+-- That date can follow the anchor.
+-- The view then hid the selected observation of each financial-fact and market-price cell.
+-- Its observation_id and freshness_state were null.
+-- The materializer freezes the same observation with validity judged at the cutoff day.
+-- This definition applies the same rule through campaign.cutoff.
 -- The valid-time clauses stay, because knowable_at does not bound valid_from or valid_to.
 --
 -- The columns are the same as in 0039, so create or replace view is valid.
--- This is the last migration that defines this view, so it owns the shape: the
--- replacement (ACCESS EXCLUSIVE on the view) runs only when the stored definition
--- differs from this one, compared through an identical temporary view.
+-- This is the last migration that defines this view, so it owns the shape.
+-- The replacement takes ACCESS EXCLUSIVE on the view.
+-- It runs only when the stored definition differs from this one.
+-- A temporary view with the same text gives the comparison.
 
 do $$
 declare

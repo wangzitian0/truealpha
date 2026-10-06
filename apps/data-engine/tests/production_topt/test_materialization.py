@@ -136,10 +136,11 @@ def _seed_complete_production_run(
     corpus: dict | None = None,
     valid_from_by_semantic: dict[str, datetime] | None = None,
     valid_to_by_semantic: dict[str, datetime] | None = None,
+    cutoff: datetime = CUTOFF,
 ):
     """Seed one complete run.
 
-    A semantic type that `valid_from_by_semantic` omits gets valid_from = CUTOFF - 2 days.
+    A semantic type that `valid_from_by_semantic` omits gets valid_from = cutoff - 2 days.
     A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
     The capture sink writes an open valid_to only.
     """
@@ -165,7 +166,7 @@ def _seed_complete_production_run(
     campaign = CaptureCampaign(
         campaign_policy_id="capture-policy:production-topt-integration-v1",
         environment=CaptureEnvironment.PRODUCTION,
-        cutoff=CUTOFF,
+        cutoff=cutoff,
         universe_refs=(list_version.universe,),
     )
     run = CaptureRun(
@@ -194,7 +195,7 @@ def _seed_complete_production_run(
             EvidenceNode(
                 ref=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run.run_id),
                 content_sha256=run.run_id.split(":", 1)[1],
-                stamp=BitemporalStamp(valid_from=CUTOFF.date(), transaction_time=CUTOFF, recorded_at=CUTOFF),
+                stamp=BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff),
             )
         ],
         [],
@@ -257,22 +258,22 @@ def _seed_complete_production_run(
                 source_record_id,
                 raw_sha256,
                 f"s3://production-topt-integration/{raw_sha256}",
-                CUTOFF - timedelta(hours=2),
-                CUTOFF - timedelta(hours=2),
+                cutoff - timedelta(hours=2),
+                cutoff - timedelta(hours=2),
             ),
         ).fetchone()[0]
         vintage = SourceVintage(
             source_request_id=request.source_request_id,
             source_record_id=source_record_id,
-            source_published_at=CUTOFF - timedelta(hours=2),
+            source_published_at=cutoff - timedelta(hours=2),
             raw_object_id=f"raw-object:{raw_sha256}",
         )
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=policy.retry)
-        attempt = ledger.start(started_at=CUTOFF - timedelta(hours=1))
+        attempt = ledger.start(started_at=cutoff - timedelta(hours=1))
         unchanged = stale_unchanged_first_observation and ordinal == 0
         attempt_result = ledger.finish(
             attempt=attempt,
-            completed_at=CUTOFF - timedelta(minutes=59),
+            completed_at=cutoff - timedelta(minutes=59),
             outcome=FetchAttemptOutcome.UNCHANGED if unchanged else FetchAttemptOutcome.SUCCESS,
             status_code=200,
             source_vintage_id=None if unchanged else vintage.source_vintage_id,
@@ -282,9 +283,9 @@ def _seed_complete_production_run(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            valid_from=valid_from_by_semantic.get(semantic_type, CUTOFF - timedelta(days=2)),
+            valid_from=valid_from_by_semantic.get(semantic_type, cutoff - timedelta(days=2)),
             valid_to=valid_to_by_semantic.get(semantic_type),
-            knowable_at=CUTOFF - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
+            knowable_at=cutoff - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="production-topt-integration-parser:v1",
             mapping_version="production-topt-integration-map:v1",
@@ -293,7 +294,7 @@ def _seed_complete_production_run(
         terminal = ListObligationResult(
             obligation_id=obligation.obligation.obligation_id,
             terminal_state=(ObligationTerminalState.UNCHANGED if unchanged else ObligationTerminalState.SUCCESS),
-            completed_at=CUTOFF - timedelta(minutes=57),
+            completed_at=cutoff - timedelta(minutes=57),
             final_attempt_id=attempt.attempt_id,
             reason_codes=("unchanged" if unchanged else "success",),
         )
@@ -315,8 +316,8 @@ def _seed_complete_production_run(
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
-                valid_from=CUTOFF + timedelta(days=1),
-                knowable_at=CUTOFF - timedelta(minutes=30),
+                valid_from=cutoff + timedelta(days=1),
+                knowable_at=cutoff - timedelta(minutes=30),
                 source_vintage_id=vintage.source_vintage_id,
                 parser_version="production-topt-integration-parser:v1",
                 mapping_version="production-topt-integration-map:v1",
@@ -335,7 +336,7 @@ def _seed_complete_production_run(
                 tied_vintage = SourceVintage(
                     source_request_id=request.source_request_id,
                     source_record_id=f"{source_record_id}-tie-{suffix}",
-                    source_published_at=CUTOFF - timedelta(hours=2),
+                    source_published_at=cutoff - timedelta(hours=2),
                     raw_object_id=f"raw-object:{raw_sha256}",
                 )
                 repository.put_source_vintage(tied_vintage, raw_fetch_id=raw_fetch_id)
@@ -344,8 +345,8 @@ def _seed_complete_production_run(
                         semantic_type=semantic_type,
                         semantic_version=obligation.capture_requirement_id,
                         subject=obligation.subject,
-                        valid_from=CUTOFF - timedelta(days=2),
-                        knowable_at=CUTOFF - timedelta(minutes=30),
+                        valid_from=cutoff - timedelta(days=2),
+                        knowable_at=cutoff - timedelta(minutes=30),
                         source_vintage_id=tied_vintage.source_vintage_id,
                         parser_version="production-topt-integration-parser:v1",
                         mapping_version="production-topt-integration-map:v1",
@@ -367,7 +368,7 @@ def _seed_complete_production_run(
             foreign_vintage = SourceVintage(
                 source_request_id=foreign_request.source_request_id,
                 source_record_id=f"{source_record_id}-foreign",
-                source_published_at=CUTOFF - timedelta(hours=2),
+                source_published_at=cutoff - timedelta(hours=2),
                 raw_object_id=f"raw-object:{raw_sha256}",
             )
             repository.put_source_vintage(foreign_vintage, raw_fetch_id=raw_fetch_id)
@@ -375,8 +376,8 @@ def _seed_complete_production_run(
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
-                valid_from=CUTOFF - timedelta(days=2),
-                knowable_at=CUTOFF - timedelta(minutes=10),
+                valid_from=cutoff - timedelta(days=2),
+                knowable_at=cutoff - timedelta(minutes=10),
                 source_vintage_id=foreign_vintage.source_vintage_id,
                 parser_version="production-topt-integration-parser:v1",
                 mapping_version="production-topt-integration-map:v1",
@@ -686,6 +687,133 @@ def test_freeze_refuses_a_fact_that_ended_before_the_cutoff_date(connection, sem
         PostgresToptCoreRepository(connection).freeze_snapshot(
             run_id=run.run_id, release_manifest_id=release_manifest_id
         )
+
+
+def _exposed_by_semantic(connection, run_id: str) -> dict[str, int]:
+    """The number of obligations per semantic type for which the view exposes an observation."""
+    rows = connection.execute(
+        """
+        select regexp_replace(capture_requirement_id, ':v1$', ''), count(observation_id)
+        from mart.topt_capture_meta_info
+        where run_id = %s
+        group by 1 order by 1
+        """,
+        (run_id,),
+    ).fetchall()
+    return dict(rows)
+
+
+def test_view_exposes_no_observation_for_a_candidate_that_starts_after_the_cutoff_day(connection) -> None:
+    (_, run, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic={"market-price": CUTOFF + timedelta(days=1)}
+    )
+
+    assert _exposed_by_semantic(connection, run.run_id) == {
+        "financial-fact": 21,
+        "listing-identity": 21,
+        "market-price": 0,
+        "universe-membership": 21,
+    }
+
+
+def test_view_exposes_no_observation_for_a_candidate_that_ended_before_the_cutoff_day(connection) -> None:
+    (_, run, *_rest) = _seed_complete_production_run(
+        connection, valid_to_by_semantic={"market-price": CUTOFF - timedelta(days=1)}
+    )
+
+    assert _exposed_by_semantic(connection, run.run_id) == {
+        "financial-fact": 21,
+        "listing-identity": 21,
+        "market-price": 0,
+        "universe-membership": 21,
+    }
+
+
+def test_view_exposes_the_in_window_candidate_when_out_of_window_candidates_exist(connection) -> None:
+    (capture_repository, _, _, _, terminal_observation_id, *_rest) = _seed_complete_production_run(connection)
+    base_payload, obligation_id, normalized_payload = connection.execute(
+        """
+        select observation.payload, observation.capture_obligation_id, payload.normalized_payload
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_payloads payload using (observation_id)
+        where observation.observation_id = %s
+        """,
+        (terminal_observation_id,),
+    ).fetchone()
+    # The seeder already holds one candidate that starts after the cutoff day for this
+    # obligation. This one ended before the cutoff day. Both share the terminal vintage.
+    expired = NormalizedObservation.model_validate(
+        {
+            **base_payload,
+            "observation_id": "",
+            "content_sha256": "",
+            "valid_to": CUTOFF - timedelta(days=1),
+            "knowable_at": CUTOFF - timedelta(minutes=30),
+        }
+    )
+    capture_repository.put_observation(
+        obligation_id,
+        expired,
+        normalized_payload=normalized_payload,
+        confidence=Decimal("1"),
+        freshness_state="fresh",
+    )
+    not_started = connection.execute(
+        """
+        select observation_id
+        from staging.capture_normalized_observations
+        where observation_id in (
+            select observation_id from staging.capture_observation_obligations where capture_obligation_id = %s
+        ) and valid_from = %s
+        """,
+        (obligation_id, CUTOFF + timedelta(days=1)),
+    ).fetchall()
+    assert len(not_started) == 1, "the seeder holds one candidate that starts after the cutoff day"
+
+    exposed = connection.execute(
+        "select observation_id from mart.topt_capture_meta_info where obligation_id = %s", (obligation_id,)
+    ).fetchall()
+
+    assert expired.observation_id != terminal_observation_id
+    assert exposed == [(terminal_observation_id,)]
+
+
+# A session TimeZone must not move a UTC day. psycopg renders a timestamptz in the session
+# TimeZone, and a cast to date follows it (#885). Each case sits on a UTC day boundary.
+_NON_UTC_ZONES = ("America/Los_Angeles", "Asia/Shanghai")
+
+
+@pytest.mark.parametrize("zone", _NON_UTC_ZONES)
+def test_valid_to_at_midnight_of_the_cutoff_day_stays_valid_in_any_session_time_zone(connection, zone: str) -> None:
+    cutoff = datetime(2026, 4, 2, 22, 15, tzinfo=UTC)
+    midnight = datetime(2026, 4, 2, tzinfo=UTC)
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, cutoff=cutoff, valid_to_by_semantic=dict.fromkeys(SEMANTIC_TYPES, midnight)
+    )
+    connection.execute("select set_config('TimeZone', %s, false)", (zone,))
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+    assert _exposed_by_semantic(connection, run.run_id) == dict.fromkeys(SEMANTIC_TYPES, 21)
+
+
+@pytest.mark.parametrize("zone", _NON_UTC_ZONES)
+def test_valid_from_on_the_next_utc_day_is_refused_in_any_session_time_zone(connection, zone: str) -> None:
+    cutoff = datetime(2026, 4, 2, 23, 59, 59, tzinfo=UTC)
+    next_midnight = datetime(2026, 4, 3, tzinfo=UTC)
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, cutoff=cutoff, valid_from_by_semantic=dict.fromkeys(SEMANTIC_TYPES, next_midnight)
+    )
+    connection.execute("select set_config('TimeZone', %s, false)", (zone,))
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+    assert _exposed_by_semantic(connection, run.run_id) == dict.fromkeys(SEMANTIC_TYPES, 0)
 
 
 def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(connection) -> None:

@@ -637,18 +637,19 @@ def _satisfy_from_recent_observations(
     plan coordinates for the subject, so equally-keyed universes still share
     vendor bytes and differently-keyed ones capture fresh.
 
-    Reuse additionally requires VALIDITY AT THE CUTOFF (#877 H1, #1060): the anchor must
-    be valid on THIS run's cutoff day — `valid_from` on or before it, `valid_to` open or
-    on or after it — which is exactly the window `freeze_snapshot` reads. An
-    observation's `valid_from` is the date of the fact itself, not the partition anchor.
-    A fact that starts after the cutoff day must not be reused: the freeze would refuse
-    it, and the cell would resolve UNCHANGED and then fail to freeze. The partition is the
-    universe anchor. It does not bound validity.
+    Reuse additionally requires VALIDITY AT THE CUTOFF (#877 H1, #1060).
+    The anchor must be valid on THIS run's cutoff day.
+    Its `valid_from` is on or before that day, and its `valid_to` is open or on or after it.
+    This is exactly the window that `freeze_snapshot` reads.
+    An observation's `valid_from` is the date of the fact itself, not the partition anchor.
+    Reuse of a fact that starts after the cutoff day would resolve the cell UNCHANGED.
+    The freeze would then refuse that cell.
+    The partition is the universe anchor. It does not bound validity.
 
-    The bound set is taken WHOLE OR NOT AT ALL (#885 item 4): every member must carry
-    this run's trio, be knowable by this run's cutoff and be valid on this run's
-    cutoff day, or the obligation fetches. Dropping the members that fail would reuse a
-    cell one origin short and still resolve it UNCHANGED.
+    The bound set is taken WHOLE OR NOT AT ALL (#885 item 4).
+    Every member must carry this run's trio and be knowable by this run's cutoff.
+    Every member must also be valid on this run's cutoff day. Otherwise the obligation fetches.
+    Dropping the members that fail would reuse a cell one origin short and still resolve it UNCHANGED.
 
     A forced run (#874) never calls this, and is the preferred anchor when it ties
     with the unforced run of the same tick.
@@ -721,10 +722,10 @@ def _satisfy_from_recent_observations(
              -- re-run of ANY tick work right after a release (#788).
              and o.parser_version = %(parser_version)s
              -- #877 H1, #1060: valid on THIS run's cutoff day, by the same predicate
-             -- `freeze_snapshot` applies. `valid_from` is the date of the fact itself, so
-             -- an observation that starts after the cutoff day would resolve the cell
-             -- UNCHANGED here and then be refused at freeze. The partition is the universe
-             -- anchor and does not bound validity.
+             -- `freeze_snapshot` applies. `valid_from` is the date of the fact itself.
+             -- An observation that starts after the cutoff day would resolve the cell
+             -- UNCHANGED here. The freeze would then refuse it.
+             -- The partition is the universe anchor and does not bound validity.
              -- Filtered before ranking, so an older anchor that IS valid still qualifies.
              and (o.valid_from at time zone 'UTC')::date <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
              and (o.valid_to is null
