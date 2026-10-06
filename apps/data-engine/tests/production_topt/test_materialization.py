@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -134,7 +134,17 @@ def _seed_complete_production_run(
     *,
     stale_unchanged_first_observation: bool = False,
     corpus: dict | None = None,
+    valid_from_by_semantic: dict[str, datetime] | None = None,
+    valid_to_by_semantic: dict[str, datetime] | None = None,
 ):
+    """Seed one complete run.
+
+    A semantic type that `valid_from_by_semantic` omits gets valid_from = CUTOFF - 2 days.
+    A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
+    The capture sink writes an open valid_to only.
+    """
+    valid_from_by_semantic = valid_from_by_semantic or {}
+    valid_to_by_semantic = valid_to_by_semantic or {}
     corpus = corpus if corpus is not None else json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
@@ -272,8 +282,8 @@ def _seed_complete_production_run(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            valid_from=CUTOFF - timedelta(days=2),
-            valid_to=CUTOFF - timedelta(days=2),
+            valid_from=valid_from_by_semantic.get(semantic_type, CUTOFF - timedelta(days=2)),
+            valid_to=valid_to_by_semantic.get(semantic_type),
             knowable_at=CUTOFF - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="production-topt-integration-parser:v1",
@@ -335,7 +345,6 @@ def _seed_complete_production_run(
                         semantic_version=obligation.capture_requirement_id,
                         subject=obligation.subject,
                         valid_from=CUTOFF - timedelta(days=2),
-                        valid_to=CUTOFF - timedelta(days=2),
                         knowable_at=CUTOFF - timedelta(minutes=30),
                         source_vintage_id=tied_vintage.source_vintage_id,
                         parser_version="production-topt-integration-parser:v1",
@@ -367,7 +376,6 @@ def _seed_complete_production_run(
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
                 valid_from=CUTOFF - timedelta(days=2),
-                valid_to=CUTOFF - timedelta(days=2),
                 knowable_at=CUTOFF - timedelta(minutes=10),
                 source_vintage_id=foreign_vintage.source_vintage_id,
                 parser_version="production-topt-integration-parser:v1",
@@ -589,6 +597,94 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
         connection.execute(
             "update mart.topt_core_results set confidence = 0 where result_id = %s",
             (results[0].result_id,),
+        )
+
+
+# The obligations' partition_key is the universe anchor (corpus report_date, 2026-03-31).
+# CUTOFF is 2026-04-02. Each adapter writes valid_from as the date of the fact itself, so a
+# fact can lie after the anchor and still be knowable at the cutoff (#1060).
+_NO_PAYLOAD_PER_OBLIGATION = "does not expose one normalized payload per obligation"
+_FACT_OWN_DATES = {
+    "listing-identity": datetime(2026, 3, 31, tzinfo=UTC),
+    "universe-membership": datetime(2026, 3, 31, tzinfo=UTC),
+    "financial-fact": datetime(2026, 2, 14, tzinfo=UTC),
+    "market-price": datetime(2026, 4, 1, tzinfo=UTC),
+}
+
+
+def test_freeze_selects_a_fact_dated_after_the_anchor_and_before_the_cutoff(connection) -> None:
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic=_FACT_OWN_DATES
+    )
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+    selected = sorted({observation_id for member in snapshot.members for observation_id in member.observation_ids})
+    selected_dates = connection.execute(
+        """
+        select semantic_type, (valid_from at time zone 'UTC')::date
+        from staging.capture_normalized_observations
+        where observation_id = any(%s)
+        group by 1, 2 order by 1
+        """,
+        (selected,),
+    ).fetchall()
+    assert selected_dates == [
+        ("financial-fact", date(2026, 2, 14)),
+        ("listing-identity", date(2026, 3, 31)),
+        ("market-price", date(2026, 4, 1)),
+        ("universe-membership", date(2026, 3, 31)),
+    ]
+    # The meta info view judges valid time with the same rule: it must expose the 84 selected rows.
+    exposed = connection.execute(
+        """
+        select observation_id, freshness_state from mart.topt_capture_meta_info
+        where run_id = %s and observation_id is not null
+        """,
+        (run.run_id,),
+    ).fetchall()
+    assert sorted(row[0] for row in exposed) == selected
+    assert {row[1] for row in exposed} == {"fresh"}
+
+
+def test_freeze_selects_a_fact_whose_window_starts_and_ends_on_the_cutoff_date(connection) -> None:
+    window = {semantic_type: CUTOFF for semantic_type in SEMANTIC_TYPES}
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic=window, valid_to_by_semantic=window
+    )
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+
+
+@pytest.mark.parametrize("semantic_type", SEMANTIC_TYPES)
+def test_freeze_refuses_a_fact_that_starts_after_the_cutoff_date(connection, semantic_type: str) -> None:
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic={semantic_type: CUTOFF + timedelta(days=1)}
+    )
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+
+
+@pytest.mark.parametrize("semantic_type", SEMANTIC_TYPES)
+def test_freeze_refuses_a_fact_that_ended_before_the_cutoff_date(connection, semantic_type: str) -> None:
+    # valid_to is after the anchor (2026-03-31) and before the cutoff date (2026-04-02).
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_to_by_semantic={semantic_type: CUTOFF - timedelta(days=1)}
+    )
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
         )
 
 
@@ -970,10 +1066,9 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
             )
 
 
-# The seeder pins every observation's validity to exactly this day (its
-# valid_from/valid_to are CUTOFF - 2 days), so the corpus report_date — which
-# becomes the obligations' partition_key — must be that same day or the
-# selection query's validity window filters every row (review on #634).
+# The corpus report_date becomes the obligations' partition_key. The seeder dates every
+# observation CUTOFF - 2 days, and the selection judges validity at the cutoff day, so
+# any report_date works here. This date keeps the universe id readable.
 _SYNTHETIC_REPORT_DATE = (CUTOFF - timedelta(days=2)).date().isoformat()
 
 

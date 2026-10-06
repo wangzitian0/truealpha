@@ -411,9 +411,10 @@ class TwelveDataClient:
 
         `adjust` is always sent explicitly (#938 contract item 4): see `DEFAULT_ADJUST`.
         """
-        vendor_symbol = symbol.replace(".", "/") if "." in symbol else symbol
+        # The canonical ticker is the Twelve Data symbol (`BRK.B`), as in the TOPT capture
+        # (`twelve_data_origin`). A "/" reads as a currency pair and answers 404 (#1060).
         params: dict[str, str] = {
-            "symbol": vendor_symbol,
+            "symbol": symbol,
             "interval": interval,
             "outputsize": str(outputsize),
             "adjust": adjust,

@@ -606,30 +606,21 @@ def test_a_forced_capture_version_is_distinct_and_stable() -> None:
 
 def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
-    # #530 item 1 split this test's one `day` into three genuinely different concepts
-    # _quote()/a shared `price_cutoff=day` used to conflate:
-    #   - `as_of` (-> valid_from) must be the fixed corpus's real partition (2026-03-31),
-    #     or freeze_snapshot's `valid_from <= partition_key` now correctly refuses it.
-    #   - `knowable_at` feeds composition._satisfy_from_recent_observations' session-bound
-    #     reuse check (`_is_settled_session`), which requires it to equal
-    #     last_settled_session_date(cutoff) -- verified locally
-    #     (truealpha_contracts.calendar.settled_session_for_cutoff) to be 2026-04-21 for
-    #     this cutoff, not the corpus's 2026-03-31.
-    #   - `target.cutoff` (price_cutoff) is what the PRIMARY fetch's own look-ahead guard
-    #     compares knowable_at against (market_price_adapter.py:224: `knowable_at.date() >
-    #     target.cutoff` -> LOOK_AHEAD_VIOLATION, confirmed by CI when this was still
-    #     `day`); it must be >= knowable_at, i.e. settled_day, not the corpus partition.
-    # Before this PR none of these three were real, so one shared `day` equal to
-    # cutoff.date() (the original author's choice) satisfied all three by accident.
-    day = date(2026, 3, 31)
+    # The bar is dated as production dates it (#530 item 1, #1060). `as_of` (-> valid_from)
+    # is the settled session of the cutoff, 2026-04-21 (verified with
+    # truealpha_contracts.calendar.settled_session_for_cutoff). It follows the corpus anchor
+    # (2026-03-31), so the reuse and the freeze must judge it at the cutoff day.
+    # `knowable_at` must equal that session, because the reuse check
+    # `_is_settled_session` requires it. `price_cutoff` is the settled session too: the
+    # primary fetch refuses a bar knowable after `target.cutoff` as look-ahead.
     settled_day = date(2026, 4, 21)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
 
     def _reuse_quote(close: Decimal) -> MarketPriceQuote:
         return MarketPriceQuote(
-            raw_bytes=f"bar:{day.isoformat()}:{close}".encode(),
+            raw_bytes=f"bar:{settled_day.isoformat()}:{close}".encode(),
             close=close,
-            as_of=day,
+            as_of=settled_day,
             knowable_at=datetime.combine(settled_day, datetime.min.time(), tzinfo=UTC),
         )
 

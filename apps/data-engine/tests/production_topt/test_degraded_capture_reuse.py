@@ -135,7 +135,10 @@ def _quote(day: date = date(2026, 3, 31), close: Decimal = Decimal("40")) -> Mar
     )
 
 
-def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
+_FILING_KNOWABLE_AT = datetime(2026, 2, 1, tzinfo=UTC)
+
+
+def _bundle(branch: OperatingBranch, knowable_at: datetime = _FILING_KNOWABLE_AT) -> FinancialFactsBundle:
     financial = branch is OperatingBranch.FINANCIAL
     return FinancialFactsBundle(
         gross_profit=Decimal("80000000") if financial else Decimal("210000000"),
@@ -144,7 +147,7 @@ def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
         revenue=Decimal("100000000"),
         pre_provision_profit=Decimal("80000000") if financial else None,
         raw_bytes=b'{"facts":{}}',
-        knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+        knowable_at=knowable_at,
     )
 
 
@@ -156,6 +159,7 @@ def _offline_routes(
     price_cutoff: date | None = None,
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
     cutoff_date: date | None = None,
+    filing_knowable_at: datetime = _FILING_KNOWABLE_AT,
 ) -> dict[str, SourceFetchPort]:
     # The settled session (#530 item 1), matching build_route's context.price_cutoff_date
     # -- not the tick's own run clock. A caller with a differently-partitioned corpus
@@ -220,7 +224,7 @@ def _offline_routes(
     )
     financial = SecFinancialFactAdapter(
         sec_targets,
-        lambda cik, cutoff, branch: _bundle(branch),
+        lambda cik, cutoff, branch: _bundle(branch, filing_knowable_at),
         headcount_extractor=PostgresHeadcountExtractor(connection),
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
@@ -441,6 +445,61 @@ def test_a_second_run_reuses_committed_observations_without_vendor_calls(tick_da
     assert (snapshots, gppe, core) == (1, 20, 20)
 
 
+def test_reuse_binds_a_bar_and_a_filing_dated_after_the_partition_anchor(tick_database_url, monkeypatch) -> None:
+    """#1060: valid_from is the date of the fact itself, not the universe anchor.
+
+    The corpus anchor is 2026-03-31. The bar is the settled session of the cutoff day
+    (2026-04-21). The filing became knowable on 2026-04-10. Both dates follow the anchor
+    and precede the cutoff, so the second run must reuse both, as the freeze accepts both.
+    """
+    anchor = date(2026, 3, 31)
+    settled_day = date(2026, 4, 21)
+    filing_at = datetime(2026, 4, 10, tzinfo=UTC)
+    cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
+    _arm(
+        monkeypatch,
+        quote=lambda: _quote(settled_day),
+        price_cutoff=settled_day,
+        cutoff_date=cutoff.date(),
+        filing_knowable_at=filing_at,
+    )
+    first = _run_tick(tick_database_url, version="after-anchor-source", cutoff=cutoff)
+    second = _run_tick(tick_database_url, version="after-anchor-target", cutoff=cutoff)
+
+    assert _status_row(tick_database_url, first.run_id)[:4] == (OBLIGATIONS, OBLIGATIONS, OBLIGATIONS, 0)
+    assert _status_row(tick_database_url, second.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        _RELEASE_OBLIGATIONS,
+        OBLIGATIONS - _RELEASE_OBLIGATIONS,
+        0,
+        0,
+        0,
+        True,
+    )
+    with psycopg.connect(tick_database_url) as reader:
+        reused = reader.execute(
+            """
+            select o.semantic_type, (o.valid_from at time zone 'UTC')::date, ob.partition_key, count(*)
+            from raw.capture_obligations ob
+            join raw.capture_obligation_results done on done.capture_obligation_id = ob.obligation_id
+            join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
+            join staging.capture_normalized_observations o
+              on o.source_vintage_id = attempt.reused_source_vintage_id
+             and o.subject_id = ob.subject_id
+             and o.semantic_type = regexp_replace(ob.capture_requirement_id, ':v1$', '')
+            where ob.run_id = %s and done.terminal_state = 'unchanged'
+            group by 1, 2, 3 order by 1, 2
+            """,
+            (second.run_id,),
+        ).fetchall()
+    assert reused == [
+        ("financial-fact", filing_at.date(), anchor.isoformat(), 21),
+        ("market-price", settled_day, anchor.isoformat(), 21),
+    ]
+    assert _materialized(tick_database_url, second.run_id) == (1, 20, 20)
+
+
 def test_reuse_never_looks_ahead_of_its_own_cutoff(tick_database_url, monkeypatch) -> None:
     """Review on #664: a run completed AFTER this run's cutoff must not satisfy it —
     reuse without an upper bound would be a look-ahead violation. The earlier tick
@@ -641,48 +700,37 @@ def test_the_session_check_is_utc_in_any_zone(zone: str) -> None:
     assert not composition._is_settled_session(knowable_at, date(2026, 3, 30))
 
 
-@pytest.mark.xfail(
-    reason="#1019: the TOPT-leg capture mints a fresh UUID per run for a shared listing, "
-    "not the identity _key_topt_like_the_planes recorded before either capture ran; the "
-    "strategy's universe-eligibility check does not recognize it and excludes all 20 "
-    "decisions. Confirmed unrelated to #530 (both legs' own captures now correctly use "
-    "each corpus's real partition; the reuse assertion above this point already passes).",
-    strict=True,
-)
-def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_database_url, monkeypatch) -> None:
-    """#877 H1 and H3 together, in the world where TOPT and QQQ key an issuer alike."""
+def test_another_universe_at_the_same_cutoff_shares_a_valid_price_but_is_not_joined(
+    tick_database_url, monkeypatch
+) -> None:
+    """#877 H3, and the H1 reuse boundary, in the world where TOPT and QQQ key an issuer alike.
+
+    This test was `xfail(strict)` for #1019 while the reuse assertion judged validity at the
+    partition. #1019 stays open: this scenario does not reproduce it. The TOPT leg is forced.
+    """
     from data_engine.datahub.production_topt import plausibility_gate
 
-    # #530 item 1: this test shares one `day` across two DIFFERENT fixed corpuses whose
-    # real partitions match neither -- default corpus.v1.json is 2026-03-31,
-    # corpus.qqq.v1.json is 2026-06-30 (both verified by reading the checked-in files).
-    # `as_of` (-> valid_from) must be each leg's own real partition, or freeze_snapshot's
-    # `valid_from <= partition_key` refuses both captures outright (the ValueError this
-    # test was red with). `knowable_at` and price_cutoff (target.cutoff, whose own
-    # look-ahead guard requires target.cutoff >= knowable_at.date() --
-    # market_price_adapter.py:224) stay on `day`, the run's own clock, unchanged --
-    # nothing here exercises the settled-session reuse check the sibling fix in
-    # test_degraded_capture_forced.py needed to split further. cutoff_date (SEC/release
-    # targets) is no longer passed explicitly: _offline_routes' own fallback
-    # (plan.timeline.partition_start.date()) now resolves it correctly per leg, since
-    # each leg is a different plan/corpus.
+    # Both legs date their bar as production does (#530 item 1, #1060): `as_of` (-> valid_from)
+    # is the settled session of the tick, 2026-07-14. That day follows both corpus anchors
+    # (QQQ 2026-06-30, TOPT 2026-03-31), so the reuse and the freeze must judge it at the
+    # cutoff day. A bar valid on the cutoff day is shared across universes (#635, #684).
+    # The TOPT leg is forced, so it captures its own price and the two runs hold different
+    # prices.
     day = date(2026, 7, 14)
-    qqq_partition = date(2026, 6, 30)
-    topt_partition = date(2026, 3, 31)
     cutoff = datetime(2026, 7, 14, 22, 15, tzinfo=UTC)
     shared = _key_topt_like_the_planes(monkeypatch)
     assert len(shared) == 13, "TOPT and QQQ share 13 listings"
     aapl_issuer = shared["listing:xnas:aapl"][0]
 
-    def _leg_quote(as_of: date, close: Decimal) -> MarketPriceQuote:
+    def _leg_quote(close: Decimal) -> MarketPriceQuote:
         return MarketPriceQuote(
-            raw_bytes=f"bar:{as_of.isoformat()}:{close}".encode(),
+            raw_bytes=f"bar:{day.isoformat()}:{close}".encode(),
             close=close,
-            as_of=as_of,
+            as_of=day,
             knowable_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC),
         )
 
-    _arm(monkeypatch, quote=lambda: _leg_quote(qqq_partition, Decimal("50")), price_cutoff=day)
+    _arm(monkeypatch, quote=lambda: _leg_quote(Decimal("50")), price_cutoff=day)
     with psycopg.connect(tick_database_url) as tick:
         qqq = run_topt_pipeline(
             tick,
@@ -698,28 +746,20 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         plan = composition.plan_and_persist(probe, cutoff=cutoff, version="run-scope-h1-probe")
         assert all(plan.coordinates[listing][:2] == ids for listing, ids in shared.items())
         satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
-        # #530 item 1 (owner decision): scoped to market-price, not every semantic type.
-        # A session-bound price from QQQ's 2026-06-30 partition is correctly ineligible
-        # for TOPT's 2026-03-31 obligations (valid_from <= partition_key is false) --
-        # that is what this test protects. financial-fact is a different question: this
-        # fixture's _bundle() knowable_at (2026-02-01) legitimately predates BOTH
-        # universes' partitions, so it satisfies both by construction, same as it would
-        # in production for a fact whose validity window covers both dates -- reusing it
-        # is correct, not a cross-universe leak, and asserting on it here would make this
-        # test depend on the fixture's specific financial-fact date rather than on the
-        # market-price/partition invariant it names.
+        # Scoped to market-price. The financial-fact bar of this fixture predates both
+        # anchors and is reusable by construction.
         reused = [
             binding.obligation.subject.id
             for work_item_id, binding in plan.bindings.items()
             if work_item_id in satisfied and binding.obligation.capture_requirement_id == "market-price:v1"
         ]
-        assert reused == [], f"a price frozen for a later partition must not be reused: {sorted(set(reused))}"
+        assert sorted(reused) == sorted(shared), "a price valid on the cutoff day is reused by every shared listing"
     finally:
         probe.rollback()
         probe.close()
 
-    _arm(monkeypatch, quote=lambda: _leg_quote(topt_partition, Decimal("40")), price_cutoff=day)
-    topt = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    _arm(monkeypatch, quote=lambda: _leg_quote(Decimal("40")), price_cutoff=day)
+    topt = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=True)
     assert _status_row(tick_database_url, topt["capture_run_id"])[:4] == (OBLIGATIONS, OBLIGATIONS, OBLIGATIONS, 0)
     assert _materialized(tick_database_url, topt["capture_run_id"]) == (1, 20, 20)
 

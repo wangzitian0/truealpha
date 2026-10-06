@@ -95,10 +95,11 @@ _RETRY_SPACING = timedelta(seconds=2)
 class CaptureTimeline:
     """The run's persistence stamps, all derived from its cutoff.
 
-    `partition_start` is the frozen universe partition the run asserts values for:
-    observations anchor `valid_from` there with an open `valid_to`, so the
-    materializer selects them for that partition at any cutoff. `knowable_at` is
-    the capture's own knowable time — inside the schedule policy's freshness
+    `partition_start` is the start of the frozen universe partition the run asserts
+    values for. It is the knowable time of a release-derived cell when the universe has
+    no publication time. It is not an observation's `valid_from`: that is the date of the
+    fact itself (#1016), and the materializer judges it at the cutoff day (#1060).
+    `knowable_at` is the capture's own knowable time — inside the schedule policy's freshness
     window, which is what makes a captured cell `fresh` at the mart.
     """
 
@@ -483,9 +484,9 @@ class PostgresCaptureControlSink:
             # accident (partition_start happens to be <= any later partition_key)
             # and would silently exclude a genuinely-valid-since fact from an
             # earlier historical replay. The materializer's selection predicate
-            # (`valid_from <= partition_key`) still gates look-ahead correctly here:
-            # a fact only becomes eligible once it is real-world true, not once it
-            # happened to be captured.
+            # (`valid_from` on or before the run's cutoff day) still gates look-ahead
+            # correctly here: a fact only becomes eligible once it is real-world true,
+            # not once it happened to be captured.
             valid_from=valid_from,
             valid_to=None,
             # The adapter's transaction_time — filed date, bar date, manifest
