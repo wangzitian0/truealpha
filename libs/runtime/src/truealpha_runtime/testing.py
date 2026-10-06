@@ -13,6 +13,7 @@ boundary in `truealpha_runtime.__init__`.
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -21,6 +22,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+
+#: One SQL literal that a seed row may hold: a quoted string, a whole number, null, true or false.
+SeedValue = str | int | bool | None
 
 REQUIRE_RUNTIME_ENV = "TRUEALPHA_REQUIRE_RUNTIME"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -219,3 +223,71 @@ def run_python_probe(
         check=False,
         timeout=timeout,
     )
+
+
+_SEED_TOKEN = re.compile(
+    r"""\s*(?:
+        (?P<comment>--[^\n]*)
+      | (?P<string>'(?:[^']|'')*')
+      | (?P<number>-?\d+)
+      | (?P<word>null|true|false)\b
+      | (?P<punct>[(),])
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
+    """The rows one migration seeds into `table`, read from the file text without a database.
+
+    It reads the single `insert into <table> (<columns>) values (<row>), ... on conflict`
+    statement. A row holds only quoted strings, whole numbers, null, true and false. Any
+    other token raises ValueError, so a seed the reader cannot parse never reads as fewer
+    rows. Two statements for the same table raise too: a seed lives in one place.
+    """
+    text = migration.read_text(encoding="utf-8")
+    statement = re.compile(
+        rf"insert\s+into\s+{re.escape(table)}\s*\((?P<columns>[^)]*)\)\s*values(?P<body>.*?)\bon\s+conflict",
+        re.IGNORECASE | re.DOTALL,
+    )
+    found = list(statement.finditer(text))
+    if len(found) != 1:
+        raise ValueError(f"{migration.name} holds {len(found)} seed statements for {table}; expected exactly 1")
+    columns = [column.strip() for column in found[0].group("columns").split(",")]
+    body = found[0].group("body")
+    rows: list[dict[str, SeedValue]] = []
+    current: list[SeedValue] | None = None
+    position = 0
+    while position < len(body) and body[position:].strip():
+        token = _SEED_TOKEN.match(body, position)
+        if token is None:
+            raise ValueError(f"{migration.name}: cannot read the seed of {table} near {body[position:][:40]!r}")
+        position = token.end()
+        kind = token.lastgroup
+        value = token.group(kind) if kind else ""
+        if kind == "comment":
+            continue
+        if kind == "punct":
+            if value == "(" and current is None:
+                current = []
+            elif value == ")" and current is not None:
+                if len(current) != len(columns):
+                    raise ValueError(
+                        f"{migration.name}: a seed row of {table} has {len(current)} values, not {len(columns)}"
+                    )
+                rows.append(dict(zip(columns, current, strict=True)))
+                current = None
+            elif value != ",":
+                raise ValueError(f"{migration.name}: unexpected {value!r} in the seed of {table}")
+            continue
+        if current is None:
+            raise ValueError(f"{migration.name}: a value outside a row in the seed of {table}")
+        if kind == "string":
+            current.append(value[1:-1].replace("''", "'"))
+        elif kind == "number":
+            current.append(int(value))
+        else:
+            current.append(None if value.lower() == "null" else value.lower() == "true")
+    if current is not None:
+        raise ValueError(f"{migration.name}: the seed of {table} ends inside a row")
+    return rows
