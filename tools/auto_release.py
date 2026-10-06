@@ -171,9 +171,7 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
     if facts.in_flight:
         return Decision(False, f"a release is already in flight: {'; '.join(facts.in_flight)}")
     tag = next_tag(facts.tags)
-    return Decision(
-        True, f"main HEAD {short} is green, quiet and untagged; releasing {tag} to staging", tag=tag
-    )
+    return Decision(True, f"main HEAD {short} is green, quiet and untagged; releasing {tag} to staging", tag=tag)
 
 
 # --- gathering the facts -----------------------------------------------------------------
@@ -192,9 +190,7 @@ def read_tags(run: Runner = run_command) -> tuple[ReleaseTag, ...]:
     The workflow checks out with full history and tags, so the local refs are origin's. A
     lightweight tag has no tagger date and no annotation, so it is never counted as automatic.
     """
-    fmt = _FIELD.join(
-        ("%(refname:strip=2)", "%(objectname)", "%(*objectname)", "%(taggerdate:unix)", "%(contents)")
-    )
+    fmt = _FIELD.join(("%(refname:strip=2)", "%(objectname)", "%(*objectname)", "%(taggerdate:unix)", "%(contents)"))
     fmt = fmt.replace(_FIELD, "%1f") + "%1e"
     out = run(["git", "for-each-ref", f"--format={fmt}", "refs/tags"])
     tags: list[ReleaseTag] = []
