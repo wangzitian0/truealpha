@@ -13,13 +13,17 @@ from typing import Any
 
 import psycopg
 import pytest
+from data_engine.datahub import question_coverage
 from data_engine.datahub.analyst_ratings import (
     AnalystRatingItem,
     analyst_track_record,
     materialize_analyst_ratings,
 )
 from data_engine.datahub.question_coverage import (
+    Cell,
+    GovernedHead,
     analyst_rating_cells,
+    compile_report,
     supply_chain_cells,
 )
 from data_engine.datahub.standards.supply_chain_extraction import (
@@ -28,6 +32,7 @@ from data_engine.datahub.standards.supply_chain_extraction import (
     materialize_universe_supply_chain_exposure,
     supply_chain_exposure,
 )
+from truealpha_contracts.question_requirements import QUESTION_REQUIREMENTS_SHA256
 
 
 @pytest.fixture
@@ -206,3 +211,101 @@ def test_an_expired_edge_still_proves_an_extraction_ran(connection: psycopg.Conn
         "issuer:t772:a": ("unavailable", ["no_disclosed_suppliers"], 0),
         "issuer:t772:b": ("unavailable", ["no_disclosed_suppliers"], 0),
     }
+
+
+_T772_UNIVERSE = "universe:qqq-us-2026-06-30"
+_T772_HEAD = "capture-run:t772-head"
+
+
+def _head_with_issuers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A governed head over the two issuers. Head resolution has its own tests; this seam only
+    names the head, so q3 and q4 are read from the real mart tables through `compile_report`."""
+    monkeypatch.setattr(
+        question_coverage,
+        "governed_head",
+        lambda _connection, *, universe_prefix: GovernedHead(_T772_UNIVERSE, _T772_HEAD, _T772_CUTOFF),
+    )
+    monkeypatch.setattr(
+        question_coverage,
+        "gppe_cells",
+        lambda _connection, _run_id: tuple(Cell(issuer_id, True) for issuer_id in _T772_ISSUERS),
+    )
+
+
+def test_the_report_counts_unavailable_q3_and_q4_rows_by_reason_and_names_their_columns(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Staging report listed `column: null` and `missing: 20` for q3 and q4. A head whose
+    q3 and q4 rows are all unavailable must report the column, `answered 0`, and the reason."""
+    _head_with_issuers(monkeypatch)
+    # q3 comes from the real writer over a graph with no supplier edge.
+    written = materialize_universe_supply_chain_exposure(
+        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+    )
+    assert written == len(_T772_ISSUERS)
+    # q4 rows carry the shape the analyst-ratings writer gives an issuer without coverage.
+    for issuer_id in _T772_ISSUERS:
+        connection.execute(
+            "insert into mart.issuer_analyst_ratings "
+            "(run_id, issuer_id, cutoff, reason_codes, availability_status, source_evidence_status, "
+            "factor_validation_status) "
+            "values (%s, %s, %s, array['no_analyst_coverage'], 'unavailable', 'degraded', 'not_evaluated')",
+            (_T772_HEAD, issuer_id, _T772_CUTOFF),
+        )
+
+    report = compile_report(connection, universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC))
+
+    assert report is not None
+    assert report["requirements_sha256"] == QUESTION_REQUIREMENTS_SHA256
+    q3 = report["questions"]["q3"]
+    assert q3["column"] == "mart.issuer_supply_chain_exposure.exposure_score"
+    assert (q3["denominator"], q3["answered"], q3["missing"]) == (2, 0, 0)
+    assert q3["unavailable"] == {"no_supply_chain_extraction": 2}
+    q4 = report["questions"]["q4"]
+    assert q4["column"] == "mart.issuer_analyst_ratings.consensus_rating"
+    assert (q4["denominator"], q4["answered"], q4["missing"]) == (2, 0, 0)
+    assert q4["unavailable"] == {"no_analyst_coverage": 2}
+
+
+def test_the_report_answers_q3_and_q4_only_for_a_row_that_carries_the_value(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _head_with_issuers(monkeypatch)
+    # q3: issuer a has a supplier edge, issuer b has none while the graph holds edges.
+    _seed_edge(connection, from_id="issuer:t772:a", to_id="customer:t772", relation_type="supplies_to")
+    materialize_universe_supply_chain_exposure(
+        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+    )
+    # q4: issuer a has a rating, issuer b is `available` with a null rating.
+    for issuer_id, rating in (("issuer:t772:a", Decimal("4.2")), ("issuer:t772:b", None)):
+        connection.execute(
+            "insert into mart.issuer_analyst_ratings "
+            "(run_id, issuer_id, cutoff, consensus_rating, availability_status, source_evidence_status, "
+            "factor_validation_status) values (%s, %s, %s, %s, 'available', 'verified', 'accepted')",
+            (_T772_HEAD, issuer_id, _T772_CUTOFF, rating),
+        )
+
+    report = compile_report(connection, universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC))
+
+    assert report is not None
+    q3 = report["questions"]["q3"]
+    assert (q3["answered"], q3["missing"], q3["unavailable"]) == (1, 0, {"no_disclosed_suppliers": 1})
+    q4 = report["questions"]["q4"]
+    assert (q4["answered"], q4["missing"], q4["unavailable"]) == (1, 0, {"null_metric_value": 1})
+
+
+def test_a_head_with_no_q3_or_q4_row_reports_no_row_and_no_missing(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`missing` means no column is bound. An issuer with a bound column and no row is
+    `unavailable:no_row`, so the M1 acceptance (zero missing) never hides a gap behind a count."""
+    _head_with_issuers(monkeypatch)
+
+    report = compile_report(connection, universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC))
+
+    assert report is not None
+    for question in ("q3", "q4"):
+        entry = report["questions"][question]
+        assert entry["column"] is not None
+        assert (entry["answered"], entry["missing"]) == (0, 0)
+        assert entry["unavailable"] == {"no_row": 2}
