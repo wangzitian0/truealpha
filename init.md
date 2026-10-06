@@ -549,12 +549,13 @@ proven or refuted by a standing check on the axis roots (#434 factor chain, #530
 completeness, #284 factor flexibility, #544 backtest reproducibility, #70 extraction,
 #581 production invariants, #712 release identity) under `AGENTS.md` rules 6 and 7, and
 a gate epic closes by hand when every claim in its row has such a check. Evidence
-(captured corpora, evaluation records, handoff documents) is content-hashed under
-`governance/` for replayability. Graduation additionally requires the independent capture audit, the final
-Vision audit, and recorded human approval. Day-to-day delivery is conventional: one issue,
-one pull request, tests and review before merge, as defined in `AGENTS.md`. The
-capability dependency graph under `governance/capabilities/` is planning information, not
-merge enforcement.
+(captured corpora, evaluation records) is content-hashed for replayability. The records of
+the earlier delivery machine (capability graph, evidence, handoffs) left the tree in #1061
+and live in git history (`governance/README.md`). Graduation additionally requires the
+independent capture audit, the final Vision audit, and recorded human approval. Day-to-day
+delivery is conventional: one issue, one pull request, tests and review before merge, as
+defined in `AGENTS.md`. The former capability dependency graph was planning information,
+never merge enforcement.
 
 ---
 

@@ -83,9 +83,10 @@ The mandated reproducibility proof was nominally required and effectively dorman
   instead.
 - The `ExecutionEvidence` type that recorded which exact build produced a cross-check goes with the
   Qlib module. The cross-check itself survives as an ordinary test assertion.
-- `governance/batches/`, `governance/leases/` and `governance/evidence/` keep their S8/S9 Qlib
-  records untouched. They are frozen history under `governance/README.md`, accepted tests pin
-  hashes in them, and this ADR does not rewrite what happened.
+- The S8/S9 Qlib records in `governance/batches/`, `governance/leases/` and
+  `governance/evidence/` were frozen history. #1061 deleted them from the tree because nothing
+  read them. They stay in git history (`governance/README.md`). This ADR does not rewrite what
+  happened.
 
 ## What this ADR does not decide
 

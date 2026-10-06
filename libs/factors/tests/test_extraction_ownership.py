@@ -74,10 +74,9 @@ ALLOWED_SELECTOR_FILES = {
 
 #: `select_*`-named functions that are not about extraction candidate selection at all,
 #: reviewed and named here rather than excluded by file so an addition to this set is a
-#: visible diff. `select_recapture` (data_engine/datahub/tiny_replay.py) picks which
-#: CAPTURE OBLIGATION a recapture scenario replays — no candidate, no extractor, no
-#: relationship to #769's scope.
-KNOWN_UNRELATED_SELECT_FUNCTIONS = {"select_recapture"}
+#: visible diff. The set is empty. Its only member, `select_recapture`, went with the replay
+#: harness in #1061.
+KNOWN_UNRELATED_SELECT_FUNCTIONS: set[str] = set()
 
 
 def _src_python_files() -> list[Path]:
