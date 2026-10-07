@@ -742,6 +742,7 @@ def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fet
 
 HEAD_RUN = "capture-run:" + "7" * 64
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
+QQQ = "universe-list:qqq"
 JOB_NAMES = ("head_reports_pipeline_job", "standard_backfill_pipeline_job")
 
 
@@ -787,8 +788,17 @@ def shared_connection():
         connection.close()
 
 
-def _execute_job(monkeypatch, shared_connection, job_name: str, responses: dict[str, Any]):
-    """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL."""
+def _execute_job(
+    monkeypatch,
+    shared_connection,
+    job_name: str,
+    responses: dict[str, Any],
+    *,
+    open_fails: Exception | None = None,
+):
+    """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL.
+
+    `open_fails` is raised when the analyst op opens the moomoo context, as an OpenD outage does."""
     from data_engine.datahub import question_coverage
     from data_engine.datahub.production_topt import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
@@ -801,6 +811,8 @@ def _execute_job(monkeypatch, shared_connection, job_name: str, responses: dict[
 
     @contextmanager
     def fake_connect():
+        if open_fails is not None:
+            raise open_fails
         yield ctx
 
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
@@ -889,6 +901,27 @@ def test_a_total_failure_fails_the_run_after_the_coverage_report_is_written(
 
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_an_opend_outage_fails_the_run_after_the_rows_and_the_report_are_written(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    """#771: with OpenD down, the old op wrote `no_analyst_coverage` rows and the run succeeded."""
+    result = _execute_job(
+        monkeypatch, shared_connection, job_name, {}, open_fails=mm.MoomooConnectionError("OpenD not reachable")
+    )
+
+    assert not result.success, "an OpenD outage must not end as SUCCESS"
+    assert _stored_analyst_rows(shared_connection) == {
+        issuer_id: ("unavailable", ["fetch_error:MoomooConnectionError"]) for issuer_id in TICKERS
+    }, "no row reads as no_analyst_coverage"
+    assert _coverage_report_exists(shared_connection)
+    assert _steps(result, failed=True) == ["fail_if_a_lane_failed"]
+    verdict_name = f"question_coverage@{QQQ}"
+    assert shared_connection.events[-3:] == ["commit", f"verdict:{verdict_name}:True", f"verdict:{verdict_name}:False"]
+    [failure] = [e for e in result.all_events if e.is_step_failure]
+    assert "3 of 3" in failure.step_failure_data.error.cause.message
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
 def test_a_partial_failure_leaves_the_run_green_and_the_rows_name_the_error(
     monkeypatch, shared_connection, job_name
 ) -> None:
@@ -924,7 +957,6 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
     assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a clean run has no red row"
 
 
-QQQ = "universe-list:qqq"
 RED_SUMMARY = "failed: analyst ratings fetch failed for 3 of 3 tickers"
 LANE_MESSAGE = "analyst ratings fetch failed for 3 of 3 tickers; first error: DDOG: X: first failure"
 
