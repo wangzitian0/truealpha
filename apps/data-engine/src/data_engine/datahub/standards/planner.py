@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
-from data_engine.datahub.production_topt.universe_corpus import load_corpus
+from data_engine.datahub.production_topt.universe_corpus import capture_as_of, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 
@@ -46,15 +46,24 @@ class OpenCell:
     best_knowable_at: datetime | None
 
 
+def _universe_corpus(connection: Any, universe: str) -> dict[str, Any]:
+    """`topt` is the hand-curated packaged corpus; any other value is a governed universe head
+    kind (`universe-list:qqq`)."""
+    if universe == TOPT_UNIVERSE:
+        return load_corpus(TOPT_CORPUS_FILENAME)
+    return resolve_universe_corpus(connection, universe)
+
+
+def universe_as_of(connection: Any, universe: str, *, cutoff: datetime) -> date:
+    """The date a capture of `universe` resolves its entity ids as of (#1079)."""
+    return capture_as_of(_universe_corpus(connection, universe)["topt_denominator"], cutoff)
+
+
 def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
     """One entry per issuer (a dual-listed issuer appears once), CIK-resolved where the
     universe plane already resolved it. `topt` is the hand-curated packaged corpus; any
     other value is a governed universe head kind (`universe-list:qqq`)."""
-    corpus = (
-        load_corpus(TOPT_CORPUS_FILENAME)
-        if universe == TOPT_UNIVERSE
-        else resolve_universe_corpus(connection, universe)
-    )
+    corpus = _universe_corpus(connection, universe)
     issuers: dict[str, UniverseIssuer] = {}
     for issuer_id, _security_id, listing_id, ticker in corpus["topt_denominator"]["instruments"]:
         if issuer_id in issuers:

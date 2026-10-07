@@ -169,12 +169,11 @@ REPORTS_CURRENT = "reports_current"
 LANE_FAILURE = "lane_failure"
 
 #: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
-#: Such a member has no entity for its legacy id.
+#: Such a member has no entity, or its entity is not in the head's wide row.
 UNMAPPED_ISSUERS = "unmapped_issuers"
 
-#: The key those ops set, to the count of rows whose issuer id is not in the head's wide row.
-#: Such a row is written, and the coverage report cannot join it (#1079).
-NOT_IN_WIDE_ROW = "not_in_wide_row"
+#: The key those ops set, to the count of members per reason (`no_canonical_issuer_id`, `not_in_wide_row`).
+UNMAPPED_BY_REASON = "unmapped_by_reason"
 
 #: The most unmapped issuers one op logs by name. A later one is counted in the summary only.
 MAX_UNMAPPED_LOGGED = 20
@@ -190,35 +189,42 @@ def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: Canoni
         context.log.warning("%s: no row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
     if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
         context.log.warning(
-            "%s: %s more issuers get no row, each for the same reason",
-            lane,
-            len(universe.unmapped) - MAX_UNMAPPED_LOGGED,
+            "%s: %s more issuers get no row, not named here", lane, len(universe.unmapped) - MAX_UNMAPPED_LOGGED
         )
     failure = universe.total_failure()
     if failure is not None:
         context.log.error("%s: %s", lane, failure)
 
 
-def _outside_the_wide_row(
-    context: dg.OpExecutionContext, lane: str, connection: Any, run_id: str, universe: CanonicalUniverse
-) -> int:
-    """Count the issuers whose canonical id is not a `issuer_id` of the head's wide row, and log them.
+def _canonical_universe(
+    context: dg.OpExecutionContext,
+    lane: str,
+    connection: Any,
+    universe: str,
+    head: question_coverage.GovernedHead,
+    tickers: Mapping[str, str],
+) -> CanonicalUniverse:
+    """The universe members that have a row in the head's wide row, each under its wide-row id (#1079).
 
-    The universe corpus can differ from the head, or a merge can move an alias to another
-    survivor. Either way the coverage report cannot join the row. This is the standing
-    measure of the join that the Staging acceptance of #1079 reads: rows minus this count.
+    The ids resolve as capture resolved them: as of the corpus report date, as known at the
+    cutoff. The wide row is the authority, so a member whose entity it does not hold is
+    unmapped. The lookup repeats capture's question, and evidence recorded since can change
+    its answer. `gppe_cells` is the subject set the coverage reader joins to.
     """
-    if not universe.issuers:
-        return 0
-    wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, run_id)}
-    outside = [issuer for issuer in universe.issuers if issuer.issuer_id not in wide]
-    for issuer in outside[:MAX_UNMAPPED_LOGGED]:
-        context.log.warning(
-            "%s: %s (%s) is not in the wide row of %s", lane, issuer.ticker, issuer.legacy_id, run_id[:24]
-        )
-    if len(outside) > MAX_UNMAPPED_LOGGED:
-        context.log.warning("%s: %s more issuers are not in the wide row", lane, len(outside) - MAX_UNMAPPED_LOGGED)
-    return len(outside)
+    from data_engine.datahub.standards.planner import universe_as_of
+
+    if not tickers:
+        return CanonicalUniverse(issuers=())
+    wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
+    resolved = canonicalize_universe(
+        connection,
+        tickers,
+        cutoff=head.cutoff,
+        as_of=universe_as_of(connection, universe, cutoff=head.cutoff),
+        wide_row_ids=wide,
+    )
+    _report_unmapped(context, lane, resolved)
+    return resolved
 
 
 def reports_current(upstream_summary: str) -> str | None:
@@ -345,22 +351,23 @@ def run_supply_chain_exposure(
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        universe = canonicalize_universe(connection, tickers, cutoff=head.cutoff)
-        _report_unmapped(context, "supply chain exposure", universe)
-        outside = _outside_the_wide_row(context, "supply chain exposure", connection, head.run_id, universe)
+        universe = _canonical_universe(context, "supply chain exposure", connection, config.universe, head, tickers)
         rows_count = materialize_universe_supply_chain_exposure(
             connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
         )
         connection.commit()
 
     context.log.info("published %s supply-chain exposure rows for %s", rows_count, config.universe)
-    summary = {
+    summary: dict[str, Any] = {
         "universe": config.universe,
         "run_id": head.run_id,
         "rows": rows_count,
         UNMAPPED_ISSUERS: len(universe.unmapped),
-        NOT_IN_WIDE_ROW: outside,
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
     }
+    lane_failure = universe.total_failure()
+    if lane_failure is not None:
+        summary[LANE_FAILURE] = lane_failure
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -389,9 +396,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        universe = canonicalize_universe(connection, tickers, cutoff=head.cutoff)
-        _report_unmapped(context, "analyst ratings", universe)
-        outside = _outside_the_wide_row(context, "analyst ratings", connection, head.run_id, universe)
+        universe = _canonical_universe(context, "analyst ratings", connection, config.universe, head, tickers)
         # Only the open of the context is a fetch failure. A write error fails the op and rolls
         # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
         # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
@@ -423,7 +428,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         "rows": captured.rows,
         "fetch_errors": len(captured.failures),
         UNMAPPED_ISSUERS: len(universe.unmapped),
-        NOT_IN_WIDE_ROW: outside,
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
@@ -497,6 +502,9 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
     """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
 
+    It also fails the run when no issuer of the universe maps to the head's wide row (#1079).
+    No Q3 or Q4 row is then written, and the report would say `no_row` for all of them.
+
     A lane's total failure is a fact the coverage report must show, so this op depends on the
     coverage op and runs only after the report is persisted. `coverage_summary` is unused on
     purpose: consuming it is what orders this op after the report.
@@ -523,7 +531,7 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
         if parsed["fetch_errors"]:
             outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
         else:
-            outcome.summary = f"analyst ratings: {parsed[UNMAPPED_ISSUERS]} issuers have no entity, no row written"
+            outcome.summary = f"analyst ratings: {parsed[UNMAPPED_ISSUERS]} issuers get no row"
         raise RuntimeError(failure)
 
 
@@ -692,7 +700,8 @@ def head_reports_pipeline_job() -> None:
     The weekly backfill wrote all three, so on every other day the head advanced and
     the coverage report served no_row for the new head — contradicting its own pointer.
 
-    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
+    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker,
+    or when no issuer of the universe maps to the head's wide row (#1079).
     """
     analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))

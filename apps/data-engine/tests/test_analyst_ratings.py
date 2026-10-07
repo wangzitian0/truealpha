@@ -7,10 +7,10 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,7 +49,9 @@ def _issuer_id(name: str) -> str:
 DDOG, NICE, SHOP, DUOL = (_issuer_id(name) for name in ("ddog", "nice", "shop", "duol"))
 
 
-def _identity_universe(_connection: Any, tickers: Mapping[str, str], *, cutoff: datetime) -> CanonicalUniverse:
+def _identity_universe(
+    _connection: Any, tickers: Mapping[str, str], *, cutoff: datetime, as_of: date, wide_row_ids: Collection[str]
+) -> CanonicalUniverse:
     """A universe whose corpus ids already are the wide row's. `test_canonical_issuer_id.py` tests the mapping."""
     return CanonicalUniverse(
         issuers=tuple(CanonicalIssuer(issuer_id=i, legacy_id=i, ticker=t) for i, t in tickers.items())
@@ -718,6 +720,7 @@ def _run_op(
     ctx = _FakeQuoteContext(responses)
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows, write_fails))
     monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
+    monkeypatch.setattr(planner, "universe_as_of", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(
         question_coverage,
         "governed_head",
@@ -1051,6 +1054,7 @@ def _execute_job(
     monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
+    monkeypatch.setattr(planner, "universe_as_of", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda _c, **_k: ())
     monkeypatch.setattr(supply_chain_extraction, "materialize_universe_supply_chain_exposure", lambda _c, **_k: 0)
 

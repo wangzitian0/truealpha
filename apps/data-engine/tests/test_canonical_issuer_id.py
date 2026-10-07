@@ -27,6 +27,7 @@ from data_engine.config import settings
 from data_engine.datahub import question_coverage
 from data_engine.datahub.canonical_issuer import (
     NO_CANONICAL_ISSUER_ID,
+    NOT_IN_WIDE_ROW,
     CanonicalUniverse,
     UnmappedIssuer,
     canonicalize_universe,
@@ -46,7 +47,6 @@ CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 #: The `report_date` of the packaged TOPT corpus. Capture resolves every id as of this date.
 REPORT_DATE = date(2026, 3, 31)
 HANDOVER = date(2026, 4, 1)
-NOT_IN_WIDE_ROW = "not_in_wide_row"
 
 
 @pytest.fixture
@@ -251,7 +251,7 @@ class _RecordingLog:
 
 
 def test_each_unmapped_issuer_is_logged_with_its_reason_code(connection: psycopg.Connection[Any]) -> None:
-    universe = canonicalize_universe(connection, {GHOST: "GHST"}, cutoff=datetime(2026, 4, 2, tzinfo=UTC))
+    universe = canonicalize_universe(connection, {GHOST: "GHST"}, cutoff=CUTOFF, as_of=REPORT_DATE, wide_row_ids=set())
     log = _RecordingLog()
 
     standards._report_unmapped(SimpleNamespace(log=log), "analyst ratings", universe)  # type: ignore[arg-type]
@@ -557,7 +557,9 @@ def test_two_names_of_one_issuer_make_one_row_under_the_first(
     universe = canonicalize_universe(
         connection,
         [(first.issuer_id, first.ticker), (str(entity), first.ticker)],
-        cutoff=datetime(2026, 4, 2, tzinfo=UTC),
+        cutoff=CUTOFF,
+        as_of=REPORT_DATE,
+        wide_row_ids=_wide_row_ids(connection, head.run_id),
     )
 
     assert [(i.issuer_id, i.legacy_id) for i in universe.issuers] == [(str(entity), first.issuer_id)]
