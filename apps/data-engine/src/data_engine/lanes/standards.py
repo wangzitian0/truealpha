@@ -700,8 +700,8 @@ def head_reports_pipeline_job() -> None:
     The weekly backfill wrote all three, so on every other day the head advanced and
     the coverage report served no_row for the new head — contradicting its own pointer.
 
-    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker,
-    or when no issuer of the universe maps to the head's wide row (#1079).
+    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
+    It also fails the run when no issuer of the universe maps to the head's wide row (#1079).
     """
     analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))

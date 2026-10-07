@@ -567,4 +567,4 @@ holding type.
 | The migrations re-apply over their own rows | `ci-db.yml` (three passes) |
 | No boot migration reads or writes data for the store, and none calls the backfill | `test_entity_identity_store.py` |
 | The job fills the store once, reports its counts and duration, and a second run writes nothing; the sensor launches for an empty store or new evidence and is quiet otherwise | same file |
-| Every `mart` table with `run_id` and `issuer_id` stores the wide row's issuer id for one real captured head; the Q3 and Q4 writers refuse a legacy id; an issuer with no entity gets no row, is logged and counted; rows outside the wide row are counted (#1079) | `apps/data-engine/tests/test_canonical_issuer_id.py` |
+| Every `mart` table with `run_id` and `issuer_id` stores the wide row's issuer id for one real captured head; the Q3 and Q4 writers refuse a legacy id; an issuer with no entity, or one the head's wide row lacks, gets no row and is logged and counted; the lane ends red when none joins; ids resolve as of the corpus report date (#1079) | `apps/data-engine/tests/test_canonical_issuer_id.py` |

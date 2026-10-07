@@ -285,8 +285,8 @@ def test_a_universe_without_any_entity_fails_the_run_after_the_report(
 
 # --- the wide row is the authority (round 2) --------------------------------------------------
 #
-# The store below is built the way a backfilled one looks: a claim ended by a retraction, a
-# successor that holds the value from the handover date, and a merge recorded after the capture.
+# The store below is built as a backfilled one looks. A claim ends by a retraction.
+# A successor holds the value from the handover date. A merge is recorded after the capture.
 
 
 def _alias(
@@ -357,9 +357,11 @@ def _first_issuer(connection: psycopg.Connection[Any]) -> Any:
 def test_an_alias_ended_before_the_cutoff_date_still_joins_under_the_capture_as_of(
     connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Capture resolves as of the corpus `report_date`. The LEI of one issuer passes to a
-    successor on HANDOVER, between that date and the cutoff date, so the cutoff date names the
-    successor and the wide row holds the entity that owned the LEI on the report date."""
+    """Capture resolves as of the corpus `report_date`. One LEI passes to a successor on HANDOVER.
+
+    HANDOVER lies between the report date and the cutoff date. The cutoff date names the successor.
+    The wide row holds the entity that owned the LEI on the report date.
+    """
     issuer = _first_issuer(connection)
     old, new = _hand_over_lei(connection, issuer.issuer_id.removeprefix("issuer:lei:"))
     head = _capture_head(connection, monkeypatch)
@@ -382,9 +384,11 @@ def test_an_alias_ended_before_the_cutoff_date_still_joins_under_the_capture_as_
 def test_a_merge_recorded_after_the_capture_moves_a_row_only_when_knowable_at_the_cutoff(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, known_from: datetime, moves: bool
 ) -> None:
-    """The entity backfill writes evidence with its own knowable-at time. A merge knowable at the
-    cutoff moves the lookup to a survivor the wide row does not hold, so the row is not written.
-    A merge knowable only after the cutoff is not visible to the head."""
+    """The entity backfill writes evidence with its own knowable-at time.
+
+    A merge knowable at the cutoff moves the lookup to a survivor the wide row lacks.
+    The row is then not written. A merge knowable only after the cutoff is not visible to the head.
+    """
     issuer = _first_issuer(connection)
     wide_entity = lookup_entity(connection, issuer.issuer_id, "issuer", as_of=REPORT_DATE, known_at=CUTOFF)
     survivor = _mint(connection, "legacy-id", f"test:survivor:{uuid.uuid4().hex}", at=datetime(2026, 1, 1, tzinfo=UTC))
