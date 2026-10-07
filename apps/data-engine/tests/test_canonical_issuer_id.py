@@ -14,6 +14,7 @@ import inspect
 import json
 import os
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -626,11 +627,10 @@ def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
     supply_chain, analyst = _run_lane_ops()
 
     wide = _wide_row_ids(connection, head.run_id)
-    _check_accounts(supply_chain, wide, joined=1)
-    _check_accounts(analyst, wide, joined=0)
-    assert supply_chain["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS - 1}
-    assert analyst["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS - 1, "join_floor_tripped": 1}
+    reasons = {"head_member_not_in_universe": ISSUERS - 1, "join_floor_tripped": 1}
     for summary in (supply_chain, analyst):
+        _check_accounts(summary, wide, joined=0)
+        assert summary["unvisited_by_reason"] == reasons
         assert summary["lane_failure"] == "1 of 20 wide-row issuers join, below the floor of 0.5"
     assert (
         _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id)[
@@ -658,6 +658,7 @@ def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> 
     assert summary["rows"] == len(wide)
     assert summary["joined_issuers"] == joined
     assert summary["joined_issuers"] + summary["unvisited_issuers"] == len(wide)
+    assert summary["unvisited_written"] + summary["kept_real_rows"] == summary["unvisited_issuers"]
     assert summary["wide_row_issuers"] == len(wide)
 
 
@@ -905,11 +906,10 @@ def test_a_partial_join_is_red_below_half_and_green_at_half(
     supply_chain, analyst = _run_lane_ops()
 
     elsewhere = {"member_resolves_elsewhere": merged}
-    _check_accounts(supply_chain, wide, joined=joined)
-    assert supply_chain["unvisited_by_reason"] == elsewhere
     if joined < ISSUERS / 2:
-        _check_accounts(analyst, wide, joined=0)
-        assert analyst["unvisited_by_reason"] == {**elsewhere, "join_floor_tripped": joined}
+        for summary in (supply_chain, analyst):
+            _check_accounts(summary, wide, joined=0)
+            assert summary["unvisited_by_reason"] == {**elsewhere, "join_floor_tripped": joined}
         message = "9 of 20 wide-row issuers join, below the floor of 0.5"
         assert supply_chain["lane_failure"] == analyst["lane_failure"] == message
         with pytest.raises(RuntimeError, match=message):
@@ -917,8 +917,9 @@ def test_a_partial_join_is_red_below_half_and_green_at_half(
         assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
         assert recorded[0]["summary"] == f"failed: analyst ratings: {message}"
     else:
-        _check_accounts(analyst, wide, joined=joined)
-        assert analyst["unvisited_by_reason"] == elsewhere
+        for summary in (supply_chain, analyst):
+            _check_accounts(summary, wide, joined=joined)
+            assert summary["unvisited_by_reason"] == elsewhere
         assert "lane_failure" not in supply_chain and "lane_failure" not in analyst
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
         assert recorded == []
@@ -974,7 +975,8 @@ def test_a_rerun_keeps_the_row_of_an_issuer_the_universe_has_lost(
         ).fetchone()
         assert after == row, table
     for summary in (supply_chain, analyst):
-        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
+        assert (summary["unvisited_issuers"], summary["unvisited_written"], summary["kept_real_rows"]) == (1, 0, 1)
+        assert summary["unvisited_by_reason"] == {}, "no fill row was written"
         assert summary["rows"] == summary["wide_row_issuers"]
 
 
@@ -1264,6 +1266,76 @@ def test_the_coverage_report_says_the_member_resolves_elsewhere_for_a_merged_iss
     assert report["questions"]["q4"]["answered"] == ISSUERS - 1
 
 
+def test_the_summary_counts_the_rows_the_run_wrote_not_the_issuers_it_handled(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    monkeypatch: pytest.MonkeyPatch,
+    vendor: _Vendor,
+) -> None:
+    """A good night writes real rows. A merge then trips the floor on a rerun. The rows stay."""
+    wide = _wide_row_ids(connection, head.run_id)
+    tables = ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings")
+    _run_lane_ops()
+    good = {table: _stored_reasons(connection, table, head.run_id) for table in tables}
+    assert good["mart.issuer_analyst_ratings"] == {("available", ()): ISSUERS}
+    fetches = (vendor.connects, vendor.fetches)
+    _merge_away(connection, sorted(wide)[:11])
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
+
+    supply_chain, analyst = _run_lane_ops()
+
+    message = "9 of 20 wide-row issuers join, below the floor of 0.5"
+    assert (vendor.connects, vendor.fetches) == fetches, "the rerun spends no vendor call"
+    for summary in (supply_chain, analyst):
+        assert (summary["rows"], summary["wide_row_issuers"]) == (ISSUERS, ISSUERS)
+        assert (summary["unvisited_issuers"], summary["unvisited_written"], summary["kept_real_rows"]) == (20, 0, 20)
+        assert summary["unvisited_by_reason"] == {}
+        assert summary["lane_failure"] == message
+    for table in tables:
+        assert _stored_reasons(connection, table, head.run_id) == good[table], table
+    with pytest.raises(RuntimeError, match=message):
+        standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
+    assert recorded[0]["summary"] == f"failed: analyst ratings: {message}"
+
+
+def _reasons_by_issuer(connection: psycopg.Connection[Any], table: str, run_id: str) -> dict[str, tuple[str, ...]]:
+    rows = connection.execute(
+        f"select issuer_id, reason_codes from {table} where run_id = %s",  # noqa: S608
+        (run_id,),
+    ).fetchall()
+    return {issuer_id: tuple(codes) for issuer_id, codes in rows}
+
+
+def test_the_supply_chain_op_and_the_analyst_op_agree_on_every_issuer_under_a_tripped_floor(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, vendor: _Vendor
+) -> None:
+    wide = _wide_row_ids(connection, head.run_id)
+    _merge_away(connection, sorted(wide)[:11])
+
+    result = _run_head_reports_job()
+
+    assert not result.success
+    supply_chain = _reasons_by_issuer(connection, "mart.issuer_supply_chain_exposure", head.run_id)
+    analyst = _reasons_by_issuer(connection, "mart.issuer_analyst_ratings", head.run_id)
+    assert supply_chain == analyst
+    assert sorted(Counter(reason for (reason,) in analyst.values()).items()) == [
+        ("join_floor_tripped", 9),
+        ("member_resolves_elsewhere", 11),
+    ]
+    extractors = connection.execute(
+        "select distinct extractor from mart.issuer_supply_chain_exposure where run_id = %s", (head.run_id,)
+    ).fetchall()
+    assert extractors == [("lane:unvisited:v1",)], "no real row under a tripped floor"
+
+
+def test_the_reason_counts_are_sorted_and_counted_once() -> None:
+    from data_engine.datahub.canonical_issuer import reason_counts
+
+    assert list(reason_counts(["b", "a", "b"]).items()) == [("a", 1), ("b", 2)]
+    assert reason_counts([]) == {}
+
+
 # --- the fill upsert: a fill refreshes a fill, and a real row stays
 
 _FILL_RUN = "capture-run:" + "9" * 64
@@ -1323,15 +1395,18 @@ def test_a_fill_row_refreshes_its_own_kind_and_never_replaces_a_real_row(
     fill, write_real = _FILL_TABLES[table]
     issuer = str(uuid.uuid4())
 
-    fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "head_member_not_in_universe")])
+    first = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "head_member_not_in_universe")])
+    assert first == [(issuer, "head_member_not_in_universe")]
     assert _fill_row(connection, table, issuer) == ("lane:unvisited:v1", "unavailable", ["head_member_not_in_universe"])
-    fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "member_resolves_elsewhere")])
+    second = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "member_resolves_elsewhere")])
+    assert second == [(issuer, "member_resolves_elsewhere")]
     assert _fill_row(connection, table, issuer) == ("lane:unvisited:v1", "unavailable", ["member_resolves_elsewhere"])
 
     write_real(connection, issuer, codes, status)
     real = _fill_row(connection, table, issuer)
     assert real is not None and real[0] != "lane:unvisited:v1" and real[1:] == (status, codes)
-    fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "join_floor_tripped")])
+    kept = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "join_floor_tripped")])
+    assert kept == [], "a real row stays, and the writer says it wrote nothing"
     assert _fill_row(connection, table, issuer) == real, "a real row stays"
 
 
