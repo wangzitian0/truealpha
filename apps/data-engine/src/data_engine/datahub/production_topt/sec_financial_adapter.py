@@ -62,7 +62,7 @@ from data_engine.datahub.production_topt.issuer_registry import (
     StatementFiling,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
-from data_engine.sources.gateway import BudgetExhausted
+from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
@@ -1109,9 +1109,9 @@ class SecFinancialFactAdapter:
                         )
                     else:
                         bundle = fallback
-        except BudgetExhausted:
-            # SEC's daily call budget is spent for this environment: deferred, named, not
-            # "the issuer files nothing" (rule 6, #729). The gate's listener counted it.
+        except (BudgetExhausted, CapacityExceeded):
+            # SEC's daily call budget or rate window capacity is refused for this environment:
+            # deferred, named, not "the issuer files nothing" (rule 6, #729).
             return FetchFailure(ObligationReasonCode.DEFERRED_CAPACITY)
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)

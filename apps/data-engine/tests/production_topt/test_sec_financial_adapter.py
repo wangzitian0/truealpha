@@ -428,6 +428,23 @@ def test_adapter_transient_and_timeout() -> None:
     assert a2.fetch(item).reason_code is ObligationReasonCode.TIMEOUT
 
 
+def test_adapter_capacity_and_budget_exhaustion() -> None:
+    from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
+
+    item = _work_item("5" * 64)
+
+    def _budget(cik, cutoff, branch):
+        raise BudgetExhausted("sec", environment="production", budget=100, spent=100)
+
+    def _capacity(cik, cutoff, branch):
+        raise CapacityExceeded("sec", "0 calls left in window")
+
+    a1 = SecFinancialFactAdapter({item.work_item_id: _target()}, _budget)
+    a2 = SecFinancialFactAdapter({item.work_item_id: _target()}, _capacity)
+    assert a1.fetch(item).reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert a2.fetch(item).reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+
+
 def test_unknown_work_item_is_contract_violation() -> None:
     item = _work_item("6" * 64)
     other = _work_item("7" * 64)
