@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
@@ -45,6 +45,7 @@ __all__ = (
     "is_canonical_issuer_id",
     "reason_counts",
     "require_canonical_issuer_id",
+    "write_unvisited",
 )
 
 #: Why an issuer got no row: the store holds no entity for its legacy id.
@@ -289,3 +290,24 @@ def account_for_head_members(
         for issuer_id in missing
     )
     return replace(universe, unvisited=unvisited, wide_row_issuers=len(wide_row_ids))
+
+
+def write_unvisited(
+    connection: psycopg.Connection[Any],
+    sql: str,
+    *,
+    run_id: str,
+    cutoff: datetime,
+    unvisited: Sequence[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Run the fill statement `sql` for each (issuer id, reason) of `unvisited` (#1079).
+
+    The one writer of both tables. It refuses an id that is not the wide row's.
+    Returns the pairs that the statement wrote. A row it kept is not among them.
+    """
+    written: list[tuple[str, str]] = []
+    for issuer_id, reason in unvisited:
+        cursor = connection.execute(sql, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
+        if cursor.rowcount:
+            written.append((issuer_id, reason))
+    return written

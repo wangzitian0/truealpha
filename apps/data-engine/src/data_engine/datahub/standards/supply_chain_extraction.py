@@ -20,7 +20,7 @@ from factors.base.supply_chain_exposure import (
 )
 from psycopg import Connection
 
-from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
+from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id, write_unvisited
 
 __all__ = (
     "SupplyChainEdgeCandidate",
@@ -367,9 +367,4 @@ def materialize_unvisited_issuers(
     A row from a member stays, and an earlier fill takes the new reason.
     Returns the (issuer id, reason) pairs that the statement wrote. A kept row is not among them.
     """
-    written: list[tuple[str, str]] = []
-    for issuer_id, reason in unvisited:
-        cursor = connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
-        if cursor.rowcount:
-            written.append((issuer_id, reason))
-    return written
+    return write_unvisited(connection, _UNVISITED_SQL, run_id=run_id, cutoff=cutoff, unvisited=unvisited)
