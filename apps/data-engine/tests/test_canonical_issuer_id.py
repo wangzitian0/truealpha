@@ -10,6 +10,7 @@ the real `topt` universe. The ids of the head are never typed by hand.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import uuid
@@ -103,23 +104,107 @@ def lane_world(connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPa
     )
 
 
-def _capture_head(
-    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+def _advance_pointer(
+    connection: psycopg.Connection[Any], snapshot: Any, run_id: str, universe_prefix: str
 ) -> question_coverage.GovernedHead:
-    """A real captured TOPT run with its wide row, and the lane ops pointed at it."""
+    """Point the governed head at `run_id` as a first advance does, and read it back as the lane does.
+
+    `advanced_at` is the clock, so this head is the newest of its universe in any database.
+    """
+    from truealpha_contracts.common import canonical_sha256
+
+    sha = canonical_sha256({"probe": run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, (select environment from mart.environment_identity), %s, %s,
+                'gross_profit_per_employee', %s, 0, null, clock_timestamp())
+        """,
+        (f"current-pointer:{sha}", sha, snapshot.universe_id, snapshot.universe_version, run_id),
+    )
+    governed = question_coverage.governed_head(connection, universe_prefix=universe_prefix)
+    assert governed is not None and governed.run_id == run_id
+    return governed
+
+
+def _materialize_head(
+    connection: psycopg.Connection[Any], plan: Any, universe_prefix: str
+) -> question_coverage.GovernedHead:
     from data_engine.datahub.production_topt import PostgresToptCoreRepository
     from factors.production_topt import GppeV0Definition
 
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    from production_topt.test_persistence import CUTOFF, _capture  # noqa: E402
-
-    plan = _capture(connection, version="test-1079")
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    governed = question_coverage.GovernedHead(HEAD_UNIVERSE_ID, plan.run_id, CUTOFF)
-    monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: governed)
-    return governed
+    return _advance_pointer(connection, snapshot, plan.run_id, universe_prefix)
+
+
+def _capture_head(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch, *, blank_one_cell: bool = False
+) -> question_coverage.GovernedHead:
+    """A real captured TOPT run with its wide row, advanced as the head of its universe."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
+    from production_topt.test_persistence import _capture, _OneBrokenCell  # noqa: E402
+
+    broken = _OneBrokenCell(financial_fact_numerator=blank_one_cell)
+    plan = _capture(connection, version="test-1079", broken=broken)
+    return _materialize_head(connection, plan, "universe:topt-")
+
+
+QQQ_REPORT_DATE = date(2026, 6, 30)
+QQQ_CUTOFF = datetime(2026, 7, 2, 22, 15, tzinfo=UTC)
+
+
+def _qqq_denominator(report_date: date, *, without: str | None = None) -> dict[str, Any]:
+    """A small QQQ-shaped universe: 21 listings of the packaged QQQ corpus, `issuer:cik:` ids.
+
+    `without` drops one issuer, as a later publication of the universe does.
+    """
+    from data_engine.datahub.production_topt.universe_corpus import _mapping_sha256, load_corpus
+
+    instruments = load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"][:21]
+    if without is not None:
+        instruments = [row for row in instruments if row[0] != without]
+    denominator: dict[str, Any] = {
+        "accession": None,
+        "identity_assertions": [],
+        "instrument_count": len(instruments),
+        "instrument_tuple_fields": ["issuer_id", "instrument_id", "listing_id", "ticker"],
+        "instruments": instruments,
+        "issuer_count": len({row[0] for row in instruments}),
+        "list_label": "test",
+        "list_version_id": "",
+        "obligation_expansion": "four-semantics:v1",
+        "report_date": report_date.isoformat(),
+        "universe_id": f"universe:qqq-us-{report_date.isoformat()}",
+    }
+    denominator["instrument_mapping_sha256"] = _mapping_sha256(denominator)
+    return denominator
+
+
+def _capture_qqq_head(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> question_coverage.GovernedHead:
+    """A real capture of the QQQ-shaped universe. The cutoff is after its report date, so its
+    inputs are stale and every wide row is `unavailable`."""
+    from data_engine.datahub.production_topt import composition
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
+    import production_topt.test_persistence as persistence  # noqa: E402
+
+    monkeypatch.setattr(
+        composition, "_load_capture_corpus", lambda *_a, **_k: {"topt_denominator": _qqq_denominator(QQQ_REPORT_DATE)}
+    )
+    monkeypatch.setattr(persistence, "CUTOFF", QQQ_CUTOFF)
+    plan = persistence._capture(connection, version="test-1079-qqq")
+    return _materialize_head(connection, plan, "universe:qqq-")
+
+
+def _publish_universe(monkeypatch: pytest.MonkeyPatch, report_date: date, *, without: str | None = None) -> None:
+    """The universe as currently published: a later report date, and perhaps one issuer fewer."""
+    corpus = {"topt_denominator": _qqq_denominator(report_date, without=without)}
+    monkeypatch.setattr(planner, "resolve_universe_corpus", lambda _connection, _kind: corpus)
 
 
 @pytest.fixture
@@ -204,6 +289,7 @@ def test_an_issuer_without_an_entity_gets_no_row_and_is_counted(
     assert (supply_chain["rows"], supply_chain["unmapped_issuers"]) == (ISSUERS, 1)
     assert (analyst["rows"], analyst["unmapped_issuers"]) == (ISSUERS, 1)
     assert supply_chain["unmapped_by_reason"] == analyst["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
+    assert supply_chain["wide_row_issuers"] == analyst["wide_row_issuers"] == ISSUERS
     assert "lane_failure" not in analyst, "one unmapped issuer of twenty is not a lane failure"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         stored = _stored_ids(connection, table, head.run_id)
@@ -237,6 +323,8 @@ def test_a_head_whose_issuers_all_join_has_nothing_unmapped(
     for summary in (supply_chain, analyst):
         assert (summary["unmapped_issuers"], summary["unmapped_by_reason"]) == (0, {})
         assert "lane_failure" not in summary
+        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
+        assert summary["wide_row_issuers"] == ISSUERS
 
 
 class _RecordingLog:
@@ -264,23 +352,26 @@ def test_each_unmapped_issuer_is_logged_with_its_reason_code(connection: psycopg
 def test_a_universe_without_any_entity_fails_the_run_after_the_report(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every row would be missing and the report would read `no_row` for all of them: the
-    #1079 symptom. The analyst op names it in its summary, and the terminal op ends the run red."""
+    """The universe holds one unknown member and none of the head's. Nothing joins, and the
+    report would read `no_row` for all of them: the #1079 symptom. The terminal op ends the run red."""
     _universe_with(monkeypatch, [(GHOST, "GHST")], keep_real=False)
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
 
     supply_chain, analyst = _run_lane_ops()
 
-    assert (supply_chain["rows"], supply_chain["unmapped_issuers"]) == (0, 1)
-    assert (analyst["rows"], analyst["unmapped_issuers"]) == (0, 1)
-    assert "1 issuers get no row" in analyst["lane_failure"]
+    reasons = {NO_CANONICAL_ISSUER_ID: 1, "head_member_not_in_universe": ISSUERS}
+    for summary in (supply_chain, analyst):
+        assert (summary["rows"], summary["unmapped_issuers"]) == (0, ISSUERS + 1)
+        assert summary["unmapped_by_reason"] == reasons
+    assert "21 issuers get no row" in analyst["lane_failure"]
+    assert "lane_failure" not in supply_chain, "the terminal op reads the analyst summary only"
     assert _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id) == set()
 
-    with pytest.raises(RuntimeError, match="1 issuers get no row"):
+    with pytest.raises(RuntimeError, match="21 issuers get no row"):
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
     assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
-    assert recorded[0]["summary"] == "failed: analyst ratings: 1 issuers get no row"
+    assert recorded[0]["summary"] == "failed: analyst ratings: 21 issuers get no row"
 
 
 # --- the wide row is the authority (round 2) --------------------------------------------------
@@ -405,14 +496,18 @@ def test_a_merge_recorded_after_the_capture_moves_a_row_only_when_knowable_at_th
     for summary in (supply_chain, analyst):
         assert summary["rows"] == len(expected)
         assert summary["unmapped_by_reason"] == ({NOT_IN_WIDE_ROW: 1} if moves else {})
+        assert summary["rows"] + summary["unmapped_issuers"] == len(wide)
+        assert summary["wide_row_issuers"] == len(wide)
 
 
 def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every issuer maps to an entity and none is in the wide row: no row joins, the #1079 symptom."""
-    foreign = tuple(question_coverage.Cell(str(uuid.uuid4()), True) for _ in range(ISSUERS))
-    monkeypatch.setattr(question_coverage, "gppe_cells", lambda _c, _run: foreign)
+    """Every wide-row entity is merged into a survivor the wide row lacks. No row joins: the #1079 symptom."""
+    wide = _wide_row_ids(connection, head.run_id)
+    for entity in sorted(wide):
+        survivor = _mint(connection, "legacy-id", f"test:survivor:{entity}", at=datetime(2026, 1, 1, tzinfo=UTC))
+        _merge(connection, uuid.UUID(entity), survivor, known_from=datetime(2026, 3, 1, tzinfo=UTC))
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
 
@@ -421,7 +516,10 @@ def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
     for summary in (supply_chain, analyst):
         assert (summary["rows"], summary["unmapped_issuers"]) == (0, ISSUERS)
         assert summary["unmapped_by_reason"] == {NOT_IN_WIDE_ROW: ISSUERS}
-        assert "20 issuers get no row" in summary["lane_failure"]
+        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
+        assert summary["wide_row_issuers"] == ISSUERS
+    assert "20 issuers get no row" in analyst["lane_failure"]
+    assert "lane_failure" not in supply_chain, "the terminal op reads the analyst summary only"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         assert _stored_ids(connection, table, head.run_id) == set(), table
 
@@ -433,22 +531,27 @@ def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
 def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_row(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A corpus id in UUID form resolves to itself without a lookup. It must also exist."""
+    """A corpus id in UUID form resolves to itself without a lookup. It must also exist.
+
+    The head's wide row names this id, so the id is a head member and the run must account for it.
+    """
     invented = str(uuid.uuid4())
     real = _wide_row_ids(connection, head.run_id)
     monkeypatch.setattr(
         question_coverage,
         "gppe_cells",
-        lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in (*real, invented)),
+        lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in (*sorted(real), invented)),
     )
-    _universe_with(monkeypatch, [(invented, "INVT")], keep_real=False)
+    _universe_with(monkeypatch, [(invented, "INVT")])
 
     supply_chain, analyst = _run_lane_ops()
 
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         assert invented not in _stored_ids(connection, table, head.run_id), table
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_by_reason"]) == (0, {NO_CANONICAL_ISSUER_ID: 1})
+        assert (summary["rows"], summary["unmapped_by_reason"]) == (ISSUERS, {NO_CANONICAL_ISSUER_ID: 1})
+        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS + 1
+        assert summary["wide_row_issuers"] == ISSUERS + 1
 
 
 def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
@@ -461,50 +564,164 @@ def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
     supply_chain, analyst = _run_lane_ops()
 
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_issuers"]) == (1, 0)
+        assert (summary["rows"], summary["unmapped_by_reason"]) == (1, {"head_member_not_in_universe": ISSUERS - 1})
+        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
+        assert summary["wide_row_issuers"] == ISSUERS
+        assert "lane_failure" not in summary, "one row joined"
     assert _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id) == {str(entity)}
 
 
-def test_a_cik_keyed_universe_joins_under_its_own_report_date(
+def _qqq_issuers() -> list[str]:
+    """The distinct issuer ids of the QQQ-shaped universe, in corpus order."""
+    ordered: list[str] = []
+    for row in _qqq_denominator(QQQ_REPORT_DATE)["instruments"]:
+        if row[0] not in ordered:
+            ordered.append(row[0])
+    return ordered
+
+
+def _cik_of(issuer_id: str) -> str:
+    return issuer_id.removeprefix("issuer:cik:").zfill(10)
+
+
+def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> None:
+    """Every wide-row issuer is a row or an unmapped issuer, and the summary says how many."""
+    assert summary["rows"] == joined
+    assert summary["rows"] + summary["unmapped_issuers"] == len(wide)
+    assert summary["wide_row_issuers"] == len(wide)
+
+
+def test_a_qqq_head_joins_under_its_own_report_date_though_every_wide_row_is_unavailable(
     connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The QQQ shape: `issuer:cik:` ids and a report date that is not the cutoff date. One
-    issuer's CIK passes to a successor between the two dates."""
-    from data_engine.datahub.production_topt.universe_corpus import load_corpus
-    from data_engine.datahub.resolve_coordinates import resolve_coordinates
-
-    instruments = load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"][:3]
-    report_date, cutoff = date(2026, 6, 30), datetime(2026, 7, 2, 22, 15, tzinfo=UTC)
-    corpus = {"topt_denominator": {"report_date": report_date.isoformat(), "instruments": instruments}}
-    monkeypatch.setattr(planner, "resolve_universe_corpus", lambda _connection, _kind: corpus)
-
-    cik = instruments[0][0].removeprefix("issuer:cik:").zfill(10)
-    old = _mint(connection, "cik", cik, at=datetime(2026, 1, 1, tzinfo=UTC))
+    """The QQQ shape through a real capture: `issuer:cik:` ids, a report date that is not TOPT's,
+    and a CIK handed to a successor between the two dates. Every wide row is `unavailable`, and
+    each issuer still gets its Q3 and Q4 row. The reader joins on the subject set, not on answers."""
+    first = _qqq_issuers()[0]
+    old = _mint(connection, "cik", _cik_of(first), at=datetime(2026, 1, 1, tzinfo=UTC))
     claim = connection.execute("select alias_id from staging.entity_aliases where entity_id = %s", (old,)).fetchone()
     assert claim is not None
     connection.execute(
         "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
-        "values (%s, '2026-07-01', 'handed over', %s, 'test', 'test')",
-        (claim[0], datetime(2026, 6, 15, tzinfo=UTC)),
+        "values (%s, '2026-04-15', 'handed over', %s, 'test', 'test')",
+        (claim[0], datetime(2026, 4, 1, tzinfo=UTC)),
     )
-    new = _mint(connection, "legacy-id", f"test:successor:{cik}", at=datetime(2026, 6, 15, tzinfo=UTC))
-    _alias(connection, new, "cik", cik, valid_from="2026-07-01", at=datetime(2026, 6, 15, tzinfo=UTC))
+    new = _mint(connection, "legacy-id", f"test:successor:{first}", at=datetime(2026, 4, 1, tzinfo=UTC))
+    _alias(connection, new, "cik", _cik_of(first), valid_from="2026-04-15", at=datetime(2026, 4, 1, tzinfo=UTC))
+    head = _capture_qqq_head(connection, monkeypatch)
+    _publish_universe(monkeypatch, QQQ_REPORT_DATE)
+    cells = question_coverage.gppe_cells(connection, head.run_id)
+    wide = {cell.subject_id for cell in cells}
+    assert str(new) in wide and str(old) not in wide, "capture resolved as of its report date"
+    assert {cell.answered for cell in cells} == {False}, "every wide row is unavailable"
 
-    coordinates = resolve_coordinates(connection, instruments, as_of=report_date, known_at=cutoff)
-    wide = {issuer for issuer, *_ in coordinates.values()}
-    assert str(old) in wide and len(wide) == 3
-    governed = question_coverage.GovernedHead("universe:qqq-us-2026-06-30", "capture-run:" + "7" * 64, cutoff)
-    monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: governed)
-    monkeypatch.setattr(
-        question_coverage, "gppe_cells", lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in sorted(wide))
-    )
+    supply_chain, analyst = _run_lane_ops("universe-list:qqq")
+
+    for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
+        assert _stored_ids(connection, table, head.run_id) == wide, table
+    for summary in (supply_chain, analyst):
+        _check_accounts(summary, wide, joined=len(wide))
+        assert summary["unmapped_by_reason"] == {}
+
+
+def test_an_unavailable_wide_row_still_gets_a_row(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One wide row is `unavailable`. The subject set holds it, so the lane writes its row too."""
+    head = _capture_head(connection, monkeypatch, blank_one_cell=True)
+    cells = question_coverage.gppe_cells(connection, head.run_id)
+    assert sorted(cell.answered for cell in cells) == [False] + [True] * (ISSUERS - 1)
+    wide = {cell.subject_id for cell in cells}
+
+    supply_chain, analyst = _run_lane_ops()
+
+    for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
+        assert _stored_ids(connection, table, head.run_id) == wide, table
+    for summary in (supply_chain, analyst):
+        _check_accounts(summary, wide, joined=ISSUERS)
+
+
+def test_a_head_member_missing_from_the_current_universe_is_counted_not_dropped(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The universe is published again after the head, with a later report date and one issuer fewer.
+    The lane lists the current universe, so the removed issuer has no member to carry its row."""
+    head = _capture_qqq_head(connection, monkeypatch)
+    wide = _wide_row_ids(connection, head.run_id)
+    removed = _qqq_issuers()[-1]
+    removed_entity = lookup_entity(connection, removed, "issuer", as_of=QQQ_REPORT_DATE, known_at=QQQ_CUTOFF)
+    _publish_universe(monkeypatch, date(2026, 7, 4), without=removed)
 
     supply_chain, analyst = _run_lane_ops("universe-list:qqq")
 
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_issuers"]) == (3, 0)
-    assert _stored_ids(connection, "mart.issuer_supply_chain_exposure", governed.run_id) == wide
-    assert _stored_ids(connection, "mart.issuer_analyst_ratings", governed.run_id) == wide
+        _check_accounts(summary, wide, joined=len(wide) - 1)
+        assert summary["unmapped_by_reason"] == {"head_member_not_in_universe": 1}
+        assert "lane_failure" not in summary, "one head member of the universe is not a lane failure"
+    for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
+        assert _stored_ids(connection, table, head.run_id) == wide - {str(removed_entity)}, table
+
+
+def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CIK passes from issuer A to issuer B after the head's report date. Both are in the wide row.
+
+    The current universe carries a later date. Resolved as of that date, A's id names B.
+    Resolved as of the head's own report date, it names A.
+    """
+    head = _capture_qqq_head(connection, monkeypatch)
+    wide = _wide_row_ids(connection, head.run_id)
+    issuers = _qqq_issuers()
+    a, b, removed = issuers[0], issuers[1], issuers[-1]
+    known_at, later = QQQ_CUTOFF, date(2026, 7, 4)
+    entity_a = lookup_entity(connection, a, "issuer", as_of=QQQ_REPORT_DATE, known_at=known_at)
+    entity_b = lookup_entity(connection, b, "issuer", as_of=QQQ_REPORT_DATE, known_at=known_at)
+    removed_entity = lookup_entity(connection, removed, "issuer", as_of=QQQ_REPORT_DATE, known_at=known_at)
+    recorded = datetime(2026, 6, 15, tzinfo=UTC)
+    claim = connection.execute(
+        "select alias_id from staging.entity_aliases where entity_id = %s and scheme = 'cik'", (entity_a,)
+    ).fetchone()
+    assert claim is not None
+    connection.execute(
+        "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
+        "values (%s, '2026-07-01', 'handed over', %s, 'test', 'test')",
+        (claim[0], recorded),
+    )
+    _alias(connection, entity_b, "cik", _cik_of(a), valid_from="2026-07-01", at=recorded)  # type: ignore[arg-type]
+    assert lookup_entity(connection, a, "issuer", as_of=later, known_at=known_at) == entity_b, "the drift exists"
+    assert lookup_entity(connection, a, "issuer", as_of=QQQ_REPORT_DATE, known_at=known_at) == entity_a
+    _publish_universe(monkeypatch, later, without=removed)
+
+    supply_chain, analyst = _run_lane_ops("universe-list:qqq")
+
+    expected = wide - {str(removed_entity)}
+    for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
+        assert _stored_ids(connection, table, head.run_id) == expected, table
+        assert str(entity_a) in _stored_ids(connection, table, head.run_id), "A's row carries A"
+    for summary in (supply_chain, analyst):
+        _check_accounts(summary, wide, joined=len(expected))
+        assert summary["unmapped_by_reason"] == {"head_member_not_in_universe": 1}
+
+
+def test_the_log_names_each_head_member_missing_from_the_universe(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = _capture_qqq_head(connection, monkeypatch)
+    removed = _qqq_issuers()[-1]
+    _publish_universe(monkeypatch, date(2026, 7, 4), without=removed)
+    members = {issuer.issuer_id: issuer.ticker for issuer in planner.universe_issuers(connection, "universe-list:qqq")}
+    log = _RecordingLog()
+
+    standards._canonical_universe(  # type: ignore[arg-type]
+        SimpleNamespace(log=log), "analyst ratings", connection, "universe-list:qqq", head, members
+    )
+
+    warnings = [text for level, text in log.records if level == "warning"]
+    assert len(warnings) == 1 and warnings[0].startswith("analyst ratings: no row for ")
+    assert warnings[0].endswith(": head_member_not_in_universe")
+    removed_ticker = next(row[3] for row in _qqq_denominator(QQQ_REPORT_DATE)["instruments"] if row[0] == removed)
+    assert removed_ticker in warnings[0], "the log names the issuer by its ticker"
 
 
 def test_the_names_of_more_unmapped_issuers_than_the_cap_are_counted_not_listed() -> None:
@@ -518,6 +735,55 @@ def test_the_names_of_more_unmapped_issuers_than_the_cap_are_counted_not_listed(
     warnings = [text for level, text in log.records if level == "warning"]
     assert len(warnings) == standards.MAX_UNMAPPED_LOGGED + 1
     assert warnings[-1] == "analyst ratings: 5 more issuers get no row, not named here"
+
+
+# --- where the lane reads the head's report date (round 3) ------------------------------------
+
+
+def test_the_head_report_date_is_the_partition_its_capture_wrote(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead
+) -> None:
+    """`raw.capture_obligations.partition_key` is `str(report_date)` for every obligation of the run.
+
+    The universe id ends with the same date for this universe. The partition is the exact source.
+    """
+    assert question_coverage.head_report_date(connection, head) == REPORT_DATE
+    assert head.universe_id.endswith(REPORT_DATE.isoformat())
+
+
+class _Answers:
+    def __init__(self, rows: list[tuple[str]]) -> None:
+        self.rows = rows
+
+    def execute(self, *_args: object) -> _Answers:
+        return self
+
+    def fetchall(self) -> list[tuple[str]]:
+        return self.rows
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ([], "no capture obligations"),
+        ([("2026-03-31",), ("2026-04-01",)], "2 partition keys"),
+        ([("latest",)], "not an ISO date"),
+    ],
+    ids=["none", "two", "not-a-date"],
+)
+def test_a_head_whose_report_date_cannot_be_read_fails_loudly(rows: list[tuple[str]], message: str) -> None:
+    governed = question_coverage.GovernedHead("universe:x", "capture-run:" + "0" * 64, CUTOFF)
+    with pytest.raises(ValueError, match=message):
+        question_coverage.head_report_date(_Answers(rows), governed)  # type: ignore[arg-type]
+
+
+def test_the_planner_and_the_capture_share_one_topt_corpus_filename() -> None:
+    from data_engine.datahub.production_topt import composition, universe_corpus
+
+    assert planner.TOPT_CORPUS_FILENAME is universe_corpus.TOPT_CORPUS_FILENAME
+    for function in (composition._load_capture_corpus, composition.plan_and_persist, composition.run_topt_pipeline):
+        default = inspect.signature(function).parameters["corpus_filename"].default
+        assert default is universe_corpus.TOPT_CORPUS_FILENAME, function.__name__
 
 
 # --- the resolver: one function for the wide row and for these rows ---------------------------
