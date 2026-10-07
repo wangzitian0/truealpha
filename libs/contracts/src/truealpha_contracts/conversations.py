@@ -5,8 +5,8 @@ over conversational research questions. This module supplies the DTOs
 `authorize_access` and the eventual #46 orchestration layer speak in; it
 does not implement intent extraction or SQL query selection — those are
 #46's scope. Conversation/message storage lives in the additive `app`
-schema (migration 0030), RLS-isolated per owner exactly like #229's
-`app.private_research_objects`.
+schema (migration 0030), RLS-isolated per owner through the transaction-local
+tenant and principal settings.
 """
 
 from __future__ import annotations

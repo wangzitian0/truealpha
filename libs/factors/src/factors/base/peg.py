@@ -22,7 +22,7 @@ measured rather than stylistic:
   live portfolio as recently as this month) cannot distort it.
 - the GROWTH is the CAGR of `net_income`, because a per-share series is not
   comparable across a stock split and nothing in this warehouse adjusts for one:
-  `staging.mvp_corporate_actions` is empty. Netflix's stored diluted EPS runs
+  no corporate-action table exists. Netflix's stored diluted EPS runs
   11.24, 9.95, 1.20, 1.98, 2.53 for 2021-2025 — the 10-for-1 split restated the
   recent years and left the older filings on the pre-split basis, so a three-year
   EPS CAGR reads as a 37% annual DECLINE for a company whose net income went from
