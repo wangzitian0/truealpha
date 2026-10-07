@@ -528,6 +528,20 @@ def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
     assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
 
 
+def test_an_empty_current_universe_cannot_hide_the_head_and_ends_red(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The head has twenty wide rows and the current universe lists none of them."""
+    _universe_with(monkeypatch, [], keep_real=False)
+
+    supply_chain, analyst = _run_lane_ops()
+
+    for summary in (supply_chain, analyst):
+        assert (summary["rows"], summary["unmapped_by_reason"]) == (0, {"head_member_not_in_universe": ISSUERS})
+        assert summary["rows"] + summary["unmapped_issuers"] == summary["wide_row_issuers"] == ISSUERS
+    assert "20 issuers get no row" in analyst["lane_failure"]
+
+
 def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_row(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
