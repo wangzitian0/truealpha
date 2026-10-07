@@ -1,21 +1,24 @@
-"""The retire migration drops 15 empty tables and never hurts a boot (#1061).
+"""The retire migration drops 15 empty tables and never waits for a lock (#1061).
 
 The chain replays on every boot. Two rules follow.
 
-* An old migration must not create a retired table. A later drop would then churn on every boot.
-* The drop must never wait for a lock and must never stop a boot.
+* An old migration must not create a retired table. A later drop would churn on every boot.
+* The drop must never wait for a lock. It must also leave every table that may hold data.
 
-These tests run against a real Postgres. "Old shape" means a database that holds the 15
-retired tables, their indexes, triggers, policies and trigger functions, as Staging and
-Production do. `fixtures/retired_planes_old_shape.sql` restores that shape on top of the
-current chain. It is a `pg_dump` of the chain of commit 4769e93.
+These tests run against a real Postgres.
+"Old shape" means a database that still holds the 15 retired tables.
+It also holds their indexes, triggers, policies and trigger functions.
+Staging and Production are in this shape.
+`fixtures/retired_planes_old_shape.sql` restores it on top of the current chain.
+The fixture is a `pg_dump` of the chain of commit 4769e93.
 
-Every test below has a mutation that turns it red. The mutations are listed in the PR.
+Every test below has a mutation that turns it red. The PR lists the mutations.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -90,6 +93,11 @@ LIVE_TABLES = (
 
 #: Live tables that a retired table references. Dropping the retired table locks them.
 LIVE_PARENTS = ("app.tenants", "app.principals", "raw.capture_runs")
+
+#: The run bound for a skip test. A skip takes about one second.
+SKIP_BOUND_SECONDS = 30
+#: A migration that waits for a lock waits this long. The wait outlasts the bound above on any machine.
+WAIT_LOCK_TIMEOUT = "45s"
 
 
 def _named(database: str) -> str:
@@ -201,6 +209,37 @@ def _run_file(database_url: str, *extra: str, lock_timeout: str = "10s") -> Run:
         timeout=120,
     )
     return Run(completed.returncode, completed.stdout + completed.stderr, time.monotonic() - started)
+
+
+def _run_file_and_count_lock_waits(database_url: str, *, lock_timeout: str = "10s") -> tuple[Run, int]:
+    """Run the migration and poll pg_locks for a relation lock request that waits.
+
+    A wait is a lock request that is not granted. It queues every later reader behind it.
+    The count is the number of polls that saw one. A correct migration never waits, so it is 0.
+    The count does not depend on how fast the machine is. A waiting request lasts a full lock timeout.
+    """
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    environment["PGOPTIONS"] = f"-c lock_timeout={lock_timeout} -c statement_timeout=60s"
+    started = time.monotonic()
+    process = subprocess.Popen(
+        ["psql", "--no-password", database_url, "-X", "-v", "ON_ERROR_STOP=1", "-f", str(MIGRATION)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    waits = 0
+    with psycopg.connect(database_url, autocommit=True) as watcher:
+        while process.poll() is None:
+            waits += watcher.execute(
+                "select count(*) from pg_locks where not granted and locktype = 'relation'"
+            ).fetchone()[0]
+            if time.monotonic() - started > 60:
+                process.kill()
+                break
+            time.sleep(0.02)
+    output, _ = process.communicate()
+    return Run(process.returncode, output, time.monotonic() - started), waits
 
 
 def _application_locks(database_url: str) -> str:
@@ -329,12 +368,16 @@ def test_a_table_in_use_is_skipped_without_waiting_and_dropped_on_the_next_repla
     """A reader holds ACCESS SHARE. A lock request that waits would queue every later reader behind it."""
     with psycopg.connect(old_shape) as reader:
         reader.execute("select 1 from staging.mvp_market_prices limit 1")  # the transaction stays open
-        run = _run_file(old_shape, lock_timeout="10s")
+        run, waits = _run_file_and_count_lock_waits(old_shape, lock_timeout=WAIT_LOCK_TIMEOUT)
         reader.rollback()
 
     assert run.returncode == 0, run.output
-    assert run.elapsed < 5, f"the migration waited for a lock: {run.elapsed:.1f}s"
-    assert "retired table staging.mvp_market_prices is in use; the next boot tries again" in run.output
+    assert waits == 0, f"the migration queued a lock request for {waits} polls"
+    assert run.elapsed < SKIP_BOUND_SECONDS, f"{run.elapsed:.1f}s"
+    # A skipped table is a WARNING, so a table that is always busy shows in the boot log.
+    assert re.search(
+        r"WARNING:.*retired table staging\.mvp_market_prices is in use; the next boot tries again", run.output
+    ), run.output
     # normalized_records stays while a child table stays. The migration names it and goes on.
     assert "retired table staging.normalized_records stays" in run.output
     assert "SQLSTATE 2BP01" in run.output
@@ -358,11 +401,14 @@ def test_a_live_parent_in_use_stops_the_drop_without_waiting(old_shape: str, par
     """Dropping a child takes ACCESS EXCLUSIVE on its parent. Login reads app.tenants and app.principals."""
     with psycopg.connect(old_shape) as reader:
         reader.execute(sql.SQL("select 1 from {} limit 1").format(sql.SQL(parent)))
-        run = _run_file(old_shape, lock_timeout="10s")
+        run, waits = _run_file_and_count_lock_waits(old_shape, lock_timeout=WAIT_LOCK_TIMEOUT)
         reader.rollback()
 
     assert run.returncode == 0, run.output
-    assert run.elapsed < 5, f"the migration waited for a lock on {parent}: {run.elapsed:.1f}s"
+    assert waits == 0, f"the migration queued a lock request on {parent} for {waits} polls"
+    assert run.elapsed < SKIP_BOUND_SECONDS, f"{run.elapsed:.1f}s"
+    # The skip is a WARNING, so a parent that is always busy shows in the boot log.
+    assert re.search(r"WARNING:.*retired table .* is in use; the next boot tries again", run.output), run.output
     children = {
         "app.tenants": {"app.tenant_memberships", "app.private_research_objects"},
         "app.principals": {"app.tenant_memberships", "app.private_research_objects"},
@@ -372,6 +418,133 @@ def test_a_live_parent_in_use_stops_the_drop_without_waiting(old_shape: str, par
     after = _run_file(old_shape)
     assert after.returncode == 0, after.output
     assert _existing(old_shape, RETIRED_TABLES) == set()
+
+
+# --- a retained table keeps every function that its trigger calls ---------------------------
+
+#: A valid plan row. The address trigger accepts it. It comes from the old capture contract.
+_PLAN_COLUMNS = (
+    "plan_id, selection_cutoff, predicate_sha256, predicate, selected_obligation_ids, planner_version, content_sha256"
+)
+_PLAN_PREDICATE = (
+    '{"assessment_policy_ids":[],"content_sha256":"d2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1",'
+    '"freshness_states":[],"mapping_versions":[],"parser_versions":[],"partitions":[],'
+    '"predicate_id":"recapture-predicate:9d70275ce843f58202347c2d9d2649da1487756888b3392667fca49078e9ab6e",'
+    '"semantic_types":[],"source_policy_ids":[],"subject_ids":["listing:xnas:goog"],"terminal_states":[],'
+    '"universe_refs":[]}'
+)
+_PLAN_OBLIGATION = "capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac"
+
+
+def _insert_plan(connection: psycopg.Connection, plan_hash: str, content_sha256: str) -> None:
+    connection.execute(
+        f"insert into raw.recapture_plans ({_PLAN_COLUMNS}) values "
+        "(%s, '2026-04-01T00:00:00Z', 'd2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1', "
+        "%s::jsonb, array[%s], 'capture-planner:v1', %s)",
+        (f"capture-list-recapture-plan:{plan_hash}", _PLAN_PREDICATE, _PLAN_OBLIGATION, content_sha256),
+    )
+
+
+#: What a retained raw.recapture_plans keeps: its two trigger functions and the two helpers they call.
+#: The catalog tracks a trigger and a check constraint. It does not track a call inside a function body.
+_RECAPTURE_FUNCTIONS = {
+    "raw.validate_recapture_plan_address()",
+    "raw.validate_recapture_obligation_refs()",
+    "raw.has_canonical_obligation_ids(text[], boolean)",
+    "raw.has_canonical_text_json_array(jsonb, boolean)",
+}
+
+
+@pytest.mark.parametrize("why", ["it holds a row", "a reader uses it"])
+def test_a_retained_table_keeps_the_functions_that_its_trigger_calls(old_shape: str, why: str) -> None:
+    """has_canonical_text_json_array is called only inside validate_recapture_plan_address().
+
+    A drop of the helper succeeds while the table stays. The next insert then fails with
+    "function does not exist". The helper must stay as long as a function that calls it stays.
+    """
+    with psycopg.connect(old_shape, autocommit=True) as admin:
+        # The obligation check needs capture rows. This test needs the address trigger only.
+        admin.execute("alter table raw.recapture_plans disable trigger validate_recapture_obligation_refs")
+        if why == "it holds a row":
+            _insert_plan(
+                admin,
+                "61ae610f9f6ad21f0fbdf51dd4550cc86b58575f363d33ba967868911020ce46",
+                "1b20a95545bb0915fb932af45defd50c5dffa848af607c14abf62d61d564b65b",
+            )
+    with psycopg.connect(old_shape) as reader:
+        if why == "a reader uses it":
+            reader.execute("select 1 from raw.recapture_plans limit 1")
+        run = _run_file(old_shape)
+        reader.rollback()
+
+    assert run.returncode == 0, run.output
+    assert _existing(old_shape, RETIRED_TABLES) == {"raw.recapture_plans"}, run.output
+    assert _existing_functions(old_shape, RETIRED_FUNCTIONS) == _RECAPTURE_FUNCTIONS, run.output
+    with psycopg.connect(old_shape) as connection:
+        # The address trigger still runs to its end. A tampered row fails the content check.
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _insert_plan(connection, "a" * 64, "a" * 64)
+        connection.rollback()
+        # The valid row passes the whole trigger. The table is empty first, as a fresh boot sees it.
+        connection.execute("set local session_replication_role = replica")
+        connection.execute("delete from raw.recapture_plans")
+        connection.execute("set local session_replication_role = origin")
+        _insert_plan(
+            connection,
+            "61ae610f9f6ad21f0fbdf51dd4550cc86b58575f363d33ba967868911020ce46",
+            "1b20a95545bb0915fb932af45defd50c5dffa848af607c14abf62d61d564b65b",
+        )
+        assert connection.execute("select count(*) from raw.recapture_plans").fetchone() == (1,)
+        connection.rollback()
+
+
+# --- a role that row-level security filters cannot make a table look empty -----------------
+
+
+def test_a_role_that_row_security_filters_cannot_make_a_table_with_rows_look_empty(old_shape: str) -> None:
+    """app.private_research_objects forces row-level security, and its policy needs a session setting.
+
+    Without that setting, the table owner sees no row. A count by that role is 0, and the drop would lose data.
+    """
+    role = f"retire_probe_{uuid.uuid4().hex[:8]}"
+    role_id = sql.Identifier(role)
+    with psycopg.connect(old_shape, autocommit=True) as admin:
+        admin.execute(sql.SQL("create role {} nosuperuser nobypassrls nologin").format(role_id))
+        admin.execute("insert into app.tenants (tenant_id) values ('tenant:rls-probe')")
+        admin.execute(
+            "insert into app.principals (principal_id, tenant_id, principal_kind) "
+            "values ('principal:rls-probe', 'tenant:rls-probe', 'member')"
+        )
+        admin.execute(
+            "insert into app.private_research_objects (resource_id, tenant_id, owner_principal_id, resource_type, "
+            "object_ref) values ('document:rls-probe', 'tenant:rls-probe', 'principal:rls-probe', "
+            "'private_document', 'object:rls-probe')"
+        )
+        for table in RETIRED_TABLES:
+            admin.execute(sql.SQL("alter table {} owner to {}").format(sql.SQL(table), role_id))
+        admin.execute(sql.SQL("grant usage on schema app, raw, staging to {}").format(role_id))
+        for parent in LIVE_PARENTS:
+            admin.execute(sql.SQL("grant truncate on {} to {}").format(sql.SQL(parent), role_id))
+    try:
+        # The hazard is real: this role owns the table and counts 0 rows.
+        with psycopg.connect(old_shape) as probe:
+            probe.execute(sql.SQL("set role {}").format(role_id))
+            assert probe.execute("select count(*) from app.private_research_objects").fetchone() == (0,)
+            probe.rollback()
+
+        run = _run_file(old_shape, "-c", f"set role {role}")
+
+        assert run.returncode == 0, run.output
+        assert re.search(r"WARNING:.*retired table app\.private_research_objects stays", run.output), run.output
+        # The owner drops its other 14 tables. It cannot drop this one.
+        assert _existing(old_shape, RETIRED_TABLES) == {"app.private_research_objects"}, run.output
+        with psycopg.connect(old_shape) as connection:
+            assert connection.execute("select count(*) from app.private_research_objects").fetchone() == (1,)
+    finally:
+        with psycopg.connect(old_shape, autocommit=True) as admin:
+            admin.execute(sql.SQL("reassign owned by {} to postgres").format(role_id))
+            admin.execute(sql.SQL("drop owned by {}").format(role_id))
+            admin.execute(sql.SQL("drop role {}").format(role_id))
 
 
 # --- the drop never reaches a live object -------------------------------------------------

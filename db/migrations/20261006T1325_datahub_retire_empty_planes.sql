@@ -5,20 +5,25 @@
 --
 -- Rules for each table:
 --   * It must exist, and it must hold no row. A table with rows stays, and a WARNING names it.
+--   * Row-level security must not hide rows from the count. The procedure sets row_security = off.
+--     A role that row security filters then gets an error, and the table stays.
 --   * The file never waits for a lock. LOCK ... NOWAIT fails at once when another session
---     reads or writes the table. The file then skips the table, and the next boot tries again.
+--     reads or writes the table. The file then skips the table with a WARNING.
+--     A table that is always busy shows in the boot log. The next boot tries again.
 --   * Dropping a table that has a foreign key takes ACCESS EXCLUSIVE on the referenced table.
 --     The referenced tables app.tenants, app.principals and raw.capture_runs are live.
 --     So the file locks them with NOWAIT before it drops the table.
 --   * The file never uses CASCADE. A dependent object makes the drop fail, and a WARNING names it.
---   * The file never stops a boot. An unexpected error becomes a WARNING with its SQLSTATE.
---   * After the tables are gone, the file reads the catalog and takes no lock on any relation.
+--   * An unexpected error becomes a WARNING with its SQLSTATE, and the file goes on.
+--     A query cancel, such as a statement timeout, is not caught. It ends the file.
+--   * After the tables are gone, the file reads the catalog and locks no table of the app, raw or staging schema.
 --
 -- Each table runs as its own statement through \gexec. A lock lasts only for that statement.
 
 create or replace procedure pg_temp.retire_empty_table(target text)
 language plpgsql
 set search_path = pg_catalog
+set row_security = off
 as $$
 declare
     table_oid oid := to_regclass(target);
@@ -49,7 +54,7 @@ begin
         end if;
     exception
         when lock_not_available then
-            raise notice 'retired table % is in use; the next boot tries again', target;
+            raise warning 'retired table % is in use; the next boot tries again', target;
         when undefined_table then
             raise notice 'retired table % is gone already', target;
         when others then
@@ -81,8 +86,10 @@ order by retired.position
 \gexec
 
 -- The functions of the retired tables: trigger functions and two check helpers.
--- A table that stayed keeps its trigger or check, and the object keeps its function.
--- The drop of that function fails, and the function stays.
+-- The catalog tracks a trigger or a check constraint. A table that stayed keeps its function.
+-- The catalog does not track a call inside a function body.
+-- So a function also stays while the body of any other function names it.
+-- The list holds each caller before the function that it calls.
 do $$
 declare
     retired_function text;
@@ -103,15 +110,25 @@ begin
         'raw.has_canonical_text_json_array(jsonb, boolean)'
     ]
     loop
-        if to_regprocedure(retired_function) is not null then
-            begin
-                execute format('drop function %s', retired_function);
-                raise notice 'retired function % dropped', retired_function;
-            exception
-                when others then
-                    raise notice 'retired function % stays: %', retired_function, sqlerrm;
-            end;
+        if to_regprocedure(retired_function) is null then
+            continue;
         end if;
+        if exists (
+            select 1
+            from pg_proc as caller
+            where caller.oid <> to_regprocedure(retired_function)::oid
+              and position(split_part(split_part(retired_function, '(', 1), '.', 2) in caller.prosrc) > 0
+        ) then
+            raise notice 'retired function % stays: the body of another function names it', retired_function;
+            continue;
+        end if;
+        begin
+            execute format('drop function %s', retired_function);
+            raise notice 'retired function % dropped', retired_function;
+        exception
+            when others then
+                raise notice 'retired function % stays: %', retired_function, sqlerrm;
+        end;
     end loop;
 end
 $$;
