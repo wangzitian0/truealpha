@@ -9,12 +9,16 @@ Run this before the first edit. Each rule exists because an agent skipped it and
 
 ## 1. Inventory before you build
 
-The owner repeatedly found new scripts that duplicated existing ones. The duplicates polluted the repository.
+The owner repeatedly found new scripts that duplicated existing ones. Follow the **Key List Protocol**:
 
-- List what exists: `ls tools/ libs/` and the SSOT index (`docs/ssot/MANIFEST.yaml` when present).
-- Search for the capability by name and by behavior. Reuse or extend the existing tool.
-- State in the first reply which existing tool you reuse. If none fits, state why.
-- Ask "is this over-designed?" and "which existing logic must I remove?" before you propose a new mechanism.
+1. **Check the Key List**: Read the repository's SSOT index (`common/meta/data/MANIFEST.yaml`, `docs/ssot/MANIFEST.yaml`, or the App's contracts index).
+   - Scan the capability keys (e.g., `deploy_v2`, `infra2-sdk`, `vault`, `signoz`, `pr_merge_gate`).
+2. **Reuse if present**: If an existing component covers the need, reuse it directly. Do not build private alternatives.
+3. **Append when new**: If no entry fits and a new capability is necessary:
+   - Build the minimal implementation.
+   - **Register the new key and summary into `MANIFEST.yaml` in the same PR.**
+4. **First-turn contract**: State in your opening response:
+   - `"Reusing existing component: <key>"` OR `"New capability: will register <key> in MANIFEST.yaml"`.
 
 ## 2. Read the original intent before you change a mechanism
 
