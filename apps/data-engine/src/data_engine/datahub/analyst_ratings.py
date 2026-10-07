@@ -157,8 +157,8 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     Return None when the payload holds no consensus: an EMPTY payload, rating 0 (unknown) or total 0.
     A total of 0 is no coverage even when `rating` is missing.
     Raise ValueError or TypeError on a contract error. A non-empty payload without `total` is one.
-    So is a payload with a total above 0 and no `rating`, a rating or total that is no whole number,
-    a negative total, or a rating out of range.
+    A total above 0 with no `rating` is one. So is a rating or total that is no whole number.
+    A negative total is one. So is a rating out of range.
     The wrapper `get_analyst_consensus` returns the payload alone, without the return code.
     The SDK builds the payload as a dict and omits each field moomoo leaves unset.
     Fields: `rating` is moomoo ResearchRatingType (1 to 5, 0 is unknown), `total` is the
