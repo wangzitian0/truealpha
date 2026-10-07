@@ -6,8 +6,7 @@
  * plus invited friends).
  *
  * Requires an existing `app.principals` row (created by #229's tooling /
- * direct SQL against app.principals + app.tenant_memberships +
- * app.entitlement_grants) — this script only ever adds/rotates the
+ * direct SQL against app.principals) — this script only ever adds/rotates the
  * credential for a principal that already exists. It never creates a
  * principal, tenant, or grant.
  *
@@ -67,7 +66,7 @@ async function main() {
     ]);
     if (principal.rows.length === 0) {
       console.error(
-        `No app.principals row for ${principalId}. Create the principal (and its tenant membership / entitlement grants) first — this script only seeds credentials for an existing principal.`,
+        `No app.principals row for ${principalId}. Create the principal first — this script only seeds credentials for an existing principal.`,
       );
       process.exit(1);
     }
