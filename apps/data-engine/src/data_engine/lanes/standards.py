@@ -169,7 +169,8 @@ REPORTS_CURRENT = "reports_current"
 LANE_FAILURE = "lane_failure"
 
 #: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
-#: A member has no row when it has no entity, its entity is not in the wide row, or it repeats one.
+#: A member has no row when it has no entity or its entity is not in the wide row.
+#: It has none either when another member names the same issuer.
 UNMAPPED_ISSUERS = "unmapped_issuers"
 
 #: The key those ops set, to the count of unmapped members per reason.

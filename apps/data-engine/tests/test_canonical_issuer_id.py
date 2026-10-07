@@ -69,9 +69,9 @@ def connection() -> Iterator[psycopg.Connection[Any]]:
 class _LaneConnection:
     """The test's connection as the ops see `psycopg.connect(...)`, and it never closes.
 
-    `commit` is counted, never run, so the head and its rows roll back with the test. Each
-    connect sets a savepoint, and `rollback` returns to it: the op's own reads end, and the
-    head and the rows of earlier ops stay. A failed statement leaves the connection usable.
+    `commit` is counted, never run, so the head and its rows roll back with the test.
+    Each connect sets a savepoint, and `rollback` returns to it. The op's own reads end.
+    The head and the rows of earlier ops stay. A failed statement leaves the connection usable.
     """
 
     def __init__(self, connection: psycopg.Connection[Any]) -> None:
