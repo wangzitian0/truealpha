@@ -109,3 +109,44 @@ def test_the_requested_window_is_anchored_on_the_caller_cutoff(monkeypatch) -> N
     yahoo.fetch_daily_bars("AAPL", end=cutoff)
     requested_end = datetime.fromtimestamp(int(seen["period2"]), tz=UTC).date()
     assert requested_end == date(2024, 3, 16)  # cutoff + 1 day, exclusive upper bound
+
+
+def test_empty_chart_response_returns_empty_bars() -> None:
+    """Empty or missing chart results must return an empty bar list."""
+    assert _parse_chart_response({"chart": {"result": None}}) == []
+    assert _parse_chart_response({"chart": {"result": []}}) == []
+
+
+def test_empty_timestamps_or_empty_quotes_returns_empty_bars() -> None:
+    """Wire responses without trading records must return empty bars without KeyError."""
+    # Wire response seen on delisted or inactive tickers (e.g. WBD):
+    payload = {
+        "chart": {
+            "result": [
+                {
+                    "meta": {"currency": "USD", "symbol": "WBD"},
+                    "indicators": {
+                        "quote": [{}],
+                        "adjclose": [{}],
+                    },
+                }
+            ],
+            "error": None,
+        }
+    }
+    assert _parse_chart_response(payload) == []
+
+    # Empty timestamps or empty close list:
+    payload_no_ts = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [],
+                    "indicators": {
+                        "quote": [{"close": []}],
+                    },
+                }
+            ]
+        }
+    }
+    assert _parse_chart_response(payload_no_ts) == []
