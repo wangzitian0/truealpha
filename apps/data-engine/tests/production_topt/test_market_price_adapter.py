@@ -628,6 +628,26 @@ def test_a_primary_out_of_budget_is_served_by_the_next_seat() -> None:
     assert sink.calls[0]["attempt_reasons"] == (ObligationReasonCode.DEFERRED_CAPACITY,)
 
 
+def test_capacity_exceeded_on_primary_fails_over_to_corroborator() -> None:
+    """#1061: A rate-window CapacityExceeded that is not BudgetExhausted is also deferred_capacity."""
+    from data_engine.sources import gateway
+
+    def rate_limited(symbol: str, cutoff: date) -> MarketPriceQuote:
+        raise gateway.CapacityExceeded("yahoo", "0 calls left in window")
+
+    item = _work_item("6" * 64)
+    twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))
+    report, sink = _capture(item, _failover_adapter(item, rate_limited, _twelve_data(twelve_fetch)))
+    [outcome] = report.outcomes
+    assert (outcome.terminal_state, outcome.reason_code, outcome.attempts, outcome.served_by_failover) == (
+        ObligationTerminalState.SUCCESS,
+        ObligationReasonCode.DEFERRED_CAPACITY,
+        1,
+        "twelve-data",
+    )
+    assert sink.calls[0]["attempt_reasons"] == (ObligationReasonCode.DEFERRED_CAPACITY,)
+
+
 def test_a_stop_reason_is_never_served_by_failover() -> None:
     """The adapter itself refuses to fail over a reason that is not "the primary had
     nothing": a contract violation or a look-ahead is a broken run, not a gap."""
