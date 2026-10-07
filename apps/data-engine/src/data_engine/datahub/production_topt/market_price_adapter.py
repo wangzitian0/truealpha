@@ -53,7 +53,7 @@ from data_engine.datahub.production_topt.executor import (
 from data_engine.datahub.production_topt.failover_drill import FailoverDrill
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER
-from data_engine.sources.gateway import BudgetExhausted
+from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
@@ -212,8 +212,8 @@ class MarketPriceAdapter:
             return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
         try:
             quote = self._fetcher(target.symbol, target.cutoff)
-        except BudgetExhausted:
-            # The gate spent nothing: the seat's daily budget is gone for this environment.
+        except (BudgetExhausted, CapacityExceeded):
+            # The gate spent nothing: the seat's daily budget or window capacity is refused.
             # Named, never read as "no bar" (rule 6, #729); the gate's listener counted it.
             return FetchFailure(ObligationReasonCode.DEFERRED_CAPACITY)
         except SourceUnavailableError:
