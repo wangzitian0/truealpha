@@ -109,3 +109,62 @@ def test_the_requested_window_is_anchored_on_the_caller_cutoff(monkeypatch) -> N
     yahoo.fetch_daily_bars("AAPL", end=cutoff)
     requested_end = datetime.fromtimestamp(int(seen["period2"]), tz=UTC).date()
     assert requested_end == date(2024, 3, 16)  # cutoff + 1 day, exclusive upper bound
+
+
+def test_empty_chart_response_returns_empty_bars() -> None:
+    """Empty or missing chart results must return an empty bar list."""
+    assert _parse_chart_response({"chart": {"result": None}}) == []
+    assert _parse_chart_response({"chart": {"result": []}}) == []
+
+
+def test_missing_or_empty_timestamps_returns_empty_bars() -> None:
+    """Missing or empty timestamps return empty bars before inspecting indicators."""
+    assert _parse_chart_response({"chart": {"result": [{}]}}) == []
+    assert _parse_chart_response({"chart": {"result": [{"timestamp": []}]}}) == []
+
+
+def test_missing_quotes_or_empty_close_returns_empty_bars() -> None:
+    """Non-empty timestamps with missing quotes or missing close must return empty bars."""
+    # Timestamps exist, but quote list is empty:
+    payload_empty_quotes = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1750000000],
+                    "indicators": {"quote": []},
+                }
+            ]
+        }
+    }
+    assert _parse_chart_response(payload_empty_quotes) == []
+
+    # Timestamps exist, but quote dictionary has no close key (e.g. quote: [{}]):
+    payload_empty_dict = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1750000000],
+                    "indicators": {
+                        "quote": [{}],
+                        "adjclose": [{}],
+                    },
+                }
+            ]
+        }
+    }
+    assert _parse_chart_response(payload_empty_dict) == []
+
+    # Timestamps exist, but close list is None or empty:
+    payload_none_close = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1750000000],
+                    "indicators": {
+                        "quote": [{"close": None}],
+                    },
+                }
+            ]
+        }
+    }
+    assert _parse_chart_response(payload_none_close) == []
