@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any
 
 import dagster as dg
 import moomoo
+import pandas as pd
 import psycopg
 import pytest
 from data_engine.config import settings
@@ -40,6 +42,9 @@ def _isolated_moomoo_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 1000)
     ledger._recent_calls.clear()
+    # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
+    # over 25 tickers would run for a minute; the pacing is not what these tests assert.
+    monkeypatch.setattr(mm, "throttle", lambda: None)
 
 
 def _sample(ticker: str) -> dict[str, Any]:
@@ -52,8 +57,9 @@ def _sample(ticker: str) -> dict[str, Any]:
 class _FakeQuoteContext:
     """Answers like the SDK: `(RET_OK, payload)` per code, `(RET_ERROR, message)` for a str.
 
-    A payload that is an `Exception` is raised, as a socket timeout would be. A list is
-    returned as it is, to stand for a payload that breaks the vendor contract.
+    A payload that is an `Exception` is raised, as a socket timeout would be. A list, a frame
+    and None are returned as they are: the first stands for a payload that breaks the vendor
+    contract, the other two for an empty answer.
     """
 
     def __init__(self, responses: dict[str, Any]):
@@ -67,7 +73,7 @@ class _FakeQuoteContext:
             raise response
         if isinstance(response, str):
             return moomoo.RET_ERROR, response
-        if isinstance(response, list):
+        if response is None or isinstance(response, (list, pd.DataFrame)):
             return moomoo.RET_OK, response
         return moomoo.RET_OK, dict(response)
 
@@ -183,15 +189,28 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
     "payload",
     [
         {},
+        None,
+        pd.DataFrame(),
         {"rating": 0, "total": 0},
         {"rating": 0, "total": 12},
         {"rating": 4, "total": 0},
-        {"total": 5},
+        {"rating": 7, "total": 0},
     ],
-    ids=["empty", "unknown-rating-no-analysts", "unknown-rating", "no-analysts", "no-rating"],
+    ids=[
+        "empty-dict",
+        "none",
+        "empty-frame",
+        "unknown-rating-no-analysts",
+        "unknown-rating",
+        "no-analysts",
+        "no-analysts-any-rating",
+    ],
 )
 def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason(payload) -> None:
-    """Anti-fabrication: no rating or no analysts never becomes a neutral rating."""
+    """Anti-fabrication: no rating or no analysts never becomes a neutral rating.
+
+    An EMPTY payload and an explicit zero (rating 0 is unknown, total 0 is no analysts) are
+    no coverage. A non-empty payload that lacks a field is a contract error, tested below."""
     conn = _MockConnection()
     ctx = _FakeQuoteContext({"US.XYZ": payload})
     res = capture_ticker_analyst_ratings(
@@ -209,6 +228,132 @@ def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason
     assert params[4] == 0
     assert params[11] == "unavailable"
     assert params[9] == ["no_analyst_coverage"]
+
+
+def _capture(payload: Any):
+    conn = _MockConnection()
+    res = capture_ticker_analyst_ratings(
+        ctx=_FakeQuoteContext({"US.XYZ": payload}),
+        ticker="XYZ",
+        company_id="issuer:xyz",
+        connection=conn,
+        run_id="run:test",
+    )
+    return res, conn.executed[0][1]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"total": 5}, "lacks rating"),
+        ({"rating": 4}, "lacks total"),
+        ({"buy": 50.0, "hold": 50.0}, "lacks rating and total"),
+        ({"rating": None, "total": 5}, "lacks rating"),
+        ({"rating": 4, "total": None}, "lacks total"),
+    ],
+    ids=["no-rating", "no-total", "neither", "rating-none", "total-none"],
+)
+def test_a_non_empty_payload_that_lacks_the_rating_or_the_total_is_a_contract_error(payload, message) -> None:
+    """#771: only an EMPTY payload means no coverage. A payload with other keys but no
+    `rating` or no `total` is a changed vendor contract, so it must not read as no coverage."""
+    res, params = _capture(payload)
+
+    assert res.failure is not None, "a contract error is a fetch failure, not no coverage"
+    assert res.failure.error.startswith("ValueError: ")
+    assert message in res.failure.error
+    assert params[9] == ["fetch_error:ValueError"]
+    assert params[3] is None
+    assert params[11] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"rating": 4.9, "total": 10}, "moomoo rating 4.9 is not a whole number"),
+        ({"rating": float("nan"), "total": 10}, "moomoo rating nan is not a whole number"),
+        ({"rating": "4", "total": 10}, "moomoo rating '4' is not a whole number"),
+        ({"rating": True, "total": 10}, "moomoo rating True is not a whole number"),
+        ({"rating": 4, "total": 10.5}, "moomoo total 10.5 is not a whole number"),
+        ({"rating": 4, "total": "abc"}, "moomoo total 'abc' is not a whole number"),
+        ({"rating": 4, "total": "12"}, "moomoo total '12' is not a whole number"),
+        ({"rating": 4, "total": False}, "moomoo total False is not a whole number"),
+        ({"rating": 4, "total": -1}, "moomoo total -1 is negative"),
+        ({"rating": 0, "total": -3}, "moomoo total -3 is negative"),
+        ({"rating": 6, "total": 10}, "moomoo rating 6 is outside 1 to 5"),
+        ({"rating": -1, "total": 10}, "moomoo rating -1 is outside 1 to 5"),
+    ],
+    ids=[
+        "rating-fraction",
+        "rating-nan",
+        "rating-string",
+        "rating-bool",
+        "total-fraction",
+        "total-text",
+        "total-numeric-text",
+        "total-bool",
+        "total-negative",
+        "total-negative-with-unknown-rating",
+        "rating-above-max",
+        "rating-below-min",
+    ],
+)
+def test_a_rating_or_total_that_is_not_a_valid_count_is_a_contract_error(payload, message) -> None:
+    """A rating of 4.9 must not truncate to 4, and a negative total must not read as no analysts."""
+    res, params = _capture(payload)
+
+    assert res.failure is not None
+    assert res.failure.error == f"ValueError: {message}"
+    assert params[9] == ["fetch_error:ValueError"]
+    assert params[3] is None, "no rating is persisted for a payload that broke the contract"
+
+
+@pytest.mark.parametrize("rating", [1, 2, 3, 4, 5, 4.0])
+def test_every_rating_from_1_to_5_is_a_consensus(rating) -> None:
+    """The bounds are inclusive: 1 (strong sell) and 5 (strong buy) are both real ratings."""
+    res, params = _capture({"rating": rating, "total": 10})
+
+    assert res.failure is None
+    assert params[3] == Decimal(int(rating))
+    assert params[11] == "available"
+
+
+def test_rating_0_is_unknown_and_not_a_consensus() -> None:
+    """0 sits one below the lowest rating: it is unknown, so it stays no coverage."""
+    res, params = _capture({"rating": 0, "total": 10})
+
+    assert res.failure is None
+    assert (params[3], params[9], params[11]) == (None, ["no_analyst_coverage"], "unavailable")
+
+
+def test_a_consensus_without_the_share_fields_keeps_the_rating_and_counts_zero() -> None:
+    """The SDK omits each field moomoo leaves unset: a missing or None share is no count."""
+    for payload in ({"rating": 4, "total": 10}, {"rating": 4, "total": 10, "buy": None, "hold": None, "sell": None}):
+        res, params = _capture(payload)
+
+        assert res.failure is None, payload
+        assert (params[3], params[4]) == (Decimal(4), 10)
+        assert (params[5], params[6], params[7]) == (0, 0, 0)
+        assert params[11] == "available"
+
+
+@pytest.mark.parametrize(
+    ("share", "count"), [(0.0, 0), (0.01, 0), (50.0, 5), (99.99, 10), (100.0, 10), (100, 10)], ids=str
+)
+def test_a_share_from_0_to_100_percent_is_a_count(share, count) -> None:
+    res, params = _capture({"rating": 4, "total": 10, "buy": share})
+
+    assert res.failure is None
+    assert params[5] == count
+
+
+@pytest.mark.parametrize("share", [-0.01, -1.0, 100.01, 101.0, float("nan")])
+def test_a_share_outside_0_to_100_percent_is_a_contract_error(share) -> None:
+    res, params = _capture({"rating": 4, "total": 10, "sell": share})
+
+    assert res.failure is not None
+    assert res.failure.error.startswith("ValueError: analyst share ")
+    assert "is outside 0 to 100 percent" in res.failure.error
+    assert params[9] == ["fetch_error:ValueError"]
 
 
 def test_the_universe_run_writes_one_row_per_issuer_from_real_responses() -> None:
@@ -331,8 +476,9 @@ def test_an_empty_universe_and_a_run_without_a_context_are_not_a_lane_failure() 
 class _RecordingConnection:
     """A connection that records the order of `execute` and `commit`, shared across the op."""
 
-    def __init__(self, events: list[str]):
+    def __init__(self, events: list[str], rows: list[tuple]):
         self.events = events
+        self.rows = rows
 
     def __enter__(self):
         return self
@@ -343,20 +489,56 @@ class _RecordingConnection:
 
     def execute(self, sql, params=None):
         self.events.append(f"execute:{params[1]}")
+        self.rows.append(params)
 
     def commit(self) -> None:
         self.events.append("commit")
 
 
-def _run_op(monkeypatch, responses: dict[str, Any], *, opend_connect_fails: bool = False):
-    """Run the deployed op `run_analyst_ratings` as a one-op job, with moomoo and Postgres faked."""
+@dataclass
+class _OpRun:
+    """What `_run_op` observed: the result, the ordered connection events, the row params
+    the op wrote, and the Dagster instance that holds the run's log records."""
+
+    result: Any
+    events: list[str]
+    rows: list[tuple]
+    instance: dg.DagsterInstance
+
+    def log_messages(self, level: int) -> list[str]:
+        """The user messages the op logged at exactly this Python logging level."""
+        return [
+            entry.user_message
+            for entry in self.instance.all_logs(self.result.run_id)
+            if entry.dagster_event is None and entry.level == level
+        ]
+
+    def output_metadata(self) -> dict[str, Any]:
+        [output] = [e for e in self.result.events_for_node("run_analyst_ratings") if e.is_successful_output]
+        return {key: value.value for key, value in output.step_output_data.metadata.items()}
+
+
+def _run_op(
+    monkeypatch,
+    responses: dict[str, Any],
+    *,
+    tickers: dict[str, str] | None = None,
+    open_fails: Exception | None = None,
+    close_fails: Exception | None = None,
+) -> _OpRun:
+    """Run the deployed op `run_analyst_ratings` as a one-op job, with moomoo and Postgres faked.
+
+    `open_fails` is raised when the op opens the moomoo context. `close_fails` is raised when
+    the op closes it again. `tickers` is the universe: issuer id to ticker, `TICKERS` by default.
+    """
     from data_engine.datahub import question_coverage
     from data_engine.datahub.standards import planner
     from data_engine.lanes.standards import run_analyst_ratings
 
     events: list[str] = []
+    rows: list[tuple] = []
     ctx = _FakeQuoteContext(responses)
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events))
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows))
     monkeypatch.setattr(
         question_coverage,
         "governed_head",
@@ -365,14 +547,16 @@ def _run_op(monkeypatch, responses: dict[str, Any], *, opend_connect_fails: bool
     monkeypatch.setattr(
         planner,
         "universe_issuers",
-        lambda *_a, **_k: [SimpleNamespace(issuer_id=i, ticker=t) for i, t in TICKERS.items()],
+        lambda *_a, **_k: [SimpleNamespace(issuer_id=i, ticker=t) for i, t in (tickers or TICKERS).items()],
     )
 
     @contextmanager
     def fake_connect():
-        if opend_connect_fails:
-            raise mm.MoomooConnectionError("OpenD not reachable")
+        if open_fails is not None:
+            raise open_fails
         yield ctx
+        if close_fails is not None:
+            raise close_fails
 
     monkeypatch.setattr(mm, "connect", fake_connect)
 
@@ -384,50 +568,163 @@ def _run_op(monkeypatch, responses: dict[str, Any], *, opend_connect_fails: bool
     def one_op_job():
         run_analyst_ratings(upstream_summary())
 
+    instance = dg.DagsterInstance.ephemeral()
     result = one_op_job.execute_in_process(
         run_config={"ops": {"run_analyst_ratings": {"config": {"executed_at": "2026-10-06T00:00:00+00:00"}}}},
+        instance=instance,
         raise_on_error=False,
     )
-    return result, events
+    return _OpRun(result, events, rows, instance)
+
+
+FETCH_FAILURE_LOG = "analyst consensus fetch failed for "
+FAILED = {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"}
 
 
 def test_the_op_commits_and_reports_a_total_failure_without_raising(monkeypatch) -> None:
     """#771: the lane failure travels in the summary. The op that measures the lane (coverage)
     must still run, so this op does not raise; the terminal op `fail_if_a_lane_failed` does."""
-    result, events = _run_op(
-        monkeypatch, {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"}
-    )
+    run = _run_op(monkeypatch, {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"})
 
-    assert result.success
-    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert run.result.success
+    summary = json.loads(run.result.output_for_node("run_analyst_ratings"))
     assert summary["rows"] == 3
     assert summary["fetch_errors"] == 3
     assert "3 of 3" in summary["lane_failure"]
     assert "first failure" in summary["lane_failure"]
-    assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"], (
+    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"], (
         "the unavailable rows are committed before the op returns"
     )
 
 
 def test_the_op_succeeds_on_a_partial_failure(monkeypatch) -> None:
-    result, events = _run_op(
-        monkeypatch, {"US.DDOG": _sample("DDOG"), "US.NICE": "second failure", "US.SHOP": _sample("SHOP")}
-    )
+    run = _run_op(monkeypatch, {"US.DDOG": _sample("DDOG"), "US.NICE": "second failure", "US.SHOP": _sample("SHOP")})
 
-    assert result.success
-    summary = json.loads(result.output_for_node("run_analyst_ratings"))
+    assert run.result.success
+    summary = json.loads(run.result.output_for_node("run_analyst_ratings"))
     assert summary["rows"] == 3
     assert summary["fetch_errors"] == 1
     assert "lane_failure" not in summary
-    assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
+    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
 
 
-def test_an_unreachable_opend_still_records_honest_unavailable_rows(monkeypatch) -> None:
-    """Without a context there is no fetch, so there is no fetch error to fail on."""
-    result, events = _run_op(monkeypatch, {}, opend_connect_fails=True)
+def test_the_op_adds_its_summary_as_output_metadata(monkeypatch) -> None:
+    """The Dagster UI shows the run's metadata: it must hold the summary the next op reads."""
+    run = _run_op(monkeypatch, FAILED)
 
-    assert result.success
-    assert events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
+    summary = json.loads(run.result.output_for_node("run_analyst_ratings"))
+    assert run.output_metadata() == summary
+    assert (summary["rows"], summary["fetch_errors"]) == (3, 3)
+    assert "lane_failure" in summary
+
+
+def test_the_op_logs_each_fetch_failure_at_error_level(monkeypatch) -> None:
+    run = _run_op(monkeypatch, FAILED)
+
+    logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
+    prefix = f"{FETCH_FAILURE_LOG}%s: MoomooConnectionError: get_research_analyst_consensus failed: %s"
+    assert logged == [
+        prefix % ("DDOG", "first failure"),
+        prefix % ("NICE", "second failure"),
+        prefix % ("SHOP", "third failure"),
+    ]
+
+
+def test_the_op_logs_a_partial_failure_for_the_failed_ticker_only(monkeypatch) -> None:
+    run = _run_op(monkeypatch, {"US.DDOG": _sample("DDOG"), "US.NICE": "second failure", "US.SHOP": _sample("SHOP")})
+
+    logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
+    assert len(logged) == 1
+    assert "NICE" in logged[0] and "second failure" in logged[0]
+
+
+def test_the_op_logs_at_most_20_fetch_failures_per_run_and_counts_the_rest(monkeypatch) -> None:
+    tickers = {f"issuer:t{n}": f"T{n}" for n in range(25)}
+    run = _run_op(monkeypatch, {f"US.T{n}": "no quote right" for n in range(25)}, tickers=tickers)
+
+    logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
+    assert len(logged) == 20
+    assert logged[0].startswith(f"{FETCH_FAILURE_LOG}T0: ")
+    assert logged[-1].startswith(f"{FETCH_FAILURE_LOG}T19: ")
+    assert [m for m in run.log_messages(logging.WARNING) if "5 more" in m], "the unlogged rest is counted"
+    assert json.loads(run.result.output_for_node("run_analyst_ratings"))["fetch_errors"] == 25
+
+
+def test_the_op_logs_exactly_20_failures_without_an_overflow_note(monkeypatch) -> None:
+    tickers = {f"issuer:t{n}": f"T{n}" for n in range(20)}
+    run = _run_op(monkeypatch, {f"US.T{n}": "no quote right" for n in range(20)}, tickers=tickers)
+
+    logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
+    assert len(logged) == 20
+    assert [m for m in run.log_messages(logging.WARNING) if "more" in m] == []
+
+
+@pytest.mark.parametrize(
+    ("error", "error_type"),
+    [
+        (mm.MoomooConnectionError("OpenD not reachable at the host"), "MoomooConnectionError"),
+        (RuntimeError("MOOMOO_OPEND_HOST / MOOMOO_OPEND_PORT are not configured"), "RuntimeError"),
+    ],
+    ids=["opend-down", "opend-not-configured"],
+)
+def test_a_context_that_cannot_be_opened_fails_every_ticker_with_the_exception_type(
+    monkeypatch, error, error_type
+) -> None:
+    """#771: an OpenD outage is a total fetch failure, not a quiet `no_analyst_coverage` row."""
+    run = _run_op(monkeypatch, {}, open_fails=error)
+
+    assert run.result.success, "the op reports and returns; the terminal op fails the run"
+    assert [params[1] for params in run.rows] == list(TICKERS)
+    assert [(params[9], params[11]) for params in run.rows] == [([f"fetch_error:{error_type}"], "unavailable")] * 3
+    summary = json.loads(run.result.output_for_node("run_analyst_ratings"))
+    assert (summary["rows"], summary["fetch_errors"]) == (3, 3)
+    assert "3 of 3" in summary["lane_failure"]
+    assert f"DDOG: {error_type}: {error}" in summary["lane_failure"]
+    assert run.events[-2:] == ["commit", "close"], "the rows are committed before the terminal op fails the run"
+    assert any(str(error) in m for m in run.log_messages(logging.ERROR)), "the open failure is logged"
+
+
+def test_an_error_when_the_context_closes_is_not_swallowed_and_no_row_is_written_twice(monkeypatch) -> None:
+    """Closing the context raises after the good rows are written. The old `except Exception`
+    re-ran the whole universe without a context, and the second pass overwrote the good rows."""
+    run = _run_op(
+        monkeypatch,
+        {"US.DDOG": _sample("DDOG"), "US.NICE": _sample("NICE"), "US.SHOP": _sample("SHOP")},
+        close_fails=RuntimeError("close failed"),
+    )
+
+    assert not run.result.success
+    assert [(params[1], params[11]) for params in run.rows] == [
+        ("issuer:ddog", "available"),
+        ("issuer:nice", "available"),
+        ("issuer:shop", "available"),
+    ], "each issuer is written once, as available: no fallback pass overwrote it"
+    assert "commit" not in run.events
+    assert run.events[-1] == "rollback"
+    [failure] = [e for e in run.result.all_events if e.is_step_failure]
+    assert failure.step_failure_data.error.cause.cls_name == "RuntimeError"
+    assert "close failed" in failure.step_failure_data.error.cause.message
+
+
+def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fetch_failure(caplog) -> None:
+    conn = _MockConnection()
+    error = mm.MoomooConnectionError("OpenD not reachable")
+    result = materialize_universe_analyst_ratings(
+        conn,
+        run_id="run:uni",
+        cutoff=datetime(2026, 10, 6, tzinfo=UTC),
+        tickers=TICKERS,
+        ctx=None,
+        open_error=error,
+    )
+
+    assert result.rows == 3
+    assert [f.ticker for f in result.failures] == list(TICKERS.values())
+    assert all(f.error == "MoomooConnectionError: OpenD not reachable" for f in result.failures)
+    assert [params[9] for _, params in conn.executed] == [["fetch_error:MoomooConnectionError"]] * 3
+    assert [params[11] for _, params in conn.executed] == ["unavailable"] * 3
+    assert "3 of 3" in (result.lane_failure() or "")
+    assert len(_error_records(caplog)) == 1, "one ERROR record for the one open failure, not one per ticker"
 
 
 # --- the lane fails AFTER the coverage report is written (#771, the #1016 pattern) --------
@@ -445,7 +742,6 @@ def test_an_unreachable_opend_still_records_honest_unavailable_rows(monkeypatch)
 
 HEAD_RUN = "capture-run:" + "7" * 64
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
-FAILED = {"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"}
 JOB_NAMES = ("head_reports_pipeline_job", "standard_backfill_pipeline_job")
 
 

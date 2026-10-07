@@ -11,8 +11,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from numbers import Real
 from typing import Any
 
+import pandas as pd
 from factors.base.analyst_track_record import (
     AnalystRatingItem,
     AnalystTrackRecord,
@@ -69,6 +71,7 @@ on conflict (run_id, issuer_id) do update set
 
 _RATING_MIN = 1
 _RATING_MAX = 5
+_RATING_UNKNOWN = 0
 
 
 @dataclass(frozen=True)
@@ -119,27 +122,56 @@ def _count_from_share(total: int, share: float | None) -> int:
     return round(total * percent / 100)
 
 
+def _is_empty(payload: object) -> bool:
+    """True for the answers that say "nothing here": None, an empty mapping, an empty frame."""
+    if payload is None:
+        return True
+    if isinstance(payload, pd.DataFrame):
+        return payload.empty
+    return isinstance(payload, Mapping) and not payload
+
+
+def _whole_number(payload: Mapping[str, Any], key: str) -> int:
+    """The value of `key` as an int. A fraction, text, a bool or NaN is a contract error."""
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, Real) or not float(value).is_integer():
+        raise ValueError(f"moomoo {key} {value!r} is not a whole number")
+    return int(float(value))
+
+
 def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     """Turn one `get_research_analyst_consensus` payload into a rating row.
 
-    Return None when the payload holds no consensus: no rating, rating 0 (unknown), or no
-    analysts. The wrapper `get_analyst_consensus` returns the payload alone, without the
-    return code. The SDK builds the payload as a dict and omits each field moomoo leaves unset.
+    Return None when the payload holds no consensus: an EMPTY payload, rating 0 (unknown) or total 0.
+    Raise ValueError or TypeError on a contract error. A non-empty payload without `rating` or `total`
+    is one. So is a rating or total that is no whole number, a negative total, or a rating out of range.
+    The wrapper `get_analyst_consensus` returns the payload alone, without the return code.
+    The SDK builds the payload as a dict and omits each field moomoo leaves unset.
     Fields: `rating` is moomoo ResearchRatingType (1 to 5, 0 is unknown), `total` is the
     analyst count of the last 3 months, `buy`, `hold` and `sell` are shares in percent.
     """
+    if _is_empty(payload):
+        return None
     if not isinstance(payload, Mapping):
         raise TypeError(f"get_research_analyst_consensus returned {type(payload).__name__}, expected a mapping")
-    rating = payload.get("rating")
-    total = payload.get("total")
-    if rating is None or total is None or rating == 0 or int(total) <= 0:
+    missing = [key for key in ("rating", "total") if payload.get(key) is None]
+    if missing:
+        raise ValueError(
+            f"get_research_analyst_consensus payload lacks {' and '.join(missing)}; keys: {sorted(map(str, payload))}"
+        )
+    rating = _whole_number(payload, "rating")
+    count = _whole_number(payload, "total")
+    if count < 0:
+        raise ValueError(f"moomoo total {count} is negative")
+    if count == 0:
         return None
-    if not _RATING_MIN <= int(rating) <= _RATING_MAX:
+    if not _RATING_MIN <= rating <= _RATING_MAX:
+        if rating == _RATING_UNKNOWN:
+            return None
         raise ValueError(f"moomoo rating {rating!r} is outside {_RATING_MIN} to {_RATING_MAX}")
-    count = int(total)
     return {
         "issuer_id": company_id,
-        "consensus_rating": Decimal(int(rating)),
+        "consensus_rating": Decimal(rating),
         "analysts_count": count,
         "buy_count": _count_from_share(count, payload.get("buy")),
         "hold_count": _count_from_share(count, payload.get("hold")),
@@ -152,6 +184,24 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     }
 
 
+def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
+    """The unavailable row for an issuer whose fetch failed. The reason code holds the exception
+    type only, never its text, which can name a host."""
+    return {
+        "issuer_id": company_id,
+        "consensus_rating": None,
+        "analysts_count": 0,
+        "buy_count": 0,
+        "hold_count": 0,
+        "sell_count": 0,
+        "confidence": Decimal("0"),
+        "availability_status": "unavailable",
+        "source_evidence_status": "degraded",
+        "factor_validation_status": "not_evaluated",
+        "reason_codes": [f"fetch_error:{type(exc).__name__}"],
+    }
+
+
 def capture_ticker_analyst_ratings(
     ctx: Any,
     *,
@@ -161,6 +211,7 @@ def capture_ticker_analyst_ratings(
     run_id: str,
     cutoff: datetime | None = None,
     raw_store: Any | None = None,
+    open_error: Exception | None = None,
 ) -> TickerCapture:
     """Capture analyst consensus for a single ticker via moomoo API and persist.
 
@@ -172,6 +223,8 @@ def capture_ticker_analyst_ratings(
         run_id: Governed run ID.
         cutoff: As-of cutoff timestamp.
         raw_store: Optional raw evidence object store.
+        open_error: Why `ctx` is None: the exception that stopped the context from opening.
+            The ticker then fails like a fetch error. Without it, `ctx=None` means no coverage.
 
     Returns:
         The rows inserted (1) and the fetch failure, if the fetch raised. A fetch failure
@@ -179,46 +232,30 @@ def capture_ticker_analyst_ratings(
         persisted as an unavailable row with the reason code `fetch_error:<ExceptionType>`.
     """
     as_of = cutoff or datetime.now(tz=UTC)
-    if ctx is None:
-        record = analyst_track_record([], entity_id=company_id, as_of=as_of)
-        rows = materialize_analyst_ratings(
-            connection,
-            run_id=run_id,
-            cutoff=as_of,
-            ratings_data=[record],
-        )
-        return TickerCapture(rows=rows)
-
-    code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
     failure: FetchFailure | None = None
-    try:
-        from data_engine.sources.moomoo import get_analyst_consensus
-
-        payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
-        consensus_row = _consensus_row(payload, company_id)
-    except Exception as exc:
-        failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
-        log.exception("analyst consensus fetch failed for %s (%s): %s", ticker, company_id, failure.error)
-        ratings_data = [
-            {
-                "issuer_id": company_id,
-                "consensus_rating": None,
-                "analysts_count": 0,
-                "buy_count": 0,
-                "hold_count": 0,
-                "sell_count": 0,
-                "confidence": Decimal("0"),
-                "availability_status": "unavailable",
-                "source_evidence_status": "degraded",
-                "factor_validation_status": "not_evaluated",
-                "reason_codes": [f"fetch_error:{type(exc).__name__}"],
-            }
-        ]
-    else:
-        if consensus_row is None:
+    ratings_data: list[dict[str, Any] | AnalystTrackRecord]
+    if ctx is None:
+        if open_error is None:
             ratings_data = [analyst_track_record([], entity_id=company_id, as_of=as_of)]
         else:
-            ratings_data = [consensus_row]
+            failure = FetchFailure(ticker=ticker, error=f"{type(open_error).__name__}: {open_error}")
+            ratings_data = [_fetch_error_row(company_id, open_error)]
+    else:
+        code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
+        try:
+            from data_engine.sources.moomoo import get_analyst_consensus
+
+            payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
+            consensus_row = _consensus_row(payload, company_id)
+        except Exception as exc:
+            failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
+            log.exception("analyst consensus fetch failed for %s (%s): %s", ticker, company_id, failure.error)
+            ratings_data = [_fetch_error_row(company_id, exc)]
+        else:
+            if consensus_row is None:
+                ratings_data = [analyst_track_record([], entity_id=company_id, as_of=as_of)]
+            else:
+                ratings_data = [consensus_row]
 
     rows = materialize_analyst_ratings(
         connection,
@@ -331,12 +368,22 @@ def materialize_universe_analyst_ratings(
     cutoff: datetime,
     tickers: Mapping[str, str],
     ctx: Any | None = None,
+    open_error: Exception | None = None,
 ) -> UniverseCapture:
     """Capture and materialize analyst ratings for all issuers in a universe run.
 
     The caller owns the transaction. Commit the rows first, then pass
     `UniverseCapture.lane_failure()` on in the run summary.
+
+    Pass `open_error` when the moomoo context could not be opened. Every ticker then fails
+    with `fetch_error:<ExceptionType>`, so an OpenD outage is a total failure, not no coverage.
     """
+    if ctx is None and open_error is not None:
+        log.error(
+            "analyst ratings fetch skipped, the moomoo context did not open: %s: %s",
+            type(open_error).__name__,
+            open_error,
+        )
     rows = 0
     failures: list[FetchFailure] = []
     for issuer_id, ticker in tickers.items():
@@ -347,6 +394,7 @@ def materialize_universe_analyst_ratings(
             connection=connection,
             run_id=run_id,
             cutoff=cutoff,
+            open_error=open_error,
         )
         rows += captured.rows
         if captured.failure is not None:

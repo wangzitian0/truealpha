@@ -22,6 +22,7 @@ names what this lane records."""
 
 import json
 from collections.abc import Mapping
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import Any
 
@@ -166,6 +167,10 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
+#: The most fetch failures the analyst ratings op logs at ERROR in one run. A run over a
+#: large universe in an outage would otherwise write one record per ticker.
+MAX_FAILURES_LOGGED = 20
+
 
 def reports_current(upstream_summary: str) -> str | None:
     """The head an upstream op found already reported, or None. The weekly backfill's summary
@@ -299,6 +304,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     """#771 (init.md §7 module 4): analyst consensus ratings rows for this week's governed head.
 
     Sequenced after supply chain exposure and before question coverage.
+    A moomoo context that does not open fails every ticker, like a fetch error.
     """
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
     from data_engine.datahub.question_coverage import governed_head
@@ -317,28 +323,25 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        opend_ctx = None
-        try:
-            from data_engine.sources.moomoo import connect as moomoo_connect
-
-            opend_ctx = moomoo_connect()
-        except Exception as exc:
-            context.log.info("moomoo OpenD connect not available (%s); will record honest unavailable coverage", exc)
-
-        if opend_ctx is not None:
+        # Only the open of the context is a fetch failure. Any later error, a write or a close,
+        # fails the op and rolls the rows back: a second pass must not overwrite good rows.
+        ctx = None
+        open_error: Exception | None = None
+        with ExitStack() as stack:
             try:
-                with opend_ctx as ctx:
-                    captured = materialize_universe_analyst_ratings(
-                        connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=ctx
-                    )
+                from data_engine.sources.moomoo import connect as moomoo_connect
+
+                ctx = stack.enter_context(moomoo_connect())
             except Exception as exc:
-                context.log.warning("OpenD connection failed (%s); recording unavailable analyst ratings", exc)
-                captured = materialize_universe_analyst_ratings(
-                    connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
-                )
-        else:
+                open_error = exc
+                context.log.error("moomoo OpenD context did not open: %s: %s", type(exc).__name__, exc)
             captured = materialize_universe_analyst_ratings(
-                connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
+                connection,
+                run_id=head.run_id,
+                cutoff=head.cutoff,
+                tickers=tickers,
+                ctx=ctx,
+                open_error=open_error,
             )
         connection.commit()
 
@@ -355,6 +358,13 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     if lane_failure is not None:
         summary[LANE_FAILURE] = lane_failure
         context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
+    for failure in captured.failures[:MAX_FAILURES_LOGGED]:
+        context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
+    if len(captured.failures) > MAX_FAILURES_LOGGED:
+        context.log.warning(
+            "%s more analyst consensus fetch failures not logged; each unavailable row holds its reason code",
+            len(captured.failures) - MAX_FAILURES_LOGGED,
+        )
     context.add_output_metadata(summary)
     context.log.info(
         "published %s analyst ratings rows for %s (%s fetch errors)",
@@ -447,8 +457,10 @@ def standard_backfill_pipeline_job() -> None:
 
 
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
-    """One universe's backfill → purity → supply chain → analyst ratings → coverage, every op configured alike. `standard` bounds
-    the backfill to one registered standard; empty runs them all."""
+    """One universe's backfill, purity, supply chain, analyst ratings and coverage ops, configured alike.
+
+    The terminal op `fail_if_a_lane_failed` takes no config. `standard` bounds the backfill
+    to one registered standard; empty runs them all."""
     return dg.RunConfig(
         ops={
             "run_standard_backfill": StandardBackfillConfig(
@@ -586,6 +598,8 @@ def head_reports_pipeline_job() -> None:
 
     The weekly backfill wrote all three, so on every other day the head advanced and
     the coverage report served no_row for the new head — contradicting its own pointer.
+
+    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
     """
     analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
@@ -594,7 +608,7 @@ def head_reports_pipeline_job() -> None:
 def head_reports_request(
     universe: str, executed_at: str, *, run_key: str, only_if_stale: bool, head_run_id: str | None = None
 ) -> dg.RunRequest:
-    """One universe's head-reports run, every op configured alike."""
+    """One universe's head-reports run: every op that takes config gets the same universe and tick."""
     tags = {UNIVERSE_TAG: universe}
     if head_run_id:
         tags[HEAD_RUN_TAG] = head_run_id
