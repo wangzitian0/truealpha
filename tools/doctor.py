@@ -214,16 +214,26 @@ def check_vps(name_filter: str = "truealpha") -> bool:
         return False
 
 
-def check_deploy_provenance(target_ref: str) -> bool:
+def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> bool:
     """Assert that the target release ref contains current HEAD commits.
 
     Prevents deploying an outdated release or deploying from an unmerged branch.
     """
     print(f"=== TrueAlpha Deploy Provenance Guard ({target_ref}) ===")
     try:
-        head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
         target = subprocess.run(
-            ["git", "rev-parse", target_ref], capture_output=True, text=True, check=True
+            ["git", "rev-parse", target_ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except subprocess.CalledProcessError as exc:
         print(f"❌ Failed to resolve git references: {exc}")
@@ -232,6 +242,7 @@ def check_deploy_provenance(target_ref: str) -> bool:
     is_ancestor = (
         subprocess.run(
             ["git", "merge-base", "--is-ancestor", head, target],
+            cwd=cwd,
             check=False,
         ).returncode
         == 0
