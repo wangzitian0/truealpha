@@ -7,9 +7,10 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Collection, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from data_engine.datahub.analyst_ratings import (
     materialize_analyst_ratings,
     materialize_universe_analyst_ratings,
 )
+from data_engine.datahub.canonical_issuer import CanonicalIssuer, CanonicalUniverse
 from data_engine.datahub.question_coverage import stored_report_run as _STORED_REPORT_RUN
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
@@ -37,6 +39,23 @@ from factors.base.analyst_track_record import (
 )
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
+
+
+def _issuer_id(name: str) -> str:
+    """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
+
+
+DDOG, NICE, SHOP, DUOL = (_issuer_id(name) for name in ("ddog", "nice", "shop", "duol"))
+
+
+def _identity_universe(
+    _connection: Any, tickers: Mapping[str, str], *, cutoff: datetime, as_of: date, wide_row_ids: Collection[str]
+) -> CanonicalUniverse:
+    """A universe whose corpus ids already are the wide row's. `test_canonical_issuer_id.py` tests the mapping."""
+    return CanonicalUniverse(
+        issuers=tuple(CanonicalIssuer(issuer_id=i, legacy_id=i, ticker=t) for i, t in tickers.items())
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -108,14 +127,14 @@ def test_materialize_analyst_ratings_handles_dict_and_factor_record() -> None:
         AnalystRatingItem("analyst:1", 5, confidence=Decimal("0.9")),
         AnalystRatingItem("analyst:2", 4, confidence=Decimal("0.8")),
     ]
-    rec = analyst_track_record(ratings, entity_id="issuer:msft", as_of=now)
+    rec = analyst_track_record(ratings, entity_id=_issuer_id("msft"), as_of=now)
     count = materialize_analyst_ratings(
         conn,
         run_id="run:both",
         cutoff=now,
         ratings_data=[
             {
-                "issuer_id": "issuer:aapl",
+                "issuer_id": _issuer_id("aapl"),
                 "consensus_rating": Decimal("4.5"),
                 "analysts_count": 32,
                 "availability_status": "available",
@@ -129,17 +148,37 @@ def test_materialize_analyst_ratings_handles_dict_and_factor_record() -> None:
     # Row 1: dict
     sql1, params1 = conn.executed[0]
     assert "insert into mart.issuer_analyst_ratings" in sql1
-    assert params1[1] == "issuer:aapl"
+    assert params1[1] == _issuer_id("aapl")
     assert params1[2] == now, "stamped with the given cutoff, not the clock"
     assert params1[3] == Decimal("4.5")
     assert params1[11] == "available"
     # Row 2: factor record
     _, params2 = conn.executed[1]
     assert params2[2] == now
-    assert params2[1] == "issuer:msft"
+    assert params2[1] == _issuer_id("msft")
     assert params2[3] == Decimal("4.5")
     assert params2[4] == 2
     assert params2[11] == "available"
+
+
+@pytest.mark.parametrize(
+    "legacy_id",
+    ["issuer:lei:AAAAAAAAAAAAAAAAAA01", "issuer:cik:0000320193", "", "NOT-A-UUID", str(uuid.uuid4()).upper()],
+    ids=["lei", "cik", "empty", "not-a-uuid", "upper-case-uuid"],
+)
+def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
+    """#1079: the legacy id of the corpus is not the wide row's id, so no row may carry it."""
+    conn = _MockConnection()
+    with pytest.raises(ValueError, match="not the wide row's id"):
+        materialize_analyst_ratings(
+            conn,
+            run_id="run:legacy",
+            cutoff=datetime(2026, 9, 25, tzinfo=UTC),
+            ratings_data=[
+                {"issuer_id": legacy_id, "consensus_rating": Decimal("4"), "availability_status": "available"}
+            ],
+        )
+    assert conn.executed == [], "nothing reached the table"
 
 
 def test_the_wrapper_hands_back_the_payload_without_the_return_code() -> None:
@@ -170,7 +209,7 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
     res = capture_ticker_analyst_ratings(
         ctx=ctx,
         ticker=ticker,
-        company_id=f"issuer:{ticker.lower()}",
+        company_id=_issuer_id(ticker.lower()),
         connection=conn,
         run_id="run:test",
     )
@@ -181,7 +220,7 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
     assert len(conn.executed) == 1
     _, params = conn.executed[0]
     assert params[0] == "run:test"
-    assert params[1] == f"issuer:{ticker.lower()}"
+    assert params[1] == _issuer_id(ticker.lower())
     assert params[9] == []
     assert params[11] == "available"
     assert params[12] == "verified"
@@ -228,14 +267,14 @@ def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason
     res = capture_ticker_analyst_ratings(
         ctx=ctx,
         ticker="XYZ",
-        company_id="issuer:xyz",
+        company_id=_issuer_id("xyz"),
         connection=conn,
         run_id="run:test",
     )
     assert res.rows == 1
     assert res.failure is None, "no coverage is not a fetch error"
     _, params = conn.executed[0]
-    assert params[1] == "issuer:xyz"
+    assert params[1] == _issuer_id("xyz")
     assert params[3] is None, "Fabricated rating without a consensus!"
     assert params[4] == 0
     assert params[11] == "unavailable"
@@ -247,7 +286,7 @@ def _capture(payload: Any):
     res = capture_ticker_analyst_ratings(
         ctx=_FakeQuoteContext({"US.XYZ": payload}),
         ticker="XYZ",
-        company_id="issuer:xyz",
+        company_id=_issuer_id("xyz"),
         connection=conn,
         run_id="run:test",
     )
@@ -395,18 +434,18 @@ def test_the_universe_run_writes_one_row_per_issuer_from_real_responses() -> Non
         conn,
         run_id="run:uni",
         cutoff=datetime(2026, 10, 6, tzinfo=UTC),
-        tickers={"issuer:ddog": "DDOG", "issuer:duol": "DUOL"},
+        tickers={DDOG: "DDOG", DUOL: "DUOL"},
         ctx=ctx,
     )
     assert total.rows == 2
     assert total.failures == ()
-    assert [params[1] for _, params in conn.executed] == ["issuer:ddog", "issuer:duol"]
+    assert [params[1] for _, params in conn.executed] == [DDOG, DUOL]
     assert [params[11] for _, params in conn.executed] == ["available", "available"]
     assert [params[4] for _, params in conn.executed] == [35, 7]
 
 
 ERROR_LOGGER = "data_engine.datahub.analyst_ratings"
-TICKERS = {"issuer:ddog": "DDOG", "issuer:nice": "NICE", "issuer:shop": "SHOP"}
+TICKERS = {DDOG: "DDOG", NICE: "NICE", SHOP: "SHOP"}
 
 
 def _run_universe(responses: dict[str, Any], tickers: dict[str, str] | None = None):
@@ -437,9 +476,9 @@ def test_one_failing_ticker_stays_unavailable_with_a_code_and_is_logged(caplog) 
     assert result.lane_failure() is None, "a partial failure is not a lane failure"
 
     rows = {params[1]: params for _, params in conn.executed}
-    assert rows["issuer:ddog"][11] == "available"
-    assert rows["issuer:shop"][11] == "available"
-    failed = rows["issuer:nice"]
+    assert rows[DDOG][11] == "available"
+    assert rows[SHOP][11] == "available"
+    failed = rows[NICE]
     assert failed[11] == "unavailable"
     assert failed[12] == "degraded"
     assert failed[9] == ["fetch_error:MoomooConnectionError"], "a code, never the free-text message"
@@ -464,9 +503,7 @@ def test_one_failing_ticker_stays_unavailable_with_a_code_and_is_logged(caplog) 
 def test_a_payload_that_breaks_the_vendor_contract_is_a_logged_fetch_error(
     caplog, response, error_type, message
 ) -> None:
-    conn, result = _run_universe(
-        {"US.DDOG": _sample("DDOG"), "US.NICE": response}, {"issuer:ddog": "DDOG", "issuer:nice": "NICE"}
-    )
+    conn, result = _run_universe({"US.DDOG": _sample("DDOG"), "US.NICE": response}, {DDOG: "DDOG", NICE: "NICE"})
 
     assert [(f.ticker, f.error.split(":")[0]) for f in result.failures] == [("NICE", error_type)]
     assert message in result.failures[0].error
@@ -522,11 +559,11 @@ def test_a_write_error_is_not_a_fetch_error_and_is_not_swallowed(payload) -> Non
     ctx = _FakeQuoteContext({"US.DDOG": payload})
     with pytest.raises(psycopg.OperationalError, match="write failed"):
         capture_ticker_analyst_ratings(
-            ctx=ctx, ticker="DDOG", company_id="issuer:ddog", connection=_FailingWrite(), run_id="run:test"
+            ctx=ctx, ticker="DDOG", company_id=DDOG, connection=_FailingWrite(), run_id="run:test"
         )
     with pytest.raises(psycopg.OperationalError, match="write failed"):
         materialize_universe_analyst_ratings(
-            _FailingWrite(), run_id="run:test", cutoff=CUTOFF, tickers={"issuer:ddog": "DDOG"}, ctx=ctx
+            _FailingWrite(), run_id="run:test", cutoff=CUTOFF, tickers={DDOG: "DDOG"}, ctx=ctx
         )
 
 
@@ -557,7 +594,7 @@ def test_a_lane_failure_is_every_ticker_of_a_non_empty_run(rows, failed, is_lane
 def test_the_traceback_is_logged_for_the_first_20_failures_only(caplog) -> None:
     from data_engine.datahub.analyst_ratings import MAX_FAILURES_LOGGED
 
-    tickers = {f"issuer:t{n}": f"T{n}" for n in range(25)}
+    tickers = {_issuer_id(f"t{n}"): f"T{n}" for n in range(25)}
     _conn, result = _run_universe({f"US.T{n}": "no quote right" for n in range(25)}, tickers)
 
     records = _error_records(caplog)
@@ -568,7 +605,7 @@ def test_the_traceback_is_logged_for_the_first_20_failures_only(caplog) -> None:
 
 def test_the_traceback_cap_counts_failures_not_tickers(caplog) -> None:
     """30 tickers, the first 5 answer, the other 25 fail: the first 20 FAILURES log a traceback."""
-    tickers = {f"issuer:t{n}": f"T{n}" for n in range(30)}
+    tickers = {_issuer_id(f"t{n}"): f"T{n}" for n in range(30)}
     responses = {f"US.T{n}": _sample("DDOG") if n < 5 else "no quote right" for n in range(30)}
     _conn, result = _run_universe(responses, tickers)
 
@@ -631,6 +668,9 @@ class _RecordingConnection:
     def commit(self) -> None:
         self.events.append("commit")
 
+    def rollback(self) -> None:
+        """The op ends its reads here. The fake holds no transaction, so nothing is recorded."""
+
 
 @dataclass
 class _OpRun:
@@ -675,12 +715,15 @@ def _run_op(
     """
     from data_engine.datahub import question_coverage
     from data_engine.datahub.standards import planner
+    from data_engine.lanes import standards
     from data_engine.lanes.standards import run_analyst_ratings
 
     events: list[str] = []
     rows: list[tuple] = []
     ctx = _FakeQuoteContext(responses)
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows, write_fails))
+    monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
+    monkeypatch.setattr(question_coverage, "head_report_date", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(
         question_coverage,
         "governed_head",
@@ -690,6 +733,11 @@ def _run_op(
         planner,
         "universe_issuers",
         lambda *_a, **_k: [SimpleNamespace(issuer_id=i, ticker=t) for i, t in (tickers or TICKERS).items()],
+    )
+    monkeypatch.setattr(
+        question_coverage,
+        "gppe_cells",
+        lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in (tickers or TICKERS)),
     )
 
     @contextmanager
@@ -734,7 +782,7 @@ def test_the_op_commits_and_reports_a_total_failure_without_raising(monkeypatch)
     assert summary["fetch_errors"] == 3
     assert "3 of 3" in summary["lane_failure"]
     assert "first failure" in summary["lane_failure"]
-    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"], (
+    assert run.events == [f"execute:{DDOG}", f"execute:{NICE}", f"execute:{SHOP}", "commit", "close"], (
         "the unavailable rows are committed before the op returns"
     )
     assert [params[2] for params in run.rows] == [HEAD_CUTOFF] * 3, "stamped with the head's cutoff, not the clock"
@@ -748,7 +796,7 @@ def test_the_op_succeeds_on_a_partial_failure(monkeypatch) -> None:
     assert summary["rows"] == 3
     assert summary["fetch_errors"] == 1
     assert "lane_failure" not in summary
-    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"]
+    assert run.events == [f"execute:{DDOG}", f"execute:{NICE}", f"execute:{SHOP}", "commit", "close"]
 
 
 def test_the_op_adds_its_summary_as_output_metadata(monkeypatch) -> None:
@@ -782,7 +830,7 @@ def test_the_op_logs_a_partial_failure_for_the_failed_ticker_only(monkeypatch) -
 
 
 def test_the_op_logs_at_most_20_fetch_failures_per_run_and_counts_the_rest(monkeypatch) -> None:
-    tickers = {f"issuer:t{n}": f"T{n}" for n in range(25)}
+    tickers = {_issuer_id(f"t{n}"): f"T{n}" for n in range(25)}
     run = _run_op(monkeypatch, {f"US.T{n}": "no quote right" for n in range(25)}, tickers=tickers)
 
     logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
@@ -794,7 +842,7 @@ def test_the_op_logs_at_most_20_fetch_failures_per_run_and_counts_the_rest(monke
 
 
 def test_the_op_logs_exactly_20_failures_without_an_overflow_note(monkeypatch) -> None:
-    tickers = {f"issuer:t{n}": f"T{n}" for n in range(20)}
+    tickers = {_issuer_id(f"t{n}"): f"T{n}" for n in range(20)}
     run = _run_op(monkeypatch, {f"US.T{n}": "no quote right" for n in range(20)}, tickers=tickers)
 
     logged = [m for m in run.log_messages(logging.ERROR) if m.startswith(FETCH_FAILURE_LOG)]
@@ -839,11 +887,11 @@ def test_a_close_error_keeps_the_committed_rows_and_still_fails_the_op(monkeypat
 
     assert not run.result.success
     assert [(params[1], params[11]) for params in run.rows] == [
-        ("issuer:ddog", "available"),
-        ("issuer:nice", "available"),
-        ("issuer:shop", "available"),
+        (DDOG, "available"),
+        (NICE, "available"),
+        (SHOP, "available"),
     ], "each issuer is written once, as available"
-    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "rollback"]
+    assert run.events == [f"execute:{DDOG}", f"execute:{NICE}", f"execute:{SHOP}", "commit", "rollback"]
     [failure] = [e for e in run.result.all_events if e.is_step_failure]
     assert failure.step_failure_data.error.cause.cls_name == "RuntimeError"
     assert "close failed" in failure.step_failure_data.error.cause.message
@@ -858,7 +906,7 @@ def test_a_write_error_in_the_op_commits_nothing_and_fails_the_op(monkeypatch) -
     )
 
     assert not run.result.success
-    assert run.events == ["execute:issuer:ddog", "rollback"]
+    assert run.events == [f"execute:{DDOG}", "rollback"]
     [failure] = [e for e in run.result.all_events if e.is_step_failure]
     assert "write failed" in failure.step_failure_data.error.cause.message
 
@@ -892,10 +940,10 @@ def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fet
 # op and a real Postgres. The connection is shared and rolled back at the end: `commit` is
 # counted, never executed, so no row outlives the test.
 #
-# These tests do not assert a Q4 coverage value. The coverage cells here use the issuer ids of
-# the analyst rows. Production joins `issuer:lei:...` analyst rows to UUID wide rows, so Q4
-# reads `unavailable:no_row` there (#1079). A Q4 assertion would pass only because of the fakes.
-# What this PR controls is asserted instead: the persisted analyst rows, the lane summary, the run.
+# These tests do not assert a Q4 coverage value. The coverage cells here reuse the issuer ids
+# of the analyst rows. A Q4 assertion would pass only because of those fakes.
+# `test_canonical_issuer_id.py` asserts the join over a real capture (#1079).
+# What this file controls is asserted instead: the persisted analyst rows, the lane summary, the run.
 
 # One token per test session. The DB-backed tests read verdicts, reports and analyst rows by
 # these names only, so rows that a development database holds from earlier work cannot change a result.
@@ -930,6 +978,9 @@ class _SharedConnection:
     def commit(self) -> None:
         self.commits += 1
         self.events.append("commit")
+
+    def rollback(self) -> None:
+        """The op ends its reads here. The job's rows live in this transaction until the test ends."""
 
     def __getattr__(self, name: str):
         return getattr(self.connection, name)
@@ -1008,6 +1059,8 @@ def _execute_job(
     )
     monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: issuers)
+    monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
+    monkeypatch.setattr(question_coverage, "head_report_date", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda _c, **_k: ())
     monkeypatch.setattr(supply_chain_extraction, "materialize_universe_supply_chain_exposure", lambda _c, **_k: 0)
 
@@ -1118,9 +1171,9 @@ def test_a_partial_failure_leaves_the_run_green_and_the_rows_name_the_error(
 
     assert result.success
     assert _stored_analyst_rows(shared_connection) == {
-        "issuer:ddog": ("available", []),
-        "issuer:nice": ("unavailable", ["fetch_error:MoomooConnectionError"]),
-        "issuer:shop": ("available", []),
+        DDOG: ("available", []),
+        NICE: ("unavailable", ["fetch_error:MoomooConnectionError"]),
+        SHOP: ("available", []),
     }
     summary = json.loads(result.output_for_node("run_analyst_ratings"))
     assert summary["fetch_errors"] == 1

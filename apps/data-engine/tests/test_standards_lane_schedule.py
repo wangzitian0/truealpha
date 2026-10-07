@@ -271,6 +271,9 @@ class _Connection:
     def commit(self) -> None:
         return None
 
+    def rollback(self) -> None:
+        return None
+
     def execute(self, *_a, **_k):
         class _Result:
             def fetchall(self):
@@ -415,7 +418,8 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
 
     _pointer(monkeypatch, heads={"topt": TOPT_NEW}, stored={TOPT_ID: stored})
     # A machine with OpenD configured must not reach a real connection from this test. The fake
-    # counts the opens: a head whose reports are current must not open one at all.
+    # counts the opens: a head whose reports are current opens none, and neither does a universe
+    # with nothing to fetch.
     opened: list[int] = []
 
     @contextmanager
@@ -460,7 +464,7 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     assert request.run_config["ops"]["head_reports_start"]["config"]["only_if_stale"] is True
     result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config)
     assert result.success
-    assert opened == ([] if stored == TOPT_NEW else [1]), "OpenD opens once, and only when the head is recomputed"
+    assert opened == [], "this universe has nothing to fetch, so OpenD never opens"
     return purity_calls, compiled, persisted, written
 
 

@@ -56,15 +56,18 @@ def parse_alias(raw_id: str, role: str) -> tuple[str, str]:
     return "legacy-id", raw
 
 
-def resolve_entity(
+def lookup_entity(
     connection: psycopg.Connection[Any],
     raw_id: str,
     role: str,
     *,
     as_of: date,
     known_at: datetime,
-) -> uuid.UUID:
-    """Resolve an entity string to its canonical UUIDv5 identity."""
+) -> uuid.UUID | None:
+    """The entity `raw_id` names, or None when the store holds none. Never writes.
+
+    `resolve_entity` mints on None. A reader that must not mint calls this instead (#1079).
+    """
     raw = raw_id.strip()
     if is_uuid(raw):
         parsed = uuid.UUID(raw)
@@ -119,6 +122,25 @@ def resolve_entity(
                 (existing_legacy[0], known_at),
             ).fetchone()
             return survivor[0] if survivor and survivor[0] else existing_legacy[0]
+
+    return None
+
+
+def resolve_entity(
+    connection: psycopg.Connection[Any],
+    raw_id: str,
+    role: str,
+    *,
+    as_of: date,
+    known_at: datetime,
+) -> uuid.UUID:
+    """Resolve an entity string to its canonical UUIDv5 identity."""
+    found = lookup_entity(connection, raw_id, role, as_of=as_of, known_at=known_at)
+    if found is not None:
+        return found
+
+    raw = raw_id.strip()
+    scheme, value = parse_alias(raw, role)
 
     # 3. Mint entity on miss
     kind = role  # 'issuer', 'instrument', 'listing'
