@@ -21,6 +21,7 @@ fresh, and deploy-freshness pages on a red, stale or missing one. `NIGHTLY_VERDI
 names what this lane records."""
 
 import json
+from collections import Counter
 from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import UTC, datetime
@@ -32,7 +33,13 @@ from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
 from data_engine.datahub import analyst_ratings, question_coverage
-from data_engine.datahub.canonical_issuer import CanonicalUniverse, account_for_head_members, canonicalize_universe
+from data_engine.datahub.canonical_issuer import (
+    JOIN_FLOOR_TRIPPED,
+    CanonicalUniverse,
+    account_for_head_members,
+    canonicalize_universe,
+    is_canonical_issuer_id,
+)
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
@@ -237,6 +244,9 @@ def _canonical_universe(
     It may be a later publication with another date.
     """
     wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
+    # `issuer_id` of the wide row is plain text. A row is written under it, so it must be canonical.
+    if not all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
+        raise ValueError(f"the wide row of {head.run_id} holds an issuer id that is not a canonical UUID")
     resolved = CanonicalUniverse(issuers=())
     if tickers:
         resolved = canonicalize_universe(
@@ -495,33 +505,39 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         # The ids are resolved. End the reads now, so no transaction stays open across the vendor
         # calls. The rows are written after the last fetch, in one transaction.
         connection.rollback()
+        # The floor depends on the head and the universe only, so a retry would repeat it. It is
+        # judged before any fetch. A tripped floor fetches nothing and opens no OpenD context.
+        # Every wide-row issuer then gets an unavailable row, a joined one with its own reason.
+        floor_failure = universe.lane_failure()
+        fills = [(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited]
+        if floor_failure is not None:
+            fills = [(issuer.issuer_id, JOIN_FLOOR_TRIPPED) for issuer in universe.issuers] + fills
         # Only the open of the context is a fetch failure. A write error fails the op and rolls
         # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
         # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
         # when its own fetch fails (the upsert's WHERE).
-        ctx = None
-        open_error: Exception | None = None
+        captured = analyst_ratings.UniverseCapture(rows=0)
         with ExitStack() as stack:
-            try:
-                from data_engine.sources.moomoo import connect as moomoo_connect
+            if floor_failure is None and universe.issuers:
+                ctx = None
+                open_error: Exception | None = None
+                try:
+                    from data_engine.sources.moomoo import connect as moomoo_connect
 
-                ctx = stack.enter_context(moomoo_connect())
-            except Exception as exc:
-                open_error = exc
-                context.log.error("moomoo OpenD context did not open: %s: %s", type(exc).__name__, exc)
-            captured = materialize_universe_analyst_ratings(
-                connection,
-                run_id=head.run_id,
-                cutoff=head.cutoff,
-                tickers=universe.tickers(),
-                ctx=ctx,
-                open_error=open_error,
-            )
+                    ctx = stack.enter_context(moomoo_connect())
+                except Exception as exc:
+                    open_error = exc
+                    context.log.error("moomoo OpenD context did not open: %s: %s", type(exc).__name__, exc)
+                captured = materialize_universe_analyst_ratings(
+                    connection,
+                    run_id=head.run_id,
+                    cutoff=head.cutoff,
+                    tickers=universe.tickers(),
+                    ctx=ctx,
+                    open_error=open_error,
+                )
             unvisited = analyst_ratings.materialize_unvisited_issuers(
-                connection,
-                run_id=head.run_id,
-                cutoff=head.cutoff,
-                unvisited=[(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited],
+                connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills
             )
             connection.commit()
 
@@ -532,7 +548,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         "rows": captured.rows + unvisited,
         JOINED_ISSUERS: captured.rows,
         UNVISITED_ISSUERS: unvisited,
-        UNVISITED_BY_REASON: universe.unvisited_by_reason(),
+        UNVISITED_BY_REASON: dict(sorted(Counter(reason for _, reason in fills).items())),
         "fetch_errors": len(captured.failures),
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
@@ -543,7 +559,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     # A fetch failure is first. Else the join floor, else the failure of the supply chain op.
     lane_failure = captured.lane_failure()
     if lane_failure is None:
-        lane_failure = universe.lane_failure()
+        lane_failure = floor_failure
         verdict_text = f"analyst ratings: {lane_failure}" if lane_failure else None
         if lane_failure is None:
             lane_failure, verdict_text = _upstream_failure(sc_summary)

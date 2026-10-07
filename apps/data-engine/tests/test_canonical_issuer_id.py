@@ -1164,6 +1164,24 @@ def test_a_universe_with_nothing_to_fetch_does_not_open_opend(
     assert analyst["lane_failure"] == "0 of 20 wide-row issuers join"
 
 
+def test_a_head_without_a_wide_row_and_without_members_opens_no_opend(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    monkeypatch: pytest.MonkeyPatch,
+    vendor: _Vendor,
+) -> None:
+    """Nothing fails and nothing is left to fetch. The floor is not what keeps OpenD closed here."""
+    monkeypatch.setattr(question_coverage, "gppe_cells", lambda _c, _run: ())
+    _universe_with(monkeypatch, [], keep_real=False)
+
+    supply_chain, analyst = _run_lane_ops()
+
+    assert (vendor.connects, vendor.fetches) == (0, 0)
+    for summary in (supply_chain, analyst):
+        assert (summary["rows"], summary["wide_row_issuers"]) == (0, 0)
+        assert "lane_failure" not in summary
+
+
 def test_a_head_that_fetches_opens_opend_once_for_every_ticker(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, vendor: _Vendor
 ) -> None:

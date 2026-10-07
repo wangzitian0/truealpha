@@ -78,13 +78,17 @@ where not (
 """
 
 
-#: An unavailable row for a wide-row issuer that no member joined. An existing row of the run stays.
+#: An unavailable row for a wide-row issuer that has no row of its own. It refreshes an earlier
+#: fill of the run. A row from a member, an answer or a fetch error, stays.
 _UNVISITED_SQL = """
 insert into mart.issuer_analyst_ratings (
     run_id, issuer_id, cutoff, reason_codes, extractor,
     availability_status, source_evidence_status, factor_validation_status
 ) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
-on conflict (run_id, issuer_id) do nothing
+on conflict (run_id, issuer_id) do update set
+    cutoff = excluded.cutoff,
+    reason_codes = excluded.reason_codes
+where mart.issuer_analyst_ratings.extractor = 'lane:unvisited:v1'
 """
 
 _RATING_MIN = 1
@@ -453,7 +457,7 @@ def materialize_unvisited_issuers(
     """Write an unavailable row for each wide-row issuer that no member joined (#1079).
 
     `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
-    A row of the run that exists already stays. Returns the number of issuers handled.
+    A row from a member stays. An earlier fill takes the new reason. Returns the number of issuers handled.
     """
     for issuer_id, reason in unvisited:
         connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))

@@ -32,6 +32,8 @@ __all__ = (
     "HEAD_MEMBER_NOT_IN_UNIVERSE",
     "JOIN_FLOOR",
     "JOIN_FLOOR_MIN_ISSUERS",
+    "JOIN_FLOOR_TRIPPED",
+    "MEMBER_RESOLVES_ELSEWHERE",
     "NOT_IN_WIDE_ROW",
     "NO_CANONICAL_ISSUER_ID",
     "CanonicalIssuer",
@@ -52,6 +54,11 @@ NOT_IN_WIDE_ROW = "not_in_wide_row"
 HEAD_MEMBER_NOT_IN_UNIVERSE = "head_member_not_in_universe"
 #: Why a member got no row: another member of the universe names the same issuer.
 DUPLICATE_CORPUS_ID = "duplicate_corpus_id"
+#: Why a wide-row issuer got an unavailable row: its member resolves to an entity outside the wide row.
+#: The issuer is in the wide row, so the reason is not `not_in_wide_row`, which names the member.
+MEMBER_RESOLVES_ELSEWHERE = "member_resolves_elsewhere"
+#: Why a joined issuer got an unavailable row: the join floor tripped, so the lane fetched nothing.
+JOIN_FLOOR_TRIPPED = "join_floor_tripped"
 
 #: The share of the wide row that members must join. Below it, the lane fails like a total drop.
 JOIN_FLOOR = 0.5
@@ -226,6 +233,15 @@ def _named_entities(
     return named
 
 
+def _fill_reason(member_reason: str | None) -> str:
+    """The reason on the row of a wide-row issuer, from the reason its member was dropped for."""
+    if member_reason is None:
+        return HEAD_MEMBER_NOT_IN_UNIVERSE
+    if member_reason == NOT_IN_WIDE_ROW:
+        return MEMBER_RESOLVES_ELSEWHERE
+    return member_reason
+
+
 def account_for_head_members(
     connection: psycopg.Connection[Any],
     universe: CanonicalUniverse,
@@ -237,8 +253,8 @@ def account_for_head_members(
 
     The universe the lane lists is the current one, so the head can hold an issuer it lacks.
     Such an issuer gets reason `head_member_not_in_universe`. A member dropped for another
-    reason names its own issuer, and that reason follows the issuer. The names come from the
-    identity view.
+    reason names its own issuer, and that reason follows the issuer. A member that resolves
+    outside the wide row gives `member_resolves_elsewhere`. The names come from the identity view.
     """
     written = {issuer.issuer_id for issuer in universe.issuers}
     missing = sorted(set(wide_row_ids) - written)
@@ -255,7 +271,7 @@ def account_for_head_members(
             issuer_id=issuer_id,
             legacy_id=labels.get(issuer_id, (None, None))[1] or issuer_id,
             ticker=labels.get(issuer_id, (None, None))[0] or issuer_id[:8],
-            reason=named.get(issuer_id, HEAD_MEMBER_NOT_IN_UNIVERSE),
+            reason=_fill_reason(named.get(issuer_id)),
         )
         for issuer_id in missing
     )
