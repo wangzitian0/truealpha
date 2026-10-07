@@ -112,20 +112,36 @@ def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int =
 
 
 def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
-    result = payload["chart"]["result"]
+    result = payload.get("chart", {}).get("result")
     if not result:
         return []
     r = result[0]
     timestamps = r.get("timestamp") or []
-    quote = r["indicators"]["quote"][0]
-    adjclose = r["indicators"].get("adjclose", [{}])[0].get("adjclose", quote["close"])
+    if not timestamps:
+        return []
+    quotes = r.get("indicators", {}).get("quote", [])
+    if not quotes:
+        return []
+    quote = quotes[0]
+    closes = quote.get("close")
+    if not closes:
+        return []
+    adjclose_list = r.get("indicators", {}).get("adjclose", [{}])
+    adjclose = (adjclose_list[0].get("adjclose") if adjclose_list else None) or closes
 
     bars = []
     for i, ts in enumerate(timestamps):
-        o, h, low, c, v = quote["open"][i], quote["high"][i], quote["low"][i], quote["close"][i], quote["volume"][i]
+        if i >= len(closes):
+            break
+        c = closes[i]
         close = recover_quoted_price(c)
         if close is None:  # non-trading gaps inside the range come back null
             continue
+        o = quote.get("open", [])[i] if "open" in quote and i < len(quote["open"]) else None
+        h = quote.get("high", [])[i] if "high" in quote and i < len(quote["high"]) else None
+        low = quote.get("low", [])[i] if "low" in quote and i < len(quote["low"]) else None
+        v = quote.get("volume", [])[i] if "volume" in quote and i < len(quote["volume"]) else None
+        ac = adjclose[i] if i < len(adjclose) else None
         bars.append(
             PriceBar(
                 day=datetime.fromtimestamp(ts, tz=UTC).date(),
@@ -133,7 +149,7 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
                 high=recover_quoted_price(h),
                 low=recover_quoted_price(low),
                 close=close,
-                adj_close=recover_quoted_price(adjclose[i]),
+                adj_close=recover_quoted_price(ac),
                 volume=v,
             )
         )
