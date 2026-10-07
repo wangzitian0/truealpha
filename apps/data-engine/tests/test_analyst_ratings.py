@@ -668,6 +668,9 @@ class _RecordingConnection:
     def commit(self) -> None:
         self.events.append("commit")
 
+    def rollback(self) -> None:
+        """The op ends its reads here. The fake holds no transaction, so nothing is recorded."""
+
 
 @dataclass
 class _OpRun:
@@ -975,6 +978,9 @@ class _SharedConnection:
     def commit(self) -> None:
         self.commits += 1
         self.events.append("commit")
+
+    def rollback(self) -> None:
+        """The op ends its reads here. The job's rows live in this transaction until the test ends."""
 
     def __getattr__(self, name: str):
         return getattr(self.connection, name)

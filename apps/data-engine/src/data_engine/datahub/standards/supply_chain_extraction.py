@@ -28,6 +28,7 @@ __all__ = (
     "SupplyChainPartner",
     "extract_supply_chain_relationships",
     "materialize_supply_chain_exposure",
+    "materialize_unvisited_issuers",
     "materialize_universe_supply_chain_exposure",
     "supply_chain_exposure",
 )
@@ -62,6 +63,16 @@ on conflict (run_id, issuer_id) do update set
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
     factor_validation_status = excluded.factor_validation_status
+"""
+
+
+#: An unavailable row for a wide-row issuer that no member joined. An existing row of the run stays.
+_UNVISITED_SQL = """
+insert into mart.issuer_supply_chain_exposure (
+    run_id, issuer_id, cutoff, reason_codes, extractor,
+    availability_status, source_evidence_status, factor_validation_status
+) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+on conflict (run_id, issuer_id) do nothing
 """
 
 
@@ -341,3 +352,16 @@ def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> b
         (cutoff,),
     ).fetchone()
     return bool(row and row[0])
+
+
+def materialize_unvisited_issuers(
+    connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
+) -> int:
+    """Write an unavailable row for each wide-row issuer that no member joined (#1079).
+
+    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
+    A row of the run that exists already stays. Returns the number of issuers handled.
+    """
+    for issuer_id, reason in unvisited:
+        connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
+    return len(unvisited)

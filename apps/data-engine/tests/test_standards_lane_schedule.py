@@ -271,6 +271,9 @@ class _Connection:
     def commit(self) -> None:
         return None
 
+    def rollback(self) -> None:
+        return None
+
     def execute(self, *_a, **_k):
         class _Result:
             def fetchall(self):

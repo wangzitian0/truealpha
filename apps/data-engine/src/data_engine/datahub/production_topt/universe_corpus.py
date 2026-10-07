@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from truealpha_contracts.capture_control import CaptureListVersion
@@ -36,16 +36,6 @@ def load_corpus(filename: str) -> dict[str, Any]:
 
     raw = resources.files("data_engine.datahub.data").joinpath(filename).read_bytes()
     return json.loads(raw)
-
-
-def capture_as_of(denominator: Mapping[str, Any], cutoff: datetime) -> date:
-    """The date a capture resolves its entity ids as of: the corpus report date, else the cutoff date.
-
-    The standards lane calls this too, so its rows resolve to the entity the wide row holds.
-    """
-    if "report_date" in denominator:
-        return date.fromisoformat(str(denominator["report_date"]))
-    return cutoff.astimezone(UTC).date()
 
 
 def corpus_universe(corpus: dict[str, Any]) -> UniverseRef:

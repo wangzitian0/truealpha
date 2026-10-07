@@ -105,7 +105,6 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from data_engine.datahub.production_topt.universe_corpus import (
     TOPT_CORPUS_FILENAME,
-    capture_as_of,
     corpus_list_version,
     frozen_topt_list_version,
 )
@@ -293,7 +292,11 @@ def plan_and_persist(
     raw_coordinates = {
         str(row[2]): (str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in denominator["instruments"]
     }
-    as_of = capture_as_of(denominator, cutoff)
+    as_of = (
+        date.fromisoformat(str(denominator["report_date"]))
+        if "report_date" in denominator
+        else cutoff.astimezone(UTC).date()
+    )
     from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
     with connection.transaction():

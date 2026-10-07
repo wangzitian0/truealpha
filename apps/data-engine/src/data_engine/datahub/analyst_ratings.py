@@ -34,6 +34,7 @@ __all__ = (
     "analyst_track_record",
     "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
+    "materialize_unvisited_issuers",
     "materialize_universe_analyst_ratings",
 )
 
@@ -76,6 +77,15 @@ where not (
 )
 """
 
+
+#: An unavailable row for a wide-row issuer that no member joined. An existing row of the run stays.
+_UNVISITED_SQL = """
+insert into mart.issuer_analyst_ratings (
+    run_id, issuer_id, cutoff, reason_codes, extractor,
+    availability_status, source_evidence_status, factor_validation_status
+) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+on conflict (run_id, issuer_id) do nothing
+"""
 
 _RATING_MIN = 1
 _RATING_MAX = 5
@@ -218,6 +228,46 @@ def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+def _ticker_row(
+    ctx: Any,
+    *,
+    ticker: str,
+    company_id: str,
+    as_of: datetime,
+    open_error: Exception | None,
+    log_traceback: bool,
+) -> tuple[dict[str, Any] | AnalystTrackRecord, FetchFailure | None]:
+    """Fetch one ticker's consensus and build its row. Touches no database.
+
+    A fetch failure is logged at ERROR level with the ticker, the message and the traceback.
+    It becomes an unavailable row with the reason code `fetch_error:<ExceptionType>`.
+    """
+    if ctx is None:
+        if open_error is None:
+            return analyst_track_record([], entity_id=company_id, as_of=as_of), None
+        failure = FetchFailure(ticker=ticker, error=f"{type(open_error).__name__}: {open_error}")
+        return _fetch_error_row(company_id, open_error), failure
+    code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
+    try:
+        from data_engine.sources.moomoo import get_analyst_consensus
+
+        payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
+        consensus_row = _consensus_row(payload, company_id)
+    except Exception as exc:
+        failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
+        log.error(
+            "analyst consensus fetch failed for %s (%s): %s",
+            ticker,
+            company_id,
+            failure.error,
+            exc_info=log_traceback,
+        )
+        return _fetch_error_row(company_id, exc), failure
+    if consensus_row is None:
+        return analyst_track_record([], entity_id=company_id, as_of=as_of), None
+    return consensus_row, None
+
+
 def capture_ticker_analyst_ratings(
     ctx: Any,
     *,
@@ -250,43 +300,10 @@ def capture_ticker_analyst_ratings(
         persisted as an unavailable row with the reason code `fetch_error:<ExceptionType>`.
     """
     as_of = cutoff or datetime.now(tz=UTC)
-    failure: FetchFailure | None = None
-    ratings_data: list[dict[str, Any] | AnalystTrackRecord]
-    if ctx is None:
-        if open_error is None:
-            ratings_data = [analyst_track_record([], entity_id=company_id, as_of=as_of)]
-        else:
-            failure = FetchFailure(ticker=ticker, error=f"{type(open_error).__name__}: {open_error}")
-            ratings_data = [_fetch_error_row(company_id, open_error)]
-    else:
-        code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
-        try:
-            from data_engine.sources.moomoo import get_analyst_consensus
-
-            payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
-            consensus_row = _consensus_row(payload, company_id)
-        except Exception as exc:
-            failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
-            log.error(
-                "analyst consensus fetch failed for %s (%s): %s",
-                ticker,
-                company_id,
-                failure.error,
-                exc_info=log_traceback,
-            )
-            ratings_data = [_fetch_error_row(company_id, exc)]
-        else:
-            if consensus_row is None:
-                ratings_data = [analyst_track_record([], entity_id=company_id, as_of=as_of)]
-            else:
-                ratings_data = [consensus_row]
-
-    rows = materialize_analyst_ratings(
-        connection,
-        run_id=run_id,
-        cutoff=as_of,
-        ratings_data=ratings_data,
+    row, failure = _ticker_row(
+        ctx, ticker=ticker, company_id=company_id, as_of=as_of, open_error=open_error, log_traceback=log_traceback
     )
+    rows = materialize_analyst_ratings(connection, run_id=run_id, cutoff=as_of, ratings_data=[row])
     return TickerCapture(rows=rows, failure=failure)
 
 
@@ -410,20 +427,34 @@ def materialize_universe_analyst_ratings(
             type(open_error).__name__,
             open_error,
         )
-    rows = 0
+    # Every fetch comes first and touches no database. The rows are written after the last one,
+    # so the caller holds no transaction across the vendor calls.
+    fetched: list[dict[str, Any] | AnalystTrackRecord] = []
     failures: list[FetchFailure] = []
     for issuer_id, ticker in tickers.items():
-        captured = capture_ticker_analyst_ratings(
+        row, failure = _ticker_row(
             ctx,
             ticker=ticker,
             company_id=issuer_id,
-            connection=connection,
-            run_id=run_id,
-            cutoff=cutoff,
+            as_of=cutoff,
             open_error=open_error,
             log_traceback=len(failures) < MAX_FAILURES_LOGGED,
         )
-        rows += captured.rows
-        if captured.failure is not None:
-            failures.append(captured.failure)
+        fetched.append(row)
+        if failure is not None:
+            failures.append(failure)
+    rows = materialize_analyst_ratings(connection, run_id=run_id, cutoff=cutoff, ratings_data=fetched)
     return UniverseCapture(rows=rows, failures=tuple(failures))
+
+
+def materialize_unvisited_issuers(
+    connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
+) -> int:
+    """Write an unavailable row for each wide-row issuer that no member joined (#1079).
+
+    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
+    A row of the run that exists already stays. Returns the number of issuers handled.
+    """
+    for issuer_id, reason in unvisited:
+        connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
+    return len(unvisited)

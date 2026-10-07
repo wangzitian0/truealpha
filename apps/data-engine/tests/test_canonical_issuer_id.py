@@ -936,6 +936,38 @@ def test_the_coverage_report_names_the_reason_of_a_head_member_the_universe_lack
     assert report["questions"]["q4"]["answered"] == len(wide) - 1
 
 
+def test_a_rerun_keeps_the_row_of_an_issuer_the_universe_has_lost(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first run joined the issuer. A later publication drops it. Its row stays what it was."""
+    head = _capture_qqq_head(connection, monkeypatch)
+    removed = _qqq_issuers()[-1]
+    removed_entity = lookup_entity(connection, removed, "issuer", as_of=QQQ_REPORT_DATE, known_at=QQQ_CUTOFF)
+    _publish_universe(monkeypatch, QQQ_REPORT_DATE)
+    _run_lane_ops("universe-list:qqq")
+    before = {
+        table: connection.execute(
+            f"select availability_status, reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
+            (head.run_id, str(removed_entity)),
+        ).fetchone()
+        for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings")
+    }
+    assert before["mart.issuer_analyst_ratings"] == ("available", [])
+    _publish_universe(monkeypatch, date(2026, 7, 4), without=removed)
+
+    supply_chain, analyst = _run_lane_ops("universe-list:qqq")
+
+    for table, row in before.items():
+        after = connection.execute(
+            f"select availability_status, reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
+            (head.run_id, str(removed_entity)),
+        ).fetchone()
+        assert after == row, table
+    for summary in (supply_chain, analyst):
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
+        assert summary["rows"] == summary["wide_row_issuers"]
+
+
 def _run_head_reports_job(universe: str = UNIVERSE) -> Any:
     """The deployed job, on the test connection, with the real ops, report and verdicts."""
     run_config = standards.head_reports_request(universe, EXECUTED_AT, run_key="test", only_if_stale=False).run_config
@@ -984,7 +1016,7 @@ def test_an_identity_error_ends_the_run_red_after_the_coverage_report(
     assert nightly_verdicts.newest_is_red("question_coverage@topt")
     newest = connection.execute(
         "select summary from mart.nightly_verdicts where check_name = 'question_coverage@topt' "
-        "order by ran_at desc, id desc limit 1"
+        "order by ran_at desc, recorded_at desc limit 1"
     ).fetchone()
     assert newest == (f"failed: analyst ratings: {failure}",), "the verdict carries the type only"
 
@@ -1147,7 +1179,7 @@ def test_two_names_of_one_issuer_make_one_row_under_the_first(
     )
 
     assert [(i.issuer_id, i.legacy_id) for i in universe.issuers] == [(str(entity), first.issuer_id)]
-    assert universe.unmapped == ()
+    assert [(m.legacy_id, m.reason) for m in universe.unmapped] == [(str(entity), "duplicate_corpus_id")]
 
 
 @pytest.mark.parametrize(

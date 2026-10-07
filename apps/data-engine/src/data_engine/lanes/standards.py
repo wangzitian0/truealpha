@@ -168,34 +168,54 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
-#: The key the supply chain and analyst ops set, to the count of issuers with no row (#1079).
-#: An issuer is unmapped when it has no entity, or its entity is not in the head's wide row.
-#: A wide-row issuer that no member of the current universe names is unmapped too.
+#: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
+#: A member has no row when it has no entity, its entity is not in the wide row, or it repeats one.
 UNMAPPED_ISSUERS = "unmapped_issuers"
 
-#: The key those ops set, to the count of unmapped issuers per reason.
+#: The key those ops set, to the count of unmapped members per reason.
 UNMAPPED_BY_REASON = "unmapped_by_reason"
+
+#: The keys those ops set, to the wide-row issuers that joined a member and those that did not.
+#: Each issuer that did not gets an unavailable row, so every wide-row issuer ends with one row.
+JOINED_ISSUERS = "joined_issuers"
+UNVISITED_ISSUERS = "unvisited_issuers"
+UNVISITED_BY_REASON = "unvisited_by_reason"
 
 #: The key those ops set, to the count of issuers in the head's wide row.
 WIDE_ROW_ISSUERS = "wide_row_issuers"
 
-#: The most unmapped issuers one op logs by name. A later one is counted in the summary only.
+#: The key those ops set, to the verdict text of a failure that is not a fetch failure.
+#: The text holds counts or an error type only, because the verdict is public.
+VERDICT_TEXT = "verdict_text"
+
+#: The most issuers one op names in its log per list. A later one is counted in the summary only.
 MAX_UNMAPPED_LOGGED = 20
 
 
 def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: CanonicalUniverse) -> None:
-    """Log each issuer that gets no row, with its reason code (#1079).
+    """Log each member that gets no row and each wide-row issuer that gets an unavailable row (#1079).
 
-    A row needs the wide row's issuer id, and the legacy id is not that. Such an issuer is
+    A row needs the wide row's issuer id, and a legacy id is not that. A member without one is
     named here and counted by the caller. It is not written under its legacy id.
     """
-    for issuer in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
-        context.log.warning("%s: no row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
+    for member in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
+        detail = f" ({member.detail})" if member.detail else ""
+        context.log.warning(
+            "%s: no row for %s (%s): %s%s", lane, member.ticker, member.legacy_id, member.reason, detail
+        )
     if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
         context.log.warning(
             "%s: %s more issuers get no row, not named here", lane, len(universe.unmapped) - MAX_UNMAPPED_LOGGED
         )
-    failure = universe.total_failure()
+    for issuer in universe.unvisited[:MAX_UNMAPPED_LOGGED]:
+        context.log.warning("%s: unavailable row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
+    if len(universe.unvisited) > MAX_UNMAPPED_LOGGED:
+        context.log.warning(
+            "%s: %s more issuers get an unavailable row, not named here",
+            lane,
+            len(universe.unvisited) - MAX_UNMAPPED_LOGGED,
+        )
+    failure = universe.lane_failure()
     if failure is not None:
         context.log.error("%s: %s", lane, failure)
 
@@ -204,7 +224,6 @@ def _canonical_universe(
     context: dg.OpExecutionContext,
     lane: str,
     connection: Any,
-    universe: str,
     head: question_coverage.GovernedHead,
     tickers: Mapping[str, str],
 ) -> CanonicalUniverse:
@@ -229,6 +248,38 @@ def _canonical_universe(
     resolved = account_for_head_members(connection, resolved, cutoff=head.cutoff, wide_row_ids=wide)
     _report_unmapped(context, lane, resolved)
     return resolved
+
+
+def _canonical_universe_or_failure(
+    context: dg.OpExecutionContext,
+    lane: str,
+    connection: Any,
+    head: question_coverage.GovernedHead,
+    tickers: Mapping[str, str],
+) -> tuple[CanonicalUniverse | None, str | None]:
+    """The canonical universe, or None and a failure text when the ids cannot be resolved.
+
+    An identity error must not stop the coverage op that measures the lane. The error type goes
+    to the summary and the verdict. The message goes to the log only, because it can name a host.
+    A failed statement leaves the transaction aborted, so the connection rolls back first.
+    """
+    try:
+        return _canonical_universe(context, lane, connection, head, tickers), None
+    except (ValueError, psycopg.Error) as error:
+        connection.rollback()
+        context.log.error("%s: canonicalization failed: %s: %s", lane, type(error).__name__, error)
+        return None, f"canonicalization failed: {type(error).__name__}"
+
+
+def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
+    """The lane failure and the verdict text that an upstream op put in its summary."""
+    try:
+        parsed = json.loads(summary)
+    except ValueError:
+        return None, None
+    if not isinstance(parsed, dict):
+        return None, None
+    return parsed.get(LANE_FAILURE), parsed.get(VERDICT_TEXT)
 
 
 def reports_current(upstream_summary: str) -> str | None:
@@ -340,6 +391,7 @@ def run_supply_chain_exposure(
     from data_engine.datahub.standards.planner import universe_issuers
     from data_engine.datahub.standards.supply_chain_extraction import (
         materialize_universe_supply_chain_exposure,
+        materialize_unvisited_issuers,
     )
 
     context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
@@ -355,21 +407,46 @@ def run_supply_chain_exposure(
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        universe = _canonical_universe(context, "supply chain exposure", connection, config.universe, head, tickers)
-        rows_count = materialize_universe_supply_chain_exposure(
+        universe, identity_failure = _canonical_universe_or_failure(
+            context, "supply chain exposure", connection, head, tickers
+        )
+        if universe is None:
+            return json.dumps(
+                {
+                    "universe": config.universe,
+                    "run_id": head.run_id,
+                    "rows": 0,
+                    LANE_FAILURE: identity_failure,
+                    VERDICT_TEXT: f"supply chain: {identity_failure}",
+                }
+            )
+        joined = materialize_universe_supply_chain_exposure(
             connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
+        )
+        unvisited = materialize_unvisited_issuers(
+            connection,
+            run_id=head.run_id,
+            cutoff=head.cutoff,
+            unvisited=[(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited],
         )
         connection.commit()
 
-    context.log.info("published %s supply-chain exposure rows for %s", rows_count, config.universe)
+    context.log.info("published %s supply-chain exposure rows for %s", joined + unvisited, config.universe)
     summary: dict[str, Any] = {
         "universe": config.universe,
         "run_id": head.run_id,
-        "rows": rows_count,
+        "rows": joined + unvisited,
+        JOINED_ISSUERS: joined,
+        UNVISITED_ISSUERS: unvisited,
+        UNVISITED_BY_REASON: universe.unvisited_by_reason(),
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
         WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
+    lane_failure = universe.lane_failure()
+    if lane_failure is not None:
+        summary[LANE_FAILURE] = lane_failure
+        summary[VERDICT_TEXT] = f"supply chain: {lane_failure}"
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -398,7 +475,25 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        universe = _canonical_universe(context, "analyst ratings", connection, config.universe, head, tickers)
+        universe, identity_failure = _canonical_universe_or_failure(
+            context, "analyst ratings", connection, head, tickers
+        )
+        if universe is None:
+            context.log.error("analyst ratings lane failed for %s: %s", config.universe, identity_failure)
+            return json.dumps(
+                {
+                    "universe": config.universe,
+                    "executed_at": config.executed_at,
+                    "run_id": head.run_id,
+                    "rows": 0,
+                    "fetch_errors": 0,
+                    LANE_FAILURE: identity_failure,
+                    VERDICT_TEXT: f"analyst ratings: {identity_failure}",
+                }
+            )
+        # The ids are resolved. End the reads now, so no transaction stays open across the vendor
+        # calls. The rows are written after the last fetch, in one transaction.
+        connection.rollback()
         # Only the open of the context is a fetch failure. A write error fails the op and rolls
         # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
         # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
@@ -421,13 +516,22 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                 ctx=ctx,
                 open_error=open_error,
             )
+            unvisited = analyst_ratings.materialize_unvisited_issuers(
+                connection,
+                run_id=head.run_id,
+                cutoff=head.cutoff,
+                unvisited=[(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited],
+            )
             connection.commit()
 
     summary: dict[str, Any] = {
         "universe": config.universe,
         "executed_at": config.executed_at,
         "run_id": head.run_id,
-        "rows": captured.rows,
+        "rows": captured.rows + unvisited,
+        JOINED_ISSUERS: captured.rows,
+        UNVISITED_ISSUERS: unvisited,
+        UNVISITED_BY_REASON: universe.unvisited_by_reason(),
         "fetch_errors": len(captured.failures),
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
@@ -435,7 +539,15 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
-    lane_failure = captured.lane_failure() or universe.total_failure()
+    # A fetch failure is first. Else the join floor, else the failure of the supply chain op.
+    lane_failure = captured.lane_failure()
+    if lane_failure is None:
+        lane_failure = universe.lane_failure()
+        verdict_text = f"analyst ratings: {lane_failure}" if lane_failure else None
+        if lane_failure is None:
+            lane_failure, verdict_text = _upstream_failure(sc_summary)
+        if lane_failure is not None:
+            summary[VERDICT_TEXT] = verdict_text
     if lane_failure is not None:
         summary[LANE_FAILURE] = lane_failure
         context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
@@ -505,8 +617,9 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
     """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
 
-    It also fails the run when no issuer of the universe maps to the head's wide row (#1079).
-    No Q3 or Q4 row is then written, and the report would say `no_row` for all of them.
+    It also fails the run when too few wide-row issuers join a member of the universe (#1079).
+    That is no issuer, or fewer than `JOIN_FLOOR` of a wide row of five or more.
+    The same holds when the ids cannot be resolved. The text holds counts or an error type only.
 
     A lane's total failure is a fact the coverage report must show, so this op depends on the
     coverage op and runs only after the report is persisted. `coverage_summary` is unused on
@@ -531,10 +644,9 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
         run_id=context.run_id,
         tick=tick_from_config(parsed["executed_at"]),
     ) as outcome:
-        if parsed["fetch_errors"]:
-            outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
-        else:
-            outcome.summary = f"analyst ratings: {parsed[UNMAPPED_ISSUERS]} issuers get no row"
+        outcome.summary = parsed.get(VERDICT_TEXT) or (
+            f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed.get(JOINED_ISSUERS, parsed['rows'])} tickers"
+        )
         raise RuntimeError(failure)
 
 
@@ -704,7 +816,7 @@ def head_reports_pipeline_job() -> None:
     the coverage report served no_row for the new head — contradicting its own pointer.
 
     The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
-    It also fails the run when no issuer of the universe maps to the head's wide row (#1079).
+    It also fails the run when too few wide-row issuers join a member, or the ids cannot be resolved (#1079).
     """
     analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
