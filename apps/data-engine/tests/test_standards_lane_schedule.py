@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import dagster as dg
+import pytest
 from data_engine.lanes.standards import (
     STANDARD_BACKFILL_UNIVERSES,
     standard_backfill_pipeline_job,
@@ -461,6 +462,42 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     assert result.success
     assert opened == ([] if stored == TOPT_NEW else [1]), "OpenD opens once, and only when the head is recomputed"
     return purity_calls, compiled, persisted, written
+
+
+@pytest.mark.parametrize(
+    ("red", "stored", "current"),
+    [
+        ((), TOPT_NEW, True),
+        (("question_coverage@topt",), TOPT_NEW, False),
+        (("theme_purity@topt",), TOPT_NEW, False),
+        (("question_coverage@topt", "theme_purity@topt"), TOPT_NEW, False),
+        (("question_coverage@qqq-not-this-universe",), TOPT_NEW, True),
+        ((), TOPT_OLD, False),
+        ((), None, False),
+    ],
+    ids=["none-red", "coverage-red", "purity-red", "both-red", "other-universe-red", "stale-report", "no-report"],
+)
+def test_a_stored_report_makes_a_head_current_unless_a_report_verdict_is_red(monkeypatch, red, stored, current) -> None:
+    """The fallback's start op: a head is current when its report is stored and neither
+    `question_coverage@<universe>` nor `theme_purity@<universe>` has a red newest row."""
+    import json
+
+    from data_engine.lanes import standards
+
+    _pointer(monkeypatch, heads={"topt": TOPT_NEW}, stored={TOPT_ID: stored})
+    asked: list[str] = []
+    monkeypatch.setattr(standards, "newest_is_red", lambda name: asked.append(name) or name in red)
+    config = standards.HeadReportsStartConfig(
+        executed_at="2026-10-07T04:00:00+00:00", universe="topt", only_if_stale=True
+    )
+
+    summary = json.loads(standards.head_reports_start(dg.build_op_context(), config))
+
+    assert (standards.REPORTS_CURRENT in summary) is current
+    if stored == TOPT_NEW:
+        assert sorted(asked) == ["question_coverage@topt", "theme_purity@topt"]
+    else:
+        assert asked == [], "no stored report for the head: nothing to ask"
 
 
 def test_the_fallback_recomputes_nothing_when_the_heads_reports_are_current(monkeypatch) -> None:

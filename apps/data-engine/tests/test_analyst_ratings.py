@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -565,6 +566,20 @@ def test_the_traceback_is_logged_for_the_first_20_failures_only(caplog) -> None:
     assert all("no quote right" in r.getMessage() for r in records)
 
 
+def test_the_traceback_cap_counts_failures_not_tickers(caplog) -> None:
+    """30 tickers, the first 5 answer, the other 25 fail: the first 20 FAILURES log a traceback."""
+    tickers = {f"issuer:t{n}": f"T{n}" for n in range(30)}
+    responses = {f"US.T{n}": _sample("DDOG") if n < 5 else "no quote right" for n in range(30)}
+    _conn, result = _run_universe(responses, tickers)
+
+    records = _error_records(caplog)
+    assert (len(result.failures), len(records)) == (25, 25)
+    assert [bool(r.exc_info) for r in records] == [True] * 20 + [False] * 5
+    assert result.failures[0].ticker == "T5"
+    assert records[0].getMessage().startswith("analyst consensus fetch failed for T5 ")
+    assert records[19].getMessage().startswith("analyst consensus fetch failed for T24 ")
+
+
 def test_every_ticker_failing_persists_the_rows_and_names_the_lane_failure() -> None:
     conn, result = _run_universe({"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"})
 
@@ -882,7 +897,12 @@ def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fet
 # reads `unavailable:no_row` there (#1079). A Q4 assertion would pass only because of the fakes.
 # What this PR controls is asserted instead: the persisted analyst rows, the lane summary, the run.
 
-HEAD_RUN = "capture-run:" + "7" * 64
+# One token per test session. The DB-backed tests read verdicts, reports and analyst rows by
+# these names only, so rows that a development database holds from earlier work cannot change a result.
+_TOKEN = uuid.uuid4().hex
+HEAD_RUN = "capture-run:" + _TOKEN * 2
+HEAD_UNIVERSE_ID = f"universe:t771-{_TOKEN[:12]}"
+UNIQUE_UNIVERSE = f"universe-list:t771-{_TOKEN[:12]}"
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
 QQQ = "universe-list:qqq"
 JOB_NAMES = ("head_reports_pipeline_job", "standard_backfill_pipeline_job")
@@ -941,6 +961,8 @@ def _execute_job(
     fallback: bool = False,
     real_verdicts: bool = False,
     instance: dg.DagsterInstance | None = None,
+    universe: str = QQQ,
+    connects: list[int] | None = None,
 ):
     """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL.
 
@@ -948,23 +970,30 @@ def _execute_job(
     `executed_at` is the tick. `fallback` runs the 04:00 fallback request (`only_if_stale`) of the
     head-reports job, which reads the report an earlier run stored. `real_verdicts` writes the
     verdict rows to `mart.nightly_verdicts` through the real recorder, in the shared transaction.
-    `instance` is the Dagster instance to run on; a test passes one to read the run's log records."""
+    `instance` is the Dagster instance to run on; a test passes one to read the run's log records.
+    `universe` is the universe of the run. `connects` gets one entry per attempt to open the moomoo
+    context, so a test can tell a run that fetched from a run that found the head current."""
     from data_engine.datahub import question_coverage
     from data_engine.datahub.production_topt import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts
 
-    head = question_coverage.GovernedHead("universe:qqq-us-2026-06-30", HEAD_RUN, datetime(2026, 10, 6, tzinfo=UTC))
+    head = question_coverage.GovernedHead(HEAD_UNIVERSE_ID, HEAD_RUN, datetime(2026, 10, 6, tzinfo=UTC))
     issuers = [SimpleNamespace(issuer_id=i, ticker=t) for i, t in TICKERS.items()]
     ctx = _FakeQuoteContext(responses)
 
     @contextmanager
     def fake_connect():
+        if connects is not None:
+            connects.append(1)
         if open_fails is not None:
             raise open_fails
         yield ctx
 
+    # The verdict names of a universe no schedule ticks are not recorded: register the test's own.
+    names = tuple(f"{check}@{universe}" for check in ("theme_purity", "question_coverage"))
+    monkeypatch.setattr(standards, "NIGHTLY_VERDICTS", (*dict.fromkeys((*standards.NIGHTLY_VERDICTS, *names)),))
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
     monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head)
     # A second job in one test must see the real reader again: monkeypatch keeps the first patch.
@@ -999,11 +1028,11 @@ def _execute_job(
 
     if job_name == "head_reports_pipeline_job":
         run_config = standards.head_reports_request(
-            "universe-list:qqq", executed_at, run_key="test", only_if_stale=fallback
+            universe, executed_at, run_key="test", only_if_stale=fallback
         ).run_config
     else:
         assert not fallback, "only the head-reports job has a fallback"
-        run_config = standards.backfill_run_config(executed_at, "universe-list:qqq")
+        run_config = standards.backfill_run_config(executed_at, universe)
     return getattr(standards, job_name).execute_in_process(
         run_config=run_config, instance=instance, raise_on_error=False
     )
@@ -1023,15 +1052,6 @@ def _coverage_report_exists(shared_connection) -> bool:
         "select 1 from mart.question_coverage_report where run_id = %s", (HEAD_RUN,)
     ).fetchone()
     return row is not None
-
-
-def _info_logs(instance: dg.DagsterInstance, result) -> list[str]:
-    """The INFO messages of a job run, read from the instance it ran on."""
-    return [
-        entry.user_message
-        for entry in instance.all_logs(result.run_id)
-        if entry.dagster_event is None and entry.level == logging.INFO
-    ]
 
 
 def _steps(result, *, failed: bool) -> list[str]:
@@ -1126,7 +1146,10 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
 
 
 FALLBACK_AT = "2026-10-07T04:00:00+00:00"
-COVERAGE_CHECK = f"question_coverage@{QQQ}"
+COVERAGE_CHECK = f"question_coverage@{UNIQUE_UNIVERSE}"
+PURITY_CHECK = f"theme_purity@{UNIQUE_UNIVERSE}"
+HEAD_JOB = "head_reports_pipeline_job"
+OPEND_DOWN = mm.MoomooConnectionError("OpenD not reachable")
 
 
 def _verdict_rows(shared_connection, check: str) -> list[tuple[bool | None, str, str]]:
@@ -1155,7 +1178,7 @@ def test_newest_is_red_reads_the_row_the_health_endpoint_reads(monkeypatch, shar
     row (ok null) and a missing check are not red."""
     from data_engine.quality import nightly_verdicts
 
-    name = "question_coverage@newest-red-test"
+    name = f"question_coverage@newest-red-{_TOKEN[:12]}"
     day1, day2 = datetime(2026, 10, 6, 4, 0, tzinfo=UTC), datetime(2026, 10, 7, 4, 0, tzinfo=UTC)
 
     def add(ok: bool | None, ran_at: datetime) -> None:
@@ -1176,117 +1199,217 @@ def test_newest_is_red_reads_the_row_the_health_endpoint_reads(monkeypatch, shar
     assert nightly_verdicts.newest_is_red(name) is True
 
 
-def test_the_fallback_does_not_turn_a_red_coverage_verdict_green(monkeypatch, shared_connection) -> None:
-    """#771: the 04:00 fallback found the failed run's report current and wrote a green verdict.
-    The health endpoint reads the newest row, so the red lived only until 04:00 and nobody was paged."""
-    job = "head_reports_pipeline_job"
-    failed = _execute_job(monkeypatch, shared_connection, job, FAILED, real_verdicts=True)
-    assert not failed.success
-    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT)
+def _record_red(name: str, ran_at: str) -> None:
+    """One red verdict row through the real recorder: a check that failed at `ran_at`."""
+    from data_engine.quality import nightly_verdicts
 
-    instance = dg.DagsterInstance.ephemeral()
-    fallback = _execute_job(
+    nightly_verdicts.record(
+        name, ran_at=datetime.fromisoformat(ran_at), ok=False, summary="failed: test", run_id="test-run"
+    )
+
+
+def _ticks(shared_connection, check: str) -> list[tuple[bool | None, str]]:
+    return [(ok, tick) for ok, tick, _summary in _verdict_rows(shared_connection, check)]
+
+
+def test_a_fallback_retries_a_red_head_and_stays_red_while_opend_is_down(monkeypatch, shared_connection) -> None:
+    """#771: the fallback found the failed run's stored report current, so it never retried the
+    lane, and the red verdict stayed until the next pointer advance, whatever OpenD did."""
+    connects: list[int] = []
+    failed = _execute_job(
         monkeypatch,
         shared_connection,
-        job,
+        HEAD_JOB,
+        FAILED,
+        universe=UNIQUE_UNIVERSE,
+        real_verdicts=True,
+        connects=connects,
+    )
+    assert not failed.success
+    assert connects == [1]
+    assert _ticks(shared_connection, COVERAGE_CHECK) == [(True, EXECUTED_AT), (False, EXECUTED_AT)]
+
+    retry = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
         {},
+        universe=UNIQUE_UNIVERSE,
         executed_at=FALLBACK_AT,
         fallback=True,
         real_verdicts=True,
-        instance=instance,
+        connects=connects,
+        open_fails=OPEND_DOWN,
     )
 
-    assert fallback.success
-    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT), "still red after the fallback"
-    assert [(ok, tick) for ok, tick, _summary in _verdict_rows(shared_connection, COVERAGE_CHECK)] == [
+    assert connects == [1, 1], "the lane ran again: OpenD was asked once more"
+    assert not retry.success, "OpenD is still down, so the retry fails too"
+    assert _stored_analyst_rows(shared_connection) == {
+        issuer_id: ("unavailable", ["fetch_error:MoomooConnectionError"]) for issuer_id in TICKERS
+    }
+    assert _ticks(shared_connection, COVERAGE_CHECK) == [
         (True, EXECUTED_AT),
         (False, EXECUTED_AT),
-    ], "the fallback wrote no coverage row at all"
-    assert _health_verdict(shared_connection, f"theme_purity@{QQQ}") == (True, FALLBACK_AT), "other checks stay fresh"
-    assert any("newest verdict is red" in m for m in _info_logs(instance, fallback)), "the skip says why"
+        (True, FALLBACK_AT),
+        (False, FALLBACK_AT),
+    ], "the retry wrote a newer red row"
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, FALLBACK_AT)
 
 
-def test_the_fallback_still_writes_its_green_row_over_a_green_verdict(monkeypatch, shared_connection) -> None:
-    job = "head_reports_pipeline_job"
-    first = _execute_job(monkeypatch, shared_connection, job, VALID, real_verdicts=True)
+def test_a_fallback_retries_a_red_head_and_turns_green_when_opend_is_back(monkeypatch, shared_connection) -> None:
+    connects: list[int] = []
+    failed = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        FAILED,
+        universe=UNIQUE_UNIVERSE,
+        real_verdicts=True,
+        connects=connects,
+    )
+    assert not failed.success
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT)
+
+    retry = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        VALID,
+        universe=UNIQUE_UNIVERSE,
+        executed_at=FALLBACK_AT,
+        fallback=True,
+        real_verdicts=True,
+        connects=connects,
+    )
+
+    assert retry.success
+    assert connects == [1, 1]
+    assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
+    assert _verdict_rows(shared_connection, COVERAGE_CHECK)[-1][2].startswith("report persisted for ")
+
+    next_fallback = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        {},
+        universe=UNIQUE_UNIVERSE,
+        executed_at="2026-10-08T04:00:00+00:00",
+        fallback=True,
+        real_verdicts=True,
+        connects=connects,
+    )
+    assert next_fallback.success
+    assert connects == [1, 1], "a green head is current again: the next fallback fetches nothing"
+
+
+def test_a_fallback_finds_a_green_head_current_and_fetches_nothing(monkeypatch, shared_connection) -> None:
+    connects: list[int] = []
+    first = _execute_job(
+        monkeypatch, shared_connection, HEAD_JOB, VALID, universe=UNIQUE_UNIVERSE, real_verdicts=True, connects=connects
+    )
     assert first.success
 
     fallback = _execute_job(
-        monkeypatch, shared_connection, job, {}, executed_at=FALLBACK_AT, fallback=True, real_verdicts=True
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        {},
+        universe=UNIQUE_UNIVERSE,
+        executed_at=FALLBACK_AT,
+        fallback=True,
+        real_verdicts=True,
+        connects=connects,
     )
 
     assert fallback.success
+    assert connects == [1], "only the first run asked OpenD"
     rows = _verdict_rows(shared_connection, COVERAGE_CHECK)
     assert [(ok, tick) for ok, tick, _summary in rows] == [(True, EXECUTED_AT), (True, FALLBACK_AT)]
     assert rows[-1][2].startswith("reports already current on ")
     assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
 
 
+def test_a_red_theme_purity_verdict_makes_the_head_not_current(monkeypatch, shared_connection) -> None:
+    """The rule is shared: the coverage verdict is green and the report is stored, yet a red
+    theme purity verdict sends the fallback through the lanes again."""
+    connects: list[int] = []
+    first = _execute_job(
+        monkeypatch, shared_connection, HEAD_JOB, VALID, universe=UNIQUE_UNIVERSE, real_verdicts=True, connects=connects
+    )
+    assert first.success
+    _record_red(PURITY_CHECK, "2026-10-06T06:00:00+00:00")
+    assert _health_verdict(shared_connection, PURITY_CHECK) == (False, "2026-10-06T06:00:00+00:00")
+
+    fallback = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        VALID,
+        universe=UNIQUE_UNIVERSE,
+        executed_at=FALLBACK_AT,
+        fallback=True,
+        real_verdicts=True,
+        connects=connects,
+    )
+
+    assert fallback.success
+    assert connects == [1, 1], "the head was not current: the lanes ran again"
+    assert _health_verdict(shared_connection, PURITY_CHECK) == (True, FALLBACK_AT)
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
+
+
+def test_already_current_writes_no_green_row_over_a_red_verdict(monkeypatch, shared_connection) -> None:
+    """Defence in depth: if the start op calls a red head current, `_already_current` still keeps the red."""
+    from data_engine.lanes import standards
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
+    monkeypatch.setattr(standards, "NIGHTLY_VERDICTS", (*standards.NIGHTLY_VERDICTS, COVERAGE_CHECK))
+    config = standards.StandardBackfillConfig(executed_at=FALLBACK_AT, universe=UNIQUE_UNIVERSE)
+    _record_red(COVERAGE_CHECK, EXECUTED_AT)
+
+    out = standards._already_current(dg.build_op_context(), standards.QUESTION_COVERAGE_VERDICT, config, HEAD_RUN)
+
+    assert json.loads(out)[standards.REPORTS_CURRENT] == HEAD_RUN
+    assert _ticks(shared_connection, COVERAGE_CHECK) == [(False, EXECUTED_AT)], "nothing written over the red"
+
+    from data_engine.quality import nightly_verdicts
+
+    nightly_verdicts.record(
+        COVERAGE_CHECK, ran_at=datetime.fromisoformat(EXECUTED_AT), ok=True, summary="ok", run_id="test-run"
+    )
+    standards._already_current(dg.build_op_context(), standards.QUESTION_COVERAGE_VERDICT, config, HEAD_RUN)
+    assert _ticks(shared_connection, COVERAGE_CHECK) == [(False, EXECUTED_AT), (True, EXECUTED_AT), (True, FALLBACK_AT)]
+
+
 def test_a_full_run_without_a_lane_failure_turns_the_red_verdict_green_again(monkeypatch, shared_connection) -> None:
-    job = "head_reports_pipeline_job"
-    assert not _execute_job(monkeypatch, shared_connection, job, FAILED, real_verdicts=True).success
+    assert not _execute_job(
+        monkeypatch, shared_connection, HEAD_JOB, FAILED, universe=UNIQUE_UNIVERSE, real_verdicts=True
+    ).success
     assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT)
 
-    rerun = _execute_job(monkeypatch, shared_connection, job, VALID, executed_at=FALLBACK_AT, real_verdicts=True)
+    rerun = _execute_job(
+        monkeypatch,
+        shared_connection,
+        HEAD_JOB,
+        VALID,
+        universe=UNIQUE_UNIVERSE,
+        executed_at=FALLBACK_AT,
+        real_verdicts=True,
+    )
 
     assert rerun.success
     assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
     assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
 
 
-def _rerun(shared_connection, payload: Any):
-    """One capture of DDOG into the run `HEAD_RUN`, on the real table. Returns the capture result."""
-    return capture_ticker_analyst_ratings(
-        ctx=_FakeQuoteContext({"US.DDOG": payload}),
-        ticker="DDOG",
-        company_id="issuer:ddog",
-        connection=shared_connection,
-        run_id=HEAD_RUN,
-        cutoff=CUTOFF,
-    )
+def test_a_total_failure_turns_the_coverage_verdict_of_its_own_universe_red(monkeypatch, shared_connection) -> None:
+    """The fallback and the sensor run the head-reports job for `topt` too: the red row must say `topt`."""
+    result = _execute_job(monkeypatch, shared_connection, HEAD_JOB, FAILED, universe="topt")
 
-
-def _ddog_row(shared_connection) -> tuple[str, list[str], int, Decimal | None]:
-    return shared_connection.execute(
-        "select availability_status, reason_codes, analysts_count, consensus_rating "
-        "from mart.issuer_analyst_ratings where run_id = %s and issuer_id = 'issuer:ddog'",
-        (HEAD_RUN,),
-    ).fetchone()
-
-
-def test_a_failed_fetch_never_replaces_an_available_row_of_the_same_run(shared_connection) -> None:
-    assert _rerun(shared_connection, _sample("DDOG")).failure is None
-    assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4))
-
-    for payload, error_type in (("first failure", "MoomooConnectionError"), ({"rating": 9, "total": 3}, "ValueError")):
-        rerun = _rerun(shared_connection, payload)
-
-        assert rerun.failure is not None and rerun.failure.error.startswith(error_type), "the failure is counted"
-        assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4)), "the good row stays"
-
-
-def test_a_fetch_that_works_still_updates_the_row_of_the_same_run(shared_connection) -> None:
-    _rerun(shared_connection, _sample("DDOG"))
-
-    _rerun(shared_connection, {"rating": 3, "total": 7})
-    assert _ddog_row(shared_connection) == ("available", [], 7, Decimal(3))
-
-    _rerun(shared_connection, {})
-    assert _ddog_row(shared_connection) == ("unavailable", ["no_analyst_coverage"], 0, None), "no coverage overwrites"
-
-
-def test_a_failed_fetch_replaces_a_row_that_is_not_available(shared_connection) -> None:
-    _rerun(shared_connection, {})
-    assert _ddog_row(shared_connection)[1] == ["no_analyst_coverage"]
-
-    _rerun(shared_connection, "first failure")
-    assert _ddog_row(shared_connection) == ("unavailable", ["fetch_error:MoomooConnectionError"], 0, None)
-
-    _rerun(shared_connection, {"rating": 9, "total": 3})
-    assert _ddog_row(shared_connection)[1] == ["fetch_error:ValueError"], "the newest failure names the cause"
-
-    _rerun(shared_connection, _sample("DDOG"))
-    assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4))
+    assert not result.success
+    assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == ["question_coverage@topt"]
+    assert {v["check"] for v in shared_connection.verdicts} == {"theme_purity@topt", "question_coverage@topt"}
 
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)
@@ -1312,8 +1435,10 @@ def _lane_summary(**extra: Any) -> str:
     return json.dumps({"universe": QQQ, "executed_at": EXECUTED_AT, "rows": 3, "fetch_errors": 3, **extra})
 
 
-def test_the_terminal_op_records_a_red_verdict_then_raises_the_summarys_failure(monkeypatch) -> None:
-    """#771: a red run must also be a red verdict. The verdict text carries counts, no error text."""
+@pytest.mark.parametrize("universe", [QQQ, "topt"])
+def test_the_terminal_op_records_a_red_verdict_then_raises_the_summarys_failure(monkeypatch, universe) -> None:
+    """#771: a red run must also be a red verdict. The verdict text carries counts, no error text.
+    The verdict names the universe of the run, whichever it is."""
     from data_engine.lanes.standards import fail_if_a_lane_failed
     from data_engine.quality import nightly_verdicts
 
@@ -1322,12 +1447,14 @@ def test_the_terminal_op_records_a_red_verdict_then_raises_the_summarys_failure(
 
     with pytest.raises(RuntimeError) as raised:
         fail_if_a_lane_failed(
-            dg.build_op_context(), _lane_summary(lane_failure=LANE_MESSAGE), json.dumps({"report_id": "r"})
+            dg.build_op_context(),
+            _lane_summary(universe=universe, lane_failure=LANE_MESSAGE),
+            json.dumps({"report_id": "r"}),
         )
 
     assert str(raised.value) == LANE_MESSAGE
     [row] = rows
-    assert (row["check"], row["ok"]) == (f"question_coverage@{QQQ}", False)
+    assert (row["check"], row["ok"]) == (f"question_coverage@{universe}", False)
     assert row["summary"] == RED_SUMMARY
     assert row["ran_at"] == datetime.fromisoformat(EXECUTED_AT), "dated by the tick, like the green coverage verdict"
 

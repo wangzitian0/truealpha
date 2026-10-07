@@ -438,11 +438,9 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
     health endpoint reads the newest row per check, so it reads the red one. The text carries
     counts only, because the verdict is public.
 
-    The red stays until a run that does the work writes green. The fallback finds the stored
-    report current, and `_already_current` then writes nothing over a red newest verdict.
-
-    The retry happens with the next head. `head_reports_start` counts a stored report for the
-    same run as current (`stored_report_run`), so a failed lane is not run again for this head.
+    The red stays until a run writes green. The next 04:00 fallback retries the lanes.
+    `head_reports_start` does not count a head with a red verdict as current.
+    `_already_current` still writes nothing over a red newest verdict.
     """
     parsed = json.loads(analyst_summary)
     failure = parsed.get(LANE_FAILURE)
@@ -573,30 +571,46 @@ HEAD_REPORTS_CRON = "0 4 * * *"
 
 class HeadReportsStartConfig(StandardBackfillConfig):
     """`only_if_stale` is the fallback's mode: when the newest stored report for the governed
-    head already names that head, the run recomputes nothing and says so. A run launched on a
-    pointer advance, or by hand, always recomputes."""
+    head already names that head, and no report verdict is red, the run recomputes nothing and
+    says so. A run launched on a pointer advance, or by hand, always recomputes."""
 
     only_if_stale: bool = False
+
+
+def _red_report_checks(universe: str) -> list[str]:
+    """The report verdicts of `universe` whose newest row is red: coverage and theme purity."""
+    names = (check_name(check, universe) for check in (QUESTION_COVERAGE_VERDICT, THEME_PURITY_VERDICT))
+    return [name for name in names if newest_is_red(name)]
 
 
 @dg.op
 def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartConfig) -> str:
     """The daily job's stand-in for the backfill summary the purity op sequences after: no
     cells are extracted here, only the head's own reports are refreshed — or, in the
-    fallback's mode, found current and left alone."""
+    fallback's mode, found current and left alone.
+
+    A stored report does not make a head current while the newest coverage or theme purity
+    verdict is red. The fallback then recomputes the lanes, which retries a failed fetch.
+    A green run makes the head current again, so the retry stops by itself.
+    """
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
         prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
+        red: list[str] = []
         with psycopg.connect(settings.database_url) as connection:
             head = question_coverage.governed_head(connection, universe_prefix=prefix)
             if head is not None and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id:
-                summary[REPORTS_CURRENT] = head.run_id
+                red = _red_report_checks(config.universe)
+                if not red:
+                    summary[REPORTS_CURRENT] = head.run_id
         current = summary.get(REPORTS_CURRENT)
-        context.log.info(
-            "fallback for %s: %s",
-            config.universe,
-            f"reports already current on {current[:24]}" if current else "no current reports; recomputing",
-        )
+        if current:
+            outcome = f"reports already current on {current[:24]}"
+        elif red:
+            outcome = f"newest verdict is red for {', '.join(red)}; recomputing to retry"
+        else:
+            outcome = "no current reports; recomputing"
+        context.log.info("fallback for %s: %s", config.universe, outcome)
     return json.dumps(summary)
 
 
