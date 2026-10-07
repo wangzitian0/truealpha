@@ -22,6 +22,7 @@ names what this lane records."""
 
 import json
 from collections.abc import Mapping
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,7 +37,7 @@ from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.standards.planner import universe_issuers
-from data_engine.quality.nightly_verdicts import check_name, tick_from_config, verdict
+from data_engine.quality.nightly_verdicts import check_name, newest_is_red, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -65,6 +66,7 @@ __all__ = (
     "THEME_PURITY_VERDICT",
     "analyst_ratings",
     "defs",
+    "fail_if_a_lane_failed",
     "run_analyst_ratings",
     "run_supply_chain_exposure",
     "supply_chain_extraction",
@@ -161,6 +163,10 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
 #: head's reports already written; the ops after it pass it on and recompute nothing.
 REPORTS_CURRENT = "reports_current"
 
+#: The key the analyst ratings op sets, to the failure message, when every ticker of the run
+#: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
+LANE_FAILURE = "lane_failure"
+
 
 def reports_current(upstream_summary: str) -> str | None:
     """The head an upstream op found already reported, or None. The weekly backfill's summary
@@ -177,15 +183,22 @@ def reports_current(upstream_summary: str) -> str | None:
 def _already_current(context: dg.OpExecutionContext, check: str, config: StandardBackfillConfig, run_id: str) -> str:
     """A fallback run over a head whose reports exist: a green verdict that says so, and
     nothing recomputed or appended. The verdict is still written, because the fallback is what
-    keeps the check fresh on a day the pointer does not move."""
-    with verdict(
-        check_name(check, config.universe),
-        registered=NIGHTLY_VERDICTS,
-        run_id=context.run_id,
-        tick=tick_from_config(config.executed_at),
-    ) as outcome:
-        outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
-    context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
+    keeps the check fresh on a day the pointer does not move.
+
+    A red newest verdict stays red. The health endpoint reads the newest row, so a green row
+    here would hide a failed run. Only a run that does the work writes green again."""
+    name = check_name(check, config.universe)
+    if name in NIGHTLY_VERDICTS and newest_is_red(name):
+        context.log.info("%s: the newest verdict is red; no green row written over it", name)
+    else:
+        with verdict(
+            name,
+            registered=NIGHTLY_VERDICTS,
+            run_id=context.run_id,
+            tick=tick_from_config(config.executed_at),
+        ) as outcome:
+            outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
+        context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
     return json.dumps({"universe": config.universe, "run_id": run_id, REPORTS_CURRENT: run_id})
 
 
@@ -294,6 +307,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     """#771 (init.md §7 module 4): analyst consensus ratings rows for this week's governed head.
 
     Sequenced after supply chain exposure and before question coverage.
+    A moomoo context that does not open fails every ticker, like a fetch error.
     """
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
     from data_engine.datahub.question_coverage import governed_head
@@ -312,34 +326,58 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        opend_ctx = None
-        try:
-            from data_engine.sources.moomoo import connect as moomoo_connect
-
-            opend_ctx = moomoo_connect()
-        except Exception as exc:
-            context.log.info("moomoo OpenD connect not available (%s); will record honest unavailable coverage", exc)
-
-        if opend_ctx is not None:
+        # Only the open of the context is a fetch failure. A write error fails the op and rolls
+        # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
+        # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
+        # when its own fetch fails (the upsert's WHERE).
+        ctx = None
+        open_error: Exception | None = None
+        with ExitStack() as stack:
             try:
-                with opend_ctx as ctx:
-                    rows_count = materialize_universe_analyst_ratings(
-                        connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=ctx
-                    )
-            except Exception as exc:
-                context.log.warning("OpenD connection failed (%s); recording unavailable analyst ratings", exc)
-                rows_count = materialize_universe_analyst_ratings(
-                    connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
-                )
-        else:
-            rows_count = materialize_universe_analyst_ratings(
-                connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers, ctx=None
-            )
-        connection.commit()
+                from data_engine.sources.moomoo import connect as moomoo_connect
 
-    context.log.info("published %s analyst ratings rows for %s", rows_count, config.universe)
-    context.add_output_metadata({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
-    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+                ctx = stack.enter_context(moomoo_connect())
+            except Exception as exc:
+                open_error = exc
+                context.log.error("moomoo OpenD context did not open: %s: %s", type(exc).__name__, exc)
+            captured = materialize_universe_analyst_ratings(
+                connection,
+                run_id=head.run_id,
+                cutoff=head.cutoff,
+                tickers=tickers,
+                ctx=ctx,
+                open_error=open_error,
+            )
+            connection.commit()
+
+    summary: dict[str, Any] = {
+        "universe": config.universe,
+        "executed_at": config.executed_at,
+        "run_id": head.run_id,
+        "rows": captured.rows,
+        "fetch_errors": len(captured.failures),
+    }
+    # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
+    # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
+    lane_failure = captured.lane_failure()
+    if lane_failure is not None:
+        summary[LANE_FAILURE] = lane_failure
+        context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
+    for failure in captured.failures[: analyst_ratings.MAX_FAILURES_LOGGED]:
+        context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
+    if len(captured.failures) > analyst_ratings.MAX_FAILURES_LOGGED:
+        context.log.warning(
+            "%s more analyst consensus fetch failures not logged; each unavailable row holds its reason code",
+            len(captured.failures) - analyst_ratings.MAX_FAILURES_LOGGED,
+        )
+    context.add_output_metadata(summary)
+    context.log.info(
+        "published %s analyst ratings rows for %s (%s fetch errors)",
+        captured.rows,
+        config.universe,
+        len(captured.failures),
+    )
+    return json.dumps(summary)
 
 
 @dg.op
@@ -387,14 +425,48 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     return json.dumps({"report_id": report_id, "summary": summary_line(report)})
 
 
+@dg.op
+def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
+    """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
+
+    A lane's total failure is a fact the coverage report must show, so this op depends on the
+    coverage op and runs only after the report is persisted. `coverage_summary` is unused on
+    purpose: consuming it is what orders this op after the report.
+
+    A red run must also be a red verdict. The coverage op wrote its green verdict as the report
+    persisted. This op then records `question_coverage@<universe>` red with the same tick. The
+    health endpoint reads the newest row per check, so it reads the red one. The text carries
+    counts only, because the verdict is public.
+
+    The red stays until a run writes green. The next 04:00 fallback retries the lanes.
+    `head_reports_start` does not count a head with a red verdict as current.
+    `_already_current` still writes nothing over a red newest verdict.
+    """
+    parsed = json.loads(analyst_summary)
+    failure = parsed.get(LANE_FAILURE)
+    if not failure:
+        return
+    with verdict(
+        check_name(QUESTION_COVERAGE_VERDICT, parsed["universe"]),
+        registered=NIGHTLY_VERDICTS,
+        run_id=context.run_id,
+        tick=tick_from_config(parsed["executed_at"]),
+    ) as outcome:
+        outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
+        raise RuntimeError(failure)
+
+
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
 def standard_backfill_pipeline_job() -> None:
-    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(run_standard_backfill()))))
+    analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(run_standard_backfill())))
+    fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
 
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
-    """One universe's backfill → purity → supply chain → analyst ratings → coverage, every op configured alike. `standard` bounds
-    the backfill to one registered standard; empty runs them all."""
+    """One universe's backfill, purity, supply chain, analyst ratings and coverage ops, configured alike.
+
+    The terminal op `fail_if_a_lane_failed` takes no config. `standard` bounds the backfill
+    to one registered standard; empty runs them all."""
     return dg.RunConfig(
         ops={
             "run_standard_backfill": StandardBackfillConfig(
@@ -499,30 +571,46 @@ HEAD_REPORTS_CRON = "0 4 * * *"
 
 class HeadReportsStartConfig(StandardBackfillConfig):
     """`only_if_stale` is the fallback's mode: when the newest stored report for the governed
-    head already names that head, the run recomputes nothing and says so. A run launched on a
-    pointer advance, or by hand, always recomputes."""
+    head already names that head, and no report verdict is red, the run recomputes nothing and
+    says so. A run launched on a pointer advance, or by hand, always recomputes."""
 
     only_if_stale: bool = False
+
+
+def _red_report_checks(universe: str) -> list[str]:
+    """The report verdicts of `universe` whose newest row is red: coverage and theme purity."""
+    names = (check_name(check, universe) for check in (QUESTION_COVERAGE_VERDICT, THEME_PURITY_VERDICT))
+    return [name for name in names if newest_is_red(name)]
 
 
 @dg.op
 def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartConfig) -> str:
     """The daily job's stand-in for the backfill summary the purity op sequences after: no
     cells are extracted here, only the head's own reports are refreshed — or, in the
-    fallback's mode, found current and left alone."""
+    fallback's mode, found current and left alone.
+
+    A stored report does not make a head current while the newest coverage or theme purity
+    verdict is red. The fallback then recomputes the lanes, which retries a failed fetch.
+    A green run makes the head current again, so the retry stops by itself.
+    """
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
         prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
+        red: list[str] = []
         with psycopg.connect(settings.database_url) as connection:
             head = question_coverage.governed_head(connection, universe_prefix=prefix)
             if head is not None and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id:
-                summary[REPORTS_CURRENT] = head.run_id
+                red = _red_report_checks(config.universe)
+                if not red:
+                    summary[REPORTS_CURRENT] = head.run_id
         current = summary.get(REPORTS_CURRENT)
-        context.log.info(
-            "fallback for %s: %s",
-            config.universe,
-            f"reports already current on {current[:24]}" if current else "no current reports; recomputing",
-        )
+        if current:
+            outcome = f"reports already current on {current[:24]}"
+        elif red:
+            outcome = f"newest verdict is red for {', '.join(red)}; recomputing to retry"
+        else:
+            outcome = "no current reports; recomputing"
+        context.log.info("fallback for %s: %s", config.universe, outcome)
     return json.dumps(summary)
 
 
@@ -532,14 +620,17 @@ def head_reports_pipeline_job() -> None:
 
     The weekly backfill wrote all three, so on every other day the head advanced and
     the coverage report served no_row for the new head — contradicting its own pointer.
+
+    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
     """
-    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start()))))
+    analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
+    fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
 
 def head_reports_request(
     universe: str, executed_at: str, *, run_key: str, only_if_stale: bool, head_run_id: str | None = None
 ) -> dg.RunRequest:
-    """One universe's head-reports run, every op configured alike."""
+    """One universe's head-reports run: every op that takes config gets the same universe and tick."""
     tags = {UNIVERSE_TAG: universe}
     if head_run_id:
         tags[HEAD_RUN_TAG] = head_run_id
