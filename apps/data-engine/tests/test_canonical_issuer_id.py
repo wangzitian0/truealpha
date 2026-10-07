@@ -29,6 +29,7 @@ from data_engine.datahub import question_coverage
 from data_engine.datahub.canonical_issuer import (
     NO_CANONICAL_ISSUER_ID,
     NOT_IN_WIDE_ROW,
+    CanonicalIssuer,
     CanonicalUniverse,
     UnmappedIssuer,
     canonicalize_universe,
@@ -67,13 +68,22 @@ def connection() -> Iterator[psycopg.Connection[Any]]:
 
 class _LaneConnection:
     """The test's connection as the ops see `psycopg.connect(...)`, and it never closes.
-    `commit` is counted, never run, so the head and its rows roll back with the test."""
+
+    `commit` is counted, never run, so the head and its rows roll back with the test. Each
+    connect sets a savepoint, and `rollback` returns to it: the op's own reads end, and the
+    head and the rows of earlier ops stay. A failed statement leaves the connection usable.
+    """
 
     def __init__(self, connection: psycopg.Connection[Any]) -> None:
         self.connection = connection
         self.commits = 0
+        self._connects = 0
+        self._savepoint: str | None = None
 
     def __enter__(self) -> _LaneConnection:
+        self._connects += 1
+        self._savepoint = f"lane_{self._connects}"
+        self.connection.execute(f"savepoint {self._savepoint}")
         return self
 
     def __exit__(self, *_exc: object) -> bool:
@@ -81,6 +91,10 @@ class _LaneConnection:
 
     def commit(self) -> None:
         self.commits += 1
+
+    def rollback(self) -> None:
+        if self._savepoint is not None:
+            self.connection.execute(f"rollback to savepoint {self._savepoint}")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.connection, name)
@@ -223,6 +237,21 @@ def _stored_ids(connection: psycopg.Connection[Any], table: str, run_id: str) ->
     return {issuer_id for (issuer_id,) in rows}
 
 
+def _stored_reasons(
+    connection: psycopg.Connection[Any], table: str, run_id: str
+) -> dict[tuple[str, tuple[str, ...]], int]:
+    """How many rows of the run hold each (availability, reason codes)."""
+    rows = connection.execute(
+        f"select availability_status, reason_codes from {table} where run_id = %s",  # noqa: S608
+        (run_id,),
+    ).fetchall()
+    counted: dict[tuple[str, tuple[str, ...]], int] = {}
+    for status, codes in rows:
+        key = (status, tuple(codes))
+        counted[key] = counted.get(key, 0) + 1
+    return counted
+
+
 def _run_lane_ops(universe: str = UNIVERSE) -> tuple[dict[str, Any], dict[str, Any]]:
     config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=universe)
     supply_chain = standards.run_supply_chain_exposure(dg.build_op_context(), config, "{}")
@@ -290,6 +319,7 @@ def test_an_issuer_without_an_entity_gets_no_row_and_is_counted(
     assert (analyst["rows"], analyst["unmapped_issuers"]) == (ISSUERS, 1)
     assert supply_chain["unmapped_by_reason"] == analyst["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
     assert supply_chain["wide_row_issuers"] == analyst["wide_row_issuers"] == ISSUERS
+    assert supply_chain["unvisited_issuers"] == analyst["unvisited_issuers"] == 0
     assert "lane_failure" not in analyst, "one unmapped issuer of twenty is not a lane failure"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         stored = _stored_ids(connection, table, head.run_id)
@@ -323,8 +353,7 @@ def test_a_head_whose_issuers_all_join_has_nothing_unmapped(
     for summary in (supply_chain, analyst):
         assert (summary["unmapped_issuers"], summary["unmapped_by_reason"]) == (0, {})
         assert "lane_failure" not in summary
-        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
-        assert summary["wide_row_issuers"] == ISSUERS
+        _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=ISSUERS)
 
 
 class _RecordingLog:
@@ -352,26 +381,30 @@ def test_each_unmapped_issuer_is_logged_with_its_reason_code(connection: psycopg
 def test_a_universe_without_any_entity_fails_the_run_after_the_report(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The universe holds one unknown member and none of the head's. Nothing joins, and the
-    report would read `no_row` for all of them: the #1079 symptom. The terminal op ends the run red."""
+    """The universe holds one unknown member and none of the head's. Nothing joins.
+
+    Each wide-row issuer still gets an unavailable row with the reason. The terminal op ends the run red.
+    """
     _universe_with(monkeypatch, [(GHOST, "GHST")], keep_real=False)
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
 
     supply_chain, analyst = _run_lane_ops()
 
-    reasons = {NO_CANONICAL_ISSUER_ID: 1, "head_member_not_in_universe": ISSUERS}
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_issuers"]) == (0, ISSUERS + 1)
-        assert summary["unmapped_by_reason"] == reasons
-    assert "21 issuers get no row" in analyst["lane_failure"]
-    assert "lane_failure" not in supply_chain, "the terminal op reads the analyst summary only"
-    assert _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id) == set()
+        _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=0)
+        assert summary["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS}
+    assert analyst["lane_failure"] == "0 of 20 wide-row issuers join"
+    assert supply_chain["lane_failure"] == "0 of 20 wide-row issuers join"
+    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {
+        ("unavailable", ("head_member_not_in_universe",)): ISSUERS
+    }
 
-    with pytest.raises(RuntimeError, match="21 issuers get no row"):
+    with pytest.raises(RuntimeError, match="0 of 20 wide-row issuers join"):
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
     assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
-    assert recorded[0]["summary"] == "failed: analyst ratings: 21 issuers get no row"
+    assert recorded[0]["summary"] == "failed: analyst ratings: 0 of 20 wide-row issuers join"
 
 
 # --- the wide row is the authority (round 2) --------------------------------------------------
@@ -441,6 +474,13 @@ def _merge(connection: psycopg.Connection[Any], loser: uuid.UUID, survivor: uuid
         )
 
 
+def _merge_away(connection: psycopg.Connection[Any], entities: list[str]) -> None:
+    """Merge each entity into a fresh survivor, with evidence knowable at the cutoff."""
+    for entity in entities:
+        survivor = _mint(connection, "legacy-id", f"test:survivor:{entity}", at=datetime(2026, 1, 1, tzinfo=UTC))
+        _merge(connection, uuid.UUID(entity), survivor, known_from=datetime(2026, 3, 1, tzinfo=UTC))
+
+
 def _first_issuer(connection: psycopg.Connection[Any]) -> Any:
     return planner.universe_issuers(connection, UNIVERSE)[0]
 
@@ -489,15 +529,18 @@ def test_a_merge_recorded_after_the_capture_moves_a_row_only_when_knowable_at_th
 
     supply_chain, analyst = _run_lane_ops()
 
-    expected = wide - {str(wide_entity)} if moves else wide
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == expected, table
+        assert _stored_ids(connection, table, head.run_id) == wide, "every wide-row issuer has its row"
     assert str(survivor) not in _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id)
     for summary in (supply_chain, analyst):
-        assert summary["rows"] == len(expected)
+        _check_accounts(summary, wide, joined=len(wide) - (1 if moves else 0))
         assert summary["unmapped_by_reason"] == ({NOT_IN_WIDE_ROW: 1} if moves else {})
-        assert summary["rows"] + summary["unmapped_issuers"] == len(wide)
-        assert summary["wide_row_issuers"] == len(wide)
+        assert summary["unvisited_by_reason"] == ({NOT_IN_WIDE_ROW: 1} if moves else {})
+    if moves:
+        assert (
+            _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id)[("unavailable", (NOT_IN_WIDE_ROW,))]
+            == 1
+        ), "the moved issuer's row names why"
 
 
 def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
@@ -505,27 +548,24 @@ def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
 ) -> None:
     """Every wide-row entity is merged into a survivor the wide row lacks. No row joins: the #1079 symptom."""
     wide = _wide_row_ids(connection, head.run_id)
-    for entity in sorted(wide):
-        survivor = _mint(connection, "legacy-id", f"test:survivor:{entity}", at=datetime(2026, 1, 1, tzinfo=UTC))
-        _merge(connection, uuid.UUID(entity), survivor, known_from=datetime(2026, 3, 1, tzinfo=UTC))
+    _merge_away(connection, sorted(wide))
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
 
     supply_chain, analyst = _run_lane_ops()
 
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_issuers"]) == (0, ISSUERS)
+        _check_accounts(summary, wide, joined=0)
         assert summary["unmapped_by_reason"] == {NOT_IN_WIDE_ROW: ISSUERS}
-        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
-        assert summary["wide_row_issuers"] == ISSUERS
-    assert "20 issuers get no row" in analyst["lane_failure"]
-    assert "lane_failure" not in supply_chain, "the terminal op reads the analyst summary only"
+        assert summary["unvisited_by_reason"] == {NOT_IN_WIDE_ROW: ISSUERS}
+        assert summary["lane_failure"] == "0 of 20 wide-row issuers join"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == set(), table
+        assert _stored_ids(connection, table, head.run_id) == wide, table
 
-    with pytest.raises(RuntimeError, match="20 issuers get no row"):
+    with pytest.raises(RuntimeError, match="0 of 20 wide-row issuers join"):
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
     assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
+    assert recorded[0]["summary"] == "failed: analyst ratings: 0 of 20 wide-row issuers join"
 
 
 def test_an_empty_current_universe_cannot_hide_the_head_and_ends_red(
@@ -537,17 +577,18 @@ def test_an_empty_current_universe_cannot_hide_the_head_and_ends_red(
     supply_chain, analyst = _run_lane_ops()
 
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_by_reason"]) == (0, {"head_member_not_in_universe": ISSUERS})
-        assert summary["rows"] + summary["unmapped_issuers"] == summary["wide_row_issuers"] == ISSUERS
-    assert "20 issuers get no row" in analyst["lane_failure"]
+        _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=0)
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS}
+        assert summary["unmapped_issuers"] == 0
+    assert analyst["lane_failure"] == "0 of 20 wide-row issuers join"
 
 
-def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_row(
+def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_available_row(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A corpus id in UUID form resolves to itself without a lookup. It must also exist.
 
-    The head's wide row names this id. The id is a head member, so the run must account for it.
+    The head's wide row names this id, so the run writes it an unavailable row and says why.
     """
     invented = str(uuid.uuid4())
     real = _wide_row_ids(connection, head.run_id)
@@ -561,11 +602,15 @@ def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_row(
     supply_chain, analyst = _run_lane_ops()
 
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert invented not in _stored_ids(connection, table, head.run_id), table
+        row = connection.execute(
+            f"select availability_status, reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
+            (head.run_id, invented),
+        ).fetchone()
+        assert row == ("unavailable", [NO_CANONICAL_ISSUER_ID]), table
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_by_reason"]) == (ISSUERS, {NO_CANONICAL_ISSUER_ID: 1})
-        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS + 1
-        assert summary["wide_row_issuers"] == ISSUERS + 1
+        _check_accounts(summary, {*real, invented}, joined=ISSUERS)
+        assert summary["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
+        assert summary["unvisited_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
 
 
 def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
@@ -578,11 +623,15 @@ def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
     supply_chain, analyst = _run_lane_ops()
 
     for summary in (supply_chain, analyst):
-        assert (summary["rows"], summary["unmapped_by_reason"]) == (1, {"head_member_not_in_universe": ISSUERS - 1})
-        assert summary["rows"] + summary["unmapped_issuers"] == ISSUERS
-        assert summary["wide_row_issuers"] == ISSUERS
-        assert "lane_failure" not in summary, "one row joined"
-    assert _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id) == {str(entity)}
+        _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=1)
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS - 1}
+        assert summary["lane_failure"] == "1 of 20 wide-row issuers join, below the floor of 0.5"
+    assert (
+        _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id)[
+            ("unavailable", ("head_member_not_in_universe",))
+        ]
+        == ISSUERS - 1
+    )
 
 
 def _qqq_issuers() -> list[str]:
@@ -599,9 +648,10 @@ def _cik_of(issuer_id: str) -> str:
 
 
 def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> None:
-    """Every wide-row issuer is a row or an unmapped issuer, and the summary says how many."""
-    assert summary["rows"] == joined
-    assert summary["rows"] + summary["unmapped_issuers"] == len(wide)
+    """Every wide-row issuer ends with one row: its own, or an unavailable one with the reason."""
+    assert summary["rows"] == len(wide)
+    assert summary["joined_issuers"] == joined
+    assert summary["joined_issuers"] + summary["unvisited_issuers"] == len(wide)
     assert summary["wide_row_issuers"] == len(wide)
 
 
@@ -672,10 +722,13 @@ def test_a_head_member_missing_from_the_current_universe_is_counted_not_dropped(
 
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=len(wide) - 1)
-        assert summary["unmapped_by_reason"] == {"head_member_not_in_universe": 1}
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
+        assert summary["unmapped_issuers"] == 0
         assert "lane_failure" not in summary, "one head member of the universe is not a lane failure"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == wide - {str(removed_entity)}, table
+        assert _stored_ids(connection, table, head.run_id) == wide, table
+        assert _stored_reasons(connection, table, head.run_id)[("unavailable", ("head_member_not_in_universe",))] == 1
+    assert str(removed_entity) in _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id)
 
 
 def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
@@ -711,13 +764,18 @@ def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
 
     supply_chain, analyst = _run_lane_ops("universe-list:qqq")
 
-    expected = wide - {str(removed_entity)}
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == expected, table
-        assert str(entity_a) in _stored_ids(connection, table, head.run_id), "A's row carries A"
+        assert _stored_ids(connection, table, head.run_id) == wide, table
+        a_row = connection.execute(
+            f"select reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
+            (head.run_id, str(entity_a)),
+        ).fetchone()
+        assert a_row is not None and "head_member_not_in_universe" not in a_row[0], "A's row is A's own"
     for summary in (supply_chain, analyst):
-        _check_accounts(summary, wide, joined=len(expected))
-        assert summary["unmapped_by_reason"] == {"head_member_not_in_universe": 1}
+        _check_accounts(summary, wide, joined=len(wide) - 1)
+        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
+        assert summary["unmapped_issuers"] == 0
+    assert removed_entity is not None
 
 
 def test_the_log_names_each_head_member_missing_from_the_universe(
@@ -730,11 +788,11 @@ def test_the_log_names_each_head_member_missing_from_the_universe(
     log = _RecordingLog()
 
     standards._canonical_universe(  # type: ignore[arg-type]
-        SimpleNamespace(log=log), "analyst ratings", connection, "universe-list:qqq", head, members
+        SimpleNamespace(log=log), "analyst ratings", connection, head, members
     )
 
     warnings = [text for level, text in log.records if level == "warning"]
-    assert len(warnings) == 1 and warnings[0].startswith("analyst ratings: no row for ")
+    assert len(warnings) == 1 and warnings[0].startswith("analyst ratings: unavailable row for ")
     assert warnings[0].endswith(": head_member_not_in_universe")
     removed_ticker = next(row[3] for row in _qqq_denominator(QQQ_REPORT_DATE)["instruments"] if row[0] == removed)
     assert removed_ticker in warnings[0], "the log names the issuer by its ticker"
@@ -753,6 +811,242 @@ def test_the_names_of_more_unmapped_issuers_than_the_cap_are_counted_not_listed(
     assert warnings[-1] == "analyst ratings: 5 more issuers get no row, not named here"
 
 
+def test_the_names_of_more_unvisited_issuers_than_the_cap_are_counted_not_listed() -> None:
+    unvisited = tuple(
+        UnmappedIssuer(legacy_id=f"issuer:lei:{n:018d}01", ticker=f"T{n}", reason="head_member_not_in_universe")
+        for n in range(25)
+    )
+    log = _RecordingLog()
+    universe = CanonicalUniverse(
+        issuers=(CanonicalIssuer(issuer_id=str(uuid.uuid4()), legacy_id="x", ticker="X"),),
+        unvisited=unvisited,
+        wide_row_issuers=26,
+    )
+
+    standards._report_unmapped(SimpleNamespace(log=log), "analyst ratings", universe)  # type: ignore[arg-type]
+
+    warnings = [text for level, text in log.records if level == "warning"]
+    assert len(warnings) == standards.MAX_UNMAPPED_LOGGED + 1
+    assert warnings[-1] == "analyst ratings: 5 more issuers get an unavailable row, not named here"
+
+
+# --- round 4: a partial join is red, the report names the reason, errors do not break the chain
+
+
+def _universe_of(joined: int, wide: int, *, others: int = 0) -> CanonicalUniverse:
+    """`joined` of `wide` issuers get a row. `others` members of the current universe get none."""
+    issuers = tuple(
+        CanonicalIssuer(issuer_id=str(uuid.uuid4()), legacy_id=f"issuer:cik:{n:010d}", ticker=f"T{n}")
+        for n in range(joined)
+    )
+    unmapped = tuple(
+        UnmappedIssuer(legacy_id=f"issuer:cik:{n:010d}", ticker=f"U{n}", reason=NOT_IN_WIDE_ROW) for n in range(others)
+    )
+    return CanonicalUniverse(issuers=issuers, unmapped=unmapped, wide_row_issuers=wide)
+
+
+@pytest.mark.parametrize(
+    ("joined", "wide", "others", "failure"),
+    [
+        (9, 20, 0, "9 of 20 wide-row issuers join, below the floor of 0.5"),
+        (10, 20, 0, None),
+        (9, 20, 5, "9 of 20 wide-row issuers join, below the floor of 0.5"),
+        (10, 20, 15, None),
+        (4, 8, 0, None),
+        (3, 8, 0, "3 of 8 wide-row issuers join, below the floor of 0.5"),
+        (3, 5, 0, None),
+        (2, 5, 0, "2 of 5 wide-row issuers join, below the floor of 0.5"),
+        (1, 4, 0, None),
+        (0, 4, 0, "0 of 4 wide-row issuers join"),
+        (0, 0, 0, None),
+        (0, 0, 3, "0 of 0 wide-row issuers join"),
+    ],
+    ids=[
+        "9-of-20",
+        "10-of-20",
+        "9-of-20-extras",
+        "10-of-20-many-extras",
+        "4-of-8",
+        "3-of-8",
+        "3-of-5",
+        "2-of-5",
+        "1-of-4",
+        "0-of-4",
+        "empty",
+        "members-only",
+    ],
+)
+def test_the_join_floor_is_half_of_a_wide_row_of_five_or_more(
+    joined: int, wide: int, others: int, failure: str | None
+) -> None:
+    assert _universe_of(joined, wide, others=others).lane_failure() == failure
+
+
+@pytest.mark.parametrize(("merged", "joined"), [(11, 9), (10, 10)], ids=["9-of-20", "10-of-20"])
+def test_a_partial_join_is_red_below_half_and_green_at_half(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    monkeypatch: pytest.MonkeyPatch,
+    merged: int,
+    joined: int,
+) -> None:
+    """Merged wide-row entities lose their members: the member resolves to a survivor the wide row lacks."""
+    wide = _wide_row_ids(connection, head.run_id)
+    _merge_away(connection, sorted(wide)[:merged])
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
+
+    supply_chain, analyst = _run_lane_ops()
+
+    for summary in (supply_chain, analyst):
+        _check_accounts(summary, wide, joined=joined)
+        assert summary["unvisited_by_reason"] == {NOT_IN_WIDE_ROW: merged}
+    if joined < ISSUERS / 2:
+        message = "9 of 20 wide-row issuers join, below the floor of 0.5"
+        assert supply_chain["lane_failure"] == analyst["lane_failure"] == message
+        with pytest.raises(RuntimeError, match=message):
+            standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
+        assert [(row["check"], row["ok"]) for row in recorded] == [("question_coverage@topt", False)]
+        assert recorded[0]["summary"] == f"failed: analyst ratings: {message}"
+    else:
+        assert "lane_failure" not in supply_chain and "lane_failure" not in analyst
+        standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
+        assert recorded == []
+
+
+def test_the_coverage_report_names_the_reason_of_a_head_member_the_universe_lacks(
+    connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The persisted report shows the reason code, where a missing row showed `no_row`."""
+    head = _capture_qqq_head(connection, monkeypatch)
+    wide = _wide_row_ids(connection, head.run_id)
+    _publish_universe(monkeypatch, date(2026, 7, 4), without=_qqq_issuers()[-1])
+    _run_lane_ops("universe-list:qqq")
+
+    report = question_coverage.compile_report(
+        connection, universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC)
+    )
+
+    assert report is not None
+    for question in ("q3", "q4"):
+        entry = report["questions"][question]
+        assert question_coverage.NO_ROW not in entry["unavailable"], f"{question}: {entry}"
+        assert entry["unavailable"].get("head_member_not_in_universe") == 1, f"{question}: {entry}"
+        assert entry["answered"] + sum(entry["unavailable"].values()) == len(wide), f"{question}: {entry}"
+    assert report["questions"]["q4"]["answered"] == len(wide) - 1
+
+
+def _run_head_reports_job(universe: str = UNIVERSE) -> Any:
+    """The deployed job, on the test connection, with the real ops, report and verdicts."""
+    run_config = standards.head_reports_request(universe, EXECUTED_AT, run_key="test", only_if_stale=False).run_config
+    return standards.head_reports_pipeline_job.execute_in_process(run_config=run_config, raise_on_error=False)
+
+
+def _failing_head_report_date(*_args: object) -> date:
+    raise ValueError("the head has no capture obligations")
+
+
+def _failing_lookup(connection: psycopg.Connection[Any], *_args: object, **_kwargs: object) -> None:
+    connection.execute("select staging.entity_resolve('lei', 'X', null, now())")  # the store refuses: no date
+
+
+@pytest.mark.parametrize(
+    ("breaks", "error_type"),
+    [("report_date", "ValueError"), ("lookup", "RaiseException")],
+    ids=["report-date", "lookup"],
+)
+def test_an_identity_error_ends_the_run_red_after_the_coverage_report(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    monkeypatch: pytest.MonkeyPatch,
+    breaks: str,
+    error_type: str,
+) -> None:
+    from data_engine.datahub import canonical_issuer
+
+    if breaks == "report_date":
+        monkeypatch.setattr(question_coverage, "head_report_date", _failing_head_report_date)
+    else:
+        monkeypatch.setattr(canonical_issuer, "lookup_entity", _failing_lookup)
+
+    result = _run_head_reports_job()
+
+    failure = f"canonicalization failed: {error_type}"
+    assert not result.success
+    assert [e.step_key for e in result.all_events if e.is_step_failure] == ["fail_if_a_lane_failed"]
+    for node in ("run_supply_chain_exposure", "run_analyst_ratings"):
+        summary = json.loads(result.output_for_node(node))
+        assert (summary["rows"], summary["lane_failure"]) == (0, failure), node
+    for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
+        assert _stored_ids(connection, table, head.run_id) == set(), table
+    reports = connection.execute("select count(*) from mart.question_coverage_report where run_id = %s", (head.run_id,))
+    assert reports.fetchone() == (1,), "the coverage report exists"
+    assert nightly_verdicts.newest_is_red("question_coverage@topt")
+    newest = connection.execute(
+        "select summary from mart.nightly_verdicts where check_name = 'question_coverage@topt' "
+        "order by ran_at desc, id desc limit 1"
+    ).fetchone()
+    assert newest == (f"failed: analyst ratings: {failure}",), "the verdict carries the type only"
+
+
+class _TracedLaneConnection(_LaneConnection):
+    """The lane connection that records every statement and every rollback, in order."""
+
+    def __init__(self, connection: psycopg.Connection[Any], events: list[str]) -> None:
+        super().__init__(connection)
+        self.events = events
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.events.append("sql")
+        return self.connection.execute(*args, **kwargs)
+
+    def rollback(self) -> None:
+        self.events.append("rollback")
+        super().rollback()
+
+
+def test_the_analyst_op_ends_its_reads_before_the_first_vendor_call_and_writes_after_the_last(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read transaction held across the vendor calls keeps locks on the identity tables for minutes."""
+    events: list[str] = []
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _TracedLaneConnection(connection, events))
+
+    def consensus(_ctx: object, _code: str, **_kwargs: object) -> dict[str, Any]:
+        events.append("fetch")
+        return {"rating": 4, "total": 10, "buy": 60.0, "hold": 30.0, "sell": 10.0}
+
+    monkeypatch.setattr(moomoo_source, "get_analyst_consensus", consensus)
+
+    _run_lane_ops()
+
+    first, last = events.index("fetch"), len(events) - 1 - events[::-1].index("fetch")
+    assert events.count("fetch") == ISSUERS
+    assert events[first - 1] == "rollback", "the reads end before the first fetch"
+    assert "sql" not in events[first : last + 1], "no statement runs between the fetches"
+    assert "sql" in events[last + 1 :], "the rows are written after the last fetch"
+
+
+def test_a_second_corpus_id_of_one_issuer_is_counted_and_logged(connection: psycopg.Connection[Any]) -> None:
+    entity = resolve_entity(connection, "issuer:cik:0000000001", "issuer", as_of=REPORT_DATE, known_at=CUTOFF)
+
+    universe = canonicalize_universe(
+        connection,
+        [("issuer:cik:0000000001", "ONE"), ("issuer:cik:1", "ONE")],
+        cutoff=CUTOFF,
+        as_of=REPORT_DATE,
+        wide_row_ids={str(entity)},
+    )
+
+    assert [issuer.legacy_id for issuer in universe.issuers] == ["issuer:cik:0000000001"]
+    assert universe.unmapped_by_reason() == {"duplicate_corpus_id": 1}
+    log = _RecordingLog()
+    standards._report_unmapped(SimpleNamespace(log=log), "analyst ratings", universe)  # type: ignore[arg-type]
+    assert [text for level, text in log.records if level == "warning"] == [
+        "analyst ratings: no row for ONE (issuer:cik:1): duplicate_corpus_id (same issuer as issuer:cik:0000000001)"
+    ]
+
+
 # --- where the lane reads the head's report date (round 3) ------------------------------------
 
 
@@ -761,9 +1055,13 @@ def test_the_head_report_date_is_the_partition_its_capture_wrote(
 ) -> None:
     """`raw.capture_obligations.partition_key` is `str(report_date)` for every obligation of the run.
 
-    The universe id ends with the same date for this universe. The partition is the exact source.
+    `plan_and_persist` writes `str(denominator["report_date"])` as the partition of each obligation.
+    The universe id ends with the same date here. The partition is the exact source.
     """
-    assert question_coverage.head_report_date(connection, head) == REPORT_DATE
+    from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+
+    corpus_date = date.fromisoformat(load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["report_date"])
+    assert question_coverage.head_report_date(connection, head) == corpus_date == REPORT_DATE
     assert head.universe_id.endswith(REPORT_DATE.isoformat())
 
 
