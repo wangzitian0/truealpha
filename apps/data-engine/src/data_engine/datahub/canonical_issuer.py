@@ -43,6 +43,7 @@ __all__ = (
     "account_for_head_members",
     "canonicalize_universe",
     "is_canonical_issuer_id",
+    "reason_counts",
     "require_canonical_issuer_id",
 )
 
@@ -64,6 +65,11 @@ JOIN_FLOOR_TRIPPED = "join_floor_tripped"
 JOIN_FLOOR = 0.5
 #: The floor applies from this size of wide row. A smaller one fails only when nothing joins.
 JOIN_FLOOR_MIN_ISSUERS = 5
+
+
+def reason_counts(reasons: Iterable[str]) -> dict[str, int]:
+    """How many times each reason occurs, in the order of the reasons. The one count of the lane."""
+    return dict(sorted(Counter(reasons).items()))
 
 
 @dataclass(frozen=True)
@@ -116,10 +122,17 @@ class CanonicalUniverse:
         return {issuer.issuer_id: issuer.ticker for issuer in self.issuers}
 
     def unmapped_by_reason(self) -> dict[str, int]:
-        return dict(sorted(Counter(member.reason for member in self.unmapped).items()))
+        return reason_counts(member.reason for member in self.unmapped)
 
-    def unvisited_by_reason(self) -> dict[str, int]:
-        return dict(sorted(Counter(issuer.reason for issuer in self.unvisited).items()))
+    def fills(self) -> list[tuple[str, str]]:
+        """(issuer id, reason) of each wide-row issuer that gets an unavailable row from the lane.
+
+        A tripped floor fills the joined issuers too, so both ops write the same row for each.
+        """
+        fills = [(issuer.issuer_id, issuer.reason) for issuer in self.unvisited]
+        if self.lane_failure() is not None:
+            fills = [(issuer.issuer_id, JOIN_FLOOR_TRIPPED) for issuer in self.issuers] + fills
+        return fills
 
     def lane_failure(self) -> str | None:
         """The message when too few wide-row issuers join a member, else None.

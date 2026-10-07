@@ -21,7 +21,6 @@ fresh, and deploy-freshness pages on a red, stale or missing one. `NIGHTLY_VERDI
 names what this lane records."""
 
 import json
-from collections import Counter
 from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import UTC, datetime
@@ -34,11 +33,11 @@ from truealpha_contracts.standards import STANDARDS
 from data_engine.config import settings
 from data_engine.datahub import analyst_ratings, question_coverage
 from data_engine.datahub.canonical_issuer import (
-    JOIN_FLOOR_TRIPPED,
     CanonicalUniverse,
     account_for_head_members,
     canonicalize_universe,
     is_canonical_issuer_id,
+    reason_counts,
 )
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
@@ -189,6 +188,11 @@ JOINED_ISSUERS = "joined_issuers"
 UNVISITED_ISSUERS = "unvisited_issuers"
 UNVISITED_BY_REASON = "unvisited_by_reason"
 
+#: The keys those ops set, to the fill rows the statement wrote and the real rows it kept.
+#: `unvisited_by_reason` counts the written ones only, so the summary matches the table.
+UNVISITED_WRITTEN = "unvisited_written"
+KEPT_REAL_ROWS = "kept_real_rows"
+
 #: The key those ops set, to the count of issuers in the head's wide row.
 WIDE_ROW_ISSUERS = "wide_row_issuers"
 
@@ -280,6 +284,24 @@ def _canonical_universe_or_failure(
         connection.rollback()
         context.log.error("%s: canonicalization failed: %s: %s", lane, type(error).__name__, error)
         return None, f"canonicalization failed: {type(error).__name__}"
+
+
+def _fill_summary(
+    universe: CanonicalUniverse, fills: list[tuple[str, str]], written: list[tuple[str, str]]
+) -> dict[str, Any]:
+    """The summary keys of the issuers the lane filled, from the rows its statements wrote (#1079).
+
+    Each filled issuer ends with one row. A fill that met a real row wrote nothing and kept it.
+    """
+    return {
+        UNVISITED_ISSUERS: len(fills),
+        UNVISITED_WRITTEN: len(written),
+        KEPT_REAL_ROWS: len(fills) - len(written),
+        UNVISITED_BY_REASON: reason_counts(reason for _, reason in written),
+        UNMAPPED_ISSUERS: len(universe.unmapped),
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
+    }
 
 
 def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
@@ -431,33 +453,29 @@ def run_supply_chain_exposure(
                     VERDICT_TEXT: f"supply chain: {identity_failure}",
                 }
             )
-        joined = materialize_universe_supply_chain_exposure(
-            connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
-        )
-        unvisited = materialize_unvisited_issuers(
-            connection,
-            run_id=head.run_id,
-            cutoff=head.cutoff,
-            unvisited=[(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited],
-        )
+        # The floor is judged before any row is written, as in the analyst op. A tripped floor
+        # writes fills only, so both tables hold the same reason for each issuer.
+        floor_failure = universe.lane_failure()
+        fills = universe.fills()
+        joined = 0
+        if floor_failure is None:
+            joined = materialize_universe_supply_chain_exposure(
+                connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
+            )
+        written = materialize_unvisited_issuers(connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills)
         connection.commit()
 
-    context.log.info("published %s supply-chain exposure rows for %s", joined + unvisited, config.universe)
+    context.log.info("published %s supply-chain exposure rows for %s", joined + len(written), config.universe)
     summary: dict[str, Any] = {
         "universe": config.universe,
         "run_id": head.run_id,
-        "rows": joined + unvisited,
+        "rows": joined + len(fills),
         JOINED_ISSUERS: joined,
-        UNVISITED_ISSUERS: unvisited,
-        UNVISITED_BY_REASON: universe.unvisited_by_reason(),
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
+        **_fill_summary(universe, fills, written),
     }
-    lane_failure = universe.lane_failure()
-    if lane_failure is not None:
-        summary[LANE_FAILURE] = lane_failure
-        summary[VERDICT_TEXT] = f"supply chain: {lane_failure}"
+    if floor_failure is not None:
+        summary[LANE_FAILURE] = floor_failure
+        summary[VERDICT_TEXT] = f"supply chain: {floor_failure}"
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -509,9 +527,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         # judged before any fetch. A tripped floor fetches nothing and opens no OpenD context.
         # Every wide-row issuer then gets an unavailable row, a joined one with its own reason.
         floor_failure = universe.lane_failure()
-        fills = [(issuer.issuer_id, issuer.reason) for issuer in universe.unvisited]
-        if floor_failure is not None:
-            fills = [(issuer.issuer_id, JOIN_FLOOR_TRIPPED) for issuer in universe.issuers] + fills
+        fills = universe.fills()
         # Only the open of the context is a fetch failure. A write error fails the op and rolls
         # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
         # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
@@ -536,7 +552,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                     ctx=ctx,
                     open_error=open_error,
                 )
-            unvisited = analyst_ratings.materialize_unvisited_issuers(
+            written = analyst_ratings.materialize_unvisited_issuers(
                 connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills
             )
             connection.commit()
@@ -545,14 +561,10 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         "universe": config.universe,
         "executed_at": config.executed_at,
         "run_id": head.run_id,
-        "rows": captured.rows + unvisited,
+        "rows": captured.rows + len(fills),
         JOINED_ISSUERS: captured.rows,
-        UNVISITED_ISSUERS: unvisited,
-        UNVISITED_BY_REASON: dict(sorted(Counter(reason for _, reason in fills).items())),
         "fetch_errors": len(captured.failures),
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
+        **_fill_summary(universe, fills, written),
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.

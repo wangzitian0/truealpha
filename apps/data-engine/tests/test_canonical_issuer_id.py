@@ -1288,9 +1288,9 @@ def test_the_summary_counts_the_rows_the_run_wrote_not_the_issuers_it_handled(
     message = "9 of 20 wide-row issuers join, below the floor of 0.5"
     assert (vendor.connects, vendor.fetches) == fetches, "the rerun spends no vendor call"
     for summary in (supply_chain, analyst):
+        assert summary["unvisited_by_reason"] == {}, "no fill row was written"
         assert (summary["rows"], summary["wide_row_issuers"]) == (ISSUERS, ISSUERS)
         assert (summary["unvisited_issuers"], summary["unvisited_written"], summary["kept_real_rows"]) == (20, 0, 20)
-        assert summary["unvisited_by_reason"] == {}
         assert summary["lane_failure"] == message
     for table in tables:
         assert _stored_reasons(connection, table, head.run_id) == good[table], table

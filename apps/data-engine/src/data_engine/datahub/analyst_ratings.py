@@ -453,12 +453,16 @@ def materialize_universe_analyst_ratings(
 
 def materialize_unvisited_issuers(
     connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
-) -> int:
-    """Write an unavailable row for each wide-row issuer that no member joined (#1079).
+) -> list[tuple[str, str]]:
+    """Write an unavailable row for each wide-row issuer that has no row of its own (#1079).
 
     `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
-    A row from a member stays. An earlier fill takes the new reason. Returns the number of issuers handled.
+    A row from a member stays, and an earlier fill takes the new reason.
+    Returns the (issuer id, reason) pairs that the statement wrote. A kept row is not among them.
     """
+    written: list[tuple[str, str]] = []
     for issuer_id, reason in unvisited:
-        connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
-    return len(unvisited)
+        cursor = connection.execute(_UNVISITED_SQL, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
+        if cursor.rowcount:
+            written.append((issuer_id, reason))
+    return written
