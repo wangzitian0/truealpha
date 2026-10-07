@@ -214,6 +214,49 @@ def check_vps(name_filter: str = "truealpha") -> bool:
         return False
 
 
+def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> bool:
+    """Assert that the target release ref contains current HEAD commits.
+
+    Prevents deploying an outdated release or deploying from an unmerged branch.
+    """
+    print(f"=== TrueAlpha Deploy Provenance Guard ({target_ref}) ===")
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        target = subprocess.run(
+            ["git", "rev-parse", target_ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        print(f"❌ Failed to resolve git references: {exc}")
+        return False
+
+    is_ancestor = (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", head, target],
+            cwd=cwd,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+    if is_ancestor:
+        print(f"✅ Target {target_ref} ({target[:8]}) contains current HEAD ({head[:8]}). Deploy authorized.")
+        return True
+    else:
+        print(f"❌ REFUSAL: Target {target_ref} ({target[:8]}) does NOT contain current HEAD ({head[:8]}).")
+        print("   Current changes are unmerged or not included in the target release ref.")
+        return False
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TrueAlpha Physical & Remote Doctor")
     parser.add_argument(
@@ -226,8 +269,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Inspect container reality on VPS via SSH",
     )
+    parser.add_argument(
+        "--verify-deploy-ref",
+        metavar="REF",
+        help="Verify that target release ref/tag contains current HEAD before deploy",
+    )
     args = parser.parse_args(argv)
 
+    if args.verify_deploy_ref:
+        return 0 if check_deploy_provenance(args.verify_deploy_ref) else 1
     if args.remote:
         return 0 if check_remote(args.remote) else 1
     if args.vps:
