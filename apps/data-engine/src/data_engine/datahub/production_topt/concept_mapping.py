@@ -61,7 +61,7 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
             {
                 # Module 1's growth basis. NOT per-share: a diluted-EPS series is
                 # incomparable across a stock split and nothing here adjusts for one
-                # (`staging.mvp_corporate_actions` is empty). Netflix's stored EPS reads
+                # (no corporate-action table exists). Netflix's stored EPS reads
                 # 11.24, 9.95, 1.20, 1.98, 2.53 for 2021-2025 because the 10-for-1 split
                 # restated the recent years and left older filings on the pre-split
                 # basis, so an EPS CAGR shows a 37%/yr DECLINE for an issuer whose net

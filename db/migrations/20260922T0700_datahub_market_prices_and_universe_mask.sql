@@ -5,8 +5,8 @@
 -- `staging.universe_mask` shape from the reverted #101 branch, which violated this
 -- repository's PIT red lines: no `transaction_time`/`confidence`, and
 -- `on conflict (...) do update` overwrote history in place. `staging.market_prices` (0004)
--- and `staging.mvp_market_prices` (0021) already own the general-purpose, KG-identity-keyed
--- price path; these two tables are the narrower TOPT-backtest-only OHLCV feed that
+-- is the legacy general-purpose price path, and 0021 sealed it against new rows. These two
+-- tables are the narrower TOPT-backtest-only OHLCV feed that
 -- `data_engine.datahub.market_prices`/`lanes.market_data` write and a future
 -- `BacktestDataGateway.price_bars()` reader turns into `PriceBar` rows -- `transaction_time`
 -- here is exactly that reader's `PriceBar.knowable_at` (`libs/contracts/.../models.py`

@@ -16,7 +16,7 @@ Provides:
   from source properties, and the append-only trigger rejects any in-place UPDATE.
 
 This is the narrow TOPT-backtest OHLCV feed, not the general KG-identity-keyed price
-path (`staging.market_prices` / `staging.mvp_market_prices`, #0004/#0021). A future
+path (the sealed `staging.market_prices`, #0004/#0021). A future
 `BacktestDataGateway.price_bars()` reader turns a row here into a
 `truealpha_contracts.models.PriceBar`: this module's `transaction_time` IS that
 `PriceBar.knowable_at` (the XNYS session close for the bar's own date, not an
