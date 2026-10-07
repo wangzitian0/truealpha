@@ -7,6 +7,7 @@ against a real PostgreSQL database (localhost:5432).
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -19,6 +20,7 @@ from data_engine.datahub.analyst_ratings import (
     analyst_track_record,
     materialize_analyst_ratings,
 )
+from data_engine.datahub.canonical_issuer import CanonicalIssuer
 from data_engine.datahub.question_coverage import (
     Cell,
     GovernedHead,
@@ -33,6 +35,11 @@ from data_engine.datahub.standards.supply_chain_extraction import (
     supply_chain_exposure,
 )
 from truealpha_contracts.question_requirements import QUESTION_REQUIREMENTS_SHA256
+
+
+def _issuer_id(name: str) -> str:
+    """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
 
 
 @pytest.fixture
@@ -68,6 +75,9 @@ def connection():
         conn.close()
 
 
+_PG_AAPL = _issuer_id("pg_aapl")
+
+
 def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection: psycopg.Connection[Any]) -> None:
     now = datetime.now(tz=UTC)
     run_id = f"test_run_{int(now.timestamp())}"
@@ -77,7 +87,7 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
         AnalystRatingItem("analyst:test:1", 5, confidence=Decimal("0.9")),
         AnalystRatingItem("analyst:test:2", 4, confidence=Decimal("0.8")),
     ]
-    rec_analyst = analyst_track_record(ratings, entity_id="issuer:test:pg_aapl", as_of=now)
+    rec_analyst = analyst_track_record(ratings, entity_id=_PG_AAPL, as_of=now)
     count_a = materialize_analyst_ratings(conn, run_id=run_id, cutoff=now, ratings_data=[rec_analyst])
     assert count_a == 1
 
@@ -88,7 +98,7 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
             "p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")
         ),
     ]
-    rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now, supplies_to_edges_exist=True)
+    rec_sc = supply_chain_exposure(partners, entity_id=_PG_AAPL, as_of=now, supplies_to_edges_exist=True)
     count_sc = materialize_supply_chain_exposure(conn, run_id=run_id, cutoff=now, exposure_data=[rec_sc])
     assert count_sc == 1
 
@@ -97,13 +107,13 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
     # 3. Read back cells and verify Touch Reality invariant
     cells_a = analyst_rating_cells(conn, run_id)
     assert len(cells_a) == 1
-    assert cells_a[0].subject_id == "issuer:test:pg_aapl"
+    assert cells_a[0].subject_id == _PG_AAPL
     assert cells_a[0].answered is True
     assert cells_a[0].reason is None
 
     cells_sc = supply_chain_cells(conn, run_id)
     assert len(cells_sc) == 1
-    assert cells_sc[0].subject_id == "issuer:test:pg_aapl"
+    assert cells_sc[0].subject_id == _PG_AAPL
     assert cells_sc[0].answered is True
     assert cells_sc[0].reason is None
 
@@ -119,7 +129,12 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection
 # so edges knowable after the cutoff stay invisible and these tests see only their own seed.
 _T772_CUTOFF = datetime(1990, 6, 30, tzinfo=UTC)
 _T772_KNOWABLE = datetime(1990, 1, 1, tzinfo=UTC)
-_T772_ISSUERS = {"issuer:t772:a": "AAA", "issuer:t772:b": "BBB"}
+#: The graph keys its edges by the legacy id; the rows store the canonical id (#1079).
+_T772_A, _T772_B = _issuer_id("t772-a"), _issuer_id("t772-b")
+_T772_ISSUERS = (
+    CanonicalIssuer(issuer_id=_T772_A, legacy_id="issuer:t772:a", ticker="AAA"),
+    CanonicalIssuer(issuer_id=_T772_B, legacy_id="issuer:t772:b", ticker="BBB"),
+)
 
 
 def _seed_edge(
@@ -147,7 +162,7 @@ def _seed_edge(
 
 def _materialize_t772(conn: psycopg.Connection[Any], run_id: str) -> dict[str, tuple[str, list[str], int]]:
     written = materialize_universe_supply_chain_exposure(
-        conn, run_id=run_id, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+        conn, run_id=run_id, cutoff=_T772_CUTOFF, issuers=_T772_ISSUERS
     )
     assert written == len(_T772_ISSUERS)
     rows = conn.execute(
@@ -165,8 +180,8 @@ def test_a_graph_with_no_supplies_to_edge_says_no_extraction_ran(connection: psy
     _seed_edge(connection, from_id="issuer:t772:a", to_id="figi:t772:a", relation_type="same_as")
     rows = _materialize_t772(connection, "run:t772:no-extraction")
     assert rows == {
-        "issuer:t772:a": ("unavailable", ["no_supply_chain_extraction"], 0),
-        "issuer:t772:b": ("unavailable", ["no_supply_chain_extraction"], 0),
+        _T772_A: ("unavailable", ["no_supply_chain_extraction"], 0),
+        _T772_B: ("unavailable", ["no_supply_chain_extraction"], 0),
     }
 
 
@@ -176,8 +191,8 @@ def test_edges_for_one_issuer_leave_the_other_with_no_disclosed_suppliers(
     _seed_edge(connection, from_id="issuer:t772:a", to_id="customer:t772", relation_type="supplies_to")
     rows = _materialize_t772(connection, "run:t772:edges-for-a")
     assert rows == {
-        "issuer:t772:a": ("available", [], 1),
-        "issuer:t772:b": ("unavailable", ["no_disclosed_suppliers"], 0),
+        _T772_A: ("available", [], 1),
+        _T772_B: ("unavailable", ["no_disclosed_suppliers"], 0),
     }
 
 
@@ -191,8 +206,8 @@ def test_an_edge_knowable_after_the_cutoff_is_not_an_extraction(connection: psyc
     )
     rows = _materialize_t772(connection, "run:t772:edge-after-cutoff")
     assert rows == {
-        "issuer:t772:a": ("unavailable", ["no_supply_chain_extraction"], 0),
-        "issuer:t772:b": ("unavailable", ["no_supply_chain_extraction"], 0),
+        _T772_A: ("unavailable", ["no_supply_chain_extraction"], 0),
+        _T772_B: ("unavailable", ["no_supply_chain_extraction"], 0),
     }
 
 
@@ -208,8 +223,8 @@ def test_an_expired_edge_still_proves_an_extraction_ran(connection: psycopg.Conn
     )
     rows = _materialize_t772(connection, "run:t772:expired-edge")
     assert rows == {
-        "issuer:t772:a": ("unavailable", ["no_disclosed_suppliers"], 0),
-        "issuer:t772:b": ("unavailable", ["no_disclosed_suppliers"], 0),
+        _T772_A: ("unavailable", ["no_disclosed_suppliers"], 0),
+        _T772_B: ("unavailable", ["no_disclosed_suppliers"], 0),
     }
 
 
@@ -228,7 +243,7 @@ def _head_with_issuers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         question_coverage,
         "gppe_cells",
-        lambda _connection, _run_id: tuple(Cell(issuer_id, True) for issuer_id in _T772_ISSUERS),
+        lambda _connection, _run_id: tuple(Cell(issuer.issuer_id, True) for issuer in _T772_ISSUERS),
     )
 
 
@@ -240,17 +255,17 @@ def test_the_report_counts_unavailable_q3_and_q4_rows_by_reason_and_names_their_
     _head_with_issuers(monkeypatch)
     # q3 comes from the real writer over a graph with no supplier edge.
     written = materialize_universe_supply_chain_exposure(
-        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, issuers=_T772_ISSUERS
     )
     assert written == len(_T772_ISSUERS)
     # q4 rows carry the shape the analyst-ratings writer gives an issuer without coverage.
-    for issuer_id in _T772_ISSUERS:
+    for issuer in _T772_ISSUERS:
         connection.execute(
             "insert into mart.issuer_analyst_ratings "
             "(run_id, issuer_id, cutoff, reason_codes, availability_status, source_evidence_status, "
             "factor_validation_status) "
             "values (%s, %s, %s, array['no_analyst_coverage'], 'unavailable', 'degraded', 'not_evaluated')",
-            (_T772_HEAD, issuer_id, _T772_CUTOFF),
+            (_T772_HEAD, issuer.issuer_id, _T772_CUTOFF),
         )
 
     report = compile_report(connection, universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC))
@@ -274,10 +289,10 @@ def test_the_report_answers_q3_and_q4_only_for_a_row_that_carries_the_value(
     # q3: issuer a has a supplier edge, issuer b has none while the graph holds edges.
     _seed_edge(connection, from_id="issuer:t772:a", to_id="customer:t772", relation_type="supplies_to")
     materialize_universe_supply_chain_exposure(
-        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, tickers=_T772_ISSUERS
+        connection, run_id=_T772_HEAD, cutoff=_T772_CUTOFF, issuers=_T772_ISSUERS
     )
     # q4: issuer a has a rating, issuer b is `available` with a null rating.
-    for issuer_id, rating in (("issuer:t772:a", Decimal("4.2")), ("issuer:t772:b", None)):
+    for issuer_id, rating in ((_T772_A, Decimal("4.2")), (_T772_B, None)):
         connection.execute(
             "insert into mart.issuer_analyst_ratings "
             "(run_id, issuer_id, cutoff, consensus_rating, availability_status, source_evidence_status, "

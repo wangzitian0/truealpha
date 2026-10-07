@@ -7,7 +7,7 @@ exposure metrics into mart.issuer_supply_chain_exposure.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -19,6 +19,8 @@ from factors.base.supply_chain_exposure import (
     supply_chain_exposure,
 )
 from psycopg import Connection
+
+from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
 
 __all__ = (
     "SupplyChainEdgeCandidate",
@@ -241,7 +243,7 @@ def materialize_supply_chain_exposure(
             _INSERT_SQL,
             (
                 run_id,
-                issuer_id,
+                require_canonical_issuer_id(issuer_id),
                 as_of,
                 exposure_score,
                 direct_partners,
@@ -265,9 +267,13 @@ def materialize_universe_supply_chain_exposure(
     *,
     run_id: str,
     cutoff: datetime,
-    tickers: Mapping[str, str],
+    issuers: Sequence[CanonicalIssuer],
 ) -> int:
-    """Extract and materialize supply chain exposure for all issuers in a universe run."""
+    """Extract and materialize supply chain exposure for all issuers in a universe run.
+
+    A row stores the issuer's canonical id, the wide row's (#1079). The graph read takes the
+    legacy id, which is what the knowledge graph keys its edges by.
+    """
     count = 0
     has_edges_table = False
     try:
@@ -287,7 +293,7 @@ def materialize_universe_supply_chain_exposure(
     # A false value means no extraction has run. A row then says so, instead of claiming that the
     # company disclosed no supplier (#772).
     supplies_to_edges_exist = has_edges_table and _supplies_to_edges_exist(connection, cutoff)
-    for issuer_id, ticker in tickers.items():
+    for issuer in issuers:
         partners: list[SupplyChainPartner] = []
         if has_edges_table:
             rows = connection.execute(
@@ -298,7 +304,7 @@ def materialize_universe_supply_chain_exposure(
                 where e.from_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
                   and (e.valid_time is null or e.valid_time @> %s::date)
                 """,
-                (issuer_id, cutoff, cutoff_date),
+                (issuer.legacy_id, cutoff, cutoff_date),
             ).fetchall()
             for p_id, p_name, conf in rows:
                 # The edge runs from the issuer to the partner, so the partner buys from the issuer.
@@ -313,7 +319,7 @@ def materialize_universe_supply_chain_exposure(
                 )
 
         record = supply_chain_exposure(
-            partners, entity_id=issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
+            partners, entity_id=issuer.issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
         )
         count += materialize_supply_chain_exposure(
             connection,

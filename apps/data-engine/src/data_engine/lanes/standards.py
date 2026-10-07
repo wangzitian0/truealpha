@@ -32,6 +32,7 @@ from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
 from data_engine.datahub import analyst_ratings, question_coverage
+from data_engine.datahub.canonical_issuer import CanonicalUniverse, canonicalize_universe
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
@@ -167,6 +168,32 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
+#: The key the supply chain and analyst ops set, to the count of universe members that got no
+#: row because no entity holds their legacy id (#1079).
+UNMAPPED_ISSUERS = "unmapped_issuers"
+
+#: The most unmapped issuers one op logs by name. A later one is counted in the summary only.
+MAX_UNMAPPED_LOGGED = 20
+
+
+def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: CanonicalUniverse) -> None:
+    """Log each issuer that gets no row, with its reason code (#1079).
+
+    A row needs the wide row's issuer id, and the legacy id is not that. Such an issuer is
+    named here and counted by the caller. It is not written under its legacy id.
+    """
+    for issuer in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
+        context.log.warning("%s: no row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
+    if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
+        context.log.warning(
+            "%s: %s more issuers get no row, each for the same reason",
+            lane,
+            len(universe.unmapped) - MAX_UNMAPPED_LOGGED,
+        )
+    failure = universe.total_failure()
+    if failure is not None:
+        context.log.error("%s: %s", lane, failure)
+
 
 def reports_current(upstream_summary: str) -> str | None:
     """The head an upstream op found already reported, or None. The weekly backfill's summary
@@ -292,14 +319,22 @@ def run_supply_chain_exposure(
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+        universe = canonicalize_universe(connection, tickers, cutoff=head.cutoff)
+        _report_unmapped(context, "supply chain exposure", universe)
         rows_count = materialize_universe_supply_chain_exposure(
-            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers
+            connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
         )
         connection.commit()
 
     context.log.info("published %s supply-chain exposure rows for %s", rows_count, config.universe)
-    context.add_output_metadata({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
-    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+    summary = {
+        "universe": config.universe,
+        "run_id": head.run_id,
+        "rows": rows_count,
+        UNMAPPED_ISSUERS: len(universe.unmapped),
+    }
+    context.add_output_metadata(summary)
+    return json.dumps(summary)
 
 
 @dg.op
@@ -326,6 +361,8 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+        universe = canonicalize_universe(connection, tickers, cutoff=head.cutoff)
+        _report_unmapped(context, "analyst ratings", universe)
         # Only the open of the context is a fetch failure. A write error fails the op and rolls
         # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
         # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
@@ -344,7 +381,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                 connection,
                 run_id=head.run_id,
                 cutoff=head.cutoff,
-                tickers=tickers,
+                tickers=universe.tickers(),
                 ctx=ctx,
                 open_error=open_error,
             )
@@ -356,10 +393,11 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         "run_id": head.run_id,
         "rows": captured.rows,
         "fetch_errors": len(captured.failures),
+        UNMAPPED_ISSUERS: len(universe.unmapped),
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
-    lane_failure = captured.lane_failure()
+    lane_failure = captured.lane_failure() or universe.total_failure()
     if lane_failure is not None:
         summary[LANE_FAILURE] = lane_failure
         context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
@@ -452,7 +490,10 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
         run_id=context.run_id,
         tick=tick_from_config(parsed["executed_at"]),
     ) as outcome:
-        outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
+        if parsed["fetch_errors"]:
+            outcome.summary = f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed['rows']} tickers"
+        else:
+            outcome.summary = f"analyst ratings: {parsed[UNMAPPED_ISSUERS]} issuers have no entity, no row written"
         raise RuntimeError(failure)
 
 

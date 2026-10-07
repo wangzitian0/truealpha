@@ -22,6 +22,8 @@ from factors.base.analyst_track_record import (
 )
 from psycopg import Connection
 
+from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
+
 __all__ = (
     "MAX_FAILURES_LOGGED",
     "AnalystRatingItem",
@@ -233,7 +235,7 @@ def capture_ticker_analyst_ratings(
     Args:
         ctx: OpenQuoteContext or mock for moomoo API.
         ticker: Ticker symbol, e.g. 'AAPL' or 'US.AAPL'.
-        company_id: Canonical issuer/company ID, e.g. 'issuer:lei:...'.
+        company_id: The issuer id of the wide row, a UUID. The write refuses any other form (#1079).
         connection: PostgreSQL connection.
         run_id: Governed run ID.
         cutoff: As-of cutoff timestamp.
@@ -364,7 +366,7 @@ def materialize_analyst_ratings(
             _INSERT_SQL,
             (
                 run_id,
-                issuer_id,
+                require_canonical_issuer_id(issuer_id),
                 as_of,
                 consensus_rating,
                 analysts_count,
@@ -394,6 +396,7 @@ def materialize_universe_analyst_ratings(
 ) -> UniverseCapture:
     """Capture and materialize analyst ratings for all issuers in a universe run.
 
+    `tickers` maps the wide row's issuer id to the ticker. `canonicalize_universe` builds it.
     The caller owns the transaction. Commit the rows first, then pass
     `UniverseCapture.lane_failure()` on in the run summary.
     Only the first `MAX_FAILURES_LOGGED` failed fetches log a traceback; later ones log the message.
