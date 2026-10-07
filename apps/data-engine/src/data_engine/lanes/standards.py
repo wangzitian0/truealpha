@@ -37,7 +37,7 @@ from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.standards.planner import universe_issuers
-from data_engine.quality.nightly_verdicts import check_name, tick_from_config, verdict
+from data_engine.quality.nightly_verdicts import check_name, newest_is_red, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -167,10 +167,6 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
-#: The most fetch failures the analyst ratings op logs at ERROR in one run. A run over a
-#: large universe in an outage would otherwise write one record per ticker.
-MAX_FAILURES_LOGGED = 20
-
 
 def reports_current(upstream_summary: str) -> str | None:
     """The head an upstream op found already reported, or None. The weekly backfill's summary
@@ -187,15 +183,22 @@ def reports_current(upstream_summary: str) -> str | None:
 def _already_current(context: dg.OpExecutionContext, check: str, config: StandardBackfillConfig, run_id: str) -> str:
     """A fallback run over a head whose reports exist: a green verdict that says so, and
     nothing recomputed or appended. The verdict is still written, because the fallback is what
-    keeps the check fresh on a day the pointer does not move."""
-    with verdict(
-        check_name(check, config.universe),
-        registered=NIGHTLY_VERDICTS,
-        run_id=context.run_id,
-        tick=tick_from_config(config.executed_at),
-    ) as outcome:
-        outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
-    context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
+    keeps the check fresh on a day the pointer does not move.
+
+    A red newest verdict stays red. The health endpoint reads the newest row, so a green row
+    here would hide a failed run. Only a run that does the work writes green again."""
+    name = check_name(check, config.universe)
+    if name in NIGHTLY_VERDICTS and newest_is_red(name):
+        context.log.info("%s: the newest verdict is red; no green row written over it", name)
+    else:
+        with verdict(
+            name,
+            registered=NIGHTLY_VERDICTS,
+            run_id=context.run_id,
+            tick=tick_from_config(config.executed_at),
+        ) as outcome:
+            outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
+        context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
     return json.dumps({"universe": config.universe, "run_id": run_id, REPORTS_CURRENT: run_id})
 
 
@@ -323,8 +326,10 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        # Only the open of the context is a fetch failure. Any later error, a write or a close,
-        # fails the op and rolls the rows back: a second pass must not overwrite good rows.
+        # Only the open of the context is a fetch failure. A write error fails the op and rolls
+        # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
+        # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
+        # when its own fetch fails (the upsert's WHERE).
         ctx = None
         open_error: Exception | None = None
         with ExitStack() as stack:
@@ -343,7 +348,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                 ctx=ctx,
                 open_error=open_error,
             )
-        connection.commit()
+            connection.commit()
 
     summary: dict[str, Any] = {
         "universe": config.universe,
@@ -358,12 +363,12 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     if lane_failure is not None:
         summary[LANE_FAILURE] = lane_failure
         context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
-    for failure in captured.failures[:MAX_FAILURES_LOGGED]:
+    for failure in captured.failures[: analyst_ratings.MAX_FAILURES_LOGGED]:
         context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
-    if len(captured.failures) > MAX_FAILURES_LOGGED:
+    if len(captured.failures) > analyst_ratings.MAX_FAILURES_LOGGED:
         context.log.warning(
             "%s more analyst consensus fetch failures not logged; each unavailable row holds its reason code",
-            len(captured.failures) - MAX_FAILURES_LOGGED,
+            len(captured.failures) - analyst_ratings.MAX_FAILURES_LOGGED,
         )
     context.add_output_metadata(summary)
     context.log.info(
@@ -430,8 +435,11 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
 
     A red run must also be a red verdict. The coverage op wrote its green verdict as the report
     persisted. This op then records `question_coverage@<universe>` red with the same tick. The
-    newest row per check wins, so the health endpoint reads the red one. The text carries counts
-    only, because the verdict is public.
+    health endpoint reads the newest row per check, so it reads the red one. The text carries
+    counts only, because the verdict is public.
+
+    The red stays until a run that does the work writes green. The fallback finds the stored
+    report current, and `_already_current` then writes nothing over a red newest verdict.
 
     The retry happens with the next head. `head_reports_start` counts a stored report for the
     same run as current (`stored_report_run`), so a failed lane is not run again for this head.

@@ -21,10 +21,13 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.analyst_ratings import (
+    FetchFailure,
+    UniverseCapture,
     capture_ticker_analyst_ratings,
     materialize_analyst_ratings,
     materialize_universe_analyst_ratings,
 )
+from data_engine.datahub.question_coverage import stored_report_run as _STORED_REPORT_RUN
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
 from factors.base.analyst_track_record import (
@@ -195,6 +198,9 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
         {"rating": 0, "total": 12},
         {"rating": 4, "total": 0},
         {"rating": 7, "total": 0},
+        {"total": 0},
+        {"total": 0, "buy": 10.0},
+        {"rating": None, "total": 0},
     ],
     ids=[
         "empty-dict",
@@ -204,6 +210,9 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
         "unknown-rating",
         "no-analysts",
         "no-analysts-any-rating",
+        "no-analysts-no-rating",
+        "no-analysts-no-rating-with-shares",
+        "no-analysts-rating-none",
     ],
 )
 def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason(payload) -> None:
@@ -246,12 +255,22 @@ def _capture(payload: Any):
     ("payload", "message"),
     [
         ({"total": 5}, "lacks rating"),
+        ({"total": 1}, "lacks rating"),
         ({"rating": 4}, "lacks total"),
+        ({"rating": 0}, "lacks total"),
         ({"buy": 50.0, "hold": 50.0}, "lacks rating and total"),
         ({"rating": None, "total": 5}, "lacks rating"),
         ({"rating": 4, "total": None}, "lacks total"),
     ],
-    ids=["no-rating", "no-total", "neither", "rating-none", "total-none"],
+    ids=[
+        "no-rating",
+        "one-analyst-no-rating",
+        "no-total",
+        "unknown-rating-no-total",
+        "neither",
+        "rating-none",
+        "total-none",
+    ],
 )
 def test_a_non_empty_payload_that_lacks_the_rating_or_the_total_is_a_contract_error(payload, message) -> None:
     """#771: only an EMPTY payload means no coverage. A payload with other keys but no
@@ -344,6 +363,16 @@ def test_a_share_from_0_to_100_percent_is_a_count(share, count) -> None:
 
     assert res.failure is None
     assert params[5] == count
+
+
+@pytest.mark.parametrize("share", [True, False, "12.3", "abc"], ids=["true", "false", "numeric-text", "text"])
+def test_a_share_that_is_no_number_is_a_contract_error(share) -> None:
+    """`float(True)` is 1.0 and `float("12.3")` is 12.3: neither is a share moomoo sends."""
+    res, params = _capture({"rating": 4, "total": 10, "hold": share})
+
+    assert res.failure is not None
+    assert res.failure.error == f"ValueError: analyst share {share!r} is not a number"
+    assert params[9] == ["fetch_error:ValueError"]
 
 
 @pytest.mark.parametrize("share", [-0.01, -1.0, 100.01, 101.0, float("nan")])
@@ -446,6 +475,94 @@ def test_a_payload_that_breaks_the_vendor_contract_is_a_logged_fetch_error(
     assert message in records[0].getMessage()
 
 
+CUTOFF = datetime(2026, 10, 6, tzinfo=UTC)
+
+
+def test_every_row_is_stamped_with_the_heads_cutoff_not_the_clock() -> None:
+    """The cutoff is the governed head's (PIT rule): an available row, a no-coverage row,
+    a fetch-error row, a row without a context and a row for a context that did not open."""
+    responses = {"US.DDOG": _sample("DDOG"), "US.NICE": {}, "US.SHOP": "first failure"}
+    conn = _MockConnection()
+    kwargs: dict[str, Any] = {"run_id": "run:uni", "cutoff": CUTOFF, "tickers": TICKERS}
+    materialize_universe_analyst_ratings(conn, ctx=_FakeQuoteContext(responses), **kwargs)
+    materialize_universe_analyst_ratings(conn, ctx=None, **kwargs)
+    materialize_universe_analyst_ratings(conn, ctx=None, open_error=RuntimeError("closed"), **kwargs)
+
+    assert [params[11] for _, params in conn.executed[:3]] == ["available", "unavailable", "unavailable"]
+    assert [params[2] for _, params in conn.executed] == [CUTOFF] * 9
+
+
+def test_the_confidence_of_each_kind_of_row() -> None:
+    """0.85 for a real consensus; 0 for a row that holds no rating, whatever the reason."""
+    responses = {"US.DDOG": _sample("DDOG"), "US.NICE": {}, "US.SHOP": "first failure"}
+    conn, _result = _run_universe(responses)
+
+    assert [params[8] for _, params in conn.executed] == [Decimal("0.85"), Decimal("0"), Decimal("0")]
+    assert [params[9] for _, params in conn.executed] == [
+        [],
+        ["no_analyst_coverage"],
+        ["fetch_error:MoomooConnectionError"],
+    ]
+
+
+class _FailingWrite(_MockConnection):
+    def execute(self, sql, params=None):
+        raise psycopg.OperationalError("write failed")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [_sample("DDOG"), {}, "first failure"],
+    ids=["available-row", "no-coverage-row", "fetch-error-row"],
+)
+def test_a_write_error_is_not_a_fetch_error_and_is_not_swallowed(payload) -> None:
+    ctx = _FakeQuoteContext({"US.DDOG": payload})
+    with pytest.raises(psycopg.OperationalError, match="write failed"):
+        capture_ticker_analyst_ratings(
+            ctx=ctx, ticker="DDOG", company_id="issuer:ddog", connection=_FailingWrite(), run_id="run:test"
+        )
+    with pytest.raises(psycopg.OperationalError, match="write failed"):
+        materialize_universe_analyst_ratings(
+            _FailingWrite(), run_id="run:test", cutoff=CUTOFF, tickers={"issuer:ddog": "DDOG"}, ctx=ctx
+        )
+
+
+@pytest.mark.parametrize(
+    ("rows", "failed", "is_lane_failure"),
+    [
+        (1, 1, True),
+        (2, 2, True),
+        (3, 3, True),
+        (2, 1, False),
+        (3, 2, False),
+        (4, 3, False),
+        (3, 1, False),
+        (3, 0, False),
+        (1, 0, False),
+        (0, 0, False),
+    ],
+)
+def test_a_lane_failure_is_every_ticker_of_a_non_empty_run(rows, failed, is_lane_failure) -> None:
+    failures = tuple(FetchFailure(ticker=f"T{n}", error="X: boom") for n in range(failed))
+    text = UniverseCapture(rows=rows, failures=failures).lane_failure()
+
+    assert (text is not None) is is_lane_failure
+    if is_lane_failure:
+        assert text == f"analyst ratings fetch failed for {rows} of {rows} tickers; first error: T0: X: boom"
+
+
+def test_the_traceback_is_logged_for_the_first_20_failures_only(caplog) -> None:
+    from data_engine.datahub.analyst_ratings import MAX_FAILURES_LOGGED
+
+    tickers = {f"issuer:t{n}": f"T{n}" for n in range(25)}
+    _conn, result = _run_universe({f"US.T{n}": "no quote right" for n in range(25)}, tickers)
+
+    records = _error_records(caplog)
+    assert (MAX_FAILURES_LOGGED, len(result.failures), len(records)) == (20, 25, 25), "one record per failure"
+    assert [bool(r.exc_info) for r in records] == [True] * 20 + [False] * 5
+    assert all("no quote right" in r.getMessage() for r in records)
+
+
 def test_every_ticker_failing_persists_the_rows_and_names_the_lane_failure() -> None:
     conn, result = _run_universe({"US.DDOG": "first failure", "US.NICE": "second failure", "US.SHOP": "third failure"})
 
@@ -476,9 +593,10 @@ def test_an_empty_universe_and_a_run_without_a_context_are_not_a_lane_failure() 
 class _RecordingConnection:
     """A connection that records the order of `execute` and `commit`, shared across the op."""
 
-    def __init__(self, events: list[str], rows: list[tuple]):
+    def __init__(self, events: list[str], rows: list[tuple], write_fails: Exception | None = None):
         self.events = events
         self.rows = rows
+        self.write_fails = write_fails
 
     def __enter__(self):
         return self
@@ -489,6 +607,8 @@ class _RecordingConnection:
 
     def execute(self, sql, params=None):
         self.events.append(f"execute:{params[1]}")
+        if self.write_fails is not None:
+            raise self.write_fails
         self.rows.append(params)
 
     def commit(self) -> None:
@@ -518,6 +638,9 @@ class _OpRun:
         return {key: value.value for key, value in output.step_output_data.metadata.items()}
 
 
+HEAD_CUTOFF = datetime(2026, 10, 6, tzinfo=UTC)
+
+
 def _run_op(
     monkeypatch,
     responses: dict[str, Any],
@@ -525,11 +648,13 @@ def _run_op(
     tickers: dict[str, str] | None = None,
     open_fails: Exception | None = None,
     close_fails: Exception | None = None,
+    write_fails: Exception | None = None,
 ) -> _OpRun:
     """Run the deployed op `run_analyst_ratings` as a one-op job, with moomoo and Postgres faked.
 
     `open_fails` is raised when the op opens the moomoo context. `close_fails` is raised when
-    the op closes it again. `tickers` is the universe: issuer id to ticker, `TICKERS` by default.
+    the op closes it again. `write_fails` is raised by the first row write.
+    `tickers` is the universe: issuer id to ticker, `TICKERS` by default.
     """
     from data_engine.datahub import question_coverage
     from data_engine.datahub.standards import planner
@@ -538,11 +663,11 @@ def _run_op(
     events: list[str] = []
     rows: list[tuple] = []
     ctx = _FakeQuoteContext(responses)
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows))
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows, write_fails))
     monkeypatch.setattr(
         question_coverage,
         "governed_head",
-        lambda _c, **_k: question_coverage.GovernedHead("universe:test", "run:head", datetime(2026, 10, 6, tzinfo=UTC)),
+        lambda _c, **_k: question_coverage.GovernedHead("universe:test", "run:head", HEAD_CUTOFF),
     )
     monkeypatch.setattr(
         planner,
@@ -595,6 +720,7 @@ def test_the_op_commits_and_reports_a_total_failure_without_raising(monkeypatch)
     assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "close"], (
         "the unavailable rows are committed before the op returns"
     )
+    assert [params[2] for params in run.rows] == [HEAD_CUTOFF] * 3, "stamped with the head's cutoff, not the clock"
 
 
 def test_the_op_succeeds_on_a_partial_failure(monkeypatch) -> None:
@@ -684,9 +810,10 @@ def test_a_context_that_cannot_be_opened_fails_every_ticker_with_the_exception_t
     assert any(str(error) in m for m in run.log_messages(logging.ERROR)), "the open failure is logged"
 
 
-def test_an_error_when_the_context_closes_is_not_swallowed_and_no_row_is_written_twice(monkeypatch) -> None:
-    """Closing the context raises after the good rows are written. The old `except Exception`
-    re-ran the whole universe without a context, and the second pass overwrote the good rows."""
+def test_a_close_error_keeps_the_committed_rows_and_still_fails_the_op(monkeypatch) -> None:
+    """Closing the context raises after the good rows are written. The rows are committed
+    BEFORE the context closes, so the close error cannot undo the night's fetches. The op still
+    fails: the close error is not swallowed, and no fallback pass overwrites a good row."""
     run = _run_op(
         monkeypatch,
         {"US.DDOG": _sample("DDOG"), "US.NICE": _sample("NICE"), "US.SHOP": _sample("SHOP")},
@@ -698,12 +825,25 @@ def test_an_error_when_the_context_closes_is_not_swallowed_and_no_row_is_written
         ("issuer:ddog", "available"),
         ("issuer:nice", "available"),
         ("issuer:shop", "available"),
-    ], "each issuer is written once, as available: no fallback pass overwrote it"
-    assert "commit" not in run.events
-    assert run.events[-1] == "rollback"
+    ], "each issuer is written once, as available"
+    assert run.events == ["execute:issuer:ddog", "execute:issuer:nice", "execute:issuer:shop", "commit", "rollback"]
     [failure] = [e for e in run.result.all_events if e.is_step_failure]
     assert failure.step_failure_data.error.cause.cls_name == "RuntimeError"
     assert "close failed" in failure.step_failure_data.error.cause.message
+
+
+def test_a_write_error_in_the_op_commits_nothing_and_fails_the_op(monkeypatch) -> None:
+    """A write error is not a fetch error: no row is committed and no second pass runs."""
+    run = _run_op(
+        monkeypatch,
+        {"US.DDOG": _sample("DDOG"), "US.NICE": _sample("NICE"), "US.SHOP": _sample("SHOP")},
+        write_fails=psycopg.OperationalError("write failed"),
+    )
+
+    assert not run.result.success
+    assert run.events == ["execute:issuer:ddog", "rollback"]
+    [failure] = [e for e in run.result.all_events if e.is_step_failure]
+    assert "write failed" in failure.step_failure_data.error.cause.message
 
 
 def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fetch_failure(caplog) -> None:
@@ -795,10 +935,18 @@ def _execute_job(
     responses: dict[str, Any],
     *,
     open_fails: Exception | None = None,
+    executed_at: str = EXECUTED_AT,
+    fallback: bool = False,
+    real_verdicts: bool = False,
+    instance: dg.DagsterInstance | None = None,
 ):
     """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL.
 
-    `open_fails` is raised when the analyst op opens the moomoo context, as an OpenD outage does."""
+    `open_fails` is raised when the analyst op opens the moomoo context, as an OpenD outage does.
+    `executed_at` is the tick. `fallback` runs the 04:00 fallback request (`only_if_stale`) of the
+    head-reports job, which reads the report an earlier run stored. `real_verdicts` writes the
+    verdict rows to `mart.nightly_verdicts` through the real recorder, in the shared transaction.
+    `instance` is the Dagster instance to run on; a test passes one to read the run's log records."""
     from data_engine.datahub import question_coverage
     from data_engine.datahub.production_topt import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
@@ -817,7 +965,12 @@ def _execute_job(
 
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
     monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head)
-    monkeypatch.setattr(question_coverage, "stored_report_run", lambda _c, _universe: None)
+    # A second job in one test must see the real reader again: monkeypatch keeps the first patch.
+    monkeypatch.setattr(
+        question_coverage,
+        "stored_report_run",
+        _STORED_REPORT_RUN if fallback else lambda _c, _universe: None,
+    )
     monkeypatch.setattr(question_coverage, "declared_environment", lambda _c: "test")
     monkeypatch.setattr(
         question_coverage, "gppe_cells", lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in TICKERS)
@@ -831,7 +984,8 @@ def _execute_job(
         shared_connection.verdicts.append({"check": name, **row})
         shared_connection.events.append(f"verdict:{name}:{row['ok']}")
 
-    monkeypatch.setattr(nightly_verdicts, "record", record_verdict)
+    if not real_verdicts:
+        monkeypatch.setattr(nightly_verdicts, "record", record_verdict)
     monkeypatch.setattr(
         standards,
         "_run_standard_backfill",
@@ -843,11 +997,14 @@ def _execute_job(
 
     if job_name == "head_reports_pipeline_job":
         run_config = standards.head_reports_request(
-            "universe-list:qqq", EXECUTED_AT, run_key="test", only_if_stale=False
+            "universe-list:qqq", executed_at, run_key="test", only_if_stale=fallback
         ).run_config
     else:
-        run_config = standards.backfill_run_config(EXECUTED_AT, "universe-list:qqq")
-    return getattr(standards, job_name).execute_in_process(run_config=run_config, raise_on_error=False)
+        assert not fallback, "only the head-reports job has a fallback"
+        run_config = standards.backfill_run_config(executed_at, "universe-list:qqq")
+    return getattr(standards, job_name).execute_in_process(
+        run_config=run_config, instance=instance, raise_on_error=False
+    )
 
 
 def _stored_analyst_rows(shared_connection) -> dict[str, tuple[str, list[str]]]:
@@ -864,6 +1021,15 @@ def _coverage_report_exists(shared_connection) -> bool:
         "select 1 from mart.question_coverage_report where run_id = %s", (HEAD_RUN,)
     ).fetchone()
     return row is not None
+
+
+def _info_logs(instance: dg.DagsterInstance, result) -> list[str]:
+    """The INFO messages of a job run, read from the instance it ran on."""
+    return [
+        entry.user_message
+        for entry in instance.all_logs(result.run_id)
+        if entry.dagster_event is None and entry.level == logging.INFO
+    ]
 
 
 def _steps(result, *, failed: bool) -> list[str]:
@@ -955,6 +1121,185 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
     assert shared_connection.commits == 4, "purity, supply chain, analyst ratings and coverage commit once each"
     assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a clean run has no red row"
+
+
+FALLBACK_AT = "2026-10-07T04:00:00+00:00"
+COVERAGE_CHECK = f"question_coverage@{QQQ}"
+
+
+def _verdict_rows(shared_connection, check: str) -> list[tuple[bool | None, str, str]]:
+    """Every row of one check in write order: (ok, tick as ISO text, summary)."""
+    rows = shared_connection.execute(
+        "select ok, ran_at, summary from mart.nightly_verdicts where check_name = %s order by verdict_id", (check,)
+    ).fetchall()
+    return [(ok, ran_at.isoformat(), summary) for ok, ran_at, summary in rows]
+
+
+def _health_verdict(shared_connection, check: str) -> tuple[bool | None, str]:
+    """What `/api/health` reports for one check: the row of `llm_service.main.NIGHTLY_VERDICTS_SQL`."""
+    from llm_service.main import NIGHTLY_VERDICTS_SQL
+
+    reported = {
+        name: (ok, ran_at.isoformat()) for name, ran_at, ok, _summary in shared_connection.execute(NIGHTLY_VERDICTS_SQL)
+    }
+    return reported[check]
+
+
+VALID = {f"US.{ticker}": _sample(ticker) for ticker in ("DDOG", "NICE", "SHOP")}
+
+
+def test_newest_is_red_reads_the_row_the_health_endpoint_reads(monkeypatch, shared_connection) -> None:
+    """The newest row per check decides: newest by `ran_at`, then by `recorded_at`. A pending
+    row (ok null) and a missing check are not red."""
+    from data_engine.quality import nightly_verdicts
+
+    name = "question_coverage@newest-red-test"
+    day1, day2 = datetime(2026, 10, 6, 4, 0, tzinfo=UTC), datetime(2026, 10, 7, 4, 0, tzinfo=UTC)
+
+    def add(ok: bool | None, ran_at: datetime) -> None:
+        shared_connection.execute(nightly_verdicts.INSERT_SQL, (name, ran_at, ok, "x", "test-run"))
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: shared_connection)
+    assert nightly_verdicts.newest_is_red(name) is False, "no row"
+    add(True, day1)
+    add(False, day1)
+    assert nightly_verdicts.newest_is_red(name) is True, "red written after green on the same tick"
+    add(True, day2)
+    assert nightly_verdicts.newest_is_red(name) is False, "a later green"
+    add(False, datetime(2026, 10, 5, 4, 0, tzinfo=UTC))
+    assert nightly_verdicts.newest_is_red(name) is False, "a red row of an older tick, written last"
+    add(None, datetime(2026, 10, 8, 4, 0, tzinfo=UTC))
+    assert nightly_verdicts.newest_is_red(name) is False, "a pending row is not red"
+    add(False, datetime(2026, 10, 9, 4, 0, tzinfo=UTC))
+    assert nightly_verdicts.newest_is_red(name) is True
+
+
+def test_the_fallback_does_not_turn_a_red_coverage_verdict_green(monkeypatch, shared_connection) -> None:
+    """#771: the 04:00 fallback found the failed run's report current and wrote a green verdict.
+    The health endpoint reads the newest row, so the red lived only until 04:00 and nobody was paged."""
+    job = "head_reports_pipeline_job"
+    failed = _execute_job(monkeypatch, shared_connection, job, FAILED, real_verdicts=True)
+    assert not failed.success
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT)
+
+    instance = dg.DagsterInstance.ephemeral()
+    fallback = _execute_job(
+        monkeypatch,
+        shared_connection,
+        job,
+        {},
+        executed_at=FALLBACK_AT,
+        fallback=True,
+        real_verdicts=True,
+        instance=instance,
+    )
+
+    assert fallback.success
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT), "still red after the fallback"
+    assert [(ok, tick) for ok, tick, _summary in _verdict_rows(shared_connection, COVERAGE_CHECK)] == [
+        (True, EXECUTED_AT),
+        (False, EXECUTED_AT),
+    ], "the fallback wrote no coverage row at all"
+    assert _health_verdict(shared_connection, f"theme_purity@{QQQ}") == (True, FALLBACK_AT), "other checks stay fresh"
+    assert any("newest verdict is red" in m for m in _info_logs(instance, fallback)), "the skip says why"
+
+
+def test_the_fallback_still_writes_its_green_row_over_a_green_verdict(monkeypatch, shared_connection) -> None:
+    job = "head_reports_pipeline_job"
+    first = _execute_job(monkeypatch, shared_connection, job, VALID, real_verdicts=True)
+    assert first.success
+
+    fallback = _execute_job(
+        monkeypatch, shared_connection, job, {}, executed_at=FALLBACK_AT, fallback=True, real_verdicts=True
+    )
+
+    assert fallback.success
+    rows = _verdict_rows(shared_connection, COVERAGE_CHECK)
+    assert [(ok, tick) for ok, tick, _summary in rows] == [(True, EXECUTED_AT), (True, FALLBACK_AT)]
+    assert rows[-1][2].startswith("reports already current on ")
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
+
+
+def test_a_full_run_without_a_lane_failure_turns_the_red_verdict_green_again(monkeypatch, shared_connection) -> None:
+    job = "head_reports_pipeline_job"
+    assert not _execute_job(monkeypatch, shared_connection, job, FAILED, real_verdicts=True).success
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (False, EXECUTED_AT)
+
+    rerun = _execute_job(monkeypatch, shared_connection, job, VALID, executed_at=FALLBACK_AT, real_verdicts=True)
+
+    assert rerun.success
+    assert _health_verdict(shared_connection, COVERAGE_CHECK) == (True, FALLBACK_AT)
+    assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
+
+
+def _rerun(shared_connection, payload: Any):
+    """One capture of DDOG into the run `HEAD_RUN`, on the real table. Returns the capture result."""
+    return capture_ticker_analyst_ratings(
+        ctx=_FakeQuoteContext({"US.DDOG": payload}),
+        ticker="DDOG",
+        company_id="issuer:ddog",
+        connection=shared_connection,
+        run_id=HEAD_RUN,
+        cutoff=CUTOFF,
+    )
+
+
+def _ddog_row(shared_connection) -> tuple[str, list[str], int, Decimal | None]:
+    return shared_connection.execute(
+        "select availability_status, reason_codes, analysts_count, consensus_rating "
+        "from mart.issuer_analyst_ratings where run_id = %s and issuer_id = 'issuer:ddog'",
+        (HEAD_RUN,),
+    ).fetchone()
+
+
+def test_a_failed_fetch_never_replaces_an_available_row_of_the_same_run(shared_connection) -> None:
+    assert _rerun(shared_connection, _sample("DDOG")).failure is None
+    assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4))
+
+    for payload, error_type in (("first failure", "MoomooConnectionError"), ({"rating": 9, "total": 3}, "ValueError")):
+        rerun = _rerun(shared_connection, payload)
+
+        assert rerun.failure is not None and rerun.failure.error.startswith(error_type), "the failure is counted"
+        assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4)), "the good row stays"
+
+
+def test_a_fetch_that_works_still_updates_the_row_of_the_same_run(shared_connection) -> None:
+    _rerun(shared_connection, _sample("DDOG"))
+
+    _rerun(shared_connection, {"rating": 3, "total": 7})
+    assert _ddog_row(shared_connection) == ("available", [], 7, Decimal(3))
+
+    _rerun(shared_connection, {})
+    assert _ddog_row(shared_connection) == ("unavailable", ["no_analyst_coverage"], 0, None), "no coverage overwrites"
+
+
+def test_a_failed_fetch_replaces_a_row_that_is_not_available(shared_connection) -> None:
+    _rerun(shared_connection, {})
+    assert _ddog_row(shared_connection)[1] == ["no_analyst_coverage"]
+
+    _rerun(shared_connection, "first failure")
+    assert _ddog_row(shared_connection) == ("unavailable", ["fetch_error:MoomooConnectionError"], 0, None)
+
+    _rerun(shared_connection, {"rating": 9, "total": 3})
+    assert _ddog_row(shared_connection)[1] == ["fetch_error:ValueError"], "the newest failure names the cause"
+
+    _rerun(shared_connection, _sample("DDOG"))
+    assert _ddog_row(shared_connection) == ("available", [], 35, Decimal(4))
+
+
+@pytest.mark.parametrize("job_name", JOB_NAMES)
+def test_a_rerun_with_a_failing_fetch_keeps_the_available_rows_and_still_ends_red(
+    monkeypatch, shared_connection, job_name
+) -> None:
+    """A failed fetch must not replace the good row an earlier run of the same head wrote."""
+    assert _execute_job(monkeypatch, shared_connection, job_name, VALID).success
+
+    rerun = _execute_job(monkeypatch, shared_connection, job_name, FAILED)
+
+    assert not rerun.success, "the failure is still counted"
+    summary = json.loads(rerun.output_for_node("run_analyst_ratings"))
+    assert summary["fetch_errors"] == 3
+    assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
 
 
 RED_SUMMARY = "failed: analyst ratings fetch failed for 3 of 3 tickers"

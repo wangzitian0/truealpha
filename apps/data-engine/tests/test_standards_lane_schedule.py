@@ -8,6 +8,7 @@ the backfill lands, and coverage counts the purity column."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import dagster as dg
@@ -409,8 +410,19 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts
+    from data_engine.sources import moomoo as moomoo_source
 
     _pointer(monkeypatch, heads={"topt": TOPT_NEW}, stored={TOPT_ID: stored})
+    # A machine with OpenD configured must not reach a real connection from this test. The fake
+    # counts the opens: a head whose reports are current must not open one at all.
+    opened: list[int] = []
+
+    @contextmanager
+    def fake_opend():
+        opened.append(1)
+        yield object()
+
+    monkeypatch.setattr(moomoo_source, "connect", fake_opend)
     purity_calls: list = []
     compiled: list = []
     persisted: list = []
@@ -447,6 +459,7 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     assert request.run_config["ops"]["head_reports_start"]["config"]["only_if_stale"] is True
     result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config)
     assert result.success
+    assert opened == ([] if stored == TOPT_NEW else [1]), "OpenD opens once, and only when the head is recomputed"
     return purity_calls, compiled, persisted, written
 
 

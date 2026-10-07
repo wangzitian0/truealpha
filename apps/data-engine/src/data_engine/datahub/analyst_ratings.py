@@ -23,6 +23,7 @@ from factors.base.analyst_track_record import (
 from psycopg import Connection
 
 __all__ = (
+    "MAX_FAILURES_LOGGED",
     "AnalystRatingItem",
     "AnalystTrackRecord",
     "FetchFailure",
@@ -66,12 +67,21 @@ on conflict (run_id, issuer_id) do update set
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
     factor_validation_status = excluded.factor_validation_status
+where not (
+    mart.issuer_analyst_ratings.availability_status = 'available'
+    and excluded.availability_status <> 'available'
+    and exists (select 1 from unnest(excluded.reason_codes) as code where starts_with(code, 'fetch_error:'))
+)
 """
 
 
 _RATING_MIN = 1
 _RATING_MAX = 5
 _RATING_UNKNOWN = 0
+
+#: The most fetch failures of one run that log a traceback. A run over a large universe in an
+#: outage would otherwise write one traceback per ticker. The Dagster op logs the same number.
+MAX_FAILURES_LOGGED = 20
 
 
 @dataclass(frozen=True)
@@ -112,10 +122,12 @@ class UniverseCapture:
         return None
 
 
-def _count_from_share(total: int, share: float | None) -> int:
+def _count_from_share(total: int, share: object) -> int:
     """Analysts behind a rating, from moomoo's share in percent (12.34 means 12.34 percent)."""
     if share is None:
         return 0
+    if isinstance(share, bool) or not isinstance(share, Real):
+        raise ValueError(f"analyst share {share!r} is not a number")
     percent = float(share)
     if not 0 <= percent <= 100:
         raise ValueError(f"analyst share {percent} is outside 0 to 100 percent")
@@ -143,8 +155,10 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     """Turn one `get_research_analyst_consensus` payload into a rating row.
 
     Return None when the payload holds no consensus: an EMPTY payload, rating 0 (unknown) or total 0.
-    Raise ValueError or TypeError on a contract error. A non-empty payload without `rating` or `total`
-    is one. So is a rating or total that is no whole number, a negative total, or a rating out of range.
+    A total of 0 is no coverage even when `rating` is missing.
+    Raise ValueError or TypeError on a contract error. A non-empty payload without `total` is one.
+    So is a payload with a total above 0 and no `rating`, a rating or total that is no whole number,
+    a negative total, or a rating out of range.
     The wrapper `get_analyst_consensus` returns the payload alone, without the return code.
     The SDK builds the payload as a dict and omits each field moomoo leaves unset.
     Fields: `rating` is moomoo ResearchRatingType (1 to 5, 0 is unknown), `total` is the
@@ -154,17 +168,17 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, Mapping):
         raise TypeError(f"get_research_analyst_consensus returned {type(payload).__name__}, expected a mapping")
-    missing = [key for key in ("rating", "total") if payload.get(key) is None]
-    if missing:
+    count = None if payload.get("total") is None else _whole_number(payload, "total")
+    if count is not None and count < 0:
+        raise ValueError(f"moomoo total {count} is negative")
+    if count == 0:
+        return None
+    if count is None or payload.get("rating") is None:
+        missing = [key for key in ("rating", "total") if payload.get(key) is None]
         raise ValueError(
             f"get_research_analyst_consensus payload lacks {' and '.join(missing)}; keys: {sorted(map(str, payload))}"
         )
     rating = _whole_number(payload, "rating")
-    count = _whole_number(payload, "total")
-    if count < 0:
-        raise ValueError(f"moomoo total {count} is negative")
-    if count == 0:
-        return None
     if not _RATING_MIN <= rating <= _RATING_MAX:
         if rating == _RATING_UNKNOWN:
             return None
@@ -212,6 +226,7 @@ def capture_ticker_analyst_ratings(
     cutoff: datetime | None = None,
     raw_store: Any | None = None,
     open_error: Exception | None = None,
+    log_traceback: bool = True,
 ) -> TickerCapture:
     """Capture analyst consensus for a single ticker via moomoo API and persist.
 
@@ -225,6 +240,7 @@ def capture_ticker_analyst_ratings(
         raw_store: Optional raw evidence object store.
         open_error: Why `ctx` is None: the exception that stopped the context from opening.
             The ticker then fails like a fetch error. Without it, `ctx=None` means no coverage.
+        log_traceback: Log a failed fetch with its traceback. False logs the message alone.
 
     Returns:
         The rows inserted (1) and the fetch failure, if the fetch raised. A fetch failure
@@ -249,7 +265,13 @@ def capture_ticker_analyst_ratings(
             consensus_row = _consensus_row(payload, company_id)
         except Exception as exc:
             failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
-            log.exception("analyst consensus fetch failed for %s (%s): %s", ticker, company_id, failure.error)
+            log.error(
+                "analyst consensus fetch failed for %s (%s): %s",
+                ticker,
+                company_id,
+                failure.error,
+                exc_info=log_traceback,
+            )
             ratings_data = [_fetch_error_row(company_id, exc)]
         else:
             if consensus_row is None:
@@ -374,6 +396,7 @@ def materialize_universe_analyst_ratings(
 
     The caller owns the transaction. Commit the rows first, then pass
     `UniverseCapture.lane_failure()` on in the run summary.
+    Only the first `MAX_FAILURES_LOGGED` failed fetches log a traceback; later ones log the message.
 
     Pass `open_error` when the moomoo context could not be opened. Every ticker then fails
     with `fetch_error:<ExceptionType>`, so an OpenD outage is a total failure, not no coverage.
@@ -395,6 +418,7 @@ def materialize_universe_analyst_ratings(
             run_id=run_id,
             cutoff=cutoff,
             open_error=open_error,
+            log_traceback=len(failures) < MAX_FAILURES_LOGGED,
         )
         rows += captured.rows
         if captured.failure is not None:
