@@ -728,6 +728,11 @@ def _run_op(
         "universe_issuers",
         lambda *_a, **_k: [SimpleNamespace(issuer_id=i, ticker=t) for i, t in (tickers or TICKERS).items()],
     )
+    monkeypatch.setattr(
+        question_coverage,
+        "gppe_cells",
+        lambda _c, _run: tuple(question_coverage.Cell(i, True) for i in (tickers or TICKERS)),
+    )
 
     @contextmanager
     def fake_connect():

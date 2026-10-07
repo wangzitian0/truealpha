@@ -190,6 +190,32 @@ def test_an_issuer_without_an_entity_gets_no_row_and_is_counted(
         assert not any(issuer_id.startswith("issuer:") for issuer_id in stored), f"{table} holds a legacy id"
 
 
+def test_an_issuer_with_an_entity_outside_the_wide_row_is_written_and_counted(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The join count of #1079: rows minus `not_in_wide_row`. This issuer has an entity but no wide row."""
+    outsider = "issuer:lei:YYYYYYYYYYYYYYYYYY02"
+    known_at = datetime(2026, 4, 2, tzinfo=UTC)
+    entity = resolve_entity(connection, outsider, "issuer", as_of=known_at.date(), known_at=known_at)
+    _universe_with(monkeypatch, [(outsider, "OUTS")])
+
+    supply_chain, analyst = _run_lane_ops()
+
+    for summary in (supply_chain, analyst):
+        assert (summary["rows"], summary["unmapped_issuers"], summary["not_in_wide_row"]) == (ISSUERS + 1, 0, 1)
+    assert _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id) == _wide_row_ids(
+        connection, head.run_id
+    ) | {str(entity)}
+
+
+def test_a_head_whose_issuers_all_join_counts_none_outside_the_wide_row(
+    connection: psycopg.Connection[Any], head: question_coverage.GovernedHead
+) -> None:
+    supply_chain, analyst = _run_lane_ops()
+
+    assert (supply_chain["not_in_wide_row"], analyst["not_in_wide_row"]) == (0, 0)
+
+
 class _RecordingLog:
     def __init__(self) -> None:
         self.records: list[tuple[str, str]] = []
