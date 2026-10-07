@@ -117,36 +117,54 @@ def test_empty_chart_response_returns_empty_bars() -> None:
     assert _parse_chart_response({"chart": {"result": []}}) == []
 
 
-def test_empty_timestamps_or_empty_quotes_returns_empty_bars() -> None:
-    """Wire responses without trading records must return empty bars without KeyError."""
-    # Wire response seen on delisted or inactive tickers (e.g. WBD):
-    payload = {
+def test_missing_or_empty_timestamps_returns_empty_bars() -> None:
+    """Missing or empty timestamps return empty bars before inspecting indicators."""
+    assert _parse_chart_response({"chart": {"result": [{}]}}) == []
+    assert _parse_chart_response({"chart": {"result": [{"timestamp": []}]}}) == []
+
+
+def test_missing_quotes_or_empty_close_returns_empty_bars() -> None:
+    """Non-empty timestamps with missing quotes or missing close must return empty bars."""
+    # Timestamps exist, but quote list is empty:
+    payload_empty_quotes = {
         "chart": {
             "result": [
                 {
-                    "meta": {"currency": "USD", "symbol": "WBD"},
+                    "timestamp": [1750000000],
+                    "indicators": {"quote": []},
+                }
+            ]
+        }
+    }
+    assert _parse_chart_response(payload_empty_quotes) == []
+
+    # Timestamps exist, but quote dictionary has no close key (e.g. quote: [{}]):
+    payload_empty_dict = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1750000000],
                     "indicators": {
                         "quote": [{}],
                         "adjclose": [{}],
                     },
                 }
-            ],
-            "error": None,
+            ]
         }
     }
-    assert _parse_chart_response(payload) == []
+    assert _parse_chart_response(payload_empty_dict) == []
 
-    # Empty timestamps or empty close list:
-    payload_no_ts = {
+    # Timestamps exist, but close list is None or empty:
+    payload_none_close = {
         "chart": {
             "result": [
                 {
-                    "timestamp": [],
+                    "timestamp": [1750000000],
                     "indicators": {
-                        "quote": [{"close": []}],
+                        "quote": [{"close": None}],
                     },
                 }
             ]
         }
     }
-    assert _parse_chart_response(payload_no_ts) == []
+    assert _parse_chart_response(payload_none_close) == []
