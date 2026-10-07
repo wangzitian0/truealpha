@@ -75,9 +75,10 @@ class UnmappedIssuer:
 class CanonicalUniverse:
     """The members that get a row and the issuers that do not, each with a reason.
 
-    `unmapped` holds members of the current universe and wide-row issuers. A member that resolves
-    to another entity counts once, as `not_in_wide_row`: it is the cause of its issuer's missing row.
-    So `rows + unmapped` equals `wide_row_issuers`, plus one per member outside the head.
+    `unmapped` holds members of the current universe and wide-row issuers.
+    A member that resolves to another entity counts once, as `not_in_wide_row`.
+    It is the cause of its issuer's missing row, so that issuer is not counted again.
+    Then `rows + unmapped` equals `wide_row_issuers`, plus one per member outside the head.
     """
 
     issuers: tuple[CanonicalIssuer, ...]

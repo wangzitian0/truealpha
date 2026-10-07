@@ -208,12 +208,13 @@ def _canonical_universe(
     head: question_coverage.GovernedHead,
     tickers: Mapping[str, str],
 ) -> CanonicalUniverse:
-    """The universe members that get a row, each under its wide-row id, and every issuer that does not (#1079).
+    """The members that get a row under their wide-row ids, and every issuer that does not (#1079).
 
-    `gppe_cells` is the subject set the coverage reader joins to, so every issuer of it is
-    accounted for: written, or unmapped with a reason. The ids resolve as capture resolved
-    them, as of the report date of the head's own run, as known at its cutoff. The current
-    universe supplies the members, and it may be a later publication with another date.
+    `gppe_cells` is the subject set the coverage reader joins to. Every issuer of it is
+    accounted for: written, or unmapped with a reason.
+    The ids resolve as capture resolved them. The date is the report date of the head's own run.
+    `known_at` is the head's cutoff. The current universe supplies the members.
+    It may be a later publication with another date.
     """
     wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
     resolved = CanonicalUniverse(issuers=())

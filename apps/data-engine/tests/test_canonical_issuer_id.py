@@ -547,7 +547,7 @@ def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_row(
 ) -> None:
     """A corpus id in UUID form resolves to itself without a lookup. It must also exist.
 
-    The head's wide row names this id, so the id is a head member and the run must account for it.
+    The head's wide row names this id. The id is a head member, so the run must account for it.
     """
     invented = str(uuid.uuid4())
     real = _wide_row_ids(connection, head.run_id)
@@ -608,9 +608,11 @@ def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> 
 def test_a_qqq_head_joins_under_its_own_report_date_though_every_wide_row_is_unavailable(
     connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The QQQ shape through a real capture: `issuer:cik:` ids, a report date that is not TOPT's,
-    and a CIK handed to a successor between the two dates. Every wide row is `unavailable`, and
-    each issuer still gets its Q3 and Q4 row. The reader joins on the subject set, not on answers."""
+    """The QQQ shape through a real capture: `issuer:cik:` ids and a report date that is not TOPT's.
+
+    A CIK passes to a successor between the two dates. Every wide row is `unavailable`, and
+    each issuer still gets its Q3 and Q4 row. The reader joins on the subject set, not on answers.
+    """
     first = _qqq_issuers()[0]
     old = _mint(connection, "cik", _cik_of(first), at=datetime(2026, 1, 1, tzinfo=UTC))
     claim = connection.execute("select alias_id from staging.entity_aliases where entity_id = %s", (old,)).fetchone()
