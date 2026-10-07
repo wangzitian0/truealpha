@@ -104,6 +104,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     registration_for,
 )
 from data_engine.datahub.production_topt.universe_corpus import (
+    TOPT_CORPUS_FILENAME,
     capture_as_of,
     corpus_list_version,
     frozen_topt_list_version,
@@ -174,7 +175,7 @@ class CaptureNotPublishableError(RuntimeError):
         self.shortfall = shortfall
 
 
-def _load_capture_corpus(corpus_filename: str = "corpus.v1.json") -> dict[str, Any]:
+def _load_capture_corpus(corpus_filename: str = TOPT_CORPUS_FILENAME) -> dict[str, Any]:
     """The frozen capture-control universe corpus, loaded from PACKAGE data so the
     deployed image (site-packages only, no repo tree) can read it. Lazy: importing
     this module must never touch the filesystem (Definitions load hermetically)."""
@@ -254,7 +255,7 @@ def plan_and_persist(
     *,
     cutoff: datetime,
     version: str,
-    corpus_filename: str = "corpus.v1.json",
+    corpus_filename: str = TOPT_CORPUS_FILENAME,
     label_prefix: str = "production-topt",
     universe_head_kind: str | None = None,
     force_fetch: bool = False,
@@ -874,7 +875,7 @@ def run_topt_pipeline(
     cutoff: datetime,
     version: str,
     writer: EvidenceGraphWriter | None = None,
-    corpus_filename: str = "corpus.v1.json",
+    corpus_filename: str = TOPT_CORPUS_FILENAME,
     label_prefix: str = "production-topt",
     universe_head_kind: str | None = None,
     force_fetch: bool = False,

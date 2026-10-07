@@ -32,7 +32,7 @@ from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
 from data_engine.datahub import analyst_ratings, question_coverage
-from data_engine.datahub.canonical_issuer import CanonicalUniverse, canonicalize_universe
+from data_engine.datahub.canonical_issuer import CanonicalUniverse, account_for_head_members, canonicalize_universe
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
@@ -168,12 +168,16 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
-#: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
-#: Such a member has no entity, or its entity is not in the head's wide row.
+#: The key the supply chain and analyst ops set, to the count of issuers with no row (#1079).
+#: An issuer is unmapped when it has no entity, or its entity is not in the head's wide row.
+#: A wide-row issuer that no member of the current universe names is unmapped too.
 UNMAPPED_ISSUERS = "unmapped_issuers"
 
-#: The key those ops set, to the count of members per reason (`no_canonical_issuer_id`, `not_in_wide_row`).
+#: The key those ops set, to the count of unmapped issuers per reason.
 UNMAPPED_BY_REASON = "unmapped_by_reason"
+
+#: The key those ops set, to the count of issuers in the head's wide row.
+WIDE_ROW_ISSUERS = "wide_row_issuers"
 
 #: The most unmapped issuers one op logs by name. A later one is counted in the summary only.
 MAX_UNMAPPED_LOGGED = 20
@@ -204,25 +208,24 @@ def _canonical_universe(
     head: question_coverage.GovernedHead,
     tickers: Mapping[str, str],
 ) -> CanonicalUniverse:
-    """The universe members that have a row in the head's wide row, each under its wide-row id (#1079).
+    """The universe members that get a row, each under its wide-row id, and every issuer that does not (#1079).
 
-    The ids resolve as capture resolved them: as of the corpus report date, as known at the
-    cutoff. The wide row is the authority, so a member whose entity it does not hold is
-    unmapped. The lookup repeats capture's question, and evidence recorded since can change
-    its answer. `gppe_cells` is the subject set the coverage reader joins to.
+    `gppe_cells` is the subject set the coverage reader joins to, so every issuer of it is
+    accounted for: written, or unmapped with a reason. The ids resolve as capture resolved
+    them, as of the report date of the head's own run, as known at its cutoff. The current
+    universe supplies the members, and it may be a later publication with another date.
     """
-    from data_engine.datahub.standards.planner import universe_as_of
-
-    if not tickers:
-        return CanonicalUniverse(issuers=())
     wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
-    resolved = canonicalize_universe(
-        connection,
-        tickers,
-        cutoff=head.cutoff,
-        as_of=universe_as_of(connection, universe, cutoff=head.cutoff),
-        wide_row_ids=wide,
-    )
+    resolved = CanonicalUniverse(issuers=())
+    if tickers:
+        resolved = canonicalize_universe(
+            connection,
+            tickers,
+            cutoff=head.cutoff,
+            as_of=question_coverage.head_report_date(connection, head),
+            wide_row_ids=wide,
+        )
+    resolved = account_for_head_members(connection, resolved, cutoff=head.cutoff, wide_row_ids=wide)
     _report_unmapped(context, lane, resolved)
     return resolved
 
@@ -364,10 +367,8 @@ def run_supply_chain_exposure(
         "rows": rows_count,
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
-    lane_failure = universe.total_failure()
-    if lane_failure is not None:
-        summary[LANE_FAILURE] = lane_failure
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -429,6 +430,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         "fetch_errors": len(captured.failures),
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.

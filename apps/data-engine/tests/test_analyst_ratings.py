@@ -720,7 +720,7 @@ def _run_op(
     ctx = _FakeQuoteContext(responses)
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _RecordingConnection(events, rows, write_fails))
     monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
-    monkeypatch.setattr(planner, "universe_as_of", lambda *_a, **_k: date(2026, 10, 6))
+    monkeypatch.setattr(question_coverage, "head_report_date", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(
         question_coverage,
         "governed_head",
@@ -1054,7 +1054,7 @@ def _execute_job(
     monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: issuers)
     monkeypatch.setattr(standards, "canonicalize_universe", _identity_universe)
-    monkeypatch.setattr(planner, "universe_as_of", lambda *_a, **_k: date(2026, 10, 6))
+    monkeypatch.setattr(question_coverage, "head_report_date", lambda *_a, **_k: date(2026, 10, 6))
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda _c, **_k: ())
     monkeypatch.setattr(supply_chain_extraction, "materialize_universe_supply_chain_exposure", lambda _c, **_k: 0)
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -113,6 +113,30 @@ def governed_head(connection: Connection[Any], *, universe_prefix: str) -> Gover
     if row is None:
         return None
     return GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
+
+
+def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
+    """The report date the head's capture resolved its entity ids as of (#1079).
+
+    The capture writes `str(report_date)` as the partition key of every obligation of its run.
+    A lane that resolves the head's ids later takes the date from the head. The current universe
+    may be a later publication, with another date, and a claim can pass between the two dates.
+    Raises when the run has no obligation, several dates, or a key that is not a date.
+    """
+    keys = [
+        str(key)
+        for (key,) in connection.execute(
+            "select distinct partition_key from raw.capture_obligations where run_id = %s", (head.run_id,)
+        ).fetchall()
+    ]
+    if not keys:
+        raise ValueError(f"{head.run_id} has no capture obligations, so its report date cannot be read")
+    if len(keys) > 1:
+        raise ValueError(f"{head.run_id} has {len(keys)} partition keys, so its report date is ambiguous")
+    try:
+        return date.fromisoformat(keys[0])
+    except ValueError as error:
+        raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
 
 
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
