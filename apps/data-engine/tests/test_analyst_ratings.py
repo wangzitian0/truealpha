@@ -129,10 +129,12 @@ def test_materialize_analyst_ratings_handles_dict_and_factor_record() -> None:
     sql1, params1 = conn.executed[0]
     assert "insert into mart.issuer_analyst_ratings" in sql1
     assert params1[1] == "issuer:aapl"
+    assert params1[2] == now, "stamped with the given cutoff, not the clock"
     assert params1[3] == Decimal("4.5")
     assert params1[11] == "available"
     # Row 2: factor record
     _, params2 = conn.executed[1]
+    assert params2[2] == now
     assert params2[1] == "issuer:msft"
     assert params2[3] == Decimal("4.5")
     assert params2[4] == 2
