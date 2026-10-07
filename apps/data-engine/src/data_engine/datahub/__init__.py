@@ -1,12 +1,8 @@
 """Isolated DataHub control-plane implementation.
 
-Deliberately does NOT re-export the replay harnesses (`tiny_replay`,
-`medium_replay`, `hardening_replay`). It did until #795, which meant every
-importer of this package — the deployed tick included — executed 1,615 lines of
-replay machinery it never calls, purely to reach one corpus function that has
-since moved to `production_topt.universe_corpus`. A caller that genuinely wants a
-replay imports its module by name; `test_deployed_closure_excludes_replay` is the
-standing check that the composition root does not."""
+The replay harnesses (`tiny_replay`, `medium_replay`, `hardening_replay`) were removed in
+#1061. The deployed tick imported them through this package until #795. The corpus function
+the tick needed lives in `production_topt.universe_corpus`."""
 
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
@@ -39,6 +35,4 @@ __all__ = [
     "ToptCoreReadResult",
     "ToptCoreSnapshot",
     "expand_obligations",
-    "replay_resume_scenarios",
-    "select_recapture",
 ]

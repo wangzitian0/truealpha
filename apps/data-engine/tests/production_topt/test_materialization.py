@@ -19,10 +19,9 @@ from data_engine.datahub.a1_evidence import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.production_topt.materialization import _ObservationRow
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
