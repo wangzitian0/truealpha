@@ -1,10 +1,10 @@
 """#1079: the Q3 and Q4 rows carry the wide row's issuer id, so the coverage report joins them.
 
-Staging, 2026-10-06: `mart.topt_gppe_results` held UUID issuer ids, while Q3 and Q4 held the
+Staging, 2026-10-06: `mart.topt_gppe_results` held UUID issuer ids. Q3 and Q4 held the
 `issuer:lei:` ids of the universe corpus. 0 of 20 joined and the report said `no_row: 20`.
 
-The head here is a REAL capture: `plan_and_persist` resolves the ids as the deployed tick does,
-and `materialize` writes the wide row. The Q3 and Q4 rows come from the deployed lane ops over
+The head here is a REAL capture. `plan_and_persist` resolves the ids as the deployed tick does.
+`materialize` writes the wide row. The Q3 and Q4 rows come from the deployed lane ops over
 the real `topt` universe. The ids of the head are never typed by hand.
 """
 
@@ -57,8 +57,8 @@ def connection() -> Iterator[psycopg.Connection[Any]]:
 
 
 class _LaneConnection:
-    """The test's connection as the ops see `psycopg.connect(...)`: no close, and `commit` is
-    counted, never run, so the head and its rows roll back with the test."""
+    """The test's connection as the ops see `psycopg.connect(...)`, and it never closes.
+    `commit` is counted, never run, so the head and its rows roll back with the test."""
 
     def __init__(self, connection: psycopg.Connection[Any]) -> None:
         self.connection = connection

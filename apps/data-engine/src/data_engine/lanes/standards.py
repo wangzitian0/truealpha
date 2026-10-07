@@ -168,8 +168,8 @@ REPORTS_CURRENT = "reports_current"
 #: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
 LANE_FAILURE = "lane_failure"
 
-#: The key the supply chain and analyst ops set, to the count of universe members that got no
-#: row because no entity holds their legacy id (#1079).
+#: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
+#: Such a member has no entity for its legacy id.
 UNMAPPED_ISSUERS = "unmapped_issuers"
 
 #: The key those ops set, to the count of rows whose issuer id is not in the head's wide row.

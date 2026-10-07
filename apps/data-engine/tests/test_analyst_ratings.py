@@ -934,11 +934,10 @@ def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fet
 # op and a real Postgres. The connection is shared and rolled back at the end: `commit` is
 # counted, never executed, so no row outlives the test.
 #
-# These tests do not assert a Q4 coverage value. The coverage cells here use the issuer ids of
-# the analyst rows, and the universe here already carries the wide row's ids. A Q4 assertion
-# would pass only because of those fakes. `test_canonical_issuer_id.py` asserts the join over a
-# real capture (#1079). What this file controls is asserted instead: the persisted analyst rows,
-# the lane summary, the run.
+# These tests do not assert a Q4 coverage value. The coverage cells here reuse the issuer ids
+# of the analyst rows. A Q4 assertion would pass only because of those fakes.
+# `test_canonical_issuer_id.py` asserts the join over a real capture (#1079).
+# What this file controls is asserted instead: the persisted analyst rows, the lane summary, the run.
 
 # One token per test session. The DB-backed tests read verdicts, reports and analyst rows by
 # these names only, so rows that a development database holds from earlier work cannot change a result.
