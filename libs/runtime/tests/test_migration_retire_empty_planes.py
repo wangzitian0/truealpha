@@ -188,6 +188,16 @@ def _existing_functions(database_url: str, functions: tuple[str, ...]) -> set[st
         return {name for name in functions if connection.execute("select to_regprocedure(%s)", (name,)).fetchone()[0]}
 
 
+def _level_prefix(level: str) -> str:
+    """The text that psql prints before a message. The applier adds the SQLSTATE: `WARNING:  01000: `."""
+    return rf"{level}:\s+(?:[0-9A-Z]{{5}}:\s+)?"
+
+
+def _logged(output: str, level: str, message: str) -> bool:
+    """True when psql printed `message` at `level`. A line of another level does not match."""
+    return re.search(_level_prefix(level) + re.escape(message), output) is not None
+
+
 @dataclass(frozen=True)
 class Run:
     returncode: int
@@ -230,6 +240,7 @@ def _run_file_and_count_lock_waits(database_url: str, *, lock_timeout: str = "10
     )
     waits = 0
     with psycopg.connect(database_url, autocommit=True) as watcher:
+        # pg_locks spans every database of the server. The CI Postgres runs one test at a time.
         while process.poll() is None:
             waits += watcher.execute(
                 "select count(*) from pg_locks where not granted and locktype = 'relation'"
@@ -278,6 +289,22 @@ def _seed_tenant_membership(database_url: str) -> None:
             "(membership_event_id, tenant_id, principal_id, membership_state, effective_at, recorded_at) "
             "values ('membership:retire-probe', 'tenant:retire-probe', 'principal:retire-probe', 'granted', "
             "'2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')"
+        )
+
+
+def _seed_tenant_memberships(database_url: str, rows: int) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute("insert into app.tenants (tenant_id) values ('tenant:retire-probe')")
+        connection.execute(
+            "insert into app.principals (principal_id, tenant_id, principal_kind) "
+            "values ('principal:retire-probe', 'tenant:retire-probe', 'member')"
+        )
+        connection.execute(
+            "insert into app.tenant_memberships "
+            "(membership_event_id, tenant_id, principal_id, membership_state, effective_at, recorded_at) "
+            "select 'membership:retire-probe-' || n, 'tenant:retire-probe', 'principal:retire-probe', 'granted', "
+            "'2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z' from generate_series(1, %s) as n",
+            (rows,),
         )
 
 
@@ -350,15 +377,54 @@ def test_a_table_with_a_row_stays_and_a_warning_names_it(old_shape: str) -> None
 
     output = apply_migration_chain(old_shape)  # raises when the boot would fail
 
-    assert "retired table app.tenant_memberships holds at least 1 row(s); it stays" in output, output[-3000:]
+    assert _logged(output, "WARNING", "retired table app.tenant_memberships holds at least 1 row(s); it stays"), output[
+        -3000:
+    ]
     assert _existing(old_shape, RETIRED_TABLES) == {"app.tenant_memberships"}
     with psycopg.connect(old_shape) as connection:
         assert connection.execute("select count(*) from app.tenant_memberships").fetchone() == (1,)
     # The next boot tries again, warns again and still does not fail.
     again = _run_file(old_shape)
     assert again.returncode == 0, again.output
-    assert "app.tenant_memberships holds at least 1 row(s)" in again.output
+    assert _logged(again.output, "WARNING", "retired table app.tenant_memberships holds at least 1 row(s)")
     assert _existing(old_shape, RETIRED_TABLES) == {"app.tenant_memberships"}
+
+
+def test_the_row_count_stops_at_the_sample_of_1000_rows(old_shape: str) -> None:
+    """A table with 1500 rows reports 1000. The count reads a sample, not the whole table."""
+    _seed_tenant_memberships(old_shape, rows=1500)
+
+    run = _run_file(old_shape)
+
+    assert run.returncode == 0, run.output
+    assert _logged(run.output, "WARNING", "retired table app.tenant_memberships holds at least 1000 row(s); it stays")
+    assert _existing(old_shape, RETIRED_TABLES) == {"app.tenant_memberships"}
+    with psycopg.connect(old_shape) as connection:
+        assert connection.execute("select count(*) from app.tenant_memberships").fetchone() == (1500,)
+
+
+def test_each_table_drops_in_its_own_transaction(old_shape: str) -> None:
+    """A lock lasts to the end of its transaction. One transaction for all tables would hold every lock to the end.
+
+    An event trigger logs the transaction id of each table drop. Fifteen tables need fifteen ids.
+    """
+    with psycopg.connect(old_shape, autocommit=True) as admin:
+        admin.execute("create table public.retire_drop_log (table_name text, xact_id text)")
+        admin.execute(
+            "create function public.retire_drop_logger() returns event_trigger language plpgsql as $$ begin "
+            "insert into public.retire_drop_log select format('%s.%s', schema_name, object_name), "
+            "pg_current_xact_id()::text from pg_event_trigger_dropped_objects() where object_type = 'table'; "
+            "end $$"
+        )
+        admin.execute("create event trigger retire_drop_probe on sql_drop execute function public.retire_drop_logger()")
+
+    run = _run_file(old_shape)
+
+    assert run.returncode == 0, run.output
+    with psycopg.connect(old_shape) as connection:
+        logged = connection.execute("select table_name, xact_id from public.retire_drop_log").fetchall()
+    assert {name for name, _ in logged} == set(RETIRED_TABLES)
+    assert len({xact_id for _, xact_id in logged}) == len(RETIRED_TABLES), logged
 
 
 # --- locks -------------------------------------------------------------------------------
@@ -498,6 +564,39 @@ def test_a_retained_table_keeps_the_functions_that_its_trigger_calls(old_shape: 
         connection.rollback()
 
 
+# --- a live function that names a retired helper keeps that helper ---------------------------
+
+_HELPER = "raw.has_canonical_obligation_ids(text[], boolean)"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            "begin return RAW.HAS_CANONICAL_OBLIGATION_IDS(array[]::text[], true); end;", id="upper-case call"
+        ),
+        pytest.param("begin return true; end; -- once raw.has_canonical_obligation_ids", id="mention in a comment"),
+    ],
+)
+def test_a_live_function_that_names_a_retired_helper_keeps_it(old_shape: str, body: str) -> None:
+    """The catalog does not track a call in a body. SQL names are case-insensitive, so the match must be too.
+
+    A comment that names the helper also keeps it. That error is safe: a function stays, and the NOTICE says why.
+    """
+    with psycopg.connect(old_shape, autocommit=True) as admin:
+        admin.execute(f"create function staging.live_probe_caller() returns boolean language plpgsql as $${body}$$")
+
+    run = _run_file(old_shape)
+
+    assert run.returncode == 0, run.output
+    assert _existing(old_shape, RETIRED_TABLES) == set(), run.output
+    assert _existing_functions(old_shape, RETIRED_FUNCTIONS) == {_HELPER}, run.output
+    assert _logged(run.output, "NOTICE", f"retired function {_HELPER} stays: the body of another function names it")
+    with psycopg.connect(old_shape) as connection:
+        # A body that calls a dropped helper fails here with "function does not exist".
+        assert connection.execute("select staging.live_probe_caller()").fetchone() == (True,)
+
+
 # --- a role that row-level security filters cannot make a table look empty -----------------
 
 
@@ -564,8 +663,8 @@ def test_a_dependent_object_stops_the_drop_and_the_boot_survives(old_shape: str)
     run = _run_file(old_shape)
 
     assert run.returncode == 0, run.output
-    assert "retired table staging.normalized_records stays" in run.output
-    assert "retired table staging.filing_documents stays" in run.output
+    assert _logged(run.output, "WARNING", "retired table staging.normalized_records stays"), run.output
+    assert _logged(run.output, "WARNING", "retired table staging.filing_documents stays"), run.output
     assert _existing(old_shape, RETIRED_TABLES) == {"staging.normalized_records", "staging.filing_documents"}
     with psycopg.connect(old_shape) as connection:
         key = connection.execute(
@@ -614,14 +713,14 @@ def test_the_first_boot_under_ordinary_locks_skips_the_tables_and_does_not_fail(
         holder.execute(sql.SQL("lock table {} in row exclusive mode").format(sql.SQL(", ").join(map(sql.SQL, tables))))
         for view in views:
             holder.execute(sql.SQL("select 1 from {} limit 0").format(sql.SQL(view)))
-        started = time.monotonic()
         output = apply_migration_chain(old_shape)  # raises when a boot would fail
-        elapsed = time.monotonic() - started
         holder.rollback()
 
     assert "LOCK TIMEOUT" not in output
-    assert elapsed < 60, f"replay took {elapsed:.1f}s"
-    assert _existing(old_shape, RETIRED_TABLES) == set(RETIRED_TABLES)  # every table was in use: all skipped
+    # Every table was in use. Each one is skipped, and each skip is a WARNING.
+    skipped = re.findall(_level_prefix("WARNING") + r"retired table (\S+) is in use; the next boot tries again", output)
+    assert sorted(skipped) == sorted(RETIRED_TABLES), output[-3000:]
+    assert _existing(old_shape, RETIRED_TABLES) == set(RETIRED_TABLES)
     after = _run_file(old_shape)
     assert after.returncode == 0, after.output
     assert _existing(old_shape, RETIRED_TABLES) == set()

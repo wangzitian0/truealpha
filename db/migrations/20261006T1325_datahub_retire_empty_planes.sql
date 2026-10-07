@@ -2,6 +2,8 @@
 --
 -- The chain no longer creates these tables. Databases that ran the old chain still hold them.
 -- This file drops them there. The chain replays on every boot, so this file must be safe to replay.
+-- The names in the two lists below are retired for good. A later migration must not reuse them.
+-- A replay drops an empty table or an unreferenced function of that name on every boot.
 --
 -- Rules for each table:
 --   * It must exist, and it must hold no row. A table with rows stays, and a WARNING names it.
@@ -88,7 +90,7 @@ order by retired.position
 -- The functions of the retired tables: trigger functions and two check helpers.
 -- The catalog tracks a trigger or a check constraint. A table that stayed keeps its function.
 -- The catalog does not track a call inside a function body.
--- So a function also stays while the body of any other function names it.
+-- So a function also stays while the body of any other function names it, in any letter case.
 -- The list holds each caller before the function that it calls.
 do $$
 declare
@@ -117,7 +119,7 @@ begin
             select 1
             from pg_proc as caller
             where caller.oid <> to_regprocedure(retired_function)::oid
-              and position(split_part(split_part(retired_function, '(', 1), '.', 2) in caller.prosrc) > 0
+              and position(lower(split_part(split_part(retired_function, '(', 1), '.', 2)) in lower(caller.prosrc)) > 0
         ) then
             raise notice 'retired function % stays: the body of another function names it', retired_function;
             continue;
