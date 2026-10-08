@@ -197,4 +197,3 @@ def test_bank_financial_leverage_adjusted_produces_positive_gppe() -> None:
     assert result.value == expected_labor_efficiency
     assert result.value > Decimal("200000")  # ~+$216,969 per employee, highly profitable
     assert result.flags == []
-

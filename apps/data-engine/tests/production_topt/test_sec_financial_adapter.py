@@ -1561,4 +1561,3 @@ def test_period_mismatch_yields_zero_confidence() -> None:
     from data_engine.datahub.production_topt.sec_financial_adapter import _confidence
 
     assert _confidence(payload) == Decimal("0.00")
-

@@ -414,4 +414,3 @@ def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
     )
     assert len(decisions) == 1
     assert decisions[0].tier == "traditional"
-

@@ -217,4 +217,3 @@ def test_gross_margin_gate_restricts_low_margin_to_traditional() -> None:
     # Target P/S is midpoint 1.15 of traditional band, NOT 4.25 of tech band
     expected_gap = Decimal("1.15") / Decimal("1.377") - Decimal("1")
     assert result.value == expected_gap
-
