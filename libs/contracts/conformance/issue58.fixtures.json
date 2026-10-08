@@ -511,9 +511,9 @@
     }
   },
   "schema_sha256": {
-    "CaptureManifest": "e84b8041857e2bfb79e8567f590b2f47ab7b80503e6ab9f944833f651ab7cbc3",
-    "CaptureScope": "90983276eef34f0c23d85718c066a3bd1dadc1247dacda3c32f5143bdf6cd04a",
-    "ReleaseManifest": "6eef8fb32b8737de34b364b381543b8e201b7ca716af145df81eb1677dc5991d",
-    "SnapshotManifest": "97d394f96d83c4a2435dbfdc11c3cba2cf5fd43e40c2c7663a51cdc50a5d0103"
+    "CaptureManifest": "467a568678eb4ac3cf966c8707b857eda53f3062ec9ef4e9a1f71245568e092c",
+    "CaptureScope": "00abf5834c45f8c892f721dc70db2434dd71570fbf25c7879dec1e7b58f79763",
+    "ReleaseManifest": "b3bfbd3eac4a349fe44685c8e0129f6f168fa1a5f89e30e0d9e6f8c2887b7dcc",
+    "SnapshotManifest": "7d5ad6a18d1344623b3f0e0053fbb8025c78d43614a883c20f6ddc2959ddc106"
   }
 }

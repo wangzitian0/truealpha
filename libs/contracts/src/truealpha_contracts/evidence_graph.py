@@ -24,11 +24,10 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import CaptureEnvironment
+from truealpha_contracts.common import STABLE_ID_PATTERN, CaptureEnvironment
 from truealpha_contracts.common import identify as _identify
 
 _SHA256 = r"^[0-9a-f]{64}$"
-_STABLE_KEY = r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$"
 _MUTABLE_VERSION_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
 
 
@@ -169,9 +168,9 @@ class CurrentPointerKey(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     environment: CaptureEnvironment
-    universe_id: str = Field(pattern=_STABLE_KEY)
-    universe_version: str = Field(pattern=_STABLE_KEY)
-    factor_id: str = Field(pattern=_STABLE_KEY)
+    universe_id: str = Field(pattern=STABLE_ID_PATTERN)
+    universe_version: str = Field(pattern=STABLE_ID_PATTERN)
+    factor_id: str = Field(pattern=STABLE_ID_PATTERN)
 
     @field_validator("universe_version", "factor_id")
     @classmethod

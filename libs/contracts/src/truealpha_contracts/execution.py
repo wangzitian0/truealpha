@@ -15,7 +15,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
@@ -25,7 +25,6 @@ from truealpha_contracts.usage import RequirementLevel, stamp_planned_cell_id
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
-_STABLE_KEY = r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$"
 _MUTABLE_VERSION_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
 
 
@@ -48,9 +47,9 @@ class ModelRevisionRef(BaseModel):
 
     model_revision_id: str = Field(default="", pattern=r"^(?:|model-revision:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    provider: str = Field(pattern=_STABLE_KEY)
-    model_id: str = Field(pattern=_STABLE_KEY)
-    immutable_revision: str = Field(pattern=_STABLE_KEY)
+    provider: str = Field(pattern=STABLE_ID_PATTERN)
+    model_id: str = Field(pattern=STABLE_ID_PATTERN)
+    immutable_revision: str = Field(pattern=STABLE_ID_PATTERN)
     endpoint_or_artifact_sha256: str = Field(pattern=_SHA256)
     decoding_parameters_sha256: str = Field(pattern=_SHA256)
 
@@ -72,11 +71,11 @@ class ExtractionTemplate(BaseModel):
 
     extraction_template_id: str = Field(default="", pattern=r"^(?:|extraction-template:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    template_name: str = Field(pattern=_STABLE_KEY)
-    template_version: str = Field(pattern=_STABLE_KEY)
+    template_name: str = Field(pattern=STABLE_ID_PATTERN)
+    template_version: str = Field(pattern=STABLE_ID_PATTERN)
     semantic_type_id: SemanticTypeId
-    semantic_type_version: str = Field(pattern=_STABLE_KEY)
-    payload_model_key: str = Field(pattern=_STABLE_KEY)
+    semantic_type_version: str = Field(pattern=STABLE_ID_PATTERN)
+    payload_model_key: str = Field(pattern=STABLE_ID_PATTERN)
     output_schema_sha256: str = Field(pattern=_SHA256)
     instructions_sha256: str = Field(pattern=_SHA256)
     extractor_implementation_sha256: str = Field(pattern=_SHA256)
@@ -122,8 +121,8 @@ class ExtractionInvocation(BaseModel):
     previous_invocation_sha256: str | None = Field(default=None, pattern=_SHA256)
     started_at: datetime
     completed_at: datetime
-    invoker_id: str = Field(pattern=_STABLE_KEY)
-    invoker_version: str = Field(pattern=_STABLE_KEY)
+    invoker_id: str = Field(pattern=STABLE_ID_PATTERN)
+    invoker_version: str = Field(pattern=STABLE_ID_PATTERN)
     invoker_implementation_sha256: str = Field(pattern=_SHA256)
 
     @field_validator("started_at", "completed_at")
@@ -181,8 +180,8 @@ class SemanticDraft(BaseModel):
     semantic_draft_id: str = ""
     content_sha256: str = ""
     semantic_type_id: SemanticTypeId
-    semantic_type_version: str = Field(pattern=_STABLE_KEY)
-    payload_model_key: str = Field(pattern=_STABLE_KEY)
+    semantic_type_version: str = Field(pattern=STABLE_ID_PATTERN)
+    payload_model_key: str = Field(pattern=STABLE_ID_PATTERN)
     payload_schema_sha256: str = Field(pattern=_SHA256)
     payload_sha256: str = Field(pattern=_SHA256)
     subject: SubjectRef
@@ -191,8 +190,8 @@ class SemanticDraft(BaseModel):
     knowable_at: datetime
     produced_at: datetime
     producer_kind: SemanticProducerKind
-    producer_id: str = Field(pattern=_STABLE_KEY)
-    producer_version: str = Field(pattern=_STABLE_KEY)
+    producer_id: str = Field(pattern=STABLE_ID_PATTERN)
+    producer_version: str = Field(pattern=STABLE_ID_PATTERN)
     producer_implementation_sha256: str = Field(pattern=_SHA256)
     model_revision_id: str | None = Field(default=None, pattern=r"^model-revision:[0-9a-f]{64}$")
     model_revision_sha256: str | None = Field(default=None, pattern=_SHA256)
@@ -309,12 +308,12 @@ class NormalizedRecordRef(BaseModel):
     normalized_record_id: str = ""
     content_sha256: str = ""
     draft: SemanticDraft
-    document_id: str = Field(pattern=_STABLE_KEY)
-    raw_object_id: str = Field(pattern=_STABLE_KEY)
+    document_id: str = Field(pattern=STABLE_ID_PATTERN)
+    raw_object_id: str = Field(pattern=STABLE_ID_PATTERN)
     raw_object_sha256: str = Field(pattern=_SHA256)
     source_registry_entry_id: str = Field(pattern=r"^source-registry-entry:[0-9a-f]{64}$")
     source_registry_entry_sha256: str = Field(pattern=_SHA256)
-    mapping_version: str = Field(pattern=_STABLE_KEY)
+    mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
     mapping_implementation_sha256: str = Field(pattern=_SHA256)
     recorded_at: datetime
     confidence: Decimal = Field(ge=0, le=1)
@@ -355,8 +354,8 @@ class PolicyBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     role: PolicyRole
-    policy_id: str = Field(pattern=_STABLE_KEY)
-    policy_version: str = Field(pattern=_STABLE_KEY)
+    policy_id: str = Field(pattern=STABLE_ID_PATTERN)
+    policy_version: str = Field(pattern=STABLE_ID_PATTERN)
     implementation_sha256: str = Field(pattern=_SHA256)
 
 
@@ -367,7 +366,7 @@ class SnapshotDemandCell(BaseModel):
     requirement_id: str = Field(pattern=r"^data-requirement:[0-9a-f]{64}$")
     capture_requirement_id: str = Field(pattern=r"^capture-requirement:[0-9a-f]{64}$")
     semantic_type_id: SemanticTypeId
-    semantic_type_version: str = Field(pattern=_STABLE_KEY)
+    semantic_type_version: str = Field(pattern=STABLE_ID_PATTERN)
     domain: DataDomain
     subject: SubjectRef
     partition_key: str = Field(min_length=1)
@@ -486,8 +485,8 @@ class SnapshotManifest(BaseModel):
     normalized_records: tuple[NormalizedRecordRef, ...] = Field(min_length=1)
     selections: tuple[SnapshotCellSelection, ...] = Field(min_length=1)
     resolved_at: datetime
-    resolver_id: str = Field(pattern=_STABLE_KEY)
-    resolver_version: str = Field(pattern=_STABLE_KEY)
+    resolver_id: str = Field(pattern=STABLE_ID_PATTERN)
+    resolver_version: str = Field(pattern=STABLE_ID_PATTERN)
     resolver_implementation_sha256: str = Field(pattern=_SHA256)
 
     @field_validator("resolved_at")
@@ -605,7 +604,7 @@ class FactorKind(StrEnum):
 class DependencyTemplate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    alias: str = Field(pattern=_STABLE_KEY)
+    alias: str = Field(pattern=STABLE_ID_PATTERN)
     template_id: str = Field(pattern=r"^factor-template:[0-9a-f]{64}$")
 
 
@@ -616,11 +615,11 @@ class FactorInvocationTemplate(BaseModel):
 
     factor_template_id: str = ""
     content_sha256: str = ""
-    factor_id: str = Field(pattern=_STABLE_KEY)
-    factor_version: str = Field(pattern=_STABLE_KEY)
+    factor_id: str = Field(pattern=STABLE_ID_PATTERN)
+    factor_version: str = Field(pattern=STABLE_ID_PATTERN)
     factor_implementation_sha256: str = Field(pattern=_SHA256)
     factor_kind: FactorKind
-    parameter_model_key: str = Field(pattern=_STABLE_KEY)
+    parameter_model_key: str = Field(pattern=STABLE_ID_PATTERN)
     parameter_schema_sha256: str = Field(pattern=_SHA256)
     canonical_parameters_sha256: str = Field(pattern=_SHA256)
     data_requirement_ids: tuple[str, ...] = Field(min_length=1)
@@ -697,7 +696,7 @@ class ProvenanceNeutralInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     subject: SubjectRef
-    payload_model_key: str = Field(pattern=_STABLE_KEY)
+    payload_model_key: str = Field(pattern=STABLE_ID_PATTERN)
     payload_sha256: str = Field(pattern=_SHA256)
     valid_from: date
     valid_to: date
@@ -798,8 +797,8 @@ class RunnerInputSelection(BaseModel):
     snapshot_id: str = Field(pattern=r"^snapshot:[0-9a-f]{64}$")
     bindings: tuple[RunnerInputBinding, ...] = ()
     selected_at: datetime
-    runner_id: str = Field(pattern=_STABLE_KEY)
-    runner_version: str = Field(pattern=_STABLE_KEY)
+    runner_id: str = Field(pattern=STABLE_ID_PATTERN)
+    runner_version: str = Field(pattern=STABLE_ID_PATTERN)
     runner_implementation_sha256: str = Field(pattern=_SHA256)
 
     @field_validator("selected_at")
@@ -914,9 +913,9 @@ class InputReadEvent(BaseModel):
     factor_execution_id: str = Field(pattern=r"^factor-execution:[0-9a-f]{64}$")
     selection_id: str = Field(pattern=r"^runner-selection:[0-9a-f]{64}$")
     requirement_handle_id: str = Field(pattern=r"^requirement-handle:[0-9a-f]{64}$")
-    output_key: str = Field(pattern=_STABLE_KEY)
+    output_key: str = Field(pattern=STABLE_ID_PATTERN)
     read_index: int = Field(ge=0)
-    trace_id: str = Field(pattern=_STABLE_KEY)
+    trace_id: str = Field(pattern=STABLE_ID_PATTERN)
     occurred_at: datetime
 
     @field_validator("occurred_at")
@@ -950,9 +949,9 @@ class FactorOutputDraft(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    output_key: str = Field(pattern=_STABLE_KEY)
+    output_key: str = Field(pattern=STABLE_ID_PATTERN)
     subject: SubjectRef
-    output_model_key: str = Field(pattern=_STABLE_KEY)
+    output_model_key: str = Field(pattern=STABLE_ID_PATTERN)
     output_schema_sha256: str = Field(pattern=_SHA256)
     output_payload_sha256: str = Field(pattern=_SHA256)
     availability_status: AvailabilityStatus
@@ -1168,7 +1167,7 @@ class MaterializedFactorBatch(BaseModel):
     factor_execution_id: str = Field(pattern=r"^factor-execution:[0-9a-f]{64}$")
     snapshot_id: str = Field(pattern=r"^snapshot:[0-9a-f]{64}$")
     output_ids: tuple[str, ...] = Field(min_length=1)
-    repository_commit_id: str = Field(pattern=_STABLE_KEY)
+    repository_commit_id: str = Field(pattern=STABLE_ID_PATTERN)
     persisted_at: datetime
 
     @field_validator("persisted_at")
@@ -1374,7 +1373,7 @@ class TraceEdge(BaseModel):
 
     downstream_id: str = Field(min_length=1)
     upstream_id: str = Field(min_length=1)
-    relation: str = Field(pattern=_STABLE_KEY)
+    relation: str = Field(pattern=STABLE_ID_PATTERN)
 
 
 class TraceBundle(BaseModel):
@@ -1387,8 +1386,8 @@ class TraceBundle(BaseModel):
     root_node_id: str = Field(min_length=1)
     nodes: tuple[TraceNode, ...] = Field(min_length=1)
     edges: tuple[TraceEdge, ...] = Field(min_length=1)
-    built_by: str = Field(pattern=_STABLE_KEY)
-    builder_version: str = Field(pattern=_STABLE_KEY)
+    built_by: str = Field(pattern=STABLE_ID_PATTERN)
+    builder_version: str = Field(pattern=STABLE_ID_PATTERN)
     builder_implementation_sha256: str = Field(pattern=_SHA256)
     built_at: datetime
 

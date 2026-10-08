@@ -14,10 +14,9 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import canonical_sha256, require_stable_and_immutable
 from truealpha_contracts.models import _require_aware
 
-_STABLE_COORDINATE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "head"})
 _AUTHENTICATION_FAILURES = frozenset(
@@ -30,12 +29,7 @@ _AUTHENTICATION_FAILURES = frozenset(
 
 
 def _stable_coordinate(value: str, field_name: str) -> str:
-    if _STABLE_COORDINATE.fullmatch(value) is None:
-        raise ValueError(f"{field_name} must be a stable coordinate")
-    tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
-    if tokens & _MUTABLE_TOKENS:
-        raise ValueError(f"{field_name} must name an immutable version")
-    return value
+    return require_stable_and_immutable(value, field_name, mutable_tokens=_MUTABLE_TOKENS)
 
 
 class StrictFrozenModel(BaseModel):

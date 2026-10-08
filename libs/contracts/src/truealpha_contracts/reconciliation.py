@@ -26,7 +26,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256, require_stable_and_immutable
 from truealpha_contracts.common import identify_by_grain as _freeze_content
 from truealpha_contracts.datahub import AssessmentFreshness, ObligationTerminalState
 from truealpha_contracts.models import _require_aware
@@ -34,7 +34,6 @@ from truealpha_contracts.universe import SubjectRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
-_STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
 
 
@@ -116,12 +115,7 @@ def _decimal_input(value: Any) -> Any:
 
 
 def _immutable_coordinate(value: str, field_name: str) -> str:
-    if re.fullmatch(_STABLE_COORDINATE, value) is None:
-        raise ValueError(f"{field_name} must be a stable coordinate")
-    tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
-    if tokens & _MUTABLE_TOKENS:
-        raise ValueError(f"{field_name} must name an immutable version")
-    return value
+    return require_stable_and_immutable(value, field_name, mutable_tokens=_MUTABLE_TOKENS)
 
 
 def _sorted_unique(values: tuple[str, ...], field_name: str) -> tuple[str, ...]:
@@ -384,8 +378,8 @@ class SourceAssertion(_FrozenModel):
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     cell_id: str = Field(pattern=r"^reconciliation-cell:[0-9a-f]{64}$")
     observation_id: str = Field(pattern=r"^normalized-observation:[0-9a-f]{64}$")
-    source_id: str = Field(pattern=_STABLE_COORDINATE)
-    origin_group_id: str = Field(pattern=_STABLE_COORDINATE)
+    source_id: str = Field(pattern=STABLE_ID_PATTERN)
+    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     knowable_at: datetime
     normalized_value_sha256: str = Field(pattern=_SHA256)
     numeric_value: Decimal | None = None
@@ -442,7 +436,7 @@ class ReconciliationPolicy(_FrozenModel):
 
     policy_id: str = Field(default="", pattern=r"^(?:|reconciliation-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    policy_version: str = Field(pattern=_STABLE_COORDINATE)
+    policy_version: str = Field(pattern=STABLE_ID_PATTERN)
     source_priority: tuple[str, ...] = Field(min_length=1)
     absolute_tolerance: Decimal = Field(ge=0)
     relative_tolerance: Decimal = Field(ge=0)
@@ -888,7 +882,7 @@ def _median_consensus_result(
 
 
 class OriginGroupCount(_FrozenModel):
-    origin_group_id: str = Field(pattern=_STABLE_COORDINATE)
+    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     cell_count: int = Field(ge=1)
 
     @field_validator("origin_group_id")
@@ -1070,7 +1064,7 @@ class VersionedDataHubQualityReport(_FrozenModel):
 
     report_id: str = Field(default="", pattern=r"^(?:|datahub-quality-report:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    report_schema_version: str = Field(pattern=_STABLE_COORDINATE)
+    report_schema_version: str = Field(pattern=STABLE_ID_PATTERN)
     denominator: DataHubQualityDenominator
     reconciliation_policies: tuple[ReconciliationPolicy, ...] = Field(min_length=1)
     cutoff: datetime

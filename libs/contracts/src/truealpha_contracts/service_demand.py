@@ -11,14 +11,13 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_serializer, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import UniverseRef
 from truealpha_contracts.usage import DataRequirement
 
 _SHA256 = r"^[0-9a-f]{64}$"
-_STABLE_ID = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 _FIELD_NAME = r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$"
 _MUTABLE_VERSION_TOKENS = frozenset({"current", "default", "head", "latest", "main", "master", "stable", "tip"})
 
@@ -132,9 +131,9 @@ class DemandIntakeReasonCode(StrEnum):
 
 class DemandRequester(_FrozenModel):
     kind: DemandRequesterKind
-    requester_id: str = Field(pattern=_STABLE_ID)
-    requester_version: str = Field(pattern=_STABLE_ID)
-    requester_definition_id: str = Field(pattern=_STABLE_ID)
+    requester_id: str = Field(pattern=STABLE_ID_PATTERN)
+    requester_version: str = Field(pattern=STABLE_ID_PATTERN)
+    requester_definition_id: str = Field(pattern=STABLE_ID_PATTERN)
     requester_definition_sha256: str = Field(pattern=_SHA256)
 
     @field_validator("requester_version")
@@ -235,7 +234,7 @@ class SampleAssertion(_FrozenModel):
 class SampleCase(_FrozenModel):
     sample_case_id: str = Field(default="", pattern=r"^(?:|sample-case:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    case_name: str = Field(pattern=_STABLE_ID)
+    case_name: str = Field(pattern=STABLE_ID_PATTERN)
     sample_artifact_id: str = Field(pattern=r"^sample-artifact:[0-9a-f]{64}$")
     assertions: tuple[SampleAssertion, ...] = Field(min_length=1)
 
@@ -290,9 +289,9 @@ class FieldSemanticExpectation(_FrozenModel):
     required: bool
     nullable: bool
     unit_behavior: UnitBehavior
-    unit: str | None = Field(default=None, pattern=_STABLE_ID)
+    unit: str | None = Field(default=None, pattern=STABLE_ID_PATTERN)
     valid_time_behavior: ValidTimeBehavior
-    knowable_time_rule_id: str = Field(pattern=_STABLE_ID)
+    knowable_time_rule_id: str = Field(pattern=STABLE_ID_PATTERN)
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
@@ -372,8 +371,8 @@ class DataQualityObjective(_FrozenModel):
 class DownstreamRecomputationHandoff(_FrozenModel):
     handoff_id: str = Field(default="", pattern=r"^(?:|recomputation-handoff:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    materialization_kind: str = Field(pattern=_STABLE_ID)
-    definition_id: str = Field(pattern=_STABLE_ID)
+    materialization_kind: str = Field(pattern=STABLE_ID_PATTERN)
+    definition_id: str = Field(pattern=STABLE_ID_PATTERN)
     definition_sha256: str = Field(pattern=_SHA256)
     input_requirement_ids: tuple[str, ...] = Field(min_length=1)
     trigger: Literal["on_accepted_exact_snapshot"] = "on_accepted_exact_snapshot"

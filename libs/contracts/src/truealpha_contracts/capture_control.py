@@ -9,7 +9,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.common import identify_by_grain as _freeze_wrapped
 from truealpha_contracts.datahub import ListObligation, RecapturePredicate
 from truealpha_contracts.universe import SubjectRef, UniverseRef
@@ -185,7 +185,7 @@ class CaptureRecapturePlan(BaseModel):
     @field_validator("planner_version")
     @classmethod
     def immutable_planner_version(cls, value: str) -> str:
-        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*", value) is None:
+        if re.fullmatch(STABLE_ID_PATTERN, value) is None:
             raise ValueError("planner_version must be a stable coordinate")
         mutable_tokens = {"latest", "current", "default", "stable", "main", "head", "tip"}
         if any(token in mutable_tokens for token in re.split(r"[._:/@+\-]", value.lower())):

@@ -1,10 +1,10 @@
 {
   "contract_set": "truealpha.issue-58.exact-contracts.v1",
   "schema_sha256": {
-    "CaptureManifest": "e84b8041857e2bfb79e8567f590b2f47ab7b80503e6ab9f944833f651ab7cbc3",
-    "CaptureScope": "90983276eef34f0c23d85718c066a3bd1dadc1247dacda3c32f5143bdf6cd04a",
-    "ReleaseManifest": "6eef8fb32b8737de34b364b381543b8e201b7ca716af145df81eb1677dc5991d",
-    "SnapshotManifest": "97d394f96d83c4a2435dbfdc11c3cba2cf5fd43e40c2c7663a51cdc50a5d0103"
+    "CaptureManifest": "467a568678eb4ac3cf966c8707b857eda53f3062ec9ef4e9a1f71245568e092c",
+    "CaptureScope": "00abf5834c45f8c892f721dc70db2434dd71570fbf25c7879dec1e7b58f79763",
+    "ReleaseManifest": "b3bfbd3eac4a349fe44685c8e0129f6f168fa1a5f89e30e0d9e6f8c2887b7dcc",
+    "SnapshotManifest": "7d5ad6a18d1344623b3f0e0053fbb8025c78d43614a883c20f6ddc2959ddc106"
   },
   "schemas": {
     "CaptureManifest": {
@@ -51,7 +51,7 @@
               "type": "array"
             },
             "partition_key": {
-              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Partition Key",
               "type": "string"
             },
@@ -167,7 +167,7 @@
             "mapping_version": {
               "anyOf": [
                 {
-                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
                   "type": "string"
                 },
                 {
@@ -279,7 +279,7 @@
             "semantic_type_version": {
               "anyOf": [
                 {
-                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
                   "type": "string"
                 },
                 {
@@ -292,7 +292,7 @@
             "source_coverage_entry_id": {
               "anyOf": [
                 {
-                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
                   "type": "string"
                 },
                 {
@@ -397,7 +397,7 @@
       "description": "Observed capture rows plus every immutable binding needed to evaluate them.",
       "properties": {
         "applicability_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Applicability Catalog Id",
           "type": "string"
         },
@@ -450,12 +450,12 @@
           "$ref": "#/$defs/CaptureEnvironment"
         },
         "partition_key": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Partition Key",
           "type": "string"
         },
         "research_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Research Catalog Id",
           "type": "string"
         },
@@ -465,7 +465,7 @@
           "type": "string"
         },
         "semantic_type_registry_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Semantic Type Registry Id",
           "type": "string"
         },
@@ -475,7 +475,7 @@
           "type": "string"
         },
         "slo_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Slo Catalog Id",
           "type": "string"
         },
@@ -485,7 +485,7 @@
           "type": "string"
         },
         "source_coverage_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Source Coverage Catalog Id",
           "type": "string"
         },
@@ -495,7 +495,7 @@
           "type": "string"
         },
         "source_registry_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Source Registry Id",
           "type": "string"
         },
@@ -561,7 +561,7 @@
               "$ref": "#/$defs/DataDomain"
             },
             "freshness_policy_id": {
-              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Freshness Policy Id",
               "type": "string"
             },
@@ -571,7 +571,7 @@
               "type": "string"
             },
             "partition_rule_id": {
-              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Partition Rule Id",
               "type": "string"
             },
@@ -597,7 +597,7 @@
               "type": "string"
             },
             "semantic_type_version": {
-              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Semantic Type Version",
               "type": "string"
             },
@@ -690,7 +690,7 @@
       "description": "Immutable environment-neutral denominator promoted unchanged.",
       "properties": {
         "applicability_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Applicability Catalog Id",
           "type": "string"
         },
@@ -735,7 +735,7 @@
           "type": "array"
         },
         "research_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Research Catalog Id",
           "type": "string"
         },
@@ -745,7 +745,7 @@
           "type": "string"
         },
         "semantic_type_registry_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Semantic Type Registry Id",
           "type": "string"
         },
@@ -755,7 +755,7 @@
           "type": "string"
         },
         "slo_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Slo Catalog Id",
           "type": "string"
         },
@@ -765,7 +765,7 @@
           "type": "string"
         },
         "source_coverage_catalog_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Source Coverage Catalog Id",
           "type": "string"
         },
@@ -780,7 +780,7 @@
           "type": "string"
         },
         "source_registry_id": {
-          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Source Registry Id",
           "type": "string"
         },
@@ -870,7 +870,7 @@
               "type": "string"
             },
             "payload_model_key": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Payload Model Key",
               "type": "string"
             },
@@ -878,17 +878,17 @@
               "$ref": "#/$defs/SemanticTypeId"
             },
             "semantic_type_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Semantic Type Version",
               "type": "string"
             },
             "template_name": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Template Name",
               "type": "string"
             },
             "template_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Template Version",
               "type": "string"
             }
@@ -929,12 +929,12 @@
               "type": "string"
             },
             "immutable_revision": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Immutable Revision",
               "type": "string"
             },
             "model_id": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Model Id",
               "type": "string"
             },
@@ -945,7 +945,7 @@
               "type": "string"
             },
             "provider": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Provider",
               "type": "string"
             }
@@ -1406,7 +1406,7 @@
               "type": "string"
             },
             "document_id": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Document Id",
               "type": "string"
             },
@@ -1424,7 +1424,7 @@
               "type": "string"
             },
             "mapping_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Mapping Version",
               "type": "string"
             },
@@ -1434,7 +1434,7 @@
               "type": "string"
             },
             "raw_object_id": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Raw Object Id",
               "type": "string"
             },
@@ -1496,12 +1496,12 @@
               "type": "string"
             },
             "policy_id": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Policy Id",
               "type": "string"
             },
             "policy_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Policy Version",
               "type": "string"
             },
@@ -1752,7 +1752,7 @@
               "title": "Model Revision Sha256"
             },
             "payload_model_key": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Payload Model Key",
               "type": "string"
             },
@@ -1772,7 +1772,7 @@
               "type": "string"
             },
             "producer_id": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Producer Id",
               "type": "string"
             },
@@ -1785,7 +1785,7 @@
               "$ref": "#/$defs/SemanticProducerKind"
             },
             "producer_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Producer Version",
               "type": "string"
             },
@@ -1798,7 +1798,7 @@
               "$ref": "#/$defs/SemanticTypeId"
             },
             "semantic_type_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Semantic Type Version",
               "type": "string"
             },
@@ -1984,7 +1984,7 @@
               "$ref": "#/$defs/SemanticTypeId"
             },
             "semantic_type_version": {
-              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
               "title": "Semantic Type Version",
               "type": "string"
             },
@@ -2427,7 +2427,7 @@
           "type": "array"
         },
         "resolver_id": {
-          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Resolver Id",
           "type": "string"
         },
@@ -2437,7 +2437,7 @@
           "type": "string"
         },
         "resolver_version": {
-          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
           "title": "Resolver Version",
           "type": "string"
         },

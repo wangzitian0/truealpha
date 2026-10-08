@@ -18,13 +18,12 @@ from enum import StrEnum
 from pydantic import Field, field_validator
 
 from truealpha_contracts.access import StrictFrozenModel
+from truealpha_contracts.common import STABLE_ID_PATTERN
 from truealpha_contracts.models import _require_aware
-
-_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
 
 
 def _stable_id(value: str, field_name: str) -> str:
-    if _ID_PATTERN.fullmatch(value) is None:
+    if re.fullmatch(STABLE_ID_PATTERN, value) is None:
         raise ValueError(f"{field_name} must be a stable identifier")
     return value
 

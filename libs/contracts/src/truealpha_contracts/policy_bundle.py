@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_seriali
 
 from truealpha_contracts.capture_contracts import CaptureScope, compile_capture_requirement_bindings
 from truealpha_contracts.catalog import ResearchCatalogManifest
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.execution import FactorInvocationTemplate, FactorKind
 from truealpha_contracts.models import _require_aware
@@ -53,7 +53,6 @@ from truealpha_contracts.usage import (
 )
 
 _SHA256 = r"^[0-9a-f]{64}$"
-_STABLE_ID = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 
 
 def _canonical_value(value: Any) -> Any:
@@ -449,10 +448,10 @@ def evaluate_exact_natural_refresh(
 class RequirementGraphNode(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    node_id: str = Field(pattern=_STABLE_ID)
+    node_id: str = Field(pattern=STABLE_ID_PATTERN)
     factor_template: FactorInvocationTemplate
-    module_id: str = Field(pattern=_STABLE_ID)
-    emitter_id: str = Field(pattern=_STABLE_ID)
+    module_id: str = Field(pattern=STABLE_ID_PATTERN)
+    emitter_id: str = Field(pattern=STABLE_ID_PATTERN)
     data_requirement_ids: tuple[str, ...] = Field(min_length=1)
     upstream_node_ids: tuple[str, ...] = ()
     usage_stages: frozenset[UsageStage] = frozenset()
@@ -466,7 +465,7 @@ class RequirementGraphNode(BaseModel):
         ):
             raise ValueError("data_requirement_ids must be content-addressed")
         if info.field_name == "upstream_node_ids" and any(
-            re.fullmatch(_STABLE_ID, value) is None for value in normalized
+            re.fullmatch(STABLE_ID_PATTERN, value) is None for value in normalized
         ):
             raise ValueError("upstream_node_ids must contain stable identifiers")
         return normalized
@@ -496,7 +495,7 @@ class CatalogRootBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     catalog_entry_id: str = Field(pattern=r"^catalog-entry:[0-9a-f]{64}$")
-    node_id: str = Field(pattern=_STABLE_ID)
+    node_id: str = Field(pattern=STABLE_ID_PATTERN)
 
 
 class RequirementGraphManifest(BaseModel):
@@ -538,11 +537,11 @@ class ScheduledRequirementPartitions(BaseModel):
     )
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     data_requirement_id: str = Field(pattern=r"^data-requirement:[0-9a-f]{64}$")
-    valid_period_rule_id: str = Field(pattern=_STABLE_ID)
+    valid_period_rule_id: str = Field(pattern=STABLE_ID_PATTERN)
     window_start: datetime | None = None
     window_end: datetime
     partition_keys: tuple[str, ...] = Field(min_length=1)
-    resolver_id: str = Field(pattern=_STABLE_ID)
+    resolver_id: str = Field(pattern=STABLE_ID_PATTERN)
     resolver_version: RegistryVersion
     resolver_implementation_sha256: str = Field(pattern=_SHA256)
 
@@ -579,7 +578,7 @@ class ScheduledCatalogInvocation(BaseModel):
         pattern=r"^(?:|scheduled-invocation:[0-9a-f]{64})$",
     )
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    run_id: str = Field(pattern=_STABLE_ID)
+    run_id: str = Field(pattern=STABLE_ID_PATTERN)
     catalog_entry_id: str = Field(pattern=r"^catalog-entry:[0-9a-f]{64}$")
     scheduled_for: datetime
     as_of: datetime
@@ -652,17 +651,17 @@ class PlannedUsageRequirement(BaseModel):
         pattern=r"^(?:|planned-usage-requirement:[0-9a-f]{64})$",
     )
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    run_id: str = Field(pattern=_STABLE_ID)
+    run_id: str = Field(pattern=STABLE_ID_PATTERN)
     scheduled_invocation_id: str = Field(pattern=r"^scheduled-invocation:[0-9a-f]{64}$")
     catalog_entry_id: str = Field(pattern=r"^catalog-entry:[0-9a-f]{64}$")
-    catalog_alias: str = Field(pattern=_STABLE_ID)
-    graph_node_id: str = Field(pattern=_STABLE_ID)
-    module_id: str = Field(pattern=_STABLE_ID)
+    catalog_alias: str = Field(pattern=STABLE_ID_PATTERN)
+    graph_node_id: str = Field(pattern=STABLE_ID_PATTERN)
+    module_id: str = Field(pattern=STABLE_ID_PATTERN)
     planned_cell_id: str = Field(pattern=r"^planned-demand-cell:[0-9a-f]{64}$")
     level: RequirementLevel
     stage: UsageStage
     emitter_kind: UsageEmitterKind
-    emitter_id: str = Field(pattern=_STABLE_ID)
+    emitter_id: str = Field(pattern=STABLE_ID_PATTERN)
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> PlannedUsageRequirement:
@@ -687,7 +686,7 @@ class CompiledRunDemand(BaseModel):
 
     compiled_run_demand_id: str = Field(default="", pattern=r"^(?:|compiled-run-demand:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    run_id: str = Field(pattern=_STABLE_ID)
+    run_id: str = Field(pattern=STABLE_ID_PATTERN)
     input_cells: tuple[PlannedDemandCell, ...]
     usage_requirements: tuple[PlannedUsageRequirement, ...]
     not_applicable_cell_ids: tuple[str, ...] = ()
@@ -767,10 +766,10 @@ class PlannedUsageEvidence(BaseModel):
     )
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     planned_usage_requirement_id: str = Field(pattern=r"^planned-usage-requirement:[0-9a-f]{64}$")
-    run_id: str = Field(pattern=_STABLE_ID)
+    run_id: str = Field(pattern=STABLE_ID_PATTERN)
     scheduled_invocation_id: str = Field(pattern=r"^scheduled-invocation:[0-9a-f]{64}$")
-    module_id: str = Field(pattern=_STABLE_ID)
-    emitter_id: str = Field(pattern=_STABLE_ID)
+    module_id: str = Field(pattern=STABLE_ID_PATTERN)
+    emitter_id: str = Field(pattern=STABLE_ID_PATTERN)
     stage: UsageStage
     planned_cell_id: str = Field(pattern=r"^planned-demand-cell:[0-9a-f]{64}$")
     usage_event: DataUsageEvent
