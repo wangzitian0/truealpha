@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from decimal import Decimal
 from hashlib import sha256
@@ -36,11 +37,26 @@ _CANARY_UNIVERSE_LIKE = "universe:canary-us-%"
 _AAPL_GPPE_BAND = (Decimal("300000"), Decimal("4000000"))
 
 
-#: The infra2-sdk release this repository pins in `pyproject.toml`. Asserted against what
-#: the deployed image actually loaded, because a pin only binds the resolver -- an image
-#: built from a stale lock, or one where the wheel failed to install, satisfies the pin on
-#: paper and loads something else.
-PINNED_INFRA2_SDK = "2.5.0"
+_WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl")
+
+
+def pinned_infra2_sdk() -> str:
+    """The infra2-sdk release the installed `truealpha-runtime` package declares.
+
+    The package metadata is the pin (the locked wheel URL), so nothing restates it. A
+    hand-kept copy once read 1.2.0 while the lock pinned 1.3.2. Asserted against what the
+    image actually loaded, because a pin only binds the resolver -- an image where the wheel
+    failed to install, or a stale layer, satisfies the pin on paper and loads something else.
+    """
+    from importlib.metadata import requires
+
+    for requirement in requires("truealpha-runtime") or []:
+        if re.split(r"[\s\[@;]", requirement, maxsplit=1)[0] == "infra2-sdk":
+            match = _WHEEL_PIN.search(requirement)
+            if match is None:
+                raise ValueError(f"truealpha-runtime pins infra2-sdk without a release wheel: {requirement}")
+            return match.group("version")
+    raise ValueError("truealpha-runtime declares no infra2-sdk requirement")
 
 
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
@@ -199,11 +215,12 @@ def image_content_failures() -> list[str]:
         from importlib.metadata import version as _installed
 
         loaded = _installed("infra2-sdk")
+        pinned = pinned_infra2_sdk()
     except Exception as error:  # noqa: BLE001
-        bad.append(f"infra2-sdk is not importable in the deployed image: {type(error).__name__}")
+        bad.append(f"infra2-sdk or its pin is not readable in the deployed image: {type(error).__name__}: {error}")
     else:
-        if loaded != PINNED_INFRA2_SDK:
-            bad.append(f"infra2-sdk {loaded} loaded, repository pins {PINNED_INFRA2_SDK}")
+        if loaded != pinned:
+            bad.append(f"infra2-sdk {loaded} loaded, truealpha-runtime pins {pinned}")
 
     if not release_identity.ENV_MANIFEST_PATH.is_file():
         bad.append(
