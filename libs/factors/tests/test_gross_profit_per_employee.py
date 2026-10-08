@@ -173,3 +173,28 @@ def test_polars_expression_reproduces_the_decimal_result():
     # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
     assert native.value == Decimal("8000")
     assert vectorised == pytest.approx(float(native.value), rel=1e-12)
+
+
+def test_bank_financial_leverage_adjusted_produces_positive_gppe() -> None:
+    # JPM data: PPNR = 86,807,000,000, Total Assets = 4,424,900,000,000, Headcount = 318,512.
+    # With financial_leverage_adjusted=True, asset leverage (4.42T / 86.8B = 50.9 > 15) charges 5%
+    # against 8% regulatory equity tier ($353.99B) instead of gross assets double-counting deposits.
+    facts = [
+        _fact("gross_profit", "86807000000", entity_id="issuer.bank"),
+        _fact("total_assets", "4424900000000", entity_id="issuer.bank"),
+        _fact("employees_total", "318512", entity_id="issuer.bank"),
+    ]
+    result = gross_profit_per_employee(
+        facts,
+        entity_id="issuer.bank",
+        as_of=_AS_OF,
+        risk_free_rate=_RISK_FREE_RATE,
+        financial_leverage_adjusted=True,
+    )
+    equity_base = Decimal("4424900000000") * Decimal("0.08")
+    expected_real_profit = Decimal("86807000000") - equity_base * _RISK_FREE_RATE
+    expected_labor_efficiency = expected_real_profit / Decimal("318512")
+    assert result.value == expected_labor_efficiency
+    assert result.value > Decimal("200000")  # ~+$216,969 per employee, highly profitable
+    assert result.flags == []
+

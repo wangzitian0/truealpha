@@ -122,6 +122,10 @@ def seed_strategy_inputs_from_capture(
         inputs: list[tuple[str, str, Decimal, datetime, str | None]] = []
         if issuer_id in financial:
             _listing, payload, confidence, observed_at = financial[issuer_id]
+            op_end = payload.get("operating_period_end")
+            rev_end = payload.get("revenue_period_end")
+            if op_end is not None and rev_end is not None and op_end != rev_end:
+                confidence = Decimal("0.00")
             for key in _STRATEGY_FINANCIAL_KEYS:
                 value = payload.get(key)
                 if value is not None:

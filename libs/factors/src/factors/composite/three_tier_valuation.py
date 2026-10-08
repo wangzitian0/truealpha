@@ -53,6 +53,7 @@ def three_tier_valuation(
     entity_id: str,
     as_of: datetime,
     definition: ThreeTierValuationDefinition,
+    gross_margin: Decimal | None = None,
 ) -> FactorResult:
     gppe = _result("gross_profit_per_employee", inputs, entity_id)
     price_to_sales = _result("price_to_sales", inputs, entity_id)
@@ -93,7 +94,7 @@ def three_tier_valuation(
             flags=["nonpositive_price_to_sales"],
         )
 
-    band = definition.band_for(gppe.value)
+    band = definition.band_for(gppe.value, gross_margin=gross_margin)
     midpoint = (band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2)
     valuation_gap = midpoint / current_ps - Decimal(1)
     confidence = min(gppe.confidence, price_to_sales.confidence)

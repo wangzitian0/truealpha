@@ -196,3 +196,25 @@ def test_duplicate_factor_for_same_entity_fails_closed() -> None:
 
     with pytest.raises(ValueError, match="e1: multiple factor results for factor 'gross_profit_per_employee'"):
         three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
+
+
+def test_gross_margin_gate_restricts_low_margin_to_traditional() -> None:
+    definition = _v0_definition()
+    # Costco scenario: GPPE is 100,946 (which without gate reaches Tech tier >= 100,000),
+    # but gross_margin is 0.128 (< 0.35 anti-fraud gate).
+    # It must be restricted to traditional band (target P/S 0.30 - 2.00, midpoint 1.15).
+    inputs = [
+        _factor_result("gross_profit_per_employee", "100946", "0.9"),
+        _factor_result("price_to_sales", "1.377", "0.9"),
+    ]
+    result = three_tier_valuation(
+        inputs,
+        entity_id="e1",
+        as_of=_AS_OF,
+        definition=definition,
+        gross_margin=Decimal("0.128"),
+    )
+    # Target P/S is midpoint 1.15 of traditional band, NOT 4.25 of tech band
+    expected_gap = Decimal("1.15") / Decimal("1.377") - Decimal("1")
+    assert result.value == expected_gap
+

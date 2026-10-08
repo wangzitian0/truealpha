@@ -93,6 +93,7 @@ def gross_profit_per_employee(
     entity_id: str,
     as_of: datetime,
     risk_free_rate: Decimal,
+    financial_leverage_adjusted: bool = False,
 ) -> FactorResult:
     gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
     total_assets = _find(facts, entity_id, _TOTAL_ASSETS)
@@ -127,7 +128,12 @@ def gross_profit_per_employee(
     assert gross_profit is not None and headcount is not None and total_assets is not None
     assert gross_profit.value is not None and headcount.value is not None and total_assets.value is not None
 
-    real_profit = gross_profit.value - total_assets.value * risk_free_rate
+    capital_base = total_assets.value
+    if financial_leverage_adjusted and gross_profit.value > Decimal("0"):
+        if (total_assets.value / gross_profit.value) > Decimal("15"):
+            capital_base = total_assets.value * Decimal("0.08")
+
+    real_profit = gross_profit.value - capital_base * risk_free_rate
     value = real_profit / headcount.value
     confidence = min(gross_profit.confidence, total_assets.confidence, headcount.confidence)
 

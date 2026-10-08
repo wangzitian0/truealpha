@@ -1545,3 +1545,20 @@ def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() ->
     assert outcome_unsigned.raw.body == b'{"predecessor": true}'
     assert outcome_unsigned.record.payload["revenue"] == "340000000000"
     assert outcome_unsigned.record.payload["total_assets"] is None
+
+
+def test_period_mismatch_yields_zero_confidence() -> None:
+    # If operating_period_end (gross profit) and revenue_period_end differ,
+    # confidence must be Decimal("0.00") to prevent corrupting downstream ratios.
+    payload = {
+        "operating_period_end": "2018-09-29",
+        "revenue_period_end": "2025-09-27",
+        "gross_profit": "101839000000",
+        "revenue": "391035000000",
+        "total_assets": "352583000000",
+        "shares_outstanding": "15115822000",
+    }
+    from data_engine.datahub.production_topt.sec_financial_adapter import _confidence
+
+    assert _confidence(payload) == Decimal("0.00")
+

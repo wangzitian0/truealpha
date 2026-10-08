@@ -392,3 +392,26 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
     assert len(decisions) == 1
     assert decisions[0].eligible is False
     assert decisions[0].exclusion_reason == ExclusionReason.MISSING_MARKET_VALUE_INPUT
+
+
+def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
+    # High GPPE (gross_profit / headcount - assets * rf / headcount = (35B - 3.5B)/200k = 157.5k > 100k tech threshold)
+    # but low gross margin (35B / 250B = 14% < 35% anti-fraud gate).
+    records = {
+        "gross_profit": (Decimal("35000000000"), Decimal("0.9")),
+        "revenue": (Decimal("250000000000"), Decimal("0.9")),
+        "total_assets": (Decimal("70000000000"), Decimal("0.9")),
+        "headcount": (Decimal("200000"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("443000000"), Decimal("0.9")),
+        "last_close": (Decimal("500"), Decimal("0.9")),
+    }
+    issuer = IssuerInput(issuer_id="issuer:retail", records=records)
+    decisions = evaluate_cutoff(
+        [issuer],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0.05"),
+    )
+    assert len(decisions) == 1
+    assert decisions[0].tier == "traditional"
+

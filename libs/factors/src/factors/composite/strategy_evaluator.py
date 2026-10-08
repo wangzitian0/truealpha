@@ -234,6 +234,12 @@ def _evaluate_issuer(
     peg_value = peg_result.value
     peg_reasons = peg_reason_codes(peg_result)
 
+    gross_margin = None
+    gp_record = issuer.records.get("gross_profit")
+    rev_record = issuer.records.get("revenue")
+    if gp_record is not None and rev_record is not None and rev_record[0] > Decimal("0"):
+        gross_margin = gp_record[0] / rev_record[0]
+
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
     tier_result = three_tier_valuation(
@@ -244,8 +250,9 @@ def _evaluate_issuer(
         entity_id=issuer.issuer_id,
         as_of=as_of,
         definition=definition.tier_valuation,
+        gross_margin=gross_margin,
     )
-    band = definition.tier_valuation.band_for(labor_efficiency)
+    band = definition.tier_valuation.band_for(labor_efficiency, gross_margin=gross_margin)
     target_ps = _quantize((band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2), tier_q)
     if tier_result.value is None:
         return (
