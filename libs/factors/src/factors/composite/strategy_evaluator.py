@@ -188,6 +188,7 @@ def _evaluate_issuer(
     definition: LargeModelValueV0Definition,
     risk_free_rate: Decimal,
     as_of: datetime,
+    financial_leverage_adjusted: bool = False,
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     """Return this issuer's pre-ranking decision plus its valuation gap (or None
     when it is not a ranking candidate)."""
@@ -214,6 +215,7 @@ def _evaluate_issuer(
         entity_id=issuer.issuer_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
+        financial_leverage_adjusted=financial_leverage_adjusted,
     )
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
@@ -368,12 +370,19 @@ def evaluate_cutoff(
     definition: LargeModelValueV0Definition,
     cutoff_at: datetime,
     risk_free_rate: Decimal,
+    financial_leverage_adjusted: bool = False,
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id."""
 
     decisions = [
-        _evaluate_issuer(issuer, definition=definition, risk_free_rate=risk_free_rate, as_of=cutoff_at)[0]
+        _evaluate_issuer(
+            issuer,
+            definition=definition,
+            risk_free_rate=risk_free_rate,
+            as_of=cutoff_at,
+            financial_leverage_adjusted=financial_leverage_adjusted,
+        )[0]
         for issuer in issuers
     ]
     return rank_and_select(decisions, definition=definition)

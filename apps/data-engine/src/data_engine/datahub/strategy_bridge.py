@@ -189,7 +189,13 @@ def run_strategy_replay_for_cutoff(
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
     issuer_inputs = gateway.issuer_inputs(cutoff)
-    evaluated = evaluate_cutoff(issuer_inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=risk_free_rate)
+    evaluated = evaluate_cutoff(
+        issuer_inputs,
+        definition=definition,
+        cutoff_at=cutoff,
+        risk_free_rate=risk_free_rate,
+        financial_leverage_adjusted=True,
+    )
     cutoff_key = cutoff.astimezone(UTC).isoformat()
     decisions = sorted(
         (_to_decision(item, cutoff_key) for item in evaluated),

@@ -135,3 +135,28 @@ def test_a_newly_registered_metric_needs_no_migration_to_be_admitted(connection)
         )
     finally:
         del METRICS[synthetic_name]
+
+
+def test_seed_strategy_inputs_zeroes_confidence_on_period_mismatch() -> None:
+    """AC #3 / #1108: if operating_period_end and revenue_period_end mismatch,
+    seed_strategy_inputs_from_capture sets confidence to 0.00 so the evaluator
+    excludes the issuer as below_confidence_floor."""
+    from decimal import Decimal
+
+    import data_engine.datahub.strategy_bridge as strategy_bridge
+
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    payload = {
+        "issuer_id": "issuer:test:aapl",
+        "listing_id": "listing:test:aapl",
+        "operating_period_end": "2018-09-29",
+        "revenue_period_end": "2025-09-27",
+        "gross_profit": "100000000000",
+        "revenue": "390000000000",
+    }
+    fake = _FakeConnection([("financial-fact", "0.92", payload, cutoff)])
+    written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test", cutoff=cutoff)
+    assert written == 2
+    for insert_params in fake.inserts:
+        # (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period)
+        assert insert_params[4] == Decimal("0.00"), f"Expected 0.00 confidence on mismatch, got {insert_params[4]}"

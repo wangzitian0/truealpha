@@ -414,3 +414,29 @@ def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
     )
     assert len(decisions) == 1
     assert decisions[0].tier == "traditional"
+
+
+def test_evaluator_evaluates_bank_with_leverage_adjusted_equity_charge() -> None:
+    # JPM bank scenario: PPNR = $86.8B, Total Assets = $4.42T, Headcount = 318,512.
+    # Evaluator wires financial_leverage_adjusted=True, so capital charge evaluates on 8% equity base ($353.99B),
+    # resulting in a positive capital-adjusted labor efficiency (~+$217k), not -$514k.
+    records = {
+        "gross_profit": (Decimal("86807000000"), Decimal("0.9")),
+        "revenue": (Decimal("150000000000"), Decimal("0.9")),
+        "total_assets": (Decimal("4424900000000"), Decimal("0.9")),
+        "headcount": (Decimal("318512"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("2800000000"), Decimal("0.9")),
+        "last_close": (Decimal("200"), Decimal("0.9")),
+    }
+    issuer = IssuerInput(issuer_id="issuer:bank", records=records)
+    decisions = evaluate_cutoff(
+        [issuer],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0.05"),
+        financial_leverage_adjusted=True,
+    )
+    assert len(decisions) == 1
+    decision = decisions[0]
+    assert decision.capital_adjusted_labor_efficiency is not None
+    assert decision.capital_adjusted_labor_efficiency > Decimal("200000")
