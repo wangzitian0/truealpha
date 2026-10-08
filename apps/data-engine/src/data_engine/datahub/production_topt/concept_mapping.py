@@ -37,8 +37,8 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "unit": "USD",
                 "kind": "synonym",
                 "concepts": (
-                    {"taxonomy": "us-gaap", "concept": "Revenues"},
                     {"taxonomy": "us-gaap", "concept": "RevenueFromContractWithCustomerExcludingAssessedTax"},
+                    {"taxonomy": "us-gaap", "concept": "Revenues"},
                 ),
             },
             {

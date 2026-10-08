@@ -340,13 +340,18 @@ class ThreeTierValuationDefinition(_StrictFrozenModel):
         _identify(self, id_field="factor_definition_id", prefix="factor-definition")
         return self
 
-    def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
+    def band_for(self, labor_efficiency: Decimal, *, gross_margin: Decimal | None = None) -> ProvisionalTierBand:
         for band in self.bands:
             lower_ok = (
                 band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
             )
             upper_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
             if lower_ok and upper_ok:
+                # Anti-fraud margin gate: thin-margin retail/wholesale businesses (e.g. Costco)
+                # cannot enter Tech or Large Model Native tiers regardless of gross labor efficiency
+                if gross_margin is not None and gross_margin < Decimal("0.35"):
+                    if band.tier in (ValuationTier.TECH, ValuationTier.LARGE_MODEL_NATIVE):
+                        return next(b for b in self.bands if b.tier == ValuationTier.TRADITIONAL)
                 return band
         raise ValueError("tier bands do not cover the supplied labor efficiency")  # pragma: no cover
 

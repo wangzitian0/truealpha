@@ -1203,7 +1203,12 @@ class SecFinancialFactAdapter:
 
 
 def _confidence(payload: Mapping[str, Any]) -> Decimal:
-    """Per-source-class confidence prior (#207/#404); the calibrated formula is #337."""
+    """Per-source-class confidence prior (#207/#404) with period coherence zero-gate (#1108); calibrated continuous formula remains #337."""
+    op_end = payload.get("operating_period_end")
+    rev_end = payload.get("revenue_period_end")
+    if op_end is not None and rev_end is not None and op_end != rev_end:
+        return Decimal("0.00")
+
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
 
