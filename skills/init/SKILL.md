@@ -11,7 +11,7 @@ Run this before the first edit. Each rule exists because an agent skipped it and
 
 The owner repeatedly found new scripts that duplicated existing ones. Follow the **Key List Protocol**:
 
-1. **Check the Key List**: Read the repository's SSOT index (`common/meta/data/MANIFEST.yaml`, `docs/ssot/MANIFEST.yaml`, or the App's contracts index).
+1. **Check the Key List**: Read the repository's SSOT index (`docs/ssot/MANIFEST.yaml`, `common/meta/data/MANIFEST.yaml`, or the App's contracts index).
    - Scan the capability keys (e.g., `deploy_v2`, `infra2-sdk`, `vault`, `signoz`, `pr_merge_gate`).
 2. **Reuse if present**: If an existing component covers the need, reuse it directly. Do not build private alternatives.
 3. **Append when new**: If no entry fits and a new capability is necessary:
@@ -30,13 +30,13 @@ Agents reversed or "fixed" a design without knowing why it existed. Example: ski
 
 ## 3. Recall
 
-Use the `recall` skill for the search. Read hits as claims, not facts: check the current code.
+Use the `recall` skill for the four-level search. Read hits as claims, not facts: check current code.
 
-## 4. Scan handover and claim the issue
+## 4. Scan issue and claim the lock
 
-- Read the latest handover for the issue (`handover issue-<N>`; fall back to `gh issue view <N> --comments`).
+- Read the latest issue discussion (`gh issue view <N> --comments`).
 - Search for an existing issue before you create one. Update it when it exists.
-- Another worktree or running process for the same issue is a lock. Do not take over. Match the full token:
+- Another worktree or running process for the same issue is an active lock. Do not take over. Match the full token:
 
 ```bash
 git worktree list | grep -F "_issue<N>_"
@@ -44,15 +44,32 @@ git worktree list | grep -F "_issue<N>_"
 
 A substring match is wrong: `issue12` would match `issue123`.
 
-Report the open production decisions once: issues labelled `prod-pending` in every repository of the owner. The command is in `local.md`.
+- **Scan open production decisions**: Check open issues labelled `prod-pending`:
+```bash
+gh issue list --search "label:prod-pending" --json repository,number,title
+```
 
-## 5. Create the worktree
+- **Scan open PRs needing owner**:
+Report the open PRs labelled `needs-owner` once. A non-production PR that waits more than 12 hours shows a defect in the rule that holds it.
+```bash
+gh pr list --search "label:needs-owner" --json repository,number,title
+```
+
+## 5. Init Swarm (Optional 4-Intern parallel discovery)
+
+For complex tasks or large repositories, dispatch a quick 4-Intern discovery batch via `subagent_batch`:
+- **Intern 1 (Key List)**: Scans `MANIFEST.yaml` and `tools/` for reusable components.
+- **Intern 2 (Intent & History)**: Runs git log search for past PRs touching the target subsystem.
+- **Intern 3 (Memory Recall)**: Executes global `search_notes` across all projects.
+- **Intern 4 (Worktree Locks)**: Checks active worktrees and process locks across repositories.
+
+## 6. Create the worktree
 
 - Name: `<repo>_issue<N>_<slug>`. Branch: `feat/issue<N>-<slug>`. Base: the latest `origin/main`.
 - Never edit in a shared checkout. One `git add` in a shared index can commit another worker's files.
-- The worktree location decides which rules reach it. See `local.md`.
 - The worktree must work alone. Tools and tests must not use `../..` to find files outside it.
 
-## 6. Report the baseline
+## 7. Report the baseline
 
 Reply in the owner's language with four lines: the goal, the tools you reuse, the facts you recalled, the worktree path.
+Do not execute test suites during baseline reporting. The baseline report is task metadata only.
