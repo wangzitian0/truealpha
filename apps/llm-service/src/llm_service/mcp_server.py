@@ -14,6 +14,7 @@ accepted from the client — the tool schema has no role/tenant/tier argument.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -42,6 +43,8 @@ from truealpha_contracts.topt_read import (
 )
 
 from llm_service.config import settings
+
+logger = logging.getLogger(__name__)
 
 _SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
 _SERVICE_TENANT_ID = "tenant:truealpha"
@@ -208,20 +211,33 @@ class PostgresCompanyProfileReader:
 
                     cur.execute(
                         """
-                        select p.theme_id,
-                               p.theme,
-                               p.theme_share::text as theme_share,
-                               p.in_theme_revenue::text as in_theme_revenue,
-                               p.consolidated_revenue::text as consolidated_revenue,
-                               p.segments,
-                               p.confidence::text as confidence,
-                               coalesce(p.availability_status, 'unavailable') as availability_status
-                        from mart.issuer_theme_purity p
-                        where p.issuer_id = %s
-                           or p.issuer_id in (
-                               select entity_id::text from mart.entity_identity where legacy_id = %s
-                           )
-                        order by p.theme_share desc nulls last, p.theme asc
+                        select theme_id,
+                               theme,
+                               theme_share,
+                               in_theme_revenue,
+                               consolidated_revenue,
+                               segments,
+                               confidence,
+                               availability_status
+                        from (
+                            select distinct on (p.theme_id)
+                                   p.theme_id,
+                                   p.theme,
+                                   p.theme_share::text as theme_share,
+                                   p.theme_share as raw_share,
+                                   p.in_theme_revenue::text as in_theme_revenue,
+                                   p.consolidated_revenue::text as consolidated_revenue,
+                                   p.segments,
+                                   p.confidence::text as confidence,
+                                   coalesce(p.availability_status, 'unavailable') as availability_status
+                            from mart.issuer_theme_purity p
+                            where p.issuer_id = %s
+                               or p.issuer_id in (
+                                   select entity_id::text from mart.entity_identity where legacy_id = %s
+                               )
+                            order by p.theme_id, p.cutoff desc, p.created_at desc
+                        ) latest_per_theme
+                        order by raw_share desc nulls last, theme asc
                         """,
                         (issuer_id, issuer_id),
                     )
@@ -242,8 +258,8 @@ class PostgresCompanyProfileReader:
                         }
                         for r in cur.fetchall()
                     ]
-        except Exception:
-            pass
+        except psycopg.Error as exc:
+            logger.warning("get_company_profile failed to query database: %s", exc)
 
         tier = str(decision_row["tier"]) if decision_row and decision_row.get("tier") is not None else None
         valuation_gap = (
@@ -406,8 +422,8 @@ class PostgresThemePurityLeaderboardReader:
                         }
                         for r in cur.fetchall()
                     ]
-        except Exception:
-            pass
+        except psycopg.Error as exc:
+            logger.warning("get_leaderboard failed to query database: %s", exc)
 
         return {
             "theme_id": theme_id,
@@ -490,8 +506,8 @@ class PostgresEtfProfileReader:
                         }
                         for r in cur.fetchall()
                     ]
-        except Exception:
-            pass
+        except psycopg.Error as exc:
+            logger.warning("get_etf_profile failed to query database: %s", exc)
 
         fund_name = (
             str(fund_row["fund_name"])
