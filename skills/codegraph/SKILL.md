@@ -19,7 +19,7 @@ codegraph explore "<symbol names or a question>"   # verbatim source of the rele
 codegraph node <symbol-or-file-path>                # one symbol's full source and its callers, or a whole file with line numbers
 ```
 
-Examples: `codegraph explore "ServiceRegistry"`, `codegraph node libs/service_registry.py`.
+Examples: `codegraph explore "ServiceRegistry"`, `codegraph node libs/core/registry.py`.
 
 ## Rules
 

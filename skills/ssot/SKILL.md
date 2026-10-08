@@ -29,6 +29,14 @@ Never optimize a step that should not exist.
 8. **Contract first.** Lock signatures, schemas, and the observable endpoint before the internals.
    Prove equivalence with real inputs on old and new paths. Run staging first when a scheduler or alert stack changes.
 
+## SSOT Swarm (4-Intern parallel drift and dead-code sweep)
+
+Before major refactorings or cleanups, dispatch a 4-Intern scan via `subagent_batch`:
+- **Intern 1 (Reachability)**: Scans public entry points vs call graph to locate uncalled dead code and unused modules.
+- **Intern 2 (Multi-Source Drift)**: Scans for duplicate configuration definitions between Host, Repo, and App layers.
+- **Intern 3 (Orphan Links & Docs)**: Runs link checkers (`python -m tools.doc_link_check`) to find rotting documentation links.
+- **Intern 4 (Empty Guard Protection)**: Verifies that existing assertions and guards actually fail on deleted or mutated inputs.
+
 ## Report
 
 State what you deleted, what is now the single source, and the check that fails if a second copy appears.
