@@ -258,19 +258,13 @@ class PostgresCompanyProfileReader:
             else None
         )
         peg = str(decision_row["peg"]) if decision_row and decision_row.get("peg") is not None else None
-        peg_rank = (
-            int(decision_row["peg_rank"])
-            if decision_row and decision_row.get("peg_rank") is not None
-            else None
-        )
+        peg_rank = int(decision_row["peg_rank"]) if decision_row and decision_row.get("peg_rank") is not None else None
         peg_reason_codes = (
             list(decision_row["peg_reason_codes"])
             if decision_row and decision_row.get("peg_reason_codes") is not None
             else []
         )
-        outcome = (
-            str(decision_row["outcome"]) if decision_row and decision_row.get("outcome") is not None else None
-        )
+        outcome = str(decision_row["outcome"]) if decision_row and decision_row.get("outcome") is not None else None
         cutoff_at = (
             str(decision_row["cutoff_at"]) if decision_row and decision_row.get("cutoff_at") is not None else None
         )
@@ -281,9 +275,7 @@ class PostgresCompanyProfileReader:
 
         gppe_val = str(gppe_row["gppe"]) if gppe_row and gppe_row.get("gppe") is not None else None
         operating_branch = (
-            str(gppe_row["operating_branch"])
-            if gppe_row and gppe_row.get("operating_branch") is not None
-            else None
+            str(gppe_row["operating_branch"]) if gppe_row and gppe_row.get("operating_branch") is not None else None
         )
         capital_adjusted_gross_profit = (
             str(gppe_row["capital_adjusted_gross_profit"])
@@ -489,9 +481,7 @@ class PostgresEtfProfileReader:
                             "isin": str(r["isin"]) if r.get("isin") is not None else None,
                             "weight_pct": str(r["weight_pct"]) if r.get("weight_pct") is not None else None,
                             "value_usd": str(r["value_usd"]) if r.get("value_usd") is not None else None,
-                            "issuer_entity": (
-                                str(r["issuer_entity"]) if r.get("issuer_entity") is not None else None
-                            ),
+                            "issuer_entity": (str(r["issuer_entity"]) if r.get("issuer_entity") is not None else None),
                             "listing_id": str(r["listing_id"]) if r.get("listing_id") is not None else None,
                         }
                         for r in cur.fetchall()
@@ -516,9 +506,7 @@ class PostgresEtfProfileReader:
             else None
         )
         total_weight = (
-            str(fund_row["total_weight_pct"])
-            if fund_row and fund_row.get("total_weight_pct") is not None
-            else "0.00"
+            str(fund_row["total_weight_pct"]) if fund_row and fund_row.get("total_weight_pct") is not None else "0.00"
         )
         resolved_weight = (
             str(fund_row["resolved_weight_pct"])
@@ -526,25 +514,13 @@ class PostgresEtfProfileReader:
             else "0.00"
         )
         valued_weight = (
-            str(fund_row["valued_weight_pct"])
-            if fund_row and fund_row.get("valued_weight_pct") is not None
-            else "0.00"
+            str(fund_row["valued_weight_pct"]) if fund_row and fund_row.get("valued_weight_pct") is not None else "0.00"
         )
-        lines_count = (
-            int(fund_row["lines"])
-            if fund_row and fund_row.get("lines") is not None
-            else len(holdings)
-        )
+        lines_count = int(fund_row["lines"]) if fund_row and fund_row.get("lines") is not None else len(holdings)
         valued_lines_count = (
-            int(fund_row["valued_lines"])
-            if fund_row and fund_row.get("valued_lines") is not None
-            else 0
+            int(fund_row["valued_lines"]) if fund_row and fund_row.get("valued_lines") is not None else 0
         )
-        confidence_val = (
-            str(fund_row["confidence"])
-            if fund_row and fund_row.get("confidence") is not None
-            else None
-        )
+        confidence_val = str(fund_row["confidence"]) if fund_row and fund_row.get("confidence") is not None else None
         availability_status = (
             str(fund_row["availability_status"])
             if fund_row and fund_row.get("availability_status") is not None
@@ -691,18 +667,14 @@ def build_mcp_server(
 
     @server.tool(
         name="theme_purity_leaderboard",
-        description=(
-            "Read the theme purity leaderboard ranking the purest issuers under a given thematic definition."
-        ),
+        description=("Read the theme purity leaderboard ranking the purest issuers under a given thematic definition."),
     )
     def theme_purity_leaderboard(request: ThemePurityToolRequest) -> dict[str, Any]:
         return active_theme_purity.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
 
     @server.tool(
         name="etf_virtual_company_profile",
-        description=(
-            "Read an ETF virtual-company consolidation profile and holdings valuation from mart."
-        ),
+        description=("Read an ETF virtual-company consolidation profile and holdings valuation from mart."),
     )
     def etf_virtual_company_profile(request: EtfProfileToolRequest) -> dict[str, Any]:
         return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
