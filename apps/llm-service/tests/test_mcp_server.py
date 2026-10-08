@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
@@ -28,7 +29,15 @@ class _RecordingRepository:
 @pytest.mark.anyio
 async def test_advertises_the_expected_tools() -> None:
     tools = await mcp.list_tools()
-    assert sorted(tool.name for tool in tools) == ["research_card", "research_report", "strategy_run", "topt_gppe"]
+    assert sorted(tool.name for tool in tools) == [
+        "company_360_profile",
+        "etf_virtual_company_profile",
+        "research_card",
+        "research_report",
+        "strategy_run",
+        "theme_purity_leaderboard",
+        "topt_gppe",
+    ]
     strategy_tool = next(t for t in tools if t.name == "strategy_run")
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None
@@ -215,9 +224,12 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         await client.initialize()
         tools = await client.list_tools()
         assert sorted(tool.name for tool in tools.tools) == [
+            "company_360_profile",
+            "etf_virtual_company_profile",
             "research_card",
             "research_report",
             "strategy_run",
+            "theme_purity_leaderboard",
             "topt_gppe",
         ]
 
@@ -261,3 +273,171 @@ def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pyt
     # #434 exit criterion 3: no runtime flag can select the fixture any more.
     assert not hasattr(mcp_server.settings, "strategy_run_backend")
     assert FixtureStrategyRunRepository is not None  # injected by tests only
+
+
+def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None:
+    from llm_service.mcp_server import (
+        PostgresCompanyProfileReader,
+        PostgresEtfProfileReader,
+        PostgresThemePurityLeaderboardReader,
+        _default_company_profile_reader,
+        _default_etf_profile_reader,
+        _default_theme_purity_reader,
+    )
+
+    assert isinstance(_default_company_profile_reader(), PostgresCompanyProfileReader)
+    assert isinstance(_default_theme_purity_reader(), PostgresThemePurityLeaderboardReader)
+    assert isinstance(_default_etf_profile_reader(), PostgresEtfProfileReader)
+
+
+@pytest.mark.anyio
+async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
+    class _FakeCompanyProfileReader:
+        def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
+            return {
+                "issuer_id": issuer_id,
+                "tier": "Tier 1: Core Value",
+                "valuation_gap": "1.6388",
+                "current_price_to_sales": "10.5",
+                "target_price_to_sales": "17.2",
+                "peg": "1.25",
+                "peg_rank": 3,
+                "peg_reason_codes": [],
+                "gppe": "1153614.48",
+                "gppe_detail": {
+                    "gppe": "1153614.48",
+                    "operating_branch": "tech",
+                    "capital_adjusted_gross_profit": "5000000.00",
+                    "availability_status": "available",
+                    "reason_codes": [],
+                },
+                "strategy_decision": {
+                    "cutoff_at": "2026-03-31T23:59:59Z",
+                    "outcome": "selected",
+                    "tier": "Tier 1: Core Value",
+                    "valuation_gap": "1.6388",
+                    "current_price_to_sales": "10.5",
+                    "target_price_to_sales": "17.2",
+                    "peg": "1.25",
+                    "peg_rank": 3,
+                    "peg_reason_codes": [],
+                },
+                "theme_purity": [
+                    {
+                        "theme_id": "ai-infrastructure",
+                        "theme": "AI infrastructure",
+                        "theme_share": "0.85",
+                        "in_theme_revenue": "850000000.00",
+                        "consolidated_revenue": "1000000000.00",
+                        "segments": 3,
+                        "confidence": "0.95",
+                        "availability_status": "available",
+                    }
+                ],
+                "availability_status": "available",
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        company_profile_reader=_FakeCompanyProfileReader(),
+    )
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "company_360_profile",
+        {"request": {"issuer_id": "issuer:adm"}},
+    )
+    assert content_blocks
+    assert structured["issuer_id"] == "issuer:adm"
+    assert structured["tier"] == "Tier 1: Core Value"
+    assert structured["valuation_gap"] == "1.6388"
+    assert structured["peg"] == "1.25"
+    assert structured["gppe"] == "1153614.48"
+    assert structured["theme_purity"][0]["theme_id"] == "ai-infrastructure"
+    assert structured["theme_purity"][0]["theme_share"] == "0.85"
+
+
+@pytest.mark.anyio
+async def test_theme_purity_leaderboard_tool_reads_through_injected_reader() -> None:
+    class _FakeThemePurityLeaderboardReader:
+        def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]:
+            return {
+                "theme_id": theme_id,
+                "limit": limit,
+                "count": 1,
+                "issuers": [
+                    {
+                        "issuer_id": "issuer:nvda",
+                        "cik": 1045810,
+                        "theme_id": theme_id,
+                        "theme": "AI infrastructure",
+                        "theme_share": "0.92",
+                        "in_theme_revenue": "26000000000.00",
+                        "consolidated_revenue": "28000000000.00",
+                        "segments": 2,
+                        "confidence": "0.98",
+                        "availability_status": "available",
+                    }
+                ],
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        theme_purity_reader=_FakeThemePurityLeaderboardReader(),
+    )
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "theme_purity_leaderboard",
+        {"request": {"theme_id": "ai-infrastructure", "limit": 5}},
+    )
+    assert content_blocks
+    assert structured["theme_id"] == "ai-infrastructure"
+    assert structured["limit"] == 5
+    assert structured["count"] == 1
+    assert structured["issuers"][0]["issuer_id"] == "issuer:nvda"
+    assert structured["issuers"][0]["theme_share"] == "0.92"
+
+
+@pytest.mark.anyio
+async def test_etf_virtual_company_profile_tool_reads_through_injected_reader() -> None:
+    class _FakeEtfProfileReader:
+        def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]:
+            return {
+                "fund_id": fund_id,
+                "fund_name": "Invesco QQQ Trust",
+                "cutoff": "2026-03-31T23:59:59Z",
+                "report_period": "2026-03-31",
+                "weighted_valuation_gap": "1.4250",
+                "total_weight_pct": "99.80",
+                "resolved_weight_pct": "95.50",
+                "valued_weight_pct": "88.20",
+                "lines": 101,
+                "valued_lines": 84,
+                "confidence": "0.92",
+                "availability_status": "available",
+                "reason_codes": [],
+                "holdings": [
+                    {
+                        "holding_name": "Apple Inc.",
+                        "ticker": "AAPL",
+                        "isin": "US0378331005",
+                        "weight_pct": "8.85",
+                        "value_usd": "25000000000.00",
+                        "issuer_entity": "issuer:aapl",
+                        "listing_id": "listing:xnas:aapl",
+                    }
+                ],
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        etf_profile_reader=_FakeEtfProfileReader(),
+    )
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "etf_virtual_company_profile",
+        {"request": {"fund_id": "etf:series:S000101292"}},
+    )
+    assert content_blocks
+    assert structured["fund_id"] == "etf:series:S000101292"
+    assert structured["fund_name"] == "Invesco QQQ Trust"
+    assert structured["weighted_valuation_gap"] == "1.4250"
+    assert structured["valued_weight_pct"] == "88.20"
+    assert len(structured["holdings"]) == 1
+    assert structured["holdings"][0]["ticker"] == "AAPL"
