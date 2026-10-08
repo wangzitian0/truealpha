@@ -22,6 +22,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
     load_fund_vintages,
     materialize_fund_consolidation,
 )
+from data_engine.datahub.resolve_coordinates import resolve_entity
 from data_engine.lanes import capture
 
 #: A HISTORICAL replay cutoff. The look-ahead this guards against is not a filing dated
@@ -157,6 +158,60 @@ def test_no_vintage_at_the_cutoff_writes_nothing(connection) -> None:
     assert all(item.fund_id != FUND for item in written), (
         "a fund whose only filing postdates the cutoff is absent from the run, not zero"
     )
+
+
+def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> None:
+    """#1099: mart.topt_core_results stores canonical entity UUIDs.
+
+    Fund consolidation joins through mart.entity_identity so canonical UUIDs resolve
+    to the fund holding's listing_id and contribute to weighted valuation gap.
+    """
+    connection.execute("set local session_replication_role = replica")
+    eid = resolve_entity(connection, "listing:xnas:tcu", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    _seed(connection, isin="US0000000040", ticker="TCU", weight="65", filing=KNOWABLE_FILING, period="2026-06-30")
+
+    connection.execute(
+        """
+        update mart.topt_core_results
+        set run_id = %s, listing_id = %s, valuation_gap = 0.42, availability = 'available', confidence = 0.85
+        where result_id = (select result_id from mart.topt_core_results limit 1)
+        """,
+        (RUN, str(eid)),
+    )
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert fund.valued_lines == 1
+    assert fund.valued_weight == Decimal("65")
+    assert fund.weighted_valuation_gap == Decimal("0.42")
+    assert fund.result.confidence == Decimal("0.85")
+    assert fund.result.data_availability == "verified"
+
+
+def test_materialize_supports_legacy_string_listing_id(connection) -> None:
+    """#1099: mart.topt_core_results rows with legacy string listing_id still match directly."""
+    connection.execute("set local session_replication_role = replica")
+    _seed(connection, isin="US0000000041", ticker="TCL", weight="70", filing=KNOWABLE_FILING, period="2026-06-30")
+
+    connection.execute(
+        """
+        update mart.topt_core_results
+        set run_id = %s, listing_id = 'listing:xnas:tcl', valuation_gap = -0.15, availability = 'available', confidence = 0.90
+        where result_id = (select result_id from mart.topt_core_results limit 1)
+        """,
+        (RUN,),
+    )
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert fund.valued_lines == 1
+    assert fund.valued_weight == Decimal("70")
+    assert fund.weighted_valuation_gap == Decimal("-0.15")
+    assert fund.result.confidence == Decimal("0.90")
 
 
 # --- the deployed call site -------------------------------------------------------
