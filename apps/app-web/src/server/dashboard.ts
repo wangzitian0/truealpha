@@ -61,6 +61,8 @@ export interface MartAdapterLike {
   comparison: StrategyRunReadAdapter["comparison"];
   entityDetail: StrategyRunReadAdapter["entityDetail"];
   traceView: StrategyRunReadAdapter["traceView"];
+  entityThemePurity?: StrategyRunReadAdapter["entityThemePurity"];
+  entityGppeDetail?: StrategyRunReadAdapter["entityGppeDetail"];
 }
 
 async function guard<T>(
@@ -127,7 +129,16 @@ export async function loadEntityDetail(
   return guard<EntityDetail>(context, async (mart, ctx) => {
     const detail = await mart.entityDetail(ctx, issuerId);
     if (detail === null) return { kind: "empty" };
-    return { kind: "ready", data: detail };
+    const themes = mart.entityThemePurity ? await mart.entityThemePurity(ctx, issuerId) : [];
+    const gppeDetail = mart.entityGppeDetail ? await mart.entityGppeDetail(ctx, issuerId) : null;
+    return {
+      kind: "ready",
+      data: {
+        ...detail,
+        themes,
+        gppeDetail,
+      },
+    };
   }, adapter);
 }
 

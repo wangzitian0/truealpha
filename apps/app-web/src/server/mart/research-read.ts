@@ -28,6 +28,7 @@ import {
 	type DecisionProvenance,
 	MartStrategyRunRepository,
 } from "./strategy-run-repository";
+import { withMartReadonly } from "./db";
 
 export type Availability =
 	| "available"
@@ -39,6 +40,12 @@ export type Availability =
 
 /** The strategy run whose materialized decisions back the current dashboard surfaces. */
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
+
+/**
+ * #1062 / Rule B: consumer queries on run-addressed mart relations read
+ * through the governed head exposed by mart.served_head.
+ */
+export const SERVED_HEAD_SQL = `select run_id, freshness, availability from mart.served_head`;
 
 export interface RunIdentity {
 	strategyRunId: string | null;
@@ -131,8 +138,12 @@ export interface ComparisonRow {
 	cutoffAt: string;
 	capitalAdjustedLaborEfficiency: string | null;
 	currentPriceToSales: string | null;
+	targetPriceToSales?: string | null;
 	tier: string | null;
 	valuationGap: string | null;
+	peg?: string | null;
+	pegRank?: number | null;
+	pegReasonCodes?: readonly string[];
 	confidence: string | null;
 	availability: Availability;
 	traceId: string;
@@ -150,6 +161,23 @@ export interface ComparisonRow {
 export interface EntityDetail {
 	issuerId: string;
 	rows: readonly ComparisonRow[];
+	themes?: Array<{
+		themeId: string;
+		theme: string;
+		themeShare: string | null;
+		inThemeRevenue: string | null;
+		consolidatedRevenue: string | null;
+		segments: number;
+		confidence?: string | null;
+		availabilityStatus: string;
+	}>;
+	gppeDetail?: {
+		gppe: string | null;
+		operatingBranch: string | null;
+		capitalAdjustedGrossProfit: string | null;
+		availabilityStatus: string;
+		reasonCodes: string[];
+	} | null;
 }
 
 export interface TraceLink {
@@ -430,8 +458,14 @@ export class StrategyRunReadAdapter {
 			capitalAdjustedLaborEfficiency:
 				decision.capital_adjusted_labor_efficiency,
 			currentPriceToSales: decision.current_price_to_sales,
+			targetPriceToSales: decision.target_price_to_sales,
 			tier: decision.tier,
 			valuationGap: decision.valuation_gap,
+			peg: decision.peg ?? null,
+			pegRank: decision.peg_rank ?? null,
+			pegReasonCodes:
+				(decision as { peg_reason_codes?: readonly string[] })
+					.peg_reason_codes ?? [],
 			confidence: decision.confidence,
 			availability: status,
 			traceId: traceId(
@@ -550,5 +584,119 @@ export class StrategyRunReadAdapter {
 				{ kind: "raw", label: "Immutable raw bytes", reference: null },
 			],
 		};
+	}
+
+	async entityThemePurity(
+		_context: AccessContext,
+		issuerId: string,
+	): Promise<
+		Array<{
+			themeId: string;
+			theme: string;
+			themeShare: string | null;
+			inThemeRevenue: string | null;
+			consolidatedRevenue: string | null;
+			segments: number;
+			confidence: string | null;
+			availabilityStatus: string;
+		}>
+	> {
+		try {
+			return await withMartReadonly(async (client) => {
+				const result = await client.query(
+					`select theme_id,
+					        theme,
+					        theme_share::text as theme_share,
+					        in_theme_revenue::text as in_theme_revenue,
+					        consolidated_revenue::text as consolidated_revenue,
+					        segments,
+					        confidence::text as confidence,
+					        coalesce(availability_status, 'unavailable') as availability_status
+					 from mart.issuer_theme_purity
+					 where issuer_id = $1
+					 order by theme_share desc nulls last, theme asc`,
+					[issuerId],
+				);
+				return result.rows.map((row) => ({
+					themeId: String(row.theme_id ?? ""),
+					theme: String(row.theme ?? ""),
+					themeShare:
+						row.theme_share !== null && row.theme_share !== undefined
+							? String(row.theme_share)
+							: null,
+					inThemeRevenue:
+						row.in_theme_revenue !== null && row.in_theme_revenue !== undefined
+							? String(row.in_theme_revenue)
+							: null,
+					consolidatedRevenue:
+						row.consolidated_revenue !== null &&
+						row.consolidated_revenue !== undefined
+							? String(row.consolidated_revenue)
+							: null,
+					segments:
+						typeof row.segments === "number"
+							? row.segments
+							: 0,
+					confidence:
+						row.confidence !== null && row.confidence !== undefined
+							? String(row.confidence)
+							: null,
+					availabilityStatus: String(row.availability_status ?? "unavailable"),
+				}));
+			});
+		} catch {
+			return [];
+		}
+	}
+
+	async entityGppeDetail(
+		_context: AccessContext,
+		issuerId: string,
+	): Promise<{
+		gppe: string | null;
+		operatingBranch: string | null;
+		capitalAdjustedGrossProfit: string | null;
+		availabilityStatus: string;
+		reasonCodes: string[];
+	} | null> {
+		try {
+			return await withMartReadonly(async (client) => {
+				const result = await client.query(
+					`select gppe::text as gppe,
+					        operating_branch,
+					        capital_adjusted_gross_profit::text as capital_adjusted_gross_profit,
+					        coalesce(availability_status, availability, 'unavailable') as availability_status,
+					        reason_codes
+					 from mart.topt_gppe_results
+					 where issuer_id = $1
+					 order by cutoff desc, created_at desc
+					 limit 1`,
+					[issuerId],
+				);
+				if (result.rows.length === 0) return null;
+				const row = result.rows[0];
+				return {
+					gppe:
+						row.gppe !== null && row.gppe !== undefined
+							? String(row.gppe)
+							: null,
+					operatingBranch:
+						row.operating_branch !== null && row.operating_branch !== undefined
+							? String(row.operating_branch)
+							: null,
+					capitalAdjustedGrossProfit:
+						row.capital_adjusted_gross_profit !== null &&
+						row.capital_adjusted_gross_profit !== undefined
+							? String(row.capital_adjusted_gross_profit)
+							: null,
+					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					reasonCodes: Array.isArray(row.reason_codes)
+						? row.reason_codes.map(String)
+						: [],
+				};
+			});
+		} catch {
+			return null;
+		}
 	}
 }

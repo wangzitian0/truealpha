@@ -4,21 +4,28 @@ import { useState } from "react";
 
 interface CardExportButtonProps {
   cutoff?: string;
+  issuerId?: string;
+  kind?: "ranking" | "entity";
 }
 
-export function CardExportButton({ cutoff }: CardExportButtonProps) {
+export function CardExportButton({ cutoff, issuerId, kind }: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
 
   const handleExport = () => {
     setDownloading(true);
+    const effectiveKind = kind ?? (issuerId ? "entity" : "ranking");
     const query = new URLSearchParams();
+    query.set("kind", effectiveKind);
     if (cutoff) query.set("cutoff", cutoff);
+    if (issuerId) query.set("issuer", issuerId);
     query.set("format", "svg");
 
     const url = `/research/api/cards/export?${query.toString()}`;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `truealpha-card-ranking.svg`;
+    a.download = issuerId
+      ? `truealpha-card-entity-${issuerId.replace(/[:]/g, "-")}.svg`
+      : `truealpha-card-ranking.svg`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -48,7 +55,11 @@ export function CardExportButton({ cutoff }: CardExportButtonProps) {
           d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
         />
       </svg>
-      {downloading ? "Exporting..." : "Export Xiaohongshu Card (1080×1440)"}
+      {downloading
+        ? "Exporting..."
+        : issuerId
+          ? "Export Entity 360 Card (1080×1440)"
+          : "Export Xiaohongshu Card (1080×1440)"}
     </button>
   );
 }
