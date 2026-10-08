@@ -47,6 +47,10 @@ _SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
 _SERVICE_TENANT_ID = "tenant:truealpha"
 _CONTEXT_LIFETIME = timedelta(minutes=5)
 
+#: #1062 / Rule B: consumer queries on run-addressed mart relations read
+#: through the governed head exposed by mart.served_head.
+SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head"
+
 
 class StrategyRunToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)

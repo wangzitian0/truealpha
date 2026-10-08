@@ -41,6 +41,12 @@ export type Availability =
 /** The strategy run whose materialized decisions back the current dashboard surfaces. */
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 
+/**
+ * #1062 / Rule B: consumer queries on run-addressed mart relations read
+ * through the governed head exposed by mart.served_head.
+ */
+export const SERVED_HEAD_SQL = `select run_id, freshness, availability from mart.served_head`;
+
 export interface RunIdentity {
 	strategyRunId: string | null;
 	executedAt: string | null;
