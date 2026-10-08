@@ -57,7 +57,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
   const themes = state.kind === "ready" ? state.data.themes ?? [] : [];
 
   const gppeValue = gppeDetail?.gppe ?? latestRow?.capitalAdjustedLaborEfficiency ?? null;
-  const operatingBranch = gppeDetail?.operatingBranch ?? "non_financial";
+  const operatingBranch = gppeDetail?.operatingBranch ?? null;
   const capitalAdjustedGrossProfit = gppeDetail?.capitalAdjustedGrossProfit ?? null;
 
   return (
@@ -136,9 +136,13 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
                   Labor Efficiency / GPPE (Module 2)
                 </span>
-                <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-[11px] font-medium text-sky-400">
-                  {operatingBranch}
-                </span>
+                {operatingBranch ? (
+                  <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-[11px] font-medium text-sky-400">
+                    {operatingBranch}
+                  </span>
+                ) : (
+                  <span className="text-gray-500 font-mono text-[11px]">—</span>
+                )}
               </div>
               <div className="mt-4">
                 <div className="text-xs text-gray-400">Gross Profit / Employee (GPPE)</div>

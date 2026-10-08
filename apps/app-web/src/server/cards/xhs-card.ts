@@ -373,7 +373,7 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
 
     <!-- Operating Branch Tag -->
     <rect x="740" y="55" width="190" height="38" rx="8" fill="#1E293B" stroke="#334155"/>
-    <text x="835" y="79" font-size="14" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(data.operatingBranch ?? "non_financial")}</text>
+    <text x="835" y="79" font-size="14" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(data.operatingBranch ?? "—")}</text>
   </g>
 
   <!-- Module 6 Theme Purity Block -->

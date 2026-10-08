@@ -606,15 +606,31 @@ export class StrategyRunReadAdapter {
 				const result = await client.query(
 					`select theme_id,
 					        theme,
-					        theme_share::text as theme_share,
-					        in_theme_revenue::text as in_theme_revenue,
-					        consolidated_revenue::text as consolidated_revenue,
+					        theme_share,
+					        in_theme_revenue,
+					        consolidated_revenue,
 					        segments,
-					        confidence::text as confidence,
-					        coalesce(availability_status, 'unavailable') as availability_status
-					 from mart.issuer_theme_purity
-					 where issuer_id = $1
-					 order by theme_share desc nulls last, theme asc`,
+					        confidence,
+					        availability_status
+					 from (
+					     select distinct on (p.theme_id)
+					            p.theme_id,
+					            p.theme,
+					            p.theme_share::text as theme_share,
+					            p.theme_share as raw_share,
+					            p.in_theme_revenue::text as in_theme_revenue,
+					            p.consolidated_revenue::text as consolidated_revenue,
+					            p.segments,
+					            p.confidence::text as confidence,
+					            coalesce(p.availability_status, 'unavailable') as availability_status
+					     from mart.issuer_theme_purity p
+					     where p.issuer_id = $1
+					        or p.issuer_id in (
+					            select entity_id::text from mart.entity_identity where legacy_id = $1
+					        )
+					     order by p.theme_id, p.cutoff desc, p.created_at desc
+					 ) latest_per_theme
+					 order by raw_share desc nulls last, theme asc`,
 					[issuerId],
 				);
 				return result.rows.map((row) => ({
@@ -644,7 +660,8 @@ export class StrategyRunReadAdapter {
 					availabilityStatus: String(row.availability_status ?? "unavailable"),
 				}));
 			});
-		} catch {
+		} catch (error) {
+			console.error("entityThemePurity error:", error);
 			return [];
 		}
 	}
@@ -669,6 +686,9 @@ export class StrategyRunReadAdapter {
 					        reason_codes
 					 from mart.topt_gppe_results
 					 where issuer_id = $1
+					    or issuer_id in (
+					        select entity_id::text from mart.entity_identity where legacy_id = $1
+					    )
 					 order by cutoff desc, created_at desc
 					 limit 1`,
 					[issuerId],
@@ -695,7 +715,8 @@ export class StrategyRunReadAdapter {
 						: [],
 				};
 			});
-		} catch {
+		} catch (error) {
+			console.error("entityGppeDetail error:", error);
 			return null;
 		}
 	}
