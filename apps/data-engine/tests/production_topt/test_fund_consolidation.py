@@ -160,24 +160,61 @@ def test_no_vintage_at_the_cutoff_writes_nothing(connection) -> None:
     )
 
 
+def _insert_core_result(
+    connection,
+    *,
+    run_id: str,
+    listing_id: str,
+    valuation_gap: float,
+    availability: str = "available",
+    confidence: float = 0.85,
+) -> None:
+    connection.execute("set local session_replication_role = replica")
+    res_sha = f"{abs(hash((run_id, listing_id))):064x}"[:64]
+    connection.execute(
+        """
+        insert into mart.topt_core_results (
+            result_id, content_sha256, invocation_id, snapshot_id, run_id,
+            release_manifest_id, universe_id, universe_version, universe_sha256,
+            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+            operating_metric, availability, operating_efficiency,
+            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+            confidence, freshness, reason_codes, input_observation_ids,
+            gppe_invocation_id, gppe_result_id,
+            gppe_definition_id, gppe_definition_sha256,
+            tier_definition_id, tier_definition_sha256, payload
+        ) values (
+            'topt-core-result:' || %s, %s,
+            'topt-core-invocation:' || repeat('b', 64),
+            'topt-core-snapshot:' || repeat('c', 64),
+            %s,
+            'release-manifest:' || repeat('d', 64),
+            'universe:test', '1', repeat('e', 64),
+            now(), 'issuer:test', 'inst:test', %s,
+            'non_financial', 'capital_adjusted_gppe', %s,
+            100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
+            %s, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
+            'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
+            'gppe-def:v0', repeat('1', 64),
+            'tier-def:v0', repeat('2', 64),
+            '{}'::jsonb
+        )
+        on conflict (result_id) do nothing
+        """,
+        (res_sha, res_sha, run_id, listing_id, availability, valuation_gap, confidence),
+    )
+
+
 def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> None:
     """#1099: mart.topt_core_results stores canonical entity UUIDs.
 
     Fund consolidation joins through mart.entity_identity so canonical UUIDs resolve
     to the fund holding's listing_id and contribute to weighted valuation gap.
     """
-    connection.execute("set local session_replication_role = replica")
     eid = resolve_entity(connection, "listing:xnas:tcu", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
     _seed(connection, isin="US0000000040", ticker="TCU", weight="65", filing=KNOWABLE_FILING, period="2026-06-30")
-
-    connection.execute(
-        """
-        update mart.topt_core_results
-        set run_id = %s, listing_id = %s, valuation_gap = 0.42, availability = 'available', confidence = 0.85
-        where result_id = (select result_id from mart.topt_core_results limit 1)
-        """,
-        (RUN, str(eid)),
-    )
+    _insert_core_result(connection, run_id=RUN, listing_id=str(eid), valuation_gap=0.42, confidence=0.85)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
     matched = [item for item in written if item.fund_id == FUND]
@@ -192,17 +229,8 @@ def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> No
 
 def test_materialize_supports_legacy_string_listing_id(connection) -> None:
     """#1099: mart.topt_core_results rows with legacy string listing_id still match directly."""
-    connection.execute("set local session_replication_role = replica")
     _seed(connection, isin="US0000000041", ticker="TCL", weight="70", filing=KNOWABLE_FILING, period="2026-06-30")
-
-    connection.execute(
-        """
-        update mart.topt_core_results
-        set run_id = %s, listing_id = 'listing:xnas:tcl', valuation_gap = -0.15, availability = 'available', confidence = 0.90
-        where result_id = (select result_id from mart.topt_core_results limit 1)
-        """,
-        (RUN,),
-    )
+    _insert_core_result(connection, run_id=RUN, listing_id="listing:xnas:tcl", valuation_gap=-0.15, confidence=0.90)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
     matched = [item for item in written if item.fund_id == FUND]
