@@ -49,8 +49,17 @@ select h.fund_id,
        core.confidence
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
-left join mart.topt_core_result_read core
-  on core.listing_id = h.listing_id and core.run_id = %(run_id)s
+left join (
+    select coalesce(ei.listing_id, c.listing_id) as listing_id,
+           c.valuation_gap,
+           c.availability,
+           c.confidence
+    from mart.topt_core_result_read c
+    left join mart.entity_identity ei
+      on ei.entity_id::text = c.listing_id
+    where c.run_id = %(run_id)s
+) core
+  on core.listing_id = h.listing_id
 order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name
 """
 

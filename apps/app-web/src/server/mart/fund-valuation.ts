@@ -87,7 +87,18 @@ const VALUED_LINES_SQL = `
          r.tier,
          r.availability
   from mart.fund_holdings_valuation v
-  left join mart.topt_core_result_read r
+  left join (
+    select coalesce(ei.listing_id, c.listing_id) as listing_id,
+           c.run_id,
+           c.current_ps,
+           c.target_ps_midpoint,
+           c.valuation_gap,
+           c.tier,
+           c.availability
+    from mart.topt_core_result_read c
+    left join mart.entity_identity ei
+      on ei.entity_id::text = c.listing_id
+  ) r
     on r.listing_id = v.listing_id and r.run_id = $1
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;
