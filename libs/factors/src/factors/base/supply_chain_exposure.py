@@ -4,8 +4,13 @@ init.md §0 question 3: *"What is this company exposed to, up and down its suppl
 Module 3 computes supply chain concentration, dependency exposure, and partner counts
 over verified `staging.kg_edges` relationships (`relation_type='supplies_to'`).
 
-When no supply chain edges are disclosed or verified for an issuer, the factor refuses
-cleanly with `no_disclosed_suppliers`, maintaining honest status and avoiding synthetic defaults.
+When an issuer has no supply chain edge, the factor refuses and names the reason. The reason
+states what the system knows (#772):
+
+- `no_supply_chain_extraction`: the graph holds no `supplies_to` edge for any issuer at the
+  cutoff. No extraction has run, so the system cannot say what the company disclosed.
+- `no_disclosed_suppliers`: the graph holds `supplies_to` edges for other issuers and none
+  for this issuer.
 """
 
 from __future__ import annotations
@@ -20,6 +25,9 @@ from factors.types import FactorResult, UnitFamily
 
 _ZERO = Decimal(0)
 _ONE = Decimal(1)
+
+NO_SUPPLY_CHAIN_EXTRACTION = "no_supply_chain_extraction"
+NO_DISCLOSED_SUPPLIERS = "no_disclosed_suppliers"
 
 
 @dataclass(frozen=True)
@@ -56,11 +64,23 @@ def supply_chain_exposure(
     *,
     entity_id: str,
     as_of: datetime,
+    supplies_to_edges_exist: bool,
 ) -> SupplyChainExposure:
     """Compute supply chain exposure and partner concentration.
 
-    If partners is empty, returns an unavailable result with reason 'no_disclosed_suppliers'.
+    `supplies_to_edges_exist` is a measurement. It is true when the graph holds at least one
+    `supplies_to` edge for any issuer at the cutoff. The caller derives it from the graph.
+
+    If partners is empty, returns an unavailable result. The reason is `no_disclosed_suppliers`
+    when `supplies_to_edges_exist` is true, and `no_supply_chain_extraction` otherwise.
+    If partners exist and `supplies_to_edges_exist` is false, the inputs contradict each other.
+    The call raises ValueError.
     """
+    if partners and not supplies_to_edges_exist:
+        raise ValueError(
+            f"{entity_id} has {len(partners)} partners but supplies_to_edges_exist is false: "
+            "the graph cannot hold a partner without a supplies_to edge"
+        )
     if not partners:
         return SupplyChainExposure(
             entity_id=entity_id,
@@ -72,7 +92,7 @@ def supply_chain_exposure(
                 confidence=_ZERO,
                 as_of=as_of,
                 data_availability="unverified",
-                flags=["no_disclosed_suppliers"],
+                flags=[NO_DISCLOSED_SUPPLIERS if supplies_to_edges_exist else NO_SUPPLY_CHAIN_EXTRACTION],
             ),
             exposure_score=None,
             direct_partners=0,

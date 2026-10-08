@@ -326,16 +326,23 @@ homeless — it is UNEXERCISED, and the difference matters:
 - **Selection is exercised at snapshot freeze.** `staging.topt_core_snapshots` is the
   durable "selected fact set", and every selected observation ID plus policy version is
   persisted in its manifest before any factor runs.
+- **Selection does not rank sources today.** `_load_observations` pins each obligation to
+  the source vintage of its terminal attempt. It refuses the run when that vintage holds
+  more than one candidate observation. The order `knowable_at desc, observation_id desc`
+  never decides, because a second candidate refuses the run. Ranking by `source_priority`
+  is not implemented in selection.
 - **What is missing is a second source, not a plane.** Every financial metric resolves
   from SEC alone today; Twelve Data is a second ORIGIN used for price reconciliation (a
   disagreement measure). For prices `source_priority` chooses only when the primary is
   absent: since #862 a cell Yahoo cannot serve is served by the next origin in the policy's
-  order, declared as a failover and graded on its own corroboration. Registering a second
-  source for an existing metric is what activates it, and by rule 22 that must change only
-  source-owned code and registrations.
+  order, declared as a failover and graded on its own corroboration. A second source for an
+  existing metric does not activate fusion by itself. Selection must first rank by
+  `source_priority`. Registering the source must change only source-owned code and
+  registrations (rule 22).
 
 ```sql
--- Selection at snapshot freeze: highest-priority source first, then restatement recency.
+-- Target selection, NOT implemented at snapshot freeze today: highest-priority source first,
+-- then restatement recency.
 select distinct on (o.subject_id, o.semantic_type)  o.*
 from staging.capture_normalized_observations o
 where o.knowable_at <= :as_of_timestamp
@@ -346,11 +353,12 @@ order by o.subject_id, o.semantic_type,
 ```
 
 This SQL is a financial-domain illustration, not the public snapshot API or a generic
-"latest row" rule. Every selected staging ID and policy version is persisted in the
-snapshot manifest before factor execution. Mart lineage points to that snapshot and its
-exact selected records, which in turn chain through mapping/extraction IDs to `raw_ref`
-and immutable bytes. Changing any selection policy creates a new snapshot/materialization;
-old evidence and results remain addressable.
+"latest row" rule. It shows the target rule. The snapshot freeze does not run it. Every
+selected staging ID and policy version is persisted in the snapshot manifest before factor
+execution. Mart lineage points to that snapshot and its exact selected records, which in
+turn chain through mapping/extraction IDs to `raw_ref` and immutable bytes. Changing any
+selection policy creates a new snapshot/materialization; old evidence and results remain
+addressable.
 
 **Factor-input projection (`staging.strategy_backtest_inputs`).** The provenance-neutral
 projection factors actually consume, and the only shape rule 3 permits them to see. Its
@@ -467,7 +475,7 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner
 
 1. **PEG**: switchable growth-rate conventions. *Status 2026-09-15: computed on every tick under the historical-CAGR convention only (`factors.base.peg`, #284); on the Staging TOPT head 14/20 issuers carry a PEG and the six that do not say why on the row — `mart.strategy_decisions.peg_reason_codes` (#837: `non_positive_growth` TSLA, ABBV; `insufficient_earnings_history` MU; three excluded upstream for a missing gross-profit fact or market-value input). The analyst-consensus convention has no source until q4's moomoo capture exists (#771), and no plane carries company guidance, so the switch has one position.*
 2. **Gross profit per employee**: operating and financial components computed for every issuer and merged into one wide row (rule 17, #59 round 2; v0.2.0 still publishes one uniform capital-adjusted number, #528), headcount gaps explicitly flagged rather than silently dropped; a negative value is a fact, not a defect — the datahub refuses only what cannot exist or cannot be computed (e.g. division by zero), and distortions are the factor layer's declared, versioned adjustments (docs/metric-forest.md §6.1)
-3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence. *Status 2026-09-10: `staging.kg_edges` holds 219 rows — `holds` 111, `same_as` 108, **`supplies_to` 0**. The blocker is not recall but the absence of an oracle: a disclosed concentration ("48% of net revenue to distributors") can be re-derived from nothing the warehouse holds, so unlike segment revenue a wrong extraction is a plausible number nothing catches. Candidate sources of safety are recorded on #37.*
+3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence. *Status 2026-09-10: `staging.kg_edges` holds 219 rows — `holds` 111, `same_as` 108, **`supplies_to` 0**. The blocker is not recall but the absence of an oracle: a disclosed concentration ("48% of net revenue to distributors") can be re-derived from nothing the warehouse holds, so unlike segment revenue a wrong extraction is a plausible number nothing catches. Candidate sources of safety are recorded on #37.* *Status 2026-10-06 (#772): a Staging row for q3 read `no_disclosed_suppliers` while no extraction existed. The mart now separates two reasons. `no_supply_chain_extraction`: the graph holds no `supplies_to` edge for any issuer at the cutoff, so no extraction has run. `no_disclosed_suppliers`: edges exist for other issuers and none for this issuer.*
 4. **Analyst backtesting**: moomoo historical rating depth is confirmed, but only events with independently defensible public availability may enter PIT scoring; backfilled rows remain unavailable before that time. *Status 2026-09-10: zero moomoo calls in `staging.api_call_ledger`, ever, and `staging.analyst_rating_events` is empty. This is a capture blocker — it needs an OpenD host and a read-only credential, and nothing in `libs/factors` moves it (#771).*
 5. **ETF virtual company**: SEC N-PORT-P is the confirmed holdings-weight source; calculations must respect report/filing lag, fund-series identity, instrument type, unresolved weight, currency, and period alignment
 6. **Pure-blood company screening**: LLM-assisted semantic classification of segment revenue. *Built 2026-09-10 (#772): `factors.base.theme_purity` -> `mart.issuer_theme_purity` -> `/research/themes`, over the accepted segment partitions in `staging.issuer_segment_revenue_facts`. The share's denominator is **consolidated** revenue and never the classified parts — a missed segment would otherwise raise every remaining share and rank the issuer with the worst data as the purest name. A declined classification is unclassified revenue rather than a negative, and coverage below the theme's governed floor refuses the row instead of ranking it. An issuer with one reportable segment is the whole company in one part, which balances by construction — so what decides it is the count the filer tags in its inline XBRL, never a sentence: the sentence rule (`rule:single-segment:v1`) landed Berkshire Hathaway as one segment and is withdrawn (#822). A withdrawn extractor's rows stay in the append-only plane and are absent to every reader, including the planner, so the issuer is re-extracted under the rule that replaced it. What a one-part row carries as its description — the only thing the classifier is shown for it — is the filer's own segment note (`us-gaap:SegmentReportingDisclosureTextBlock`, read through its `ix:continuation` chain), never the sentence the count happens to be tagged in: Visa's count sits in a sentence about expenses, on which every theme was declined, so v2 is withdrawn for v3 (#841); and a note can declare one segment without naming a business — Netflix's — on which the classifier, told only an id, answered as NVIDIA and ranked Netflix a semiconductor pure-play, so v4 carries the filer's nature-of-business opening beside the declaration and the classifier is told the issuer's ticker (#849). The rows are the governed run's MEMBERS only, under the issuer id that run gives them — resolved from the CIK the run's own capture fetched each member's financials under, since the `topt` members are LEI-keyed and the fact planes are CIK-keyed (#828). The parts are read from the segment revenue the filing TAGS on the business-segment axis of its inline XBRL; a filing that tags segments is answered from the tags — the union of its two context shapes, then each shape, then a short set completed by ONE positive off-axis corporate item (#835) — or refused, and a filing that tags none is refused (#830: 10 partitions against 3 on the same 106 filings; the printed-table regex reader that found the 3 — and once took Comcast's geography table for its segments — is retired, #833).*
@@ -541,12 +549,85 @@ proven or refuted by a standing check on the axis roots (#434 factor chain, #530
 completeness, #284 factor flexibility, #544 backtest reproducibility, #70 extraction,
 #581 production invariants, #712 release identity) under `AGENTS.md` rules 6 and 7, and
 a gate epic closes by hand when every claim in its row has such a check. Evidence
-(captured corpora, evaluation records, handoff documents) is content-hashed under
-`governance/` for replayability. Graduation additionally requires the independent capture audit, the final
-Vision audit, and recorded human approval. Day-to-day delivery is conventional: one issue,
-one pull request, tests and review before merge, as defined in `AGENTS.md`. The
-capability dependency graph under `governance/capabilities/` is planning information, not
-merge enforcement.
+(captured corpora, evaluation records) is content-hashed for replayability. The records of
+the earlier delivery machine (capability graph, evidence, handoffs) left the tree in #1061
+and live in git history (`governance/README.md`). Graduation additionally requires the
+independent capture audit, the final Vision audit, and recorded human approval. Day-to-day
+delivery is conventional: one issue, one pull request, tests and review before merge, as
+defined in `AGENTS.md`. The former capability dependency graph was planning information,
+never merge enforcement.
+
+### Served freshness (read time)
+
+`mart.served_head` computes the age, the limit, the `freshness` label and the `availability`
+at each read. It uses the time of the last good refresh and the data cadence. The target state
+is that no consumer relies on a stamp written at publication. Before #1062, a head 13 days old
+read `fresh`. Today `/api/health` reads the view. The readers in the guard baseline do not yet.
+
+The limits live in `mart.freshness_limit`. Git is the authority for the rows that the seed
+lists. The seed in `db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores
+them at every boot. A row removed from the seed stays in deployed databases until a migration
+removes it. Change a limit with a reviewed edit to that seed. The table cannot hold a limit
+above 720 hours.
+
+| Cadence family | Limit (hours) | Limit (days) | Data in this family |
+|---|---|---|---|
+| `daily` | 72 | 3 | Governed heads from the daily capture ticks; daily quality checks; market data (weekdays only) |
+| `weekly` | 336 | 14 | Universe refresh, standards backfill, entity identity |
+| `quarterly` | 720 | 30 | Filing-derived facts, checked monthly |
+| `withhold` | 720 | 30 | Cap for every family: no value older than this is served |
+
+These rules describe what `mart.served_head` and `mart.head_freshness` return.
+
+- **Age** is the time since the last good refresh. An age equal to the limit reads `fresh`.
+  An age above the limit reads `stale`.
+- **Past its family limit**, a value is served with `freshness = 'stale'`, its `age_hours` and
+  a reason code. The codes are `older_than_3d` and `older_than_14d`.
+- **Past the `withhold` limit** (30 days), the value is withheld. Then `availability =
+  'unavailable'`, the reason is `older_than_30d`, and `run_id` is null. No number is shown.
+- **A quarterly value** reaches its limit at the `withhold` limit. It goes from `fresh`
+  straight to withheld. It is never served `stale`.
+- **A head with no registry row** gets the strictest limit.
+- **A missing refresh time** reads `unknown` and `unavailable`. The reason is
+  `refresh_time_unknown`.
+
+`mart.served_artifact` is the registry. Each row maps one served artifact to one cadence
+family. Each scheduled lane has a row. `apps/data-engine/tests/test_freshness_registry.py` fails
+when a lane or a schedule has no row.
+
+The `wired` column is a readiness flag. It is true when an age source is wired for the artifact.
+Today only the three governed heads are wired. Their age source is the pointer's `advanced_at`.
+Other tables hold a time, for example `staging.accepted_rulesets.advanced_at` and
+`mart.nightly_verdicts.ran_at`. No row uses them yet. Nothing reads `wired`, and nothing
+enforces it.
+
+The target state is one read point. A consumer reads `mart.served_head` and not
+`mart.current_pointer_head`. A consumer computes no head age of its own. That is not true today.
+Follow-up changes 2 to 4 of #1062 move the readers that still read the pointer.
+`libs/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
+heuristic, and a new shape can pass it. Its BASELINE lists today's exceptions, and it can only
+shrink. The guard works per file. It cannot prove that a run id flows from the head into a result
+query. The per-reader behaviour tests of PRs 2 to 4 are the real proof.
+
+`/api/health` already reads the head. It reports each governed pointer with `freshness`,
+`limit_hours`, `staleness_reason` and `availability`. Its `status` stays `ok` for a stale head.
+It reports `governed_pointers: "unknown"` when heads exist that this database does not serve.
+
+Four limits are accepted:
+- The word `unknown` has two uses. It is the `freshness` value for a missing refresh time. It is
+  also the health marker for pointers that cannot be read. Both keys are frozen.
+- A refresh time in the future counts as age 0.
+- `/api/health` rounds `age_hours` to one decimal. An entry can show `72.0` and `stale`.
+- The environment filter appears in `mart.served_head` and in `mart.served_head_environments`.
+  One scenario test ties the two views to each other.
+
+This is a different measure from three others. The capture-time windows in
+`raw.capture_schedule_policies` judge one observation when it is captured. They are 5 days for
+`market-price` and 730 days for `financial-fact`. The two-day maximum age in
+`docs/datahub-service-demand.md` is the demand objective of one capture requirement.
+`tools/nightly_verdicts.py` ages each nightly verdict at twice the cadence of its check. None of
+the three changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, equal to the
+`daily` limit.
 
 ---
 

@@ -57,6 +57,25 @@ values (%s, %s, %s, %s, %s)
 """
 
 
+NEWEST_SQL = """
+select ok from mart.nightly_verdicts
+where check_name = %s
+order by ran_at desc, recorded_at desc
+limit 1
+"""
+
+
+def newest_is_red(name: str) -> bool:
+    """True when the newest row of check `name` is red. No row, a green row and a pending row are False.
+
+    The order is the health endpoint's (`llm_service.main.NIGHTLY_VERDICTS_SQL`): `ran_at`, then
+    `recorded_at`. An unreadable table raises: the green row this guards would not be writable either.
+    """
+    with psycopg.connect(settings.database_url, autocommit=True) as connection:
+        row = connection.execute(NEWEST_SQL, (name,)).fetchone()
+    return row is not None and row[0] is False
+
+
 def check_name(check: str, universe: str | None = None) -> str:
     """`check`, or `check@universe` for a per-universe check. Not validated here: a manual
     run may name any universe, and `verdict()` records only declared names."""

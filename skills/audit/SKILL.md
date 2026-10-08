@@ -49,7 +49,12 @@ Each gate came from a measured failure.
 
 ## Scouts (owner design: three categories, 4+3+2 = 9)
 
-Use all nine only for a large or risky change. Lean mode uses one scout per category (M2, G3, T1).
+**Default (Lean Mode, < 60s):**
+- Run a single-pass read-only falsification covering M2 (design promise vs reality), G3 (fake tests / empty greens), and T1 (goal completeness).
+- Execute focused checks, cite physical commands and exit codes.
+- Do not spin up multiple subagents for routine PRs.
+
+**High-Risk Escalation (Full Scouts 4+3+2):** Use all nine only for cross-cutting platform refactors or high-blast-radius changes.
 
 **Category M: contract and impact (reads docs and code).**
 - M1 API breaking changes: renamed fields, new required fields, incompatible types.
@@ -71,7 +76,8 @@ A completeness claim (T1) against empty-run tests (G3) is false prosperity.
 
 ## Swarm mode (10 Interns, 3 to 5 rounds)
 
-Use swarm mode for complex refactors, architecture migrations, or high-risk changes.
+**On-Demand Escalation Only:** Never use swarm mode for routine bugs or small features. Trigger ONLY when:
+(a) confidence is low after round 1, (b) SHZP recovery activates, or (c) owner explicitly requests `/audit swarm`.
 
 1. **Round 1 (Propose):** 10 parallel Interns inspect the system across distinct dimensions. Each Intern writes sharp defect hypotheses.
 2. **Rounds 2 to 4 (Cross-Falsify):** Interns cross-examine each other's claims. Interns take opposing hypotheses and attempt to disprove them using verbatim source code and physical facts. They mark hypotheses as DISPROVEN or CONFIRMED.

@@ -10,10 +10,16 @@ Inspects the physical developer environment against the repository contracts:
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
 import shutil
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -128,7 +134,155 @@ def check_local_services() -> None:
         print("    [INFO] OpenD loopback (11111): closed (not running or host outside VPS)")
 
 
-def main() -> int:
+def check_remote(env: str) -> bool:
+    urls = {
+        "production": "https://truealpha.club/api/health",
+        "staging": "https://truealpha-staging.truealpha.club/api/health",
+    }
+    url = urls.get(env)
+    if not url:
+        print(f"[FAIL] Unknown remote environment: {env}")
+        return False
+
+    print(f"=== TrueAlpha Remote Health: {env.upper()} ({url}) ===")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-Doctor/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"❌ Failed to reach {url}: {exc}")
+        return False
+
+    print(f"[*] Status: {data.get('status')}")
+    print(f"[*] Git SHA: {data.get('git_sha')} | Data Engine SHA: {data.get('data_engine_git_sha')}")
+    print(f"[*] Digest: {data.get('data_engine_image_digest')}")
+
+    pointers = data.get("governed_pointers", [])
+    print(f"\n[*] Governed Pointers ({len(pointers)}):")
+    pointers_ok = True
+    for p in pointers:
+        u_id = p.get("universe_id")
+        age = p.get("age_hours", 0)
+        adv = p.get("advanced_at")
+        if age > 36:
+            print(f"    [STALE] {u_id:30} | age {age:5.1f}h (advanced at {adv})")
+            pointers_ok = False
+        else:
+            print(f"    [OK]    {u_id:30} | age {age:5.1f}h (advanced at {adv})")
+
+    verdicts = data.get("nightly_verdicts", [])
+    print(f"\n[*] Nightly Verdicts ({len(verdicts)}):")
+    verdicts_ok = True
+    for v in verdicts:
+        chk = v.get("check")
+        ok = v.get("ok")
+        summary = v.get("summary")
+        if ok is True:
+            status_str = "[PASS]"
+        elif ok is False:
+            status_str = "[FAIL]"
+            verdicts_ok = False
+        else:
+            status_str = "[SKIP]"
+        print(f"    {status_str:6} {chk:35} | {summary}")
+
+    overall = pointers_ok and verdicts_ok
+    if overall:
+        print(f"\n✅ Remote {env} environment is healthy.")
+    else:
+        print(f"\n⚠️ Remote {env} environment has alerts or stale pointers.")
+    return overall
+
+
+def check_vps(name_filter: str = "truealpha") -> bool:
+    host = os.environ.get("VPS_HOST", "")
+    if not host:
+        print("[-] VPS_HOST environment variable is not set; skipping VPS container inspection.")
+        return False
+    print(f"=== TrueAlpha VPS Container Truth ({host}) ===")
+    try:
+        try:
+            import runtime_truth
+        except ImportError:
+            from tools import runtime_truth  # type: ignore[no-redef]
+
+        containers = runtime_truth.fetch_inspect(host, name_filter)
+        print(runtime_truth.render(containers))
+        return True
+    except Exception as exc:
+        print(f"❌ Failed to inspect VPS containers: {exc}")
+        return False
+
+
+def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> bool:
+    """Assert that the target release ref contains current HEAD commits.
+
+    Prevents deploying an outdated release or deploying from an unmerged branch.
+    """
+    print(f"=== TrueAlpha Deploy Provenance Guard ({target_ref}) ===")
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        target = subprocess.run(
+            ["git", "rev-parse", target_ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        print(f"❌ Failed to resolve git references: {exc}")
+        return False
+
+    is_ancestor = (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", head, target],
+            cwd=cwd,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+    if is_ancestor:
+        print(f"✅ Target {target_ref} ({target[:8]}) contains current HEAD ({head[:8]}). Deploy authorized.")
+        return True
+    else:
+        print(f"❌ REFUSAL: Target {target_ref} ({target[:8]}) does NOT contain current HEAD ({head[:8]}).")
+        print("   Current changes are unmerged or not included in the target release ref.")
+        return False
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="TrueAlpha Physical & Remote Doctor")
+    parser.add_argument(
+        "--remote",
+        choices=["production", "staging"],
+        help="Inspect deployed remote health, pointers, and nightly verdicts",
+    )
+    parser.add_argument(
+        "--vps",
+        action="store_true",
+        help="Inspect container reality on VPS via SSH",
+    )
+    parser.add_argument(
+        "--verify-deploy-ref",
+        metavar="REF",
+        help="Verify that target release ref/tag contains current HEAD before deploy",
+    )
+    args = parser.parse_args(argv)
+
+    if args.verify_deploy_ref:
+        return 0 if check_deploy_provenance(args.verify_deploy_ref) else 1
+    if args.remote:
+        return 0 if check_remote(args.remote) else 1
+    if args.vps:
+        return 0 if check_vps() else 1
+
     print("=== TrueAlpha Dev Environment Doctor ===")
     ok = True
     ok = check_python_version() and ok

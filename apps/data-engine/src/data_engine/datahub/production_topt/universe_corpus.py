@@ -26,6 +26,9 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 from data_engine.datahub.control_plane import frozen_topt_universe
 
+#: The hand-curated TOPT corpus. A capture and the standards lane both default to it.
+TOPT_CORPUS_FILENAME = "corpus.v1.json"
+
 
 def load_corpus(filename: str) -> dict[str, Any]:
     """Package-data corpus by filename; lazy so Definitions load hermetically."""

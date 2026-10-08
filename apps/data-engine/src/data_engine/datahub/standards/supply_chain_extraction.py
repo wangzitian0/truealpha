@@ -7,7 +7,7 @@ exposure metrics into mart.issuer_supply_chain_exposure.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -20,12 +20,15 @@ from factors.base.supply_chain_exposure import (
 )
 from psycopg import Connection
 
+from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id, write_unvisited
+
 __all__ = (
     "SupplyChainEdgeCandidate",
     "SupplyChainExposure",
     "SupplyChainPartner",
     "extract_supply_chain_relationships",
     "materialize_supply_chain_exposure",
+    "materialize_unvisited_issuers",
     "materialize_universe_supply_chain_exposure",
     "supply_chain_exposure",
 )
@@ -60,6 +63,20 @@ on conflict (run_id, issuer_id) do update set
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
     factor_validation_status = excluded.factor_validation_status
+"""
+
+
+#: An unavailable row for a wide-row issuer that has no row of its own. It refreshes an earlier
+#: fill of the run. A row from a member, an answer or a fetch error, stays.
+_UNVISITED_SQL = """
+insert into mart.issuer_supply_chain_exposure (
+    run_id, issuer_id, cutoff, reason_codes, extractor,
+    availability_status, source_evidence_status, factor_validation_status
+) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+on conflict (run_id, issuer_id) do update set
+    cutoff = excluded.cutoff,
+    reason_codes = excluded.reason_codes
+where mart.issuer_supply_chain_exposure.extractor = 'lane:unvisited:v1'
 """
 
 
@@ -196,7 +213,12 @@ def materialize_supply_chain_exposure(
         else:
             issuer_id = str(item["issuer_id"])
             if "partners" in item:
-                rec = supply_chain_exposure(item["partners"], entity_id=issuer_id, as_of=as_of)
+                rec = supply_chain_exposure(
+                    item["partners"],
+                    entity_id=issuer_id,
+                    as_of=as_of,
+                    supplies_to_edges_exist=bool(item["supplies_to_edges_exist"]),
+                )
                 exposure_score = rec.exposure_score
                 direct_partners = rec.direct_partners
                 suppliers_count = rec.suppliers_count
@@ -236,7 +258,7 @@ def materialize_supply_chain_exposure(
             _INSERT_SQL,
             (
                 run_id,
-                issuer_id,
+                require_canonical_issuer_id(issuer_id),
                 as_of,
                 exposure_score,
                 direct_partners,
@@ -260,9 +282,13 @@ def materialize_universe_supply_chain_exposure(
     *,
     run_id: str,
     cutoff: datetime,
-    tickers: Mapping[str, str],
+    issuers: Sequence[CanonicalIssuer],
 ) -> int:
-    """Extract and materialize supply chain exposure for all issuers in a universe run."""
+    """Extract and materialize supply chain exposure for all issuers in a universe run.
+
+    A row stores the issuer's canonical id, the wide row's (#1079). The graph read takes the
+    legacy id, which is what the knowledge graph keys its edges by.
+    """
     count = 0
     has_edges_table = False
     try:
@@ -278,33 +304,38 @@ def materialize_universe_supply_chain_exposure(
         has_edges_table = False
 
     cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
-    for issuer_id, ticker in tickers.items():
+    # One measurement per run, taken before any issuer: does the graph hold a supplier edge at all?
+    # A false value means no extraction has run. A row then says so, instead of claiming that the
+    # company disclosed no supplier (#772).
+    supplies_to_edges_exist = has_edges_table and _supplies_to_edges_exist(connection, cutoff)
+    for issuer in issuers:
         partners: list[SupplyChainPartner] = []
         if has_edges_table:
             rows = connection.execute(
                 """
-                select e.to_id, coalesce(ent.display_name, e.to_id), e.relation_type, e.confidence
+                select e.to_id, coalesce(ent.display_name, e.to_id), e.confidence
                 from staging.kg_edges e
                 left join staging.kg_entities ent on ent.id = e.to_id
-                where e.from_id = %s and e.transaction_time <= %s
+                where e.from_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
                   and (e.valid_time is null or e.valid_time @> %s::date)
                 """,
-                (issuer_id, cutoff, cutoff_date),
+                (issuer.legacy_id, cutoff, cutoff_date),
             ).fetchall()
-            for r in rows:
-                p_id, p_name, r_type, conf = r
-                rel_direction = "customer" if str(r_type) in ("supplies_to", "customer") else "supplier"
+            for p_id, p_name, conf in rows:
+                # The edge runs from the issuer to the partner, so the partner buys from the issuer.
                 partners.append(
                     SupplyChainPartner(
                         partner_id=str(p_id),
                         partner_name=str(p_name),
-                        relation_type=rel_direction,
+                        relation_type="customer",
                         revenue_share=None,
                         confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
                     )
                 )
 
-        record = supply_chain_exposure(partners, entity_id=issuer_id, as_of=cutoff)
+        record = supply_chain_exposure(
+            partners, entity_id=issuer.issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
+        )
         count += materialize_supply_chain_exposure(
             connection,
             run_id=run_id,
@@ -312,3 +343,28 @@ def materialize_universe_supply_chain_exposure(
             exposure_data=[record],
         )
     return count
+
+
+def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> bool:
+    """True when the graph holds a `supplies_to` edge for ANY issuer that was knowable at the cutoff.
+
+    The test uses transaction time only. An edge whose validity ended before the cutoff still
+    proves that an extraction ran. An edge recorded after the cutoff was not knowable then.
+    """
+    row = connection.execute(
+        "select exists (select 1 from staging.kg_edges where relation_type = 'supplies_to' and transaction_time <= %s)",
+        (cutoff,),
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def materialize_unvisited_issuers(
+    connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Write an unavailable row for each wide-row issuer that has no row of its own (#1079).
+
+    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
+    A row from a member stays, and an earlier fill takes the new reason.
+    Returns the (issuer id, reason) pairs that the statement wrote. A kept row is not among them.
+    """
+    return write_unvisited(connection, _UNVISITED_SQL, run_id=run_id, cutoff=cutoff, unvisited=unvisited)

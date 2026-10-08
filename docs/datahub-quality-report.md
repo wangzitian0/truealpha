@@ -144,6 +144,9 @@ comparison anchor, so an apparent agreement or conflict can be validated without
 producer-supplied outcome labels. `origin_composition` counts each origin at most once per
 requested cell.
 
+The `freshness` ratio above grades each cell when it is captured. The read-time age of a
+served head is a different measure: see `init.md`, "Served freshness (read time)".
+
 ## Representative Report
 
 The following compact projection shows the intended operator view for four requested

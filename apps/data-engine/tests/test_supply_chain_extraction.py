@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+from data_engine.datahub.canonical_issuer import CanonicalIssuer
 from data_engine.datahub.standards.supply_chain_extraction import (
     extract_supply_chain_relationships,
     materialize_supply_chain_exposure,
@@ -14,6 +17,11 @@ from factors.base.supply_chain_exposure import (
     SupplyChainPartner,
     supply_chain_exposure,
 )
+
+
+def _issuer_id(name: str) -> str:
+    """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
 
 
 class _MockCursor:
@@ -50,14 +58,14 @@ def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> N
     partners = [
         SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")),
     ]
-    rec = supply_chain_exposure(partners, entity_id="issuer:nvda", as_of=now)
+    rec = supply_chain_exposure(partners, entity_id=_issuer_id("nvda"), as_of=now, supplies_to_edges_exist=True)
     count = materialize_supply_chain_exposure(
         conn,
         run_id="run:sc_both",
         cutoff=now,
         exposure_data=[
             {
-                "issuer_id": "issuer:aapl",
+                "issuer_id": _issuer_id("aapl"),
                 "exposure_score": Decimal("0.85"),
                 "direct_partners": 12,
                 "availability_status": "available",
@@ -71,12 +79,12 @@ def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> N
     # Row 1: dict
     sql1, params1 = conn.executed[0]
     assert "insert into mart.issuer_supply_chain_exposure" in sql1
-    assert params1[1] == "issuer:aapl"
+    assert params1[1] == _issuer_id("aapl")
     assert params1[3] == Decimal("0.85")
     assert params1[11] == "available"
     # Row 2: factor record
     _, params2 = conn.executed[1]
-    assert params2[1] == "issuer:nvda"
+    assert params2[1] == _issuer_id("nvda")
     assert params2[3] == Decimal("0.25")
     assert params2[4] == 1
     assert params2[11] == "available"
@@ -130,12 +138,55 @@ def test_extract_supply_chain_adversarial_negative_corpus() -> None:
 
 def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> None:
     conn = _MockConnection()
-    tickers = {"issuer:1": "NVDA", "issuer:2": "AAPL"}
+    issuers = [
+        CanonicalIssuer(issuer_id=_issuer_id("1"), legacy_id="issuer:lei:AAAAAAAAAAAAAAAAAA01", ticker="NVDA"),
+        CanonicalIssuer(issuer_id=_issuer_id("2"), legacy_id="issuer:lei:BBBBBBBBBBBBBBBBBB02", ticker="AAPL"),
+    ]
     total = materialize_universe_supply_chain_exposure(
         conn,
         run_id="run:sc_uni",
         cutoff=datetime.now(tz=UTC),
-        tickers=tickers,
+        issuers=issuers,
     )
     assert total == 2
     assert len(conn.executed) == 2
+    # The mock holds no `staging.kg_edges` table, so no extraction exists: both rows say so.
+    reasons = [params[9] for _, params in conn.executed]
+    assert reasons == [["no_supply_chain_extraction"], ["no_supply_chain_extraction"]]
+
+
+def test_materialize_dict_with_partners_states_the_graph_measurement() -> None:
+    conn = _MockConnection()
+    now = datetime(2026, 9, 25, tzinfo=UTC)
+    materialize_supply_chain_exposure(
+        conn,
+        run_id="run:sc_dict",
+        cutoff=now,
+        exposure_data=[
+            {"issuer_id": _issuer_id("a"), "partners": [], "supplies_to_edges_exist": True},
+            {"issuer_id": _issuer_id("b"), "partners": [], "supplies_to_edges_exist": False},
+        ],
+    )
+    assert [params[9] for _, params in conn.executed] == [["no_disclosed_suppliers"], ["no_supply_chain_extraction"]]
+    with pytest.raises(KeyError, match="supplies_to_edges_exist"):
+        materialize_supply_chain_exposure(
+            conn, run_id="run:sc_dict", cutoff=now, exposure_data=[{"issuer_id": _issuer_id("c"), "partners": []}]
+        )
+
+
+@pytest.mark.parametrize(
+    "legacy_id",
+    ["issuer:lei:AAAAAAAAAAAAAAAAAA01", "issuer:cik:0000320193", "", "NOT-A-UUID", str(uuid.uuid4()).upper()],
+    ids=["lei", "cik", "empty", "not-a-uuid", "upper-case-uuid"],
+)
+def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
+    """#1079: the legacy id of the corpus is not the wide row's id, so no row may carry it."""
+    conn = _MockConnection()
+    with pytest.raises(ValueError, match="not the wide row's id"):
+        materialize_supply_chain_exposure(
+            conn,
+            run_id="run:sc_legacy",
+            cutoff=datetime(2026, 9, 25, tzinfo=UTC),
+            exposure_data=[{"issuer_id": legacy_id, "partners": [], "supplies_to_edges_exist": True}],
+        )
+    assert conn.executed == [], "nothing reached the table"

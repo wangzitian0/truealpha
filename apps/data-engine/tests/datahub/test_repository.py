@@ -10,22 +10,23 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
-from data_engine.datahub.control_plane import AttemptLedger
-from data_engine.datahub.medium_replay import _capture_run, _source_request, frozen_topt_list_version
-from truealpha_contracts.capture_control import (
-    CaptureCheckpoint,
-    CaptureObligationWorkBinding,
-    CheckpointPhase,
-)
-from truealpha_contracts.common import canonical_sha256
+from data_engine.datahub.control_plane import AttemptLedger, frozen_topt_universe, replay_retry_policy
+from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
+from truealpha_contracts.capture_control import CaptureObligationWorkBinding
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
+    CaptureCampaign,
+    CaptureRun,
+    CaptureSchedulePolicy,
     CaptureWorkItem,
     FetchAttemptOutcome,
     ListObligationResult,
     NormalizedObservation,
     ObligationTerminalState,
+    SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.universe import SubjectRef
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 STARTED_AT = datetime(2026, 4, 1, 1, tzinfo=UTC)
@@ -45,6 +46,61 @@ def connection():
     finally:
         active.rollback()
         active.close()
+
+
+# The three helpers below lived in `medium_replay` until #1061. Their values are unchanged.
+def _schedule_policy() -> CaptureSchedulePolicy:
+    return CaptureSchedulePolicy(
+        policy_version="d5-medium-replay:v1",
+        demanded_cadence=timedelta(days=1),
+        provider_availability_cadence="fixture-daily:v1",
+        freshness_max_age=timedelta(days=2),
+        retry=replay_retry_policy(3),
+    )
+
+
+def _capture_run(
+    corpus: dict[str, object], *, cutoff: datetime, sequence: int
+) -> tuple[CaptureSchedulePolicy, CaptureCampaign, CaptureRun]:
+    universe = frozen_topt_universe(corpus)
+    schedule_policy = _schedule_policy()
+    campaign = CaptureCampaign(
+        campaign_policy_id="capture-policy:d5-medium-v1",
+        environment=CaptureEnvironment.LOCAL_DEV,
+        cutoff=cutoff,
+        universe_refs=(universe,),
+    )
+    scope_id = f"capture-scope:{canonical_sha256({'corpus_id': corpus['corpus_id'], 'rung': 'E3'})}"
+    run = CaptureRun(
+        campaign_id=campaign.campaign_id,
+        run_sequence=sequence,
+        schedule_policy_id=schedule_policy.schedule_policy_id,
+        capture_scope_id=scope_id,
+    )
+    return schedule_policy, campaign, run
+
+
+def _source_request(
+    *,
+    member: SubjectRef,
+    semantic_types: tuple[str, ...],
+    partition: str,
+) -> SourceRequest:
+    requirement_ids = tuple(f"{semantic_type}:v1" for semantic_type in semantic_types)
+    request_coordinate = {
+        "member": member.model_dump(mode="json"),
+        "requirements": requirement_ids,
+        "partition": partition,
+    }
+    return SourceRequest(
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'd5-medium-fixture:v1', 'semantic_types': semantic_types})}",
+        source_policy_id="source-policy:d5-medium-fixture-v1",
+        request_fingerprint_version="d5-medium-request:v1",
+        canonical_request_sha256=canonical_sha256(request_coordinate),
+        subject_refs=(member,),
+        capture_requirement_ids=requirement_ids,
+        partition=partition,
+    )
 
 
 def test_repository_persists_and_reads_terminal_capture_chain(connection) -> None:
@@ -105,13 +161,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         final_attempt_id=attempt.attempt_id,
         reason_codes=("success",),
     )
-    checkpoint = CaptureCheckpoint(
-        run_id=run.run_id,
-        sequence=1,
-        phase=CheckpointPhase.MANIFEST_PERSISTED,
-        completed_obligation_ids=(obligation.obligation_id,),
-        recorded_at=STARTED_AT + timedelta(seconds=3),
-    )
     repository = PostgresCaptureControlRepository(connection)
 
     raw_fetch_id = connection.execute(
@@ -154,7 +203,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         freshness_state="fresh",
     )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result)
-    assert repository.put_checkpoint(checkpoint)
 
     status = repository.status(run.run_id)
     assert (status.obligation_count, status.terminal_count, status.success_count) == (1, 1, 1)
@@ -198,7 +246,6 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
             confidence=Decimal("0.95"),
         )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result) is False
-    assert repository.put_checkpoint(checkpoint) is False
 
     mismatched_result = ListObligationResult(
         obligation_id="list-obligation:" + "0" * 64,

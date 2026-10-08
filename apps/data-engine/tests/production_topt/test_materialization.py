@@ -19,10 +19,9 @@ from data_engine.datahub.a1_evidence import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.production_topt.materialization import _ObservationRow
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
@@ -1401,6 +1400,9 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     explicitly below.
     """
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    connection.execute("set session_replication_role = replica")
+    connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
+    connection.execute("set session_replication_role = origin")
     _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
 
     written = seed_strategy_inputs_from_capture(
@@ -1464,6 +1466,9 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
       to land at all (the 0032 CHECK, asserted red).
     """
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    connection.execute("set session_replication_role = replica")
+    connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
+    connection.execute("set session_replication_role = origin")
     _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
     seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
