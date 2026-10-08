@@ -10,7 +10,6 @@ from typing import Any
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.capture_control import (
-    CaptureCheckpoint,
     CaptureListObligation,
     CaptureListVersion,
     CaptureObligationWorkBinding,
@@ -417,39 +416,6 @@ class PostgresCaptureControlRepository:
             if inserted
             else self._check_existing(
                 "raw.capture_attempt_results", "attempt_result_id", result.attempt_result_id, result.content_sha256
-            )
-        )
-
-    def put_checkpoint(self, checkpoint: CaptureCheckpoint) -> bool:
-        if self._existing_matches(
-            "raw.capture_checkpoints", "checkpoint_id", checkpoint.checkpoint_id, checkpoint.content_sha256
-        ):
-            return False
-        payload = self._payload(checkpoint)
-        inserted = self._connection.execute(
-            """
-            insert into raw.capture_checkpoints (
-                checkpoint_id, run_id, sequence, phase, completed_obligation_ids,
-                recorded_at, recorded_at_canonical, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (checkpoint_id) do nothing returning checkpoint_id
-            """,
-            (
-                checkpoint.checkpoint_id,
-                checkpoint.run_id,
-                checkpoint.sequence,
-                checkpoint.phase.value,
-                list(checkpoint.completed_obligation_ids),
-                checkpoint.recorded_at,
-                payload["recorded_at"],
-                checkpoint.content_sha256,
-            ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_checkpoints", "checkpoint_id", checkpoint.checkpoint_id, checkpoint.content_sha256
             )
         )
 

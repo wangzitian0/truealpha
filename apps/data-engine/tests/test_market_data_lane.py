@@ -52,7 +52,12 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.market_prices import TwelveDataClient, last_xnys_session_of_month, xnys_session_close_utc
+from data_engine.datahub.market_prices import (
+    TwelveDataApiError,
+    TwelveDataClient,
+    last_xnys_session_of_month,
+    xnys_session_close_utc,
+)
 from data_engine.datahub.universe_mask import UniverseMaskReason
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 
@@ -407,3 +412,36 @@ def test_refresh_market_data_op_does_not_crash_on_todays_session_before_its_clos
     assert prior_mask_row == (True, UniverseMaskReason.OK), (
         f"expected {symbol} eligible at the last CLOSED session {prior_session}, got {prior_mask_row}"
     )
+
+
+def test_refresh_market_data_asks_twelve_data_for_the_canonical_ticker(connection) -> None:
+    """#1060: Twelve Data lists Berkshire B as `BRK.B`. A `/` makes it read a currency pair and answer 404."""
+    requested: list[dict[str, str]] = []
+
+    def transport(url: str) -> tuple[int, bytes]:
+        requested.append(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query)))
+        return 200, json.dumps({"values": []}).encode()
+
+    client = TwelveDataClient(api_key="test", transport_fn=transport)
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+
+    _refresh_market_data(dg.build_op_context(), connection, symbols=["BRK.B"], now=now, client=client)
+
+    assert [(query["symbol"], query["interval"]) for query in requested] == [
+        ("BRK.B", "1day"),
+        ("BRK.B", "1month"),
+    ]
+
+
+def test_refresh_market_data_fails_visibly_when_twelve_data_rejects_a_symbol(connection) -> None:
+    """#1060: a symbol the vendor rejects must fail the run. The lane must not skip it."""
+
+    def transport(url: str) -> tuple[int, bytes]:
+        body = {"code": 404, "message": "symbol is missing or invalid", "status": "error"}
+        return 404, json.dumps(body).encode()
+
+    client = TwelveDataClient(api_key="test", transport_fn=transport)
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+
+    with pytest.raises(TwelveDataApiError, match="404"):
+        _refresh_market_data(dg.build_op_context(), connection, symbols=["NOSUCH"], now=now, client=client)

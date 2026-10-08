@@ -21,8 +21,10 @@ from __future__ import annotations
 import ast
 import importlib.metadata
 import importlib.util
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -1368,6 +1370,48 @@ def test_the_pr_trigger_covers_every_file_the_manifest_names() -> None:
     )
 
 
+def _changes_filters() -> dict[str, list[str]]:
+    workflow = yaml.safe_load(source(REQUIRED))
+    changes_job = (workflow.get("jobs") or {})["changes"]
+    # Default + assertion so a restructured changes job fails by naming the
+    # missing contract, not as a bare StopIteration.
+    filter_step = next(
+        (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, (
+        "ci-required's changes job no longer carries a paths-filter step; every lane decision reads from it (#673)"
+    )
+    return yaml.safe_load(filter_step["with"]["filters"])
+
+
+def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> None:
+    """#1018 merged with test_every_top_level_directory_is_scanned_or_explicitly_excluded
+    red on main. It added `.ws-publish/` and touched nothing the python filter matched,
+    so ci-python never ran and `required` read the skip as success: #673's class, one
+    directory further over.
+
+    The shared rule source publishes this repository's `AGENTS.md` and skills, so a PR
+    that touches only those paths is the normal case, not an edge. A test in this file
+    reads every one of them: `skills/` is a scan root, the symlink-only roots and the
+    publish record are excluded on premises asserted here, and `AGENTS.md` (with
+    `CLAUDE.md` linking to it) is a root file.
+
+    A PR that adds some other new top-level directory still skips ci-python; no filter
+    entry can name a directory that does not exist yet.
+    """
+    python = _changes_filters()["python"]
+    published = [f"{root}/**" for root in ("skills", *_SYMLINK_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)] + [
+        "AGENTS.md",
+        "CLAUDE.md",
+    ]
+    missing = [entry for entry in published if entry not in python]
+    assert not missing, (
+        f"the python filter lacks {missing}: a PR touching only those paths skips ci-python, "
+        f"and `required` reads the skip as success (#1018)"
+    )
+
+
 def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
     """A tools-only PR used to run ZERO tests — A4 review finding (#673).
 
@@ -1385,19 +1429,7 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
     """
     import tomllib
 
-    workflow = yaml.safe_load(source(REQUIRED))
-    changes_job = (workflow.get("jobs") or {})["changes"]
-    # Default + assertion so a restructured changes job fails by naming the
-    # missing contract, not as a bare StopIteration.
-    filter_step = next(
-        (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
-        None,
-    )
-    assert filter_step is not None, (
-        "ci-required's changes job no longer carries a paths-filter step; every lane "
-        "decision below reads from it (#673)"
-    )
-    filters = yaml.safe_load(filter_step["with"]["filters"])
+    filters = _changes_filters()
 
     for lane in ("python", "db", "web"):
         assert "tools/**" in filters[lane], (
@@ -2005,11 +2037,13 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
 #: appear in QLIB_SCAN_ROOTS — asserted below, because the two holes this guard has
 #: already had were both "a place the walk cannot reach", found by review rather than by
 #: the guard. A new top-level directory now fails this test until someone classifies it.
-#: The one excluded root whose exclusion rests on a premise rather than on its contents
-#: being out of scope outright: it is safe only while everything in it resolves into one of
-#: QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
+#: The excluded roots whose exclusion rests on a premise rather than on their contents
+#: being out of scope outright: each is safe only while everything in it resolves into one
+#: of QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
 #: and the assertion cannot drift apart (#1006 review).
-_SYMLINK_ONLY_EXCLUDED_ROOT = ".claude"
+_SYMLINK_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
+#: Excluded on the same kind of premise: it holds one JSON record and nothing else.
+_RECORD_ONLY_EXCLUDED_ROOT = ".ws-publish"
 
 QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The ADR for this migration (A5-polars-vectorbt-engine.md) and A0's amendment note
@@ -2019,15 +2053,22 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # Frozen history. Accepted records pin these files' hashes, so editing the prose
     # inside one breaks the record rather than removing a dependency.
     "governance",
-    # #1003 committed this so an agent host reads the vendored skills at the path it
-    # looks in. Every entry under it is a symlink resolving INTO A SCANNED ROOT -- today
-    # all eight land in `skills/`, but the safety argument is the general one, and it is
-    # the general one that test_every_claude_entry_is_a_symlink_into_a_scanned_root
-    # asserts. The content is therefore swept through its real path, once rather than
-    # twice. That premise is the whole reason the exclusion is safe: a real file added
-    # here later would otherwise be silently out of scope, which is the exact shape of
-    # the two holes this guard has already had.
-    _SYMLINK_ONLY_EXCLUDED_ROOT,
+    # Where agent hosts look for this repository's skills: `.claude/skills` (Claude Code,
+    # #1003) and `.agents/skills` (Codex). Every entry under them is a symlink resolving
+    # INTO A SCANNED ROOT -- today every one lands in `skills/`, but the safety argument is
+    # the general one, and it is the general one that
+    # test_every_symlink_only_root_entry_resolves_into_a_scanned_root asserts. The content
+    # is therefore swept through its real path, once rather than twice. That premise is the
+    # whole reason the exclusion is safe: a real file added here later would otherwise be
+    # silently out of scope, which is the exact shape of the two holes this guard has
+    # already had.
+    *_SYMLINK_ONLY_EXCLUDED_ROOTS,
+    # The record the shared rule source writes when it publishes `AGENTS.md` and the
+    # skills (#1018): output paths and their hashes. It names files and runs nothing; the
+    # files it names are swept where they live -- `AGENTS.md` as a root file, the skills
+    # under `skills/`. Safe only while the record is all it holds, which
+    # test_the_publish_record_root_holds_only_the_record asserts.
+    _RECORD_ONLY_EXCLUDED_ROOT,
 )
 #: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
 #: scan root cannot reach a file sitting at the repository root, and the root
@@ -2595,10 +2636,11 @@ def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
     )
 
 
-def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
-    """The excluded root is excluded on one premise: everything in it is a symlink that
+@pytest.mark.parametrize("excluded_root", _SYMLINK_ONLY_EXCLUDED_ROOTS)
+def test_every_symlink_only_root_entry_resolves_into_a_scanned_root(excluded_root: str) -> None:
+    """Each of these roots is excluded on one premise: everything in it is a symlink that
     resolves into one of QLIB_SCAN_ROOTS. This asserts the premise, in those terms -- not
-    in terms of `skills/`, which is merely where all eight happen to land today.
+    in terms of `skills/`, which is merely where every link happens to land today.
 
     Without it the exclusion is a hole waiting for its first real file, which is how both of
     this guard's previous holes were shaped -- a place the walk could not reach, found by
@@ -2606,14 +2648,14 @@ def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
     directory outside the scan roots.
     """
     listing = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", _SYMLINK_ONLY_EXCLUDED_ROOT],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", excluded_root],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
     entries = [entry for entry in listing.split("\0") if entry]
     assert entries, (
-        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep but git tracks nothing "
+        f"{excluded_root}/ is excluded from the Qlib sweep but git tracks nothing "
         f"there, so this assertion is checking nothing (GREEN-WHILE-EMPTY). Remove the exclusion "
         f"or remove this test."
     )
@@ -2629,7 +2671,160 @@ def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
         if not any(target == root or root in target.parents for root in scanned):
             escapes.append(f"{entry} -> {target} resolves outside every scanned root")
     assert not escapes, (
-        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep only because everything "
+        f"{excluded_root}/ is excluded from the Qlib sweep only because everything "
         f"in it is scanned through its real path. These are not: {escapes}. Either move them under "
-        f"a scan root or move {_SYMLINK_ONLY_EXCLUDED_ROOT} into QLIB_SCAN_ROOTS."
+        f"a scan root or move {excluded_root} into QLIB_SCAN_ROOTS."
     )
+
+
+def test_the_publish_record_root_holds_only_the_record() -> None:
+    """The publish record's directory is excluded because it holds one JSON file that
+    names other files and runs nothing. A script written there later would sit outside
+    the sweep with nothing to say so; this asserts the premise instead of trusting it.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", _RECORD_ONLY_EXCLUDED_ROOT],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    entries = sorted(entry for entry in listing.split("\0") if entry)
+    assert entries == [f"{_RECORD_ONLY_EXCLUDED_ROOT}/manifest.json"], (
+        f"{_RECORD_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep only because it holds the "
+        f"publish record and nothing else; git tracks {entries}. Scan what was added, or remove "
+        f"the exclusion."
+    )
+
+
+# --- #1056: only a production deployment needs the owner ----------------------------
+# Owner instruction, 2026-10-06 (infra2#1035): production needs the owner's approval of
+# the exact SHA and the owner's presence. `deploy-release.yml` with `deploy_type=prod` is
+# the second path to production beside `tools/cut_release.sh --prod`, so it carries the
+# same gate. The tests run the step's own script text, not a copy of it: a workflow edit
+# that loosens the step changes what these tests execute.
+
+OWNER_GATE_STEP = "Require the owner's approval of the release SHA for production"
+RELEASE_TAG = "v1.2.3"
+SHA_THE_OWNER_DID_NOT_APPROVE = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+def _repo_with_a_release_tag(tmp_path: Path) -> tuple[Path, str]:
+    """A throwaway checkout holding the gate script and one annotated release tag, which
+    is all the step reads: it resolves the tag to a commit with `git rev-list`."""
+    repo = tmp_path / "release_checkout"
+    (repo / "tools").mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "tools" / "owner_approval_gate.sh", repo / "tools" / "owner_approval_gate.sh")
+    identity = ["-c", "user.name=release-test", "-c", "user.email=release-test@example.invalid"]
+    signing = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+    environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *identity, *signing, *arguments],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=environment,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "release")
+    git("tag", "-a", RELEASE_TAG, "-m", RELEASE_TAG)
+    return repo, git("rev-parse", "HEAD")
+
+
+def _run_owner_gate_step(
+    repo: Path, *, deploy_type: str, approved: str, version_ref: str = RELEASE_TAG
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", str(step(RELEASE, OWNER_GATE_STEP)["run"])],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOY_TYPE": deploy_type,
+            "VERSION_REF": version_ref,
+            "OWNER_APPROVED_SHA": approved,
+        },
+    )
+
+
+def test_a_prod_dispatch_carrying_the_approved_sha_passes_the_owner_gate(tmp_path: Path) -> None:
+    repo, release_sha = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert f"owner approval covers {release_sha}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("approved", "refusal"),
+    [
+        ("", "needs the owner's approval of the exact release SHA"),
+        (SHA_THE_OWNER_DID_NOT_APPROVE, "does not cover this commit"),
+        ("not-a-sha", "exactly 40 characters"),
+    ],
+)
+def test_a_prod_dispatch_without_a_matching_approval_stops_at_the_owner_gate(
+    tmp_path: Path, approved: str, refusal: str
+) -> None:
+    repo, _ = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=approved)
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert refusal in result.stderr, result.stderr
+    assert "::error::production needs the owner's approval" in result.stdout, result.stdout
+
+
+def test_a_prod_dispatch_for_a_missing_tag_stops_at_the_owner_gate(tmp_path: Path) -> None:
+    repo, release_sha = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha, version_ref="v9.9.9")
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "release SHA is not a 40-character" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("deploy_type", ["staging", "preview/tag"])
+def test_a_deploy_that_is_not_production_needs_no_owner_approval(tmp_path: Path, deploy_type: str) -> None:
+    """The other half of the owner's instruction: staging and preview are the agent's."""
+    repo, _ = _repo_with_a_release_tag(tmp_path)
+
+    result = _run_owner_gate_step(repo, deploy_type=deploy_type, approved="")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "no owner approval is needed" in result.stdout
+
+
+def test_the_owner_gate_runs_first_cannot_be_skipped_and_reads_the_input() -> None:
+    inputs = triggers(RELEASE)["workflow_dispatch"]["inputs"]
+    assert "owner_approved_sha" in inputs, "deploy-release.yml has no way to carry the owner's approval"
+    assert inputs["owner_approved_sha"]["required"] is False, (
+        "the input is required only for prod; a required input would force an approval onto staging"
+    )
+
+    gate = step(RELEASE, OWNER_GATE_STEP)
+    assert gate["env"]["OWNER_APPROVED_SHA"] == "${{ inputs.owner_approved_sha }}"
+    assert gate["env"]["DEPLOY_TYPE"] == "${{ inputs.deploy_type }}"
+    assert "if" not in gate, "an `if` on the gate step can skip it; the script decides by deploy_type itself"
+    assert "continue-on-error" not in gate, "a gate that may fail without failing the job is not a gate"
+    assert "continue-on-error" not in job(RELEASE, "request"), "the job must fail when the gate fails"
+
+    names = [spec.get("name") or spec.get("uses") for spec in job(RELEASE, "request")["steps"]]
+    gate_at = names.index(OWNER_GATE_STEP)
+    for later in (
+        "astral-sh/setup-uv@v5",
+        "Install the pinned SDK contract and the workspace",
+        "Verify release evidence and render request",
+        "Dispatch the validated request to infra2",
+    ):
+        assert gate_at < names.index(later), (
+            f"{later!r} runs before the owner gate: a prod dispatch must fail in seconds, before any "
+            f"install, evidence read or dispatch to infra2"
+        )

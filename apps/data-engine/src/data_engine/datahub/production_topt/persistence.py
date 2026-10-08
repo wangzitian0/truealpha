@@ -95,10 +95,11 @@ _RETRY_SPACING = timedelta(seconds=2)
 class CaptureTimeline:
     """The run's persistence stamps, all derived from its cutoff.
 
-    `partition_start` is the frozen universe partition the run asserts values for:
-    observations anchor `valid_from` there with an open `valid_to`, so the
-    materializer selects them for that partition at any cutoff. `knowable_at` is
-    the capture's own knowable time — inside the schedule policy's freshness
+    `partition_start` is the start of the frozen universe partition the run asserts
+    values for. It is the knowable time of a release-derived cell when the universe has
+    no publication time. It is not an observation's `valid_from`: that is the date of the
+    fact itself (#1016), and the materializer judges it at the cutoff day (#1060).
+    `knowable_at` is the capture's own knowable time — inside the schedule policy's freshness
     window, which is what makes a captured cell `fresh` at the mart.
     """
 
@@ -373,6 +374,11 @@ class PostgresCaptureControlSink:
             confidence=success.confidence,
             source_vintage_id=source_vintage_id,
             knowable_at=success.transaction_time,
+            # NormalizedObservation.valid_from is an aware datetime; FetchSuccess.valid_from
+            # is a bare date (every adapter's own concept of "the fact's day"). Midnight UTC,
+            # matching the same date->datetime idiom already used throughout this module
+            # (persistence.py:116) and the adapters (#530 item 1).
+            valid_from=datetime.combine(success.valid_from, datetime.min.time(), tzinfo=UTC),
         )
 
     def _persist_corroboration_or_record_loss(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
@@ -418,6 +424,10 @@ class PostgresCaptureControlSink:
             confidence=corroboration.confidence,
             source_vintage_id=vintage.source_vintage_id,
             knowable_at=corroboration.transaction_time,
+            # Corroboration carries no valid_from of its own (unlike FetchSuccess); its own
+            # source time is the best available real date and is already an aware datetime,
+            # unlike success.valid_from above (#530 item 1).
+            valid_from=corroboration.transaction_time,
         )
 
     def _corroborating_request(self, binding: ObligationBinding, *, origin: str, source: str) -> SourceRequest:
@@ -452,6 +462,7 @@ class PostgresCaptureControlSink:
         confidence: Decimal,
         source_vintage_id: str,
         knowable_at: datetime,
+        valid_from: datetime,
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
@@ -465,13 +476,18 @@ class PostgresCaptureControlSink:
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            # Deliberately the PARTITION anchor, not the adapter's date: the
-            # materializer selects observations whose valid_from covers the frozen
-            # partition (a live August bar asserts a value FOR the 2026-03-31
-            # partition). The adapter's own time lives in knowable_at below; the
-            # valid-time remodel is out of #530 slice 3's scope and tracked on the
-            # issue.
-            valid_from=self._timeline.partition_start,
+            # The caller's own real date (#530 item 1) -- a bar's as_of, a filing's
+            # knowable_at, a report_period -- never the partition anchor. Every
+            # adapter already computes this on FetchSuccess/Corroboration; it used
+            # to be discarded here in favor of self._timeline.partition_start, which
+            # made every observation eligible for its capturing partition only by
+            # accident (partition_start happens to be <= any later partition_key)
+            # and would silently exclude a genuinely-valid-since fact from an
+            # earlier historical replay. The materializer's selection predicate
+            # (`valid_from` on or before the run's cutoff day) still gates look-ahead
+            # correctly here: a fact only becomes eligible once it is real-world true,
+            # not once it happened to be captured.
+            valid_from=valid_from,
             valid_to=None,
             # The adapter's transaction_time — filed date, bar date, manifest
             # time — never arithmetic on the cutoff (#530 slice 3).

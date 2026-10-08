@@ -342,30 +342,6 @@
       "cwd": "."
     },
     {
-      "id": "factor-contract/an-expired-deferral-stops-deferring",
-      "guard": "tools/check_factor_contract.py",
-      "file": "tools/factor_contract.json",
-      "find": "\"exemptions_evaluated_on\": \"2026-08-20\"",
-      "replace": "\"exemptions_evaluated_on\": \"2027-01-01\"",
-      "command": [
-        "python3",
-        "tools/check_factor_contract.py"
-      ],
-      "cwd": "."
-    },
-    {
-      "id": "factor-contract/snapshot-selection-must-rank-the-source",
-      "guard": "tools/check_factor_contract.py",
-      "file": "tools/factor_contract.json",
-      "find": "\"failure_contains\": \"snapshot selection orders by recency alone\"",
-      "replace": "\"failure_contains\": \"a clause nothing produces\"",
-      "command": [
-        "python3",
-        "tools/check_factor_contract.py"
-      ],
-      "cwd": "."
-    },
-    {
       "id": "health/data-engine-vintage-is-reported",
       "guard": "libs/runtime/tests/test_health_check.py",
       "file": "apps/llm-service/src/llm_service/main.py",
@@ -717,6 +693,102 @@
         "--no-sync",
         "pytest",
         "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "cut-release/prod-promotes-only-the-owner-approved-sha",
+      "guard": "libs/runtime/tests/test_cut_release.py",
+      "file": "tools/cut_release.sh",
+      "find": "  sh \"$SCRIPT_DIR/owner_approval_gate.sh\" \"$OWNER_APPROVED_SHA\" \"$LOCAL_MAIN\" || exit 2\n",
+      "replace": "  true\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "cut-release/prod-is-refused-before-any-git-call-without-an-approval",
+      "guard": "libs/runtime/tests/test_cut_release.py",
+      "file": "tools/cut_release.sh",
+      "find": "if [ \"$PROD\" = \"1\" ] && [ -z \"$OWNER_APPROVED_SHA\" ]; then\n",
+      "replace": "if false; then\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "cut-release/prod-dispatch-carries-the-owner-approved-sha",
+      "guard": "libs/runtime/tests/test_cut_release.py",
+      "file": "tools/cut_release.sh",
+      "find": "    -f reviewed_change_url=\"https://github.com/$REPO/pull/$REVIEWED_PR\" \\\n    -f owner_approved_sha=\"$OWNER_APPROVED_SHA\" | tail -1)\n",
+      "replace": "    -f reviewed_change_url=\"https://github.com/$REPO/pull/$REVIEWED_PR\" | tail -1)\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "cut-release/the-owner-gate-compares-the-approval-with-the-release-sha",
+      "guard": "libs/runtime/tests/test_cut_release.py",
+      "file": "tools/owner_approval_gate.sh",
+      "find": "if [ \"$approved\" != \"$release\" ]; then\n",
+      "replace": "if false; then\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/prod-deploy-needs-the-owner-approved-sha",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-release.yml",
+      "find": "          if [[ \"$DEPLOY_TYPE\" != \"prod\" ]]; then\n            echo \"deploy_type=${DEPLOY_TYPE}: no owner approval is needed\"\n",
+      "replace": "          if true; then\n            echo \"deploy_type=${DEPLOY_TYPE}: no owner approval is needed\"\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "local-target/a-deployed-postgres-port-is-never-local",
+      "guard": "libs/runtime/tests/test_migration_applier.py",
+      "file": "db/local_target.sh",
+      "find": "deployed_ports=\"15432 15433\"\n",
+      "replace": "deployed_ports=\"0\"\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_migration_applier.py",
         "-q"
       ],
       "cwd": "."

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -17,12 +19,13 @@ from data_engine.datahub.a1_evidence import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.materialization import _ObservationRow
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition, ToptCoreAvailability
+from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
+from psycopg.types.json import Jsonb
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -78,7 +81,9 @@ def connection():
 def _normalized_payload(
     coordinates: tuple[str, str, str, str],
     semantic_type: str,
-) -> dict[str, str | None]:
+    *,
+    financial_vintage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     issuer_id, instrument_id, listing_id, ticker = coordinates
     identity = {
         "issuer_id": issuer_id,
@@ -95,7 +100,7 @@ def _normalized_payload(
         # (the SEC financial-fact adapter provides them), so a financial issuer now
         # takes the uniform capital-adjusted path -- gross_profit stays None for a
         # bank (it reports pre-provision profit as its industry-branch numerator).
-        return {
+        payload: dict[str, Any] = {
             **identity,
             "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
@@ -106,6 +111,9 @@ def _normalized_payload(
             "shares_outstanding": "10000000",
             "pre_provision_profit": "80000000" if financial else None,
         }
+        if financial_vintage is not None:
+            payload["vintage"] = financial_vintage
+        return payload
     raise AssertionError(f"unexpected semantic type: {semantic_type}")
 
 
@@ -134,7 +142,21 @@ def _seed_complete_production_run(
     *,
     stale_unchanged_first_observation: bool = False,
     corpus: dict | None = None,
+    valid_from_by_semantic: dict[str, datetime] | None = None,
+    valid_to_by_semantic: dict[str, datetime] | None = None,
+    cutoff: datetime = CUTOFF,
+    financial_vintage: dict[str, Any] | None = None,
+    environment: CaptureEnvironment = CaptureEnvironment.PRODUCTION,
 ):
+    """Seed one complete run in the given capture environment.
+
+    A semantic type that `valid_from_by_semantic` omits gets valid_from = cutoff - 2 days.
+    A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
+    The capture sink writes an open valid_to only.
+    A `financial_vintage` is written into every financial-fact payload as its `vintage`.
+    """
+    valid_from_by_semantic = valid_from_by_semantic or {}
+    valid_to_by_semantic = valid_to_by_semantic or {}
     corpus = corpus if corpus is not None else json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
@@ -154,8 +176,8 @@ def _seed_complete_production_run(
     )
     campaign = CaptureCampaign(
         campaign_policy_id="capture-policy:production-topt-integration-v1",
-        environment=CaptureEnvironment.PRODUCTION,
-        cutoff=CUTOFF,
+        environment=environment,
+        cutoff=cutoff,
         universe_refs=(list_version.universe,),
     )
     run = CaptureRun(
@@ -184,7 +206,7 @@ def _seed_complete_production_run(
             EvidenceNode(
                 ref=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run.run_id),
                 content_sha256=run.run_id.split(":", 1)[1],
-                stamp=BitemporalStamp(valid_from=CUTOFF.date(), transaction_time=CUTOFF, recorded_at=CUTOFF),
+                stamp=BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff),
             )
         ],
         [],
@@ -231,7 +253,9 @@ def _seed_complete_production_run(
         repository.put_binding(binding)
 
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
-        normalized_payload = _normalized_payload(coordinates[obligation.subject.id], semantic_type)
+        normalized_payload = _normalized_payload(
+            coordinates[obligation.subject.id], semantic_type, financial_vintage=financial_vintage
+        )
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": normalized_payload})
         source_record_id = f"production-topt-integration:{ordinal}"
         raw_fetch_id = connection.execute(
@@ -247,22 +271,22 @@ def _seed_complete_production_run(
                 source_record_id,
                 raw_sha256,
                 f"s3://production-topt-integration/{raw_sha256}",
-                CUTOFF - timedelta(hours=2),
-                CUTOFF - timedelta(hours=2),
+                cutoff - timedelta(hours=2),
+                cutoff - timedelta(hours=2),
             ),
         ).fetchone()[0]
         vintage = SourceVintage(
             source_request_id=request.source_request_id,
             source_record_id=source_record_id,
-            source_published_at=CUTOFF - timedelta(hours=2),
+            source_published_at=cutoff - timedelta(hours=2),
             raw_object_id=f"raw-object:{raw_sha256}",
         )
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=policy.retry)
-        attempt = ledger.start(started_at=CUTOFF - timedelta(hours=1))
+        attempt = ledger.start(started_at=cutoff - timedelta(hours=1))
         unchanged = stale_unchanged_first_observation and ordinal == 0
         attempt_result = ledger.finish(
             attempt=attempt,
-            completed_at=CUTOFF - timedelta(minutes=59),
+            completed_at=cutoff - timedelta(minutes=59),
             outcome=FetchAttemptOutcome.UNCHANGED if unchanged else FetchAttemptOutcome.SUCCESS,
             status_code=200,
             source_vintage_id=None if unchanged else vintage.source_vintage_id,
@@ -272,9 +296,9 @@ def _seed_complete_production_run(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            valid_from=CUTOFF - timedelta(days=2),
-            valid_to=CUTOFF - timedelta(days=2),
-            knowable_at=CUTOFF - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
+            valid_from=valid_from_by_semantic.get(semantic_type, cutoff - timedelta(days=2)),
+            valid_to=valid_to_by_semantic.get(semantic_type),
+            knowable_at=cutoff - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="production-topt-integration-parser:v1",
             mapping_version="production-topt-integration-map:v1",
@@ -283,7 +307,7 @@ def _seed_complete_production_run(
         terminal = ListObligationResult(
             obligation_id=obligation.obligation.obligation_id,
             terminal_state=(ObligationTerminalState.UNCHANGED if unchanged else ObligationTerminalState.SUCCESS),
-            completed_at=CUTOFF - timedelta(minutes=57),
+            completed_at=cutoff - timedelta(minutes=57),
             final_attempt_id=attempt.attempt_id,
             reason_codes=("unchanged" if unchanged else "success",),
         )
@@ -305,8 +329,8 @@ def _seed_complete_production_run(
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
-                valid_from=CUTOFF + timedelta(days=1),
-                knowable_at=CUTOFF - timedelta(minutes=30),
+                valid_from=cutoff + timedelta(days=1),
+                knowable_at=cutoff - timedelta(minutes=30),
                 source_vintage_id=vintage.source_vintage_id,
                 parser_version="production-topt-integration-parser:v1",
                 mapping_version="production-topt-integration-map:v1",
@@ -325,7 +349,7 @@ def _seed_complete_production_run(
                 tied_vintage = SourceVintage(
                     source_request_id=request.source_request_id,
                     source_record_id=f"{source_record_id}-tie-{suffix}",
-                    source_published_at=CUTOFF - timedelta(hours=2),
+                    source_published_at=cutoff - timedelta(hours=2),
                     raw_object_id=f"raw-object:{raw_sha256}",
                 )
                 repository.put_source_vintage(tied_vintage, raw_fetch_id=raw_fetch_id)
@@ -334,9 +358,8 @@ def _seed_complete_production_run(
                         semantic_type=semantic_type,
                         semantic_version=obligation.capture_requirement_id,
                         subject=obligation.subject,
-                        valid_from=CUTOFF - timedelta(days=2),
-                        valid_to=CUTOFF - timedelta(days=2),
-                        knowable_at=CUTOFF - timedelta(minutes=30),
+                        valid_from=cutoff - timedelta(days=2),
+                        knowable_at=cutoff - timedelta(minutes=30),
                         source_vintage_id=tied_vintage.source_vintage_id,
                         parser_version="production-topt-integration-parser:v1",
                         mapping_version="production-topt-integration-map:v1",
@@ -358,7 +381,7 @@ def _seed_complete_production_run(
             foreign_vintage = SourceVintage(
                 source_request_id=foreign_request.source_request_id,
                 source_record_id=f"{source_record_id}-foreign",
-                source_published_at=CUTOFF - timedelta(hours=2),
+                source_published_at=cutoff - timedelta(hours=2),
                 raw_object_id=f"raw-object:{raw_sha256}",
             )
             repository.put_source_vintage(foreign_vintage, raw_fetch_id=raw_fetch_id)
@@ -366,9 +389,8 @@ def _seed_complete_production_run(
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
-                valid_from=CUTOFF - timedelta(days=2),
-                valid_to=CUTOFF - timedelta(days=2),
-                knowable_at=CUTOFF - timedelta(minutes=10),
+                valid_from=cutoff - timedelta(days=2),
+                knowable_at=cutoff - timedelta(minutes=10),
                 source_vintage_id=foreign_vintage.source_vintage_id,
                 parser_version="production-topt-integration-parser:v1",
                 mapping_version="production-topt-integration-map:v1",
@@ -592,6 +614,221 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
         )
 
 
+# The obligations' partition_key is the universe anchor (corpus report_date, 2026-03-31).
+# CUTOFF is 2026-04-02. Each adapter writes valid_from as the date of the fact itself, so a
+# fact can lie after the anchor and still be knowable at the cutoff (#1060).
+_NO_PAYLOAD_PER_OBLIGATION = "does not expose one normalized payload per obligation"
+_FACT_OWN_DATES = {
+    "listing-identity": datetime(2026, 3, 31, tzinfo=UTC),
+    "universe-membership": datetime(2026, 3, 31, tzinfo=UTC),
+    "financial-fact": datetime(2026, 2, 14, tzinfo=UTC),
+    "market-price": datetime(2026, 4, 1, tzinfo=UTC),
+}
+
+
+def test_freeze_selects_a_fact_dated_after_the_anchor_and_before_the_cutoff(connection) -> None:
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic=_FACT_OWN_DATES
+    )
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+    selected = sorted({observation_id for member in snapshot.members for observation_id in member.observation_ids})
+    selected_dates = connection.execute(
+        """
+        select semantic_type, (valid_from at time zone 'UTC')::date
+        from staging.capture_normalized_observations
+        where observation_id = any(%s)
+        group by 1, 2 order by 1
+        """,
+        (selected,),
+    ).fetchall()
+    assert selected_dates == [
+        ("financial-fact", date(2026, 2, 14)),
+        ("listing-identity", date(2026, 3, 31)),
+        ("market-price", date(2026, 4, 1)),
+        ("universe-membership", date(2026, 3, 31)),
+    ]
+    # The meta info view judges valid time with the same rule: it must expose the 84 selected rows.
+    exposed = connection.execute(
+        """
+        select observation_id, freshness_state from mart.topt_capture_meta_info
+        where run_id = %s and observation_id is not null
+        """,
+        (run.run_id,),
+    ).fetchall()
+    assert sorted(row[0] for row in exposed) == selected
+    assert {row[1] for row in exposed} == {"fresh"}
+
+
+def test_freeze_selects_a_fact_whose_window_starts_and_ends_on_the_cutoff_date(connection) -> None:
+    window = {semantic_type: CUTOFF for semantic_type in SEMANTIC_TYPES}
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic=window, valid_to_by_semantic=window
+    )
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+
+
+@pytest.mark.parametrize("semantic_type", SEMANTIC_TYPES)
+def test_freeze_refuses_a_fact_that_starts_after_the_cutoff_date(connection, semantic_type: str) -> None:
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic={semantic_type: CUTOFF + timedelta(days=1)}
+    )
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+
+
+@pytest.mark.parametrize("semantic_type", SEMANTIC_TYPES)
+def test_freeze_refuses_a_fact_that_ended_before_the_cutoff_date(connection, semantic_type: str) -> None:
+    # valid_to is after the anchor (2026-03-31) and before the cutoff date (2026-04-02).
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, valid_to_by_semantic={semantic_type: CUTOFF - timedelta(days=1)}
+    )
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+
+
+def _exposed_by_semantic(connection, run_id: str) -> dict[str, int]:
+    """The number of obligations per semantic type for which the view exposes an observation."""
+    rows = connection.execute(
+        """
+        select regexp_replace(capture_requirement_id, ':v1$', ''), count(observation_id)
+        from mart.topt_capture_meta_info
+        where run_id = %s
+        group by 1 order by 1
+        """,
+        (run_id,),
+    ).fetchall()
+    return dict(rows)
+
+
+def test_view_exposes_no_observation_for_a_candidate_that_starts_after_the_cutoff_day(connection) -> None:
+    (_, run, *_rest) = _seed_complete_production_run(
+        connection, valid_from_by_semantic={"market-price": CUTOFF + timedelta(days=1)}
+    )
+
+    assert _exposed_by_semantic(connection, run.run_id) == {
+        "financial-fact": 21,
+        "listing-identity": 21,
+        "market-price": 0,
+        "universe-membership": 21,
+    }
+
+
+def test_view_exposes_no_observation_for_a_candidate_that_ended_before_the_cutoff_day(connection) -> None:
+    (_, run, *_rest) = _seed_complete_production_run(
+        connection, valid_to_by_semantic={"market-price": CUTOFF - timedelta(days=1)}
+    )
+
+    assert _exposed_by_semantic(connection, run.run_id) == {
+        "financial-fact": 21,
+        "listing-identity": 21,
+        "market-price": 0,
+        "universe-membership": 21,
+    }
+
+
+def test_view_exposes_the_in_window_candidate_when_out_of_window_candidates_exist(connection) -> None:
+    (capture_repository, _, _, _, terminal_observation_id, *_rest) = _seed_complete_production_run(connection)
+    base_payload, obligation_id, normalized_payload = connection.execute(
+        """
+        select observation.payload, observation.capture_obligation_id, payload.normalized_payload
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_payloads payload using (observation_id)
+        where observation.observation_id = %s
+        """,
+        (terminal_observation_id,),
+    ).fetchone()
+    # The seeder already holds one candidate that starts after the cutoff day for this
+    # obligation. This one ended before the cutoff day. Both share the terminal vintage.
+    expired = NormalizedObservation.model_validate(
+        {
+            **base_payload,
+            "observation_id": "",
+            "content_sha256": "",
+            "valid_to": CUTOFF - timedelta(days=1),
+            "knowable_at": CUTOFF - timedelta(minutes=30),
+        }
+    )
+    capture_repository.put_observation(
+        obligation_id,
+        expired,
+        normalized_payload=normalized_payload,
+        confidence=Decimal("1"),
+        freshness_state="fresh",
+    )
+    not_started = connection.execute(
+        """
+        select observation_id
+        from staging.capture_normalized_observations
+        where observation_id in (
+            select observation_id from staging.capture_observation_obligations where capture_obligation_id = %s
+        ) and valid_from = %s
+        """,
+        (obligation_id, CUTOFF + timedelta(days=1)),
+    ).fetchall()
+    assert len(not_started) == 1, "the seeder holds one candidate that starts after the cutoff day"
+
+    exposed = connection.execute(
+        "select observation_id from mart.topt_capture_meta_info where obligation_id = %s", (obligation_id,)
+    ).fetchall()
+
+    assert expired.observation_id != terminal_observation_id
+    assert exposed == [(terminal_observation_id,)]
+
+
+# A session TimeZone must not move a UTC day. psycopg renders a timestamptz in the session
+# TimeZone, and a cast to date follows it (#885). Each case sits on a UTC day boundary.
+_NON_UTC_ZONES = ("America/Los_Angeles", "Asia/Shanghai")
+
+
+@pytest.mark.parametrize("zone", _NON_UTC_ZONES)
+def test_valid_to_at_midnight_of_the_cutoff_day_stays_valid_in_any_session_time_zone(connection, zone: str) -> None:
+    cutoff = datetime(2026, 4, 2, 22, 15, tzinfo=UTC)
+    midnight = datetime(2026, 4, 2, tzinfo=UTC)
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, cutoff=cutoff, valid_to_by_semantic=dict.fromkeys(SEMANTIC_TYPES, midnight)
+    )
+    connection.execute("select set_config('TimeZone', %s, false)", (zone,))
+
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+
+    assert len(snapshot.members) == 21
+    assert _exposed_by_semantic(connection, run.run_id) == dict.fromkeys(SEMANTIC_TYPES, 21)
+
+
+@pytest.mark.parametrize("zone", _NON_UTC_ZONES)
+def test_valid_from_on_the_next_utc_day_is_refused_in_any_session_time_zone(connection, zone: str) -> None:
+    cutoff = datetime(2026, 4, 2, 23, 59, 59, tzinfo=UTC)
+    next_midnight = datetime(2026, 4, 3, tzinfo=UTC)
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, cutoff=cutoff, valid_from_by_semantic=dict.fromkeys(SEMANTIC_TYPES, next_midnight)
+    )
+    connection.execute("select set_config('TimeZone', %s, false)", (zone,))
+
+    with pytest.raises(ValueError, match=_NO_PAYLOAD_PER_OBLIGATION):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+    assert _exposed_by_semantic(connection, run.run_id) == dict.fromkeys(SEMANTIC_TYPES, 0)
+
+
 def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(connection) -> None:
     (
         _,
@@ -626,6 +863,16 @@ def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(conne
     affected = next(result for result in results if terminal_observation_id in result.input_observation_ids)
     assert affected.availability is ToptCoreAvailability.UNAVAILABLE
     assert tuple(reason.value for reason in affected.reason_codes) == ("stale_input",)
+
+    # #530: the quality report grades the same run from the same table this test just
+    # proved is stale (mart.topt_capture_meta_info); it must not fall back to the
+    # frozen capture_normalized_observations.freshness_state and call the cell fresh.
+    graded = quality_report.build_report(connection, run.run_id)
+    live_fresh_count = connection.execute(
+        "select count(*) from mart.topt_capture_meta_info where run_id = %s and freshness_state = 'fresh'",
+        (run.run_id,),
+    ).fetchone()[0]
+    assert graded["fresh_count"] == live_fresh_count
 
 
 def test_snapshot_rejects_ambiguous_mapping_for_terminal_source_vintage(connection) -> None:
@@ -684,6 +931,330 @@ def test_snapshot_rejects_unknown_run(connection) -> None:
             run_id=f"capture-run:{'0' * 64}",
             release_manifest_id=f"release-manifest:{'1' * 64}",
         )
+
+
+def _cell_row(listing_id: str, semantic_type: str, ordinal: int) -> _ObservationRow:
+    return _ObservationRow(
+        obligation_id=f"capture-list-obligation:{ordinal:064x}",
+        listing_id=listing_id,
+        semantic_type=semantic_type,
+        observation_id=f"normalized-observation:{ordinal:064x}",
+        confidence=Decimal("0.9"),
+        freshness=MetricFreshness.FRESH,
+        knowable_at=CUTOFF,
+        payload={},
+    )
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        pytest.param(SEMANTIC_TYPES[:3], id="one-cell-missing"),
+        pytest.param((*SEMANTIC_TYPES, "extra-cell"), id="one-cell-too-many"),
+        pytest.param((*SEMANTIC_TYPES[:3], "extra-cell"), id="one-cell-replaced"),
+    ],
+)
+def test_a_listing_without_the_exact_four_semantic_cells_is_refused_by_the_member_builder(
+    cells: tuple[str, ...],
+) -> None:
+    """#1061: this is the only per-listing count guard. The snapshot model and the run-wide
+    equality it replaced both run later or are weaker: neither names the missing cell."""
+    by_type = {semantic: _cell_row("listing:probe", semantic, ordinal) for ordinal, semantic in enumerate(cells)}
+
+    with pytest.raises(ValueError, match="listing:probe does not have the exact four TOPT semantic cells"):
+        PostgresToptCoreRepository._snapshot_member("listing:probe", by_type)
+
+
+def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_refused(
+    connection, monkeypatch
+) -> None:
+    """#1061: one listing holds three cells and another holds five. The row count equals the
+    obligation count. The sum `listings * 4 == obligations` holds. The removed run-wide
+    equality passed this input. The member builder refuses it, and nothing is stored."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    rows = list(repository._load_observations(run.run_id, cutoff=CUTOFF))
+    assert len(rows) == 84
+    donor, receiver = rows[0], rows[-1]
+    assert donor.listing_id != receiver.listing_id
+    moved = dataclasses.replace(donor, listing_id=receiver.listing_id, semantic_type="extra-cell")
+    unbalanced = tuple([moved, *rows[1:]])
+    assert len(unbalanced) == 84
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", lambda self, run_id, *, cutoff: unbalanced)
+
+    with pytest.raises(ValueError, match="does not have the exact four TOPT semantic cells"):
+        repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+def _insert_snapshot_row(connection, run_id: str, release_manifest_id: str, *, instruments: int, observations: int):
+    """A hand-written snapshot row. Every column except the counts satisfies the snapshot
+    trigger. So a refusal names the count rule, not an unrelated column."""
+    universe_id, universe_version, universe_sha256, cutoff = connection.execute(
+        "select universe_id, universe_version, universe_sha256, cutoff from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone()
+    payload = {"probe": run_id, "instruments": instruments}
+    digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(payload),)).fetchone()[0]
+    return connection.execute(
+        """
+        insert into staging.topt_core_snapshots (
+            snapshot_id, content_sha256, run_id, release_manifest_id, universe_id, universe_version,
+            universe_sha256, cutoff, issuer_count, instrument_count, observation_count, payload
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+        """,
+        (
+            f"topt-core-snapshot:{digest}",
+            digest,
+            run_id,
+            release_manifest_id,
+            universe_id,
+            universe_version,
+            universe_sha256,
+            cutoff,
+            instruments,
+            observations,
+            Jsonb(payload),
+        ),
+    )
+
+
+def test_the_database_refuses_a_snapshot_that_does_not_bind_four_observations_per_instrument(connection) -> None:
+    """#1061: the kept database check. The run has 84 obligations, so the snapshot trigger
+    accepts observation_count 84 and the CHECK alone refuses 20 instruments."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with pytest.raises(psycopg.errors.CheckViolation) as refused, connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=84)
+    assert refused.value.diag.constraint_name == "topt_core_snapshots_observation_count_check"
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_with_fewer_members_than_the_run_has_obligations(connection) -> None:
+    """#1061: the kept database check for the same input the removed run-wide equality
+    refused. 20 instruments with 80 observations satisfy the CHECK and miss the run's 84."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=20, observations=80)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_the_database_refuses_a_snapshot_member_that_repeats_an_observation(connection) -> None:
+    """#1061: the kept database check for the repeated-observation input. The control row
+    differs only in distinct ids, so the member trigger's other clauses all hold."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=run.run_id, release_manifest_id=release_manifest_id
+    )
+    ids = list(snapshot.members[0].observation_ids)
+
+    def insert_member(label: str, observation_ids: list[str]) -> None:
+        factor_input = {
+            "snapshot_id": snapshot.snapshot_id,
+            "instrument_id": f"security:probe:{label}",
+            "issuer_id": f"issuer:probe:{label}",
+            "listing_id": f"listing:probe:{label}",
+        }
+        digest = connection.execute("select raw.canonical_sha256(%s::jsonb)", (Jsonb(factor_input),)).fetchone()[0]
+        connection.execute(
+            """
+            insert into staging.topt_core_snapshot_members (
+                snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input
+            ) values (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                snapshot.snapshot_id,
+                factor_input["instrument_id"],
+                factor_input["issuer_id"],
+                factor_input["listing_id"],
+                observation_ids,
+                digest,
+                Jsonb(factor_input),
+            ),
+        )
+
+    with connection.transaction():
+        insert_member("distinct", ids)
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="member identity or payload drifted"),
+        connection.transaction(),
+    ):
+        insert_member("repeated", [ids[0], ids[0], ids[1], ids[2]])
+
+
+_NOT_SUCCESSFUL = ("unavailable", "skipped_by_policy", "failed", "missing")
+
+
+def _spoil_one_result(connection, run_id: str, how: str) -> None:
+    """Leave one obligation of a complete run without a successful terminal result.
+
+    Results are append-only by trigger, so the change bypasses the trigger for this
+    transaction only. The test's rollback restores everything."""
+    connection.execute("set local session_replication_role = replica")
+    result_id = connection.execute(
+        """
+        select result.result_id
+        from raw.capture_obligation_results result
+        join raw.capture_obligations obligation on obligation.obligation_id = result.capture_obligation_id
+        where obligation.run_id = %s
+        order by result.result_id limit 1
+        """,
+        (run_id,),
+    ).fetchone()[0]
+    if how == "missing":
+        connection.execute("delete from raw.capture_obligation_results where result_id = %s", (result_id,))
+    else:
+        connection.execute(
+            """
+            update raw.capture_obligation_results
+               set terminal_state = %s,
+                   final_attempt_id = case when %s = 'skipped_by_policy' then null else final_attempt_id end
+             where result_id = %s
+            """,
+            (how, how, result_id),
+        )
+    connection.execute("set local session_replication_role = origin")
+    assert connection.execute(
+        "select success_count + unchanged_count, obligation_count from mart.topt_capture_status where run_id = %s",
+        (run_id,),
+    ).fetchone() == (83, 84)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_freeze_refuses_a_run_with_one_obligation_that_did_not_succeed(connection, how: str) -> None:
+    """#1061: `success + unchanged == obligations` is the one status condition freeze keeps.
+    It leaves no room for an unavailable, skipped or failed obligation, or for a gap."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with pytest.raises(ValueError, match="core snapshot requires a completely successful run"):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id, release_manifest_id=release_manifest_id
+        )
+    assert connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run.run_id,)
+    ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("how", _NOT_SUCCESSFUL)
+def test_the_database_refuses_a_snapshot_for_a_run_with_one_obligation_that_did_not_succeed(
+    connection, how: str
+) -> None:
+    """#1061: the kept database check for the same input. The row binds 21 instruments and
+    84 observations, so only the run's own status can make the snapshot trigger refuse."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    _spoil_one_result(connection, run.run_id, how)
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+@pytest.mark.parametrize("how", (None, *_NOT_SUCCESSFUL))
+def test_the_capture_status_counts_partition_the_results_of_a_run(connection, how: str | None) -> None:
+    """#1061: freeze drops its `unavailable == 0`, `skipped == 0`, `failed == 0` and
+    `terminal == obligations` terms because the status view makes them follow from
+    `success + unchanged == obligations`. This pins the view facts that argument uses."""
+    (_, run, _, _, *_rest) = _seed_complete_production_run(connection)
+    if how is not None:
+        _spoil_one_result(connection, run.run_id, how)
+
+    (obligations, terminal, success, unchanged, unavailable, skipped, failed, complete) = connection.execute(
+        """
+        select obligation_count, terminal_count, success_count, unchanged_count,
+               unavailable_count, skipped_count, failed_count, complete
+        from mart.topt_capture_status where run_id = %s
+        """,
+        (run.run_id,),
+    ).fetchone()
+
+    assert success + unchanged + unavailable + skipped + failed == terminal
+    assert terminal <= obligations
+    assert complete is (terminal == obligations)
+
+
+def _forbid_loading_observations(monkeypatch) -> list[str]:
+    """Make any observation load fail the test. The list records the run ids that were loaded."""
+    loaded: list[str] = []
+
+    def load(self, run_id, *, cutoff):
+        loaded.append(run_id)
+        raise AssertionError("freeze loaded observations for a run that it must refuse first")
+
+    monkeypatch.setattr(PostgresToptCoreRepository, "_load_observations", load)
+    return loaded
+
+
+def _snapshot_count(connection, run_id: str) -> tuple[int]:
+    return connection.execute(
+        "select count(*) from staging.topt_core_snapshots where run_id = %s", (run_id,)
+    ).fetchone()
+
+
+def test_freeze_refuses_a_staging_run_when_the_environment_identity_is_empty(connection, monkeypatch) -> None:
+    """#1061: with an empty identity table the snapshot trigger compares with NULL and does
+    not fire. The control row at the end shows that gap. Only the freeze check refuses."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, environment=CaptureEnvironment.STAGING
+    )
+    connection.execute("delete from mart.environment_identity")
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a production run, found a staging run"):
+            PostgresToptCoreRepository(connection).freeze_snapshot(
+                run_id=run.run_id, release_manifest_id=release_manifest_id
+            )
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
+
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+
+def test_freeze_refuses_a_run_of_another_environment_when_the_identity_is_populated(connection, monkeypatch) -> None:
+    """#1061: the freeze check refuses before it loads any observation. The same run freezes
+    once the identity matches again."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+    with monkeypatch.context() as patch:
+        loaded = _forbid_loading_observations(patch)
+        with pytest.raises(ValueError, match="requires a staging run, found a production run"):
+            repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert loaded == []
+    assert _snapshot_count(connection, run.run_id) == (0,)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    assert len(repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id).members) == 21
+
+
+def test_the_database_refuses_a_snapshot_for_a_run_of_another_environment(connection) -> None:
+    """#1061: the snapshot trigger is the second guard. It refuses a hand-written row when the
+    identity is populated. The same row passes once the identity matches."""
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
+    connection.execute("update mart.environment_identity set environment = 'staging'")
+
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="matching its own obligation count"),
+        connection.transaction(),
+    ):
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
+
+    connection.execute("update mart.environment_identity set environment = 'production'")
+    with connection.transaction():
+        _insert_snapshot_row(connection, run.run_id, release_manifest_id, instruments=21, observations=84)
 
 
 class _BorrowedConnection:
@@ -829,6 +1400,9 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     explicitly below.
     """
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    connection.execute("set session_replication_role = replica")
+    connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
+    connection.execute("set session_replication_role = origin")
     _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
 
     written = seed_strategy_inputs_from_capture(
@@ -892,6 +1466,9 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
       to land at all (the 0032 CHECK, asserted red).
     """
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    connection.execute("set session_replication_role = replica")
+    connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
+    connection.execute("set session_replication_role = origin")
     _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
     seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
@@ -960,10 +1537,9 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
             )
 
 
-# The seeder pins every observation's validity to exactly this day (its
-# valid_from/valid_to are CUTOFF - 2 days), so the corpus report_date — which
-# becomes the obligations' partition_key — must be that same day or the
-# selection query's validity window filters every row (review on #634).
+# The corpus report_date becomes the obligations' partition_key. The seeder dates every
+# observation CUTOFF - 2 days, and the selection judges validity at the cutoff day, so
+# any report_date works here. This date keeps the universe id readable.
 _SYNTHETIC_REPORT_DATE = (CUTOFF - timedelta(days=2)).date().isoformat()
 
 

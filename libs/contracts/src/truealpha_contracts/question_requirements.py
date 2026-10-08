@@ -103,8 +103,18 @@ QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
         standards=(),
         tracking_issue="#284",
     ),
-    QuestionRequirement(Question.Q3_SUPPLY_CHAIN_EXPOSURE, (), (), "#772"),
-    QuestionRequirement(Question.Q4_ANALYST_TRACK_RECORD, (), (), "#771"),
+    QuestionRequirement(
+        question=Question.Q3_SUPPLY_CHAIN_EXPOSURE,
+        columns=(FactorColumn("mart.issuer_supply_chain_exposure", "exposure_score", "supply_chain_exposure", 3),),
+        standards=(),
+        tracking_issue="#772",
+    ),
+    QuestionRequirement(
+        question=Question.Q4_ANALYST_TRACK_RECORD,
+        columns=(FactorColumn("mart.issuer_analyst_ratings", "consensus_rating", "analyst_track_record", 4),),
+        standards=(),
+        tracking_issue="#771",
+    ),
     QuestionRequirement(
         question=Question.Q5_ETF_VIRTUAL_COMPANY,
         # Module 5 writes one row per (run, fund); the QQQ tick is the only one that

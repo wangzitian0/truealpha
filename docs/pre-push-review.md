@@ -44,7 +44,7 @@ another lane spent a PR fixing it (#717).
 Before merging, require that a review has been SUBMITTED for the current head,
 not merely that no thread is open. Zero threads on a PR nobody has reviewed
 looks identical to zero threads on a clean one. Mechanised as
-`python tools/merge_ready.py <pr>` — it exits non-zero until a review whose
+`python -m tools.pr_merge_gate <pr> --policy either --merge` (from infra2) — it exits non-zero until a review whose
 `commit_id` IS the current head exists. Run it INSTEAD of eyeballing
 `mergeStateStatus`; that is the check both incidents passed.
 

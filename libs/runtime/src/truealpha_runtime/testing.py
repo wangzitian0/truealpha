@@ -13,10 +13,18 @@ boundary in `truealpha_runtime.__init__`.
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
+import threading
+from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
+from typing import Any
+
+#: One SQL literal that a seed row may hold: a quoted string, a whole number, null, true or false.
+SeedValue = str | int | bool | None
 
 REQUIRE_RUNTIME_ENV = "TRUEALPHA_REQUIRE_RUNTIME"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -103,3 +111,183 @@ def apply_migration_chain(
             f"{runner} exited {completed.returncode}:\n{(completed.stdout + completed.stderr)[-8000:]}"
         )
     return completed.stdout + completed.stderr
+
+
+class OtlpCollectorStub:
+    """A localhost OTLP/HTTP receiver that records what a service really exports (#1034).
+
+    Faking the exporter proves the settings, not the wiring: a service entrypoint that never
+    calls `init_telemetry`, or calls it and exports under the wrong identity, would still pass.
+    This stub is the other end of the wire. A subprocess that imports the real entrypoint is
+    pointed at `endpoint`, does some work, flushes, and the test reads back the decoded
+    resource identity of every span, metric point and log record the stub received.
+
+    Binds `127.0.0.1` on an ephemeral port, so it never collides with an ambient collector.
+    """
+
+    SIGNALS = {"traces": "/v1/traces", "metrics": "/v1/metrics", "logs": "/v1/logs"}
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, bytes]] = []
+        stub = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - the http.server hook name
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                stub.requests.append((self.path, body))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-protobuf")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                return None
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def endpoint(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}"
+
+    def __enter__(self) -> "OtlpCollectorStub":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    def _decoded(self, signal: str) -> list[Any]:
+        from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+        from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+        messages: dict[str, Any] = {
+            "traces": ExportTraceServiceRequest,
+            "metrics": ExportMetricsServiceRequest,
+            "logs": ExportLogsServiceRequest,
+        }
+        message = messages[signal]
+        return [message.FromString(body) for path, body in self.requests if path == self.SIGNALS[signal]]
+
+    def resources(self, signal: str) -> list[dict[str, str]]:
+        """The resource attributes of every resource batch received for `signal`."""
+        batches = []
+        for request in self._decoded(signal):
+            for resource_group in getattr(request, f"resource_{'spans' if signal == 'traces' else signal}"):
+                batches.append({kv.key: kv.value.string_value for kv in resource_group.resource.attributes})
+        return batches
+
+    def span_names(self) -> list[str]:
+        return [
+            span.name
+            for request in self._decoded("traces")
+            for resource_spans in request.resource_spans
+            for scope_spans in resource_spans.scope_spans
+            for span in scope_spans.spans
+        ]
+
+    def log_bodies(self) -> list[str]:
+        return [
+            record.body.string_value
+            for request in self._decoded("logs")
+            for resource_logs in request.resource_logs
+            for scope_logs in resource_logs.scope_logs
+            for record in scope_logs.log_records
+        ]
+
+
+def run_python_probe(
+    code: str, environ: Mapping[str, str], *, timeout: float = 120
+) -> subprocess.CompletedProcess[str]:
+    """Run `code` in a fresh interpreter whose environment is exactly the ambient one without any
+    OpenTelemetry/service-identity variable, plus `environ`.
+
+    A fresh process is the only honest way to test an entrypoint that installs process-global
+    providers and a root-logger handler on import, and the scrub keeps a developer's shell (or a
+    CI job that sets `OTEL_*`) from deciding the outcome. The working directory is the repository
+    root, where the services' relative manifest paths resolve.
+    """
+    scrubbed = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("OTEL_") and name not in {"SERVICE_NAME", "SERVICE_VERSION", "ENVIRONMENT", "ENV"}
+    }
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env={**scrubbed, **environ},
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+_SEED_TOKEN = re.compile(
+    r"""\s*(?:
+        (?P<comment>--[^\n]*)
+      | (?P<string>'(?:[^']|'')*')
+      | (?P<number>-?\d+)
+      | (?P<word>null|true|false)\b
+      | (?P<punct>[(),])
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
+    """The rows one migration seeds into `table`, read from the file text without a database.
+
+    It reads the single `insert into <table> (<columns>) values (<row>), ... on conflict`
+    statement. A row holds only quoted strings, whole numbers, null, true and false. Any
+    other token raises ValueError, so a seed the reader cannot parse never reads as fewer
+    rows. Two statements for the same table raise too: a seed lives in one place.
+    """
+    text = migration.read_text(encoding="utf-8")
+    statement = re.compile(
+        rf"insert\s+into\s+{re.escape(table)}\s*\((?P<columns>[^)]*)\)\s*values(?P<body>.*?)\bon\s+conflict",
+        re.IGNORECASE | re.DOTALL,
+    )
+    found = list(statement.finditer(text))
+    if len(found) != 1:
+        raise ValueError(f"{migration.name} holds {len(found)} seed statements for {table}; expected exactly 1")
+    columns = [column.strip() for column in found[0].group("columns").split(",")]
+    body = found[0].group("body")
+    rows: list[dict[str, SeedValue]] = []
+    current: list[SeedValue] | None = None
+    position = 0
+    while position < len(body) and body[position:].strip():
+        token = _SEED_TOKEN.match(body, position)
+        if token is None:
+            raise ValueError(f"{migration.name}: cannot read the seed of {table} near {body[position:][:40]!r}")
+        position = token.end()
+        kind = token.lastgroup
+        value = token.group(kind) if kind else ""
+        if kind == "comment":
+            continue
+        if kind == "punct":
+            if value == "(" and current is None:
+                current = []
+            elif value == ")" and current is not None:
+                if len(current) != len(columns):
+                    raise ValueError(
+                        f"{migration.name}: a seed row of {table} has {len(current)} values, not {len(columns)}"
+                    )
+                rows.append(dict(zip(columns, current, strict=True)))
+                current = None
+            elif value != ",":
+                raise ValueError(f"{migration.name}: unexpected {value!r} in the seed of {table}")
+            continue
+        if current is None:
+            raise ValueError(f"{migration.name}: a value outside a row in the seed of {table}")
+        if kind == "string":
+            current.append(value[1:-1].replace("''", "'"))
+        elif kind == "number":
+            current.append(int(value))
+        else:
+            current.append(None if value.lower() == "null" else value.lower() == "true")
+    if current is not None:
+        raise ValueError(f"{migration.name}: the seed of {table} ends inside a row")
+    return rows

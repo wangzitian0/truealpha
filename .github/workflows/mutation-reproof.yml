@@ -53,6 +53,7 @@ on:
       - "apps/data-engine/src/data_engine/lanes/quality.py"
       - "apps/data-engine/src/data_engine/quality/nightly_verdicts.py"
       - "apps/data-engine/tests/test_nightly_verdicts.py"
+      - "db/local_target.sh"
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
       - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
       - "libs/contracts/src/truealpha_contracts/question_requirements.py"
@@ -66,6 +67,7 @@ on:
       - "libs/runtime/tests/test_cut_release.py"
       - "libs/runtime/tests/test_escalate_issue.py"
       - "libs/runtime/tests/test_migration_chain.py"
+      - "libs/runtime/tests/test_migration_applier.py"
       - "libs/runtime/tests/test_nightly_verdicts.py"
       - "libs/runtime/tests/test_output_invariants.py"
       - "libs/runtime/tests/test_pytest_shard.py"
@@ -76,6 +78,7 @@ on:
       - "tools/escalate_issue.py"
       - "tools/factor_contract.json"
       - "tools/mutation_reproof.py"
+      - "tools/owner_approval_gate.sh"
       - "tools/mutations.json"
       - "tools/pytest_shard.py"
       # The balance guard reads the harvest: a refreshed harvest can make the packer mutation undetectable.

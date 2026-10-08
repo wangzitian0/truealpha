@@ -1,7 +1,7 @@
 [project]
 name = "truealpha-data-engine"
 version = "0.1.0"
-description = "Ingestion: source adapters into Postgres raw schema. Phase -1: local sampling scripts; dlt + Dagster arrive in Phase 0/1."
+description = "Ingestion: source adapters into Postgres raw schema, orchestrated by Dagster. Obligation planning, source adapters, and fusion are custom (#1031); dlt was never adopted."
 requires-python = ">=3.12"
 dependencies = [
     "dagster==1.13.12",

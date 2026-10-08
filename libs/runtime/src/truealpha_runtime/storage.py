@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import contextlib
 import hashlib
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from infra2_sdk.runtime.s3 import S3Settings, create_s3_client
+from infra2_sdk.runtime.s3 import (
+    S3Settings,
+    create_s3_client,
+    is_not_found,
+    read_object_bytes,
+)
+from infra2_sdk.runtime.s3 import (
+    ensure_bucket as ensure_bucket_sdk,
+)
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 from truealpha_runtime.config import RuntimeSettings, runtime_settings
@@ -36,18 +43,17 @@ class S3RawObjectStore:
         # break local dev. addressing_style="path" stays forced (MinIO doesn't support
         # virtual-hosted-style routing) rather than left to S3Settings' env-driven
         # default of None.
-        self.client = client or create_s3_client(
-            S3Settings(
-                bucket=self.settings.s3_bucket,
-                endpoint_url=self._require_endpoint(),
-                access_key_id=self.settings.s3_access_key,
-                secret_access_key=self.settings.s3_secret_key.get_secret_value(),
-                region_name=self.settings.s3_region,
-                addressing_style="path",
-                connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-                read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-            )
+        self.s3_settings = S3Settings(
+            bucket=self.settings.s3_bucket,
+            endpoint_url=self._require_endpoint(),
+            access_key_id=self.settings.s3_access_key,
+            secret_access_key=self.settings.s3_secret_key.get_secret_value(),
+            region_name=self.settings.s3_region,
+            addressing_style="path",
+            connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
+            read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
         )
+        self.client = client or create_s3_client(self.s3_settings)
 
     def _require_endpoint(self) -> str:
         """The configured endpoint, or a named configuration error.
@@ -65,22 +71,9 @@ class S3RawObjectStore:
     def ensure_bucket(self, *, create: bool | None = None) -> None:
         allow_create = self.settings.may_create_bucket if create is None else create
         try:
-            self.client.head_bucket(Bucket=self.bucket)
-            return
-        except ClientError as exc:
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            if not allow_create or code not in {"404", "NoSuchBucket", "NotFound"}:
-                raise StorageError(f"cannot access bucket {self.bucket}") from exc
-        except BotoCoreError as exc:
-            raise StorageError(f"cannot access bucket {self.bucket}") from exc
-
-        try:
-            kwargs: dict[str, Any] = {"Bucket": self.bucket}
-            if self.settings.s3_region != "us-east-1":
-                kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self.settings.s3_region}
-            self.client.create_bucket(**kwargs)
-        except (BotoCoreError, ClientError) as exc:
-            raise StorageError(f"cannot create bucket {self.bucket}") from exc
+            ensure_bucket_sdk(self.s3_settings, client=self.client, allow_create=allow_create)
+        except Exception as exc:
+            raise StorageError(f"cannot access or create bucket {self.bucket}: {exc}") from exc
 
     def store(self, capture: RawCapture) -> RawIngestionEnvelope:
         digest = hashlib.sha256(capture.body).hexdigest()
@@ -94,20 +87,19 @@ class S3RawObjectStore:
         )
         self.ensure_bucket()
 
-        exists = False
+        existing_length: int | None = None
         try:
             existing = self.client.head_object(Bucket=self.bucket, Key=key)
-            exists = True
-            if int(existing.get("ContentLength", -1)) != len(capture.body):
-                raise StorageError(f"content-address collision for {key}")
-        except ClientError as exc:
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            if code not in {"404", "NoSuchKey", "NotFound"}:
+            existing_length = int(existing.get("ContentLength", -1))
+        except Exception as exc:
+            if not is_not_found(exc):
                 raise StorageError(f"cannot inspect {key}") from exc
-        except BotoCoreError as exc:
-            raise StorageError(f"cannot inspect {key}") from exc
 
-        if not exists:
+        # Compare outside the try scope: the broad except must not replace this message.
+        if existing_length is not None and existing_length != len(capture.body):
+            raise StorageError(f"content-address collision for {key}")
+
+        if existing_length is None:
             try:
                 self.client.put_object(
                     Bucket=self.bucket,
@@ -135,11 +127,9 @@ class S3RawObjectStore:
         if ref.bucket != self.bucket:
             raise StorageError(f"object belongs to unexpected bucket {ref.bucket}")
         try:
-            response = self.client.get_object(Bucket=ref.bucket, Key=ref.key)
-            with contextlib.closing(response["Body"]) as body:
-                content = body.read()
-        except (BotoCoreError, ClientError) as exc:
-            raise StorageError(f"cannot read {ref.key}") from exc
+            content = read_object_bytes(self.client, bucket=ref.bucket, key=ref.key)
+        except Exception as exc:
+            raise StorageError(f"cannot read {ref.key}: {exc}") from exc
         if hashlib.sha256(content).hexdigest() != ref.sha256:
             raise StorageError(f"checksum mismatch for {ref.key}")
         return content

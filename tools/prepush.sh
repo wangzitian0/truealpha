@@ -120,7 +120,8 @@ for path in "${CHANGED[@]}"; do
     apps/data-engine/*|apps/app-web/*)
       SKIPPED+=("$path -> ${path%%/tests/*} suite (CI tier: data-engine ~168 s sharded, web walk needs a browser)")
       continue ;;
-    libs/*/tests/*|apps/llm-service/tests/*) target="$path" ;;
+    libs/*/tests/fixtures/*) ;;
+    libs/*/tests/*.py|apps/llm-service/tests/*.py) target="$path" ;;
     tools/*.py|tools/*.sh|tools/*.json)
       base=$(basename "$path"); base="${base%.*}"
       [ -f "libs/runtime/tests/test_${base}.py" ] && target="libs/runtime/tests/test_${base}.py" ;;

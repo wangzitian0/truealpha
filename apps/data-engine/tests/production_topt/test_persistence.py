@@ -194,7 +194,15 @@ def _routes(
     outage: _PrimaryOutage | None = None,
 ) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
-    cutoff_date = CUTOFF.date()
+    # The settled session (#530 item 1): production's build_route uses
+    # context.price_cutoff_date here, "the last SETTLED session, not the calendar date"
+    # (market_price_adapter.py) -- CUTOFF is when the tick RUNS, not the session it
+    # captures for. They used to be interchangeable because valid_from ignored both;
+    # now that valid_from is the fact's own date, a fake quote dated CUTOFF (one day
+    # after the obligation's actual partition, plan.timeline.partition_start) would
+    # correctly be graded ineligible for this run's partition -- test the same
+    # settled-session semantics production uses instead of the run's own clock.
+    cutoff_date = plan.timeline.partition_start.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
@@ -1042,6 +1050,63 @@ def test_sink_refuses_a_ledger_that_contradicts_the_served_value(connection) -> 
     ).fetchone() == (0,)
 
 
+def test_observation_valid_from_is_the_adapters_real_date_not_the_partition_anchor(connection) -> None:
+    """#530 item 1: a fact's valid_from is its own real date, not the capturing tick's
+    partition anchor -- otherwise a fact is only eligible starting from whenever it
+    happened to be captured rather than from when it became real-world true (the defect
+    the 2010 Visa share count exposed: captured in 2026, it should have been eligible
+    for any replay since 2010, not only from its capture tick's own partition onward)."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-item1-valid-from")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
+    )
+    work_item = next(
+        item
+        for item in plan.work_items
+        if plan.bindings[item.work_item_id].obligation.capture_requirement_id == "financial-fact:v1"
+    )
+    obligation_id = plan.bindings[work_item.work_item_id].obligation.obligation_id
+    filed_long_before_the_capture = date(2026, 1, 15)
+    payload = {"revenue": "100000000"}
+    success = FetchSuccess(
+        raw=RawResponse(body=b"{}", source=DataSource.SEC, record_id="sec:filed-2026-01-15"),
+        normalized_sha256=canonical_sha256(payload),
+        confidence=Decimal("0.9"),
+        valid_from=filed_long_before_the_capture,
+        transaction_time=datetime(2026, 1, 15, tzinfo=UTC),
+        record=NormalizedRecord(
+            payload=payload, parser_version="sec-financial-adapter-parser:v1", mapping_version="sec-map:v1"
+        ),
+    )
+    sink.record_outcome(
+        work_item, attempt_reasons=(None,), terminal_state=ObligationTerminalState.SUCCESS, success=success
+    )
+    stored = connection.execute(
+        """
+        select o.valid_from
+        from staging.capture_observation_obligations oo
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where oo.capture_obligation_id = %s
+        """,
+        (obligation_id,),
+    ).fetchone()
+    assert stored is not None
+    # The column round-trips as an aware datetime at midnight UTC (timestamptz); a bare
+    # `date` never compares equal to a `datetime` in Python even for the same day, so
+    # normalize before asserting -- an unnormalized comparison here would stay red
+    # forever regardless of the fix, not just before it.
+    stored_valid_from = stored[0].date() if isinstance(stored[0], datetime) else stored[0]
+    partition_start = plan.timeline.partition_start
+    partition_start_date = partition_start.date() if isinstance(partition_start, datetime) else partition_start
+    assert stored_valid_from == filed_long_before_the_capture
+    assert stored_valid_from != partition_start_date
+
+
 def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-attempts")
     sink = PostgresCaptureControlSink(
@@ -1458,6 +1523,75 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     assert recency_only != governed_run_id, "the red case: recency alone would serve an unresolved run"
 
 
+def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silent_one(connection) -> None:
+    """#575/#1028: `run_production_topt_capture.py` used to advance `mart.current_pointer`
+    via `register_run_evidence` without ever running the strategy bridge — the scheduled
+    tick's `seed_strategy_inputs_from_capture` -> `run_strategy_replay_for_cutoff`, which
+    binds a strategy run to the capture (#877). `mart.governed_strategy_run` inner-joins
+    from the head to that binding, so an unbound head made the view resolve to nothing;
+    readers fell back to "newest by executed_at" (the sibling test above), and the nightly
+    `report_surface_proof` check found the view empty and reported it, red, on both
+    2026-09-23 and 2026-09-24 in staging.
+
+    Reproduces the pre-fix shape directly: capture + pointer-advance with NO strategy
+    bridge in between (what the script used to do) must leave `mart.governed_strategy_run`
+    resolving nothing for that head — the same "empty view" surface_proof.py detects.
+    Reverse-verified: deleting the strategy-bridge lines the fixed script now runs turns
+    this from a documented gap into a caught one — this test is what would have caught it."""
+    plan = _capture(connection, version="test-unbound-strategy-gap")
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+
+    env = connection.execute("select environment from mart.environment_identity").fetchone()[0]
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, %s, %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            env,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+
+    # No seed_strategy_inputs_from_capture, no run_strategy_replay_for_cutoff — the
+    # pre-#575-fix manual script's exact sequence. The view must show this, not hide it.
+    resolved = connection.execute(
+        "select strategy_run_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)
+    ).fetchall()
+    assert resolved == [], (
+        f"expected the unbound head to resolve nothing (the gap #575/#1028 describe), got {resolved} — "
+        "either a strategy run bound itself to this capture with no seed/replay call, or the view's "
+        "join changed shape; either way this test's premise needs re-checking before trusting it"
+    )
+
+    # Now run exactly what the fixed script runs, in order, before its own
+    # register_run_evidence call — not re-implemented, the same three functions — and the
+    # gap must close for this same head.
+    from data_engine.datahub.strategy_bridge import (
+        persist_strategy_input_coverage,
+        run_strategy_replay_for_cutoff,
+        seed_strategy_inputs_from_capture,
+    )
+
+    seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
+    persist_strategy_input_coverage(connection, plan.run_id, cutoff=CUTOFF)
+    bound_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
+    )
+    resolved_after = connection.execute(
+        "select strategy_run_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)
+    ).fetchall()
+    assert resolved_after == [(bound_run_id,)]
+
+
 def test_the_run_plan_records_which_data_engine_build_produced_it(connection, monkeypatch) -> None:
     """#712: the compose injects GIT_COMMIT_SHA and TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST into
     every data-engine process; the run plan now carries them and
@@ -1651,7 +1785,10 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
     assert (final_outcome, final_reasons) == ("success", ["transient_network"])
     assert attempt_outcomes == ["transport_error", "transport_error", "success"]
     assert vintage_id is not None and under_planned_request is True
-    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{CUTOFF.date().isoformat()}", "twelvedata")
+    # The failover's own record id is stamped with the settled session it served
+    # (quote.as_of), not the tick's run clock -- see _routes' cutoff_date (#530 item 1).
+    settled_session = plan.timeline.partition_start.date()
+    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{settled_session.isoformat()}", "twelvedata")
     # Every other price cell is the primary's, with an untouched ledger.
     others = connection.execute(
         """
@@ -1852,6 +1989,72 @@ def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violat
         (plan.run_id,),
     ).fetchall()
     assert len(stripped) == 1
+    assert run() == 1
+    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+
+
+def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, capsys) -> None:
+    """#1061: the nightly invariant judges priority against recency. Its third clause needs
+    its own red case. Twelve Data (rank 1) serves a failover cell. Relabel the corroborating
+    observation of the same session as the primary family (rank 0). Now a higher-ranked
+    origin asserted the cell, and the snapshot passed it over. The payload still declares
+    the substitution, and the origin is still ranked. So only the passed-over clause can
+    turn the invariant red."""
+    tool = _output_invariants_tool()
+    fusion = next(
+        invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
+    )
+    plan = _capture(connection, version="test-1061-passed-over", corroborate=True, outage=_PrimaryOutage())
+    victim_listing, _ticker = _victim(plan)
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
+    )
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    run = lambda: tool.check(  # noqa: E731
+        "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
+    )
+    assert run() == 0
+    capsys.readouterr()
+    victim_listing_id = plan.coordinates[victim_listing][2]
+    selected_id = next(m for m in snapshot.members if m.listing_id == victim_listing_id).market_price.input_id
+    # Observations are append-only by trigger; the red case bypasses it for this transaction.
+    connection.execute("set local session_replication_role = replica")
+    relabelled = connection.execute(
+        """
+        update staging.capture_normalized_observations peer
+           set parser_version = %s || ':v1',
+               knowable_at = selected.knowable_at
+          from staging.capture_normalized_observations selected
+         where selected.observation_id = %s
+           and peer.observation_id <> selected.observation_id
+           and peer.semantic_type = 'market-price'
+           and peer.observation_id in (
+               select oo.observation_id
+               from staging.capture_observation_obligations oo
+               join staging.capture_observation_obligations chosen
+                 on chosen.capture_obligation_id = oo.capture_obligation_id
+               where chosen.observation_id = selected.observation_id
+           )
+        returning peer.observation_id
+        """,
+        (tool.PRIMARY_MARKET_PRICE_PARSER, selected_id),
+    ).fetchall()
+    assert len(relabelled) >= 1
     assert run() == 1
     assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
 

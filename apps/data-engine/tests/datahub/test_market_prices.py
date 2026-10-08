@@ -10,7 +10,9 @@ know about this date before the value changed."
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.parse
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -18,7 +20,9 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
+    DEFAULT_TOPT_SYMBOLS,
     PriceBarRecord,
+    TwelveDataClient,
     insert_market_prices_daily,
     insert_market_prices_monthly,
     last_xnys_session_of_month,
@@ -27,6 +31,8 @@ from data_engine.datahub.market_prices import (
     xnys_early_close_days,
     xnys_session_close_utc,
 )
+from data_engine.datahub.production_topt.twelve_data_origin import TwelveDataQuoteFetcher
+from data_engine.sources import gateway
 
 
 @pytest.fixture
@@ -461,3 +467,36 @@ def test_xnys_regular_day_close_remains_16_et() -> None:
     local_close = close_instant.astimezone(et_tz)
     assert local_close.hour == 16
     assert local_close.minute == 0
+
+
+@pytest.mark.parametrize("symbol", DEFAULT_TOPT_SYMBOLS)
+def test_both_twelve_data_paths_send_the_same_vendor_symbol(symbol: str, monkeypatch) -> None:
+    """#1060: the market data refresh and the TOPT capture ask Twelve Data for one symbol.
+
+    The TOPT capture sends the canonical ticker as is, and it is the proven path for
+    `BRK.B`. The refresh must send the same text. A second spelling is a second mapping.
+    """
+    refresh_urls: list[str] = []
+
+    def refresh_transport(url: str) -> tuple[int, bytes]:
+        refresh_urls.append(url)
+        return 200, json.dumps({"values": []}).encode()
+
+    TwelveDataClient(api_key="test", transport_fn=refresh_transport).fetch_time_series(symbol, interval="1day")
+
+    capture_urls: list[str] = []
+
+    def capture_urlopen(source: str, endpoint: str, request: str, **_kwargs) -> tuple[int, bytes]:
+        capture_urls.append(request)
+        return 400, b'{"code": 400, "message": "No data is available on the specified dates.", "status": "error"}'
+
+    monkeypatch.setattr(gateway, "urlopen", capture_urlopen)
+    TwelveDataQuoteFetcher("test", throttle_seconds=0)(symbol, date(2026, 10, 5))
+
+    def symbol_of(url: str) -> str:
+        return dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))["symbol"]
+
+    assert len(refresh_urls) == 1
+    assert capture_urls, "the TOPT capture made no request"
+    assert {symbol_of(url) for url in capture_urls} == {symbol}
+    assert symbol_of(refresh_urls[0]) == symbol

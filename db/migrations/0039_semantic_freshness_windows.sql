@@ -117,9 +117,10 @@ begin
 end
 $$;
 
--- This is the last migration that defines this view, so it owns the shape: the
--- replacement (ACCESS EXCLUSIVE on the view) runs only when the stored definition
--- differs from this one, compared through an identical temporary view.
+-- Superseded: 20261006T0847_datahub_capture_meta_info_valid_time_at_cutoff.sql redefines
+-- this view later in the chain and owns its shape. Replacing the view here on every boot
+-- would take ACCESS EXCLUSIVE on it only to have that file replace it back. This definition
+-- is applied only while the view does not exist.
 do $$
 declare
     wanted constant text := $view$
@@ -198,13 +199,8 @@ left join lateral (
 ) observation on true
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.topt_capture_meta_info') is null
-       or pg_get_viewdef(to_regclass('mart.topt_capture_meta_info'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
-        execute 'create or replace view mart.topt_capture_meta_info as ' || wanted;
+    if to_regclass('mart.topt_capture_meta_info') is null then
+        execute 'create view mart.topt_capture_meta_info as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;

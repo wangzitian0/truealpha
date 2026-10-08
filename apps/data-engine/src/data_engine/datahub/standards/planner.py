@@ -16,12 +16,11 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
-from data_engine.datahub.production_topt.universe_corpus import load_corpus
+from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 
 TOPT_UNIVERSE = "topt"
-TOPT_CORPUS_FILENAME = "corpus.v1.json"
 
 OpenReason = Literal["no_fact", "seed_only", "stale"]
 

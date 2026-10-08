@@ -28,7 +28,21 @@
 #
 # Usage:
 #   tools/cut_release.sh vX.Y.Z --message "one-line summary" \
-#     [--prs "663,665"] [--prod] [--dry-run] [--resume] [--redeploy] [--auto]
+#     [--prs "663,665"] [--prod --owner-approved-sha <40-character SHA>] [--dry-run] \
+#     [--resume] [--redeploy] [--auto]
+#
+# --prod promotes to production, and only a production deployment needs the owner
+#   (owner instruction 2026-10-06; AGENTS.md rule 4: the owner approves the exact
+#   head SHA and is present). So --prod REQUIRES --owner-approved-sha <sha>: the full
+#   40-character SHA of the commit being promoted, which the owner approved. The script
+#   refuses (exit 2) when the flag is missing, malformed, or not equal to main HEAD, and
+#   it refuses before it claims a tag number or dispatches anything — --dry-run
+#   included, so a dry run is also the check that an approval matches. The flag is
+#   refused without --prod. deploy-release.yml checks the same value again (input
+#   `owner_approved_sha`), and tools/owner_approval_gate.sh is the one implementation
+#   both run. The value proves the caller named the exact commit; it cannot prove who
+#   typed it. The owner's presence stays a human fact: an agent passes the SHA only
+#   after the owner approved that SHA.
 #
 # --auto marks the tag as machine-cut (`auto-release-staging.yml`, #860): it
 #   appends `Release-Trigger: auto-staging` to the tag annotation, which is the
@@ -75,8 +89,9 @@
 # Promotion policy (#819) — deploy-freshness.yml and tools/deploy_freshness.py
 # bound the same policy, so the three files must agree:
 #   - every tag soaks staging: the staging deploy below is unconditional;
-#   - prod moves only with --prod: the owner promotes deliberately, so prod
-#     lags staging by design and several tags can soak before one is promoted;
+#   - prod moves only with --prod and --owner-approved-sha: the owner approves the
+#     exact SHA and is present, so prod lags staging by design and several tags can
+#     soak before one is promoted;
 #   - the daily freshness check bounds that lag at staging 3 days and
 #     production 14 days. Past the bound the leg is red and files an issue
 #     (#680); the answer is a --prod run, not a wider bound.
@@ -86,9 +101,10 @@ REPO="wangzitian0/truealpha"
 STAGING_URL="https://truealpha-staging.truealpha.club"
 PROD_URL="https://truealpha.club"
 
-TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod] [--dry-run] [--resume] [--redeploy] [--auto]}"
+TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod --owner-approved-sha <sha>] [--dry-run] [--resume] [--redeploy] [--auto]}"
 shift
-PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0 AUTO=0
+PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0 AUTO=0 OWNER_APPROVED_SHA=""
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # Set once THIS run pushes a brand-new tag (not a --resume of one already on
 # origin) — see abandon_fresh_tag_on_origin below.
 FRESHLY_TAGGED=0
@@ -101,6 +117,9 @@ while [ $# -gt 0 ]; do
     --resume) RESUME=1; shift ;;
     --redeploy) REDEPLOY=1; shift ;;
     --auto) AUTO=1; shift ;;
+    --owner-approved-sha)
+      [ $# -ge 2 ] || { echo "cut_release: --owner-approved-sha needs a value" >&2; exit 2; }
+      OWNER_APPROVED_SHA="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -113,6 +132,18 @@ done
 # string) — so a bug that DID add it here still cannot promote production.
 if [ "$AUTO" = "1" ] && [ "$PROD" = "1" ]; then
   echo "cut_release: --auto and --prod cannot be combined — automatic releases are staging-only (owner decision 2026-09-17, #860)" >&2
+  exit 2
+fi
+# Production needs the owner's approval of the exact SHA (owner instruction 2026-10-06,
+# #1056). Presence is checked here, before any git or gh call, so a --prod with no
+# approval cannot claim a tag number or start a staging deploy. Whether the SHA equals
+# the commit being promoted is checked once main HEAD is known (step 2 below).
+if [ "$PROD" = "1" ] && [ -z "$OWNER_APPROVED_SHA" ]; then
+  echo "cut_release: --prod needs the owner's approval of the exact release SHA — pass --owner-approved-sha <40-character SHA> after the owner approved that SHA (docs/release-protocol.md)" >&2
+  exit 2
+fi
+if [ "$PROD" != "1" ] && [ -n "$OWNER_APPROVED_SHA" ]; then
+  echo "cut_release: --owner-approved-sha applies only with --prod — an approval with nothing to promote is a mistake" >&2
   exit 2
 fi
 # deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
@@ -322,6 +353,13 @@ if [ "$LOCAL_MAIN" != "$REMOTE_MAIN" ]; then
   note "main fast-forwarded to ${LOCAL_MAIN:0:8}"
 fi
 note "main is current at ${LOCAL_MAIN:0:8}"
+# The owner approved ONE commit. Promote that commit or nothing: the approval must equal
+# main HEAD, which is the commit the tag and the prod deploy both name. This is still
+# before the tag push (the lock), so a mismatch claims no number.
+if [ "$PROD" = "1" ]; then
+  sh "$SCRIPT_DIR/owner_approval_gate.sh" "$OWNER_APPROVED_SHA" "$LOCAL_MAIN" || exit 2
+  note "owner approval covers main HEAD ${LOCAL_MAIN:0:8}"
+fi
 
 # 2b. --resume/--redeploy's existing tag must point at local main, or it is a
 #     genuine collision — the tag push is the lock and this is the one check
@@ -357,17 +395,29 @@ if [ -z "$PRS" ]; then
   [ -n "$BASE_TAG" ] \
     || fail "no prior vX.Y.Z release tag is reachable from main to derive --prs from — pass --prs explicitly for a first release"
   echo "== deriving --prs: every merge on main since $BASE_TAG =="
-  SUBJECTS=$(git log "${BASE_TAG}..${LOCAL_MAIN}" --format=%s --reverse)
-  [ -n "$SUBJECTS" ] || fail "no commits between $BASE_TAG and main HEAD ${LOCAL_MAIN:0:8} — nothing to release"
+  COMMITS=$(git log "${BASE_TAG}..${LOCAL_MAIN}" --format='%H %s' --reverse)
+  [ -n "$COMMITS" ] || fail "no commits between $BASE_TAG and main HEAD ${LOCAL_MAIN:0:8} — nothing to release"
   DERIVED_PRS=()
-  while IFS= read -r SUBJECT; do
-    if [[ "$SUBJECT" =~ \(#([0-9]+)\)$ ]]; then
-      DERIVED_PRS+=("${BASH_REMATCH[1]}")
-      note "#${BASH_REMATCH[1]}: $SUBJECT"
-    else
-      fail "commit '$SUBJECT' since $BASE_TAG has no trailing (#N) — not a squash-merge this script can attribute to a PR; pass --prs explicitly to describe this release"
+  while IFS= read -r LINE; do
+    SHA="${LINE%% *}"
+    SUBJECT="${LINE#* }"
+    # #1022: a commit subject's trailing (#N) is not reliable — it is whatever
+    # text landed in the squash-merge box, and that can be the PR title's own
+    # issue reference (e.g. a title ending "(#1001)") instead of GitHub's
+    # auto-appended PR number when the merge box was hand-edited. Resolve the
+    # PR from the commit SHA itself via the API, the same authoritative source
+    # used to catch this: a subject is text a human typed, an SHA->PR lookup
+    # is not.
+    PR_JSON=$(gh api "repos/$REPO/commits/$SHA/pulls" 2>/dev/null) \
+      || fail "could not resolve the PR for commit ${SHA:0:8} ('$SUBJECT') via the GitHub API — pass --prs explicitly to describe this release"
+    PR_COUNT=$(echo "$PR_JSON" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+    if [ "$PR_COUNT" != "1" ]; then
+      fail "commit ${SHA:0:8} ('$SUBJECT') resolves to $PR_COUNT PR(s), not exactly 1 — not a squash-merge this script can attribute to a PR; pass --prs explicitly to describe this release"
     fi
-  done <<<"$SUBJECTS"
+    PR_NUM=$(echo "$PR_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["number"])')
+    DERIVED_PRS+=("$PR_NUM")
+    note "#${PR_NUM}: $SUBJECT"
+  done <<<"$COMMITS"
   PRS=$(IFS=,; echo "${DERIVED_PRS[*]}")
   note "derived --prs $PRS (${#DERIVED_PRS[@]} PR(s) since $BASE_TAG)"
 else
@@ -610,11 +660,13 @@ if [ "$PROD" = "1" ]; then
   echo "== prod =="
   PROD_RUN=$(deploy prod \
     -f staging_run_url="https://github.com/$REPO/actions/runs/$STAGING_RUN" \
-    -f reviewed_change_url="https://github.com/$REPO/pull/$REVIEWED_PR" | tail -1)
+    -f reviewed_change_url="https://github.com/$REPO/pull/$REVIEWED_PR" \
+    -f owner_approved_sha="$OWNER_APPROVED_SHA" | tail -1)
   probe "$PROD_URL"
   note "prod run $PROD_RUN"
 else
-  echo "staging verified (deploy green AND surface walk green); promote with:"
-  echo "  tools/cut_release.sh $TAG --prs \"$PRS\" --message \"...\" --prod  # staging_run=$STAGING_RUN"
+  echo "staging verified (deploy green AND surface walk green)."
+  echo "production needs the owner's approval of release SHA $LOCAL_MAIN. After the owner approves that exact SHA, promote with:"
+  echo "  tools/cut_release.sh $TAG --prs \"$PRS\" --message \"...\" --prod --owner-approved-sha <the SHA the owner approved>  # staging_run=$STAGING_RUN"
 fi
 echo "== done =="

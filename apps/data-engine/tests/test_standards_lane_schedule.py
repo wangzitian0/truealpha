@@ -8,9 +8,11 @@ the backfill lands, and coverage counts the purity column."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import dagster as dg
+import pytest
 from data_engine.lanes.standards import (
     STANDARD_BACKFILL_UNIVERSES,
     standard_backfill_pipeline_job,
@@ -18,14 +20,17 @@ from data_engine.lanes.standards import (
 )
 
 
-def test_the_job_chains_backfill_then_purity_then_coverage() -> None:
+def test_the_job_chains_all_modules_to_coverage() -> None:
     """Each op consumes the one before it, so the chain is enforced by the dependency rather
-    than by ordering luck: purity would classify an empty plane if it ran first, and coverage
-    would count a column that had not been written yet."""
+    than by ordering luck: backfill -> theme purity -> supply chain -> analyst ratings -> coverage
+    -> the terminal op that fails the run when a lane failed (#771)."""
     assert [node.name for node in standard_backfill_pipeline_job.graph.node_defs] == [
         "run_standard_backfill",
         "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
         "run_question_coverage",
+        "fail_if_a_lane_failed",
     ]
 
 
@@ -37,7 +42,13 @@ def test_every_run_request_configures_every_op_for_its_universe() -> None:
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"run_standard_backfill", "run_theme_purity", "run_question_coverage"}
+        assert set(ops) == {
+            "run_standard_backfill",
+            "run_theme_purity",
+            "run_supply_chain_exposure",
+            "run_analyst_ratings",
+            "run_question_coverage",
+        }
         for op in ops.values():
             assert op["config"]["universe"] == universe
             assert op["config"]["executed_at"] == "2026-09-13T09:07:00+00:00"
@@ -209,7 +220,10 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
     assert [node.name for node in head_reports_pipeline_job.graph.node_defs] == [
         "head_reports_start",
         "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
         "run_question_coverage",
+        "fail_if_a_lane_failed",
     ]
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 16, 23, 30, tzinfo=UTC))
     requests = list(head_reports_schedule.evaluate_tick(context).run_requests)
@@ -218,7 +232,13 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"head_reports_start", "run_theme_purity", "run_question_coverage"}
+        assert set(ops) == {
+            "head_reports_start",
+            "run_theme_purity",
+            "run_supply_chain_exposure",
+            "run_analyst_ratings",
+            "run_question_coverage",
+        }
         assert all(op["config"]["universe"] == universe for op in ops.values())
     assert dg.validate_run_config(head_reports_pipeline_job, requests[0].run_config)
 
@@ -250,6 +270,22 @@ class _Connection:
 
     def commit(self) -> None:
         return None
+
+    def rollback(self) -> None:
+        return None
+
+    def execute(self, *_a, **_k):
+        class _Result:
+            def fetchall(self):
+                return []
+
+            def fetchone(self):
+                return None
+
+        return _Result()
+
+    def cursor(self):
+        return self
 
 
 def _pointer(monkeypatch, *, heads: dict[str, str | None], stored: dict[str, str | None]) -> None:
@@ -307,7 +343,13 @@ def test_a_pointer_advance_launches_exactly_one_head_reports_run_for_that_univer
         "dagster/sensor_name": "head_reports_on_pointer_advance",
     }
     ops = request.run_config["ops"]
-    assert set(ops) == {"head_reports_start", "run_theme_purity", "run_question_coverage"}
+    assert set(ops) == {
+        "head_reports_start",
+        "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
+        "run_question_coverage",
+    }
     assert all(op["config"]["universe"] == "topt" for op in ops.values())
     assert ops["head_reports_start"]["config"]["only_if_stale"] is False, "an advance always recomputes"
     assert dg.validate_run_config(head_reports_pipeline_job, request.run_config)
@@ -367,12 +409,25 @@ def test_the_sensor_is_deployed_running_against_the_head_reports_job() -> None:
 def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list, list]:
     """Execute the fallback schedule's request for TOPT through the deployed job, with the head
     on TOPT_NEW and the newest stored report naming `stored`."""
-    from data_engine.datahub import question_coverage
+    from data_engine.datahub import analyst_ratings, question_coverage
     from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts
+    from data_engine.sources import moomoo as moomoo_source
 
     _pointer(monkeypatch, heads={"topt": TOPT_NEW}, stored={TOPT_ID: stored})
+    # A machine with OpenD configured must not reach a real connection from this test. The fake
+    # counts the opens: a head whose reports are current opens none, and neither does a universe
+    # with nothing to fetch.
+    opened: list[int] = []
+
+    @contextmanager
+    def fake_opend():
+        opened.append(1)
+        yield object()
+
+    monkeypatch.setattr(moomoo_source, "connect", fake_opend)
     purity_calls: list = []
     compiled: list = []
     persisted: list = []
@@ -380,7 +435,18 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     monkeypatch.setattr(
         theme_purity, "materialize_theme_purity", lambda _c, **kwargs: purity_calls.append(kwargs) or ()
     )
+    monkeypatch.setattr(planner, "universe_issuers", lambda *_a, **_k: [])
     monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        supply_chain_extraction,
+        "materialize_universe_supply_chain_exposure",
+        lambda _c, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        analyst_ratings,
+        "materialize_universe_analyst_ratings",
+        lambda _c, **kwargs: analyst_ratings.UniverseCapture(rows=0),
+    )
     report = {"universe_id": TOPT_ID, "denominator": 20, "questions": {}}
     monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **kwargs: compiled.append(kwargs) or report)
     monkeypatch.setattr(question_coverage, "persist", lambda _c, r: persisted.append(r) or "question-coverage-report:x")
@@ -398,7 +464,44 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     assert request.run_config["ops"]["head_reports_start"]["config"]["only_if_stale"] is True
     result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config)
     assert result.success
+    assert opened == [], "this universe has nothing to fetch, so OpenD never opens"
     return purity_calls, compiled, persisted, written
+
+
+@pytest.mark.parametrize(
+    ("red", "stored", "current"),
+    [
+        ((), TOPT_NEW, True),
+        (("question_coverage@topt",), TOPT_NEW, False),
+        (("theme_purity@topt",), TOPT_NEW, False),
+        (("question_coverage@topt", "theme_purity@topt"), TOPT_NEW, False),
+        (("question_coverage@qqq-not-this-universe",), TOPT_NEW, True),
+        ((), TOPT_OLD, False),
+        ((), None, False),
+    ],
+    ids=["none-red", "coverage-red", "purity-red", "both-red", "other-universe-red", "stale-report", "no-report"],
+)
+def test_a_stored_report_makes_a_head_current_unless_a_report_verdict_is_red(monkeypatch, red, stored, current) -> None:
+    """The fallback's start op: a head is current when its report is stored and neither
+    `question_coverage@<universe>` nor `theme_purity@<universe>` has a red newest row."""
+    import json
+
+    from data_engine.lanes import standards
+
+    _pointer(monkeypatch, heads={"topt": TOPT_NEW}, stored={TOPT_ID: stored})
+    asked: list[str] = []
+    monkeypatch.setattr(standards, "newest_is_red", lambda name: asked.append(name) or name in red)
+    config = standards.HeadReportsStartConfig(
+        executed_at="2026-10-07T04:00:00+00:00", universe="topt", only_if_stale=True
+    )
+
+    summary = json.loads(standards.head_reports_start(dg.build_op_context(), config))
+
+    assert (standards.REPORTS_CURRENT in summary) is current
+    if stored == TOPT_NEW:
+        assert sorted(asked) == ["question_coverage@topt", "theme_purity@topt"]
+    else:
+        assert asked == [], "no stored report for the head: nothing to ask"
 
 
 def test_the_fallback_recomputes_nothing_when_the_heads_reports_are_current(monkeypatch) -> None:

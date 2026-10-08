@@ -16,7 +16,7 @@ Provides:
   from source properties, and the append-only trigger rejects any in-place UPDATE.
 
 This is the narrow TOPT-backtest OHLCV feed, not the general KG-identity-keyed price
-path (`staging.market_prices` / `staging.mvp_market_prices`, #0004/#0021). A future
+path (the sealed `staging.market_prices`, #0004/#0021). A future
 `BacktestDataGateway.price_bars()` reader turns a row here into a
 `truealpha_contracts.models.PriceBar`: this module's `transaction_time` IS that
 `PriceBar.knowable_at` (the XNYS session close for the bar's own date, not an
@@ -411,9 +411,10 @@ class TwelveDataClient:
 
         `adjust` is always sent explicitly (#938 contract item 4): see `DEFAULT_ADJUST`.
         """
-        vendor_symbol = symbol.replace(".", "/") if "." in symbol else symbol
+        # The canonical ticker is the Twelve Data symbol (`BRK.B`), as in the TOPT capture
+        # (`twelve_data_origin`). A "/" reads as a currency pair and answers 404 (#1060).
         params: dict[str, str] = {
-            "symbol": vendor_symbol,
+            "symbol": symbol,
             "interval": interval,
             "outputsize": str(outputsize),
             "adjust": adjust,

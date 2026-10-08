@@ -38,7 +38,30 @@ from factors.expressions.dsl import col
 
 
 def _load_prices(connection: psycopg.Connection, table: str, symbols: list[str]) -> pl.DataFrame:
-    query = f"select symbol, trading_date as date, close from {table} where symbol = any(%s) order by trading_date asc"  # noqa: S608 - table is one of two fixed literals below
+    # #1030: staging.market_prices_{daily,monthly} are append-only with no unique
+    # constraint on (symbol, trading_date) -- a re-fetch under a new adjust policy
+    # (split/dividend recompute) lands a second vintage, never overwrites the first
+    # (market_prices.py's insert_market_prices_daily docstring). A plain SELECT
+    # returned every vintage undifferentiated, and pivot_to_vbt_matrices' pandas
+    # .pivot() (not .pivot_table()) raises ValueError on the resulting duplicate
+    # (date, symbol) pairs the moment any symbol has been re-fetched even once --
+    # this script could not run against data with any real revision history.
+    # `distinct on (symbol, trading_date) ... order by ..., recorded_at desc` picks
+    # the latest known vintage deterministically, mirroring market_prices.py's own
+    # _latest_vintages resolution exactly. This is NOT full walk-forward PIT
+    # protection: transaction_time here is xnys_session_close_utc(trading_date), a
+    # pure function of the trading date itself, identical across every vintage of
+    # the same (symbol, date) -- it cannot distinguish "originally known" from "a
+    # later revision" the way a real capture-time-varying transaction_time would.
+    # Only recorded_at (ingestion audit time, not an authoritative PIT field per
+    # AGENTS.md) varies between vintages today, which is what this resolves by.
+    # Tracked as its own, deeper write-side gap, not fixed here.
+    query = f"""
+        select distinct on (symbol, trading_date) symbol, trading_date as date, close
+        from {table}
+        where symbol = any(%s)
+        order by symbol, trading_date, recorded_at desc
+    """  # noqa: S608 - table is one of two fixed literals below
     with connection.cursor() as cur:
         cur.execute(query, (symbols,))
         rows = cur.fetchall()

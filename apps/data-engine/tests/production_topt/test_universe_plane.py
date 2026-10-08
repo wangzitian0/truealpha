@@ -16,7 +16,11 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.universe_corpus import (
+    corpus_list_version,
+    frozen_topt_list_version,
+    load_corpus,
+)
 from data_engine.datahub.production_topt.universe_plane import (
     UNIVERSE_SOURCES,
     build_denominator,
@@ -25,6 +29,7 @@ from data_engine.datahub.production_topt.universe_plane import (
     publish_universe_list,
     resolve_universe_corpus,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
 
 _CASSETTE = Path(__file__).parent / "cassettes" / "nasdaq100_index.bcc3fb15.json"
@@ -350,6 +355,26 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
             ),
         )
 
+    # #1061: one member that repeats an observation is refused by the same snapshot check.
+    # Its set of observations is one short of four per member, so no member-level check is needed.
+    first, second = member(4), member(5)
+    repeating = SnapshotMember.model_validate(
+        {**first.model_dump(), "observation_ids": (*first.observation_ids[:3], first.observation_ids[2])}
+    )
+    with _pytest.raises(ValueError, match="four distinct observations per member"):
+        ToptCoreSnapshot(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            universe_id="universe:test-2026-06-30",
+            universe_version="test-2026-06-30-v1",
+            universe_sha256="c" * 64,
+            cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+            members=(repeating, second),
+        )
+    # An unsorted member would hash to a second identity for the same observations.
+    with _pytest.raises(ValueError, match="snapshot member requires sorted observations"):
+        SnapshotMember.model_validate({**first.model_dump(), "observation_ids": tuple(reversed(first.observation_ids))})
+
     # The INSERT itself must carry the snapshot's own counts — the first scheduled
     # QQQ run passed every model check and then died on `values (..., 20, 21, 84, ...)`
     # hardcoded in _put_snapshot's SQL, which the 0042 trigger rightly refused
@@ -450,3 +475,115 @@ def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) 
     assert denominator["instrument_count"] == 6
     assert denominator["issuer_count"] == 5  # GOOGL+GOOG collapse to one issuer
     assert denominator["universe_id"] == "universe:canary-us-2026-06-30"
+
+
+# -- one denominator check serves both loaders (#1061) -------------------------------------------
+
+
+def _frozen_corpus() -> dict:
+    """The corpus the deployed tick loads for the TOPT 20."""
+    return load_corpus("corpus.v1.json")
+
+
+def _self_pinned(corpus: dict) -> dict:
+    """The same denominator, self-pinned the way `build_denominator` pins a generated one."""
+    denominator = corpus["topt_denominator"]
+    denominator["instrument_mapping_sha256"] = canonical_sha256(
+        {"fields": denominator["instrument_tuple_fields"], "instruments": denominator["instruments"]}
+    )
+    return corpus
+
+
+def _drop_last_row_consistently(denominator: dict) -> None:
+    denominator["instruments"].pop()
+    denominator["instrument_count"] = len(denominator["instruments"])
+    denominator["issuer_count"] = len({row[0] for row in denominator["instruments"]})
+
+
+_DENOMINATOR_DRIFT = (
+    pytest.param(lambda d: d["instruments"].pop(), "instrument denominator shrink", id="row-dropped"),
+    pytest.param(
+        lambda d: d["instruments"].append(list(d["instruments"][0])),
+        "instrument denominator shrink",
+        id="row-repeated",
+    ),
+    pytest.param(
+        lambda d: d.__setitem__("issuer_count", d["issuer_count"] - 1), "issuer denominator drift", id="issuers"
+    ),
+    pytest.param(
+        lambda d: d["instruments"][1].__setitem__(1, d["instruments"][0][1]),
+        "security denominator contains duplicates",
+        id="security-repeated",
+    ),
+    pytest.param(
+        lambda d: d["instruments"][1].__setitem__(2, d["instruments"][0][2]),
+        "listing denominator contains duplicates",
+        id="listing-repeated",
+    ),
+)
+
+
+def test_the_frozen_topt_list_version_loads_the_pinned_denominator() -> None:
+    """The mapping sha pin is the only literal. It fixes the 21 listings and 20 issuers."""
+    corpus = _frozen_corpus()
+    version = frozen_topt_list_version(corpus)
+
+    assert len(version.members) == 21
+    assert len({row[0] for row in corpus["topt_denominator"]["instruments"]}) == 20
+    assert version.list_version_id == corpus["topt_denominator"]["list_version_id"]
+
+
+@pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
+def test_the_frozen_topt_list_version_refuses_a_drifted_denominator(mutate, message: str) -> None:
+    corpus = _frozen_corpus()
+    mutate(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match=f"TOPT {message}"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_pin_refuses_a_shrunk_denominator_whose_counts_agree() -> None:
+    """The counts below agree with the rows, so the shared check passes. Only the pin
+    refuses. The loader once refused this input with a literal count of 21."""
+    corpus = _frozen_corpus()
+    _drop_last_row_consistently(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_pin_refuses_an_edited_identity() -> None:
+    corpus = _frozen_corpus()
+    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+
+    with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_list_identity_must_match_the_corpus() -> None:
+    corpus = _frozen_corpus()
+    corpus["topt_denominator"]["list_version_id"] = "list-version:" + "0" * 64
+
+    with pytest.raises(ValueError, match="frozen TOPT list identity drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_a_self_pinned_corpus_loads() -> None:
+    assert len(corpus_list_version(_self_pinned(_frozen_corpus())).members) == 21
+
+
+@pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
+def test_a_self_pinned_corpus_refuses_a_drifted_denominator(mutate, message: str) -> None:
+    corpus = _self_pinned(_frozen_corpus())
+    mutate(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match=f"universe corpus {message}"):
+        corpus_list_version(corpus)
+
+
+def test_a_self_pinned_corpus_refuses_rows_that_do_not_reproduce_its_sha() -> None:
+    corpus = _self_pinned(_frozen_corpus())
+    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+
+    with pytest.raises(ValueError, match="universe corpus instrument mapping drift"):
+        corpus_list_version(corpus)

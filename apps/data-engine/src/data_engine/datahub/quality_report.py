@@ -469,7 +469,7 @@ def build_report(
                o.subject_id,
                o.observation_id,
                p.normalized_payload,
-               o.freshness_state,
+               meta.freshness_state,
                o.confidence,
                f.object_uri,
                f.payload_sha256,
@@ -482,6 +482,14 @@ def build_report(
         left join staging.capture_observation_payloads p on p.observation_id = o.observation_id
         left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
         left join raw.fetches f on f.id = v.raw_fetch_id
+        -- #530: freshness is graded live, off the obligation's currently-selected
+        -- observation at THIS run's cutoff (mart.topt_capture_meta_info, the same
+        -- expression production_topt/materialization.py uses) -- never off
+        -- capture_normalized_observations.freshness_state, which is frozen at the
+        -- observation's first write and stays "fresh" across later reuse even after
+        -- it ages past the freshness window (test_snapshot_recomputes_freshness_for_
+        -- unchanged_observation_at_cutoff proves the two diverge).
+        left join mart.topt_capture_meta_info meta on meta.obligation_id = ob.obligation_id
         where ob.run_id = %s
         order by ob.obligation_id, o.observation_id
         """,

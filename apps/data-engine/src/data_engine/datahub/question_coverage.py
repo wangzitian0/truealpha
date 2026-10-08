@@ -12,7 +12,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
@@ -114,19 +115,47 @@ def governed_head(connection: Connection[Any], *, universe_prefix: str) -> Gover
     return GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
 
 
+def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
+    """The report date the head's capture resolved its entity ids as of (#1079).
+
+    The capture writes `str(report_date)` as the partition key of every obligation of its run.
+    A lane that resolves the head's ids later takes the date from the head. The current universe
+    may be a later publication, with another date, and a claim can pass between the two dates.
+    Raises when the run has no obligation, several dates, or a key that is not a date.
+    """
+    keys = [
+        str(key)
+        for (key,) in connection.execute(
+            "select distinct partition_key from raw.capture_obligations where run_id = %s", (head.run_id,)
+        ).fetchall()
+    ]
+    if not keys:
+        raise ValueError(f"{head.run_id} has no capture obligations, so its report date cannot be read")
+    if len(keys) > 1:
+        raise ValueError(f"{head.run_id} has {len(keys)} partition keys, so its report date is ambiguous")
+    try:
+        return date.fromisoformat(keys[0])
+    except ValueError as error:
+        raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
+
+
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
         """
-        select issuer_id, availability_status, availability, reason_codes
+        select issuer_id, availability_status, availability, reason_codes, gppe
         from mart.topt_gppe_results where run_id = %s order by issuer_id
         """,
         (run_id,),
     ).fetchall()
     cells = []
-    for subject_id, availability_status, availability, reason_codes in rows:
+    for row in rows:
+        subject_id, availability_status, availability, reason_codes = row[:4]
+        gppe_val = row[4] if len(row) > 4 else Decimal("1")
         status = availability_status or availability  # rows written before #747 carry only `availability`
-        if status == "available":
+        if status == "available" and gppe_val is not None:
             cells.append(Cell(str(subject_id), True))
+        elif status == "available" and gppe_val is None:
+            cells.append(Cell(str(subject_id), False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [status or UNRECORDED_REASON])[0]
             cells.append(Cell(str(subject_id), False, str(reason)))
@@ -180,15 +209,19 @@ def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     """
     rows = connection.execute(
         """
-        select fund_id, availability_status, reason_codes
+        select fund_id, availability_status, reason_codes, weighted_valuation_gap
         from mart.fund_virtual_company where run_id = %s order by fund_id
         """,
         (run_id,),
     ).fetchall()
     cells = []
-    for fund_id, availability_status, reason_codes in rows:
-        if availability_status == "available":
+    for row in rows:
+        fund_id, availability_status, reason_codes = row[:3]
+        gap_val = row[3] if len(row) > 3 else Decimal("1")
+        if availability_status == "available" and gap_val is not None:
             cells.append(Cell(str(fund_id), True))
+        elif availability_status == "available" and gap_val is None:
+            cells.append(Cell(str(fund_id), False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
             cells.append(Cell(str(fund_id), False, str(reason)))
@@ -209,22 +242,70 @@ def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
     """
     rows = connection.execute(
         """
-        select issuer_id, availability_status, reason_codes
+        select issuer_id, availability_status, reason_codes, theme_share
         from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id
         """,
         (run_id,),
     ).fetchall()
     answered: dict[str, Cell] = {}
-    for issuer_id, availability_status, reason_codes in rows:
+    for row in rows:
+        issuer_id, availability_status, reason_codes = row[:3]
+        share_val = row[3] if len(row) > 3 else Decimal("1")
         subject = str(issuer_id)
         if answered.get(subject) and answered[subject].answered:
             continue
-        if availability_status == "available":
+        if availability_status == "available" and share_val is not None:
             answered[subject] = Cell(subject, True)
+        elif availability_status == "available" and share_val is None:
+            answered.setdefault(subject, Cell(subject, False, "null_metric_value"))
         else:
             reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
             answered.setdefault(subject, Cell(subject, False, str(reason)))
     return tuple(answered[key] for key in sorted(answered))
+
+
+def supply_chain_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    """Module 3's supply-chain exposure rows for this run (#772)."""
+    rows = connection.execute(
+        """
+        select issuer_id, availability_status, reason_codes, exposure_score
+        from mart.issuer_supply_chain_exposure where run_id = %s order by issuer_id
+        """,
+        (run_id,),
+    ).fetchall()
+    cells = []
+    for row in rows:
+        issuer_id, availability_status, reason_codes, score = row
+        if availability_status == "available" and score is not None:
+            cells.append(Cell(str(issuer_id), True))
+        elif availability_status == "available" and score is None:
+            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
+        else:
+            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
+            cells.append(Cell(str(issuer_id), False, str(reason)))
+    return tuple(cells)
+
+
+def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    """Module 4's analyst ratings rows for this run (#771)."""
+    rows = connection.execute(
+        """
+        select issuer_id, availability_status, reason_codes, consensus_rating
+        from mart.issuer_analyst_ratings where run_id = %s order by issuer_id
+        """,
+        (run_id,),
+    ).fetchall()
+    cells = []
+    for row in rows:
+        issuer_id, availability_status, reason_codes, rating = row
+        if availability_status == "available" and rating is not None:
+            cells.append(Cell(str(issuer_id), True))
+        elif availability_status == "available" and rating is None:
+            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
+        else:
+            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
+            cells.append(Cell(str(issuer_id), False, str(reason)))
+    return tuple(cells)
 
 
 def classify_question(
@@ -309,7 +390,11 @@ def compile_report(
     funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
-        "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id) if prefix == "universe:topt-" else (),
+        "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
+        if prefix.startswith("universe:topt-")
+        else (),
+        "mart.issuer_supply_chain_exposure.exposure_score": supply_chain_cells(connection, head.run_id),
+        "mart.issuer_analyst_ratings.consensus_rating": analyst_rating_cells(connection, head.run_id),
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }

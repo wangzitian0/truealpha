@@ -15,9 +15,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import factors.base.analyst_track_record  # noqa: F401
+import factors.base.etf_virtual_company  # noqa: F401
 import factors.base.gross_profit_per_employee  # noqa: F401
 import factors.base.peg  # noqa: F401
 import factors.base.price_to_sales  # noqa: F401
+import factors.base.supply_chain_exposure  # noqa: F401
 import factors.base.theme_purity  # noqa: F401
 import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
@@ -39,6 +42,9 @@ INIT_MD = REPO_ROOT / "init.md"
 _FACTOR_KEYWORDS = {
     "peg": "PEG",
     "gross_profit_per_employee": "Gross profit per employee",
+    "supply_chain_exposure": "Supply-chain",
+    "analyst_track_record": "Analyst backtesting",
+    "etf_virtual_company": "ETF",
     "theme_purity": "Pure-blood",
     "three_tier_valuation": "Three-tier valuation",
 }

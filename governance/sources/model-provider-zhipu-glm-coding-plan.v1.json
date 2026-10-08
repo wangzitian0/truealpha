@@ -48,6 +48,6 @@
     "truealpha#60",
     "truealpha#729"
   ],
-  "model_requested": "glm-5.3",
-  "routing_note": "2026-09-07: /models lists glm-4.5 … glm-5.3, glm-5.3-flash; the plan routes legacy names to current models (requests for glm-4.7/4.6/5-turbo answered by glm-5.3-flash, glm-5/5.1 by glm-5.3). All 16 production invocations that asked for glm-4.7 were served by glm-5.3-flash. Replaying those 16 requests against explicit glm-5.3 and glm-5.3-flash reproduced every recorded decision (16/16, 5,663 prompt tokens each). The seat now requests glm-5.3 explicitly and records response.model as served_model."
+  "model_requested": "glm-5.3-flash",
+  "routing_note": "2026-09-07: /models lists glm-4.5 … glm-5.3, glm-5.3-flash; the plan routes legacy names to current models (requests for glm-4.7/4.6/5-turbo answered by glm-5.3-flash, glm-5/5.1 by glm-5.3). All 16 production invocations that asked for glm-4.7 were served by glm-5.3-flash. Replaying those 16 requests against explicit glm-5.3 and glm-5.3-flash reproduced every recorded decision (16/16, 5,663 prompt tokens each) -- no evidenced decision-quality difference. 2026-09-24: the seat that requested explicit glm-5.3 (#765) turned out to have a much lower concurrency ceiling than glm-5.3-flash and was the root cause of model_key_health reporting HTTP 429 in both environments, blocking extraction work; owner confirmed (2026-09-24) glm-5.3-flash for this use. The seat now requests glm-5.3-flash explicitly and continues to record response.model as served_model. `budget.capacity_declared` below is still the placeholder from 2026-09-07 and was never updated with either model's real published limits -- worth closing out alongside this change, not done here."
 }

@@ -22,6 +22,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
     load_fund_vintages,
     materialize_fund_consolidation,
 )
+from data_engine.datahub.resolve_coordinates import resolve_entity
 from data_engine.lanes import capture
 
 #: A HISTORICAL replay cutoff. The look-ahead this guards against is not a filing dated
@@ -157,6 +158,88 @@ def test_no_vintage_at_the_cutoff_writes_nothing(connection) -> None:
     assert all(item.fund_id != FUND for item in written), (
         "a fund whose only filing postdates the cutoff is absent from the run, not zero"
     )
+
+
+def _insert_core_result(
+    connection,
+    *,
+    run_id: str,
+    listing_id: str,
+    valuation_gap: float,
+    availability: str = "available",
+    confidence: float = 0.85,
+) -> None:
+    connection.execute("set local session_replication_role = replica")
+    res_sha = f"{abs(hash((run_id, listing_id))):064x}"[:64]
+    connection.execute(
+        """
+        insert into mart.topt_core_results (
+            result_id, content_sha256, invocation_id, snapshot_id, run_id,
+            release_manifest_id, universe_id, universe_version, universe_sha256,
+            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+            operating_metric, availability, operating_efficiency,
+            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+            confidence, freshness, reason_codes, input_observation_ids,
+            gppe_invocation_id, gppe_result_id,
+            gppe_definition_id, gppe_definition_sha256,
+            tier_definition_id, tier_definition_sha256, payload
+        ) values (
+            'topt-core-result:' || %s, %s,
+            'topt-core-invocation:' || repeat('b', 64),
+            'topt-core-snapshot:' || repeat('c', 64),
+            %s,
+            'release-manifest:' || repeat('d', 64),
+            'universe:test', '1', repeat('e', 64),
+            now(), 'issuer:test', 'inst:test', %s,
+            'non_financial', 'capital_adjusted_gppe', %s,
+            100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
+            %s, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
+            'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
+            'gppe-def:v0', repeat('1', 64),
+            'tier-def:v0', repeat('2', 64),
+            '{}'::jsonb
+        )
+        on conflict (result_id) do nothing
+        """,
+        (res_sha, res_sha, run_id, listing_id, availability, valuation_gap, confidence),
+    )
+
+
+def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> None:
+    """#1099: mart.topt_core_results stores canonical entity UUIDs.
+
+    Fund consolidation joins through mart.entity_identity so canonical UUIDs resolve
+    to the fund holding's listing_id and contribute to weighted valuation gap.
+    """
+    eid = resolve_entity(connection, "listing:xnas:tcu", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    _seed(connection, isin="US0000000040", ticker="TCU", weight="65", filing=KNOWABLE_FILING, period="2026-06-30")
+    _insert_core_result(connection, run_id=RUN, listing_id=str(eid), valuation_gap=0.42, confidence=0.85)
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert fund.valued_lines == 1
+    assert fund.valued_weight == Decimal("65")
+    assert fund.weighted_valuation_gap == Decimal("0.42")
+    assert fund.result.confidence == Decimal("0.85")
+    assert fund.result.data_availability == "verified"
+
+
+def test_materialize_supports_legacy_string_listing_id(connection) -> None:
+    """#1099: mart.topt_core_results rows with legacy string listing_id still match directly."""
+    _seed(connection, isin="US0000000041", ticker="TCL", weight="70", filing=KNOWABLE_FILING, period="2026-06-30")
+    _insert_core_result(connection, run_id=RUN, listing_id="listing:xnas:tcl", valuation_gap=-0.15, confidence=0.90)
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert fund.valued_lines == 1
+    assert fund.valued_weight == Decimal("70")
+    assert fund.weighted_valuation_gap == Decimal("-0.15")
+    assert fund.result.confidence == Decimal("0.90")
 
 
 # --- the deployed call site -------------------------------------------------------

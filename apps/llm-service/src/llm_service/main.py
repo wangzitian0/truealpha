@@ -13,7 +13,9 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from truealpha_runtime.boot import assert_environment
+from truealpha_runtime.telemetry import init_telemetry
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.config import settings
@@ -59,6 +61,17 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 ROUTED_PREFIX = "/api"
 
 app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
+
+# OTLP telemetry for infra2's shared SigNoz (#1034): traces, metrics and ERROR logs under the
+# identity infra2's deploy renders into OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES. Off unless
+# OTEL_EXPORTER_OTLP_ENDPOINT is set; once on, a missing identity refuses the import, so uvicorn
+# never starts serving untagged telemetry. At import, not in the lifespan: FastAPIInstrumentor wraps
+# the middleware stack, which Starlette builds before the first lifespan event.
+_telemetry = init_telemetry()
+if _telemetry is not None:
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=_telemetry.tracer_provider, meter_provider=_telemetry.meter_provider
+    )
 
 # TLS terminates at Traefik, so requests arrive over http. Without this, Starlette
 # builds redirect Locations from the request scheme and `GET /api/mcp` answered
@@ -160,7 +173,12 @@ def health() -> dict[str, Any]:
         # The governed pointer per universe and when it last advanced (#536's gate can
         # withhold it for days with every deploy check green; the admin funnel showed
         # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
-        # "unknown" when the read failed; an empty list when no pointer has ever advanced.
+        # Each entry also carries the freshness label, the limit, a reason code and the
+        # availability (#1062). `status` stays "ok" for a stale head, because it reports
+        # liveness. The freshness check pages for a frozen head.
+        # "unknown" when the read failed. Also "unknown" when heads exist that this database
+        # does not serve, because the identity row is missing or names another environment.
+        # An empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
         # #876: the newest verdict of each nightly in-environment check (the Dagster quality
         # and head-report jobs, the model-provider key probe), green or red. The runner that
@@ -181,6 +199,23 @@ select distinct on (check_name) check_name, ran_at, ok, summary
 from mart.nightly_verdicts
 order by check_name, ran_at desc, recorded_at desc
 """
+
+
+#: The newest governed head per universe, aged at read time (#1062). `mart.served_head` holds
+#: the one definition of age, limit and label. This query picks the newest row of each universe.
+#: It never subtracts a clock of its own.
+GOVERNED_POINTERS_SQL = """
+select distinct on (universe_id)
+       universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
+from mart.served_head
+order by universe_id, advanced_at desc
+"""
+
+#: Runs only when the query above returns no row. `mart.served_head` shows the heads of this
+#: database's own environment. It is empty when the identity row is missing or names another
+#: environment, even though heads exist. This view lists the environments that hold heads. A row
+#: here with no served row means the heads exist and this database cannot serve them.
+HEAD_ENVIRONMENTS_SQL = "select 1 from mart.served_head_environments limit 1"
 
 
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
@@ -225,19 +260,34 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                 # Per universe, never collapsed (the funnel's lesson): one universe's fresh
                 # pointer must not hide another's frozen one. The newest head per universe
                 # across its factors and versions is what "still advancing" means.
-                rows = connection.execute(
-                    "select universe_id, max(advanced_at), "
-                    "extract(epoch from (now() - max(advanced_at))) / 3600.0 "
-                    "from mart.current_pointer_head group by universe_id order by universe_id"
-                ).fetchall()
-                pointers = [
-                    {
-                        "universe_id": str(universe_id),
-                        "advanced_at": advanced_at.isoformat(),
-                        "age_hours": round(float(age_hours), 1),
-                    }
-                    for universe_id, advanced_at, age_hours in rows
-                ]
+                # The age, the limit and the label come from mart.served_head (#1062).
+                # That view is the one read point. This service computes no head age.
+                rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
+                # An empty answer means "no head yet" only when no environment holds a head. When
+                # one does, the identity row hides every head. Then `pointers` stays "unknown",
+                # the marker that `tools/datahub_freshness.py` fails on. An empty list would
+                # read as a database that has never advanced.
+                if rows or connection.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is None:
+                    pointers = [
+                        {
+                            "universe_id": str(universe_id),
+                            "advanced_at": advanced_at.isoformat(),
+                            "age_hours": round(float(age_hours), 1),
+                            "freshness": str(freshness),
+                            "limit_hours": int(limit_hours),
+                            "staleness_reason": None if staleness_reason is None else str(staleness_reason),
+                            "availability": str(availability),
+                        }
+                        for (
+                            universe_id,
+                            advanced_at,
+                            age_hours,
+                            freshness,
+                            limit_hours,
+                            staleness_reason,
+                            availability,
+                        ) in rows
+                    ]
             except psycopg.Error:
                 connection.rollback()
             try:

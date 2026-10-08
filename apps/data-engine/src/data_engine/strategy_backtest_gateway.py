@@ -91,17 +91,27 @@ class StrategyBacktestGateway:
 
     def _rows_for_cutoff(self, cutoff_at: str | datetime) -> list[tuple[str, str, Any, Any, str | None]]:
         # Latest vintage per (issuer, input_key, fiscal_period) at the cutoff -- a
-        # restatement lands a new row and supersedes by recorded_at, never overwriting the
-        # prior one. The period is part of the identity since 0043: a metric legitimately
-        # appears once per period, and collapsing them would hand a factor one arbitrary
-        # year of a series it asked for whole.
+        # restatement lands a new row and supersedes, never overwriting the prior one. The
+        # period is part of the identity since 0043: a metric legitimately appears once per
+        # period, and collapsing them would hand a factor one arbitrary year of a series it
+        # asked for whole.
+        #
+        # #530: supersession is ordered by `knowable_at` (init.md §6: "within the winning
+        # source, the latest transaction_time -- restatement -- wins"), not `recorded_at`.
+        # `recorded_at` is ingestion audit time only -- init.md §6 says explicitly
+        # "as-of resolution never reads it" -- and this IS an as-of resolution
+        # (`where cutoff_at = %s`). `knowable_at` carries a real, enforced PIT guarantee
+        # here (`strategy_backtest_inputs_pit check (knowable_at <= cutoff_at)`,
+        # migration 0032); `recorded_at` carries none. `recorded_at desc` stays only as
+        # the final tie-break for two rows with genuinely identical `knowable_at` (e.g. a
+        # byte-for-byte rerun), never as the primary rule.
         return self._connection.execute(
             """
             select distinct on (issuer_id, input_key, fiscal_period)
                    issuer_id, input_key, value, confidence, fiscal_period
             from staging.strategy_backtest_inputs
             where cutoff_at = %s
-            order by issuer_id, input_key, fiscal_period, recorded_at desc
+            order by issuer_id, input_key, fiscal_period, knowable_at desc, recorded_at desc
             """,
             (cutoff_at,),
         ).fetchall()
