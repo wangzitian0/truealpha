@@ -71,6 +71,10 @@ jobs:
     if: ${{ !inputs.dagster_liveness_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
     # in CI instead of skipping (they skip gracefully where unreachable).
     services:
@@ -123,7 +127,17 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
         run: sh db/apply_migrations.sh
-      - run: uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests apps/llm-service/tests
+      - name: Run tests (shard ${{ matrix.shard }} of 2)
+        run: |
+          set -euo pipefail
+          FILE_LIST=$(python3 tools/pytest_shard.py libs/contracts/tests libs/factors/tests libs/runtime/tests apps/llm-service/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
+          mapfile -t FILES <<< "$FILE_LIST"
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
+            exit 1
+          fi
+          echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
+          uv run pytest "${FILES[@]}" --durations=0 --durations-min=0
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -131,8 +145,6 @@ jobs:
           S3_ACCESS_KEY: minio
           S3_SECRET_KEY: minio_local_secret
           S3_BUCKET: truealpha-raw
-          # The services above exist so integration tests RUN here; a suite
-          # that silently skips must fail, not pass green while covering nothing.
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
   # A4 B1 (#673): this was ONE 207 s job — 168 s of pytest — and the pole of

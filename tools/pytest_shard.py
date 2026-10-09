@@ -35,11 +35,13 @@ from pathlib import Path
 PATTERNS = ("test_*.py", "*_test.py")
 
 
-def collect(root: Path) -> list[Path]:
-    """Every file under ``root`` pytest would collect, sorted for determinism."""
+def collect(root: Path | Sequence[Path]) -> list[Path]:
+    """Every file under ``root`` (or ``roots``) pytest would collect, sorted for determinism."""
+    roots = [root] if isinstance(root, Path) else list(root)
     found: set[Path] = set()
-    for pattern in PATTERNS:
-        found.update(root.rglob(pattern))
+    for r in roots:
+        for pattern in PATTERNS:
+            found.update(r.rglob(pattern))
     return sorted(found)
 
 
@@ -165,17 +167,19 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", type=Path, help="test tree to shard")
+    parser.add_argument("roots", nargs="+", type=Path, help="test tree(s) to shard")
     parser.add_argument("--shard", type=int, required=True, help="0-based shard index")
     parser.add_argument("--of", type=int, required=True, dest="total", help="total shard count")
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
-    if not arguments.root.is_dir():
-        print(f"pytest_shard: {arguments.root} is not a directory", file=sys.stderr)
-        return 2
-    files = collect(arguments.root)
+    for root in arguments.roots:
+        if not root.is_dir():
+            print(f"pytest_shard: {root} is not a directory", file=sys.stderr)
+            return 2
+    files = collect(arguments.roots)
     if not files:
-        print(f"pytest_shard: {arguments.root} contains no test files", file=sys.stderr)
+        roots_str = ", ".join(str(r) for r in arguments.roots)
+        print(f"pytest_shard: {roots_str} contains no test files", file=sys.stderr)
         return 2
     try:
         selected = shard(files, arguments.shard, arguments.total)
@@ -186,9 +190,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # More shards than files: the caller asked for a lane with nothing in
         # it, which would run pytest over an empty argument list — i.e. the
         # whole suite, or nothing, depending on the invocation.
+        roots_str = ", ".join(str(r) for r in arguments.roots)
         print(
             f"pytest_shard: shard {arguments.shard} of {arguments.total} is empty "
-            f"({len(files)} files under {arguments.root}) — use fewer shards",
+            f"({len(files)} files under {roots_str}) — use fewer shards",
             file=sys.stderr,
         )
         return 2
