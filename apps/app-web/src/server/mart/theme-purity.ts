@@ -63,9 +63,13 @@ export type ThemePurityGroup = {
  * (#1117), and a run that holds only fill rows is not populated. So the fill rows do not count.
  */
 const LATEST_RUN_SQL = `
-  select run_id, max(cutoff) as cutoff
-  from mart.issuer_theme_purity
-  where partition_id is not null
+  select p.run_id, max(p.cutoff) as cutoff
+  from mart.issuer_theme_purity p
+  where p.partition_id is not null
+    and not exists (
+      select 1 from mart.served_head h
+      where h.head_run_id = p.run_id and h.availability = 'unavailable'
+    )
   group by run_id
   order by max(cutoff) desc
   limit 1

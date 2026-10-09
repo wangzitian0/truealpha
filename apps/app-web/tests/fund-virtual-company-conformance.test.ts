@@ -54,7 +54,7 @@ function runner() {
   return async <T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> => {
     const client: MartClientLike = {
       query: async (sql: string) => {
-        if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+        if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
         if (sql.includes("topt_capture_status")) return { rows: [] };
         if (sql.includes("fund_holdings_coverage")) {
           return {

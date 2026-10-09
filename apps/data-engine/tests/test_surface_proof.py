@@ -73,9 +73,9 @@ class _Tables:
             self._rows = [(params[0] in self.theme_runs,)]
         elif "mart.governed_strategy_run" in text:
             self._rows = [(self.strategy, "strategy-run:x")] if self.strategy else []
-        elif "from mart.issuer_theme_purity where partition_id is not null group by run_id" in text:
+        elif "from mart.issuer_theme_purity" in text and "group by run_id" in text:
             self._rows = [(self.themes, NOW)] if self.themes else []
-        elif "from mart.current_pointer_head" in text:
+        elif "from mart.current_pointer_head" in text or "from mart.served_head" in text:
             self._rows = [(self.holdings,)] if self.holdings else []
         elif "from mart.fund_virtual_company" in text:
             self._rows = [(self.funds,)]

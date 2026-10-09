@@ -26,9 +26,9 @@ export interface MartClientLike {
 }
 
 const POINTER_HEAD_SQL = `
-  select target_run_id as run_id from mart.current_pointer_head
-  where environment = (select environment from mart.environment_identity)
-    and factor_id = 'gross_profit_per_employee'
+  select run_id, freshness, availability, staleness_reason
+  from mart.served_head
+  where factor_id = 'gross_profit_per_employee'
     -- The universe is part of the governed key. Without it this served whichever pipeline
     -- advanced last: the canary universe's 24-cell run displaced the 84-cell TOPT core,
     -- which is how a module card came to read "available" at 4% coverage.
@@ -125,10 +125,19 @@ export class MartToptGppeRepository {
 
     return this.runWithClient(async (client) => {
       let head = await client.query(POINTER_HEAD_SQL);
-      if (head.rows.length === 0) {
+      if (head.rows.length > 0) {
+        const row = head.rows[0];
+        if (row.availability === "unavailable" || row.run_id === null) {
+          const reason =
+            typeof row.staleness_reason === "string" && row.staleness_reason.length > 0
+              ? row.staleness_reason
+              : "older_than_30d";
+          return { reason: `head_unavailable: ${reason}` };
+        }
+      } else {
         head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL);
       }
-      if (head.rows.length === 0) {
+      if (head.rows.length === 0 || head.rows[0].run_id === null) {
         return { reason: "no accepted (quality-reported) production TOPT run" };
       }
 
