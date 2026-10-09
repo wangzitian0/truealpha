@@ -409,10 +409,16 @@ def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
         before = stored_questions.get(question)
         if before is None:
             changed.append(f"{question}: absent from the stored report")
-        elif (before.get("answered"), before.get("unavailable"), before.get("missing")) != (
+        elif (
+            before.get("answered"),
+            before.get("unavailable"),
+            before.get("missing"),
+            before.get("not_applicable", 0),
+        ) != (
             entry["answered"],
             entry["unavailable"],
             entry["missing"],
+            entry.get("not_applicable", 0),
         ):
             changed.append(f"{question}: stored {before.get('answered')} answered, tables say {entry['answered']}")
     return "; ".join(changed)

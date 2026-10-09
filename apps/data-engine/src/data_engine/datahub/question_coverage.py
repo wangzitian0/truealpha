@@ -3,8 +3,10 @@
 Expected side: `truealpha_contracts.question_requirements` — per §0 question, the wide-row
 columns that answer it. Observed side: the governed head's factor rows with their §8 status
 dimensions (#747). The report left-joins the two per (question, issuer) and counts
-`answered` / `unavailable:<reason>` / `missing`, where `missing` means no column exists for
-this universe yet — a gap owned by an issue, never folded into "unavailable".
+`answered` / `unavailable:<reason>` / `missing` / `not_applicable`. `missing` means the
+registry holds no column for the question — a gap owned by an issue, never folded into
+"unavailable". `not_applicable` means the registry holds columns, but none governs this
+universe. It stays out of the denominator (#1115).
 """
 
 from __future__ import annotations
@@ -324,9 +326,11 @@ def classify_question(
     been looked up under twenty issuer ids and graded `unavailable:no_row` twenty times, a
     red describing the registry rather than the data.
 
-    `missing` when no column applies to this universe; a subject is `answered` when ANY
-    applicable column answers it; otherwise the first column with a row supplies the
-    reason; `unavailable:no_row` when no column has a row for the subject at all (the join
+    `missing` when the requirement has no column at all. `not_applicable` when the
+    requirement has columns and none applies to this universe: every subject is counted
+    there, and the denominator is 0 (#1115). A subject is `answered` when ANY applicable
+    column answers it; otherwise the first column with a row supplies the reason;
+    `unavailable:no_row` when no column has a row for the subject at all (the join
     produced nothing — the red-proof case).
     """
     subjects = funds if requirement.scope is QuestionScope.FUND else issuers
@@ -344,9 +348,16 @@ def classify_question(
         "answered": 0,
         "unavailable": {},
         "missing": 0,
+        "not_applicable": 0,
     }
     if not columns:
-        entry["missing"] = len(expected)
+        if requirement.columns:
+            # The registry names a column, but not for this universe. No cell can answer or
+            # fail here, so the subjects leave the denominator instead of reading as a gap.
+            entry["not_applicable"] = len(expected)
+            entry["denominator"] = 0
+        else:
+            entry["missing"] = len(expected)
         return entry
     entry["column"] = entry["columns"][0]
     observed = [{cell.subject_id: cell for cell in cells_by_column.get(_column_key(column), ())} for column in columns]
@@ -467,6 +478,10 @@ def stored_report_run(connection: Connection[Any], universe_id: str) -> str | No
 def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for question, entry in report["questions"].items():
+        not_applicable = entry.get("not_applicable", 0)
+        if not_applicable:
+            parts.append(f"{question}: {not_applicable} not applicable (no column governs this universe)")
+            continue
         unavailable = sum(entry["unavailable"].values())
         parts.append(
             f"{question}: {entry['answered']}/{entry['denominator']} answered, {unavailable} unavailable, {entry['missing']} missing"

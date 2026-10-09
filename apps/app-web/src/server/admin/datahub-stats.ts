@@ -93,7 +93,16 @@ export interface QuestionCoverageQuestion {
   unavailable_total: number;
   top_reasons: string;
   missing: number;
+  /** #1115: subjects of a question whose columns are all scoped to other universes.
+   * They are outside `denominator`. A report stored before the key existed reads as 0. */
+  not_applicable: number;
   denominator: number;
+}
+
+/** The "answered" cell of a coverage row. A question with `not_applicable` subjects has
+ * no ratio to show: a denominator of 0 would print "0/0" and read as an empty universe. */
+export function coverageAnsweredCell(q: QuestionCoverageQuestion): string {
+  return q.not_applicable > 0 ? "n/a" : `${q.answered}/${q.denominator}`;
 }
 
 export interface QuestionCoverageRow {
@@ -120,6 +129,7 @@ interface QuestionCoverageDbRow {
         answered?: number;
         unavailable?: Record<string, number>;
         missing?: number;
+        not_applicable?: number;
         denominator?: number;
       }
     >;
@@ -164,6 +174,7 @@ function questionCoverageRows(
             unavailable_total: total,
             top_reasons: topReasons,
             missing: entry.missing ?? 0,
+            not_applicable: entry.not_applicable ?? 0,
             denominator: entry.denominator ?? 0,
           };
         },

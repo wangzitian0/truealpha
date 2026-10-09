@@ -71,12 +71,49 @@ def test_removing_the_left_join_is_red() -> None:
 
 
 def test_peg_applies_to_topt_only() -> None:
+    """#1115: PEG has a column, but only for TOPT. On QQQ no column governs the universe.
+    The report grades each QQQ subject `not_applicable`, outside the denominator, never `missing`."""
     peg = REQ[Question.Q2_VALUATION_VS_GROWTH]
     cells = {"mart.strategy_decisions.peg": (Cell("issuer:a", True), Cell("issuer:b", False, "excluded:financial"))}
     topt = classify_question(peg, universe_id=TOPT, issuers=["issuer:a", "issuer:b"], cells_by_column=cells)
-    qqq = classify_question(peg, universe_id=QQQ, issuers=["issuer:a", "issuer:b"], cells_by_column=cells)
+    qqq_issuers = [f"issuer:{n}" for n in range(100)]
+    qqq = classify_question(peg, universe_id=QQQ, issuers=qqq_issuers, cells_by_column=cells)
     assert topt["answered"] == 1 and topt["unavailable"] == {"excluded:financial": 1}
-    assert qqq["missing"] == 2 and qqq["column"] is None
+    assert topt["not_applicable"] == 0 and topt["denominator"] == 2
+    assert qqq["not_applicable"] == 100
+    assert qqq["denominator"] == 0
+    assert qqq["missing"] == 0
+    assert qqq["answered"] == 0 and qqq["unavailable"] == {}
+    assert qqq["column"] is None and qqq["columns"] == []
+
+
+def test_a_question_with_no_column_at_all_stays_missing_and_is_not_not_applicable() -> None:
+    """#1115: `missing` means the registry holds no column for the question. It keeps its denominator."""
+    unbound = QuestionRequirement(Question.Q3_SUPPLY_CHAIN_EXPOSURE, (), (), "#772")
+    entry = classify_question(unbound, universe_id=QQQ, issuers=["issuer:a", "issuer:b"], cells_by_column={})
+    assert entry["missing"] == 2 and entry["denominator"] == 2
+    assert entry["not_applicable"] == 0
+
+
+def test_a_question_with_an_applicable_column_has_no_not_applicable_subject() -> None:
+    entry = classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=QQQ,
+        issuers=["issuer:a"],
+        cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+    )
+    assert entry["not_applicable"] == 0 and entry["denominator"] == 1 and entry["answered"] == 1
+
+
+def test_the_summary_line_names_a_not_applicable_question_and_prints_no_ratio_for_it() -> None:
+    """#1115: the log line must not print `0/0 answered` for a question no column governs."""
+    peg = REQ[Question.Q2_VALUATION_VS_GROWTH]
+    q2 = classify_question(peg, universe_id=QQQ, issuers=[f"issuer:{n}" for n in range(100)], cells_by_column={})
+    report = {"universe_id": QQQ, "cutoff": "2026-06-30T00:00:00+00:00", "questions": {"q2": q2}}
+    line = summary_line(report)
+    assert "q2: 100 not applicable" in line
+    assert "0/0" not in line
+    assert "missing" not in line
 
 
 class _Rows:
