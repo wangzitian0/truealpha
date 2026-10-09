@@ -31,7 +31,7 @@ import os
 import warnings
 from collections.abc import Mapping
 
-from infra2_sdk.runtime.environ import RuntimeEnvKey, resolve_runtime_env, runtime_env_spec
+from infra2_sdk.runtime.environment import RuntimeEnvKey, resolve_runtime_env, runtime_env_spec
 from infra2_sdk.runtime.otel import OtelSettings, TelemetryProviders, configure_telemetry
 
 #: The `OTEL_RESOURCE_ATTRIBUTES` keys infra2's deploy issues (`ServiceIdentity`) and every alert

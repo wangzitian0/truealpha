@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from infra2_sdk.runtime.dependencies import Dependency, DependencyKind, DependencyManifest
+from infra2_sdk.runtime.health import Dependency, DependencyKind, DependencyManifest
 
 from truealpha_runtime.tiers import EnvironmentTier
 

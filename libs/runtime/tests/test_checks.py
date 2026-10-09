@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import psycopg
 import pytest
 from botocore.exceptions import ClientError
-from infra2_sdk.runtime.probes import DependencyStatus, ProbeResult
+from infra2_sdk.runtime.health import DependencyStatus, ProbeResult
 from truealpha_runtime import checks as checks_module
 from truealpha_runtime.checks import (
     DatabaseCheck,

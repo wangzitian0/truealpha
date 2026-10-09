@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
-from infra2_sdk.dispatch import INFRA_REPOSITORY, ReceiverRun
+from infra2_sdk.deploy import INFRA_REPOSITORY, ReceiverRun
 from truealpha_runtime.testing import load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

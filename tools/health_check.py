@@ -23,8 +23,8 @@ import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get, poll_until_healthy
-from infra2_sdk.release import ReleaseError, resolve_image_digest
+from infra2_sdk.deploy import HttpGet, default_http_get, poll_until_healthy
+from infra2_sdk.refs import ReleaseError, resolve_image_digest
 from truealpha_runtime.deployed_release import (
     ReleaseIdentityError,
     identifier_kind,

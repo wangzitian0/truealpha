@@ -39,7 +39,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get
+from infra2_sdk.deploy import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 # Daily releases were the norm before the lane stopped (v0.0.16 through v0.0.19

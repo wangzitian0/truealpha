@@ -36,7 +36,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get
+from infra2_sdk.deploy import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 REPO = "wangzitian0/truealpha"
