@@ -17,7 +17,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING, IssuerInput, evaluate_cutoff
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual
@@ -171,7 +171,11 @@ def run_backtest_from_staging(
         as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
         risk_free_rate = _risk_free_rate(rates, cutoff_at)
         evaluated = evaluate_cutoff(
-            gateway.issuer_inputs(cutoff_at), definition=definition, cutoff_at=as_of, risk_free_rate=risk_free_rate
+            gateway.issuer_inputs(cutoff_at),
+            definition=definition,
+            cutoff_at=as_of,
+            risk_free_rate=risk_free_rate,
+            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
 

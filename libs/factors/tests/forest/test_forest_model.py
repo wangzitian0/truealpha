@@ -55,6 +55,7 @@ MINTED = {
     "gppe_uniform_charge_v0": "6143cf17-ceba-5f78-a2d3-a7cc423c49a7",
     # #1176: gppe_banking_tce_v1 and its measured-TCE inputs and derived nodes.
     "stockholders_equity": "0aa53e41-0d12-5f11-92c4-fe6225166328",
+    "preferred_stock_value": "ddf51b59-2c0e-52f0-8798-a555673c9bf6",
     "goodwill": "738c81a6-fd15-53ca-ad2f-679a2b700056",
     "intangible_assets_net_excluding_goodwill": "14313d73-f5f7-5a47-a087-ed9ce71ebd88",
     "tangible_deductions": "805d8f77-10aa-5dc4-b2bd-f47647e00593",

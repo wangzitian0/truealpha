@@ -123,6 +123,10 @@ class ExclusionReason(StrEnum):
     MISSING_MARKET_VALUE_INPUT = "missing_market_value_input"
     #: The banking labor-efficiency metric needs measured tangible common equity (#1176).
     MISSING_TANGIBLE_COMMON_EQUITY = "missing_tangible_common_equity"
+    #: The banking metric deducts preferred stock. A missing value is never zero (#1176 follow-up).
+    MISSING_PREFERRED_STOCK_VALUE = "missing_preferred_stock_value"
+    #: The live path ranks an issuer only on the metric of its class. No class means no metric.
+    MISSING_ISSUER_CLASS = "missing_issuer_class"
     MISSING_RISK_FREE_RATE_PARAMETER = "missing_risk_free_rate_parameter"
     BELOW_CONFIDENCE_FLOOR = "below_confidence_floor"
     STALE_REQUIRED_INPUT = "stale_required_input"

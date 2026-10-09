@@ -79,7 +79,8 @@ PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
         "intangible_assets_net_excluding_goodwill": (
             "a carrying amount of intangible assets; a negative balance is a sign or unit defect in the filing parse"
         ),
-        "tangible_deductions": "the sum of two non-negative balances (goodwill and intangibles)",
+        "preferred_stock_value": "a carrying amount of preferred stock; a negative balance is a sign or unit defect in the filing parse",
+        "tangible_deductions": "the sum of three non-negative balances (preferred stock, goodwill and intangibles)",
     }
 )
 
@@ -283,6 +284,23 @@ STOCKHOLDERS_EQUITY = MetricNode(
     aliases=(NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),),
 )
 
+PREFERRED_STOCK_VALUE = MetricNode(
+    node_id=UUID("ddf51b59-2c0e-52f0-8798-a555673c9bf6"),
+    key="preferred_stock_value",
+    kind=NodeKind.INPUT,
+    definition=(
+        "Preferred stock carrying value at the fiscal year end (#1176 follow-up). Deducted from "
+        "stockholders' equity for tangible common equity. Never zero-filled when absent."
+    ),
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="preferred_stock_value"),
+    confidence=_captured("preferred_stock_value"),
+    aliases=(NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),),
+)
+
 GOODWILL = MetricNode(
     node_id=UUID("738c81a6-fd15-53ca-ad2f-679a2b700056"),
     key="goodwill",
@@ -315,7 +333,7 @@ TANGIBLE_DEDUCTIONS = MetricNode(
     node_id=UUID("805d8f77-10aa-5dc4-b2bd-f47647e00593"),
     key="tangible_deductions",
     kind=NodeKind.DERIVED,
-    definition="Equity that is not tangible: goodwill plus intangible assets (#1176).",
+    definition="Equity that is not common or not tangible: preferred stock, goodwill and intangible assets (#1176).",
     unit=UnitFamily.CURRENCY,
     period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
     applicability=_FINANCIAL,
@@ -328,7 +346,7 @@ TANGIBLE_COMMON_EQUITY = MetricNode(
     node_id=UUID("8c346339-0ca5-588a-90d4-e67c96db8ecb"),
     key="tangible_common_equity",
     kind=NodeKind.DERIVED,
-    definition="Measured tangible common equity: stockholders' equity minus tangible deductions (#1176).",
+    definition="Measured tangible common equity: stockholders' equity minus tangible deductions (#1176, #1176 follow-up).",
     unit=UnitFamily.CURRENCY,
     period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
     applicability=_FINANCIAL,
@@ -366,7 +384,7 @@ CAPITAL_ADJUSTED_TCE = MetricNode(
 
 GPPE_BANKING_TCE_V1 = MetricNode(
     node_id=UUID("582c62d6-4873-5ff4-ad91-eba1d571fc4c"),
-    key="gppe_banking_tce_v1",  # gitleaks:allow - a metric key, not a credential
+    key="gppe_banking_tce_v1",
     kind=NodeKind.DERIVED,
     definition=(
         "gppe_banking_tce_v1 (#1176, #1108): labor efficiency for FINANCIAL issuers. Real profit on "
@@ -419,7 +437,7 @@ GPPE_BANKING_TCE_TREE = MetricTree(
             output=TANGIBLE_DEDUCTIONS.key,
             formula_id="sum",
             formula_version=1,
-            operands={IssuerClass.FINANCIAL: (GOODWILL.key, INTANGIBLE_ASSETS.key)},
+            operands={IssuerClass.FINANCIAL: (PREFERRED_STOCK_VALUE.key, GOODWILL.key, INTANGIBLE_ASSETS.key)},
         ),
     ),
     decimal_precision=34,
@@ -482,6 +500,7 @@ FOREST = Forest(
         CAPITAL_ADJUSTED_GROSS_PROFIT,
         GPPE,
         STOCKHOLDERS_EQUITY,
+        PREFERRED_STOCK_VALUE,
         GOODWILL,
         INTANGIBLE_ASSETS,
         TANGIBLE_DEDUCTIONS,

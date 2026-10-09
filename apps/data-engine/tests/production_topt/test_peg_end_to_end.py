@@ -27,7 +27,7 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt.sec_financial_adapter import build_bundle
-from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING, IssuerInput, evaluate_cutoff
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
@@ -123,6 +123,7 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
     )
     [decision] = evaluate_cutoff(
         [issuer],
+        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_CUTOFF,
         risk_free_rate=Decimal("0"),

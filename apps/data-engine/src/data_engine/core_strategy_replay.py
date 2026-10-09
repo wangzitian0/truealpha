@@ -36,7 +36,12 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from factors.composite.strategy_evaluator import EvaluatedDecision, IssuerInput, evaluate_cutoff
+from factors.composite.strategy_evaluator import (
+    UNIFORM_LABOR_EFFICIENCY_BINDING,
+    EvaluatedDecision,
+    IssuerInput,
+    evaluate_cutoff,
+)
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 # CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
@@ -172,7 +177,13 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
             )
             for item in group
         ]
-        evaluated = evaluate_cutoff(issuers, definition=definition, cutoff_at=as_of, risk_free_rate=risk_free_rate)
+        evaluated = evaluate_cutoff(
+            issuers,
+            definition=definition,
+            cutoff_at=as_of,
+            risk_free_rate=risk_free_rate,
+            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+        )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
 
     decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))

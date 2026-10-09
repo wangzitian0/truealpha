@@ -144,6 +144,15 @@ _SPECS = (
         ),
     ),
     MetricSpec(
+        name="preferred_stock_value",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description=(
+            "Preferred stock carrying value at the fiscal year end (us-gaap PreferredStockValue); "
+            "deducted from stockholders' equity for banking tangible common equity (#1176)."
+        ),
+    ),
+    MetricSpec(
         name="goodwill",
         unit_family=UnitFamily.CURRENCY,
         source_priority=(DataSource.SEC,),

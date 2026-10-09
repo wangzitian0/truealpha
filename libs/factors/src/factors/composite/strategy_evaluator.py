@@ -98,20 +98,35 @@ _BANKING_TCE_V1 = LaborEfficiencyMetric(
     input_keys=tuple(input_key_for_metric(metric) for metric in BANKING_TCE_INPUTS),
 )
 
-#: The one binding table (owner decision 2026-10-09, #1176): FINANCIAL issuers rank on measured
-#: tangible common equity; every other class ranks on the uniform total-assets charge. A classless
-#: input (the frozen #21 replay carries no class) keeps the uniform definition it was frozen with.
-LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(
+#: The one binding table for the live path (owner decision 2026-10-09, #1176): FINANCIAL issuers
+#: rank on measured tangible common equity; every other class ranks on the uniform total-assets
+#: charge. An issuer with no class has no entry: it gets `missing_issuer_class`, never a fallback.
+LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass, LaborEfficiencyMetric] = MappingProxyType(
     {
         IssuerClass.FINANCIAL: _BANKING_TCE_V1,
         IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
         IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
-        None: _UNIFORM_CHARGE_V0,
     }
 )
 
-#: The factor flag that names a missing tangible-common-equity input (`gppe_banking_tce_v1`).
+#: The frozen #21 replay binding, passed by name by the replay callers. Every class, and a
+#: classless input, ranks on the uniform charge the #21 golden was frozen with.
+UNIFORM_LABOR_EFFICIENCY_BINDING: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(
+    {
+        None: _UNIFORM_CHARGE_V0,
+        IssuerClass.FINANCIAL: _UNIFORM_CHARGE_V0,
+        IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
+        IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
+    }
+)
+
+#: Factor flags that name a missing banking input, and the exclusion reason each one carries.
 _MISSING_TCE_FLAG = "missing_tangible_common_equity"
+_MISSING_PREFERRED_FLAG = "missing_preferred_stock_value"
+_BANKING_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
+    (_MISSING_PREFERRED_FLAG, ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
+    (_MISSING_TCE_FLAG, ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+)
 
 
 @dataclass(frozen=True)
@@ -132,7 +147,7 @@ class IssuerInput:
     issuer_id: str
     records: Mapping[str, tuple[Decimal, Decimal]]
     periodic_records: Mapping[str, Mapping[str, tuple[Decimal, Decimal]]] = field(default_factory=dict)
-    #: The issuer's operating class. It selects the labor-efficiency metric (LABOR_EFFICIENCY_BY_CLASS).
+    #: The issuer's operating class. It selects the labor-efficiency metric. None means no class.
     issuer_class: IssuerClass | None = None
 
 
@@ -232,6 +247,7 @@ def _evaluate_issuer(
     definition: LargeModelValueV0Definition,
     risk_free_rate: Decimal,
     as_of: datetime,
+    binding: Mapping[IssuerClass | None, LaborEfficiencyMetric],
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     """Return this issuer's pre-ranking decision plus its valuation gap (or None
     when it is not a ranking candidate)."""
@@ -253,7 +269,9 @@ def _evaluate_issuer(
             None,
         )
 
-    labor = LABOR_EFFICIENCY_BY_CLASS[issuer.issuer_class]
+    labor = binding.get(issuer.issuer_class)
+    if labor is None:
+        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=consumed_confidence), None
     gppe_result = labor.compute(
         _facts_for(issuer, labor.input_keys, as_of=as_of),
         entity_id=issuer.issuer_id,
@@ -264,10 +282,9 @@ def _evaluate_issuer(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
     )
     if gppe_result.value is None or ps_result.value is None:
-        reason = (
-            ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY
-            if _MISSING_TCE_FLAG in gppe_result.flags
-            else ExclusionReason.STALE_REQUIRED_INPUT
+        reason = next(
+            (reason for flag, reason in _BANKING_FLAG_REASONS if flag in gppe_result.flags),
+            ExclusionReason.STALE_REQUIRED_INPUT,
         )
         return _excluded(issuer.issuer_id, reason, confidence=consumed_confidence), None
 
@@ -418,9 +435,14 @@ def evaluate_cutoff(
     definition: LargeModelValueV0Definition,
     cutoff_at: datetime,
     risk_free_rate: Decimal,
+    labor_efficiency_by_class: Mapping[IssuerClass | None, LaborEfficiencyMetric] = LABOR_EFFICIENCY_BY_CLASS,
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
-    in-band candidates. Returns decisions sorted by issuer id."""
+    in-band candidates. Returns decisions sorted by issuer id.
+
+    `labor_efficiency_by_class` is the binding that selects each issuer's labor metric. An issuer
+    whose class has no entry is excluded with `missing_issuer_class`. Replays of the frozen #21
+    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name."""
 
     decisions = [
         _evaluate_issuer(
@@ -428,6 +450,7 @@ def evaluate_cutoff(
             definition=definition,
             risk_free_rate=risk_free_rate,
             as_of=cutoff_at,
+            binding=labor_efficiency_by_class,
         )[0]
         for issuer in issuers
     ]

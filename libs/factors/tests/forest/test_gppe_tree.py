@@ -266,7 +266,8 @@ def test_the_tree_is_the_definition_version_it_claims() -> None:
 # diff against main@e465d3d shows only `key` and `definition` changed on the node itself.
 FROZEN_TREES = {
     ("gppe", "production-topt-v0.2.0"): "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d",
-    ("gppe_banking_tce", "v1"): "69c6cfcf49b19247f082458276697f761f7a8cca4b3b5d19c096741945696bb4",
+    # #1176 follow-up: the banking tree deducts preferred stock, so its pin moved with the edit.
+    ("gppe_banking_tce", "v1"): "6b2d2ccec56a240af5a71c0db367fd9569d7a699f838e7c70079497816b32ad0",
 }
 
 
@@ -293,13 +294,16 @@ def test_banking_tree_evaluates_measured_tangible_common_equity_for_a_bank() -> 
     inputs = {
         "pre_provision_profit": Decimal("86807000000"),
         "stockholders_equity": Decimal("340000000000"),
+        "preferred_stock_value": Decimal("10000000000"),
         "goodwill": Decimal("5000000000"),
         "intangible_assets_net_excluding_goodwill": Decimal("1000000000"),
         "employees_total": Decimal("318512"),
         "risk_free_rate": Decimal("0.05"),
     }
     evaluation = evaluate(FOREST, BANKING_TCE_TREE, issuer_class=IssuerClass.FINANCIAL, inputs=inputs)
-    tangible_common_equity = Decimal("340000000000") - Decimal("5000000000") - Decimal("1000000000")
+    tangible_common_equity = (
+        Decimal("340000000000") - Decimal("10000000000") - Decimal("5000000000") - Decimal("1000000000")
+    )
     with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
         expected = (Decimal("86807000000") - tangible_common_equity * Decimal("0.05")) / Decimal("318512")
     assert evaluation.values["gppe_banking_tce_v1"] == expected
@@ -312,6 +316,7 @@ def test_banking_tree_leaves_a_missing_tangible_common_equity_undefined() -> Non
     inputs = {
         "pre_provision_profit": Decimal("86807000000"),
         "stockholders_equity": Decimal("340000000000"),
+        "preferred_stock_value": Decimal("10000000000"),
         "employees_total": Decimal("318512"),
         "risk_free_rate": Decimal("0.05"),
     }

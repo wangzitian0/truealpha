@@ -153,11 +153,19 @@ def gross_profit_per_employee(
 
 
 _STOCKHOLDERS_EQUITY = "stockholders_equity"
+_PREFERRED_STOCK = "preferred_stock_value"
 _GOODWILL = "goodwill"
 _INTANGIBLE_ASSETS = "intangible_assets_net_excluding_goodwill"
 
 #: The metrics `gppe_banking_tce_v1` reads. Total assets is not one of them.
-BANKING_TCE_INPUTS = (_GROSS_PROFIT, _STOCKHOLDERS_EQUITY, _GOODWILL, _INTANGIBLE_ASSETS, _EMPLOYEES_TOTAL)
+BANKING_TCE_INPUTS = (
+    _GROSS_PROFIT,
+    _STOCKHOLDERS_EQUITY,
+    _PREFERRED_STOCK,
+    _GOODWILL,
+    _INTANGIBLE_ASSETS,
+    _EMPLOYEES_TOTAL,
+)
 
 
 def gross_profit_per_employee_banking_tce(
@@ -169,12 +177,14 @@ def gross_profit_per_employee_banking_tce(
 ) -> FactorResult:
     """`gppe_banking_tce_v1` (#1176): `(gross_profit - TCE * risk_free_rate) / headcount`.
 
-    TCE is `stockholders_equity - (goodwill + intangible_assets_net_excluding_goodwill)`. It is
-    measured, never estimated. A missing TCE input gives an unavailable result with the flag
-    `missing_tangible_common_equity`. The factor never substitutes total assets or a ratio.
+    TCE is `stockholders_equity - preferred_stock_value - (goodwill + intangible_assets_net_excluding_goodwill)`.
+    It is measured, never estimated. A missing equity, goodwill or intangible input gives the flag
+    `missing_tangible_common_equity`. A missing preferred value gives `missing_preferred_stock_value`.
+    Neither input is zero-filled. The factor never substitutes total assets or a ratio.
     """
     gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
     equity = _find(facts, entity_id, _STOCKHOLDERS_EQUITY)
+    preferred = _find(facts, entity_id, _PREFERRED_STOCK)
     goodwill = _find(facts, entity_id, _GOODWILL)
     intangibles = _find(facts, entity_id, _INTANGIBLE_ASSETS)
     headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
@@ -185,11 +195,13 @@ def gross_profit_per_employee_banking_tce(
         flags.append("missing_gross_profit")
     if any(item is None or item.value is None for item in tce_inputs):
         flags.append("missing_tangible_common_equity")
+    if preferred is None or preferred.value is None:
+        flags.append("missing_preferred_stock_value")
     if headcount is None or headcount.value is None:
         flags.append("missing_employees_total")
     elif headcount.value <= 0:
         flags.append("non_positive_employees_total")
-    present = [item for item in (gross_profit, headcount, *tce_inputs) if item is not None]
+    present = [item for item in (gross_profit, headcount, preferred, *tce_inputs) if item is not None]
     if not flags and len({item.fiscal_period for item in present}) > 1:
         flags.append("fiscal_period_mismatch")
 
@@ -209,11 +221,12 @@ def gross_profit_per_employee_banking_tce(
     assert equity is not None and goodwill is not None and intangibles is not None
     assert gross_profit.value is not None and headcount.value is not None
     assert equity.value is not None and goodwill.value is not None and intangibles.value is not None
+    assert preferred is not None and preferred.value is not None
 
-    tangible_common_equity = equity.value - (goodwill.value + intangibles.value)
+    tangible_common_equity = equity.value - preferred.value - (goodwill.value + intangibles.value)
     real_profit = gross_profit.value - tangible_common_equity * risk_free_rate
     value = real_profit / headcount.value
-    confidence = min(item.confidence for item in (gross_profit, headcount, *tce_inputs) if item is not None)
+    confidence = min(item.confidence for item in (gross_profit, headcount, preferred, *tce_inputs) if item is not None)
 
     return FactorResult(
         factor="gppe_banking_tce_v1",

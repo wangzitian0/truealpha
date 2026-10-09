@@ -19,6 +19,7 @@ _UNIT_FAMILY = {
     "stockholders_equity": UnitFamily.CURRENCY,
     "goodwill": UnitFamily.CURRENCY,
     "intangible_assets_net_excluding_goodwill": UnitFamily.CURRENCY,
+    "preferred_stock_value": UnitFamily.CURRENCY,
 }
 
 
@@ -197,11 +198,12 @@ def test_non_financial_above_fifteen_times_gross_profit_takes_the_uniform_charge
 def _banking_facts(
     *,
     equity: str | None = "340000000000",
+    preferred: str | None = "10000000000",
     goodwill: str | None = "5000000000",
     intangibles: str | None = "1000000000",
     total_assets: str | None = "4424900000000",
 ) -> list[Fact]:
-    # JPM-shaped inputs. Tangible common equity = equity - (goodwill + intangibles) = 334B.
+    # Synthetic bank inputs. Tangible common equity = equity - preferred - (goodwill + intangibles) = 324B.
     facts = [
         _fact("gross_profit", "86807000000", entity_id="issuer.bank"),
         _fact("employees_total", "318512", entity_id="issuer.bank"),
@@ -210,6 +212,8 @@ def _banking_facts(
         facts.append(_fact("total_assets", total_assets, entity_id="issuer.bank"))
     if equity is not None:
         facts.append(_fact("stockholders_equity", equity, entity_id="issuer.bank"))
+    if preferred is not None:
+        facts.append(_fact("preferred_stock_value", preferred, entity_id="issuer.bank"))
     if goodwill is not None:
         facts.append(_fact("goodwill", goodwill, entity_id="issuer.bank"))
     if intangibles is not None:
@@ -223,11 +227,39 @@ def test_banking_tce_charges_measured_tangible_common_equity() -> None:
     result = gross_profit_per_employee_banking_tce(
         _banking_facts(), entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
     )
-    tangible_common_equity = Decimal("340000000000") - Decimal("5000000000") - Decimal("1000000000")
+    tangible_common_equity = (
+        Decimal("340000000000") - Decimal("10000000000") - Decimal("5000000000") - Decimal("1000000000")
+    )
     expected = (Decimal("86807000000") - tangible_common_equity * _RISK_FREE_RATE) / Decimal("318512")
     assert result.value == expected
-    assert result.value > Decimal("200000")  # ~+$217k per employee on the measured base
+    assert result.value > Decimal("200000")  # positive on this synthetic base
     assert result.unit_family == UnitFamily.PER_EMPLOYEE
+    assert result.flags == []
+
+
+def test_banking_tce_deducts_preferred_stock_for_jpm_fy2025() -> None:
+    # JPM FY2025 10-K (accession 0001628280-26-008131, repo sample apps/data-engine/samples/filings):
+    # total stockholders' equity 362,438M; preferred stock 20,045M (362,438M - 342,393M common equity);
+    # goodwill 52,731M; intangibles 2,600M (finite-lived 1,300M + indefinite-lived 1,300M);
+    # employees 318,512; pre-provision profit 86,807M. Risk-free rate 0.05.
+    # Hand computation:
+    #   TCE          = 362,438M - 20,045M - 52,731M - 2,600M = 287,062M
+    #   capital      = 287,062M x 0.05                       = 14,353.1M
+    #   real profit  = 86,807M - 14,353.1M                   = 72,453.9M
+    #   value        = 72,453.9M / 318,512                   = about +227,476 per employee
+    from factors.base.gross_profit_per_employee import gross_profit_per_employee_banking_tce
+
+    facts = _banking_facts(
+        equity="362438000000",
+        preferred="20045000000",
+        goodwill="52731000000",
+        intangibles="2600000000",
+        total_assets=None,
+    )
+    result = gross_profit_per_employee_banking_tce(
+        facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
+    )
+    assert result.value == Decimal("72453900000") / Decimal("318512")
     assert result.flags == []
 
 
@@ -240,6 +272,30 @@ def test_banking_tce_missing_gives_unavailable_with_reason() -> None:
     assert result.value is None
     assert result.confidence == Decimal("0")
     assert "missing_tangible_common_equity" in result.flags
+
+
+def test_banking_missing_preferred_stock_gives_unavailable_with_its_own_reason() -> None:
+    # No zero stand-in for preferred stock: the measurement is refused, not computed on common equity.
+    from factors.base.gross_profit_per_employee import gross_profit_per_employee_banking_tce
+
+    result = gross_profit_per_employee_banking_tce(
+        _banking_facts(preferred=None), entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
+    )
+    assert result.value is None
+    assert result.confidence == Decimal("0")
+    assert "missing_preferred_stock_value" in result.flags
+    assert "missing_tangible_common_equity" not in result.flags
+
+
+def test_banking_reported_zero_preferred_stock_is_a_value_not_a_gap() -> None:
+    from factors.base.gross_profit_per_employee import gross_profit_per_employee_banking_tce
+
+    result = gross_profit_per_employee_banking_tce(
+        _banking_facts(preferred="0"), entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
+    )
+    tangible_common_equity = Decimal("340000000000") - Decimal("5000000000") - Decimal("1000000000")
+    assert result.value == (Decimal("86807000000") - tangible_common_equity * _RISK_FREE_RATE) / Decimal("318512")
+    assert result.flags == []
 
 
 def test_banking_tce_never_falls_back_to_total_assets() -> None:
