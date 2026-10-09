@@ -1,7 +1,7 @@
 """Preview replay: run large_model_value_v0 against #335's golden fixture.
 
 This reproduces the ten hand-verified golden decisions (5 issuers x 2
-cutoffs) from `libs/contracts/tests/fixtures/large_model_value_v0_strategy.v1.json`
+cutoffs) from `truealpha_contracts.data/large_model_value_v0_strategy.v1.json`
 by projecting the golden corpus into `factors.composite.strategy_evaluator`
 inputs and mapping its decisions onto the mart `Decision` dataclass. The whole
 decision algorithm -- factor orchestration, eligibility, the tier-band verdict,

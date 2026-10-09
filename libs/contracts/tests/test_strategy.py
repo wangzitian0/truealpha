@@ -3,7 +3,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+from importlib import resources
 
 import pytest
 from pydantic import ValidationError
@@ -23,12 +23,12 @@ from truealpha_contracts.strategy import (
 # `strategy_evaluator` both this golden and the #26 replay consume (#393). This
 # module keeps the schema-, identity-, and negative-case contract tests.
 
-CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0_strategy.v1.json"
+CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
 CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
 
 
 def _corpus() -> dict[str, object]:
-    raw = CORPUS_PATH.read_bytes()
+    raw = CORPUS_RESOURCE.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == CORPUS_SHA256
     return json.loads(raw)
 

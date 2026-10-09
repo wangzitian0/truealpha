@@ -27,8 +27,7 @@ command never overwrites differing bytes. Yahoo revised overlapping historical
 values during the 2026-07-12 capture itself; both the old one-year and new
 three-year files therefore remain immutable point-in-time vintages.
 
-Run `make sample-audit` to validate this corpus against the machine-readable
-strategy requirements. Sampling and the executable composite replay now satisfy
+Sampling and the executable composite replay now satisfy
 the local-backtest boundary. Five-year coverage and primary/fallback price
 reconciliation remain strategy-evaluation requirements. See
 `docs/strategy-data-quality.md` for the gate definitions.

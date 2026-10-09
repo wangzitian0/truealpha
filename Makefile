@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test prepush contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -20,7 +20,6 @@ help:
 	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
 	@echo "  make sample       Phase -1: pull SEC company-facts samples"
 	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
-	@echo "  make sample-audit Check fixture readiness for tooling and backtests"
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo ""
 	@echo "Quality:"
@@ -119,9 +118,6 @@ sample:
 
 sample-evidence:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/capture_strategy_evidence.py --resume
-
-sample-audit:
-	uv run --package truealpha-data-engine python apps/data-engine/scripts/audit_strategy_samples.py
 
 strategy-smoke:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/run_strategy_smoke.py --output-dir .local/strategy-smoke

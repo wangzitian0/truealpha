@@ -57,7 +57,5 @@ and filters normalized rows to the inclusive sample window. Twelve Data's suppor
 example likewise shows an `end_date` daily request ending on the preceding date:
 <https://support.twelvedata.com/en/articles/5214728-getting-historical-data>.
 
-The earlier Yahoo-only `factor-matrix-yahoo-20260715` directory is retained as
-invalidated development evidence. It pins the pre-review plan hash `d89ac31f...`,
-whose path was superseded before merge, so it is intentionally excluded from E0
-and E1 evidence and cannot be validated against the frozen v1 or v2 plan.
+The earlier Yahoo-only `factor-matrix-yahoo-20260715` directory was invalidated development
+evidence pinning pre-review plan hash `d89ac31f...` and has been cleaned up.
