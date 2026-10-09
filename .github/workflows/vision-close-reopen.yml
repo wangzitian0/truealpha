@@ -1,0 +1,27 @@
+name: vision-close-reopen
+
+# #1174: a scope:vision issue closed by a merge or a person, with no Rule 6
+# evidence comment, is reopened and gets one comment. The evidence comment holds
+# the headings `Deployed call site` and `Real-data output`. Issues without
+# scope:vision are not touched here; issue-close-guard.yml decides those.
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  reopen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reopen a scope:vision issue that lacks evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: python3 tools/vision_close_guard.py reopen --issue "$ISSUE_NUMBER"
