@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "eee7e301c96228ae0ed5eed9a866f56be9752b32dc2ecdda28c67e41c9646035",
     "root": "749e6cf6cfb5e18b32675996d0ddd5055f3583ff433e3c0aaa4cbf63b1805eaa",
-    "skills": "9c1006e030f81eb47e7260e494c92ae1603da4f70b2e00fcc69b92d6893c8b28"
+    "skills": "ae1d5ad08402248951790d2a23fec52e0c6fd9a3bbc304dd358d4f596aa77fc8"
   },
   "language": "en",
   "outputs": {
@@ -19,7 +19,7 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/audit/SKILL.md": "0af6924952635a59dc2e7991b872de35e22c87c0c02d8cebb7c2ca5c15c90e77",
+      "skills/audit/SKILL.md": "e2465a6d4027e3b1280f72d8a671d7308bfbe4e69a204ebfd36956b99cf58edd",
       "skills/auto/SKILL.md": "93b48a68f378a9a68024235cc04ea74aa222ed98fed6721aa1a7c1de8bad083d",
       "skills/close/SKILL.md": "d50a3cbec48ffba96c014851473a2ddd13421384b8f10bec7230f8ece7edf4b9",
       "skills/codegraph/SKILL.md": "ab6e81a61e7efb60ff9897c058e668c120ce282ea918b1364ca2b1fb353e7d0f",
@@ -30,7 +30,7 @@
       "skills/recall/SKILL.md": "3549a4d9a45777275b673b3d1a4c6311ffd802d66c752391a5b3a4970f624921",
       "skills/smoke/SKILL.md": "b8d6c1f868edf776c395a13fc3e4f86e1ce8eb2e745d313b690f42fff7a3959a",
       "skills/ssot/SKILL.md": "f485ceda841c39b0c1c19e50bafae2365f2ce95ec6b65d2e7653185420397f12",
-      "skills/swarm/SKILL.md": "12b0a3fdf6e9a91e4ed56061d0d619f498e8386de93ff9e639c621a00d595737"
+      "skills/swarm/SKILL.md": "d2fd3a6213db7cd8586436e00698189ebcaaac4ef85ace4090d386f67193351c"
     },
     "link_dirs": [
       ".claude/skills",
@@ -64,7 +64,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "2485ddba48a28fefaa87ffef6f360f3e18191ff9",
+  "source_revision": "da813771ad50e2b8b28a1bc589461d00c7a5b0ff",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",

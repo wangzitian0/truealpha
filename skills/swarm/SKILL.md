@@ -1,11 +1,11 @@
 ---
 name: swarm
-description: Universal multi-agent swarm execution engine. Coordinates 10 Interns across a 3-round adversarial state machine (Propose -> Cross-Falsify -> Triangulate) with physical reality verification.
+description: Universal multi-agent swarm execution engine. Coordinates 10 Interns across an adversarial state machine of up to 5 rounds (Propose -> Cross-Falsify -> Triangulate -> Extended Confrontation) with dynamic Director direction and physical reality verification.
 ---
 
 # swarm: multi-agent adversarial engine
 
-This skill is the execution engine for multi-agent parallel investigations, audits, and discovery sweeps. It coordinates batches of read-only Interns (`subagent_batch`) through structured rounds of hypothesis generation, adversarial cross-falsification, and Director physical verification.
+This skill is the execution engine for multi-agent parallel investigations, audits, and discovery sweeps. It coordinates batches of 10 read-only Interns (`subagent_batch`) through up to 5 structured rounds of hypothesis generation, adversarial cross-falsification, and Director physical verification. The Director dynamically defines audit dimensions and round progression.
 
 ## Specifications and constraints
 
@@ -22,11 +22,11 @@ This skill is the execution engine for multi-agent parallel investigations, audi
   - Anchors required: Every finding must cite exact file anchors (`file#Lxx-Lyy`) and reproducible counterexamples.
   - Zero conversational filler. Lead with conclusion.
 
-## Standard 3-round state machine
+## Dynamic 5-round state machine
 
 ```
 Round 1 (Propose)
-10 parallel Interns across distinct dimensions
+10 parallel Interns across Director-defined dimensions
 Output: Unverified defect hypotheses with exact anchors
        │
        ▼
@@ -38,6 +38,11 @@ Output: Hypotheses marked [DISPROVEN] or [CONFIRMED]
        ▼
 Round 3 (Director Triangulation)
 Director conducts Touch Reality probes on [CONFIRMED] findings
+Output: Verified findings or escalation triggers
+       │
+       ▼ (if contested HIGH findings remain)
+Round 4 - 5 (Extended Confrontation & Final Verdict)
+Targeted confrontation rounds; terminal round is audit-only
 Output: Final verified verdict and action list
 ```
 
