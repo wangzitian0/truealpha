@@ -13,6 +13,7 @@ import {
   buildRankingCardJson,
   renderEntityDeepDiveCardSvg,
   buildEntityCardJson,
+  entityCardThemes,
   type RankingCardData,
   type EntityCardData,
 } from "../src/server/cards/xhs-card";
@@ -127,5 +128,16 @@ assert(entityJson.metrics.peg === "1.85", "metric peg must match");
 assert(entityJson.themes.length === 2, "themes count must match");
 assert(entityJson.themes[0].theme === "AI Compute & Hardware <Core>", "theme name must match");
 assert(entityJson.themes[0].theme_share === "0.85", "theme share must match");
+
+// 7. A fill row (an issuer without a segment partition) is not a theme of the card (#1117)
+const cardThemes = entityCardThemes([
+  { theme: "AI Compute", themeShare: "0.85", unvisitedReason: null },
+  { theme: "Automotive Edge", themeShare: null, unvisitedReason: "no_segment_partition" },
+  { theme: "Refused Theme", themeShare: null, unvisitedReason: null },
+]);
+assert(cardThemes.length === 2, "the card drops the fill and keeps a refused real row");
+assert(cardThemes[0].theme === "AI Compute" && cardThemes[0].themeShare === "0.85", "a judged theme passes through");
+assert(cardThemes[1].theme === "Refused Theme" && cardThemes[1].themeShare === null, "a refused real row stays");
+assert(!("unvisitedReason" in cardThemes[0]), "the card data carries no reason field");
 
 console.log("xhs-card.test.ts: all assertions passed");

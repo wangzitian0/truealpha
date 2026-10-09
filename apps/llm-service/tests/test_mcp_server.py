@@ -522,3 +522,163 @@ def test_postgres_etf_profile_reader_handles_connection_error() -> None:
     assert result["availability_status"] == "unavailable"
     assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]
     assert result["holdings"] == []
+# --- #1117: the theme readers meet the unvisited fill rows of Q6 ---------------------------------
+#
+# An issuer without a segment partition has a fill row for each theme. The row holds NULL in
+# every partition column, `extractor` `lane:unvisited:v1` and the reason in `reason_codes`.
+# The real readers run here, against a real Postgres, inside a transaction that is rolled back.
+
+_FILL_EXTRACTOR = "lane:unvisited:v1"
+_OLD_CUTOFF = datetime(2026, 1, 1, tzinfo=UTC)
+_NEW_CUTOFF = datetime(2026, 2, 1, tzinfo=UTC)
+
+
+class _BorrowedConnection:
+    """Gives each reader the test's own connection, so it reads the uncommitted rows.
+
+    The readers pass their row factory to `psycopg.connect`, so the wrapper applies it to each cursor.
+    """
+
+    def __init__(self, real: Any, row_factory: Any) -> None:
+        self._real = real
+        self._row_factory = row_factory
+
+    def __enter__(self) -> _BorrowedConnection:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def cursor(self, **kwargs: Any) -> Any:
+        return self._real.cursor(row_factory=self._row_factory, **kwargs)
+
+
+@pytest.fixture
+def theme_database(monkeypatch: pytest.MonkeyPatch) -> Any:
+    import os
+
+    import psycopg
+
+    url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
+    try:
+        connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; ci-python runs this against a real database")
+    monkeypatch.setattr(
+        psycopg, "connect", lambda *_a, **kwargs: _BorrowedConnection(connection, kwargs.get("row_factory"))
+    )
+    try:
+        yield connection
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _theme_row(
+    connection: Any, *, issuer_id: str, theme_id: str, cutoff: datetime, fill: bool, run: str = "run:mcp-1117"
+) -> None:
+    """One `mart.issuer_theme_purity` row: a judged share of 0.5, or the fill of an issuer without a partition."""
+    connection.execute(
+        """
+        insert into mart.issuer_theme_purity
+            (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, cutoff,
+             period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,
+             out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,
+             reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
+        values (%(run)s, %(issuer)s, %(cik)s, %(theme_id)s, %(theme)s, 'v0', %(sha)s, %(cutoff)s,
+                %(period)s, %(partition)s, %(share)s, %(total)s, %(inside)s, %(outside)s, %(rest)s, %(rest)s,
+                %(segments)s, %(confidence)s, %(reasons)s, %(extractor)s, %(status)s, %(evidence)s,
+                'not_evaluated')
+        """,
+        {
+            "run": f"{run}:{cutoff:%Y%m%d}",
+            "issuer": issuer_id,
+            "theme_id": theme_id,
+            "theme": theme_id.upper(),
+            "sha": "a" * 64,
+            "cutoff": cutoff,
+            "cik": None if fill else 4242,
+            "period": None if fill else "2025-12-31",
+            "partition": None if fill else "segment-partition:" + "b" * 64,
+            "share": None if fill else "0.5",
+            "total": None if fill else "100",
+            "inside": None if fill else "50",
+            "outside": None if fill else "50",
+            "rest": None if fill else "0",
+            "segments": 0 if fill else 2,
+            "confidence": "0" if fill else "0.9",
+            "reasons": ["no_segment_partition"] if fill else [],
+            "extractor": _FILL_EXTRACTOR if fill else "rule:test",
+            "status": "unavailable" if fill else "available",
+            "evidence": "degraded" if fill else "verified",
+        },
+    )
+
+
+def _profile_reader() -> Any:
+    from llm_service.mcp_server import PostgresCompanyProfileReader
+
+    return PostgresCompanyProfileReader(database_url="postgresql://unused")
+
+
+def _leaderboard_reader() -> Any:
+    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+
+    return PostgresThemePurityLeaderboardReader(database_url="postgresql://unused")
+
+
+def test_company_profile_names_why_a_theme_has_no_answer_and_stays_unavailable(theme_database: Any) -> None:
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    for theme_id in ("zz-theme-a", "zz-theme-b"):
+        _theme_row(theme_database, issuer_id=issuer, theme_id=theme_id, cutoff=_NEW_CUTOFF, fill=True)
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    assert [(t["theme_id"], t["unvisited_reason"]) for t in profile["theme_purity"]] == [
+        ("zz-theme-a", "no_segment_partition"),
+        ("zz-theme-b", "no_segment_partition"),
+    ]
+    for theme in profile["theme_purity"]:
+        assert (theme["theme_share"], theme["segments"], theme["confidence"]) == (None, None, None), (
+            "a fill has no share, no segment count and no confidence; it is not a refused real row"
+        )
+    assert profile["availability_status"] == "unavailable", "a fill row is not data for the profile"
+
+
+def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_fill(theme_database: Any) -> None:
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-b", cutoff=_NEW_CUTOFF, fill=True)
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    themes = {t["theme_id"]: t for t in profile["theme_purity"]}
+    assert themes["zz-theme-a"]["theme_share"] == "0.5", "the newer fill must not hide the real row"
+    assert themes["zz-theme-a"]["unvisited_reason"] is None
+    assert themes["zz-theme-b"]["unvisited_reason"] == "no_segment_partition"
+    assert profile["availability_status"] == "available", "one real theme row is data"
+
+
+def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_issuer_with_a_newer_fill(
+    theme_database: Any,
+) -> None:
+    import uuid
+
+    judged, later_fill, never_judged = (str(uuid.uuid4()) for _ in range(3))
+    _theme_row(theme_database, issuer_id=judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+    _theme_row(theme_database, issuer_id=never_judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+
+    board = _leaderboard_reader().get_leaderboard(theme_id="zz-theme-a", limit=10)
+
+    assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill])
+    assert board["count"] == 2
+    assert all(i["theme_share"] == "0.5" and i["cik"] == 4242 for i in board["issuers"])

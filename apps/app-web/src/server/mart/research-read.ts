@@ -167,9 +167,13 @@ export interface EntityDetail {
 		themeShare: string | null;
 		inThemeRevenue: string | null;
 		consolidatedRevenue: string | null;
-		segments: number;
+		/** Null for a fill row: it has no segments. */
+		segments: number | null;
 		confidence?: string | null;
 		availabilityStatus: string;
+		/** The reason code of a fill row (an issuer without a segment partition, #1117), else null.
+		 * A fill row is "no answer, and why". It is not a refused share. */
+		unvisitedReason?: string | null;
 	}>;
 	gppeDetail?: {
 		gppe: string | null;
@@ -596,9 +600,10 @@ export class StrategyRunReadAdapter {
 			themeShare: string | null;
 			inThemeRevenue: string | null;
 			consolidatedRevenue: string | null;
-			segments: number;
+			segments: number | null;
 			confidence: string | null;
 			availabilityStatus: string;
+			unvisitedReason: string | null;
 		}>
 	> {
 		try {
@@ -611,7 +616,8 @@ export class StrategyRunReadAdapter {
 					        consolidated_revenue,
 					        segments,
 					        confidence,
-					        availability_status
+					        availability_status,
+					        unvisited_reason
 					 from (
 					     select distinct on (p.theme_id)
 					            p.theme_id,
@@ -620,15 +626,19 @@ export class StrategyRunReadAdapter {
 					            p.theme_share as raw_share,
 					            p.in_theme_revenue::text as in_theme_revenue,
 					            p.consolidated_revenue::text as consolidated_revenue,
-					            p.segments,
-					            p.confidence::text as confidence,
-					            coalesce(p.availability_status, 'unavailable') as availability_status
+					            case when p.partition_id is null then null else p.segments end as segments,
+					            case when p.partition_id is null then null else p.confidence::text end as confidence,
+					            coalesce(p.availability_status, 'unavailable') as availability_status,
+					            case when p.partition_id is null
+					                 then coalesce(p.reason_codes[1], 'unvisited') end as unvisited_reason
 					     from mart.issuer_theme_purity p
 					     where p.issuer_id = $1
 					        or p.issuer_id in (
 					            select entity_id::text from mart.entity_identity where legacy_id = $1
 					        )
-					     order by p.theme_id, p.cutoff desc, p.created_at desc
+					     -- A row with a segment partition comes first. A newer fill row (an issuer
+					     -- without a partition, #1117) must not hide an older real row.
+					     order by p.theme_id, (p.partition_id is null), p.cutoff desc, p.created_at desc
 					 ) latest_per_theme
 					 order by raw_share desc nulls last, theme asc`,
 					[issuerId],
@@ -649,15 +659,14 @@ export class StrategyRunReadAdapter {
 						row.consolidated_revenue !== undefined
 							? String(row.consolidated_revenue)
 							: null,
-					segments:
-						typeof row.segments === "number"
-							? row.segments
-							: 0,
+					segments: typeof row.segments === "number" ? row.segments : null,
 					confidence:
 						row.confidence !== null && row.confidence !== undefined
 							? String(row.confidence)
 							: null,
 					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					unvisitedReason:
+						typeof row.unvisited_reason === "string" ? row.unvisited_reason : null,
 				}));
 			});
 		} catch (error) {
