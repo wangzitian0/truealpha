@@ -17,6 +17,7 @@ never read (#429 invariant I2).
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -59,6 +60,53 @@ def load_strategy_definition() -> LargeModelValueV0Definition:
     corpus's golden inputs, decisions, or rates (#429 invariant I2)."""
     corpus = _load_corpus()
     return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+
+
+def financial_input_rows(
+    payload: Mapping[str, Any],
+    confidence: Decimal,
+    observed_at: datetime,
+    *,
+    knowable_at_of: Callable[[str, str | None], datetime | None] | None = None,
+) -> list[tuple[str, str, Decimal, datetime, str | None]]:
+    """The strategy input rows one financial-fact payload yields.
+
+    Each row is ``(input_key, value, confidence, knowable_at, fiscal_period)``. The live writer
+    and the historical projector (``datahub.strategy_history``) share this function, so both
+    write the same keys, the same period tags and the same confidence gate.
+
+    The live writer stamps every row with the observation's own ``observed_at``. The projector
+    passes ``knowable_at_of(input_key, period_end)``, which returns the filing time of one
+    input. ``period_end`` is None for a scalar input. A None result drops the row: an input
+    without a filing time has no knowable time, and nothing may invent one.
+    """
+    rows: list[tuple[str, str, Decimal, datetime, str | None]] = []
+
+    def knowable_at(input_key: str, period_end: str | None) -> datetime | None:
+        return observed_at if knowable_at_of is None else knowable_at_of(input_key, period_end)
+
+    op_end = payload.get("operating_period_end")
+    rev_end = payload.get("revenue_period_end")
+    if op_end is not None and rev_end is not None and op_end != rev_end:
+        confidence = Decimal("0.00")
+    for key in _STRATEGY_FINANCIAL_KEYS:
+        value = payload.get(key)
+        if value is not None and (stamp := knowable_at(key, None)) is not None:
+            rows.append((key, value, confidence, stamp, None))
+    for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
+        # The period tag mirrors staging's own encoding so `factors.base.peg`
+        # parses one shape wherever the series came from. Only the end date is
+        # known here, and an annual period's start is its end less a year; the
+        # factor re-checks the duration floor rather than trusting the tag.
+        for period_end, value in sorted((payload.get(payload_key) or {}).items()):
+            if (stamp := knowable_at(key, period_end)) is None:
+                continue
+            # One encoder, shared with the factor that parses it (init.md Section 6).
+            # Building the tag here and matching it with a regex there is how a
+            # format drifts into an empty series instead of an error.
+            tag = encode_annual(date.fromisoformat(period_end))
+            rows.append((key, value, confidence, stamp, tag))
+    return rows
 
 
 def seed_strategy_inputs_from_capture(
@@ -122,25 +170,7 @@ def seed_strategy_inputs_from_capture(
         inputs: list[tuple[str, str, Decimal, datetime, str | None]] = []
         if issuer_id in financial:
             _listing, payload, confidence, observed_at = financial[issuer_id]
-            op_end = payload.get("operating_period_end")
-            rev_end = payload.get("revenue_period_end")
-            if op_end is not None and rev_end is not None and op_end != rev_end:
-                confidence = Decimal("0.00")
-            for key in _STRATEGY_FINANCIAL_KEYS:
-                value = payload.get(key)
-                if value is not None:
-                    inputs.append((key, value, confidence, observed_at, None))
-            for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
-                # The period tag mirrors staging's own encoding so `factors.base.peg`
-                # parses one shape wherever the series came from. Only the end date is
-                # known here, and an annual period's start is its end less a year; the
-                # factor re-checks the duration floor rather than trusting the tag.
-                for period_end, value in sorted((payload.get(payload_key) or {}).items()):
-                    # One encoder, shared with the factor that parses it (init.md Section 6).
-                    # Building the tag here and matching it with a regex there is how a
-                    # format drifts into an empty series instead of an error.
-                    tag = encode_annual(date.fromisoformat(period_end))
-                    inputs.append((key, value, confidence, observed_at, tag))
+            inputs.extend(financial_input_rows(payload, confidence, observed_at))
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]
             close = payload.get("close")

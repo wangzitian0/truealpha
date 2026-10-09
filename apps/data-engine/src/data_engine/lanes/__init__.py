@@ -36,6 +36,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.standards",
     # datahub: the entity identity backfill (#877), sensor-launched, never at boot
     "data_engine.lanes.entity_identity",
+    # the strategy's point-in-time input history for monthly cutoffs (#1139): stored bytes only
+    "data_engine.lanes.strategy_history",
 )
 
 
