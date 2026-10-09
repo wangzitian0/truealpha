@@ -29,6 +29,7 @@ import {
 	MartStrategyRunRepository,
 } from "./strategy-run-repository";
 import { withMartReadonly } from "./db";
+import type { MartClientLike } from "./topt-gppe-repository";
 
 export type Availability =
 	| "available"
@@ -74,6 +75,33 @@ export interface ModuleOverviewRow {
 	 * combined with another and nothing new is computed (init.md principle 2).
 	 */
 	coverage: { withValue: number; total: number } | null;
+	/** The table this module's value is read from: the decision table, or its own mart output. */
+	source: string;
+	/** Output counts for modules 3 to 6, read at read time. Null for decision modules. */
+	output: ModuleOutputCount | null;
+}
+
+/** The mart tables that hold the output of modules 3 to 6. */
+export type MartOutputTable =
+	| "mart.issuer_supply_chain_exposure"
+	| "mart.issuer_analyst_ratings"
+	| "mart.fund_virtual_company"
+	| "mart.issuer_theme_purity";
+
+/** Modules 1, 2 and 7 read their values from the strategy decision table. */
+const DECISION_SOURCE = "mart.strategy_decisions";
+
+/** What one output table holds for its newest governed run, counted at read time. */
+export interface ModuleOutputCount {
+	table: MartOutputTable;
+	/** The run whose rows were counted: the run with the newest cutoff. Null when the table is empty. */
+	runId: string | null;
+	/** Rows the run wrote to the table. Zero when the table is empty. */
+	rows: number;
+	/** Rows whose availability_status is 'available'. Fill rows and refusals are not counted here. */
+	availableRows: number;
+	/** The newest cutoff of that run, ISO-8601 UTC to the second. Null when the table is empty. */
+	latestCutoff: string | null;
 }
 
 export interface RankingRow {
@@ -209,16 +237,21 @@ export class MartReadUnavailable extends Error {
 	}
 }
 
-// The seven modules and the strategy composite. `field` names the decision field whose
-// presence proves the module is materialized in the current mart (via the strategy fixture);
-// `null` means no mart output exists for it yet (Gate 2 modules).
-const MODULE_CATALOG: readonly {
+export interface ModuleCatalogEntry {
 	module: number;
 	name: string;
 	note: string;
 	gate: string;
+	/** The decision key whose presence proves a decision module. Null for an output-table module. */
 	field: keyof StrategyRunDecision | null;
-}[] = [
+	/** The mart table a module's output is read from. Null for a decision module. */
+	outputTable: MartOutputTable | null;
+}
+
+// The seven modules and the strategy composite. `field` names the decision field whose
+// presence proves the module is materialized in the strategy run. `outputTable` names the
+// mart table a module writes its own output to; modules 3 to 6 have one.
+export const MODULE_CATALOG: readonly ModuleCatalogEntry[] = [
 	// `field` must name the decision key the module writes, or the badge reports the
 	// catalog's opinion instead of the data (Copilot review on #603: PEG read "unavailable"
 	// while `peg` values were present and rendering on /research/rankings).
@@ -228,6 +261,7 @@ const MODULE_CATALOG: readonly {
 		note: "recency-weighted historical growth",
 		gate: "Gate 2",
 		field: "peg",
+		outputTable: null,
 	},
 	{
 		module: 2,
@@ -235,6 +269,7 @@ const MODULE_CATALOG: readonly {
 		note: "capital-adjusted labor efficiency",
 		gate: "Gate 1",
 		field: "capital_adjusted_labor_efficiency",
+		outputTable: null,
 	},
 	{
 		module: 3,
@@ -242,6 +277,7 @@ const MODULE_CATALOG: readonly {
 		note: "confidence-gated scenario exposure",
 		gate: "Gate 2",
 		field: null,
+		outputTable: "mart.issuer_supply_chain_exposure",
 	},
 	{
 		module: 4,
@@ -249,6 +285,7 @@ const MODULE_CATALOG: readonly {
 		note: "PIT event eligibility and outcomes",
 		gate: "Gate 2",
 		field: null,
+		outputTable: "mart.issuer_analyst_ratings",
 	},
 	{
 		module: 5,
@@ -256,6 +293,7 @@ const MODULE_CATALOG: readonly {
 		note: "delayed N-PORT holdings",
 		gate: "Gate 2",
 		field: null,
+		outputTable: "mart.fund_virtual_company",
 	},
 	{
 		module: 6,
@@ -263,6 +301,7 @@ const MODULE_CATALOG: readonly {
 		note: "traceable segment classification",
 		gate: "Gate 2",
 		field: null,
+		outputTable: "mart.issuer_theme_purity",
 	},
 	{
 		module: 7,
@@ -270,8 +309,63 @@ const MODULE_CATALOG: readonly {
 		note: "materialized composite factor",
 		gate: "Gate 1",
 		field: "tier",
+		outputTable: null,
 	},
 ];
+
+/** The table a module's value comes from: its own output table, or the decision table. */
+export function moduleSourceTable(entry: ModuleCatalogEntry): string {
+	return entry.outputTable ?? DECISION_SOURCE;
+}
+
+/**
+ * Counts the newest run in one output table, in one statement. The newest run has the newest
+ * cutoff. The theme-purity reader uses the same rule. `table` is a typed constant, never input.
+ */
+export function moduleOutputCountSql(table: MartOutputTable): string {
+	return `
+		with newest as (
+			select run_id
+			from ${table}
+			group by run_id
+			order by max(cutoff) desc
+			limit 1
+		)
+		select (select run_id from newest) as run_id,
+		       count(*)::int as row_count,
+		       count(*) filter (where availability_status = 'available')::int as available_count,
+		       to_char(max(cutoff) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as latest_cutoff
+		from ${table}
+		where run_id = (select run_id from newest)
+	`;
+}
+
+function countOf(value: unknown, column: string): number {
+	if (typeof value !== "number" || !Number.isInteger(value)) {
+		throw new MartReadUnavailable(`${column} is not an integer count`);
+	}
+	return value;
+}
+
+async function readOutputCount(
+	client: MartClientLike,
+	table: MartOutputTable,
+): Promise<ModuleOutputCount> {
+	const result = await client.query(moduleOutputCountSql(table));
+	const row = result.rows[0];
+	if (row === undefined) {
+		throw new MartReadUnavailable(`${table} count returned no row`);
+	}
+	const runId = row.run_id;
+	const latestCutoff = row.latest_cutoff;
+	return {
+		table,
+		runId: typeof runId === "string" ? runId : null,
+		rows: countOf(row.row_count, `${table}.row_count`),
+		availableRows: countOf(row.available_count, `${table}.available_count`),
+		latestCutoff: typeof latestCutoff === "string" ? latestCutoff : null,
+	};
+}
 
 /** Exported for `tests/dashboard-read.test.ts`'s fixture-independent hard-excluded case —
  * see #370's rebase note: the shared fixture no longer contains a naturally-occurring
@@ -340,9 +434,20 @@ export class StrategyRunReadAdapter {
 	// cost against Postgres — Copilot review on #438). Keyed by contextId, not unconditional,
 	// since nothing stops a caller from reusing one instance across two different contexts.
 	private readonly reportCache = new Map<string, Promise<StrategyRunReport>>();
+	private readonly runWithClient: <T>(
+		fn: (client: MartClientLike) => Promise<T>,
+	) => Promise<T>;
 
-	constructor(repository?: StrategyRunRepositoryLike) {
+	/** `runWithClient` is an injection point for tests only (a fake client, no connection).
+	 * Production callers omit it and get the `mart_readonly` session from `withMartReadonly`. */
+	constructor(
+		repository?: StrategyRunRepositoryLike,
+		runWithClient: <T>(
+			fn: (client: MartClientLike) => Promise<T>,
+		) => Promise<T> = withMartReadonly,
+	) {
 		this.repository = repository ?? new MartStrategyRunRepository();
+		this.runWithClient = runWithClient;
 	}
 
 	/** `provenance` is optional because `FixtureStrategyRunRepository` legitimately
@@ -392,9 +497,43 @@ export class StrategyRunReadAdapter {
 		return cutoffs.slice().sort().reverse()[0];
 	}
 
+	/** Counts each output table's newest run. One session; one count statement per table. */
+	private async readModuleOutputs(): Promise<
+		Map<MartOutputTable, ModuleOutputCount>
+	> {
+		const tables = MODULE_CATALOG.flatMap((entry) =>
+			entry.outputTable === null ? [] : [entry.outputTable],
+		);
+		return this.runWithClient(async (client) => {
+			const counts = new Map<MartOutputTable, ModuleOutputCount>();
+			for (const table of tables) {
+				counts.set(table, await readOutputCount(client, table));
+			}
+			return counts;
+		});
+	}
+
 	async overview(context: AccessContext): Promise<ModuleOverviewRow[]> {
 		const decisions = (await this.report(context)).decisions;
+		const outputs = await this.readModuleOutputs();
 		return MODULE_CATALOG.map((entry) => {
+			const source = moduleSourceTable(entry);
+			if (entry.outputTable !== null) {
+				const output = outputs.get(entry.outputTable);
+				if (output === undefined) {
+					throw new MartReadUnavailable(`no count read for ${entry.outputTable}`);
+				}
+				return {
+					module: entry.module,
+					name: entry.name,
+					note: entry.note,
+					gate: entry.gate,
+					availability: output.availableRows > 0 ? "available" : "unavailable",
+					coverage: null,
+					source,
+					output,
+				};
+			}
 			const withValue =
 				entry.field === null
 					? 0
@@ -410,6 +549,8 @@ export class StrategyRunReadAdapter {
 				availability: withValue > 0 ? "available" : "unavailable",
 				coverage:
 					entry.field === null ? null : { withValue, total: decisions.length },
+				source,
+				output: null,
 			};
 		});
 	}

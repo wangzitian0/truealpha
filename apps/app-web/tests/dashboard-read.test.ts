@@ -27,6 +27,7 @@ import {
 import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboard";
 import { decisionAvailability, StrategyRunReadAdapter, type StrategyRunRepositoryLike } from "../src/server/mart/research-read";
 import { paginate } from "../src/server/mart/pagination";
+import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -59,6 +60,13 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
 function fixtureAdapter(): StrategyRunReadAdapter {
   return new StrategyRunReadAdapter({
     getLatest: (strategyId, context) => new FixtureStrategyRunRepository().getLatest(strategyId, context),
+  }, EMPTY_MART);
+}
+
+/** Module 3-6 output counts (#1175), answered as empty tables. Keeps overview() off a database. */
+function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
+  return fn({
+    query: async () => ({ rows: [{ run_id: null, row_count: 0, available_count: 0, latest_cutoff: null }] }),
   });
 }
 
@@ -108,7 +116,7 @@ function fixtureAdapter(): StrategyRunReadAdapter {
     strategy_run_id: "strategy-run:" + "e".repeat(64),
     executed_at: "2026-07-19T06:32:15.541Z",
   };
-  const outcome = await loadOverview(TEST_CONTEXT, new StrategyRunReadAdapter({ getLatest: async () => martShapedReport }));
+  const outcome = await loadOverview(TEST_CONTEXT, new StrategyRunReadAdapter({ getLatest: async () => martShapedReport }, EMPTY_MART));
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   assert(outcome.data.run.strategyRunId === martShapedReport.strategy_run_id, "run id must surface from a mart-shaped report");
   assert(outcome.data.run.executedAt === "2026-07-19T06:32:15.541Z", "executed_at must surface verbatim");
@@ -125,7 +133,7 @@ function fixtureAdapter(): StrategyRunReadAdapter {
       getLatestCalls += 1;
       return new FixtureStrategyRunRepository().getLatest(id, ctx);
     },
-  });
+  }, EMPTY_MART);
   const outcome = await loadOverview(TEST_CONTEXT, countingAdapter);
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   assert(getLatestCalls === 1, `expected exactly 1 underlying read, got ${getLatestCalls}`);
@@ -184,6 +192,7 @@ function fixtureAdapter(): StrategyRunReadAdapter {
     TEST_CONTEXT,
     new StrategyRunReadAdapter(
       repositoryReturning({ ...emptyReport(), decisions: [withPeg] }),
+      EMPTY_MART,
     ),
   );
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
@@ -195,6 +204,7 @@ function fixtureAdapter(): StrategyRunReadAdapter {
     TEST_CONTEXT,
     new StrategyRunReadAdapter(
       repositoryReturning({ ...emptyReport(), decisions: [{ ...withPeg, peg: null, peg_rank: null }] }),
+      EMPTY_MART,
     ),
   );
   assert(withoutPeg.kind === "ready", `expected ready, got ${withoutPeg.kind}`);
