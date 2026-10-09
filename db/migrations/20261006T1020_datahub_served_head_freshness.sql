@@ -84,6 +84,8 @@ values
     -- market-data: the lane runs on weekdays only (cron `15 21 * * 1-5`).
     -- After a long weekend the age can pass 72 hours. Decide the family again when it is wired.
     ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'daily', 'internal', false),
+    -- strategy-history: the lane runs on Sundays (cron `7 10 * * 0`) and reads stored bytes only.
+    ('strategy-history', 'strategy_history', 'strategy_history_schedule', null, 'weekly', 'internal', false),
     ('output-invariants', 'quality', 'output_invariants_schedule', null, 'daily', 'operators', false),
     ('datahub-confidence-report', 'quality', 'datahub_confidence_report_schedule', null, 'daily', 'operators', false),
     ('model-key-health', 'quality', 'model_key_health_schedule', null, 'daily', 'operators', false),

@@ -627,3 +627,24 @@ def test_the_documented_graphql_launch_is_a_valid_forced_topt_tick() -> None:
     assert set(config) == {"executed_at", "force_fetch"} and config["force_fetch"] is True
     datetime.fromisoformat(config["executed_at"])
     assert dg.validate_run_config(capture.topt_live_pipeline_job, run_config)
+
+
+def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick() -> None:
+    """#1139: the projector runs from the deployed root, and its cutoffs come from the tick.
+
+    The schedule passes the tick as `executed_at`. The op derives the monthly cutoffs from it.
+    A wall-clock read in the lane would make a replay of the same tick build different cutoffs."""
+    from data_engine.lanes import strategy_history as lane
+
+    assert "data_engine.lanes.strategy_history" in LANE_MODULES
+    assert lane.STRATEGY_HISTORY_JOB_NAME in {job.name for job in defs.jobs or ()}
+    assert lane.strategy_history_schedule.name in {schedule.name for schedule in defs.schedules or ()}
+    assert lane.strategy_history_schedule.cron_schedule == lane.STRATEGY_HISTORY_CRON
+
+    tick = datetime(2026, 10, 11, 10, 7, tzinfo=UTC)
+    request = lane.strategy_history_schedule(dg.build_schedule_context(scheduled_execution_time=tick))
+    assert request.run_key == tick.isoformat()
+    config = request.run_config["ops"]["project_strategy_history_op"]["config"]
+    assert config["executed_at"] == tick.isoformat()
+    assert dg.validate_run_config(lane.strategy_history_pipeline_job, request.run_config)
+    assert "datetime.now" not in inspect.getsource(lane)

@@ -378,6 +378,12 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   and a regex fails silently, as an empty series rather than an error.
 - `vintage` is `recorded_at`-ordered supersession: a restatement appends and wins by
   recency; history is never overwritten.
+- **History rows (#1139).** `datahub/strategy_history.py` writes the rows of past monthly cutoffs
+  (the first day of each of the last 36 months, 00:00:00Z) from stored bytes only. A fact is
+  admitted when its filed date is before the cutoff date. Its `knowable_at` is the end of the
+  filed day. Each input keeps its own filed date and its own `fiscal_period`. `last_close` is the
+  unadjusted close of the last session before the cutoff date. A re-run skips a row that exists
+  with the same value and `knowable_at`. The lane is `strategy_history_projection_pipeline`.
 - **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
   computation (rule 23): `staging.evidence_nodes` / `evidence_edges`.
