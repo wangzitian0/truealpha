@@ -128,7 +128,9 @@ def test_a_missing_input_or_a_zero_denominator_is_undefined_never_a_number() -> 
             "risk_free_rate": Decimal("0.05"),
         },
     )
-    assert zero.values["gppe_uniform_charge_v0"] is None and zero.undefined == {"gppe_uniform_charge_v0": "zero_denominator"}
+    assert zero.values["gppe_uniform_charge_v0"] is None and zero.undefined == {
+        "gppe_uniform_charge_v0": "zero_denominator"
+    }
 
 
 def _metric(name: str, value: str | None, input_id: str = IDS[0]) -> ToptMetricInput:

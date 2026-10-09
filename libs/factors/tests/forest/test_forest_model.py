@@ -86,7 +86,10 @@ def test_captured_inputs_name_a_confidence_family_and_nothing_else_does() -> Non
 def test_a_node_declares_a_sign_policy_for_exactly_its_classes() -> None:
     with pytest.raises(ValidationError, match="exactly its applicable classes"):
         _node("gppe_uniform_charge_v0").model_validate(
-            {**_node("gppe_uniform_charge_v0").model_dump(), "sign_policy": {IssuerClass.FINANCIAL: SignPolicy.SIGN_IS_SIGNAL}}
+            {
+                **_node("gppe_uniform_charge_v0").model_dump(),
+                "sign_policy": {IssuerClass.FINANCIAL: SignPolicy.SIGN_IS_SIGNAL},
+            }
         )
 
 
@@ -171,7 +174,10 @@ def test_a_formula_is_registered_and_takes_its_arity() -> None:
         )
     with pytest.raises(ValidationError, match="not registered"):
         Decomposition(
-            output="gppe_uniform_charge_v0", formula_id="ratio", formula_version=2, operands={IssuerClass.FINANCIAL: ("a", "b")}
+            output="gppe_uniform_charge_v0",
+            formula_id="ratio",
+            formula_version=2,
+            operands={IssuerClass.FINANCIAL: ("a", "b")},
         )
 
 
@@ -200,9 +206,14 @@ def test_judge_sign(policy: SignPolicy, value: str, violation: bool, signal: boo
 
 
 def test_a_class_the_node_does_not_declare_is_a_violation_whatever_the_sign() -> None:
-    finding = judge_sign(_node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=Decimal("5"), subject="listing:x")
+    finding = judge_sign(
+        _node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=Decimal("5"), subject="listing:x"
+    )
     assert finding is not None and finding.violation and finding.policy is None
-    assert judge_sign(_node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=None, subject="listing:x") is None
+    assert (
+        judge_sign(_node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=None, subject="listing:x")
+        is None
+    )
 
 
 def test_gppe_v020_declares_a_negative_value_a_signal_for_every_class() -> None:

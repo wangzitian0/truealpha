@@ -436,7 +436,9 @@ def test_evaluator_ranks_a_bank_on_measured_tangible_common_equity() -> None:
     # Banking v1 charges measured TCE (340B - 6B = 334B), not 8% of assets and not total assets.
     # (86.807B - 334B * 0.05) / 318,512 = about +$220k per employee on this base.
     issuer = IssuerInput(issuer_id="issuer:bank", records=_BANK_RECORDS_WITH_TCE, issuer_class=IssuerClass.FINANCIAL)
-    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    [decision] = evaluate_cutoff(
+        [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
     expected = (Decimal("86807000000") - Decimal("334000000000") * Decimal("0.05")) / Decimal("318512")
     assert decision.exclusion_reason is None
     assert decision.capital_adjusted_labor_efficiency == expected.quantize(Decimal("0.01"))
@@ -446,7 +448,9 @@ def test_evaluator_excludes_a_bank_without_tangible_common_equity() -> None:
     # No fallback value: the bank is excluded with the named reason, never ranked on total assets.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "goodwill"}
     issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
-    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    [decision] = evaluate_cutoff(
+        [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
     assert decision.eligible is False
     assert decision.capital_adjusted_labor_efficiency is None
     assert decision.exclusion_reason is ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY
@@ -456,7 +460,9 @@ def test_evaluator_charges_the_uniform_base_to_a_non_financial_issuer_above_fift
     # Assets / gross profit = 50.9 > 15. The uniform charge applies: no 8% base for a non-financial issuer.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key not in _TCE_KEYS}
     issuer = IssuerInput(issuer_id="issuer:acme", records=records, issuer_class=IssuerClass.NON_FINANCIAL)
-    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    [decision] = evaluate_cutoff(
+        [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
     expected = (Decimal("86807000000") - Decimal("4424900000000") * Decimal("0.05")) / Decimal("318512")
     assert decision.capital_adjusted_labor_efficiency == expected.quantize(Decimal("0.01"))
     assert decision.capital_adjusted_labor_efficiency < 0
