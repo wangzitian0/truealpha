@@ -301,4 +301,3 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
         connect=lambda _url: _Connection(answers),
     )
     assert failing == 1
-
