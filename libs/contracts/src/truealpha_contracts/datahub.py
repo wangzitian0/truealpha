@@ -590,6 +590,11 @@ class NormalizedObservation(BaseModel):
     parser_version: str = Field(pattern=STABLE_ID_PATTERN)
     mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
     normalized_payload_sha256: str = Field(pattern=_SHA256)
+    # #530: The next two fields stay declared and unused by the capture path.
+    # The vintage in mart lineage is the real restatement mechanism.
+    # The read path resolves a restatement with `knowable_at desc` (init.md Section 6).
+    # Do not wire these fields without an issue.
+    # `test_restatement_fields_stay_unwired.py` fails when a data-engine module writes them.
     is_restatement: bool = False
     supersedes_observation_id: str | None = Field(
         default=None,

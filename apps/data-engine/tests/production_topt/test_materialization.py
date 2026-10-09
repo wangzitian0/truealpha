@@ -875,6 +875,27 @@ def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(conne
     assert graded["fresh_count"] == live_fresh_count
 
 
+def test_mart_freshness_state_takes_more_than_one_value_on_a_run_with_a_stale_cell(connection) -> None:
+    """#530 acceptance, mart side: the served freshness is not a constant.
+
+    The seeded run holds 84 selected observations. One reused observation is older than
+    its window at the cutoff. The mart view grades that row stale and the other 83 fresh.
+    A view that returns one literal for every row fails this test.
+    """
+    (_, run, *_rest) = _seed_complete_production_run(connection, stale_unchanged_first_observation=True)
+
+    distinct_count, states = connection.execute(
+        """
+        select count(distinct freshness_state), array_agg(distinct freshness_state order by freshness_state)
+        from mart.topt_capture_meta_info
+        where run_id = %s and observation_id is not null
+        """,
+        (run.run_id,),
+    ).fetchone()
+    assert distinct_count > 1, f"mart freshness_state is a constant across the run: {states}"
+    assert states == ["fresh", "stale"]
+
+
 def test_snapshot_rejects_ambiguous_mapping_for_terminal_source_vintage(connection) -> None:
     (
         capture_repository,

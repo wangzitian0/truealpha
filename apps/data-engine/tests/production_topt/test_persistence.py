@@ -1250,13 +1250,9 @@ def test_observation_knowable_at_is_the_adapters_time_and_freshness_is_graded(co
             assert freshness == "fresh"
 
 
-def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
-    """A price bar older than its semantic's 5-day window lands as 'stale' — the
-    write-time half of the honest-freshness chain (#530 slice 3)."""
-    import datetime as _dt
-
-    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-stale-price")
-    sink = PostgresCaptureControlSink(
+def _hand_driven_sink(connection, plan: PlannedRun) -> PostgresCaptureControlSink:
+    """A sink over the plan's bindings, for tests that call `record_outcome` by hand."""
+    return PostgresCaptureControlSink(
         connection,
         plan.bindings,
         source_label=plan.source_label,
@@ -1266,18 +1262,33 @@ def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
         default_freshness_max_age=plan.default_freshness_max_age,
         object_store=_InMemoryObjectStore(),
     )
-    work_item_id, binding = next(
-        (k, v) for k, v in plan.bindings.items() if v.obligation.capture_requirement_id == "market-price:v1"
-    )
+
+
+def _price_obligations(plan: PlannedRun) -> list[tuple[str, object]]:
+    """The plan's (work item id, binding) pairs for the market-price semantic."""
+    return [(k, v) for k, v in plan.bindings.items() if v.obligation.capture_requirement_id == "market-price:v1"]
+
+
+def _record_price_bar(
+    plan: PlannedRun,
+    sink: PostgresCaptureControlSink,
+    work_item_id: str,
+    binding,
+    bar_time: datetime,
+) -> None:
+    """Record one successful price bar whose own time is `bar_time`."""
     work_item = next(w for w in plan.work_items if w.work_item_id == work_item_id)
     payload = {"listing_id": binding.obligation.subject.id, "close": "100.00", "currency": "USD"}
-    old_bar = _dt.datetime(2026, 3, 20, tzinfo=_dt.UTC)  # 13 days before the 04-02 cutoff
     success = FetchSuccess(
-        raw=RawResponse(body=b"bar:2026-03-20:100.00", source=DataSource.YAHOO, record_id="stale-bar"),
+        raw=RawResponse(
+            body=f"bar:{bar_time.date()}:100.00".encode(),
+            source=DataSource.YAHOO,
+            record_id=f"bar-{bar_time.date()}",
+        ),
         normalized_sha256=canonical_sha256(payload),
         confidence=Decimal("0.9"),
-        valid_from=old_bar.date(),
-        transaction_time=old_bar,
+        valid_from=bar_time.date(),
+        transaction_time=bar_time,
         record=NormalizedRecord(
             payload=payload,
             parser_version="production-topt-live-parser:v4",
@@ -1290,6 +1301,16 @@ def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
         terminal_state=ObligationTerminalState.SUCCESS,
         success=success,
     )
+
+
+def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
+    """A price bar older than its semantic's 5-day window lands as 'stale' — the
+    write-time half of the honest-freshness chain (#530 slice 3)."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-stale-price")
+    sink = _hand_driven_sink(connection, plan)
+    work_item_id, binding = _price_obligations(plan)[0]
+    old_bar = datetime(2026, 3, 20, tzinfo=UTC)  # 13 days before the 04-02 cutoff
+    _record_price_bar(plan, sink, work_item_id, binding, old_bar)
     freshness, knowable_at = connection.execute(
         """
         select o.freshness_state, o.knowable_at from raw.capture_obligations ob
@@ -1301,6 +1322,35 @@ def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
     ).fetchone()
     assert knowable_at == old_bar
     assert freshness == "stale", "13 days beyond a 5-day window must not grade fresh"
+
+
+def test_freshness_state_takes_more_than_one_value_across_one_run(connection) -> None:
+    """#530 acceptance: the freshness dimension is not a constant.
+
+    Production once held ONE distinct `freshness_state` over 21,717 observations. This
+    run records one price bar 13 days before the cutoff and one bar 2 days before it.
+    The 5-day price window must grade them differently, and the distinct count over the
+    run's observations must show both states. A sink that stamps one literal for every
+    row fails this test.
+    """
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-freshness-variety")
+    sink = _hand_driven_sink(connection, plan)
+    stale_obligation, fresh_obligation = _price_obligations(plan)[:2]
+    _record_price_bar(plan, sink, *stale_obligation, datetime(2026, 3, 20, tzinfo=UTC))
+    _record_price_bar(plan, sink, *fresh_obligation, datetime(2026, 3, 31, tzinfo=UTC))
+
+    distinct_count, states = connection.execute(
+        """
+        select count(distinct o.freshness_state), array_agg(distinct o.freshness_state order by o.freshness_state)
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where ob.run_id = %s
+        """,
+        (plan.run_id,),
+    ).fetchone()
+    assert distinct_count > 1, f"freshness_state is a constant across the run: {states}"
+    assert states == ["fresh", "stale"]
 
 
 def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
