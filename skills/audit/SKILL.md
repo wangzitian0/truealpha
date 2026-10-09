@@ -48,7 +48,7 @@ Each gate came from a measured failure.
 
 ## The 10-Intern Scout Matrix
 
-The 10 parallel Interns in Round 1 are allocated to specific, non-overlapping audit dimensions across four categories:
+The 10 parallel Interns in Round 1 are allocated across non-overlapping audit dimensions. The Director dynamically tailors the focus dimensions and weight distribution to the change:
 
 **Category M: Contract and impact (reads docs and code).**
 - M1 breaking changes (Intern 1): Renamed fields, new required parameters, breaking protobuf/schema contracts.
@@ -72,11 +72,12 @@ The Director cross-checks scouts: a doc claim (M2) that a doc-blind scout (G1) c
 
 ## Swarm execution workflow
 
-Audit executes via the `swarm` skill state machine:
+Audit executes in a deterministic mode with 10 Interns and up to 5 rounds via the `swarm` skill state machine. The Director may skip audit for trivial or document-only changes. When invoked, the Director dynamically defines focus directions and round counts:
 
-1. **Round 1 (Propose)**: The Director dispatches the 10-Intern Scout Matrix concurrently via `subagent_batch`. Each Intern outputs structured defect hypotheses with exact `file#Lxx-Lyy` anchors and counterexamples.
+1. **Round 1 (Propose)**: The Director dispatches 10 parallel Interns across defined dimensions via `subagent_batch`. Each Intern outputs structured defect hypotheses with exact `file#Lxx-Lyy` anchors and counterexamples.
 2. **Round 2 (Cross-Falsify)**: Interns cross-examine opposing claims. Opponents must actively seek counterexamples in code to disprove hypotheses. Hypotheses are marked strictly as `[DISPROVEN]` or `[CONFIRMED]`.
 3. **Round 3 (Director Triangulation)**: The Director reviews surviving `[CONFIRMED]` claims, runs targeted physical reality checks (Touch Reality), and rejects false positives.
+4. **Round 4-5 (Extended Confrontation)**: When HIGH findings remain contested after Round 3, the Director dispatches focused cross-falsification rounds up to Round 5.
 
 A round with zero HIGH and zero new MIDDLE findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
 During review rounds, run focused tests only (`pytest <file>::<test> -x`). Never run full test suites during audit rounds.
