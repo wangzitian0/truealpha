@@ -156,7 +156,7 @@ class PostgresCompanyProfileReader:
         gppe_row: dict[str, Any] | None = None
         themes: list[dict[str, Any]] = []
 
-        cand = extract_issuer_resolution_candidates(issuer_id)
+        cand = resolve_issuer_resolution_candidates(issuer_id)
         clean_issuer = cand["clean_issuer"]
         token = cand["token"]
         upper_issuer = cand["upper_issuer"]
@@ -371,8 +371,8 @@ def normalize_theme_slug(theme_id: str) -> str:
     return normalized_slug
 
 
-def extract_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
-    """Extract candidate identifiers and patterns for ETF profile queries."""
+def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
+    """Resolve candidate identifiers and patterns for ETF profile queries."""
     clean_id = fund_id.strip()
     token = clean_id.split(":")[-1].split("/")[-1].strip()
     upper_token = token.upper()
@@ -391,8 +391,8 @@ def extract_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
     }
 
 
-def extract_issuer_resolution_candidates(issuer_id: str) -> dict[str, str]:
-    """Extract candidate identifiers for issuer company 360 queries."""
+def resolve_issuer_resolution_candidates(issuer_id: str) -> dict[str, str]:
+    """Resolve candidate identifiers for issuer company 360 queries."""
     clean_issuer = issuer_id.strip()
     token = clean_issuer.split(":")[-1].strip()
     return {
@@ -499,7 +499,7 @@ class PostgresEtfProfileReader:
         fund_row: dict[str, Any] | None = None
         holdings: list[dict[str, Any]] = []
 
-        query_params = extract_fund_resolution_candidates(fund_id)
+        query_params = resolve_fund_resolution_candidates(fund_id)
 
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
