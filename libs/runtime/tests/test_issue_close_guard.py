@@ -316,3 +316,30 @@ def test_a_mixed_product_and_non_product_commit_is_reopened(
     assert len(calls) == 1
     assert calls[0][0] == 1159
     assert "production is NOT serving" in calls[0][1]
+
+
+def test_a_commit_modifying_tests_and_e2e_stays_closed_without_reopening(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test suites and E2E scripts are verification checks, not deployed paths."""
+    calls, reopen = _capture()
+
+    def git(args):  # noqa: ANN001
+        if args[0] == "merge-base":
+            return 1, ""  # production does not contain it
+        if args[0] == "diff-tree":
+            return 0, "apps/app-web/e2e/walk-tree.mjs\nlibs/runtime/tests/test_foo.py\n"
+        return 0, ""
+
+    exit_code = run(
+        1159,
+        gh_api=_timeline({"event": "closed", "commit_id": "c0ffee3" + "0" * 33}),
+        git=git,
+        http_get=_serving("v0.0.19"),
+        reopen=reopen,
+    )
+    assert exit_code == 0
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "leaving #1159 closed" in out
+    assert "only changes non-product paths" in out
