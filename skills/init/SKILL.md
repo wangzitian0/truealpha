@@ -55,6 +55,15 @@ Report the open PRs labelled `needs-owner` once. A non-production PR that waits 
 gh pr list --search "label:needs-owner" --json repository,number,title
 ```
 
+- **Scan stale leftovers**:
+Run these in bash or zsh, in the repository you work in. The three counts are: branches whose upstream is gone, stashes older than 30 days, and local branches whose name is the head of a merged PR. Put each count above zero in the "facts you recalled" line. A count above zero shows a cleanup that nothing triggered. Do not delete what another session owns. A `gh` error is a failed scan, not a zero.
+```bash
+git fetch --prune --no-tags --no-write-fetch-head --no-auto-gc origin || echo "fetch failed: the counts can be stale"
+LC_ALL=C git for-each-ref --format='%(upstream:track)' refs/heads | awk '/\[gone\]/ {n++} END {print n+0}'
+git stash list --format=%ct | awk -v c=$(( $(date +%s) - 2592000 )) '$1 < c {n++} END {print n+0}'
+gh pr list --state merged --limit 300 --json headRefName --jq '.[].headRefName' | sort -u | comm -12 - <(git for-each-ref --format='%(refname:short)' refs/heads | sort) | awk 'END {print NR}'
+```
+
 ## 5. Init Swarm (Optional 4-Intern parallel discovery)
 
 For complex tasks or large repositories, dispatch a quick 4-Intern discovery batch via `subagent_batch`:
