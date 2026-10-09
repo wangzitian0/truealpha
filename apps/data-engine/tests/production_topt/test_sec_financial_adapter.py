@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
@@ -1754,3 +1756,77 @@ def test_a_gross_profit_of_the_revenue_period_keeps_gppe_available() -> None:
     assert "operating_period_stale" not in result.record.payload
     assert gppe.availability is ToptCoreAvailability.AVAILABLE
     assert gppe.reason_codes == ()
+
+
+# --- #1176 step 2: banking tangible common equity from the SEC source gateway -----------------
+# The fixture is the recorded JPM companyfacts document (captured 2026-07-09, byte-for-byte
+# from SEC). Its FY2025 10-K is accession 0001628280-26-008131, filed 2026-02-13. JPM reports
+# no `IntangibleAssetsNetExcludingGoodwill`; it tags the two lifetime classes instead.
+
+_JPM_SAMPLE = Path(__file__).parents[2] / "samples" / "sec" / "JPM_CIK0000019617.json"
+_JPM_CUTOFF = date(2026, 6, 30)
+
+
+def _jpm_facts() -> dict:
+    return json.loads(_JPM_SAMPLE.read_bytes())
+
+
+def _without_concept(facts: dict, concept: str) -> dict:
+    gaap = dict(facts["facts"]["us-gaap"])
+    gaap.pop(concept)
+    return {**facts, "facts": {**facts["facts"], "us-gaap": gaap}}
+
+
+def test_banking_tce_components_are_measured_for_jpm_at_the_latest_complete_period() -> None:
+    # The 10-Q for Q1 2026 tags equity and goodwill but no intangible components, so the
+    # measurement falls back to FY2025, the latest period where all three are filed together.
+    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+    assert bundle.stockholders_equity == Decimal("362438000000")
+    assert bundle.goodwill == Decimal("52731000000")
+    # Intangibles: lifetime-class components summed at the same period end (1.3B + 1.3B).
+    assert bundle.intangible_assets_net_excluding_goodwill == Decimal("2600000000")
+    assert bundle.intangible_basis == "FiniteLivedIntangibleAssetsNet+IndefiniteLivedIntangibleAssetsExcludingGoodwill"
+
+
+def test_banking_tce_components_are_not_captured_for_a_non_financial_branch() -> None:
+    # Per-class mapping: the same document yields no tangible-equity input for any other class.
+    for branch in (OperatingBranch.NON_FINANCIAL, OperatingBranch.INSURANCE):
+        bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, branch)
+        assert bundle.stockholders_equity is None
+        assert bundle.goodwill is None
+        assert bundle.intangible_assets_net_excluding_goodwill is None
+        assert bundle.tangible_equity_period_end is None
+
+
+def test_banking_tce_is_unmeasured_when_one_intangible_component_is_missing() -> None:
+    # No zero stand-in for a missing component: without the second lifetime class, the
+    # intangibles are not measured, and the whole tangible measurement is absent.
+    facts = _without_concept(_jpm_facts(), "IndefiniteLivedIntangibleAssetsExcludingGoodwill")
+    bundle = build_bundle(facts, _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.intangible_assets_net_excluding_goodwill is None
+    assert bundle.tangible_equity_period_end is None
+
+
+def test_a_bank_payload_carries_the_tangible_common_equity_inputs_and_a_non_bank_payload_does_not() -> None:
+    # The capture path, not only the bundle: a FINANCIAL row names its TCE inputs and their filing,
+    # while a non-financial row carries no TCE key, so its payload hash does not move.
+    item = _work_item("f" * 64)
+    bank = SecFinancialFactAdapter(
+        {item.work_item_id: _target(branch=OperatingBranch.FINANCIAL)},
+        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(bank, FetchSuccess)
+    payload = bank.record.payload
+    assert payload["stockholders_equity"] == "362438000000"
+    assert payload["goodwill"] == "52731000000"
+    assert payload["intangible_assets_net_excluding_goodwill"] == "2600000000"
+    assert payload["tangible_equity_period_end"] == "2025-12-31"
+    assert payload["vintage"]["stockholders_equity"]["accession"] == "0001628280-26-008131"
+    plain = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(plain, FetchSuccess)
+    assert "stockholders_equity" not in plain.record.payload
+    assert "stockholders_equity" not in plain.record.payload["vintage"]

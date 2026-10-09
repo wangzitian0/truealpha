@@ -94,6 +94,40 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "Assets"},),
             },
             {
+                # #1176: banking tangible common equity (`gppe_banking_tce_v1`). The adapter reads
+                # these four fields for the FINANCIAL branch only, at one period end.
+                "field": "stockholders_equity",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "StockholdersEquity"},),
+            },
+            {
+                "field": "goodwill",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "Goodwill"},),
+            },
+            {
+                "field": "intangible_assets_net_excluding_goodwill",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "IntangibleAssetsNetExcludingGoodwill"},),
+            },
+            {
+                # Lifetime-class components of the same total. A filer that reports the classes and
+                # not the total (JPM) is measured from these two, summed at one period end.
+                "field": "finite_lived_intangibles_net",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "FiniteLivedIntangibleAssetsNet"},),
+            },
+            {
+                "field": "indefinite_lived_intangibles",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "IndefiniteLivedIntangibleAssetsExcludingGoodwill"},),
+            },
+            {
                 # True synonyms: both are point-in-time shares OUTSTANDING, one on the cover
                 # page and one in the statements. `CommonStockSharesIssued` is deliberately
                 # absent — issued includes treasury stock (JNJ: 3.12bn issued against 2.41bn

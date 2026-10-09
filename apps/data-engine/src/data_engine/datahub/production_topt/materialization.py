@@ -86,6 +86,12 @@ class FinancialFactPayload(_FrozenModel):
     # None, because a count refused for staleness must be distinguishable from one the
     # source never published — the first is a dated gap, the second an absence.
     shares_period_end: date | None = None
+    # #1176: banking tangible-common-equity inputs. Written on a FINANCIAL row only.
+    stockholders_equity: Decimal | None = None
+    goodwill: Decimal | None = None
+    intangible_assets_net_excluding_goodwill: Decimal | None = None
+    intangible_basis: str | None = None
+    tangible_equity_period_end: date | None = None
     # Module 1's growth basis, derived from the annual net-income series the payload's own
     # source already carries (#284). Both endpoints travel with it so the window is
     # auditable and a consumer can confirm the rate was not built from a filing later than
@@ -123,6 +129,9 @@ class FinancialFactPayload(_FrozenModel):
         "pre_provision_profit",
         "net_income",
         "earnings_cagr_3y",
+        "stockholders_equity",
+        "goodwill",
+        "intangible_assets_net_excluding_goodwill",
         mode="before",
     )
     @classmethod
