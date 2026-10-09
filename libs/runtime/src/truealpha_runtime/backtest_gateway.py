@@ -1,8 +1,8 @@
 """Postgres-backed implementation of BacktestDataGateway (#758, Milestone M3).
 
 Provides the governed data boundary for backtesting and historical strategy simulation.
-Reads PIT market prices from staging.market_prices_daily and financial facts from
-staging.financial_facts, enforcing knowable_at <= as_of to prevent look-ahead bias.
+Reads point-in-time market prices from staging.market_prices_daily, enforcing
+knowable_at <= as_of to prevent look-ahead bias.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from truealpha_contracts.models import (
     AsOfQuery,
     BacktestDataset,
     DataSource,
-    FinancialFact,
     PriceBar,
 )
 
@@ -110,63 +109,10 @@ class PostgresBacktestDataGateway:
                     )
                 )
 
-        # 2. Load financial facts
-        financial_facts: list[FinancialFact] = []
-        with self._connection.cursor() as cur:
-            cur.execute(
-                """
-                select distinct on (entity_id, metric, fiscal_period)
-                    entity_id,
-                    metric,
-                    value,
-                    unit,
-                    fiscal_period,
-                    valid_from,
-                    valid_to,
-                    knowable_at,
-                    recorded_at,
-                    confidence,
-                    raw_ref,
-                    source_metric,
-                    mapping_version,
-                    accession,
-                    form,
-                    is_restatement
-                from staging.financial_facts
-                where entity_id = any(%s)
-                  and knowable_at <= %s
-                order by entity_id, metric, fiscal_period, recorded_at desc
-                """,
-                (symbols, query.as_of),
-            )
-            facts_rows = cur.fetchall()
-
-            for f_row in facts_rows:
-                financial_facts.append(
-                    FinancialFact(
-                        entity_id=f_row[0],
-                        metric=f_row[1],
-                        value=Decimal(str(f_row[2])) if f_row[2] is not None else None,
-                        unit=f_row[3],
-                        fiscal_period=f_row[4],
-                        valid_from=f_row[5],
-                        valid_to=f_row[6],
-                        knowable_at=f_row[7],
-                        recorded_at=max(f_row[8], f_row[7]),
-                        confidence=Decimal(str(f_row[9])),
-                        raw_ref=f_row[10],
-                        source_metric=f_row[11],
-                        mapping_version=f_row[12],
-                        accession=f_row[13],
-                        form=f_row[14],
-                        is_restatement=bool(f_row[15]),
-                    )
-                )
-
         return BacktestDataset(
             query=query,
             price_bars=tuple(price_bars),
-            financial_facts=tuple(financial_facts),
+            financial_facts=(),
         )
 
 

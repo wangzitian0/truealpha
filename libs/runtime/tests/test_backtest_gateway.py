@@ -42,24 +42,20 @@ def test_postgres_backtest_data_gateway_load_populates_price_bars() -> None:
     tx_time = datetime(2026, 3, 31, 20, 0, tzinfo=UTC)
     rec_time = datetime(2026, 3, 31, 20, 5, tzinfo=UTC)
 
-    # First fetchall is for market prices, second for financial facts
-    mock_cur.fetchall.side_effect = [
-        [
-            (
-                "AAPL",
-                date(2026, 3, 31),
-                150.0,
-                155.0,
-                149.0,
-                154.0,
-                154.0,
-                1000000,
-                tx_time,
-                rec_time,
-                "raw:aapl:20260331",
-            )
-        ],
-        [],
+    mock_cur.fetchall.return_value = [
+        (
+            "AAPL",
+            date(2026, 3, 31),
+            150.0,
+            155.0,
+            149.0,
+            154.0,
+            154.0,
+            1000000,
+            tx_time,
+            rec_time,
+            "raw:aapl:20260331",
+        )
     ]
 
     gateway = PostgresBacktestDataGateway(mock_conn)
