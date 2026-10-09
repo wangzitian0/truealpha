@@ -97,6 +97,7 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
     "company_360_profile": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
     "theme_purity_leaderboard": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},
     "etf_virtual_company_profile": {"request": {"fund_id": "etf:series:S000101292"}},
+    "governed_backtest": {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
 }
 
 
