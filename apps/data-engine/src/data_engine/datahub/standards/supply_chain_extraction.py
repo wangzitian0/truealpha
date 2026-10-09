@@ -21,6 +21,7 @@ from factors.base.supply_chain_exposure import (
 from psycopg import Connection
 
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id, write_unvisited
+from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 __all__ = (
     "SupplyChainEdgeCandidate",
@@ -189,8 +190,14 @@ def materialize_supply_chain_exposure(
     cutoff: datetime | None = None,
     exposure_data: Sequence[dict[str, Any] | SupplyChainExposure],
 ) -> int:
-    """Materialize batch supply chain exposure rows into mart.issuer_supply_chain_exposure."""
+    """Materialize batch supply chain exposure rows into mart.issuer_supply_chain_exposure.
+
+    No Q3 row names a raw pointer yet (#1116). Every row gets its evidence and validation statuses
+    from the status source. A status in an input item has no effect.
+    """
     as_of = cutoff or datetime.now(tz=UTC)
+    source_evidence, factor_validation = statuses_without_raw_pointer()
+    source_status, val_status = source_evidence.value, factor_validation.value
     count = 0
     for item in exposure_data:
         if isinstance(item, SupplyChainExposure):
@@ -208,8 +215,6 @@ def materialize_supply_chain_exposure(
                 if item.result.data_availability == "verified" and exposure_score is not None
                 else "unavailable"
             )
-            source_status = "verified" if avail == "available" else "degraded"
-            val_status = "accepted" if exposure_score is not None else "not_evaluated"
         else:
             issuer_id = str(item["issuer_id"])
             if "partners" in item:
@@ -231,8 +236,6 @@ def materialize_supply_chain_exposure(
                     if rec.result.data_availability == "verified" and exposure_score is not None
                     else "unavailable"
                 )
-                source_status = "verified" if avail == "available" else "degraded"
-                val_status = "accepted" if exposure_score is not None else "not_evaluated"
             else:
                 raw_exp = item.get("exposure_score")
                 exposure_score = Decimal(str(raw_exp)) if raw_exp is not None else None
@@ -245,12 +248,6 @@ def materialize_supply_chain_exposure(
                 reason_codes = list(item.get("reason_codes", []))
                 avail = str(
                     item.get("availability_status", "available" if exposure_score is not None else "unavailable")
-                )
-                source_status = str(
-                    item.get("source_evidence_status", "verified" if avail == "available" else "degraded")
-                )
-                val_status = str(
-                    item.get("factor_validation_status", "accepted" if exposure_score is not None else "not_evaluated")
                 )
             extractor = str(item.get("extractor", "graph:kg-edges:v1"))
 

@@ -135,3 +135,16 @@ def source_evidence_status_for(
 
 def factor_validation_status_for(definition_ids: Iterable[str]) -> FactorValidationStatus:
     return validation_status_for(definition_ids)
+
+
+def statuses_without_raw_pointer(
+    definition_ids: Iterable[str] = (),
+) -> tuple[InputEvidenceStatus, FactorValidationStatus]:
+    """The evidence and validation statuses of a mart row whose input has no raw pointer chain (#1116).
+
+    Such a row cannot show that a raw fetch backs it. Its evidence is `degraded`, never `verified`.
+    Its validation status comes from the registry through `factor_validation_status_for`.
+    A factor with no registered definition passes no definition id. The registry then gives `not_evaluated`.
+    Replace this call with `source_evidence_status_for` when the row carries observation ids.
+    """
+    return InputEvidenceStatus.DEGRADED, factor_validation_status_for(definition_ids)

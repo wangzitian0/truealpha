@@ -10,6 +10,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
     availability_status_for,
     decision_availability_status,
     source_evidence_status_for,
+    statuses_without_raw_pointer,
 )
 from factors import validation_records
 from factors.validation_records import ValidationRecord, validation_status_for
@@ -112,3 +113,17 @@ def test_source_evidence_is_verified_only_when_every_pointer_resolves_and_inputs
     assert source_evidence_status_for(conn, ("obs:1",), financial_payloads=[cited]) is InputEvidenceStatus.VERIFIED
     none = {"headcount": None, "vintage": {}}
     assert source_evidence_status_for(conn, ("obs:1",), financial_payloads=[none]) is InputEvidenceStatus.VERIFIED
+
+
+def test_a_row_without_a_raw_pointer_is_degraded_and_follows_the_validation_registry(monkeypatch) -> None:
+    """#1116: no pointer chain means `degraded` evidence, whatever the registry says about the factor."""
+    assert statuses_without_raw_pointer() == (InputEvidenceStatus.DEGRADED, FactorValidationStatus.NOT_EVALUATED)
+    accepted = ValidationRecord(
+        "gppe-definition:" + "a" * 64, "holdout:1", FactorValidationStatus.ACCEPTED, "2026-09-08"
+    )
+    monkeypatch.setattr(validation_records, "VALIDATION_RECORDS", (accepted,))
+    assert statuses_without_raw_pointer((accepted.definition_id,)) == (
+        InputEvidenceStatus.DEGRADED,
+        FactorValidationStatus.ACCEPTED,
+    )
+    assert statuses_without_raw_pointer() == (InputEvidenceStatus.DEGRADED, FactorValidationStatus.NOT_EVALUATED)

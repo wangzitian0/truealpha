@@ -223,7 +223,8 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
     assert params[1] == _issuer_id(ticker.lower())
     assert params[9] == []
     assert params[11] == "available"
-    assert params[12] == "verified"
+    # #1116: the row names no raw pointer, so it is degraded evidence. No sealed record exists.
+    assert (params[12], params[13]) == ("degraded", "not_evaluated")
     assert params[3] == Decimal(rating)
     assert params[4] == total
     assert (params[5], params[6], params[7]) == (buy, hold, sell)
