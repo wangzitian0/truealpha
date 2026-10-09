@@ -57,23 +57,33 @@ def _install_fake_connect(monkeypatch: Any, responder: Callable[[str, Any], list
     monkeypatch.setattr(topt_read_module.psycopg, "connect", lambda *a, **kw: _FakeConnection(responder))
 
 
-def _row_keyed_like_postgres_would(sql: str, value: str) -> dict[str, Any]:
-    """`dict_row` keys a returned row by the SELECTed column's name or `AS` alias —
-    never by what the caller later reads it as. Deriving the key from the SQL text
-    itself (rather than hardcoding "run_id") is what makes this test able to catch
-    a missing/wrong alias instead of just re-asserting the code under test."""
-    column_expr = sql.lower().split("select", 1)[1].split("from", 1)[0].strip()
-    key = column_expr.split(" as ")[1].strip() if " as " in column_expr else column_expr
-    return {key: value}
+def _served_head_row(
+    sql: str,
+    run_id: str | None,
+    *,
+    freshness: str = "fresh",
+    availability: str = "available",
+    staleness_reason: str | None = None,
+) -> dict[str, Any]:
+    """`dict_row` keys a returned row by the SELECTed column's name or `AS` alias."""
+    column_exprs = [col.strip() for col in sql.lower().split("select", 1)[1].split("from", 1)[0].split(",")]
+    keys = [c.split(" as ")[1].strip() if " as " in c else c.strip() for c in column_exprs]
+    values = {
+        "run_id": run_id,
+        "freshness": freshness,
+        "availability": availability,
+        "staleness_reason": staleness_reason,
+    }
+    return {k: values.get(k) for k in keys}
 
 
-def test_latest_resolves_head_from_current_pointer_before_the_acceptance_fallback(monkeypatch: Any) -> None:
+def test_latest_resolves_head_from_served_head_before_the_acceptance_fallback(monkeypatch: Any) -> None:
     calls: list[str] = []
 
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
         calls.append(sql)
-        if "current_pointer_head" in sql:
-            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "served_head" in sql:
+            return [_served_head_row(sql, RUN_ID)]
         if "obligation_count" in sql:
             return [{"obligation_count": 84}]
         if "topt_capture_status" in sql:
@@ -95,7 +105,7 @@ def test_latest_resolves_head_from_current_pointer_before_the_acceptance_fallbac
     assert report.cells[0].gppe == "1500000.00"
     assert report.quality == {"independent_reconciliation": "0.25"}
     assert report.requested_count == 84
-    assert any("current_pointer_head" in sql for sql in calls)
+    assert any("served_head" in sql for sql in calls)
 
 
 def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkeypatch: Any) -> None:
@@ -103,7 +113,7 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
 
     def responder(sql: str, params: Any) -> list[dict[str, Any]]:
         calls.append((sql, params))
-        if "current_pointer_head" in sql:
+        if "served_head" in sql:
             return []
         if "obligation_count" in sql:
             return [{"obligation_count": 84}]
@@ -129,12 +139,47 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
     assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
 
 
+def test_latest_withheld_when_served_head_is_unavailable(monkeypatch: Any) -> None:
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        if "served_head" in sql:
+            return [_served_head_row(sql, None, freshness="stale", availability="unavailable", staleness_reason="older_than_30d")]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    result = repo.latest()
+    assert isinstance(result, topt_read_module.ToptGppeUnavailable)
+    assert result.reason == "head_unavailable: older_than_30d"
+
+
+def test_latest_serves_data_when_served_head_is_stale_but_available(monkeypatch: Any) -> None:
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        if "served_head" in sql:
+            return [_served_head_row(sql, RUN_ID, freshness="stale", availability="available", staleness_reason="older_than_3d")]
+        if "obligation_count" in sql:
+            return [{"obligation_count": 84}]
+        if "topt_gppe_results" in sql:
+            return [
+                {"listing_id": "listing:aaa", "availability": "available", "gppe": "1500000.00", "confidence": "0.90"}
+            ]
+        if "datahub_quality_report" in sql:
+            return [{"payload": {"independent_reconciliation": "0.25"}}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    report = repo.latest()
+    assert report.run_id == RUN_ID
+
+
 def test_latest_fallback_returns_unavailable_when_only_canary_run_exists(monkeypatch: Any) -> None:
     calls: list[tuple[str, Any]] = []
 
     def responder(sql: str, params: Any) -> list[dict[str, Any]]:
         calls.append((sql, params))
-        if "current_pointer_head" in sql:
+        if "served_head" in sql:
             return []
         if "topt_capture_status" in sql and "datahub_quality_report" in sql:
             if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
@@ -160,8 +205,8 @@ def test_requested_count_follows_the_runs_own_denominator(monkeypatch: Any) -> N
     never a constant — a 100-cell universe must report 100."""
 
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
-        if "current_pointer_head" in sql:
-            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "served_head" in sql:
+            return [_served_head_row(sql, RUN_ID)]
         if "obligation_count" in sql:
             return [{"obligation_count": 100}]
         if "topt_gppe_results" in sql or "datahub_quality_report" in sql:
@@ -177,8 +222,8 @@ def test_requested_count_follows_the_runs_own_denominator(monkeypatch: Any) -> N
 
 def test_latest_reports_unavailable_when_the_governed_run_has_no_capture_status(monkeypatch: Any) -> None:
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
-        if "current_pointer_head" in sql:
-            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "served_head" in sql:
+            return [_served_head_row(sql, RUN_ID)]
         if "obligation_count" in sql:
             return []
         if "topt_gppe_results" in sql or "datahub_quality_report" in sql:
@@ -194,7 +239,7 @@ def test_latest_reports_unavailable_when_the_governed_run_has_no_capture_status(
 
 def test_latest_reports_unavailable_when_neither_source_resolves(monkeypatch: Any) -> None:
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
-        if "current_pointer_head" in sql or "topt_capture_status" in sql:
+        if "served_head" in sql or "topt_capture_status" in sql:
             return []
         raise AssertionError(f"unexpected query: {sql}")
 
@@ -214,9 +259,8 @@ def test_latest_fails_closed_instead_of_raising_on_a_malformed_head_row(monkeypa
     row is missing the key the code reads."""
 
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
-        if "current_pointer_head" in sql:
-            # No "as run_id" alias applied -- the row is keyed by the raw column
-            # expression, so `head["run_id"]` raises KeyError, exactly like #461.
+        if "served_head" in sql:
+            # No "run_id" key in dict -- raises KeyError, exactly like #461.
             return [{"target_run_id": RUN_ID}]
         raise AssertionError(f"unexpected query: {sql}")
 
@@ -245,8 +289,8 @@ def test_latest_joins_entity_identity_to_resolve_symbolic_listing_id(monkeypatch
 
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
         calls.append(sql)
-        if "current_pointer_head" in sql:
-            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "served_head" in sql:
+            return [_served_head_row(sql, RUN_ID)]
         if "obligation_count" in sql:
             return [{"obligation_count": 1}]
         if "topt_gppe_results" in sql:

@@ -19,7 +19,7 @@ TS_TWIN = REPO / "apps" / "app-web" / "src" / "server" / "mart" / "strategy-run-
 
 
 def _normalize(sql: str) -> str:
-    return re.sub(r"\s+", " ", sql.replace("$1", "%s")).strip()
+    return re.sub(r"\s+", " ", sql.replace("$1", "%s").replace("%%", "%")).strip()
 
 
 def _ts_latest_run_sql() -> str:
@@ -35,7 +35,7 @@ def test_both_twins_rank_the_governed_run_first() -> None:
 
 def test_the_rule_is_the_governed_head_not_recency_alone() -> None:
     normalized = _normalize(LATEST_RUN_SQL)
-    assert "mart.governed_strategy_run" in normalized
+    assert "mart.served_head" in normalized
     assert "order by is_governed desc" in normalized
 
 
