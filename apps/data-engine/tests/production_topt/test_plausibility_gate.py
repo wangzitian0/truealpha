@@ -227,6 +227,18 @@ def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, 
         today=date(2026, 9, 8),
     )
     assert verdict.refused and [v.rule for v in verdict.violations] == [RULE_EMPTY_ELIGIBLE]
+    # #544: a strategy run with zero published decisions must also be refused
+    empty_strategy_verdict = plausibility_gate.judge_run(
+        connection,
+        run_id=run_id,
+        strategy_run_id="run:empty-strategy-0-decisions",
+        l2_complete=5,
+        exemptions_path=_exemptions(tmp_path, "2000-01-01"),
+        today=date(2026, 9, 8),
+    )
+    assert empty_strategy_verdict.refused and [v.rule for v in empty_strategy_verdict.violations] == [
+        RULE_EMPTY_ELIGIBLE
+    ]
 
 
 def test_the_price_a_row_is_judged_by_is_its_own_runs(connection) -> None:

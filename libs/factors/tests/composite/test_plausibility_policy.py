@@ -120,6 +120,9 @@ def test_an_empty_eligible_set_is_caught() -> None:
     assert evaluate(PREVIOUS, PREVIOUS, outcomes={"selected": 2, "excluded": 18}, l2_complete=17) == []
     # a tick without a strategy passes nothing here and is not judged
     assert evaluate(PREVIOUS, PREVIOUS) == []
+    # #544: outcomes={} (a strategy run that produced 0 decisions) must not be exempted
+    assert [v.rule for v in evaluate(PREVIOUS, PREVIOUS, outcomes={}, l2_complete=5)] == [policy.RULE_EMPTY_ELIGIBLE]
+    assert [v.rule for v in policy.empty_eligible_set({}, 5)] == [policy.RULE_EMPTY_ELIGIBLE]
 
 
 def test_the_first_accepted_run_has_no_previous_to_regress_against() -> None:
