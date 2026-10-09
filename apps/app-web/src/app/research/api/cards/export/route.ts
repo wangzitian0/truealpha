@@ -14,6 +14,7 @@ import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resoluti
 import {
   buildEntityCardJson,
   buildRankingCardJson,
+  entityCardThemes,
   renderEntityDeepDiveCardSvg,
   renderRankingCardSvg,
   type EntityCardData,
@@ -62,7 +63,7 @@ export async function GET(request: Request): Promise<Response> {
       peg: latestRow?.peg ?? null,
       gppe: state.data.gppeDetail?.gppe ?? latestRow?.capitalAdjustedLaborEfficiency ?? null,
       operatingBranch: state.data.gppeDetail?.operatingBranch ?? null,
-      themes: (state.data.themes ?? []).map((t) => ({ theme: t.theme, themeShare: t.themeShare })),
+      themes: entityCardThemes(state.data.themes ?? []),
       confidence: latestRow?.confidence ?? null,
     };
 

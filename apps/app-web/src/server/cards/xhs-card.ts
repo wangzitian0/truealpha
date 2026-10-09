@@ -215,6 +215,18 @@ function formatTierLabel(tier: string | null): string {
   return tier;
 }
 
+/**
+ * The themes of an entity card. A fill row (an issuer without a segment partition, #1117) is not
+ * a theme: the card lists judged themes and refused real rows only.
+ */
+export function entityCardThemes(
+  themes: ReadonlyArray<{ theme: string; themeShare: string | null; unvisitedReason?: string | null }>,
+): EntityCardData["themes"] {
+  return themes
+    .filter((t) => !t.unvisitedReason)
+    .map((t) => ({ theme: t.theme, themeShare: t.themeShare }));
+}
+
 export function buildEntityCardJson(data: EntityCardData) {
   return {
     schema_version: CARD_SCHEMA_VERSION,

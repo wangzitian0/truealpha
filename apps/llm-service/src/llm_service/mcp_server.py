@@ -230,7 +230,8 @@ class PostgresCompanyProfileReader:
                                consolidated_revenue,
                                segments,
                                confidence,
-                               availability_status
+                               availability_status,
+                               unvisited_reason
                         from (
                             select distinct on (p.theme_id)
                                    p.theme_id,
@@ -239,9 +240,12 @@ class PostgresCompanyProfileReader:
                                    p.theme_share as raw_share,
                                    p.in_theme_revenue::text as in_theme_revenue,
                                    p.consolidated_revenue::text as consolidated_revenue,
-                                   p.segments,
-                                   p.confidence::text as confidence,
-                                   coalesce(p.availability_status, 'unavailable') as availability_status
+                                   case when p.partition_id is null then null else p.segments end as segments,
+                                   case when p.partition_id is null then null else p.confidence::text end
+                                       as confidence,
+                                   coalesce(p.availability_status, 'unavailable') as availability_status,
+                                   case when p.partition_id is null
+                                        then coalesce(p.reason_codes[1], 'unvisited') end as unvisited_reason
                             from mart.issuer_theme_purity p
                             where p.issuer_id = %s
                                or p.issuer_id in (
@@ -250,7 +254,9 @@ class PostgresCompanyProfileReader:
                                       or upper(current_ticker) in (%s, %s)
                                       or upper(legacy_id) in (%s, %s)
                                )
-                            order by p.theme_id, p.cutoff desc, p.created_at desc
+                            -- A row with a segment partition comes first. A newer fill row (an issuer
+                            -- without a partition, #1117) must not hide an older real row.
+                            order by p.theme_id, (p.partition_id is null), p.cutoff desc, p.created_at desc
                         ) latest_per_theme
                         order by raw_share desc nulls last, theme asc
                         """,
@@ -267,9 +273,13 @@ class PostgresCompanyProfileReader:
                             "consolidated_revenue": (
                                 str(r["consolidated_revenue"]) if r.get("consolidated_revenue") is not None else None
                             ),
-                            "segments": int(r["segments"]) if r.get("segments") is not None else 0,
+                            "segments": int(r["segments"]) if r.get("segments") is not None else None,
                             "confidence": str(r["confidence"]) if r.get("confidence") is not None else None,
                             "availability_status": str(r.get("availability_status", "unavailable")),
+                            # Set only on a fill row: the issuer has no segment partition (#1117).
+                            "unvisited_reason": (
+                                str(r["unvisited_reason"]) if r.get("unvisited_reason") is not None else None
+                            ),
                         }
                         for r in cur.fetchall()
                     ]
@@ -359,7 +369,10 @@ class PostgresCompanyProfileReader:
             if decision_row
             else None,
             "theme_purity": themes,
-            "availability_status": "available" if (decision_row or gppe_row or themes) else "unavailable",
+            # A fill row says why a theme has no answer. It is not data, so it does not make the profile available.
+            "availability_status": "available"
+            if (decision_row or gppe_row or any(theme["unvisited_reason"] is None for theme in themes))
+            else "unavailable",
         }
 
 
@@ -434,7 +447,10 @@ class PostgresThemePurityLeaderboardReader:
                                    p.cutoff,
                                    p.created_at
                             from mart.issuer_theme_purity p
-                            where p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s)
+                            -- The board ranks judged issuers. A fill row (an issuer without a segment
+                            -- partition, #1117) is not ranked and must not hide an older real row.
+                            where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
+                              and p.partition_id is not null
                             order by p.issuer_id, p.cutoff desc, p.created_at desc
                         )
                         select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,

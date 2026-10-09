@@ -5,6 +5,7 @@ import { CardExportButton } from "@/components/card-export-button";
 import { loadEntityDetail } from "@/server/dashboard";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
+import { unvisitedReasonText } from "@/server/mart/theme-purity";
 import {
   formatPercentFromFraction,
   formatRatio,
@@ -204,6 +205,17 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
             {themes.length > 0 ? (
               <div className="mt-4 space-y-4">
                 {themes.map((theme) => {
+                  if (theme.unvisitedReason) {
+                    // A fill row: the issuer has no segment partition (#1117). The page says why, in words.
+                    return (
+                      <div key={theme.themeId} className="flex flex-wrap items-center justify-between text-sm">
+                        <span className="font-medium text-gray-200">{theme.theme}</span>
+                        <span className="font-mono text-xs text-gray-400">
+                          {unvisitedReasonText(theme.unvisitedReason)}
+                        </span>
+                      </div>
+                    );
+                  }
                   const sharePct = theme.themeShare
                     ? Math.min(100, Math.max(0, Number(theme.themeShare) * 100))
                     : 0;

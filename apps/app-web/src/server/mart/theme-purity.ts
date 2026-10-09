@@ -154,6 +154,17 @@ export async function loadThemePurity(
 }
 
 /**
+ * A reason code of a fill row, as plain text: "no_segment_partition" reads "No segment partition".
+ *
+ * An issuer without a segment partition has a fill row (#1117). A page shows the reason in
+ * words where it would show a share. It never shows the fill as a refused share.
+ */
+export function unvisitedReasonText(reason: string): string {
+  const words = reason.replaceAll("_", " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
  * The share of the denominator that carries a judgement either way, as a 0-1 string.
  *
  * Deterministic within-row reformatting of columns the factor already wrote — rule 2's

@@ -12,7 +12,7 @@
  *    already wrote — rule 2's permitted shape, and nothing else in this file computes.
  */
 
-import { classifiedShare, loadThemePurity } from "../src/server/mart/theme-purity";
+import { classifiedShare, loadThemePurity, unvisitedReasonText } from "../src/server/mart/theme-purity";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -163,6 +163,18 @@ async function run() {
     assert(
       classifiedShare({ ...full, consolidatedRevenue: "0" }) === null,
       "a non-positive denominator has no classified share, rather than an infinity",
+    );
+  }
+
+  // An issuer without a segment partition has a fill row. The page says why in plain text (#1117).
+  {
+    assert(
+      unvisitedReasonText("no_segment_partition") === "No segment partition",
+      "the reason code reads as plain text, without underscores",
+    );
+    assert(
+      unvisitedReasonText("join_floor_tripped") === "Join floor tripped",
+      "another reason code reads the same way",
     );
   }
 
