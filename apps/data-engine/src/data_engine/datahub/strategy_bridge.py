@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 import psycopg
 from factors.composite.strategy_evaluator import evaluate_cutoff
+from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
 from truealpha_contracts.strategy import LargeModelValueV0Definition
@@ -218,13 +220,15 @@ def run_strategy_replay_for_cutoff(
     strategy run that no capture owns."""
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
-    issuer_inputs = gateway.issuer_inputs(cutoff)
+    issuer_classes = _issuer_classes_for_run(connection, capture_run_id)
+    issuer_inputs = [
+        replace(item, issuer_class=issuer_classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff)
+    ]
     evaluated = evaluate_cutoff(
         issuer_inputs,
         definition=definition,
         cutoff_at=cutoff,
         risk_free_rate=risk_free_rate,
-        financial_leverage_adjusted=True,
     )
     cutoff_key = cutoff.astimezone(UTC).isoformat()
     decisions = sorted(
@@ -237,6 +241,33 @@ def run_strategy_replay_for_cutoff(
     )
     bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
     return run_id, len(decision_ids), snapshot_id
+
+
+def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) -> dict[str, IssuerClass]:
+    """The operating class of each issuer in one capture run (#1176). Read from the captured
+    financial-fact observations, the same rows the strategy inputs are seeded from. The class
+    selects the labor-efficiency metric (`LABOR_EFFICIENCY_BY_CLASS`). An issuer with no class
+    here gets `missing_issuer_class` in the evaluator."""
+    rows = connection.execute(
+        """
+        select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'operating_branch'
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        where ob.run_id = %s
+          and o.semantic_type = 'financial-fact'
+        """,
+        (run_id,),
+    ).fetchall()
+    classes: dict[str, IssuerClass] = {}
+    for issuer_id, branch in rows:
+        if branch is None:
+            continue
+        issuer_class = IssuerClass(branch)
+        if classes.setdefault(issuer_id, issuer_class) != issuer_class:
+            raise ValueError(f"{issuer_id}: two operating branches in capture run {run_id}")
+    return classes
 
 
 def persist_strategy_input_coverage(

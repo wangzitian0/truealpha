@@ -128,7 +128,7 @@ def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monk
         node.model_copy(
             update={"sign_policy": {**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE}}
         )
-        if node.key == "gppe"
+        if node.key == "gppe_uniform_charge_v0"
         else node
         for node in FOREST.nodes
     )

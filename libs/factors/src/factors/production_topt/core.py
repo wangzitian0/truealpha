@@ -660,7 +660,7 @@ def compute_topt_gppe(
     # the same tier/P-S path. The tree's decimal context is the one this kernel always used.
     evaluation = evaluate(FOREST, GPPE_V0_TREE, issuer_class=issuer_class, inputs=inputs)
     capital_adjusted = evaluation.values["capital_adjusted_gross_profit"]
-    gppe = evaluation.values["gppe"]
+    gppe = evaluation.values["gppe_uniform_charge_v0"]
     # Every input was checked present and headcount positive above, so nothing is undefined.
     assert capital_adjusted is not None and gppe is not None and not evaluation.undefined
     return ToptGppeResult(

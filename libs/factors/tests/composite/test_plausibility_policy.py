@@ -139,5 +139,5 @@ def test_the_policy_is_v2_with_v1_thresholds_and_named_rules() -> None:
         "node-sign-policy",
         "empty-eligible-set",
     }
-    # the gate judges the published column the forest ties to GPPE v0.2.0
-    assert published_node(policy.JUDGED_TABLE, policy.JUDGED_COLUMN).key == "gppe"
+    # the gate judges the published column the forest ties to GPPE v0.2.0 (#1176: the uniform node)
+    assert published_node(policy.JUDGED_TABLE, policy.JUDGED_COLUMN).key == "gppe_uniform_charge_v0"

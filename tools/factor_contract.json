@@ -54,7 +54,7 @@
       "kind": "base",
       "module": 2,
       "module_path": "libs/factors/src/factors/base/gross_profit_per_employee.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal, financial_leverage_adjusted: bool = False) -> FactorResult",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult",
       "inputs": [
         "gross_profit",
         "total_assets",

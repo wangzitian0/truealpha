@@ -16,6 +16,7 @@ hardcoded formula.
 | 2026-09-16 | The exemption was extended once, to 2026-09-23 (#886). It must not be extended again without the owner. |
 | 2026-09-17 | Keep diversity. The metrics form a forest: gross profit, Market Value Added, stock-based compensation, labor cost, marketing cost, and so on, possibly with several ways to decompose each. **The engineering structure must not hardcode GPPE.** |
 | 2026-09-17 | #877: entities are identified by UUIDs with typed aliases. |
+| 2026-10-09 | #1176: split GPPE into two named metrics. `gppe_uniform_charge_v0` (total-assets charge, every class). `gppe_banking_tce_v1` (FINANCIAL only, measured tangible common equity). No constant stands in for a measurement. A missing input gives `unavailable`, never a fallback. |
 
 ## 1. What exists, measured in code (`main@f5807a7`)
 
@@ -147,7 +148,7 @@ flowchart TB
   CS[[cost_structure]]:::concept
 
   subgraph T1["tree gppe @ production-topt-v0.2.0 (step B, #909)"]
-    GPPE[gppe] -->|ratio| CAGP[capital_adjusted_gross_profit]
+    GPPE[gppe_uniform_charge_v0] -->|ratio| CAGP[capital_adjusted_gross_profit]
     GPPE -->|ratio| EMP[(employees_total)]
     CAGP -->|difference| OGP[operating_gross_profit]
     CAGP -->|difference| CC[capital_charge]
@@ -199,6 +200,7 @@ flowchart TB
 | tree | realizes | root = … | sign policy of the root | step |
 |---|---|---|---|---|
 | `gppe @ production-topt-v0.2.0` | labor_efficiency | (operating gross profit − total_assets × rf) / employees | `sign-is-signal`, every class (#59's reading) | **B** (proposed in #909) |
+| `gppe_banking_tce @ v1` (#1176) | labor_efficiency | (pre-provision profit − TCE × rf) / employees, where TCE = stockholders' equity − preferred stock − (goodwill + intangible assets excluding goodwill). FINANCIAL only. | `sign-is-signal`, FINANCIAL (the root) | #1176 |
 | `labor_efficiency.operating_financial @ v1` | labor_efficiency, value_creation | operating real profit / employees and financial real profit / employees. `real_profit` = sum of the two. | both `sign-is-signal`: "some managers beat Treasuries, some do not" (#59 item 5) | E |
 | `value_creation.mva @ v1` | value_creation | market value − invested capital | `sign-is-signal` (value destroyed is a signal) | G |
 | `labor_efficiency.labor_cost @ v1` | labor_efficiency | gross profit / (salaries + SBC) (#59 item 2) | `sign-is-signal` | G |
@@ -214,6 +216,22 @@ The decomposition tree (step E) follows the 2026-09-08 proposal on #528:
   `vintage.financial_assets.basis`.
 - A bank's `operating_capital` binding is an owner decision (§12 D2). In the forest it is a
   per-class operand binding and nothing else.
+
+### 3.1a The two named GPPE metrics (#1176, current state)
+
+| node | tree | applicability | capital base | sign policy | missing input gives |
+|---|---|---|---|---|---|
+| `gppe_uniform_charge_v0` (mart column `gppe`) | `gppe @ production-topt-v0.2.0` | every class | total assets × risk-free rate | `sign-is-signal`, every class | the input's `missing_<field>` reason |
+| `gppe_banking_tce_v1` | `gppe_banking_tce @ v1` | FINANCIAL only | measured tangible common equity | `sign-is-signal`, FINANCIAL | `missing_tangible_common_equity` or `missing_preferred_stock_value`, no zero stand-in |
+
+The strategy ranks a FINANCIAL issuer on `gppe_banking_tce_v1`. It ranks every other class on
+`gppe_uniform_charge_v0`. One binding table selects the metric per class
+(`LABOR_EFFICIENCY_BY_CLASS` in `factors.composite.strategy_evaluator`). An issuer with no class
+is excluded with `missing_issuer_class`. The frozen #21 replay passes the uniform binding by name.
+
+The TCE nodes are `stockholders_equity`, `preferred_stock_value`, `goodwill` and
+`intangible_assets_net_excluding_goodwill` (inputs), and `tangible_deductions`,
+`tangible_common_equity`, `capital_charge_tce` and `capital_adjusted_tce` (derived).
 
 ### 3.2 Coverage of the new inputs (9 packaged `apps/data-engine/samples/sec` bodies, FY2024+ annual)
 
@@ -238,6 +256,10 @@ the labor-cost tree needs the #735 loop (filing extraction) for its denominator.
 same situation headcount was in.
 
 ## 4. GPPE v0.2.0 as a tree, with zero numeric change (step B)
+
+> Current state (#1176): the node in this tree is `gppe_uniform_charge_v0`. Its key was `gppe`
+> when step B merged. The tree coordinate `gppe @ production-topt-v0.2.0` is unchanged. The
+> table below describes step B and keeps the key it had then.
 
 | `core.py` on main | forest |
 |---|---|
@@ -306,13 +328,13 @@ In #909, both checks are generated from the forest. `factors.forest.PUBLISHED_CO
 published mart column to its node, and there is no second list of what a negative number
 means. The suite also asserts two things the tree implies:
 
-- **Sign propagation:** for `gppe ← ratio(capital_adjusted_gross_profit, employees_total)`
+- **Sign propagation:** for `gppe_uniform_charge_v0 ← ratio(capital_adjusted_gross_profit, employees_total)`
   with a non-negative denominator, the two published signs agree. A published output whose
   numerator is NULL also fails.
-- **One node, one value:** `operating_efficiency` and `gppe` carry the same node, so they
+- **One node, one value:** `operating_efficiency` and `gppe` (the mart columns) carry the same node, so they
   must be equal (`is distinct from`, so a NULL on one side fails too).
 
-Under v0.2.0 the nodes declare #59's reading: `gppe` and `capital_adjusted_gross_profit` are
+Under v0.2.0 the nodes declare #59's reading: `gppe_uniform_charge_v0` and `capital_adjusted_gross_profit` are
 `sign-is-signal` for every class. JPM's value (−514,726.13 on both governed heads, measured 2026-09-16; earlier ticks published −510,498 and −528,986) is therefore neither refused nor exempted:
 it is printed by name on every tick and every nightly run. #909 therefore removes the #528
 entry from `tools/output_invariant_exemptions.json`, which today still defers

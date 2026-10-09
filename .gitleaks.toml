@@ -26,3 +26,15 @@ regexes = [
 paths = [
   '''governance/.*''',
 ]
+
+# #1176: the forest registry declares metric node keys such as `key="gppe_banking_tce_v1"`.
+# The generic-api-key rule reads that high-entropy value as a credential. Allow this one rule for
+# this one file. The rule keeps its default regex, and every other file keeps the full scan.
+[[rules]]
+id = "generic-api-key"
+
+[rules.allowlist]
+description = "Forest registry metric node keys are identifiers, not credentials (#1176)"
+paths = [
+  '''libs/factors/src/factors/forest/registry\.py$''',
+]

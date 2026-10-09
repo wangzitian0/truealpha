@@ -135,6 +135,39 @@ _SPECS = (
         description="Point-in-time common shares outstanding for the reported context.",
     ),
     MetricSpec(
+        name="stockholders_equity",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description=(
+            "Total stockholders' equity at the fiscal year end; the first term of the banking "
+            "tangible-common-equity base (gppe_banking_tce_v1, #1176). Includes preferred equity."
+        ),
+    ),
+    MetricSpec(
+        name="preferred_stock_value",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description=(
+            "Preferred stock carrying value at the fiscal year end (us-gaap PreferredStockValue); "
+            "deducted from stockholders' equity for banking tangible common equity (#1176)."
+        ),
+    ),
+    MetricSpec(
+        name="goodwill",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description="Goodwill carrying amount at the fiscal year end; deducted for tangible common equity (#1176).",
+    ),
+    MetricSpec(
+        name="intangible_assets_net_excluding_goodwill",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description=(
+            "Intangible assets net of amortization, excluding goodwill, at the fiscal year end; "
+            "deducted for tangible common equity (#1176)."
+        ),
+    ),
+    MetricSpec(
         name="employees_total",
         unit_family=UnitFamily.COUNT,
         source_priority=(DataSource.SEC, DataSource.MOOMOO),
