@@ -165,6 +165,8 @@ export interface ComparisonRow {
 	issuerId: string;
 	cutoffAt: string;
 	capitalAdjustedLaborEfficiency: string | null;
+	/** The metric name the strategy used for `capitalAdjustedLaborEfficiency` (#1176). */
+	laborEfficiencyMetric?: string | null;
 	currentPriceToSales: string | null;
 	targetPriceToSales?: string | null;
 	tier: string | null;
@@ -265,8 +267,8 @@ export const MODULE_CATALOG: readonly ModuleCatalogEntry[] = [
 	},
 	{
 		module: 2,
-		name: "Gross profit / employee",
-		note: "capital-adjusted labor efficiency",
+		name: "Labor efficiency",
+		note: "capital-adjusted labor efficiency, named per issuer class (#1176)",
 		gate: "Gate 1",
 		field: "capital_adjusted_labor_efficiency",
 		outputTable: null,
@@ -602,6 +604,7 @@ export class StrategyRunReadAdapter {
 			cutoffAt: decision.cutoff_at,
 			capitalAdjustedLaborEfficiency:
 				decision.capital_adjusted_labor_efficiency,
+			laborEfficiencyMetric: decision.labor_efficiency_metric ?? null,
 			currentPriceToSales: decision.current_price_to_sales,
 			targetPriceToSales: decision.target_price_to_sales,
 			tier: decision.tier,

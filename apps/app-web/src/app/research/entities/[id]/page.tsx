@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { CardExportButton } from "@/components/card-export-button";
+import { laborEfficiencyLabels, UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
 import { loadEntityDetail } from "@/server/dashboard";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -57,7 +58,13 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
   const gppeDetail = state.kind === "ready" ? state.data.gppeDetail : null;
   const themes = state.kind === "ready" ? state.data.themes ?? [] : [];
 
-  const gppeValue = gppeDetail?.gppe ?? latestRow?.capitalAdjustedLaborEfficiency ?? null;
+  // #1176: the published `gppe` column is the uniform metric; the strategy value carries the name the
+  // strategy used. Both are shown, each with its name, and neither is shown bare.
+  const laborLabels = laborEfficiencyLabels({
+    publishedGppe: gppeDetail?.gppe ?? null,
+    strategyValue: latestRow?.capitalAdjustedLaborEfficiency ?? null,
+    strategyMetric: latestRow?.laborEfficiencyMetric ?? null,
+  });
   const operatingBranch = gppeDetail?.operatingBranch ?? null;
   const capitalAdjustedGrossProfit = gppeDetail?.capitalAdjustedGrossProfit ?? null;
 
@@ -146,10 +153,20 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                 )}
               </div>
               <div className="mt-4">
-                <div className="text-xs text-gray-400">Gross Profit / Employee (GPPE)</div>
-                <div className="mt-1 font-mono text-2xl font-bold text-white" title={gppeValue ?? undefined}>
-                  {formatUsdMagnitude(gppeValue) ?? cell(gppeValue)}
-                </div>
+                {laborLabels.length === 0 ? (
+                  <div className="font-mono text-2xl font-bold text-white">—</div>
+                ) : (
+                  laborLabels.map((label) => (
+                    <div key={label.metric} className="mt-2 first:mt-0">
+                      <div className="font-mono text-xs text-gray-400" data-testid="labor-metric-name">
+                        {label.metric}
+                      </div>
+                      <div className="mt-1 font-mono text-2xl font-bold text-white" title={label.value}>
+                        {formatUsdMagnitude(label.value) ?? cell(label.value)}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
               <div className="mt-4 border-t border-border/60 pt-3">
                 <div className="flex items-center justify-between text-sm">
@@ -277,6 +294,11 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                       </th>
                       <td className="px-4 py-3 font-mono">
                         {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? cell(row.capitalAdjustedLaborEfficiency)}
+                        {row.capitalAdjustedLaborEfficiency !== null && (
+                          <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
+                            {row.laborEfficiencyMetric ?? UNRECORDED_METRIC}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 font-mono">
                         {formatRatio(row.currentPriceToSales) ?? cell(row.currentPriceToSales)}

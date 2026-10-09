@@ -112,7 +112,7 @@ _DECISIONS_SQL = (
            d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
            d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
            d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
-           t.confidence
+           d.labor_efficiency_metric, t.confidence
 """
     + DECISIONS_FROM_SQL
 )
@@ -145,6 +145,8 @@ def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
         # parity gate diverges — which is exactly how this was caught.
         peg=row["peg"],
         peg_rank=row["peg_rank"],
+        # #1176: the metric name the strategy recorded for this value. Both twins carry it.
+        labor_efficiency_metric=row["labor_efficiency_metric"],
     )
 
 
