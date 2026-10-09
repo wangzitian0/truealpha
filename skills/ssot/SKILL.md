@@ -29,13 +29,19 @@ Never optimize a step that should not exist.
 8. **Contract first.** Lock signatures, schemas, and the observable endpoint before the internals.
    Prove equivalence with real inputs on old and new paths. Run staging first when a scheduler or alert stack changes.
 
-## SSOT Swarm (4-Intern parallel drift and dead-code sweep)
+## SSOT Swarm (10-Intern deterministic parallel drift and dead-code sweep)
 
-Before major refactorings or cleanups, dispatch a 4-Intern scan via `subagent_batch`:
-- **Intern 1 (Reachability)**: Scans public entry points vs call graph to locate uncalled dead code and unused modules.
-- **Intern 2 (Multi-Source Drift)**: Scans for duplicate configuration definitions between Host, Repo, and App layers.
-- **Intern 3 (Orphan Links & Docs)**: Runs link checkers (`python -m tools.doc_link_check`) to find rotting documentation links.
-- **Intern 4 (Empty Guard Protection)**: Verifies that existing assertions and guards actually fail on deleted or mutated inputs.
+Before major refactorings or cleanups, dispatch a deterministic 10-Intern scan via `subagent_batch`. The Director dynamically defines the focus dimensions and allocation across the following baseline topology:
+- **Intern 1 (Call graph reachability)**: Scans public entry points vs call graph to locate uncalled dead code and unused modules.
+- **Intern 2 (Multi-source configuration drift)**: Scans for duplicate configuration definitions between Host, Repo, and App layers.
+- **Intern 3 (Orphan links & rotting documentation)**: Runs link checkers (`python -m tools.doc_link_check`) to find broken documentation links and stale claims.
+- **Intern 4 (Empty guard protection)**: Verifies that existing assertions and guards actually fail on deleted or mutated inputs.
+- **Intern 5 (Deprecated shims & backward-compatibility wrappers)**: Finds temporary adapters and shims whose replacement has landed.
+- **Intern 6 (Stale schema & contract duplication)**: Scans for duplicate DTO models, redundant interfaces, or manual copies of generated types.
+- **Intern 7 (SQL query fragmentation)**: Locates fragmented database queries across consumer layers that bypass shared query services.
+- **Intern 8 (Hardcoded magic numbers & constants)**: Scans for scattered thresholds, timeouts, or formulas that lack a single source of truth.
+- **Intern 9 (Documented vs implemented invariant drift)**: Compares architectural documentation against reality to eliminate false defect claims.
+- **Intern 10 (Dead test assertions & tautologies)**: Inspects test fixtures for deleted code paths or assertions that run on empty result sets.
 
 ## Report
 

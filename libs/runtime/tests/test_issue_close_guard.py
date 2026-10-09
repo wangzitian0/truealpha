@@ -261,3 +261,58 @@ def test_a_release_identity_git_could_read_as_an_option_never_reaches_git(
     assert exit_code == 1
     assert not reached_git
     assert "not a usable release identifier" in capsys.readouterr().err
+
+
+def test_a_non_product_commit_stays_closed_without_reopening(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-product commits (docs, skills, rules, governance, tools) do not deliver
+    to production containers, so rule 6 deployed-check does not apply."""
+    calls, reopen = _capture()
+
+    def git(args):  # noqa: ANN001
+        if args[0] == "merge-base":
+            return 1, ""  # production does not contain it
+        if args[0] == "diff-tree":
+            return 0, "docs/index.md\nskills/ssot/SKILL.md\nAGENTS.md\n"
+        return 0, ""
+
+    exit_code = run(
+        1159,
+        gh_api=_timeline({"event": "closed", "commit_id": "c0ffee1" + "0" * 33}),
+        git=git,
+        http_get=_serving("v0.0.19"),
+        reopen=reopen,
+    )
+    assert exit_code == 0
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "leaving #1159 closed" in out
+    assert "only changes non-product paths" in out
+
+
+def test_a_mixed_product_and_non_product_commit_is_reopened(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A commit that touches any product file (e.g. apps/ or libs/ or db/) is a product
+    change and must be serving in production to stay closed."""
+    calls, reopen = _capture()
+
+    def git(args):  # noqa: ANN001
+        if args[0] == "merge-base":
+            return 1, ""  # production does not contain it
+        if args[0] == "diff-tree":
+            return 0, "docs/index.md\napps/app-web/src/app/page.tsx\n"
+        return 0, ""
+
+    exit_code = run(
+        1159,
+        gh_api=_timeline({"event": "closed", "commit_id": "c0ffee2" + "0" * 33}),
+        git=git,
+        http_get=_serving("v0.0.19"),
+        reopen=reopen,
+    )
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0][0] == 1159
+    assert "production is NOT serving" in calls[0][1]

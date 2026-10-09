@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "eee7e301c96228ae0ed5eed9a866f56be9752b32dc2ecdda28c67e41c9646035",
     "root": "749e6cf6cfb5e18b32675996d0ddd5055f3583ff433e3c0aaa4cbf63b1805eaa",
-    "skills": "ae1d5ad08402248951790d2a23fec52e0c6fd9a3bbc304dd358d4f596aa77fc8"
+    "skills": "a7a73349ce5ded591fed90077957816143d504cd1dfc2ade9f5b8659ef6cdd20"
   },
   "language": "en",
   "outputs": {
@@ -29,8 +29,9 @@
       "skills/prr/SKILL.md": "402e84b362610e044e7a18113ce245f40e437c01362967e47d1e96a31d1ba4e4",
       "skills/recall/SKILL.md": "3549a4d9a45777275b673b3d1a4c6311ffd802d66c752391a5b3a4970f624921",
       "skills/smoke/SKILL.md": "b8d6c1f868edf776c395a13fc3e4f86e1ce8eb2e745d313b690f42fff7a3959a",
-      "skills/ssot/SKILL.md": "f485ceda841c39b0c1c19e50bafae2365f2ce95ec6b65d2e7653185420397f12",
-      "skills/swarm/SKILL.md": "d2fd3a6213db7cd8586436e00698189ebcaaac4ef85ace4090d386f67193351c"
+      "skills/ssot/SKILL.md": "9494b05693ee56a9a8f86e9296e2e7ad52422b994a358f49df3a01982cea5d31",
+      "skills/swarm/SKILL.md": "d2fd3a6213db7cd8586436e00698189ebcaaac4ef85ace4090d386f67193351c",
+      "skills/z/SKILL.md": "79391503d9f9feedc6cc5598c05ec0482b2c837c858aa42ebbc3035764934bfd"
     },
     "link_dirs": [
       ".claude/skills",
@@ -49,6 +50,7 @@
       ".agents/skills/smoke": "../../skills/smoke",
       ".agents/skills/ssot": "../../skills/ssot",
       ".agents/skills/swarm": "../../skills/swarm",
+      ".agents/skills/z": "../../skills/z",
       ".claude/skills/audit": "../../skills/audit",
       ".claude/skills/auto": "../../skills/auto",
       ".claude/skills/close": "../../skills/close",
@@ -60,11 +62,12 @@
       ".claude/skills/recall": "../../skills/recall",
       ".claude/skills/smoke": "../../skills/smoke",
       ".claude/skills/ssot": "../../skills/ssot",
-      ".claude/skills/swarm": "../../skills/swarm"
+      ".claude/skills/swarm": "../../skills/swarm",
+      ".claude/skills/z": "../../skills/z"
     },
     "root": "skills"
   },
-  "source_revision": "da813771ad50e2b8b28a1bc589461d00c7a5b0ff",
+  "source_revision": "50c3fa91f47e7613e809bcc03353167adc3f3ce5",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
