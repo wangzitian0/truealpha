@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
 import { loadComparison } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -67,7 +68,12 @@ export default async function ComparePage({
                         {entityLabel(row.issuerId, names)}
                       </Link>
                     </th>
-                    <td className="px-4 py-3">{cell(row.capitalAdjustedLaborEfficiency)}</td>
+                    <td className="px-4 py-3">
+                      {cell(row.capitalAdjustedLaborEfficiency)}
+                      {row.capitalAdjustedLaborEfficiency !== null && (
+                        <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? UNRECORDED_METRIC}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">{cell(row.currentPriceToSales)}</td>
                     <td className="px-4 py-3">{cell(row.tier)}</td>
                     <td className="px-4 py-3">{cell(row.valuationGap)}</td>

@@ -72,6 +72,9 @@ export interface StrategyRunDecision {
 	peg?: string | null;
 	// Module 1 ordering (#284). Independent of `rank`; PEG does not participate in selection.
 	peg_rank?: number | null;
+	// #1176: the metric name the strategy used for `capital_adjusted_labor_efficiency`, e.g.
+	// gppe_banking_tce_v1 for a FINANCIAL issuer. Null when no metric was recorded.
+	labor_efficiency_metric?: string | null;
 }
 
 export interface StrategyRunReport {
@@ -226,12 +229,13 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 			"target_weight",
 			"peg",
 			"peg_rank",
+			"labor_efficiency_metric",
 		],
 		path,
-		// Optional exactly where the interface says optional: PEG (#284) and the
-		// input provenance joined from mart.topt_core_results. A report produced
-		// before either existed still validates.
-		["peg", "peg_rank"],
+		// Optional exactly where the interface says optional: PEG (#284), the input
+		// provenance joined from mart.topt_core_results, and the labor-efficiency metric
+		// name (#1176). A report produced before any of them existed still validates.
+		["peg", "peg_rank", "labor_efficiency_metric"],
 	);
 
 	const issuerId = object.issuer_id;
@@ -290,6 +294,14 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 		fail(`${path}.peg_rank`, "expected a positive integer or null");
 	}
 
+	const laborEfficiencyMetric = object.labor_efficiency_metric ?? null;
+	if (
+		laborEfficiencyMetric !== null &&
+		(typeof laborEfficiencyMetric !== "string" || laborEfficiencyMetric.length === 0)
+	) {
+		fail(`${path}.labor_efficiency_metric`, "expected a non-empty metric name or null");
+	}
+
 	return {
 		issuer_id: issuerId,
 		cutoff_at: cutoffAt,
@@ -329,6 +341,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 				? null
 				: asDecimalString(object.peg, `${path}.peg`),
 		peg_rank: pegRank as number | null,
+		labor_efficiency_metric: laborEfficiencyMetric as string | null,
 	};
 }
 

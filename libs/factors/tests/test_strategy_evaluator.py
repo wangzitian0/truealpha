@@ -586,3 +586,34 @@ def test_evaluator_excludes_a_bank_without_preferred_stock_value() -> None:
     assert decision.eligible is False
     assert decision.capital_adjusted_labor_efficiency is None
     assert decision.exclusion_reason == "missing_preferred_stock_value"
+
+
+def test_each_decision_names_the_labor_efficiency_metric_it_was_computed_with() -> None:
+    # #1176: the name comes from the same binding that selected the metric. A FINANCIAL issuer is named
+    # for banking v1, a non-financial issuer for uniform v0, and an issuer with no class carries no name.
+    bank = IssuerInput(issuer_id="issuer:bank", records=_BANK_RECORDS_WITH_TCE, issuer_class=IssuerClass.FINANCIAL)
+    acme = IssuerInput(issuer_id="issuer:acme", records=_without(_TCE_KEYS), issuer_class=IssuerClass.NON_FINANCIAL)
+    unclassified = IssuerInput(issuer_id="issuer:unclassified", records=_without(_TCE_KEYS))
+    decisions = {
+        d.issuer_id: d
+        for d in evaluate_cutoff(
+            [bank, acme, unclassified],
+            definition=_definition(),
+            cutoff_at=_PEG_CUTOFF,
+            risk_free_rate=Decimal("0.05"),
+        )
+    }
+    assert decisions["issuer:bank"].labor_efficiency_metric == "gppe_banking_tce_v1"
+    assert decisions["issuer:acme"].labor_efficiency_metric == "gppe_uniform_charge_v0"
+    assert decisions["issuer:unclassified"].labor_efficiency_metric is None
+
+
+def test_an_exclusion_after_the_metric_is_chosen_still_names_it() -> None:
+    # A bank with no preferred value is excluded after its metric was selected. The name is still recorded.
+    records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "preferred_stock_value"}
+    issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
+    [decision] = evaluate_cutoff(
+        [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
+    assert decision.exclusion_reason == "missing_preferred_stock_value"
+    assert decision.labor_efficiency_metric == "gppe_banking_tce_v1"

@@ -227,3 +227,26 @@ def test_write_strategy_run_persists_computed_corpus_sha256(connection) -> None:
         "select corpus_sha256 from mart.strategy_runs where strategy_run_id = %s", (run_id,)
     ).fetchone()
     assert persisted_corpus_sha == "a" * 64
+
+
+def test_the_labor_efficiency_metric_is_persisted_outside_the_decisions_identity(connection) -> None:
+    """#1176: the metric name the strategy used reaches mart.strategy_decisions. It is an annotation, so
+    the decision id is the one the same decision had before the column existed, and no persisted run conflicts."""
+    from dataclasses import replace
+
+    decisions, definition = run()
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    evaluated = next(d for d in decisions if d.eligible)
+    unnamed_id = write_strategy_decision(
+        connection, replace(evaluated, labor_efficiency_metric=None), strategy_run_id=run_id
+    )
+    connection.rollback()
+
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    named = replace(evaluated, labor_efficiency_metric="gppe_banking_tce_v1")
+    named_id = write_strategy_decision(connection, named, strategy_run_id=run_id)
+    assert named_id == unnamed_id, "the metric name is not part of the decision's identity"
+    (name,) = connection.execute(
+        "select labor_efficiency_metric from mart.strategy_decisions where strategy_decision_id = %s", (named_id,)
+    ).fetchone()
+    assert name == "gppe_banking_tce_v1"
