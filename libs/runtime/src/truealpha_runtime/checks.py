@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 
 import psycopg
-from infra2_sdk.runtime.postgres import PostgresSettings, _redact_error, probe_postgres
 from infra2_sdk.runtime.health import DependencyStatus, ProbeResult
+from infra2_sdk.runtime.postgres import PostgresSettings, _redact_error, probe_postgres
 from infra2_sdk.runtime.s3 import probe_s3
 
 from truealpha_runtime.config import RuntimeSettings
