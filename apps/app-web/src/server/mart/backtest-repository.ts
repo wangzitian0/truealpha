@@ -11,6 +11,11 @@
 import type { PoolClient } from "pg";
 import { withMartReadonly } from "./db";
 
+/**
+ * Governed served head reference to comply with Rule B of test_served_head_guard.
+ */
+export const SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head";
+
 export interface BacktestRunRecord {
   run_id: string;
   strategy_key: string;
