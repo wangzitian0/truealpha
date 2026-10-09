@@ -57,7 +57,11 @@ permissions:
 
 concurrency:
   group: auto-release-staging
-  cancel-in-progress: false
+  # #860: A newer commit to main renders any in-flight debounce sleep obsolete —
+  # tools/auto_release.py will refuse to release any commit that is no longer HEAD.
+  # Setting cancel-in-progress: true immediately terminates superseded runners,
+  # saving 20 runner minutes per merge burst and restarting the debounce timer for HEAD.
+  cancel-in-progress: true
 
 jobs:
   release:

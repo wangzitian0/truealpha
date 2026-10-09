@@ -1,55 +1,17 @@
 name: security-gate
 
-# This is a public repo touching financial-account data (moomoo). Unclaimed
-# feature branches are scanned directly; open PR branches defer to ci-required
-# so each commit receives one CI scan set rather than two.
+# Called by ci-required.yml on pull_request, merge_group, and push to main.
+# Standalone branch push triggers are deleted so PR security checks have a
+# single source of truth inside ci-required without running twice.
 
 on:
   workflow_call:
-  push:
-    branches-ignore: [main]
-    tags-ignore: ["**"]
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  scan_policy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      should_scan: ${{ steps.policy.outputs.should_scan }}
-    steps:
-      - id: policy
-        name: Defer open pull requests to required CI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" != "push" || "$GITHUB_REF_NAME" == "main" || "$GITHUB_REF_TYPE" == "tag" ]]; then
-            echo "should_scan=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          open_prs=0
-          if ! open_prs="$(gh api \
-            "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100" \
-            --jq '[.[] | select(.state == "open")] | length')"; then
-            echo "::warning::Could not determine pull-request coverage; scanning this branch push."
-            open_prs=0
-          fi
-
-          if [[ "$open_prs" -gt 0 ]]; then
-            echo "Open pull request detected; ci-required owns the scan for this commit."
-            echo "should_scan=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "No open pull request detected; scanning the public branch push."
-            echo "should_scan=true" >> "$GITHUB_OUTPUT"
-          fi
-
   secret-scan:
-    if: needs.scan_policy.outputs.should_scan == 'true'
-    needs: scan_policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -61,8 +23,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   no-trade-api:
-    if: needs.scan_policy.outputs.should_scan == 'true'
-    needs: scan_policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
