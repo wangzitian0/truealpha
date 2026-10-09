@@ -12,13 +12,15 @@ from __future__ import annotations
 import inspect
 import os
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, insert_market_prices_monthly
+from data_engine.datahub.strategy_history import postgres_last_close
 from data_engine.datahub.universe_mask import UniverseMaskReason, compute_and_persist_universe_mask_from_db
 from data_engine.lanes.market_data import _distinct_trading_dates
 
@@ -136,6 +138,23 @@ def test_universe_mask_reads_only_the_series_it_asked_for(connection) -> None:
     assert mask_for("splits") == (False, UniverseMaskReason.UNLISTED)
 
 
+def test_the_last_close_reader_returns_the_unadjusted_bar_only(connection) -> None:
+    """The strategy last-close reader filters on `adjust`.
+
+    The split-adjusted bar is the newer session here. A query that drops the `adjust`
+    filter orders by `trading_date` and returns the split close, so this assertion fails.
+    """
+    symbol = "T1139LASTCLOSE"
+    unadjusted_day, split_day = date(2026, 9, 21), date(2026, 9, 22)
+    insert_market_prices_daily(connection, [_bar(symbol, unadjusted_day, UNADJUSTED_CLOSE)], adjust="none")
+    insert_market_prices_daily(connection, [_bar(symbol, split_day, SPLIT_CLOSE)], adjust="splits")
+
+    last = postgres_last_close(connection)(symbol, datetime(2026, 9, 23, 12, tzinfo=UTC))
+
+    assert last is not None
+    assert last.close == Decimal(UNADJUSTED_CLOSE)
+
+
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
     "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
@@ -161,6 +180,7 @@ REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/scripts/run_vectorbt_backtest.py": "reader, tested by test_load_prices_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
+    "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
     "tools/schema_drift.py": "prose in a docstring, no query",
 }
