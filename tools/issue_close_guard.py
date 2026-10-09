@@ -156,9 +156,9 @@ def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
 
     Rule 6 states that product issues must be deployed, real, and evidenced.
     Non-product changes (documentation, developer skills, harness rules,
-    governance records, and tooling) do not deliver code to production
-    containers. Checking whether production serves them causes false
-    reopenings.
+    governance records, tooling, test suites, and E2E verification scripts)
+    do not deliver code to production containers. Checking whether
+    production serves them causes false reopenings.
     """
     code, out = git(["diff-tree", "-m", "--no-commit-id", "--name-only", "-r", commit])
     if code != 0:
@@ -172,6 +172,9 @@ def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
         if any(path.startswith(prefix) for prefix in NON_PRODUCT_PREFIXES):
             continue
         if path.endswith(".md") and "/" not in path:
+            continue
+        parts = path.split("/")
+        if "tests" in parts or "test" in parts or "e2e" in parts:
             continue
         return False
     return True
