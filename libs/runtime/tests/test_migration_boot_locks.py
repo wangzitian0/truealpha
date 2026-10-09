@@ -93,22 +93,38 @@ def _output(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout + completed.stderr
 
 
-@pytest.fixture
-def migrated_database(empty_database: str) -> str:
+@pytest.fixture(scope="module")
+def migrated_database() -> Iterator[str]:
     """The chain applied, rows seeded, and the chain applied again — the state every
     deployed database is in when the next boot replays it."""
-    completed, _ = run_runner(empty_database)
-    assert completed.returncode == 0, _output(completed)[-4000:]
-    seeded = subprocess.run(
-        ["psql", "--no-password", empty_database, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", str(REPLAY_SEED)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
-    completed, _ = run_runner(empty_database)
-    assert completed.returncode == 0, _output(completed)[-4000:]
-    return empty_database
+    admin_url = _admin_url()
+    name = f"truealpha_bootlocks_migrated_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    try:
+        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
+            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
+    parameters = conninfo_to_dict(admin_url)
+    db_url = make_conninfo(**(parameters | {"dbname": name}))
+    try:
+        completed, _ = run_runner(db_url)
+        assert completed.returncode == 0, _output(completed)[-4000:]
+        seeded = subprocess.run(
+            ["psql", "--no-password", db_url, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", str(REPLAY_SEED)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+        completed, _ = run_runner(db_url)
+        assert completed.returncode == 0, _output(completed)[-4000:]
+        yield db_url
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            admin.execute("select pg_terminate_backend(pid) from pg_stat_activity where datname = %s", (name,))
+            admin.execute(sql.SQL("drop database if exists {}").format(sql.Identifier(name)))
 
 
 def _insert_contract_object(connection: psycopg.Connection) -> None:
