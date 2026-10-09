@@ -16,7 +16,6 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
 
 import psycopg
 import pytest
@@ -435,6 +434,40 @@ def _capture(
     return plan
 
 
+def _cell_objects(connection, run_id: str) -> list[tuple[str, str]]:
+    """(obligation_id, object_uri) for every landed pointer this run's cells rest on."""
+    return connection.execute(
+        """
+        select distinct ob.obligation_id, landing.object_uri
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join raw.capture_source_vintages vintage on vintage.source_vintage_id = o.source_vintage_id
+        join raw.fetches landing on landing.id = vintage.raw_fetch_id
+        where ob.run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+
+
+def _a_pointer_only_one_cell_rests_on(connection, run_id: str) -> str:
+    """An object URI that exactly one cell depends on, and that cell on nothing else.
+
+    Deleting it must move `lineage_completeness` by exactly one cell, which is what makes
+    the harness a measurement rather than a smoke test.
+    """
+    pairs = _cell_objects(connection, run_id)
+    objects_per_cell: dict[str, set[str]] = {}
+    cells_per_object: dict[str, set[str]] = {}
+    for obligation_id, object_uri in pairs:
+        objects_per_cell.setdefault(obligation_id, set()).add(object_uri)
+        cells_per_object.setdefault(object_uri, set()).add(obligation_id)
+    for object_uri, cells in sorted(cells_per_object.items()):
+        if len(cells) == 1 and len(objects_per_cell[next(iter(cells))]) == 1:
+            return object_uri
+    raise AssertionError("no pointer is exclusive to a single cell; the harness cannot isolate one")
+
+
 # --- Falsifiability harness for mart.datahub_quality_report (#537) ------------------
 #
 # `availability` counted observation rows and `lineage_completeness` counted a
@@ -446,24 +479,6 @@ def _capture(
 # exactly one cell through the deployed write path and requires the corresponding metric
 # to move. Delete the control and "always below 1.0" passes; delete an injection and a
 # pinned metric passes. Both halves are the check.
-
-
-def _a_pointer_only_one_cell_rests_on(connection: psycopg.Connection[Any], run_id: str) -> str:
-    """Find an object store URI referenced by exactly one cell in the run, so its deletion
-    degrades completeness by exactly 1 without knocking out whole obligations."""
-    pointers = connection.execute(
-        """
-        select object_uri, count(*)
-        from staging.topt_observations
-        where run_id = %s and object_uri is not null
-        group by object_uri
-        """,
-        (run_id,),
-    ).fetchall()
-    for object_uri, count in pointers:
-        if count == 1:
-            return object_uri
-    raise AssertionError("no pointer is exclusive to a single cell; the harness cannot isolate one")
 
 
 def test_quality_report_metrics_are_perfect_only_when_the_run_is(connection) -> None:

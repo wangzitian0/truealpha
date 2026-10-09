@@ -263,87 +263,122 @@ def _run_lane_ops(universe: str = UNIVERSE) -> tuple[dict[str, Any], dict[str, A
     return json.loads(supply_chain), json.loads(analyst)
 
 
-# --- round 4: a partial join is red, the report names the reason, errors do not break the chain
-
-
 GHOST = "issuer:lei:ZZZZZZZZZZZZZZZZZZ01"
 
 
 def _universe_with(monkeypatch: pytest.MonkeyPatch, extra: list[tuple[str, str]], *, keep_real: bool = True) -> None:
-    corpus = standards.resolve_universe_corpus(None, UNIVERSE)
-    instruments = [row for row in corpus["topt_denominator"]["instruments"] if keep_real]
-    instruments.extend(
-        [extra_id, f"inst:{extra_ticker}", f"list:{extra_ticker}", extra_ticker] for extra_id, extra_ticker in extra
-    )
-    patched = {
-        **corpus,
-        "topt_denominator": {
-            **corpus["topt_denominator"],
-            "instruments": instruments,
-            "instrument_count": len(instruments),
-            "issuer_count": len({row[0] for row in instruments}),
-        },
-    }
-    monkeypatch.setattr(planner, "resolve_universe_corpus", lambda _connection, _kind: patched)
+    """The real `topt` universe, plus members the entity store does not know."""
+    real = planner.universe_issuers
+
+    def issuers(connection: Any, universe: str) -> list[Any]:
+        found = real(connection, universe) if keep_real else []
+        return [*found, *(SimpleNamespace(issuer_id=i, ticker=t) for i, t in extra)]
+
+    monkeypatch.setattr(planner, "universe_issuers", issuers)
 
 
 class _RecordingLog:
     def __init__(self) -> None:
         self.records: list[tuple[str, str]] = []
 
-    def warning(self, message: str, **_kw: Any) -> None:
-        self.records.append(("warning", message))
+    def warning(self, message: str, *args: object) -> None:
+        self.records.append(("warning", message % args))
 
-    def info(self, message: str, **_kw: Any) -> None:
-        self.records.append(("info", message))
+    def error(self, message: str, *args: object) -> None:
+        self.records.append(("error", message % args))
+
+
+def _alias(
+    connection: psycopg.Connection[Any], entity: uuid.UUID, scheme: str, value: str, *, valid_from: str, at: datetime
+) -> int:
+    row = connection.execute(
+        """
+        insert into staging.entity_aliases
+            (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref,
+             method, confidence, mapping_version)
+        values (%s, %s, %s, %s, %s, 'test', 'test', 'asserted', 1, 'test')
+        returning alias_id
+        """,
+        (entity, scheme, value, valid_from, at),
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
 
 
 def _mint(connection: psycopg.Connection[Any], scheme: str, value: str, *, at: datetime) -> uuid.UUID:
-    entity_id = uuid.uuid4()
+    row = connection.execute("select staging.entity_mint('issuer', %s, %s, 'test')", (scheme, value)).fetchone()
+    assert row is not None
+    _alias(connection, row[0], scheme, value, valid_from="-infinity", at=at)
+    return row[0]  # type: ignore[no-any-return]
+
+
+def _hand_over_lei(connection: psycopg.Connection[Any], lei: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """The LEI belongs to one entity until HANDOVER and to its successor from then on."""
+    recorded = datetime(2026, 3, 15, tzinfo=UTC)
+    old = _mint(connection, "lei", lei, at=datetime(2026, 1, 1, tzinfo=UTC))
+    claim = connection.execute(
+        "select alias_id from staging.entity_aliases where entity_id = %s and scheme = 'lei'", (old,)
+    ).fetchone()
+    assert claim is not None
     connection.execute(
-        """
-        insert into mart.entity_identity (entity_id, domain, primary_name, created_at)
-        values (%s, issuer, %s, %s)
-        """,
-        (entity_id, f"test-{value}", at),
+        "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
+        "values (%s, %s, 'handed over', %s, 'test', 'test')",
+        (claim[0], HANDOVER, recorded),
     )
-    connection.execute(
-        """
-        insert into mart.entity_alias (alias_id, entity_id, scheme, value, is_primary, valid_from, recorded_at)
-        values (%s, %s, %s, %s, true, %s, %s)
-        """,
-        (uuid.uuid4(), entity_id, scheme, value, at, at),
-    )
-    return entity_id
+    new = _mint(connection, "legacy-id", f"test:successor:{lei}", at=recorded)
+    _alias(connection, new, "lei", lei, valid_from=HANDOVER.isoformat(), at=recorded)
+    return old, new
 
 
 def _merge(connection: psycopg.Connection[Any], loser: uuid.UUID, survivor: uuid.UUID, *, known_from: datetime) -> None:
-    connection.execute(
-        """
-        insert into mart.entity_merge_history (merge_id, entity_id, surviving_entity_id, merge_type, valid_from, recorded_at)
-        values (%s, %s, %s, acquisition, %s, %s)
-        """,
-        (uuid.uuid4(), loser, survivor, known_from, known_from),
-    )
+    """The evidence of a merge, recorded now and knowable from `known_from`."""
+    for relation in ("same_as", "superseded_by"):
+        derived = connection.execute(
+            "select staging.entity_relation_uuid(%s, %s, %s, '-infinity', %s, 'test', 'asserted')",
+            (relation, loser, survivor, known_from),
+        ).fetchone()
+        assert derived is not None
+        connection.execute(
+            """
+            insert into staging.entity_relations
+                (relation_id, relation_type, from_entity_id, to_entity_id, valid_from, transaction_time,
+                 source, raw_ref, method, confidence, mapping_version)
+            values (%s, %s, %s, %s, '-infinity', %s, 'test', 'test', 'asserted', 1, 'test')
+            """,
+            (derived[0], relation, loser, survivor, known_from),
+        )
 
 
 def _merge_away(connection: psycopg.Connection[Any], entities: list[str]) -> None:
-    survivor = _mint(connection, "legacy-id", "test:survivor:outside", at=datetime(2026, 1, 1, tzinfo=UTC))
+    """Merge each entity into a fresh survivor, with evidence knowable at the cutoff."""
     for entity in entities:
-        _merge(connection, uuid.UUID(entity), survivor, known_from=datetime(2026, 1, 2, tzinfo=UTC))
+        survivor = _mint(connection, "legacy-id", f"test:survivor:{entity}", at=datetime(2026, 1, 1, tzinfo=UTC))
+        _merge(connection, uuid.UUID(entity), survivor, known_from=datetime(2026, 3, 1, tzinfo=UTC))
 
 
 def _qqq_issuers() -> list[str]:
-    from data_engine.datahub.production_topt.universe_corpus import load_corpus
+    """The distinct issuer ids of the QQQ-shaped universe, in corpus order."""
+    ordered: list[str] = []
+    for row in _qqq_denominator(QQQ_REPORT_DATE)["instruments"]:
+        if row[0] not in ordered:
+            ordered.append(row[0])
+    return ordered
 
-    return [row[0] for row in load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"][:21]]
+
+def _cik_of(issuer_id: str) -> str:
+    return issuer_id.removeprefix("issuer:cik:").zfill(10)
 
 
 def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> None:
-    assert summary["rows"] == joined
-    assert summary["wide_row_issuers"] == len(wide)
+    """Every wide-row issuer ends with one row: its own, or an unavailable one with the reason."""
+    assert summary["rows"] == len(wide)
     assert summary["joined_issuers"] == joined
-    assert summary["unmapped_issuers"] == len(wide) - joined
+    assert summary["joined_issuers"] + summary["unvisited_issuers"] == len(wide)
+    assert summary["unvisited_written"] + summary["kept_real_rows"] == summary["unvisited_issuers"]
+    assert summary["wide_row_issuers"] == len(wide)
+
+
+# --- round 4: a partial join is red, the report names the reason, errors do not break the chain
 
 
 def _universe_of(joined: int, wide: int, *, others: int = 0) -> CanonicalUniverse:
