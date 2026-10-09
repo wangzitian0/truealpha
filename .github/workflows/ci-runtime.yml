@@ -20,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-packages --frozen
+      - run: uv sync --package truealpha-runtime --frozen
       - name: Start app-owned runtime
         run: |
           docker compose up -d --wait postgres minio
