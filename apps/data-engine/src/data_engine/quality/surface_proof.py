@@ -47,10 +47,12 @@ from data_engine.datahub.question_coverage import (
     governed_head,
     stored_report_run,
 )
+from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import llm
 
 TOPT = "topt"
 QQQ = "universe-list:qqq"
+_NOT_SCHEDULED = "not_scheduled"
 
 #: `apps/app-web/src/server/mart/strategy-run-repository.ts` resolves the governed strategy
 #: run through this view (`db/migrations/20260907T0630_bt_governed_strategy_run.sql`):
@@ -205,6 +207,7 @@ def prove(
 
     `settling` names the universes that have not settled (universe -> why): a surface of one
     that does not match is IN-PROGRESS rather than MISMATCH."""
+    environment = declared_environment(connection)
     heads = _heads(connection)
     topt, qqq = heads.get(TOPT), heads.get(QQQ)
     verdicts: list[SurfaceVerdict] = []
@@ -275,6 +278,18 @@ def prove(
         for universe_id, run_id, payload in connection.execute(_COVERAGE_HEAD_SQL).fetchall()
     }
     for universe, prefix in UNIVERSE_PREFIXES.items():
+        if not is_universe_scheduled(universe, environment) and universe not in (settling or {}):
+            verdicts.append(
+                SurfaceVerdict(
+                    surface=f"/admin/datahub coverage [{universe}]",
+                    reader="datahub-stats.ts QUESTION_COVERAGE_SQL",
+                    expected_run=_NOT_SCHEDULED,
+                    served_run=_NOT_SCHEDULED,
+                    detail="not_scheduled in this environment",
+                    universe=universe,
+                )
+            )
+            continue
         head = heads[universe]
         # The report for the head's OWN universe id when there is a head (two TOPT partitions
         # would share a prefix; review on #859); by prefix only to say "nothing stored" for a

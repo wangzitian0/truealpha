@@ -236,6 +236,19 @@ TICKS: tuple[UniverseTick, ...] = (
 )
 
 
+def is_universe_scheduled(universe: str, environment: str) -> bool:
+    """Whether `universe` has an active schedule in `environment` (#1118)."""
+    key = "qqq" if universe in ("universe-list:qqq", "qqq") else universe
+    for tick in TICKS:
+        if tick.key == key:
+            if tick.cron is None:
+                return False
+            if tick.key == "qqq":
+                return _production_only(environment) == dg.DefaultScheduleStatus.RUNNING
+            return tick.default_status == dg.DefaultScheduleStatus.RUNNING
+    return False
+
+
 @contextmanager
 def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: CorroborationTally) -> Iterator[None]:
     """A tick that fails — a capture refused for its shortfall (#538) included — still
