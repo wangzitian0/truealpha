@@ -318,8 +318,8 @@
       "id": "factor-contract/nobody-re-implements-the-period-tag",
       "guard": "tools/check_factor_contract.py",
       "file": "apps/data-engine/src/data_engine/datahub/strategy_bridge.py",
-      "find": "                    tag = encode_annual(date.fromisoformat(period_end))",
-      "replace": "                    tag = f\"FY{period_end[:4]}:FY:{period_end}:{period_end}\"",
+      "find": "tag = encode_annual(date.fromisoformat(period_end))",
+      "replace": "tag = f\"FY{period_end[:4]}:FY:{period_end}:{period_end}\"",
       "command": [
         "python3",
         "tools/check_factor_contract.py"
