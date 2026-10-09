@@ -143,6 +143,44 @@ def test_every_surface_on_the_head_with_an_agreeing_report_is_green(monkeypatch)
     assert summary_lines(verdicts)[-1] == "report surface proof: 5/5 surfaces serve the governed head"
 
 
+def test_a_stale_head_on_an_unscheduled_universe_gives_a_green_proof(monkeypatch) -> None:
+    """A stale head on an unscheduled universe (such as QQQ on staging) is not a failure."""
+    _heads(monkeypatch)
+    fresh_report = {"questions": {"q1": {"answered": 99, "unavailable": {}, "missing": 0}}}
+    _reports(monkeypatch, fresh_report)
+    tables = _Tables(
+        strategy=NEW,
+        themes=NEW,
+        holdings=QQQ,
+        funds=1,
+        coverage=[(QQQ_UNIVERSE, QQQ, REPORT), (TOPT_UNIVERSE, NEW, fresh_report)],
+        environment="staging",
+    )
+    verdicts = prove(tables, executed_at=NOW)
+    by_surface = {v.surface: v for v in verdicts}
+    qqq_cov = by_surface["/admin/datahub coverage [universe-list:qqq]"]
+    assert qqq_cov.ok, f"expected qqq coverage to be ok when unscheduled, got: {qqq_cov.line}"
+
+
+def test_a_stale_head_on_a_scheduled_universe_stays_red(monkeypatch) -> None:
+    """A stale head on a scheduled universe (such as QQQ on production) must still fail."""
+    _heads(monkeypatch)
+    fresh_report = {"questions": {"q1": {"answered": 99, "unavailable": {}, "missing": 0}}}
+    _reports(monkeypatch, fresh_report)
+    tables = _Tables(
+        strategy=NEW,
+        themes=NEW,
+        holdings=QQQ,
+        funds=1,
+        coverage=[(QQQ_UNIVERSE, QQQ, REPORT), (TOPT_UNIVERSE, NEW, fresh_report)],
+        environment="production",
+    )
+    verdicts = prove(tables, executed_at=NOW)
+    by_surface = {v.surface: v for v in verdicts}
+    qqq_cov = by_surface["/admin/datahub coverage [universe-list:qqq]"]
+    assert not qqq_cov.ok, f"expected qqq coverage to fail when scheduled and stale, got: {qqq_cov.line}"
+
+
 def test_a_stored_report_the_tables_no_longer_agree_with_is_stale_even_on_the_right_run(monkeypatch) -> None:
     """The run id can be right and the numbers wrong: purity rows written after the report
     was stored change q6, and the page would show the old count until the next weekly run."""
@@ -257,6 +295,7 @@ def test_production_2026_09_17_names_both_mismatches_and_what_the_theme_plane_ho
         funds=1,
         coverage=[(QQQ_UNIVERSE, QQQ_OLD, REPORT), (TOPT_UNIVERSE, NEW, REPORT)],
         partitions=0,
+        environment="production",
     )
     verdicts = prove(tables, executed_at=NOW)
     lines = summary_lines(verdicts)
