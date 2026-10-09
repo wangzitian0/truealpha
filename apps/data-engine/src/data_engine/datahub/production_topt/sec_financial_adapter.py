@@ -1130,6 +1130,15 @@ class SecFinancialFactAdapter:
         gross_profit_value = bundle.gross_profit
         if bundle.gross_profit_is_revenue_proxy and not target.revenue_proxy_allowed:
             gross_profit_value = None
+        # #1114: an operating metric from another period than the revenue is dropped. BKNG's
+        # last GrossProfit ends 2017-12-31, so GPPE paired it with 2025 assets and headcount.
+        # The factor then reports `missing_gross_profit` instead of a number from mixed
+        # periods. The marker below records why the metric is absent.
+        operating_period_stale = _periods_differ(bundle.operating_period_end, bundle.revenue_period_end)
+        pre_provision_value = bundle.pre_provision_profit
+        if operating_period_stale:
+            gross_profit_value = None
+            pre_provision_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
         headcount: Decimal | None = None
         headcount_evidence: dict[str, Any] | None = None
@@ -1150,7 +1159,7 @@ class SecFinancialFactAdapter:
         if headcount_evidence is not None:
             # #747: the side-plane input names its evidence next to the XBRL inputs.
             vintage["headcount"] = headcount_evidence
-        payload = {
+        payload: dict[str, Any] = {
             "issuer_id": target.issuer_id,
             "instrument_id": target.instrument_id,
             "listing_id": target.listing_id,
@@ -1162,8 +1171,8 @@ class SecFinancialFactAdapter:
             "revenue": _s(bundle.revenue),
             "shares_outstanding": _s(bundle.shares_outstanding),
             "shares_basis": bundle.shares_basis,
-            "pre_provision_profit": _s(bundle.pre_provision_profit),
-            "operating_period_end": _d(bundle.operating_period_end),
+            "pre_provision_profit": _s(pre_provision_value),
+            "operating_period_end": None if operating_period_stale else _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
@@ -1185,6 +1194,10 @@ class SecFinancialFactAdapter:
             # is refused above, `gross_profit` is null and must not claim a filing.
             "vintage": {key: vintage[key] for key in sorted(vintage)},
         }
+        if operating_period_stale:
+            # Present only on a dropped metric, so the payload hash of a current row does not move.
+            payload["operating_period_stale"] = True
+            payload["stale_operating_period_end"] = _d(bundle.operating_period_end)
         return FetchSuccess(
             raw=RawResponse(
                 body=bundle.raw_bytes,
@@ -1204,13 +1217,18 @@ class SecFinancialFactAdapter:
 
 def _confidence(payload: Mapping[str, Any]) -> Decimal:
     """Per-source-class confidence prior (#207/#404) with period coherence zero-gate (#1108); calibrated continuous formula remains #337."""
-    op_end = payload.get("operating_period_end")
-    rev_end = payload.get("revenue_period_end")
-    if op_end is not None and rev_end is not None and op_end != rev_end:
+    # Backstop. `fetch` drops an operating metric of another period, so a payload that
+    # reaches this gate with two different periods must not carry a positive confidence.
+    if _periods_differ(payload.get("operating_period_end"), payload.get("revenue_period_end")):
         return Decimal("0.00")
 
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
+
+
+def _periods_differ(operating_end: object | None, revenue_end: object | None) -> bool:
+    """True when both period ends exist and differ: the operating metric describes another period."""
+    return operating_end is not None and revenue_end is not None and operating_end != revenue_end
 
 
 def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:

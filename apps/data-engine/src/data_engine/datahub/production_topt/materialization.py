@@ -77,6 +77,11 @@ class FinancialFactPayload(_FrozenModel):
     # from the vendor.
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
+    # #1114: written only when the adapter dropped an operating metric because its period
+    # differed from the revenue period. `stale_operating_period_end` is the dropped metric's
+    # period. Absent on a current row, so the payload hash of a current row does not move.
+    operating_period_stale: bool | None = None
+    stale_operating_period_end: date | None = None
     # The share count's measurement date (#529). Present even when `shares_outstanding` is
     # None, because a count refused for staleness must be distinguishable from one the
     # source never published — the first is a dated gap, the second an absence.

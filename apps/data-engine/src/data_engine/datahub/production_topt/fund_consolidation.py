@@ -46,15 +46,21 @@ select h.fund_id,
        h.listing_id,
        core.valuation_gap,
        core.availability,
-       core.confidence
+       core.confidence,
+       core.availability_status
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
 left join (
     select coalesce(ei.listing_id, c.listing_id) as listing_id,
            c.valuation_gap,
            c.availability,
-           c.confidence
+           c.confidence,
+           status.availability_status
     from mart.topt_core_result_read c
+    -- The read view exposes the factor column `availability` only. The section 8 status
+    -- lives on the table. A low-confidence row keeps `availability = 'available'` (#1114).
+    left join mart.topt_core_results status
+      on status.result_id = c.result_id
     left join mart.entity_identity ei
       on ei.entity_id::text = c.listing_id
     where c.run_id = %(run_id)s
@@ -92,8 +98,17 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
                 valuation_gap=valuation_gap,
                 availability=None if availability is None else str(availability),
                 confidence=confidence,
+                availability_status=None if availability_status is None else str(availability_status),
             )
-            for holding_name, weight, listing_id, valuation_gap, availability, confidence in line_rows
+            for (
+                holding_name,
+                weight,
+                listing_id,
+                valuation_gap,
+                availability,
+                confidence,
+                availability_status,
+            ) in line_rows
         )
         vintages.append(
             FundVintage(
