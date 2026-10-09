@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test prepush contract-conformance check clean
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke check-large-files prepush contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -23,7 +23,11 @@ help:
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check        lint + typecheck + test"
+	@echo "  make smoke        Fast inner-loop checks: lint + typecheck + fast tests (<20s)"
+	@echo "  make test-fast    Fast unit tests: contracts + factors + runtime checks (<10s)"
+	@echo "  make test         Full repository test suite (runs all tests, slower)"
+	@echo "  make check-large-files Verify repository files comply with size invariants"
+	@echo "  make check        lint + typecheck + test + contract-conformance"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
 
 bootstrap:
@@ -140,6 +144,15 @@ prepush:
 test:
 	uv run pytest
 
+test-fast:
+	uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests/test_checks.py
+
+check-large-files:
+	uv run python tools/check_large_files.py
+
+smoke: lint typecheck contract-conformance test-fast check-large-files
+	@echo "✅ Inner-loop smoke checks passed"
+
 contract-conformance:
 	uv run python libs/contracts/conformance/export_issue58.py --check
 	# Runs every apps/app-web/tests/*.test.ts file, mirroring ci-web.yml (#373 found a
@@ -153,7 +166,7 @@ contract-conformance:
 	# exactly as ci-web runs them — #468).
 	cd apps/app-web && set -eu; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
 
-check: lint typecheck test contract-conformance
+check: lint typecheck test contract-conformance check-large-files
 	@echo "✅ All checks passed"
 
 clean:
