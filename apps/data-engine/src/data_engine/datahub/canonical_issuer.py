@@ -36,6 +36,7 @@ __all__ = (
     "MEMBER_RESOLVES_ELSEWHERE",
     "NOT_IN_WIDE_ROW",
     "NO_CANONICAL_ISSUER_ID",
+    "NO_SEGMENT_PARTITION",
     "CanonicalIssuer",
     "CanonicalUniverse",
     "UnmappedIssuer",
@@ -61,6 +62,8 @@ DUPLICATE_CORPUS_ID = "duplicate_corpus_id"
 MEMBER_RESOLVES_ELSEWHERE = "member_resolves_elsewhere"
 #: Why a joined issuer got an unavailable row: the join floor tripped, so the lane fetched nothing.
 JOIN_FLOOR_TRIPPED = "join_floor_tripped"
+#: Why a wide-row issuer got an unavailable Q6 row: no accepted segment partition exists for it (#1117).
+NO_SEGMENT_PARTITION = "no_segment_partition"
 
 #: The share of the wide row that members must join. Below it, the lane fails like a total drop.
 JOIN_FLOOR = 0.5
@@ -299,15 +302,23 @@ def write_unvisited(
     run_id: str,
     cutoff: datetime,
     unvisited: Sequence[tuple[str, str]],
+    per_row: Sequence[Sequence[Any]] = ((),),
 ) -> list[tuple[str, str]]:
     """Run the fill statement `sql` for each (issuer id, reason) of `unvisited` (#1079).
 
-    The one writer of both tables. It refuses an id that is not the wide row's.
-    Returns the pairs that the statement wrote. A row it kept is not among them.
+    The one writer of all three tables. It refuses an id that is not the wide row's.
+    The statement binds run id, issuer id, cutoff and the reason list, in this order.
+    `per_row` holds extra parameters, bound after those four. The statement runs once per
+    entry of `per_row` for each issuer. Q6 passes one entry for each governed theme (#1117).
+    Returns the pairs for which the statement wrote at least one row. A row it kept is not counted.
     """
     written: list[tuple[str, str]] = []
     for issuer_id, reason in unvisited:
-        cursor = connection.execute(sql, (run_id, require_canonical_issuer_id(issuer_id), cutoff, [reason]))
-        if cursor.rowcount:
+        canonical = require_canonical_issuer_id(issuer_id)
+        wrote = False
+        for extra in per_row:
+            cursor = connection.execute(sql, (run_id, canonical, cutoff, [reason], *extra))
+            wrote = wrote or bool(cursor.rowcount)
+        if wrote:
             written.append((issuer_id, reason))
     return written

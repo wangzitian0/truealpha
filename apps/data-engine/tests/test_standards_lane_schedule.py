@@ -191,6 +191,11 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     monkeypatch.setattr(
         theme_purity, "materialize_theme_purity", lambda _c, **kwargs: materialized.append(kwargs) or ()
     )
+    # The wide row names the issuers that need a fill (#1117). This head has none, and the stub answers no query.
+    from data_engine.datahub import question_coverage
+
+    wide_row_runs = []
+    monkeypatch.setattr(question_coverage, "gppe_cells", lambda _c, run_id: wide_row_runs.append(run_id) or ())
     # The corpus the op names its members from (#849); the pointer stub answers no corpus query.
     from data_engine.datahub.standards.planner import UniverseIssuer
     from data_engine.lanes import standards as lane
@@ -206,6 +211,7 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
         "the op must find the head through mart.environment_identity, not through a named environment"
     )
     assert out["run_id"] == head[1]
+    assert wide_row_runs == [head[1]], "the fills are computed against the wide row of THAT run"
     assert materialized == [{"run_id": head[1], "cutoff": head[2], "tickers": {"issuer:lei:X": "NFLX"}}], (
         "rows are written for THAT run, at ITS cutoff, and the classifier is told the ticker (#849)"
     )

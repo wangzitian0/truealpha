@@ -60,21 +60,27 @@ _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_s
 #: table, deliberately not the pointer — which is exactly why it has to be checked against it.
 #: No universe filter: every universe's head gets purity rows, and the page names a run and a
 #: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
+#:
+#: A purity row has a segment partition. The fill row of an issuer without one has none (#1117).
+#: A run that holds only fill rows is not populated, so no query here counts a fill row.
 _THEMES_HEAD_SQL = """
 select run_id, max(cutoff) as cutoff
 from mart.issuer_theme_purity
+where partition_id is not null
 group by run_id
 order by max(cutoff) desc
 limit 1
 """
 #: Whether a run has purity rows, i.e. whether the theme reader could select it.
-_THEME_ROWS_SQL = "select exists (select 1 from mart.issuer_theme_purity where run_id = %s)"
+_THEME_ROWS_SQL = (
+    "select exists (select 1 from mart.issuer_theme_purity where run_id = %s and partition_id is not null)"
+)
 #: Whether any run a universe's pointer ever named has purity rows: whether the theme lane
 #: covers that universe in this environment.
 _THEME_UNIVERSE_SQL = """
 select exists (
     select 1 from mart.current_pointer p
-    join mart.issuer_theme_purity t on t.run_id = p.target_run_id
+    join mart.issuer_theme_purity t on t.run_id = p.target_run_id and t.partition_id is not null
     where p.environment = %s and p.factor_id = %s and p.universe_id like %s
 )
 """

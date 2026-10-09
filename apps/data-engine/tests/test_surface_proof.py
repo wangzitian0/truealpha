@@ -73,7 +73,7 @@ class _Tables:
             self._rows = [(params[0] in self.theme_runs,)]
         elif "mart.governed_strategy_run" in text:
             self._rows = [(self.strategy, "strategy-run:x")] if self.strategy else []
-        elif "from mart.issuer_theme_purity group by run_id" in text:
+        elif "from mart.issuer_theme_purity where partition_id is not null group by run_id" in text:
             self._rows = [(self.themes, NOW)] if self.themes else []
         elif "from mart.current_pointer_head" in text:
             self._rows = [(self.holdings,)] if self.holdings else []
@@ -630,6 +630,112 @@ def test_the_theme_lane_covers_a_universe_once_a_run_its_pointer_named_has_rows(
         _seed_theme_row(connection, run_id=qqq_run, cutoff=QQQ_CUTOFF)
         landed = themes_verdict(connection, heads, qqq_run)
         assert (landed.state, landed.universe) == ("MATCH", "universe-list:qqq")
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+# --- #1117: a Q6 fill row has no segment partition, so it is no theme row ---------------------
+
+#: The newest cutoffs of the table. The head query has no universe filter, so a fill-only run at the
+#: top of the table is the run an unguarded reader would serve.
+_FILL_ONLY_CUTOFF = datetime(2099, 1, 2, tzinfo=UTC)
+_REAL_CUTOFF = datetime(2099, 1, 1, tzinfo=UTC)
+
+
+def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
+    """The Q6 fill of one issuer, one row per governed theme, written by the lane's own writer."""
+    import uuid
+
+    from data_engine.datahub.production_topt import theme_purity
+    from truealpha_contracts.theme_purity import THEMES
+
+    written = theme_purity.materialize_unvisited_issuers(
+        connection, run_id=run_id, cutoff=cutoff, unvisited=[(str(uuid.uuid4()), "no_segment_partition")]
+    )
+    assert len(written) == 1
+    count = connection.execute(
+        "select count(*) from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'", (run_id,)
+    ).fetchone()
+    assert count == (len(THEMES),), "one fill row for each governed theme"
+
+
+def _typescript_query(name: str) -> str:
+    """The text of a `const <name> = ...;` query of the App's theme reader, with `$1` as `%s`."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/mart/theme-purity.ts").read_text()
+    match = re.search(rf"const {name} = `(?P<sql>.*?)`;", source, re.S)
+    assert match is not None, f"theme-purity.ts no longer declares {name}"
+    return match.group("sql").replace("$1", "%s")
+
+
+def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
+    """The proof names `LATEST_RUN_SQL` as the reader it mirrors. A change to one text must change both."""
+    assert " ".join(_typescript_query("LATEST_RUN_SQL").split()) == " ".join(surface_proof._THEMES_HEAD_SQL.split())
+
+
+def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
+    fill_only, populated = ("capture-run:" + digit * 64 for digit in "fe")
+    connection = _db()
+    try:
+        _seed_theme_fill(connection, run_id=fill_only, cutoff=_FILL_ONLY_CUTOFF)
+        _seed_theme_row(connection, run_id=populated, cutoff=_REAL_CUTOFF)
+
+        assert surface_proof._exists(connection, surface_proof._THEME_ROWS_SQL, (populated,)) is True
+        assert surface_proof._exists(connection, surface_proof._THEME_ROWS_SQL, (fill_only,)) is False
+        for name, query in (
+            ("proof", surface_proof._THEMES_HEAD_SQL),
+            ("App reader", _typescript_query("LATEST_RUN_SQL")),
+        ):
+            newest = connection.execute(query).fetchone()
+            assert newest is not None and newest[0] == populated, f"{name} must skip the fill-only run"
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def test_the_theme_page_query_returns_the_real_rows_of_a_run_and_no_fill_row() -> None:
+    run = "capture-run:" + "d" * 64
+    connection = _db()
+    try:
+        _seed_theme_row(connection, run_id=run, cutoff=_REAL_CUTOFF)
+        _seed_theme_fill(connection, run_id=run, cutoff=_REAL_CUTOFF)
+
+        rows = connection.execute(_typescript_query("ROWS_SQL"), (run,)).fetchall()
+
+        assert [row[5] for row in rows] == ["issuer:themes-910-test"], "issuer_id is the sixth column"
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def test_a_universe_whose_runs_hold_only_fill_rows_is_not_covered_by_the_theme_lane(monkeypatch) -> None:
+    """The lane covers a universe once a run its pointer named has theme rows. A fill is not one."""
+    from data_engine.quality.surface_proof import themes_verdict
+
+    topt_universe, qqq_universe = "universe:topt-fill-1117-test", "universe:qqq-fill-1117-test"
+    monkeypatch.setattr(
+        surface_proof,
+        "UNIVERSE_PREFIXES",
+        {"universe-list:qqq": "universe:qqq-fill-1117-", "topt": "universe:topt-fill-1117-"},
+    )
+    topt_run, qqq_run = ("capture-run:" + digit * 64 for digit in "ab")
+    heads = {
+        "topt": surface_proof.GovernedHead(topt_universe, topt_run, TOPT_CUTOFF),
+        "universe-list:qqq": surface_proof.GovernedHead(qqq_universe, qqq_run, QQQ_CUTOFF),
+    }
+    connection = _db()
+    try:
+        _seed_head(connection, universe_id=topt_universe, run_id=topt_run)
+        _seed_head(connection, universe_id=qqq_universe, run_id=qqq_run)
+        _seed_theme_row(connection, run_id=topt_run, cutoff=TOPT_CUTOFF)
+        _seed_theme_fill(connection, run_id=qqq_run, cutoff=QQQ_CUTOFF)
+
+        verdict = themes_verdict(connection, heads, topt_run)
+
+        assert (verdict.state, verdict.universe, verdict.expected_run) == ("MATCH", "topt", topt_run)
     finally:
         connection.rollback()
         connection.close()

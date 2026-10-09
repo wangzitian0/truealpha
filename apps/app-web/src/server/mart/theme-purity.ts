@@ -58,16 +58,23 @@ export type ThemePurityGroup = {
  * against, so "the newest run present here" IS a governed run — and asking the pointer
  * instead would name a run that may have no purity rows at all (the lane had not run yet),
  * leaving the page empty while rows existed.
+ *
+ * A purity row has a segment partition. An issuer without one gets a fill row that has none
+ * (#1117), and a run that holds only fill rows is not populated. So the fill rows do not count.
  */
 const LATEST_RUN_SQL = `
   select run_id, max(cutoff) as cutoff
   from mart.issuer_theme_purity
+  where partition_id is not null
   group by run_id
   order by max(cutoff) desc
   limit 1
 `;
 
-/** Ordered by the stored share, refusals last — the database's ordering, not this layer's. */
+/**
+ * Ordered by the stored share, refusals last — the database's ordering, not this layer's.
+ * The fill rows of issuers without a partition are not listed: the page lists judged issuers only.
+ */
 const ROWS_SQL = `
   select theme_id,
          theme,
@@ -91,6 +98,7 @@ const ROWS_SQL = `
          to_char(period_end, 'YYYY-MM-DD') as period_end
   from mart.issuer_theme_purity
   where run_id = $1
+    and partition_id is not null
   order by theme_id, theme_share desc nulls last, issuer_id
 `;
 
