@@ -23,6 +23,7 @@ from factors.base.analyst_track_record import (
 from psycopg import Connection
 
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id, write_unvisited
+from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 __all__ = (
     "MAX_FAILURES_LOGGED",
@@ -208,8 +209,6 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
         "sell_count": _count_from_share(count, payload.get("sell")),
         "confidence": Decimal("0.85"),
         "availability_status": "available",
-        "source_evidence_status": "verified",
-        "factor_validation_status": "accepted",
         "reason_codes": [],
     }
 
@@ -226,8 +225,6 @@ def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
         "sell_count": 0,
         "confidence": Decimal("0"),
         "availability_status": "unavailable",
-        "source_evidence_status": "degraded",
-        "factor_validation_status": "not_evaluated",
         "reason_codes": [f"fetch_error:{type(exc).__name__}"],
     }
 
@@ -318,8 +315,14 @@ def materialize_analyst_ratings(
     cutoff: datetime | None = None,
     ratings_data: Sequence[dict[str, Any] | AnalystTrackRecord],
 ) -> int:
-    """Materialize batch analyst rating rows into mart.issuer_analyst_ratings."""
+    """Materialize batch analyst rating rows into mart.issuer_analyst_ratings.
+
+    No Q4 row names a raw pointer yet (#1116). Every row gets its evidence and validation statuses
+    from the status source. A status in an input item has no effect.
+    """
     as_of = cutoff or datetime.now(tz=UTC)
+    source_evidence, factor_validation = statuses_without_raw_pointer()
+    source_status, val_status = source_evidence.value, factor_validation.value
     count = 0
     for item in ratings_data:
         if isinstance(item, AnalystTrackRecord):
@@ -337,8 +340,6 @@ def materialize_analyst_ratings(
                 if item.result.data_availability == "verified" and consensus_rating is not None
                 else "unavailable"
             )
-            source_status = "verified" if avail == "available" else "degraded"
-            val_status = "accepted" if consensus_rating is not None else "not_evaluated"
         else:
             issuer_id = str(item["issuer_id"])
             if "ratings" in item:
@@ -355,8 +356,6 @@ def materialize_analyst_ratings(
                     if rec.result.data_availability == "verified" and consensus_rating is not None
                     else "unavailable"
                 )
-                source_status = "verified" if avail == "available" else "degraded"
-                val_status = "accepted" if consensus_rating is not None else "not_evaluated"
             else:
                 raw_c = item.get("consensus_rating")
                 consensus_rating = Decimal(str(raw_c)) if raw_c is not None else None
@@ -372,14 +371,6 @@ def materialize_analyst_ratings(
                 reason_codes = list(item.get("reason_codes", []))
                 avail = str(
                     item.get("availability_status", "available" if consensus_rating is not None else "unavailable")
-                )
-                source_status = str(
-                    item.get("source_evidence_status", "verified" if avail == "available" else "degraded")
-                )
-                val_status = str(
-                    item.get(
-                        "factor_validation_status", "accepted" if consensus_rating is not None else "not_evaluated"
-                    )
                 )
             extractor = str(item.get("extractor", "origin:moomoo:v1"))
 
