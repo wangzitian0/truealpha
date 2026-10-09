@@ -464,40 +464,40 @@ def test_normalize_theme_slug_falsifiable() -> None:
     assert normalize_theme_slug("") == ""
 
 
-def test_extract_fund_resolution_candidates_falsifiable() -> None:
-    from llm_service.mcp_server import extract_fund_resolution_candidates
+def test_resolve_fund_resolution_candidates_falsifiable() -> None:
+    from llm_service.mcp_server import resolve_fund_resolution_candidates
 
-    qqq = extract_fund_resolution_candidates("fund:nasdaq:qqq")
+    qqq = resolve_fund_resolution_candidates("fund:nasdaq:qqq")
     assert qqq["clean_id"] == "fund:nasdaq:qqq"
     assert qqq["upper_token"] == "QQQ"
     assert qqq["series_candidate"] == "etf:series:QQQ"
     assert qqq["name_pattern"] == "%qqq%"
 
-    series = extract_fund_resolution_candidates("etf:series:S000101292")
+    series = resolve_fund_resolution_candidates("etf:series:S000101292")
     assert series["clean_id"] == "etf:series:S000101292"
     assert series["upper_token"] == "S000101292"
     assert series["series_candidate"] == "etf:series:S000101292"
     assert series["name_pattern"] == "%s000101292%"
 
     # Short token guard prevents matching broad substrings
-    short = extract_fund_resolution_candidates("q")
+    short = resolve_fund_resolution_candidates("q")
     assert short["upper_token"] == "Q"
     assert short["name_pattern"] == ""
 
-    empty = extract_fund_resolution_candidates("")
+    empty = resolve_fund_resolution_candidates("")
     assert empty["upper_token"] == ""
     assert empty["name_pattern"] == ""
 
 
-def test_extract_issuer_resolution_candidates_falsifiable() -> None:
-    from llm_service.mcp_server import extract_issuer_resolution_candidates
+def test_resolve_issuer_resolution_candidates_falsifiable() -> None:
+    from llm_service.mcp_server import resolve_issuer_resolution_candidates
 
-    nvda = extract_issuer_resolution_candidates("NVDA")
+    nvda = resolve_issuer_resolution_candidates("NVDA")
     assert nvda["clean_issuer"] == "NVDA"
     assert nvda["token"] == "NVDA"
     assert nvda["upper_token"] == "NVDA"
 
-    cik = extract_issuer_resolution_candidates("issuer:cik:0001045810")
+    cik = resolve_issuer_resolution_candidates("issuer:cik:0001045810")
     assert cik["clean_issuer"] == "issuer:cik:0001045810"
     assert cik["token"] == "0001045810"
     assert cik["upper_token"] == "0001045810"
