@@ -13,7 +13,7 @@ from llm_service import main
 from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
 from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, load_tool, skip_or_fail
+from truealpha_runtime.testing import isolated_test_database, load_tool
 
 
 def test_health():
@@ -363,20 +363,8 @@ def _named(database: str) -> str:
 @pytest.fixture(scope="module")
 def template_database() -> Iterator[str]:
     """A scratch database with the real chain and no head. Each test clones it."""
-    name = f"truealpha_health_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with REAL_CONNECT(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
-    try:
-        apply_migration_chain(_named(name))
-        yield name
-    finally:
-        with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with isolated_test_database("health") as db:
+        yield db.name
 
 
 #: Three heads of known age, for the universes the registry knows.

@@ -54,7 +54,8 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts.datahub import ObligationTerminalState
-from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
+from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
@@ -334,41 +335,6 @@ def _routes(
     routes.update(dict.fromkeys(sec_targets, financial))
     routes.update(dict.fromkeys(release_targets, release))
     return routes
-
-
-class _InMemoryObjectStore:
-    """A `RawObjectStore` that keeps bytes in a dict.
-
-    The suite must exercise the real landing path — sink -> raw_store -> object store —
-    because the defect this replaced was precisely that the row was written and the
-    upload never happened. Stubbing at the sink would have kept that invisible; stubbing
-    at the store keeps the whole path under test while staying offline.
-    """
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-
-    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
-        digest = hashlib.sha256(capture.body).hexdigest()
-        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
-        self.objects[key] = capture.body
-        return RawIngestionEnvelope(
-            source=capture.source,
-            source_record_id=capture.source_record_id,
-            object=RawObjectRef(
-                bucket="truealpha-raw",
-                key=key,
-                sha256=digest,
-                byte_length=len(capture.body),
-                content_type=capture.content_type,
-            ),
-            fetched_at=capture.fetched_at,
-            source_published_at=capture.source_published_at,
-            metadata=capture.metadata,
-        )
-
-    def get(self, ref: RawObjectRef) -> bytes:
-        return self.objects[ref.key]
 
 
 def _seed_headcounts(connection, plan: PlannedRun) -> None:

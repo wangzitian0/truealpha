@@ -16,19 +16,17 @@ it is withheld.
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
 from psycopg import errors, sql
-from truealpha_runtime.testing import apply_migration_chain, read_seed_rows, skip_or_fail
+from truealpha_runtime.testing import isolated_test_database, read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
@@ -39,28 +37,11 @@ HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
 
 
-def _named(database: str) -> str:
-    base = urlsplit(os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL))
-    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
-
-
 @pytest.fixture(scope="module")
 def database() -> Iterator[str]:
     """One database with the declared chain applied. Tests never commit to it."""
-    name = f"truealpha_served_head_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
-    try:
-        apply_migration_chain(_named(name))
-        yield _named(name)
-    finally:
-        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with isolated_test_database("served_head") as db:
+        yield str(db)
 
 
 @pytest.fixture

@@ -7,7 +7,6 @@ whole resolution must come from the landing zone and the injected SEC index."""
 
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -19,38 +18,8 @@ from data_engine.datahub.production_topt.holdings_enrichment import (
     figi_from_raw,
 )
 from factors.shared import entity_resolution as er
-from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
-
-
-class _InMemoryObjectStore:
-    """RawObjectStore over a dict — the raw landing path without MinIO (the
-    degraded-capture suite's exact seam)."""
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-
-    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
-        digest = hashlib.sha256(capture.body).hexdigest()
-        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
-        self.objects[key] = capture.body
-        return RawIngestionEnvelope(
-            source=capture.source,
-            source_record_id=capture.source_record_id,
-            object=RawObjectRef(
-                bucket="truealpha-raw",
-                key=key,
-                sha256=digest,
-                byte_length=len(capture.body),
-                content_type=capture.content_type,
-            ),
-            fetched_at=capture.fetched_at,
-            source_published_at=capture.source_published_at,
-            metadata=capture.metadata,
-        )
-
-    def get(self, ref: RawObjectRef) -> bytes:
-        return self.objects[ref.key]
-
+from truealpha_contracts.models import DataSource
+from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 _AT = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 _NVDA_ISIN = "US67066G1040"

@@ -31,9 +31,6 @@ colliding inside the sink after a wasted round of vendor calls.
 
 from __future__ import annotations
 
-import hashlib
-import os
-import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -67,12 +64,10 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import OperatingBranch
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
-from truealpha_runtime.testing import apply_migration_chain
+from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
+from truealpha_runtime.testing import isolated_test_database
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
@@ -91,57 +86,8 @@ _BANK_TICKER = "JPM"
 
 @pytest.fixture(scope="module")
 def tick_database_url():
-    parameters = conninfo_to_dict(settings.database_url)
-    database_name = f"truealpha_degraded_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    admin_url = make_conninfo(**(parameters | {"dbname": "postgres"}))
-    target_url = make_conninfo(**(parameters | {"dbname": database_name}))
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(database_name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        # The one applier, not a fourth copy of its loop (#984).
-        apply_migration_chain(target_url)
+    with isolated_test_database("degraded") as target_url:
         yield target_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(
-                "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s",
-                (database_name,),
-            )
-            admin.execute(sql.SQL("drop database if exists {}").format(sql.Identifier(database_name)))
-
-
-class _InMemoryObjectStore:
-    """`RawObjectStore` over a dict, so the real landing path runs without MinIO."""
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-
-    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
-        digest = hashlib.sha256(capture.body).hexdigest()
-        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
-        self.objects[key] = capture.body
-        return RawIngestionEnvelope(
-            source=capture.source,
-            source_record_id=capture.source_record_id,
-            object=RawObjectRef(
-                bucket="truealpha-raw",
-                key=key,
-                sha256=digest,
-                byte_length=len(capture.body),
-                content_type=capture.content_type,
-            ),
-            fetched_at=capture.fetched_at,
-            source_published_at=capture.source_published_at,
-            metadata=capture.metadata,
-        )
-
-    def get(self, ref: RawObjectRef) -> bytes:
-        return self.objects[ref.key]
 
 
 class _FailingPort:
