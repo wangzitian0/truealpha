@@ -80,6 +80,7 @@ values
     ('head:canary', 'capture', 'canary_daily_schedule', 'universe:canary-%', 'daily', 'operators', true),
     ('head-reports', 'standards', 'head_reports_schedule', null, 'daily', 'operators', false),
     ('standards-backfill', 'standards', 'standard_backfill_schedule', null, 'weekly', 'consumers', false),
+    ('standards-history', 'standards', 'standard_history_schedule', null, 'weekly', 'consumers', false),
     ('universe-refresh', 'universe_refresh', 'universe_refresh_schedule', null, 'weekly', 'consumers', false),
     -- market-data: the lane runs on weekdays only (cron `15 21 * * 1-5`).
     -- After a long weekend the age can pass 72 hours. Decide the family again when it is wired.
