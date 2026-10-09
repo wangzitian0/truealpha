@@ -108,12 +108,20 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "Goodwill"},),
             },
             {
-                # #1176 follow-up: deducted from equity. A filer that does not report this concept
-                # (JPM, in the companyfacts sample) gives no value. The adapter never zero-fills it.
+                # #1176: deducted from equity. Synonyms merge into one period series, so the latest
+                # period wins. JPM reports its balance-sheet preferred line under the second concept
+                # (companyfacts: 20,045,000,000 at 2025-12-31). A filer that reports neither concept
+                # gives no value. The adapter never zero-fills it.
                 "field": "preferred_stock_value",
                 "unit": "USD",
                 "kind": "synonym",
-                "concepts": ({"taxonomy": "us-gaap", "concept": "PreferredStockValue"},),
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "PreferredStockValue"},
+                    {
+                        "taxonomy": "us-gaap",
+                        "concept": "PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount",
+                    },
+                ),
             },
             {
                 "field": "intangible_assets_net_excluding_goodwill",

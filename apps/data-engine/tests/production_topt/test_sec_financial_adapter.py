@@ -1844,10 +1844,16 @@ def _with_preferred_stock(facts: dict, *, value: int, end: str, filed: str, accn
     return {**facts, "facts": {**facts["facts"], "us-gaap": gaap}}
 
 
-def test_jpm_companyfacts_sample_has_no_preferred_stock_value_for_fy2025() -> None:
-    # The sample carries PreferredStockValue only for 2008-2009. JPM tags its current preferred
-    # line by series, which companyfacts does not return. The measurement is refused, not zero-filled.
-    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+def _without_preferred(facts: dict) -> dict:
+    # Both preferred concepts removed: a filer that reports neither.
+    return _without_concept(
+        _without_concept(facts, "PreferredStockValue"), "PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount"
+    )
+
+
+def test_a_filer_reporting_neither_preferred_concept_gets_no_value_not_zero() -> None:
+    # Absence is refused, not zero-filled. The other three inputs are still measured.
+    bundle = build_bundle(_without_preferred(_jpm_facts()), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
     assert bundle.preferred_stock_value is None
     assert "preferred_stock_value" not in bundle.vintages
     # The three other inputs are still measured at the same period.
@@ -1869,9 +1875,53 @@ def test_the_bank_payload_names_an_absent_preferred_value_as_null() -> None:
     item = _work_item("d" * 64)
     result = SecFinancialFactAdapter(
         {item.work_item_id: _target(branch=OperatingBranch.FINANCIAL)},
-        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+        lambda cik, cutoff, branch: build_bundle(_without_preferred(_jpm_facts()), cutoff, branch),
     ).fetch(item)
     assert isinstance(result, FetchSuccess)
     assert "preferred_stock_value" in result.record.payload
     assert result.record.payload["preferred_stock_value"] is None
     assert "preferred_stock_value" not in result.record.payload["vintage"]
+
+
+def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_value_matches() -> None:
+    # JPM tags its balance-sheet preferred line as PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount.
+    # The companyfacts sample carries it non-dimensionally: 20,045,000,000 at 2025-12-31, from the FY2025
+    # 10-K (accession 0001628280-26-008131). Verified against the repo 10-K sample, not against live EDGAR.
+    # Headcount 318,512 is not in companyfacts. It is the 10-K "Employees" figure that #1108 cites.
+    from factors.base.gross_profit_per_employee import gross_profit_per_employee_banking_tce
+    from factors.types import Fact, UnitFamily
+
+    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    period = "2025-12-31"
+
+    def fact(metric: str, value: Decimal, unit: UnitFamily) -> Fact:
+        return Fact(
+            entity_id="issuer:jpm",
+            metric=metric,
+            value=value,
+            unit_family=unit,
+            confidence="0.9",
+            as_of=datetime(2026, 6, 30, tzinfo=UTC),
+            fiscal_period=period,
+        )
+
+    facts = [
+        fact("gross_profit", bundle.gross_profit, UnitFamily.CURRENCY),
+        fact("stockholders_equity", bundle.stockholders_equity, UnitFamily.CURRENCY),
+        fact("preferred_stock_value", bundle.preferred_stock_value, UnitFamily.CURRENCY),
+        fact("goodwill", bundle.goodwill, UnitFamily.CURRENCY),
+        fact(
+            "intangible_assets_net_excluding_goodwill",
+            bundle.intangible_assets_net_excluding_goodwill,
+            UnitFamily.CURRENCY,
+        ),
+        fact("employees_total", Decimal("318512"), UnitFamily.COUNT),
+    ]
+    result = gross_profit_per_employee_banking_tce(
+        facts, entity_id="issuer:jpm", as_of=datetime(2026, 6, 30, tzinfo=UTC), risk_free_rate=Decimal("0.05")
+    )
+    assert result.flags == [], result.flags
+    assert bundle.preferred_stock_value == Decimal("20045000000")
+    # Hand computation: TCE = 362,438M - 20,045M - 52,731M - 2,600M = 287,062M. Value = (86,807M - 287,062M x 0.05) / 318,512.
+    assert result.value is not None
+    assert abs(result.value - Decimal("227476.20")) <= Decimal("0.01")
