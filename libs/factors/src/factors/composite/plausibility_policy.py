@@ -194,10 +194,14 @@ def empty_eligible_set(outcomes: dict[str, int] | None, l2_complete: int | None)
         violations.append(
             Violation(RULE_EMPTY_ELIGIBLE, None, "L2 complete count is 0: no issuer has every strategy input")
         )
-    if outcomes:
+    if outcomes is not None:
         total = sum(outcomes.values())
         excluded = outcomes.get("excluded", 0)
-        if total > 0 and excluded == total:
+        if total == 0:
+            violations.append(
+                Violation(RULE_EMPTY_ELIGIBLE, None, "strategy produced 0 decisions: the strategy selected nothing")
+            )
+        elif excluded == total:
             violations.append(
                 Violation(
                     RULE_EMPTY_ELIGIBLE, None, f"all {total} decisions are excluded: the strategy selected nothing"
