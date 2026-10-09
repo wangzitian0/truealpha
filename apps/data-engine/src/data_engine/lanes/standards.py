@@ -363,7 +363,12 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     filings replays (§9). A restated segment set is a new filing and is asked afresh, which
     is the behaviour you want.
     """
-    from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
+    from data_engine.datahub.production_topt.theme_purity import (
+        materialize_theme_purity,
+        materialize_unvisited_issuers,
+        summary_line,
+        unvisited_issuers,
+    )
     from data_engine.datahub.question_coverage import governed_head
 
     context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
@@ -400,16 +405,37 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         # universe corpus the backfill labels its own asks with.
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
         rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers)
+        # Every wide-row issuer that got no row has no accepted segment partition (#1117). It gets an
+        # unavailable row for each theme, so the report names the reason and does not say `no_row`.
+        wide = sorted({cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)})
+        fills: list[tuple[str, str]] = []
+        if all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
+            fills = unvisited_issuers(
+                connection, run_id=head.run_id, wide_row_ids=wide, written_ids={row.entity_id for row in rows}
+            )
+        else:
+            # A row is written under the wide row's id only. The supply chain op fails the run on this defect.
+            context.log.error("theme purity: the wide row of %s holds an id that is not a canonical UUID", head.run_id)
+        written = materialize_unvisited_issuers(connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills)
         connection.commit()
         published = sum(1 for row in rows if row.result.value is not None)
         # Counts only: the purity values themselves are research output, and this line is public.
         # A row is one (issuer, theme) judgement, so the count is of rows, not issuers.
         outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}"
     context.log.info(summary_line(rows))
-    context.add_output_metadata(
-        {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}
-    )
-    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published})
+    summary: dict[str, Any] = {
+        "universe": config.universe,
+        "run_id": head.run_id,
+        "rows": len(rows),
+        "published": published,
+        UNVISITED_ISSUERS: len(fills),
+        UNVISITED_WRITTEN: len(written),
+        KEPT_REAL_ROWS: len(fills) - len(written),
+        UNVISITED_BY_REASON: reason_counts(reason for _, reason in written),
+        WIDE_ROW_ISSUERS: len(wide),
+    }
+    context.add_output_metadata(summary)
+    return json.dumps(summary)
 
 
 @dg.op

@@ -22,7 +22,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
@@ -35,6 +35,7 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 from truealpha_contracts.standards import STANDARDS, confidence_for
 from truealpha_contracts.theme_purity import THEMES, ThemeDefinition
 
+from data_engine.datahub.canonical_issuer import NO_SEGMENT_PARTITION, write_unvisited
 from data_engine.datahub.production_topt.status_dimensions import LOW_CONFIDENCE_FLOOR
 from data_engine.sources import llm
 
@@ -447,6 +448,70 @@ def materialize_theme_purity(
             )
             written.append(purity)
     return tuple(written)
+
+
+#: An unavailable row for each theme of a wide-row issuer that has no row of its own (#1117).
+#: The eight columns that describe a partition stay NULL. A fill has no partition.
+#: The CHECK `issuer_theme_purity_partition_or_fill_check` ties those NULLs to this extractor.
+#: An earlier fill of the run takes the new reason. A real row stays.
+_UNVISITED_SQL = """
+insert into mart.issuer_theme_purity (
+    run_id, issuer_id, cutoff, reason_codes, theme_id, theme, definition_version, definition_sha256,
+    segments, confidence, extractor, availability_status, source_evidence_status, factor_validation_status
+) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+on conflict (run_id, issuer_id, theme_id) do update set
+    cutoff = excluded.cutoff,
+    reason_codes = excluded.reason_codes,
+    theme = excluded.theme,
+    definition_version = excluded.definition_version,
+    definition_sha256 = excluded.definition_sha256
+where mart.issuer_theme_purity.extractor = 'lane:unvisited:v1'
+"""
+
+
+def unvisited_issuers(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    wide_row_ids: Collection[str],
+    written_ids: Collection[str],
+) -> list[tuple[str, str]]:
+    """(issuer id, reason) of each wide-row issuer that `materialize_theme_purity` wrote no row for (#1117).
+
+    The reason is `no_segment_partition`. The issuers left over have no accepted partition.
+    `written_ids` are the issuer ids of the rows that the run wrote.
+
+    A run with no member gets no fill. The member join then found nothing, as in #839.
+    That defect must stay visible as `no_row`. A fill would call it a missing partition.
+    """
+    missing = sorted(set(wide_row_ids) - set(written_ids))
+    if not missing or not governed_members(connection, run_id=run_id):
+        return []
+    return [(issuer_id, NO_SEGMENT_PARTITION) for issuer_id in missing]
+
+
+def materialize_unvisited_issuers(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    cutoff: datetime,
+    unvisited: Sequence[tuple[str, str]],
+    themes: tuple[ThemeDefinition, ...] = tuple(THEMES.values()),
+) -> list[tuple[str, str]]:
+    """Write an unavailable row for each theme of each wide-row issuer that has no row of its own (#1117).
+
+    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
+    A real row stays, and an earlier fill takes the new reason.
+    Returns the (issuer id, reason) pairs for which the statement wrote a row. A kept row is not among them.
+    """
+    return write_unvisited(
+        connection,
+        _UNVISITED_SQL,
+        run_id=run_id,
+        cutoff=cutoff,
+        unvisited=unvisited,
+        per_row=[(t.theme_id, t.theme, t.factor_version, t.content_sha256) for t in themes],
+    )
 
 
 def _short_id(entity_id: str) -> str:
