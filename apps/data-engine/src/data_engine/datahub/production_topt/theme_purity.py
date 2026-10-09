@@ -450,6 +450,11 @@ def materialize_theme_purity(
     return tuple(written)
 
 
+#: A fill row has no segment and no evidence. Its segment count and its confidence are zero.
+#: The statement binds them as parameters (#621/#629): no number sits in the statement text.
+FILL_SEGMENTS = 0
+FILL_CONFIDENCE = Decimal(0)
+
 #: An unavailable row for each theme of a wide-row issuer that has no row of its own (#1117).
 #: The eight columns that describe a partition stay NULL. A fill has no partition.
 #: The CHECK `issuer_theme_purity_partition_or_fill_check` ties those NULLs to this extractor.
@@ -458,7 +463,7 @@ _UNVISITED_SQL = """
 insert into mart.issuer_theme_purity (
     run_id, issuer_id, cutoff, reason_codes, theme_id, theme, definition_version, definition_sha256,
     segments, confidence, extractor, availability_status, source_evidence_status, factor_validation_status
-) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
 on conflict (run_id, issuer_id, theme_id) do update set
     cutoff = excluded.cutoff,
     reason_codes = excluded.reason_codes,
@@ -510,7 +515,9 @@ def materialize_unvisited_issuers(
         run_id=run_id,
         cutoff=cutoff,
         unvisited=unvisited,
-        per_row=[(t.theme_id, t.theme, t.factor_version, t.content_sha256) for t in themes],
+        per_row=[
+            (t.theme_id, t.theme, t.factor_version, t.content_sha256, FILL_SEGMENTS, FILL_CONFIDENCE) for t in themes
+        ],
     )
 
 
