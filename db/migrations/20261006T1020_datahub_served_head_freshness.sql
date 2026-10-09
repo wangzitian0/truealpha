@@ -87,6 +87,8 @@ values
     ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'daily', 'internal', false),
     -- strategy-history: the lane runs on Sundays (cron `7 10 * * 0`) and reads stored bytes only.
     ('strategy-history', 'strategy_history', 'strategy_history_schedule', null, 'weekly', 'internal', false),
+    -- backtest: the lane runs on weekdays (cron `30 21 * * 1-5`) and simulates daily/monthly portfolios.
+    ('nightly-backtest', 'backtest', 'nightly_backtest_schedule', null, 'daily', 'internal', false),
     ('output-invariants', 'quality', 'output_invariants_schedule', null, 'daily', 'operators', false),
     ('datahub-confidence-report', 'quality', 'datahub_confidence_report_schedule', null, 'daily', 'operators', false),
     ('model-key-health', 'quality', 'model_key_health_schedule', null, 'daily', 'operators', false),

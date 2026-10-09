@@ -38,6 +38,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.entity_identity",
     # the strategy's point-in-time input history for monthly cutoffs (#1139): stored bytes only
     "data_engine.lanes.strategy_history",
+    # the nightly portfolio backtest simulation and mart persistence lane (#758, Milestone M3)
+    "data_engine.lanes.backtest",
 )
 
 

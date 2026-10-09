@@ -155,10 +155,17 @@ def test_the_last_close_reader_returns_the_unadjusted_bar_only(connection) -> No
     assert last.close == Decimal(UNADJUSTED_CLOSE)
 
 
+def _datahub_backtest_load_prices():
+    from data_engine.datahub.backtest import _load_prices
+
+    return _load_prices
+
+
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
     "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
     "backtest-script": _load_prices_reader,
+    "backtest-datahub": _datahub_backtest_load_prices,
 }
 
 
@@ -177,10 +184,11 @@ def test_a_reader_cannot_omit_the_adjust_filter(name: str) -> None:
 #: Every file that names a price table, with what it does there. A new file in this scan
 #: needs a row here AND a test above that fails when its query drops the `adjust` filter.
 REVIEWED_PRICE_TABLE_FILES = {
-    "apps/data-engine/scripts/run_vectorbt_backtest.py": "reader, tested by test_load_prices_*",
+    "apps/data-engine/src/data_engine/datahub/backtest.py": "reader, tested by test_load_prices_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
+    "apps/data-engine/src/data_engine/lanes/backtest.py": "lane op, checks price presence via adjust filter",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
     "tools/schema_drift.py": "prose in a docstring, no query",
 }
