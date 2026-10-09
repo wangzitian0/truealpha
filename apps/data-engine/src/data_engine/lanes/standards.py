@@ -637,6 +637,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
             "denominator": report["denominator"],
             **{f"{q}_answered": entry["answered"] for q, entry in report["questions"].items()},
             **{f"{q}_missing": entry["missing"] for q, entry in report["questions"].items()},
+            **{f"{q}_not_applicable": entry["not_applicable"] for q, entry in report["questions"].items()},
         }
     )
     return json.dumps({"report_id": report_id, "summary": summary_line(report)})

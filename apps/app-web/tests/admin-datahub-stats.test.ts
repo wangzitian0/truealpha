@@ -6,7 +6,10 @@
  * Run standalone: `bun run tests/admin-datahub-stats.test.ts`.
  */
 
-import { loadDatahubStats } from "../src/server/admin/datahub-stats";
+import {
+  coverageAnsweredCell,
+  loadDatahubStats,
+} from "../src/server/admin/datahub-stats";
 import { __setTestOpsClient } from "../src/server/admin/ops";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -122,6 +125,29 @@ const coverageRows = [
       },
     },
   },
+  {
+    // #1115: PEG has a column for TOPT only. On QQQ no column governs the universe,
+    // so every subject is not applicable and none is in the denominator.
+    universe_id: "universe:qqq-us-2026-06-30",
+    cutoff: "2026-06-30 00:00:00+00",
+    created_at: "2026-10-08 09:07:00+00",
+    payload: {
+      generated_at: "2026-10-08T09:07:00+00:00",
+      requirements_sha256: "a".repeat(64),
+      questions: {
+        q2: {
+          text: "valuation vs growth?",
+          column: null,
+          tracking_issue: "#284",
+          answered: 0,
+          unavailable: {},
+          missing: 0,
+          denominator: 0,
+          not_applicable: 100,
+        },
+      },
+    },
+  },
 ];
 
 const confidenceRows = [
@@ -219,7 +245,7 @@ const confidenceRows = [
     "traffic rows pass through",
   );
   assert(
-    stats.questionCoverage.length === 1,
+    stats.questionCoverage.length === 2,
     "the newest coverage report per universe is surfaced",
   );
   assert(
@@ -269,6 +295,29 @@ const confidenceRows = [
       q3.column === null &&
       q3.tracking_issue === "#772",
     "a question without a column is missing and names its owner",
+  );
+  assert(
+    q1 !== undefined && q1.not_applicable === 0,
+    "a report stored before the not_applicable key existed reads as zero not applicable",
+  );
+  const qqqReport = stats.questionCoverage.find(
+    (r) => r.universe_id === "universe:qqq-us-2026-06-30",
+  );
+  const qqqQ2 = qqqReport?.questions.find((q) => q.question === "q2");
+  assert(
+    qqqQ2 !== undefined &&
+      qqqQ2.not_applicable === 100 &&
+      qqqQ2.missing === 0 &&
+      qqqQ2.denominator === 0,
+    "q2 on QQQ is not applicable for every subject, not missing, and outside the denominator",
+  );
+  assert(
+    coverageAnsweredCell(qqqQ2) === "n/a",
+    "the page shows n/a for q2 on QQQ, never 0/0",
+  );
+  assert(
+    coverageAnsweredCell(q1) === "18/20",
+    "a question with an applicable column keeps its answered/denominator cell",
   );
   assert(
     stats.traffic[0].failed === 21,
