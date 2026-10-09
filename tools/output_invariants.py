@@ -500,6 +500,32 @@ INVARIANTS: tuple[Invariant, ...] = (
             where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
         """,
     ),
+    Invariant(
+        id="extraction-citations-resolve",
+        claim=(
+            "a landed extraction fact's citation must resolve to captured bytes in raw.fetches — "
+            "a fact citing raw.fetches:N where row N does not exist is unevidenced data (#735, #70)"
+        ),
+        violations="""
+            select
+                f.id::text,
+                f.cik::text,
+                f.source,
+                substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') as cited_raw_id
+            from staging.issuer_headcount_facts f
+            where f.source = '10k-extraction'
+              and (
+                  substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
+                  or not exists (
+                      select 1 from raw.fetches r
+                      where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                  )
+              )
+        """,
+        population="""
+            select count(*) from staging.issuer_headcount_facts where source = '10k-extraction'
+        """,
+    ),
 )
 
 
