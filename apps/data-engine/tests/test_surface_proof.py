@@ -186,7 +186,31 @@ def test_a_stored_report_that_differs_only_in_not_applicable_is_stale(monkeypatc
     stored = {"q2": {"answered": 0, "unavailable": {}, "missing": 0, "denominator": 0, "not_applicable": 0}}
     verdict = _coverage_verdict(monkeypatch, stored=stored, fresh={"q2": NOT_APPLICABLE_Q2})
     assert not verdict.ok
-    assert verdict.detail.startswith("q2: ")
+    assert verdict.detail == "q2: not_applicable 0 -> 100"
+
+
+def test_a_stored_report_from_before_the_grade_names_both_fields_that_moved(monkeypatch) -> None:
+    """#1115: a QQQ report stored before the grade holds `missing` 100. The recomputed one holds
+    `not_applicable` 100. The message names both fields with both values, not equal `answered` counts."""
+    stored = {"q2": {"answered": 0, "unavailable": {}, "missing": 100, "denominator": 100}}
+    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh={"q2": NOT_APPLICABLE_Q2})
+    assert not verdict.ok
+    assert verdict.detail == "q2: missing 100 -> 0, not_applicable 0 -> 100"
+
+
+def test_a_stored_report_that_differs_only_in_unavailable_names_that_field(monkeypatch) -> None:
+    stored = {"q1": {"answered": 18, "unavailable": {"x": 2}, "missing": 0}}
+    fresh = {"q1": {"answered": 18, "unavailable": {"x": 1, "y": 1}, "missing": 0}}
+    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh=fresh)
+    assert not verdict.ok
+    assert verdict.detail == "q1: unavailable {'x': 2} -> {'x': 1, 'y': 1}"
+
+
+def test_a_stored_report_with_equal_answered_counts_names_every_other_field_that_moved(monkeypatch) -> None:
+    stored = {"q2": {"answered": 0, "unavailable": {"x": 2}, "missing": 100}}
+    fresh = {"q2": {"answered": 0, "unavailable": {}, "missing": 0, "not_applicable": 100}}
+    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh=fresh)
+    assert verdict.detail == "q2: unavailable {'x': 2} -> {}, missing 100 -> 0, not_applicable 0 -> 100"
 
 
 def test_a_head_with_no_strategy_run_and_a_holdings_head_with_no_fund_row_are_named(monkeypatch) -> None:
