@@ -47,6 +47,25 @@ def test_shards_partition_the_tree(total: int) -> None:
     assert len(seen) == len(set(seen)), "a file lands in more than one shard — wasted CI, not a defect"
 
 
+def test_shards_partition_multiple_roots() -> None:
+    """Multi-root collection partitions all roots exactly across 2 shards (#1173)."""
+    roots = [
+        REPO_ROOT / "libs" / "contracts" / "tests",
+        REPO_ROOT / "libs" / "factors" / "tests",
+        REPO_ROOT / "libs" / "runtime" / "tests",
+        REPO_ROOT / "apps" / "llm-service" / "tests",
+    ]
+    files = pytest_shard.collect(roots)
+    assert len(files) >= 100, f"expected at least 100 files across core roots, got {len(files)}"
+
+    seen: list[Path] = []
+    for index in range(2):
+        seen.extend(pytest_shard.shard(files, index, 2))
+
+    assert sorted(seen) == files, "multi-root 2-way sharding dropped files"
+    assert len(seen) == len(set(seen)), "a file lands in more than one shard"
+
+
 def test_collection_misses_no_file_that_defines_tests() -> None:
     """Content-based, so it cannot agree with the glob by construction.
 
