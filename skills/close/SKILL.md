@@ -28,6 +28,7 @@ ws-delivery-status --assert-complete --reality-probe "<command>"
 Unmerged work is never Complete. Merge to main without a verified Business Reality Probe is never Complete.
 Do not close the issue and do not delete the worktree in Suspend.
 Never declare complete or done when `ws-delivery-status` exits non-zero.
+Complete also needs the predecessor gone: each file, branch, worktree, stash or flag that this issue's change replaces is deleted, or the issue states why it stays. Delete only what this issue created or replaced. Never delete what another session's worktree or stash owns.
 Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
 while the docs described it as existing. Push the branch or write it into the handover.
 
@@ -138,9 +139,13 @@ Commands for this machine are in `local.md`.
    git worktree unlock "../<repo>_issue<N>_<slug>" 2>/dev/null || true
    git worktree remove --force "../<repo>_issue<N>_<slug>" || git worktree prune
    ```
-3. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
+3. Delete the merged branch when `gh pr view <n> --json state,headRefOid,isCrossRepository` shows `MERGED`, no cross-repository head, and `git rev-parse <branch>` equals `headRefOid`.
+   Run `git branch -d` first. A squash or rebase merge can make it refuse. The equal tip proves that nothing is lost, so `-D` is then safe. A host gate that blocks `-D` stays in force: leave the local branch and say so in the handover.
+   Delete the remote branch only at that tip: `git push --force-with-lease=refs/heads/<branch>:<headRefOid> origin --delete <branch>`. GitHub may have deleted it already.
+   The PR keeps `refs/pull/<n>/head`, so the commits stay recoverable. A different tip means commits that the PR did not merge: open a new PR for them or write them into the handover.
+4. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
    With `pending`, keep it open (section 3).
-4. Delete scratch files. Record each leftover TODO in the handover.
+5. Delete scratch files. Record each leftover TODO in the handover.
 
 ## 6. Route each lesson (distill)
 

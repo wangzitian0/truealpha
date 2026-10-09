@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "eee7e301c96228ae0ed5eed9a866f56be9752b32dc2ecdda28c67e41c9646035",
     "root": "749e6cf6cfb5e18b32675996d0ddd5055f3583ff433e3c0aaa4cbf63b1805eaa",
-    "skills": "a7a73349ce5ded591fed90077957816143d504cd1dfc2ade9f5b8659ef6cdd20"
+    "skills": "574f4310dee6f19f3a7603ba88c6137c08cfbcaedab2b98c9f75db97c1fbb930"
   },
   "language": "en",
   "outputs": {
@@ -21,11 +21,11 @@
     "files": {
       "skills/audit/SKILL.md": "e2465a6d4027e3b1280f72d8a671d7308bfbe4e69a204ebfd36956b99cf58edd",
       "skills/auto/SKILL.md": "93b48a68f378a9a68024235cc04ea74aa222ed98fed6721aa1a7c1de8bad083d",
-      "skills/close/SKILL.md": "d50a3cbec48ffba96c014851473a2ddd13421384b8f10bec7230f8ece7edf4b9",
+      "skills/close/SKILL.md": "b8a4272142c5ee1d51b4aaf7a56e9dac5e5a815f48e990898fe9a5109bd89b57",
       "skills/codegraph/SKILL.md": "ab6e81a61e7efb60ff9897c058e668c120ce282ea918b1364ca2b1fb353e7d0f",
       "skills/deploy-evidence/SKILL.md": "822c1cb774dc65a122e2d858387e23e87147062e080d2bebee990a1162a41b7f",
       "skills/factor-acceptance/SKILL.md": "a45c2b5d6d5138f433052f868996d117d569b58aa23c32409f6e7676c49c62b8",
-      "skills/init/SKILL.md": "79a9b515d9973576f3805c6c9cdfaa4ea9f6e30187ac166b20032b6fcaa3affd",
+      "skills/init/SKILL.md": "58dd1f4dbd57dd544b4cfdd192ff788defb899b35ae6f48e720a4f76a3e0dc04",
       "skills/prr/SKILL.md": "402e84b362610e044e7a18113ce245f40e437c01362967e47d1e96a31d1ba4e4",
       "skills/recall/SKILL.md": "3549a4d9a45777275b673b3d1a4c6311ffd802d66c752391a5b3a4970f624921",
       "skills/smoke/SKILL.md": "b8d6c1f868edf776c395a13fc3e4f86e1ce8eb2e745d313b690f42fff7a3959a",
@@ -67,7 +67,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "50c3fa91f47e7613e809bcc03353167adc3f3ce5",
+  "source_revision": "eabb4a1107de0f4577c541eb0ca75cf491d311b7",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
