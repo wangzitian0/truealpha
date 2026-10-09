@@ -397,8 +397,22 @@ def _no_theme_rows(connection: Connection[Any], head: GovernedHead | None) -> st
     return f"no theme purity rows at all, though {partitions} segment partition(s) are knowable at the head's cutoff"
 
 
+#: The fields of one question the drift check compares.
+_DRIFT_FIELDS = ("answered", "unavailable", "missing", "not_applicable")
+
+
+def _drift_value(entry: Mapping[str, Any], field: str) -> Any:
+    """One compared field. A report stored before #1115 has no `not_applicable` key: read it as zero."""
+    return entry.get(field, 0) if field == "not_applicable" else entry.get(field)
+
+
 def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
-    """How the stored report differs from one compiled now over the same tables, per question."""
+    """How the stored report differs from one compiled now over the same tables, per question.
+
+    When `answered` differs, the text is `stored N answered, tables say M`. Other fields move with
+    it: a subject that becomes answered leaves `unavailable`. When `answered` is equal and another
+    field differs, the text names each differing field with its stored and recomputed value.
+    """
     if stored is None:
         return "no stored report"
     if fresh is None:
@@ -409,18 +423,15 @@ def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
         before = stored_questions.get(question)
         if before is None:
             changed.append(f"{question}: absent from the stored report")
-        elif (
-            before.get("answered"),
-            before.get("unavailable"),
-            before.get("missing"),
-            before.get("not_applicable", 0),
-        ) != (
-            entry["answered"],
-            entry["unavailable"],
-            entry["missing"],
-            entry.get("not_applicable", 0),
-        ):
+            continue
+        moved = [field for field in _DRIFT_FIELDS if _drift_value(before, field) != _drift_value(entry, field)]
+        if "answered" in moved:
             changed.append(f"{question}: stored {before.get('answered')} answered, tables say {entry['answered']}")
+        elif moved:
+            fields = ", ".join(
+                f"{field} {_drift_value(before, field)} -> {_drift_value(entry, field)}" for field in moved
+            )
+            changed.append(f"{question}: {fields}")
     return "; ".join(changed)
 
 
