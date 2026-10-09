@@ -1,0 +1,30 @@
+{
+  "description": "Approved exemptions for frozen sample fixtures, generated conformance schemas, and architectural test suites",
+  "exempt_paths": [
+    "apps/data-engine/samples/filings/AAPL_10K_000032019325000079.html",
+    "apps/data-engine/samples/filings/ADM_10K_000000708426000011.html",
+    "apps/data-engine/samples/filings/ADP_10K_000000867026000030.html",
+    "apps/data-engine/samples/filings/AVGO_10K_000173016825000121.html",
+    "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html",
+    "apps/data-engine/samples/filings/DUOL_10K_000162828026012494.html",
+    "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html",
+    "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html",
+    "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html",
+    "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html",
+    "apps/data-engine/samples/filings/SHOP_10K_000159480526000007.html",
+    "apps/data-engine/samples/filings/V_10K_000140316125000089.html",
+    "apps/data-engine/samples/moomoo/DDOG.json",
+    "apps/data-engine/samples/moomoo/NICE.json",
+    "apps/data-engine/samples/moomoo/SHOP.json",
+    "apps/data-engine/samples/sec/ADM_CIK0000007084.json",
+    "apps/data-engine/samples/sec/DDOG_CIK0001561550.json",
+    "apps/data-engine/samples/sec/DUOL_CIK0001562088.json",
+    "apps/data-engine/samples/sec/JPM_CIK0000019617.json",
+    "apps/data-engine/samples/sec/META_CIK0001326801.json",
+    "apps/data-engine/samples/sec/NICE_CIK0001003935.json",
+    "apps/data-engine/samples/sec/NVDA_CIK0001045810.json",
+    "apps/data-engine/samples/sec/PLUG_CIK0001093691.json",
+    "apps/data-engine/samples/sec/SHOP_CIK0001594805.json",
+    "libs/runtime/tests/test_ci_workflows.py"
+  ]
+}
