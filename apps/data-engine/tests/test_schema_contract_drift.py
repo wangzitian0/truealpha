@@ -1,44 +1,53 @@
 """DTO <-> DDL drift guard (init.md Section 6). db/migrations is the schema's
-source of truth and libs/contracts is the code's — this suite fails the moment
-they disagree, so a field added on one side without the other surfaces in CI
+source of truth and libs/contracts is the code's. This suite fails when they
+disagree. A field added on one side without the other then surfaces in CI
 instead of at the first parser's expense.
 
 The mapping below is the AUTHORITATIVE correspondence for
-staging.financial_facts. Table-only columns (surrogate id, source) and the
-DTO's valid_from/valid_to collapsing into one daterange are declared
-explicitly, never inferred."""
+staging.capture_normalized_observations, the table the deployed capture path
+writes. It replaces the old FinancialFact <-> staging.financial_facts mapping
+(#530). That table is retired (init.md Section 6), holds 0 rows in Production,
+and has no writer.
+
+The mapping declares table-only columns and the DTO's subject field (two
+columns) explicitly. It never infers them."""
+
+from typing import get_args
 
 import pytest
 from data_engine.config import settings
-from truealpha_contracts.models import FinancialFact
+from truealpha_contracts.datahub import NormalizedObservation
 from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")
 
-# FinancialFact field -> staging.financial_facts column.
-FIELD_TO_COLUMN = {
-    "entity_id": "unified_id",
-    "metric": "metric",
-    "value": "value",
-    "unit": "unit",
-    "fiscal_period": "fiscal_period",
-    "valid_from": "valid_time",  # daterange lower bound
-    "valid_to": "valid_time",  # daterange upper bound
-    "knowable_at": "transaction_time",  # DTO name for the same axis
-    "recorded_at": "recorded_at",
-    "confidence": "confidence",
-    "raw_ref": "raw_ref",
-    "source_metric": "source_metric",
-    "mapping_version": "mapping_version",
-    "accession": "accession",
-    "form": "form",
-    "is_restatement": "is_restatement",
+# NormalizedObservation field -> staging.capture_normalized_observations columns.
+FIELD_TO_COLUMNS = {
+    "observation_id": ("observation_id",),
+    "content_sha256": ("content_sha256",),
+    "semantic_type": ("semantic_type",),
+    "semantic_version": ("semantic_version",),
+    "subject": ("subject_kind", "subject_id"),
+    "valid_from": ("valid_from",),
+    "valid_to": ("valid_to",),
+    "knowable_at": ("knowable_at",),
+    "source_vintage_id": ("source_vintage_id",),
+    "parser_version": ("parser_version",),
+    "mapping_version": ("mapping_version",),
+    "normalized_payload_sha256": ("normalized_payload_sha256",),
+    # These two fields stay declared and unused by the capture path (#530).
+    "is_restatement": ("is_restatement",),
+    "supersedes_observation_id": ("supersedes_observation_id",),
 }
-# Columns with no DTO field: surrogate key, and source — the fusion layer reads
-# it, factors never see it (init.md Section 1, rule 3).
-TABLE_ONLY_COLUMNS = {"id", "source"}
-# DTO fields that may be absent on a row (everything else must be NOT NULL).
-NULLABLE_FIELDS = {"value", "accession", "form"}
+# Columns with no DTO field. `PostgresCaptureControlRepository.put_observation` receives the
+# obligation link, the confidence and the freshness state as arguments beside the
+# observation. `payload` holds the observation's own JSON envelope. `recorded_at` is the
+# ingestion audit clock.
+TABLE_ONLY_COLUMNS = {"capture_obligation_id", "confidence", "freshness_state", "payload", "recorded_at"}
+# PIT time axes that must never default to the insert clock.
+EXPLICIT_TIME_COLUMNS = ("valid_from", "knowable_at")
+
+_TABLE = "capture_normalized_observations"
 
 
 @pytest.fixture(scope="module")
@@ -51,44 +60,63 @@ def columns():
         """
         select column_name, is_nullable, column_default
         from information_schema.columns
-        where table_schema = 'staging' and table_name = 'financial_facts'
-        """
+        where table_schema = 'staging' and table_name = %s
+        """,
+        (_TABLE,),
     ).fetchall()
     conn.close()
     if not rows:
-        skip_or_fail("staging.financial_facts missing (make db-migrate)")
+        skip_or_fail(f"staging.{_TABLE} missing (make db-migrate)")
     return {name: (nullable == "YES", default) for name, nullable, default in rows}
 
 
+def _mapped_columns() -> set[str]:
+    return {column for field_columns in FIELD_TO_COLUMNS.values() for column in field_columns}
+
+
 def test_every_dto_field_has_a_column(columns):
-    missing = {f: c for f, c in FIELD_TO_COLUMN.items() if c not in columns}
-    assert not missing, f"DTO fields without a staging column: {missing}"
+    missing = {
+        field: column
+        for field, field_columns in FIELD_TO_COLUMNS.items()
+        for column in field_columns
+        if column not in columns
+    }
+    assert not missing, f"NormalizedObservation fields without a staging column: {missing}"
 
 
 def test_every_column_is_claimed_by_the_contract(columns):
-    unclaimed = set(columns) - set(FIELD_TO_COLUMN.values()) - TABLE_ONLY_COLUMNS
-    assert not unclaimed, f"staging columns no DTO field claims: {unclaimed}"
+    unclaimed = set(columns) - _mapped_columns() - TABLE_ONLY_COLUMNS
+    assert not unclaimed, f"staging columns no NormalizedObservation field claims: {unclaimed}"
+
+
+def test_table_only_columns_exist(columns):
+    # A stale entry here would hide a dropped column behind the allowance above.
+    assert TABLE_ONLY_COLUMNS <= set(columns), f"table-only columns missing: {TABLE_ONLY_COLUMNS - set(columns)}"
 
 
 def test_dto_and_ddl_agree_on_field_names():
-    assert set(FIELD_TO_COLUMN) == set(FinancialFact.model_fields), (
-        "FinancialFact changed — update FIELD_TO_COLUMN and db/migrations together"
+    assert set(FIELD_TO_COLUMNS) == set(NormalizedObservation.model_fields), (
+        "NormalizedObservation changed — update FIELD_TO_COLUMNS and db/migrations together"
     )
 
 
-def test_required_fields_are_not_null_in_ddl(columns):
-    for field, column in FIELD_TO_COLUMN.items():
-        nullable, _ = columns[column]
-        if field in NULLABLE_FIELDS:
-            continue
-        assert not nullable, f"{column} is nullable but FinancialFact.{field} is required"
+def test_ddl_nullability_matches_dto_optionality(columns):
+    for field, field_columns in FIELD_TO_COLUMNS.items():
+        optional = type(None) in get_args(NormalizedObservation.model_fields[field].annotation)
+        for column in field_columns:
+            nullable, _ = columns[column]
+            assert nullable == optional, (
+                f"{column} is {'nullable' if nullable else 'NOT NULL'} but NormalizedObservation.{field} "
+                f"is {'optional' if optional else 'required'}"
+            )
 
 
-def test_knowable_axis_has_no_insert_clock_default(columns):
-    # transaction_time defaulting to now() is how a backfill silently corrupts
-    # point-in-time truth; the default was dropped in 0006 and must stay gone.
-    _, default = columns["transaction_time"]
-    assert default is None, f"transaction_time regained a default: {default}"
+def test_pit_time_axes_have_no_insert_clock_default(columns):
+    # A time axis defaulting to now() is how a backfill silently corrupts
+    # point-in-time truth. `recorded_at` may default to now(): it is audit time only.
+    for column in EXPLICIT_TIME_COLUMNS:
+        _, default = columns[column]
+        assert default is None, f"{column} gained a default: {default}"
 
 
 def test_kg_edges_carries_both_time_axes():
