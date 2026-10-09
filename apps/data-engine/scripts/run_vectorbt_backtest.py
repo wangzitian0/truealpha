@@ -31,13 +31,20 @@ import pandas as pd
 import polars as pl
 import psycopg
 from data_engine.config import settings
+from data_engine.datahub.market_prices import SPLIT_ADJUSTED
 from factors.backtest.adapter import compile_factor_panel, compute_topk_dropout_weights, pivot_to_vbt_matrices
 from factors.backtest.engine import BacktestEngineConfig, BacktestResult, VectorBTBacktestEngine
 from factors.backtest.storage import persist_backtest_result
 from factors.expressions.dsl import col
 
 
-def _load_prices(connection: psycopg.Connection, table: str, symbols: list[str]) -> pl.DataFrame:
+def _load_prices(connection: psycopg.Connection, table: str, symbols: list[str], *, adjust: str) -> pl.DataFrame:
+    # #1131: a price table holds a split-adjusted (`splits`) and an unadjusted (`none`)
+    # series for one (symbol, trading_date). `adjust` picks the series and has no default:
+    # a read that omits it would return whichever series wrote last, and a return computed
+    # across the two series is wrong by every split. This script computes returns, so its
+    # callers pass the split-adjusted series.
+    #
     # #1030: staging.market_prices_{daily,monthly} are append-only with no unique
     # constraint on (symbol, trading_date) -- a re-fetch under a new adjust policy
     # (split/dividend recompute) lands a second vintage, never overwrites the first
@@ -59,11 +66,11 @@ def _load_prices(connection: psycopg.Connection, table: str, symbols: list[str])
     query = f"""
         select distinct on (symbol, trading_date) symbol, trading_date as date, close
         from {table}
-        where symbol = any(%s)
+        where symbol = any(%s) and adjust = %s
         order by symbol, trading_date, recorded_at desc
     """  # noqa: S608 - table is one of two fixed literals below
     with connection.cursor() as cur:
-        cur.execute(query, (symbols,))
+        cur.execute(query, (symbols, adjust))
         rows = cur.fetchall()
     if not rows:
         return pl.DataFrame(schema={"symbol": pl.Utf8, "date": pl.Date, "close": pl.Float64})
@@ -96,13 +103,13 @@ def run_backtest(
     dropout_k: int,
 ) -> BacktestResult:
     """Load staging market data, compile the factor, rebalance, simulate, persist."""
-    monthly_prices = _load_prices(connection, "staging.market_prices_monthly", symbols)
+    monthly_prices = _load_prices(connection, "staging.market_prices_monthly", symbols, adjust=SPLIT_ADJUSTED)
     if monthly_prices.is_empty():
         raise SystemExit(
             f"no rows in staging.market_prices_monthly for {symbols}; run the "
             "market_data_refresh_pipeline lane (or ingest_twelve_data_market_prices) first"
         )
-    daily_prices = _load_prices(connection, "staging.market_prices_daily", symbols)
+    daily_prices = _load_prices(connection, "staging.market_prices_daily", symbols, adjust=SPLIT_ADJUSTED)
     mask = _load_mask(connection, symbols)
 
     factor_expr = col(factor_column).rank()

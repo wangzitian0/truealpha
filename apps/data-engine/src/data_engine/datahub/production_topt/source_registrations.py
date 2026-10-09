@@ -302,6 +302,11 @@ MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
 #: ~250 with a manual QQQ). The two minute shares sum to 7 of 8, so the environments'
 #: concurrent canaries (both at 23:47 UTC — the 2026-09-07 23:48 ledger rows show 18
 #: credits in one minute across the two) can no longer jointly trip the vendor's window.
+#: The market-data lane (`lanes/market_data.py`) adds 60 calls to a production weekday: 20
+#: symbols times three series (daily split-adjusted, daily unadjusted, monthly split-adjusted,
+#: #1131). That run is at 21:15 UTC, before the capture ticks. 60 plus the busiest capture day
+#: (152) is 212 of production's 480. `test_the_lane_fits_the_twelve_data_production_share`
+#: measures the lane's calls and holds this sum inside the share.
 TWELVE_DATA_ENVIRONMENT_SHARES: tuple[tuple[str, int], ...] = (("production", 60), ("staging", 40))
 
 LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(

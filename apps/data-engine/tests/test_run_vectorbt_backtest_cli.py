@@ -79,7 +79,7 @@ def test_load_prices_resolves_duplicate_vintages_to_the_latest(connection) -> No
         (vintage_count,) = cur.fetchone()
     assert vintage_count == 2, f"test setup didn't produce two vintages: {vintage_count}"
 
-    prices = _load_prices(connection, "staging.market_prices_daily", [symbol])
+    prices = _load_prices(connection, "staging.market_prices_daily", [symbol], adjust="splits")
     rows = prices.filter(prices["symbol"] == symbol).to_dicts()
 
     assert len(rows) == 1, f"expected exactly one resolved row per (symbol, date), got {rows}"
@@ -98,10 +98,11 @@ def test_load_prices_query_uses_trading_date_alias() -> None:
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
     mock_cur.fetchall.return_value = []
 
-    _load_prices(mock_conn, "staging.market_prices_daily", ["AAPL"])
+    _load_prices(mock_conn, "staging.market_prices_daily", ["AAPL"], adjust="splits")
 
     mock_cur.execute.assert_called_once()
-    sql_executed = mock_cur.execute.call_args[0][0]
+    sql_executed, parameters = mock_cur.execute.call_args[0]
+    assert parameters == (["AAPL"], "splits")
 
     # Must select trading_date as date instead of date
     assert "trading_date as date" in sql_executed

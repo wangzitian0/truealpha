@@ -145,6 +145,36 @@ def test_price_upsert_treats_an_adjust_policy_change_as_a_genuine_vintage(connec
     assert adjusts == ["splits", "raw"], adjusts
 
 
+def test_each_adjust_series_deduplicates_on_its_own_latest_vintage(connection) -> None:
+    """#1131: the split-adjusted and the unadjusted bar of one (symbol, date) are two series.
+
+    The unchanged-revisit check compares a bar with the latest vintage of its OWN series.
+    Before #1131 it compared with the latest row of the (symbol, date) pair. A `none` row
+    written last then made the next unchanged `splits` bar look new, and the table grew by
+    one duplicate row on every run.
+    """
+    symbol = "T1131DEDUP"
+    trading_date = date(2026, 10, 1)
+
+    split_first = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 50)], adjust="splits")
+    unadjusted_first = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 500)], adjust="none")
+    split_again = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 50)], adjust="splits")
+    unadjusted_again = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 500)], adjust="none")
+
+    assert (split_first, unadjusted_first) == (1, 1)
+    assert (split_again, unadjusted_again) == (0, 0), (
+        "an unchanged bar was appended again because the other series wrote the newest row"
+    )
+    with connection.cursor() as cur:
+        cur.execute(
+            "select adjust, close from staging.market_prices_daily "
+            "where symbol = %s and trading_date = %s order by adjust",
+            (symbol, trading_date),
+        )
+        rows = cur.fetchall()
+    assert rows == [("none", 500), ("splits", 50)], rows
+
+
 def test_raw_ref_distinguishes_adjust_policy_for_the_same_symbol_and_date(connection) -> None:
     """#939 review Low: `_provenance`'s `raw_ref` format string encoded source/symbol/
     resolution/date but not `adjust` -- two rows for the same (symbol, date) persisted

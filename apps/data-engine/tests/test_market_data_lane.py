@@ -46,20 +46,28 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
+    DEFAULT_TOPT_SYMBOLS,
+    PriceBarRecord,
     TwelveDataApiError,
     TwelveDataClient,
+    insert_market_prices_daily,
     last_xnys_session_of_month,
     xnys_session_close_utc,
 )
+from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, environment_share
 from data_engine.datahub.universe_mask import UniverseMaskReason
+from data_engine.lanes import market_data
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
+from data_engine.quality import nightly_verdicts
 
 
 @pytest.fixture
@@ -427,9 +435,10 @@ def test_refresh_market_data_asks_twelve_data_for_the_canonical_ticker(connectio
 
     _refresh_market_data(dg.build_op_context(), connection, symbols=["BRK.B"], now=now, client=client)
 
-    assert [(query["symbol"], query["interval"]) for query in requested] == [
-        ("BRK.B", "1day"),
-        ("BRK.B", "1month"),
+    assert [(query["symbol"], query["interval"], query["adjust"]) for query in requested] == [
+        ("BRK.B", "1day", "splits"),
+        ("BRK.B", "1day", "none"),
+        ("BRK.B", "1month", "splits"),
     ]
 
 
@@ -445,3 +454,324 @@ def test_refresh_market_data_fails_visibly_when_twelve_data_rejects_a_symbol(con
 
     with pytest.raises(TwelveDataApiError, match="404"):
         _refresh_market_data(dg.build_op_context(), connection, symbols=["NOSUCH"], now=now, client=client)
+
+
+# --- #1131: split-adjusted and unadjusted daily bars ------------------------------------
+
+SPLIT_CLOSE = "50"
+UNADJUSTED_CLOSE = "500"
+#: A Tuesday, after the 20:00 UTC close of its own session.
+LANE_NOW = datetime(2026, 10, 6, 22, 0, tzinfo=UTC)
+LANE_SESSIONS = [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5), date(2026, 10, 6)]
+
+
+def _adjust_aware_client(requests: list[tuple[str, str, str]], sessions: list[date]) -> TwelveDataClient:
+    """A fake vendor. A daily call answers one close per `adjust` value. Monthly calls answer nothing."""
+    closes = {"splits": SPLIT_CLOSE, "none": UNADJUSTED_CLOSE}
+
+    def transport(url: str) -> tuple[int, bytes]:
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+        requests.append((query["symbol"], query["interval"], query["adjust"]))
+        values = []
+        if query["interval"] == "1day":
+            close = closes[query["adjust"]]
+            values = [
+                {
+                    "datetime": d.isoformat(),
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "volume": "1000",
+                }
+                for d in sessions
+            ]
+        return 200, json.dumps({"values": values}).encode()
+
+    # The rate limiter never sleeps here: the test counts calls, it does not pace them.
+    return TwelveDataClient(api_key="test", transport_fn=transport, sleep_fn=lambda _seconds: None)
+
+
+def _write_newest_bars(connection, symbol: str, newest: dict[str, date]) -> None:
+    """One bar per series, dated `newest[adjust]`."""
+    for adjust, trading_date in newest.items():
+        close = 50 if adjust == "splits" else 500
+        insert_market_prices_daily(
+            connection,
+            [PriceBarRecord(symbol, trading_date, close, close, close, close, 1000, "twelvedata", "1D")],
+            adjust=adjust,
+        )
+
+
+def test_refresh_market_data_ingests_both_adjust_values_with_one_fetch_each_per_symbol(connection) -> None:
+    symbols = ["T1131LANEA", "T1131LANEB"]
+    requests: list[tuple[str, str, str]] = []
+    client = _adjust_aware_client(requests, LANE_SESSIONS)
+
+    _refresh_market_data(dg.build_op_context(), connection, symbols=symbols, now=LANE_NOW, client=client)
+
+    expected = Counter()
+    for symbol in symbols:
+        expected[(symbol, "1day", "splits")] = 1
+        expected[(symbol, "1day", "none")] = 1
+        expected[(symbol, "1month", "splits")] = 1
+    assert Counter(requests) == expected, "each symbol needs one split-adjusted and one unadjusted daily fetch"
+
+    for symbol in symbols:
+        with connection.cursor() as cur:
+            cur.execute(
+                "select adjust, count(*), min(close), max(close), max(trading_date) "
+                "from staging.market_prices_daily where symbol = %s group by adjust order by adjust",
+                (symbol,),
+            )
+            rows = cur.fetchall()
+        assert rows == [
+            ("none", len(LANE_SESSIONS), 500, 500, LANE_SESSIONS[-1]),
+            ("splits", len(LANE_SESSIONS), 50, 50, LANE_SESSIONS[-1]),
+        ], rows
+
+
+def test_refresh_market_data_takes_its_mask_cutoffs_from_the_split_adjusted_series(connection) -> None:
+    """A date that only the unadjusted series holds is no cutoff of the split-adjusted mask."""
+    symbol = "T1131CUTOFFS"
+    split_dates = [date(2026, 9, 30), date(2026, 10, 1)]
+    unadjusted_only = date(2026, 10, 2)
+    _write_newest_bars(connection, symbol, {"splits": split_dates[0]})
+    _write_newest_bars(connection, symbol, {"splits": split_dates[1]})
+    _write_newest_bars(connection, symbol, {"none": unadjusted_only})
+    client = _adjust_aware_client([], [])
+
+    result = _refresh_market_data(dg.build_op_context(), connection, symbols=[symbol], now=LANE_NOW, client=client)
+
+    assert result["daily_cutoffs"] == [*split_dates, _daily_cutoff(LANE_NOW)]
+    assert unadjusted_only not in result["daily_cutoffs"]
+
+
+def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
+    """Rule 6 ratchet. The measured calls of one lane run, plus the busiest measured capture day, fit the daily share.
+
+    152 is production's busiest capture day of 2026-09-08..15, as recorded beside
+    `TWELVE_DATA_ENVIRONMENT_SHARES` in `source_registrations.py`.
+    """
+    measured_busiest_capture_day = 152
+    requests: list[tuple[str, str, str]] = []
+    client = _adjust_aware_client(requests, [])
+
+    _refresh_market_data(dg.build_op_context(), connection, symbols=DEFAULT_TOPT_SYMBOLS, now=LANE_NOW, client=client)
+
+    twelve = LEDGER_CAPACITIES["twelvedata"]
+    assert twelve.daily_budget is not None
+    production_budget = environment_share(twelve.daily_budget, twelve.environment_shares, "production")
+    assert production_budget is not None
+    assert len(requests) + measured_busiest_capture_day <= production_budget, (
+        f"the lane makes {len(requests)} Twelve Data calls a run; production's daily share is {production_budget}"
+    )
+
+
+# --- #1131: the freshness verdict --------------------------------------------------------
+
+
+def _both(trading_date: date) -> dict[str, date]:
+    return {"splits": trading_date, "none": trading_date}
+
+
+MONDAY_RUN = datetime(2026, 10, 5, 21, 15, tzinfo=UTC)  # the lane's cron tick, a Monday
+FRIDAY = date(2026, 10, 2)
+
+
+def test_freshness_is_green_when_the_newest_bar_is_the_latest_closed_session(connection) -> None:
+    symbol = "T1131FRESH0"
+    _write_newest_bars(connection, symbol, _both(date(2026, 10, 5)))
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=MONDAY_RUN)
+
+    assert verdict.ok is True, verdict.summary
+
+
+def test_freshness_is_green_over_a_normal_weekend_gap(connection) -> None:
+    """Monday's tick runs before the vendor lists Monday's bar. Friday is one session behind and still on time."""
+    symbol = "T1131WEEKEND"
+    _write_newest_bars(connection, symbol, _both(FRIDAY))
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=MONDAY_RUN)
+
+    assert verdict.ok is True, verdict.summary
+
+
+def test_freshness_is_green_on_the_weekend_itself(connection) -> None:
+    symbol = "T1131SUNDAY"
+    _write_newest_bars(connection, symbol, _both(FRIDAY))
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=datetime(2026, 10, 4, 12, 0, tzinfo=UTC))
+
+    assert verdict.ok is True, verdict.summary
+
+
+def test_freshness_is_green_over_a_holiday_weekend(connection) -> None:
+    """Labor Day is Monday 2026-09-07. Tuesday's tick finds Friday's bar. Monday was no session."""
+    symbol = "T1131HOLIDAY"
+    _write_newest_bars(connection, symbol, _both(date(2026, 9, 4)))
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=datetime(2026, 9, 8, 21, 15, tzinfo=UTC))
+
+    assert verdict.ok is True, verdict.summary
+
+
+def test_freshness_is_red_when_the_newest_bar_is_older_than_the_limit(connection) -> None:
+    """Tuesday's tick with Friday's bar as the newest: Monday and Tuesday are missing, two sessions."""
+    symbol = "T1131STALE"
+    _write_newest_bars(connection, symbol, _both(FRIDAY))
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=datetime(2026, 10, 6, 21, 15, tzinfo=UTC))
+
+    assert verdict.ok is False
+    assert market_data.MAX_BAR_LAG_SESSIONS == 1
+    assert "newest bar 2026-10-02 is more than 1 session behind 2026-10-06" in verdict.summary, verdict.summary
+
+
+def test_freshness_is_red_when_one_series_is_stale(connection) -> None:
+    """The unadjusted fetch can fail alone. The split-adjusted bars stay fresh and hide it."""
+    symbol = "T1131ONESERIES"
+    _write_newest_bars(connection, symbol, {"splits": date(2026, 10, 5), "none": date(2026, 9, 29)})
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=MONDAY_RUN)
+
+    assert verdict.ok is False
+    assert "none" in verdict.summary and "splits" not in verdict.summary, verdict.summary
+
+
+def test_freshness_is_red_when_a_series_has_no_bar_at_all(connection) -> None:
+    symbol = "T1131NOUNADJ"
+    _write_newest_bars(connection, symbol, {"splits": date(2026, 10, 5)})
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=MONDAY_RUN)
+
+    assert verdict.ok is False
+    assert "none: no bar" in verdict.summary, verdict.summary
+
+
+def test_freshness_reads_each_series_by_its_own_adjust_value(connection) -> None:
+    """A fresh bar of the other series must not vouch for this one."""
+    symbol = "T1131OTHERSERIES"
+    _write_newest_bars(connection, symbol, {"splits": date(2026, 10, 5)})
+    with connection.cursor() as cur:
+        cur.execute("select count(*) from staging.market_prices_daily where symbol = %s and adjust = 'none'", (symbol,))
+        assert cur.fetchone() == (0,)
+
+    verdict = market_data.judge_bar_freshness(connection, [symbol], now=MONDAY_RUN)
+
+    assert verdict.ok is False
+
+
+# --- #1131: the op records the verdict ---------------------------------------------------
+
+TICK = "2026-10-05T21:15:00+00:00"
+
+
+class _Connection:
+    """A database connection that counts commits. The op reads no table through it here."""
+
+    def __init__(self) -> None:
+        self.commits = 0
+
+    def __enter__(self) -> _Connection:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+@pytest.fixture
+def written(monkeypatch) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **kwargs: rows.append({"check": name, **kwargs}))
+    return rows
+
+
+@pytest.fixture
+def fake_connection(monkeypatch) -> _Connection:
+    fake = _Connection()
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: fake)
+    return fake
+
+
+def _run_job() -> dg.ExecuteInProcessResult:
+    return market_data.market_data_refresh_pipeline_job.execute_in_process(
+        tags={nightly_verdicts.TICK_TAG: TICK}, raise_on_error=False
+    )
+
+
+def test_the_lane_declares_the_verdict_it_records() -> None:
+    assert market_data.NIGHTLY_VERDICTS == ("market_data_freshness",)
+    assert nightly_verdicts.is_valid_name("market_data_freshness")
+
+
+def test_a_fresh_run_records_a_green_verdict_after_the_commit(monkeypatch, written, fake_connection) -> None:
+    commits_when_judged: list[int] = []
+    monkeypatch.setattr(market_data, "_refresh_market_data", lambda *_a, **_k: {})
+
+    def judge(_connection: object, _symbols: object, *, now: datetime) -> market_data.BarFreshness:
+        commits_when_judged.append(fake_connection.commits)
+        return market_data.BarFreshness(ok=True, summary="newest bars 2026-10-05 (none, splits)")
+
+    monkeypatch.setattr(market_data, "judge_bar_freshness", judge)
+
+    assert _run_job().success
+    ((row),) = written
+    assert (row["check"], row["ok"], row["summary"]) == (
+        "market_data_freshness",
+        True,
+        "newest bars 2026-10-05 (none, splits)",
+    )
+    assert row["ran_at"] == datetime.fromisoformat(TICK)
+    assert commits_when_judged == [1], "the ingest must be committed before it is judged"
+
+
+def test_a_stale_run_records_a_red_verdict_and_fails_the_run_but_keeps_the_ingest(
+    monkeypatch, written, fake_connection
+) -> None:
+    monkeypatch.setattr(market_data, "_refresh_market_data", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        market_data,
+        "judge_bar_freshness",
+        lambda *_a, **_k: market_data.BarFreshness(ok=False, summary="none: newest bar 2026-10-02 is stale"),
+    )
+
+    result = _run_job()
+
+    assert not result.success
+    ((row),) = written
+    assert (row["check"], row["ok"]) == ("market_data_freshness", False)
+    assert row["summary"] == "failed: none: newest bar 2026-10-02 is stale"
+    assert fake_connection.commits == 1, "a stale verdict must not roll back the bars this run ingested"
+
+
+def test_a_crashing_ingest_records_a_red_verdict(monkeypatch, written, fake_connection) -> None:
+    """The 2026-09-24..10-05 shape: the lane failed 8 times and no verdict row said so."""
+
+    def crash(*_a: object, **_k: object) -> None:
+        raise TwelveDataApiError("Twelve Data error 401: invalid key")
+
+    monkeypatch.setattr(market_data, "_refresh_market_data", crash)
+
+    result = _run_job()
+
+    assert not result.success
+    ((row),) = written
+    assert (row["check"], row["ok"]) == ("market_data_freshness", False)
+    assert row["summary"].startswith("failed: TwelveDataApiError")
+    assert "invalid key" not in row["summary"], "an exception text is not published"
+
+
+def test_the_schedule_stamps_its_tick_so_the_verdict_is_dated_by_it() -> None:
+    tick = datetime(2026, 10, 5, 21, 15, tzinfo=UTC)
+
+    result = market_data.market_data_refresh_schedule.evaluate_tick(
+        dg.build_schedule_context(scheduled_execution_time=tick)
+    )
+
+    ((request),) = result.run_requests
+    assert request.tags[nightly_verdicts.TICK_TAG] == tick.isoformat()

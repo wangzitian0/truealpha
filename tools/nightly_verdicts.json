@@ -1,8 +1,9 @@
 {
-  "_comment": "#876 W1/W2: the nightly in-environment checks tools/nightly_verdicts.py bounds, and how often each ticks. The names are exactly what the data engine's lanes can record in mart.nightly_verdicts (their NIGHTLY_VERDICTS): libs/runtime/tests/test_nightly_verdicts.py holds the two sets equal, so a check cannot be recorded and go unwatched. A verdict is stale past twice its cadence. The tool reads THIS file as the deployed release's own copy (git show <release>:tools/nightly_verdicts.json), so a check added on main is not demanded of a release that does not run it yet.",
+  "_comment": "#876 W1/W2: the nightly in-environment checks tools/nightly_verdicts.py bounds, and how often each ticks. The names are exactly what the data engine's lanes can record in mart.nightly_verdicts (their NIGHTLY_VERDICTS): libs/runtime/tests/test_nightly_verdicts.py holds the two sets equal, so a check cannot be recorded and go unwatched. A verdict is stale past twice its cadence. The tool reads THIS file as the deployed release's own copy (git show <release>:tools/nightly_verdicts.json), so a check added on main is not demanded of a release that does not run it yet. market_data_freshness ticks on weekdays only (cron 15 21 * * 1-5). Its largest gap is 72 hours, Friday to Monday, and the test test_every_declared_cadence_is_its_jobs_schedule_period holds the cadence equal to that gap. The 07:00 UTC read on a Monday is 57.75 hours after Friday's tick and stays green.",
   "checks": {
     "datahub_confidence_report@topt": {"cadence_hours": 24, "job": "datahub_confidence_report"},
     "datahub_confidence_report@universe-list:qqq": {"cadence_hours": 24, "job": "datahub_confidence_report"},
+    "market_data_freshness": {"cadence_hours": 72, "job": "market_data_refresh_pipeline"},
     "model_key_health": {"cadence_hours": 24, "job": "model_key_health"},
     "output_invariants": {"cadence_hours": 24, "job": "output_invariants_check"},
     "release_fetch_proof": {"cadence_hours": 24, "job": "release_fetch_proof"},

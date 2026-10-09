@@ -1,10 +1,11 @@
 """Twelve Data market prices ingestion and multi-resolution staging (#938 layer 1).
 
 Ingests the 20 TOPT symbols for:
-- 3 years daily (interval='1day')
-- 10 years monthly (interval='1month')
-via Twelve Data /time_series with outputsize=5000 (1 call per symbol per resolution,
-40 calls total).
+- 3 years daily (interval='1day'), split-adjusted (`adjust = 'splits'`)
+- 3 years daily (interval='1day'), unadjusted (`adjust = 'none'`, #1131)
+- 10 years monthly (interval='1month'), split-adjusted
+via Twelve Data /time_series with outputsize=5000 (1 call per symbol per series,
+60 calls total).
 
 Provides:
 - Built-in token bucket rate limiter (8 calls/min compliant)
@@ -34,7 +35,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -82,7 +83,15 @@ TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 # (dividends are handled at the return-calculation layer, not the price series). The
 # value actually sent travels with every row (`adjust` column) so a future change to
 # this constant does not make old and new rows indistinguishable either.
-DEFAULT_ADJUST = "splits"
+#
+# Since #1131 a (symbol, trading_date) holds two daily series. Every reader of the price
+# tables names the series it wants (`adjust = %s`). A reader that omits the filter would
+# flip between the two series from one run to the next.
+SPLIT_ADJUSTED = "splits"
+# Raw bars (A6, #1131): market value is the unadjusted close times the as-filed share count.
+# Daily only. Returns and the universe mask read the split-adjusted series.
+UNADJUSTED = "none"
+DEFAULT_ADJUST = SPLIT_ADJUSTED
 
 # Declared single-source confidence grade: this pipeline fetches Twelve Data alone, with
 # no independent corroborating origin (unlike `production_topt.market_price_adapter`'s
@@ -607,40 +616,38 @@ def _latest_vintages(
     connection: psycopg.Connection,
     table: str,
     records: Sequence[PriceBarRecord],
-) -> dict[tuple[str, date], tuple[Any, Any, Any, Any, Any, str]]:
-    """The latest known (open, high, low, close, volume, adjust) per (symbol,
-    trading_date) already in `table`, for exactly the (symbol, date) pairs `records`
-    is about to write.
+) -> dict[tuple[str, date, str], tuple[Any, Any, Any, Any, Any]]:
+    """The latest known (open, high, low, close, volume) per (symbol, trading_date, adjust)
+    already in `table`, for exactly the (symbol, date) pairs `records` is about to write.
 
     Append-only means every GENUINE change gets its own row -- it does not mean every
     re-fetch of unchanged history piles up an identical row. This pipeline refetches the
     full 3y/10y lookback on every scheduled run (#938's lane), so without this check an
     append-only insert would grow each table by ~5000 rows per symbol per run forever.
 
-    `adjust` is part of the comparison (#939 review Medium), not just OHLCV: it is the
-    one other field every appended row persists explicitly per-call
-    (`insert_market_prices_daily`/`_monthly`'s `adjust` parameter) and that can
-    legitimately change between pipeline runs. Comparing OHLCV alone let a re-ingest
-    under a NEW adjust policy whose values happened to come back numerically identical
-    to the prior vintage (no split/dividend between the two policies for this date) be
-    swallowed as "unchanged" -- the row's `adjust` column silently stayed on the OLD
-    policy forever, which is exactly the policy drift an append-only history exists to
-    make visible.
+    `adjust` is part of the KEY (#1131), not just of the compared values. Until #1131 it
+    was a compared value (#939 review Medium): a re-ingest under a NEW adjust policy was
+    never swallowed as "unchanged". That held while one series existed. With two series per
+    (symbol, date) it breaks the other way: the newest row belongs to whichever series wrote
+    last, so an unchanged bar of the other series looked new and was appended on every run.
+    Keyed on `adjust`, each series is compared with its own latest vintage, and a bar under a
+    NEW adjust policy has no vintage to match, so it is still appended.
     """
     if not records:
         return {}
     symbols = sorted({r.symbol for r in records})
     dates = sorted({r.date for r in records})
     query = f"""
-        select distinct on (symbol, trading_date) symbol, trading_date, open, high, low, close, volume, adjust
+        select distinct on (symbol, trading_date, adjust)
+            symbol, trading_date, adjust, open, high, low, close, volume
         from {table}
         where symbol = any(%s) and trading_date = any(%s)
-        order by symbol, trading_date, recorded_at desc;
+        order by symbol, trading_date, adjust, recorded_at desc;
     """
     with connection.cursor() as cur:
         cur.execute(query, (symbols, dates))
         rows = cur.fetchall()
-    return {(row[0], row[1]): (row[2], row[3], row[4], row[5], row[6], row[7]) for row in rows}
+    return {(row[0], row[1], row[2]): (row[3], row[4], row[5], row[6], row[7]) for row in rows}
 
 
 def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decimal, str]:
@@ -674,8 +681,8 @@ def insert_market_prices_daily(
     Never upserts (#938 contract item 1): there is no unique constraint on
     (symbol, trading_date) to conflict on, so a genuinely changed date is always a new
     vintage row, and `trg_market_prices_daily_append_only` rejects any UPDATE/DELETE
-    outright. A record identical to the latest known vintage for its (symbol, date) is
-    skipped (`_latest_vintages`) rather than appended again.
+    outright. A record identical to the latest known vintage for its (symbol, date, adjust)
+    is skipped (`_latest_vintages`) rather than appended again.
     """
     if not records:
         return 0
@@ -689,7 +696,7 @@ def insert_market_prices_daily(
     """
     rows = []
     for r in records:
-        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume, adjust):
+        if existing.get((r.symbol, r.date, adjust)) == (r.open, r.high, r.low, r.close, r.volume):
             continue
         transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
         rows.append(
@@ -734,7 +741,7 @@ def insert_market_prices_monthly(
     """
     rows = []
     for r in records:
-        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume, adjust):
+        if existing.get((r.symbol, r.date, adjust)) == (r.open, r.high, r.low, r.close, r.volume):
             continue
         transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
         rows.append(
@@ -770,6 +777,10 @@ class IngestionSummary:
     monthly_inserted: int
     daily_records: list[PriceBarRecord]
     monthly_records: list[PriceBarRecord]
+    #: The unadjusted daily series (#1131). Empty when the caller's own series is unadjusted.
+    unadjusted_daily_records_count: int = 0
+    unadjusted_daily_inserted: int = 0
+    unadjusted_daily_records: list[PriceBarRecord] = field(default_factory=list)
 
 
 def ingest_twelve_data_market_prices(
@@ -783,7 +794,9 @@ def ingest_twelve_data_market_prices(
 ) -> IngestionSummary:
     """Ingest 20 TOPT symbols for 3 years daily and 10 years monthly via Twelve Data /time_series.
 
-    Issues 1 call per symbol per resolution (40 calls total for 20 symbols). Every call
+    Issues 1 call per symbol per series: daily and monthly under `adjust`, plus the daily
+    unadjusted series (`UNADJUSTED`, #1131). That is 3 calls per symbol, 60 for 20 symbols.
+    The unadjusted call is skipped when `adjust` already is `UNADJUSTED`. Every call
     passes `adjust` explicitly (#938 contract item 4).
 
     `now` (an instant, not a date) is the single source of truth for "as of when":
@@ -803,8 +816,10 @@ def ingest_twelve_data_market_prices(
     td_client = client or TwelveDataClient()
 
     all_daily_records: list[PriceBarRecord] = []
+    all_unadjusted_daily_records: list[PriceBarRecord] = []
     all_monthly_records: list[PriceBarRecord] = []
     calls_made = 0
+    fetch_unadjusted = adjust != UNADJUSTED
 
     for symbol in symbols:
         # 1 call for daily
@@ -813,6 +828,16 @@ def ingest_twelve_data_market_prices(
         daily_bars = parse_daily_bars(symbol, daily_payload, min_date=min_daily_date, now=now_instant)
         all_daily_records.extend(daily_bars)
 
+        # 1 call for the unadjusted daily series (market value, A6)
+        if fetch_unadjusted:
+            unadjusted_payload = td_client.fetch_time_series(
+                symbol, interval="1day", outputsize=5000, adjust=UNADJUSTED
+            )
+            calls_made += 1
+            all_unadjusted_daily_records.extend(
+                parse_daily_bars(symbol, unadjusted_payload, min_date=min_daily_date, now=now_instant)
+            )
+
         # 1 call for monthly
         monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
         calls_made += 1
@@ -820,9 +845,13 @@ def ingest_twelve_data_market_prices(
         all_monthly_records.extend(monthly_bars)
 
     daily_inserted = 0
+    unadjusted_daily_inserted = 0
     monthly_inserted = 0
     if connection is not None:
         daily_inserted = insert_market_prices_daily(connection, all_daily_records, adjust=adjust)
+        unadjusted_daily_inserted = insert_market_prices_daily(
+            connection, all_unadjusted_daily_records, adjust=UNADJUSTED
+        )
         monthly_inserted = insert_market_prices_monthly(connection, all_monthly_records, adjust=adjust)
 
     return IngestionSummary(
@@ -834,4 +863,7 @@ def ingest_twelve_data_market_prices(
         monthly_inserted=monthly_inserted,
         daily_records=all_daily_records,
         monthly_records=all_monthly_records,
+        unadjusted_daily_records_count=len(all_unadjusted_daily_records),
+        unadjusted_daily_inserted=unadjusted_daily_inserted,
+        unadjusted_daily_records=all_unadjusted_daily_records,
     )

@@ -71,6 +71,7 @@ def test_1d_and_1m_masks_do_not_collide(connection) -> None:
         symbols=[symbol],
         cutoff_dates=[cutoff],
         source_table="staging.market_prices_daily",
+        adjust="splits",
         resolution="1D",
         min_periods=1,
     )
@@ -79,6 +80,7 @@ def test_1d_and_1m_masks_do_not_collide(connection) -> None:
         symbols=[symbol],
         cutoff_dates=[cutoff],
         source_table="staging.market_prices_monthly",
+        adjust="splits",
         resolution="1M",
         min_periods=1,
     )
