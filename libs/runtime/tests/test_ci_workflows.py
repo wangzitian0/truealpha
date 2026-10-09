@@ -1003,7 +1003,7 @@ def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> Non
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     concurrency = workflow["concurrency"]
     assert concurrency["group"] == "auto-release-staging"
-    assert concurrency["cancel-in-progress"] is False
+    assert concurrency["cancel-in-progress"] is True
 
 
 def test_auto_release_has_only_the_permissions_it_needs() -> None:

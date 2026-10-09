@@ -124,11 +124,15 @@ jobs:
       # that rather than reporting ok over an empty set, and `--require-coverage`
       # is deliberately not passed here. It IS passed where the data is real.
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - name: Output invariants (migrated schema)
         env:
           PGPASSWORD: postgres
         run: |
-          uv sync --all-packages
+          # output_invariants.py and schema_drift.py require only factors.forest and runtime testing.
+          # The full workspace (Dagster, Torch, Pandas) is not needed for DB schema verification.
+          uv sync --package truealpha-factors --package truealpha-runtime --frozen
           uv run --no-sync python tools/output_invariants.py \
             --database-url postgresql://postgres:postgres@localhost:5432/truealpha
 

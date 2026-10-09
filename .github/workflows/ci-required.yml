@@ -174,19 +174,27 @@ jobs:
               - '.github/workflows/ci-required.yml'
             image_llm_service:
               - 'apps/llm-service/**'
+              - '!apps/llm-service/tests/**'
               - 'apps/data-engine/pyproject.toml'
               - 'libs/contracts/**'
+              - '!libs/contracts/tests/**'
               - 'libs/factors/**'
+              - '!libs/factors/tests/**'
               - 'libs/runtime/**'
+              - '!libs/runtime/tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_data_engine:
               - 'apps/data-engine/**'
+              - '!apps/data-engine/tests/**'
               - 'libs/contracts/**'
+              - '!libs/contracts/tests/**'
               - 'libs/factors/**'
+              - '!libs/factors/tests/**'
               - 'libs/runtime/**'
+              - '!libs/runtime/tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
@@ -235,6 +243,9 @@ jobs:
   db:
     if: github.ref_type != 'tag' && needs.changes.outputs.db == 'true'
     needs: changes
+    permissions:
+      contents: read
+      actions: write
     uses: ./.github/workflows/ci-db.yml
 
   python:

@@ -352,14 +352,17 @@ jobs:
       - name: Stop background processes
         if: always()
         run: |
-          # Signal each process GROUP (negative pid): uv and the dagster process it runs.
+          # Direct process signaling by command line: setsid causes $! to capture the exited
+          # parent PID, so kill -TERM -- "-$pid" fails silently. pkill signals the active daemons immediately.
           for pid in "${DAEMON_PID:-}" "${CODE_SERVER_PID:-}"; do
             [ -n "$pid" ] && kill -TERM -- "-$pid" 2>/dev/null || true
           done
-          for _ in $(seq 1 20); do
+          pkill -TERM -f "dagster api grpc|dagster-daemon run" || true
+          for _ in $(seq 1 5); do
             pgrep -f "dagster api grpc|dagster-daemon run" >/dev/null || break
             sleep 1
           done
+          pkill -KILL -f "dagster api grpc|dagster-daemon run" || true
           for pid in "${DAEMON_PID:-}" "${CODE_SERVER_PID:-}"; do
             [ -n "$pid" ] && kill -KILL -- "-$pid" 2>/dev/null || true
           done
