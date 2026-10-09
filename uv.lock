@@ -27,7 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.0/infra2_sdk-3.1.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -868,13 +868,13 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "3.0.2"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl" }
+version = "3.1.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.0/infra2_sdk-3.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl", hash = "sha256:562939e6404a0d5e073fe6f3ea32d211ea6830c2a0a75c1d1eb456f7bbdbf0ca" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.0/infra2_sdk-3.1.0-py3-none-any.whl", hash = "sha256:1c09555d1369755765508793f3b7db9528bd230707b40d1ec8faef8ad1480c3b" },
 ]
 
 [package.optional-dependencies]
@@ -894,6 +894,9 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34,<2" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34,<2" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,!=1.5.1,<2" },
+    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.110,<1" },
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110,<1" },
+    { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.110,<1" },
     { name = "httpx", marker = "extra == 'all'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27,<1" },
@@ -920,7 +923,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
 ]
-provides-extras = ["s3", "postgres", "otel", "http", "all", "dev"]
+provides-extras = ["s3", "postgres", "otel", "http", "fastapi", "all", "dev"]
 
 [[package]]
 name = "iniconfig"
@@ -2786,7 +2789,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.0/infra2_sdk-3.1.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "libs/contracts" },

@@ -13,7 +13,7 @@ dependencies = [
     # check. The `otel` extra is the OTLP/HTTP exporter stack truealpha_runtime.telemetry
     # (#1034) configures through infra2_sdk.runtime.otel; it ships in every service image
     # because every Python service calls init_telemetry() at startup.
-    "infra2-sdk[otel] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl",
+    "infra2-sdk[otel] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.0/infra2_sdk-3.1.0-py3-none-any.whl",
 ]
 
 [project.scripts]
