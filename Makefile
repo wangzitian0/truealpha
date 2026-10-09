@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke check-large-files prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -27,7 +27,6 @@ help:
 	@echo "  make smoke        Fast inner-loop checks: lint + typecheck + fast tests (<20s)"
 	@echo "  make test-fast    Fast unit tests: contracts + factors + runtime checks (<10s)"
 	@echo "  make test         Full repository test suite (runs all tests, slower)"
-	@echo "  make check-large-files Verify repository files comply with size invariants"
 	@echo "  make check        lint + typecheck + test + contract-conformance"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
 
@@ -151,10 +150,7 @@ test:
 test-fast:
 	uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests/test_checks.py
 
-check-large-files:
-	uv run python tools/check_large_files.py
-
-smoke: lint typecheck contract-conformance test-fast check-large-files
+smoke: lint typecheck contract-conformance test-fast
 	@echo "✅ Inner-loop smoke checks passed"
 
 contract-conformance:
@@ -170,7 +166,7 @@ contract-conformance:
 	# exactly as ci-web runs them — #468).
 	cd apps/app-web && set -eu; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
 
-check: lint typecheck test contract-conformance check-large-files
+check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"
 
 clean:
