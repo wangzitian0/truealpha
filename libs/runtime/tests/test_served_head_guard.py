@@ -47,7 +47,6 @@ import io
 import os
 import re
 import tokenize
-import uuid
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -56,8 +55,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
-from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, skip_or_fail
+from truealpha_runtime.testing import clone_test_database, isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -1248,20 +1246,8 @@ where n.nspname = 'mart'
 @pytest.fixture(scope="module")
 def migrated_database() -> Iterator[str]:
     """The name of a scratch database with the declared chain applied."""
-    name = f"truealpha_served_guard_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(_named("postgres"), connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
-    try:
-        apply_migration_chain(_named(name))
-        yield name
-    finally:
-        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with isolated_test_database("served_guard") as db:
+        yield db.name
 
 
 @pytest.fixture(scope="module")
@@ -1335,19 +1321,12 @@ def test_the_catalog_read_sees_a_materialized_view_and_ignores_a_name_that_only_
     migrated_database: str,
 ) -> None:
     """A copy of the migrated database gets two probes. The shared database stays unchanged."""
-    probe = f"{migrated_database}_probe"
-    with psycopg.connect(_named("postgres"), autocommit=True) as admin:
-        admin.execute(
-            sql.SQL("create database {} template {}").format(sql.Identifier(probe), sql.Identifier(migrated_database))
-        )
-    try:
-        with psycopg.connect(_named(probe), autocommit=True) as connection:
+    with clone_test_database(migrated_database, "probe") as probe_url:
+        with psycopg.connect(probe_url, autocommit=True) as connection:
             connection.execute("create materialized view mart.probe_matview as select 1 as run_id")
             connection.execute("create table mart.probe_table (truncated_at timestamptz, prune_count int)")
             columns = connection.execute(RUN_LIKE_COLUMNS_SQL).fetchall()
-    finally:
-        with psycopg.connect(_named("postgres"), autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(probe)))
+
     found = {(row[0], row[1]) for row in columns}
     assert ("mart.probe_matview", "run_id") in found
     assert not {relation for relation, _ in found if relation == "mart.probe_table"}

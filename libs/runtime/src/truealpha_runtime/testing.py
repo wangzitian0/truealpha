@@ -11,17 +11,25 @@ than installed packages, which is why they live here and not behind the runtime
 boundary in `truealpha_runtime.__init__`.
 """
 
+import hashlib
 import importlib.util
 import os
 import re
 import subprocess
 import sys
 import threading
-from collections.abc import Mapping
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+import psycopg
+from psycopg import sql
+from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 #: One SQL literal that a seed row may hold: a quoted string, a whole number, null, true or false.
 SeedValue = str | int | bool | None
@@ -291,3 +299,180 @@ def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
     if current is not None:
         raise ValueError(f"{migration.name}: the seed of {table} ends inside a row")
     return rows
+
+
+class InMemoryRawObjectStore:
+    """In-memory implementation of RawObjectStore for unit and integration tests.
+
+    Stores payloads in an in-memory dictionary rather than transmitting to S3/MinIO.
+    """
+
+    def __init__(self, bucket: str = "truealpha-raw") -> None:
+        self.bucket = bucket
+        self.objects: dict[str, bytes] = {}
+
+    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
+        digest = hashlib.sha256(capture.body).hexdigest()
+        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
+        self.objects[key] = capture.body
+        return RawIngestionEnvelope(
+            source=capture.source,
+            source_record_id=capture.source_record_id,
+            object=RawObjectRef(
+                bucket=self.bucket,
+                key=key,
+                sha256=digest,
+                byte_length=len(capture.body),
+                content_type=capture.content_type,
+            ),
+            fetched_at=capture.fetched_at,
+            source_published_at=capture.source_published_at,
+            metadata=capture.metadata,
+        )
+
+    def get(self, ref: RawObjectRef) -> bytes:
+        if ref.key not in self.objects:
+            raise KeyError(f"object not found in memory store: {ref.key}")
+        return self.objects[ref.key]
+
+
+class IsolatedDatabase(str):
+    """Database URL string with `.name` attribute identifying the database."""
+
+    name: str
+
+    def __new__(cls, url: str, name: str) -> "IsolatedDatabase":
+        instance = super().__new__(cls, url)
+        instance.name = name
+        return instance
+
+
+def _admin_url_for(database_url: str) -> str:
+    base = urlsplit(database_url)
+    return urlunsplit((base.scheme, base.netloc, "/postgres", base.query, ""))
+
+
+def _named_url_for(database_url: str, dbname: str) -> str:
+    base = urlsplit(database_url)
+    return urlunsplit((base.scheme, base.netloc, f"/{dbname}", base.query, ""))
+
+
+def _dbname_for(database_url: str) -> str:
+    return urlsplit(database_url).path.lstrip("/")
+
+
+@contextmanager
+def isolated_test_database(
+    name_prefix: str = "test",
+    *,
+    template: str | None = "truealpha",
+    database_url: str | None = None,
+    connect_timeout: int = 3,
+) -> Iterator[IsolatedDatabase]:
+    """Provide a fresh, isolated PostgreSQL database for test execution.
+
+    When `template` is supplied and exists with migrated relations (e.g. CI or local
+    dev where `truealpha` is already initialized), the database is cloned via:
+        `CREATE DATABASE <name> TEMPLATE <template>`
+    which runs in <0.2s by copying data pages directly.
+
+    If `template` does not exist or lacks migrated tables, creates a new database
+    and applies `apply_migration_chain(target_url)` as a fallback.
+
+    On context exit, all connections to the database are terminated and the
+    database is dropped with FORCE.
+    """
+    import pytest
+
+    base_url = database_url or os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
+    admin_url = _admin_url_for(base_url)
+    name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    target_url = _named_url_for(base_url, name)
+
+    try:
+        admin_conn = psycopg.connect(admin_url, connect_timeout=connect_timeout, autocommit=True)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get(REQUIRE_RUNTIME_ENV):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
+        return
+
+    try:
+        cloned = False
+        if template is not None:
+            template_name = _dbname_for(template) if "://" in template else template
+            # Verify template database exists
+            exists = admin_conn.execute("select 1 from pg_database where datname = %s", (template_name,)).fetchone()
+            if exists:
+                # Terminate any idle backends holding locks on template
+                admin_conn.execute(
+                    "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
+                    (template_name,),
+                )
+                try:
+                    admin_conn.execute(
+                        sql.SQL("create database {} template {}").format(
+                            sql.Identifier(name), sql.Identifier(template_name)
+                        )
+                    )
+                    cloned = True
+                except psycopg.Error:
+                    cloned = False
+
+        if not cloned:
+            admin_conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+            apply_migration_chain(target_url)
+
+        yield IsolatedDatabase(target_url, name)
+    finally:
+        try:
+            admin_conn.execute(
+                "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
+                (name,),
+            )
+            admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+        finally:
+            admin_conn.close()
+
+
+@contextmanager
+def clone_test_database(
+    source_database: str,
+    name_prefix: str = "clone",
+    *,
+    connect_timeout: int = 3,
+) -> Iterator[IsolatedDatabase]:
+    """Clone an existing database as a new isolated throwaway database.
+
+    Terminates active connections on source before cloning to prevent concurrency conflicts.
+    Drops the clone on context exit.
+    """
+    base_url = (
+        source_database
+        if "://" in source_database
+        else os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
+    )
+    source_name = _dbname_for(source_database) if "://" in source_database else source_database
+    admin_url = _admin_url_for(base_url)
+    clone_name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    clone_url = _named_url_for(base_url, clone_name)
+
+    admin_conn = psycopg.connect(admin_url, connect_timeout=connect_timeout, autocommit=True)
+    try:
+        admin_conn.execute(
+            "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
+            (source_name,),
+        )
+        admin_conn.execute(
+            sql.SQL("create database {} template {}").format(sql.Identifier(clone_name), sql.Identifier(source_name))
+        )
+        yield IsolatedDatabase(clone_url, clone_name)
+    finally:
+        try:
+            admin_conn.execute(
+                "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
+                (clone_name,),
+            )
+            admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(clone_name)))
+        finally:
+            admin_conn.close()

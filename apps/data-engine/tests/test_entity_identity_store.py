@@ -15,6 +15,7 @@ which builds (and drops) fresh databases of its own.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
@@ -27,10 +28,8 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from factors.shared import entity_resolution as er
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_contracts.common import canonical_sha256
-from truealpha_runtime.testing import apply_migration_chain
+from truealpha_runtime.testing import clone_test_database, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).parent))
 from production_topt.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
@@ -577,68 +576,19 @@ def test_the_backfill_plan_reads_only_tables_that_predate_it() -> None:
     assert referenced and not (referenced & created), sorted(referenced & created)
 
 
-def _admin_conninfo() -> str:
-    return make_conninfo(**conninfo_to_dict(settings.database_url))
-
-
-def _database_conninfo(database: str) -> str:
-    return make_conninfo(**(conninfo_to_dict(settings.database_url) | {"dbname": database}))
-
-
 @pytest.fixture(scope="module")
 def migrated_template():
-    """One database carrying the declared chain, cloned per test by `fresh_databases`.
-
-    "The declared chain" means db/apply_migrations.sh (#984) — the same applier CI, the
-    compose initdb hook and every container boot run. Before #984 this module pushed
-    each migration file through psycopg and never applied db/roles.sql, so a fixture
-    whose docstring said "migrated from scratch" produced a schema no environment has.
-
-    The applier costs a psql process per file, which is why it is paid ONCE here instead
-    of three times per test (measured: 8.7 s of setup per test, against 0.5 s for three
-    clones). `create database ... template` is a file copy, so each clone is exactly as
-    independent and as fresh as a separately migrated database — which is what these
-    tests are about.
-    """
-    name = f"entity_determinism_template_{uuid.uuid4().hex[:10]}"
-    try:
-        admin = psycopg.connect(_admin_conninfo(), connect_timeout=3, autocommit=True)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        try:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-        except psycopg.errors.InsufficientPrivilege:
-            if os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-                raise
-            pytest.skip("the configured role cannot create databases")
-        apply_migration_chain(_database_conninfo(name))
-        yield name
-    finally:
-        admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
-        admin.close()
+    """One database carrying the declared chain, cloned per test by `fresh_databases`."""
+    with isolated_test_database("entity_template", template=None) as db:
+        yield db.name
 
 
 @pytest.fixture
 def fresh_databases(migrated_template):
     """Three databases of our own, each a clone of the migrated template, dropped after."""
-    names = [f"entity_determinism_{uuid.uuid4().hex[:10]}" for _ in range(3)]
-    created: list[str] = []
-    with psycopg.connect(_admin_conninfo(), connect_timeout=3, autocommit=True) as admin:
-        try:
-            for name in names:
-                admin.execute(
-                    sql.SQL("create database {} template {}").format(
-                        sql.Identifier(name), sql.Identifier(migrated_template)
-                    )
-                )
-                created.append(name)
-            yield [_database_conninfo(name) for name in names]
-        finally:
-            for name in created:
-                admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with contextlib.ExitStack() as stack:
+        databases = [stack.enter_context(clone_test_database(migrated_template, f"entity_{idx}")) for idx in range(3)]
+        yield [str(db) for db in databases]
 
 
 def _identity_snapshot(conninfo: str, *, learn_the_link_late: bool) -> dict:
