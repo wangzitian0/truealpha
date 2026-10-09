@@ -22,7 +22,8 @@
       "peg_reason_codes",
       "availability_status",
       "source_evidence_status",
-      "factor_validation_status"
+      "factor_validation_status",
+      "labor_efficiency_metric"
     ],
     "staging.strategy_backtest_inputs": [
       "id",
