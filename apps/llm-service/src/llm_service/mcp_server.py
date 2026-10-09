@@ -156,6 +156,11 @@ class PostgresCompanyProfileReader:
         gppe_row: dict[str, Any] | None = None
         themes: list[dict[str, Any]] = []
 
+        clean_issuer = issuer_id.strip()
+        token = clean_issuer.split(":")[-1].strip()
+        upper_issuer = clean_issuer.upper()
+        upper_token = token.upper()
+
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
@@ -181,12 +186,15 @@ class PostgresCompanyProfileReader:
                         ) ei on true
                         where d.issuer_id = %s
                            or d.issuer_id in (
-                               select entity_id::text from mart.entity_identity where legacy_id = %s
+                               select entity_id::text from mart.entity_identity
+                               where legacy_id in (%s, %s)
+                                  or upper(current_ticker) in (%s, %s)
+                                  or upper(legacy_id) in (%s, %s)
                            )
                         order by d.cutoff_at desc
                         limit 1
                         """,
-                        (issuer_id, issuer_id),
+                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
                     )
                     decision_row = cur.fetchone()
 
@@ -200,12 +208,15 @@ class PostgresCompanyProfileReader:
                         from mart.topt_gppe_results g
                         where g.issuer_id = %s
                            or g.issuer_id in (
-                               select entity_id::text from mart.entity_identity where legacy_id = %s
+                               select entity_id::text from mart.entity_identity
+                               where legacy_id in (%s, %s)
+                                  or upper(current_ticker) in (%s, %s)
+                                  or upper(legacy_id) in (%s, %s)
                            )
                         order by g.cutoff desc, g.created_at desc
                         limit 1
                         """,
-                        (issuer_id, issuer_id),
+                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
                     )
                     gppe_row = cur.fetchone()
 
@@ -233,13 +244,16 @@ class PostgresCompanyProfileReader:
                             from mart.issuer_theme_purity p
                             where p.issuer_id = %s
                                or p.issuer_id in (
-                                   select entity_id::text from mart.entity_identity where legacy_id = %s
+                                   select entity_id::text from mart.entity_identity
+                                   where legacy_id in (%s, %s)
+                                      or upper(current_ticker) in (%s, %s)
+                                      or upper(legacy_id) in (%s, %s)
                                )
                             order by p.theme_id, p.cutoff desc, p.created_at desc
                         ) latest_per_theme
                         order by raw_share desc nulls last, theme asc
                         """,
-                        (issuer_id, issuer_id),
+                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
                     )
                     themes = [
                         {
@@ -358,6 +372,10 @@ class PostgresThemePurityLeaderboardReader:
         issuers: list[dict[str, Any]] = []
         clamped_limit = max(1, min(limit, 100))
 
+        normalized_slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
+        while "--" in normalized_slug:
+            normalized_slug = normalized_slug.replace("--", "-")
+
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
@@ -378,7 +396,7 @@ class PostgresThemePurityLeaderboardReader:
                                    p.cutoff,
                                    p.created_at
                             from mart.issuer_theme_purity p
-                            where p.theme_id = %s
+                            where p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s)
                             order by p.issuer_id, p.cutoff desc, p.created_at desc
                         )
                         select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
@@ -401,7 +419,7 @@ class PostgresThemePurityLeaderboardReader:
                         order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last
                         limit %s
                         """,
-                        (theme_id, clamped_limit),
+                        (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
                     )
                     issuers = [
                         {
@@ -443,6 +461,22 @@ class PostgresEtfProfileReader:
         fund_row: dict[str, Any] | None = None
         holdings: list[dict[str, Any]] = []
 
+        clean_id = fund_id.strip()
+        token = clean_id.split(":")[-1].split("/")[-1].strip()
+        upper_token = token.upper()
+        lower_token = token.lower()
+        clean_upper = clean_id.upper()
+        clean_lower = clean_id.lower()
+        name_pattern = f"%{lower_token}%"
+        series_candidate = f"etf:series:{upper_token}" if not clean_lower.startswith("etf:series:") else clean_id
+        query_params = {
+            "clean_id": clean_id,
+            "series_candidate": series_candidate,
+            "upper_token": upper_token,
+            "clean_upper": clean_upper,
+            "name_pattern": name_pattern,
+        }
+
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
@@ -462,13 +496,31 @@ class PostgresEtfProfileReader:
                                coalesce(availability_status, 'unavailable') as availability_status,
                                reason_codes
                         from mart.fund_virtual_company
-                        where fund_id = %s
+                        where fund_id = %(clean_id)s
+                           or fund_id = %(series_candidate)s
+                           or fund_id in (
+                               select entity_id
+                               from staging.kg_identifiers
+                               where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                  or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                           )
+                           or fund_id in (
+                               select entity_id::text
+                               from mart.entity_identity
+                               where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
+                                  or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
+                           )
+                           or lower(fund_name) like %(name_pattern)s
+                           or lower(fund_id) like %(name_pattern)s
                         order by cutoff desc, created_at desc
                         limit 1
                         """,
-                        (fund_id,),
+                        query_params,
                     )
                     fund_row = cur.fetchone()
+                    target_fund_id = str(fund_row["fund_id"]) if fund_row else clean_id
+                    holdings_params = dict(query_params)
+                    holdings_params["target_fund_id"] = target_fund_id
 
                     cur.execute(
                         """
@@ -488,11 +540,26 @@ class PostgresEtfProfileReader:
                             where ei.entity_id::text = v.issuer_entity
                             limit 1
                         ) ei on true
-                        where v.fund_id = %s
+                        where v.fund_id = %(target_fund_id)s
+                           or v.fund_id = %(series_candidate)s
+                           or v.fund_id in (
+                               select entity_id
+                               from staging.kg_identifiers
+                               where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                  or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                           )
+                           or v.fund_id in (
+                               select entity_id::text
+                               from mart.entity_identity
+                               where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
+                                  or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
+                           )
+                           or lower(v.fund_name) like %(name_pattern)s
+                           or lower(v.fund_id) like %(name_pattern)s
                         order by v.percent_of_net_assets desc nulls last, v.holding_name asc
                         limit 100
                         """,
-                        (fund_id,),
+                        holdings_params,
                     )
                     holdings = [
                         {
