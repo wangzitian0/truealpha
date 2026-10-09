@@ -441,3 +441,36 @@ async def test_etf_virtual_company_profile_tool_reads_through_injected_reader() 
     assert structured["valued_weight_pct"] == "88.20"
     assert len(structured["holdings"]) == 1
     assert structured["holdings"][0]["ticker"] == "AAPL"
+
+
+def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug() -> None:
+    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+
+    # Disconnected DB should return empty list gracefully without unhandled exception
+    reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
+    assert result["theme_id"] == "AI Infrastructure"
+    assert result["limit"] == 5
+    assert result["count"] == 0
+    assert result["issuers"] == []
+
+
+def test_postgres_company_profile_reader_handles_connection_error() -> None:
+    from llm_service.mcp_server import PostgresCompanyProfileReader
+
+    reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_company_profile(issuer_id="NVDA")
+    assert result["issuer_id"] == "NVDA"
+    assert result["availability_status"] == "unavailable"
+    assert result["theme_purity"] == []
+
+
+def test_postgres_etf_profile_reader_handles_connection_error() -> None:
+    from llm_service.mcp_server import PostgresEtfProfileReader
+
+    reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
+    assert result["fund_id"] == "fund:nasdaq:qqq"
+    assert result["availability_status"] == "unavailable"
+    assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]
+    assert result["holdings"] == []
