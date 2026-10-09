@@ -180,6 +180,14 @@ class FinancialFactsBundle:
     # and parsed again as one filing history. Never part of the payload or the bundle's
     # identity.
     document: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
+    # #1176: the banking tangible-common-equity inputs. Set for the FINANCIAL branch only, all at
+    # `tangible_equity_period_end`, or absent together. Nothing is substituted for a missing input.
+    stockholders_equity: Decimal | None = None
+    preferred_stock_value: Decimal | None = None
+    goodwill: Decimal | None = None
+    intangible_assets_net_excluding_goodwill: Decimal | None = None
+    intangible_basis: str | None = None
+    tangible_equity_period_end: date | None = None
 
 
 SHARES_POINT_IN_TIME = "point_in_time"
@@ -853,9 +861,22 @@ def build_bundle(
     # them was filed — the PIT obligation #284 named and could not satisfy while only the
     # endpoints travelled.
     financial = financial_components(facts, cutoff, branch, ruleset)
+    tangible = tangible_common_equity_components(facts, cutoff, branch, ruleset)
     resolved = [
         datum
-        for datum in (profit, assets, shares, revenue, financial.assets, financial.returns, *earnings_periods.values())
+        for datum in (
+            profit,
+            assets,
+            shares,
+            revenue,
+            financial.assets,
+            financial.returns,
+            tangible.stockholders_equity,
+            tangible.preferred_stock_value,
+            tangible.goodwill,
+            tangible.intangible_assets,
+            *earnings_periods.values(),
+        )
         if datum is not None
     ]
     knowable = max((datum.filed for datum in resolved), default=None)
@@ -869,6 +890,10 @@ def build_bundle(
             ("net_income", net_income),
             ("financial_assets", financial.assets),
             ("financial_returns", financial.returns),
+            ("stockholders_equity", tangible.stockholders_equity),
+            ("preferred_stock_value", tangible.preferred_stock_value),
+            ("goodwill", tangible.goodwill),
+            ("intangible_assets_net_excluding_goodwill", tangible.intangible_assets),
         )
         if datum is not None
     }
@@ -906,6 +931,12 @@ def build_bundle(
         latest_statement_period_end=latest_statement,
         latest_annual_period_end=latest_annual,
         document=facts,
+        stockholders_equity=_v(tangible.stockholders_equity),
+        preferred_stock_value=_v(tangible.preferred_stock_value),
+        goodwill=_v(tangible.goodwill),
+        intangible_assets_net_excluding_goodwill=_v(tangible.intangible_assets),
+        intangible_basis=tangible.intangible_basis,
+        tangible_equity_period_end=tangible.period_end,
     )
 
 
@@ -970,6 +1001,71 @@ def merge_company_facts(
             for unit, entries in body.get("units", {}).items():
                 units.setdefault(unit, []).extend({**entry, _DOCUMENT_KEY: record_id} for entry in entries)
     return merged
+
+
+@dataclass(frozen=True)
+class TangibleCommonEquityComponents:
+    """The three balance-sheet facts a banking tangible-common-equity measurement needs (#1176)."""
+
+    stockholders_equity: _Datum | None = None
+    preferred_stock_value: _Datum | None = None
+    goodwill: _Datum | None = None
+    intangible_assets: _Datum | None = None
+    intangible_basis: str | None = None
+    period_end: date | None = None
+
+
+def _intangibles_at(series: Callable[[str], dict[date, _Datum]], end: date) -> tuple[_Datum | None, str | None]:
+    """Intangible assets excluding goodwill at one period end: the total concept when the filer
+    reports it, else the two lifetime classes summed. Both classes must exist; none is assumed."""
+    total = series("intangible_assets_net_excluding_goodwill").get(end)
+    if total is not None:
+        return total, "IntangibleAssetsNetExcludingGoodwill"
+    finite = series("finite_lived_intangibles_net").get(end)
+    indefinite = series("indefinite_lived_intangibles").get(end)
+    if finite is None or indefinite is None:
+        return None, None
+    return (
+        _sum_at(end, [finite, indefinite]),
+        "FiniteLivedIntangibleAssetsNet+IndefiniteLivedIntangibleAssetsExcludingGoodwill",
+    )
+
+
+def tangible_common_equity_components(
+    facts: dict[str, Any], cutoff: date, branch: OperatingBranch, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> TangibleCommonEquityComponents:
+    """#1176: stockholders' equity, goodwill and intangibles, at the latest period where all three
+    are filed. A non-FINANCIAL branch captures none of them.
+
+    The period is the latest one that carries equity, goodwill and intangibles together. A later
+    balance sheet that omits an intangible component is skipped, never mixed with an older
+    component. Nothing is zero-filled: a period without all three yields no measurement.
+    """
+    if branch is not OperatingBranch.FINANCIAL:
+        return TangibleCommonEquityComponents()
+    memo: dict[str, dict[date, _Datum]] = {}
+
+    def series(field_name: str) -> dict[date, _Datum]:
+        if field_name not in memo:
+            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
+        return memo[field_name]
+
+    equity = series("stockholders_equity")
+    goodwill = series("goodwill")
+    for end in sorted(set(equity) & set(goodwill), reverse=True):
+        intangibles, basis = _intangibles_at(series, end)
+        if intangibles is None:
+            continue
+        return TangibleCommonEquityComponents(
+            stockholders_equity=equity[end],
+            # Not required for the period: a missing preferred value stays None, never zero.
+            preferred_stock_value=series("preferred_stock_value").get(end),
+            goodwill=goodwill[end],
+            intangible_assets=intangibles,
+            intangible_basis=basis,
+            period_end=end,
+        )
+    return TangibleCommonEquityComponents()
 
 
 def _vintage(datum: _Datum) -> dict[str, Any]:
@@ -1194,6 +1290,19 @@ class SecFinancialFactAdapter:
             # is refused above, `gross_profit` is null and must not claim a filing.
             "vintage": {key: vintage[key] for key in sorted(vintage)},
         }
+        if target.operating_branch is OperatingBranch.FINANCIAL:
+            # #1176: the banking tangible-common-equity inputs. Written for a bank only, so the
+            # payload hash of a non-financial row does not move.
+            payload.update(
+                {
+                    "stockholders_equity": _s(bundle.stockholders_equity),
+                    "preferred_stock_value": _s(bundle.preferred_stock_value),
+                    "goodwill": _s(bundle.goodwill),
+                    "intangible_assets_net_excluding_goodwill": _s(bundle.intangible_assets_net_excluding_goodwill),
+                    "intangible_basis": bundle.intangible_basis,
+                    "tangible_equity_period_end": _d(bundle.tangible_equity_period_end),
+                }
+            )
         if operating_period_stale:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
