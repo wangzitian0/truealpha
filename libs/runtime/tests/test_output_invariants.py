@@ -266,3 +266,38 @@ def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
         assert exemption.expires > date(2026, 8, 17), (
             f"{name} ships already expired, which fails the gate on the first run"
         )
+
+
+def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None:
+    """#735, #70: extraction facts must resolve their evidence_ref pointer to raw.fetches.
+    A landed fact citing a missing raw id or omitting the citation is an invariant failure."""
+    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == "extraction-citations-resolve"]
+    assert "staging.issuer_headcount_facts" in invariant.violations
+    assert "raw.fetches" in invariant.violations
+    assert "staging.issuer_headcount_facts" in invariant.population
+    assert "10k-extraction" in invariant.violations and "10k-extraction" in invariant.population
+
+    # Behavior check with mock database: holding passes, violation fails
+    answers = {
+        invariant.violations.strip(): [],
+        invariant.population.strip(): [(85,)],
+    }
+    holding = check(
+        "postgresql://unused",
+        today=TODAY,
+        exemptions={},
+        invariants=(invariant,),
+        connect=lambda _url: _Connection(answers),
+    )
+    assert holding == 0
+
+    violation = ("1", "1018724", "10k-extraction", "999999")
+    answers[invariant.violations.strip()] = [violation]
+    failing = check(
+        "postgresql://unused",
+        today=TODAY,
+        exemptions={},
+        invariants=(invariant,),
+        connect=lambda _url: _Connection(answers),
+    )
+    assert failing == 1
