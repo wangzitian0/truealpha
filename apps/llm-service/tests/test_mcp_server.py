@@ -32,6 +32,7 @@ async def test_advertises_the_expected_tools() -> None:
     assert sorted(tool.name for tool in tools) == [
         "company_360_profile",
         "etf_virtual_company_profile",
+        "governed_backtest",
         "research_card",
         "research_report",
         "strategy_run",
@@ -42,6 +43,41 @@ async def test_advertises_the_expected_tools() -> None:
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None
     assert "result" in strategy_tool.outputSchema["properties"]
+
+
+@pytest.mark.anyio
+async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
+    class _FakeBacktestReader:
+        def get_backtest_report(
+            self, *, run_id: str | None = None, strategy_key: str | None = None, limit: int = 10
+        ) -> dict[str, Any]:
+            return {
+                "runs": [
+                    {
+                        "run_id": "backtest:qqq_topk_rank:20261009_000000",
+                        "strategy_key": "qqq_topk_rank",
+                        "strategy_version": "v1.0.0",
+                        "universe_id": "universe:qqq",
+                        "status": "succeeded",
+                        "cagr_monthly": "0.152",
+                        "sharpe_daily": "1.34",
+                        "max_dd_daily": "-0.185",
+                    }
+                ],
+                "valuations": [],
+                "trades": [],
+                "count": 1,
+                "availability_status": "available",
+            }
+
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), backtest_reader=_FakeBacktestReader())
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "governed_backtest",
+        {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
+    )
+    assert structured["count"] == 1
+    assert structured["availability_status"] == "available"
+    assert structured["runs"][0]["strategy_key"] == "qqq_topk_rank"
 
 
 @pytest.mark.anyio
@@ -226,6 +262,7 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         assert sorted(tool.name for tool in tools.tools) == [
             "company_360_profile",
             "etf_virtual_company_profile",
+            "governed_backtest",
             "research_card",
             "research_report",
             "strategy_run",
@@ -277,9 +314,11 @@ def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pyt
 
 def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None:
     from llm_service.mcp_server import (
+        PostgresBacktestReader,
         PostgresCompanyProfileReader,
         PostgresEtfProfileReader,
         PostgresThemePurityLeaderboardReader,
+        _default_backtest_reader,
         _default_company_profile_reader,
         _default_etf_profile_reader,
         _default_theme_purity_reader,
@@ -288,6 +327,7 @@ def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None
     assert isinstance(_default_company_profile_reader(), PostgresCompanyProfileReader)
     assert isinstance(_default_theme_purity_reader(), PostgresThemePurityLeaderboardReader)
     assert isinstance(_default_etf_profile_reader(), PostgresEtfProfileReader)
+    assert isinstance(_default_backtest_reader(), PostgresBacktestReader)
 
 
 @pytest.mark.anyio

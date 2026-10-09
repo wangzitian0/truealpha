@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke check-large-files prepush contract-conformance check clean
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke check-large-files prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -21,6 +21,7 @@ help:
 	@echo "  make sample       Phase -1: pull SEC company-facts samples"
 	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
+	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
 	@echo "Quality:"
 	@echo "  make smoke        Fast inner-loop checks: lint + typecheck + fast tests (<20s)"
@@ -125,6 +126,9 @@ sample-evidence:
 
 strategy-smoke:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/run_strategy_smoke.py --output-dir .local/strategy-smoke
+
+vision-audit:
+	uv run python tools/vision_audit.py $(ARGS)
 
 lint:
 	uv run ruff check apps libs

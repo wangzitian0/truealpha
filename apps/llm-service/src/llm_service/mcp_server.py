@@ -1,11 +1,12 @@
-"""The MCP endpoint — see #348 and #1104.
+"""The MCP endpoint — see #348, #758, and #1104.
 
-Registers seven read-only tools: `strategy_run` (#347's provisional
+Registers eight read-only tools: `strategy_run` (#347's provisional
 `StrategyRunReadRepository`), `topt_gppe` (#405/#433's TOPT GPPE + quality
 read), `research_report` (#369's deterministic report assembler),
 `research_card` (#372's deterministic card renderer), `company_360_profile`
 (#1104's issuer 360 profile), `theme_purity_leaderboard` (#1104's theme purity
-leaderboard), and `etf_virtual_company_profile` (#1104's virtual company profile).
+leaderboard), `etf_virtual_company_profile` (#1104's virtual company profile),
+and `governed_backtest` (#758's backtest execution runs and valuations).
 
 No browser session exists for MCP callers today, so `AccessContext` is
 derived server-side via `AuthenticationMethod.SERVICE_IDENTITY` rather than
@@ -105,6 +106,14 @@ class EtfProfileToolRequest(BaseModel):
     fund_id: str = "etf:series:S000101292"
 
 
+class BacktestToolRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = None
+    strategy_key: str | None = None
+    limit: int = 10
+
+
 def _service_access_context() -> AccessContext:
     """A fresh, short-lived SERVICE_IDENTITY context; never derived from client input."""
     issued_at = datetime.now(UTC)
@@ -143,6 +152,12 @@ class ThemePurityLeaderboardReader(Protocol):
 
 class EtfProfileReader(Protocol):
     def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]: ...
+
+
+class BacktestReader(Protocol):
+    def get_backtest_report(
+        self, *, run_id: str | None = None, strategy_key: str | None = None, limit: int = 10
+    ) -> dict[str, Any]: ...
 
 
 class PostgresCompanyProfileReader:
@@ -716,6 +731,123 @@ def _default_etf_profile_reader() -> EtfProfileReader:
     return PostgresEtfProfileReader(database_url=settings.database_url)
 
 
+class PostgresBacktestReader:
+    """Reads backtest runs, valuations, and trades from mart for MCP consumers."""
+
+    def __init__(self, *, database_url: str) -> None:
+        self._database_url = database_url
+
+    def get_backtest_report(
+        self, *, run_id: str | None = None, strategy_key: str | None = None, limit: int = 10
+    ) -> dict[str, Any]:
+        runs: list[dict[str, Any]] = []
+        valuations: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
+
+        try:
+            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    if run_id:
+                        cur.execute(
+                            """
+                            select run_id, strategy_key, strategy_version, universe_id,
+                                   start_date::text, end_date::text, status,
+                                   cagr_monthly::text as cagr_monthly,
+                                   sharpe_daily::text as sharpe_daily,
+                                   max_dd_daily::text as max_dd_daily,
+                                   vol_daily::text as vol_daily,
+                                   turnover_monthly::text as turnover_monthly,
+                                   calmar_daily::text as calmar_daily,
+                                   metrics_payload, error_message,
+                                   executed_at::text, created_at::text
+                            from mart.backtest_runs
+                            where run_id = %s
+                            limit 1
+                            """,
+                            (run_id,),
+                        )
+                        run_row = cur.fetchone()
+                        if run_row:
+                            runs.append(dict(run_row))
+                            cur.execute(
+                                """
+                                select run_id, resolution, valuation_date::text,
+                                       cum_nav::text as cum_nav,
+                                       drawdown::text as drawdown,
+                                       gross_exposure::text as gross_exposure,
+                                       cash_weight::text as cash_weight
+                                from mart.backtest_valuations
+                                where run_id = %s
+                                order by valuation_date desc
+                                limit 100
+                                """,
+                                (run_id,),
+                            )
+                            valuations = [dict(r) for r in cur.fetchall()]
+
+                            cur.execute(
+                                """
+                                select trade_id, run_id, trade_date::text,
+                                       symbol, side, shares::text as shares,
+                                       execution_price::text as execution_price,
+                                       trade_value::text as trade_value,
+                                       weight_before::text as weight_before,
+                                       weight_after::text as weight_after,
+                                       fee_paid::text as fee_paid
+                                from mart.backtest_trades
+                                where run_id = %s
+                                order by trade_date desc
+                                limit 100
+                                """,
+                                (run_id,),
+                            )
+                            trades = [dict(r) for r in cur.fetchall()]
+                    else:
+                        query = """
+                            select run_id, strategy_key, strategy_version, universe_id,
+                                   start_date::text, end_date::text, status,
+                                   cagr_monthly::text as cagr_monthly,
+                                   sharpe_daily::text as sharpe_daily,
+                                   max_dd_daily::text as max_dd_daily,
+                                   vol_daily::text as vol_daily,
+                                   turnover_monthly::text as turnover_monthly,
+                                   calmar_daily::text as calmar_daily,
+                                   metrics_payload, error_message,
+                                   executed_at::text, created_at::text
+                            from mart.backtest_runs
+                        """
+                        params: list[Any] = []
+                        if strategy_key:
+                            query += " where strategy_key = %s"
+                            params.append(strategy_key)
+                        query += " order by created_at desc limit %s"
+                        params.append(limit)
+                        cur.execute(query, tuple(params))
+                        runs = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            logger.warning("Failed to read backtest from mart: %s", e)
+            return {
+                "runs": [],
+                "valuations": [],
+                "trades": [],
+                "count": 0,
+                "availability_status": "unavailable",
+                "error": str(e),
+            }
+
+        return {
+            "runs": runs,
+            "valuations": valuations,
+            "trades": trades,
+            "count": len(runs),
+            "availability_status": "available" if runs else "empty",
+        }
+
+
+def _default_backtest_reader() -> BacktestReader:
+    return PostgresBacktestReader(database_url=settings.database_url)
+
+
 def build_mcp_server(
     *,
     repository: StrategyRunReadRepository | None = None,
@@ -724,6 +856,7 @@ def build_mcp_server(
     company_profile_reader: CompanyProfileReader | None = None,
     theme_purity_reader: ThemePurityLeaderboardReader | None = None,
     etf_profile_reader: EtfProfileReader | None = None,
+    backtest_reader: BacktestReader | None = None,
 ) -> FastMCP:
     """Builds the MCP server. Caller-supplied repositories are for tests only."""
     # `streamable_http_path="/"`: main.py mounts this app at "/mcp"; FastMCP's own
@@ -758,6 +891,7 @@ def build_mcp_server(
     active_etf_profile: EtfProfileReader = (
         etf_profile_reader if etf_profile_reader is not None else _default_etf_profile_reader()
     )
+    active_backtest: BacktestReader = backtest_reader if backtest_reader is not None else _default_backtest_reader()
 
     @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
@@ -832,6 +966,18 @@ def build_mcp_server(
     )
     def etf_virtual_company_profile(request: EtfProfileToolRequest) -> dict[str, Any]:
         return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
+
+    @server.tool(
+        name="governed_backtest",
+        description=(
+            "Read governed backtest execution runs, performance metrics (CAGR, Sharpe, MaxDD), "
+            "valuations and simulated trades from mart."
+        ),
+    )
+    def governed_backtest(request: BacktestToolRequest) -> dict[str, Any]:
+        return active_backtest.get_backtest_report(
+            run_id=request.run_id, strategy_key=request.strategy_key, limit=request.limit
+        )
 
     return server
 
