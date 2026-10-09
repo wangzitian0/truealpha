@@ -66,7 +66,7 @@ def test_a_merge_closing_an_unreleased_issue_is_reopened(
     )
     assert exit_code == 0
     assert len(calls) == 1 and calls[0][0] == 494
-    assert "production is NOT serving" in calls[0][1]
+    assert "staging is NOT serving" in calls[0][1]
     assert "#562" in calls[0][1], "the comment must name the mechanism, not just scold"
 
 
@@ -123,7 +123,7 @@ def test_a_released_capability_stays_closed(capsys: pytest.CaptureFixture[str]) 
     )
     assert exit_code == 0
     assert calls == []
-    assert "production is serving" in capsys.readouterr().out
+    assert "staging is serving" in capsys.readouterr().out
 
 
 def test_the_latest_close_is_the_one_judged() -> None:
@@ -315,7 +315,7 @@ def test_a_mixed_product_and_non_product_commit_is_reopened(
     assert exit_code == 0
     assert len(calls) == 1
     assert calls[0][0] == 1159
-    assert "production is NOT serving" in calls[0][1]
+    assert "staging is NOT serving" in calls[0][1]
 
 
 def test_a_commit_modifying_tests_and_e2e_stays_closed_without_reopening(
@@ -343,3 +343,37 @@ def test_a_commit_modifying_tests_and_e2e_stays_closed_without_reopening(
     out = capsys.readouterr().out
     assert "leaving #1159 closed" in out
     assert "only changes non-product paths" in out
+
+
+def test_default_health_url_points_to_staging() -> None:
+    """Owner principle: deployment to staging is the completion boundary."""
+    assert _module.DEFAULT_HEALTH == "https://truealpha-staging.truealpha.club/api/health"
+    assert _module.DEFAULT_HEALTH == _module.STAGING_HEALTH
+
+
+def test_explicit_production_health_url_targets_production(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Passing health_url targeting production uses production in verdicts and comments."""
+    calls, reopen = _capture()
+    exit_code = run(
+        494,
+        gh_api=_timeline({"event": "closed", "commit_id": "1acd82c" + "0" * 33}),
+        git=_git(),
+        health_url=_module.PRODUCTION_HEALTH,
+        http_get=_serving(),
+        reopen=reopen,
+    )
+    assert exit_code == 0
+    assert len(calls) == 1 and calls[0][0] == 494
+    assert "production is NOT serving" in calls[0][1]
+
+
+def test_cli_parser_defaults_to_staging_health_and_accepts_custom_url() -> None:
+    """CLI defaults to staging and accepts an explicit --health-url."""
+    parser = _module._parser()
+    args_default = parser.parse_args(["--issue", "494"])
+    assert args_default.health_url == _module.STAGING_HEALTH
+
+    args_custom = parser.parse_args(["--issue", "494", "--health-url", "https://example.com/health"])
+    assert args_custom.health_url == "https://example.com/health"

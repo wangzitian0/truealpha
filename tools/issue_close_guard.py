@@ -12,10 +12,10 @@ not a check that runs again.
 What this deliberately does NOT do: touch an issue a human closed. A hand
 close is exactly what rule 7 asks for, and the person doing it has seen more
 than this script can. It fires only on the auto-close case — an issue closed by
-a commit that PRODUCTION IS NOT SERVING — which is the defect and nothing else.
+a commit that STAGING IS NOT SERVING — which is the defect and nothing else.
 
 "Serving", not "a release tag contains": v0.0.20 contains the commits that
-closed #371, #494 and #495 while production served v0.0.19, so a tag-existence
+closed #371, #494 and #495 while staging served v0.0.19, so a tag-existence
 test called all three released when nothing a user touches had them. Rule 6 is
 explicit that a tag is not the bar.
 
@@ -40,9 +40,12 @@ from infra2_sdk.deploy import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 REPO = "wangzitian0/truealpha"
-# Rule 6 asks whether a user has it, so the question is what production SERVES,
-# not what a tag contains.
+# Rule 6 asks whether a capability is deployed, so the question is what staging
+# SERVES, not what a tag contains. Staging deployment is the completion condition;
+# production releases are hoarded and batched separately.
+STAGING_HEALTH = "https://truealpha-staging.truealpha.club/api/health"
 PRODUCTION_HEALTH = "https://truealpha.club/api/health"
+DEFAULT_HEALTH = STAGING_HEALTH
 GhApi = Callable[[str], str]
 Git = Callable[[Sequence[str]], tuple[int, str]]
 
@@ -108,15 +111,13 @@ def closing_commit(issue: int, *, gh_api: GhApi = _gh_api) -> str | None:
 
 
 def deployed(
-    commit: str, *, health_url: str = PRODUCTION_HEALTH, http_get: HttpGet | None = None, git: Git = _git
+    commit: str, *, health_url: str = DEFAULT_HEALTH, http_get: HttpGet | None = None, git: Git = _git
 ) -> tuple[bool, str]:
-    """Is the commit in what PRODUCTION is actually serving?
+    """Is the commit in what the target environment is actually serving?
 
-    Not "does a release tag contain it". Verified against reality while writing
-    this: v0.0.20 contains the commits that closed #371, #494 and #495, and
-    production serves v0.0.19 — so a tag-existence test would have called all
-    three released while nothing a user touches had them. Tag existence is the
-    thing rule 6 explicitly is not satisfied by.
+    Not "does a release tag contain it". Staging is the required deployment target;
+    a tag-existence test would call commits released while nothing a user touches
+    has them. Rule 6 is explicit that a tag is not the bar.
     """
     http_get = http_get or default_http_get()
     serving = read_deployed_release(health_url, http_get)
@@ -157,8 +158,8 @@ def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
     Rule 6 states that product issues must be deployed, real, and evidenced.
     Non-product changes (documentation, developer skills, harness rules,
     governance records, tooling, test suites, and E2E verification scripts)
-    do not deliver code to production containers. Checking whether
-    production serves them causes false reopenings.
+    do not deliver code to runtime containers. Checking whether
+    staging serves them causes false reopenings.
     """
     code, out = git(["diff-tree", "-m", "--no-commit-id", "--name-only", "-r", commit])
     if code != 0:
@@ -185,7 +186,7 @@ def judge(
     *,
     gh_api: GhApi = _gh_api,
     git: Git = _git,
-    health_url: str = PRODUCTION_HEALTH,
+    health_url: str = DEFAULT_HEALTH,
     http_get: HttpGet | None = None,
 ) -> Verdict:
     commit = closing_commit(issue, gh_api=gh_api)
@@ -196,19 +197,20 @@ def judge(
             f"and they have seen more than this guard can",
         )
     is_deployed, serving = deployed(commit, health_url=health_url, http_get=http_get, git=git)
+    env_name = "staging" if "staging" in health_url else "production"
     if is_deployed:
-        return Verdict(False, f"#{issue} was closed by {commit[:8]}, which production is serving ({serving})")
+        return Verdict(False, f"#{issue} was closed by {commit[:8]}, which {env_name} is serving ({serving})")
     if is_non_product_commit(commit, git=git):
         return Verdict(
             False,
             f"#{issue} was closed by {commit[:8]}, which only changes non-product paths "
-            f"(documentation, rules, skills, governance, or tooling); production serving "
+            f"(documentation, rules, skills, governance, or tooling); {env_name} serving "
             f"check is not applicable under rule 6",
         )
     return Verdict(
         True,
-        f"#{issue} was closed by merge commit {commit[:8]}, which production is NOT serving — it "
-        f"serves {serving}. The capability is on main and nowhere a user is, which rule 6 does not "
+        f"#{issue} was closed by merge commit {commit[:8]}, which {env_name} is NOT serving — it "
+        f"serves {serving}. The capability is on main and not deployed to {env_name}, which rule 6 does not "
         f"call closed. Rule 7 asks for a plain `#N` reference and a hand close once the deployed "
         f"evidence exists; a merge closed this regardless, which is #562. Reopened rather than "
         f"left looking done.",
@@ -220,7 +222,7 @@ def run(
     *,
     gh_api: GhApi = _gh_api,
     git: Git = _git,
-    health_url: str = PRODUCTION_HEALTH,
+    health_url: str = DEFAULT_HEALTH,
     http_get: HttpGet | None = None,
     reopen: Callable[[int, str], None] | None = None,
 ) -> int:
@@ -247,11 +249,17 @@ def _reopen(issue: int, reason: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--issue", type=int, required=True)
+    parser.add_argument(
+        "--health-url",
+        default=DEFAULT_HEALTH,
+        help="Health check URL (default: %(default)s)",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    return run(_parser().parse_args(argv).issue)
+    args = _parser().parse_args(argv)
+    return run(args.issue, health_url=args.health_url)
 
 
 if __name__ == "__main__":
