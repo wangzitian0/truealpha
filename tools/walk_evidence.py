@@ -44,7 +44,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get
+from infra2_sdk.deploy import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 WALK_STEP_NAME = "Walk the deployed surface"

@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get
+from infra2_sdk.deploy import HttpGet, default_http_get
 
 # Daily captures; a weekend is two missed days. Three days cannot fire on ordinary
 # operation and is exactly the freeze that went unpaged (2026-08-15/17).

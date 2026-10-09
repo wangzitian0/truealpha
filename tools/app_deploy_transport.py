@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from infra2_sdk.dispatch import Api, LogFetcher, ReceiverRun, github_api_client
-from infra2_sdk.dispatch import dispatch_and_wait as _sdk_dispatch_and_wait
+from infra2_sdk.deploy import Api, LogFetcher, ReceiverRun, github_api_client
+from infra2_sdk.deploy import dispatch_and_wait as _sdk_dispatch_and_wait
 
 # `tools` has no __init__.py and isn't installed as a package, so it is only
 # resolvable as `tools.app_deploy_request` when the repo root is on sys.path --

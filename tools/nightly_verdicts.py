@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from infra2_sdk.deploy_health import HttpGet, default_http_get
+from infra2_sdk.deploy import HttpGet, default_http_get
 
 GhApi = Callable[[str], str]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
