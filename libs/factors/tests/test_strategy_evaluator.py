@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
+from importlib import resources
 
 from factors.composite.strategy_evaluator import (
     EvaluatedDecision,
@@ -24,7 +24,7 @@ from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
 )
 
-_CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
+_CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
 _CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
 
 
@@ -33,7 +33,7 @@ def _s(value: object) -> str | None:
 
 
 def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
-    raw = _CORPUS_PATH.read_bytes()
+    raw = _CORPUS_RESOURCE.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
     corpus = json.loads(raw)
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
@@ -82,7 +82,7 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
 
 
 def _definition() -> LargeModelValueV0Definition:
-    corpus = json.loads(_CORPUS_PATH.read_bytes())
+    corpus = json.loads(_CORPUS_RESOURCE.read_bytes())
     return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
 
 

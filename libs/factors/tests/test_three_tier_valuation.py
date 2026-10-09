@@ -2,7 +2,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+from importlib import resources
 
 import pytest
 from factors.composite.three_tier_valuation import three_tier_valuation
@@ -10,7 +10,7 @@ from factors.types import FactorResult, UnitFamily
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
-_CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
+_CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
 _CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
 _UNIT_FAMILY = {
     "gross_profit_per_employee": UnitFamily.PER_EMPLOYEE,
@@ -21,7 +21,7 @@ _UNIT_FAMILY = {
 def _v0_definition() -> ThreeTierValuationDefinition:
     """The locked v0 tier bands from #21/#335's golden fixture, not a local copy."""
 
-    raw = _CORPUS_PATH.read_bytes()
+    raw = _CORPUS_RESOURCE.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
     corpus = json.loads(raw)
     return ThreeTierValuationDefinition.model_validate_json(json.dumps(corpus["strategy_definition"]["tier_valuation"]))

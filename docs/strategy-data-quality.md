@@ -75,15 +75,10 @@ manually changed readiness flag cannot satisfy any of these release outcomes.
 
 The targeted 2026-07 evidence set is sufficient for toolchain and local boundary
 implementation. The composite-factor replay fixture has since landed and every `local_backtest` row
-passes the executable audit (`make sample-audit`). `strategy_evaluation` corpus readiness remains blocked by five-year
+cleared the legacy audit. `strategy_evaluation` corpus readiness remains blocked by five-year
 coverage for every declared evaluation subject and primary/fallback price
 reconciliation. Even after those checks pass, the Gate 0, module holdout, operational,
-consumer, and graduation gates above remain blocking. Run the executable corpus audit
-after every sample change:
-
-```bash
-make sample-audit
-```
+consumer, and graduation gates above remain blocking.
 
 Non-inferable evidence is declared in
 `apps/data-engine/samples/strategy_coverage.json`. Readiness requires a typed
