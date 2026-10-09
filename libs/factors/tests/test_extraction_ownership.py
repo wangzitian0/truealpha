@@ -31,7 +31,7 @@ Three independent shapes are checked. The first two match the issue's own two ex
    module that extracts values and never calls the primitive is a second primitive,
    whatever it names its constants and functions. `supply_chain_extraction.py` passed both
    text shapes and still owns its own regex and candidate class. It sits in a shrink-only
-   debt set until #773 D8 removes it.
+   debt set until #773 D8 removes it. The scan covers `EXTRACTION_SCAN_ROOTS` only (#1144).
 
 Checks 1 and 2 are exercised against the REAL repository content (not a synthetic fixture):
 `test_the_literal_guard_actually_fires_...` and `test_the_selector_name_guard_actually_
@@ -88,6 +88,12 @@ ALLOWED_SELECTOR_FILES = {
 #: harness in #1061.
 KNOWN_UNRELATED_SELECT_FUNCTIONS: set[str] = set()
 
+#: The roots the structural guard governs: metric extraction from filings and source documents.
+#: The llm-service is a transport layer (AGENTS.md: no computation outside `libs/factors`). Its
+#: `extract_*` helpers read identifiers from a user query. They extract no metric, so the guard
+#: does not scan that service (#1144). Add a root only when it holds metric extraction code.
+EXTRACTION_SCAN_ROOTS = ("libs/factors/src", "apps/data-engine/src")
+
 PRIMITIVE_FILE = "libs/factors/src/factors/shared/extraction.py"
 PRIMITIVE_MODULE = "factors.shared.extraction"
 PRIMITIVE_PACKAGE = "factors.shared"
@@ -108,15 +114,15 @@ KNOWN_UNROUTED_EXTRACTION_MODULES: set[str] = {
 }
 
 
-def _src_python_files() -> list[Path]:
+def _src_python_files(root: Path = REPO_ROOT) -> list[Path]:
     """Every production module under `libs/` and `apps/` — package source only: no
     tests (which legitimately reference the extractor id as fixture data or an imported
     constant, e.g. `apps/data-engine/tests/test_headcount_source_priority.py`), no
     `__pycache__`."""
     files: list[Path] = []
-    for base in (REPO_ROOT / "libs", REPO_ROOT / "apps"):
+    for base in (root / "libs", root / "apps"):
         for path in base.rglob("*.py"):
-            parts = path.relative_to(REPO_ROOT).parts
+            parts = path.relative_to(root).parts
             if "src" not in parts or "tests" in parts or "__pycache__" in parts:
                 continue
             files.append(path)
@@ -221,22 +227,31 @@ def _module_violations(rel: str, source: str, entrypoints: frozenset[str] | None
     return [f"{rel} {'; '.join(triggers)}, and never calls a function of {PRIMITIVE_MODULE}"]
 
 
-def _scan_extraction_modules(*, debt: set[str]) -> list[str]:
+def _extraction_scan_files(root: Path = REPO_ROOT) -> list[Path]:
+    """The production modules the structural guard governs: those under `EXTRACTION_SCAN_ROOTS`."""
+    return [
+        path
+        for path in _src_python_files(root)
+        if path.relative_to(root).as_posix().startswith(tuple(f"{scan_root}/" for scan_root in EXTRACTION_SCAN_ROOTS))
+    ]
+
+
+def _scan_extraction_modules(*, debt: set[str], root: Path = REPO_ROOT) -> list[str]:
     violations = []
     entrypoints = _primitive_entrypoints()
-    for path in _src_python_files():
-        rel = path.relative_to(REPO_ROOT).as_posix()
+    for path in _extraction_scan_files(root):
+        rel = path.relative_to(root).as_posix()
         if rel == PRIMITIVE_FILE or rel in debt:
             continue
         violations.extend(_module_violations(rel, path.read_text(), entrypoints))
     return violations
 
 
-def _extraction_module_paths() -> set[str]:
-    """Every real module the structural guard treats as an extraction module."""
+def _extraction_module_paths(root: Path = REPO_ROOT) -> set[str]:
+    """Every module under the scan roots that the structural guard treats as an extraction module."""
     found = set()
-    for path in _src_python_files():
-        rel = path.relative_to(REPO_ROOT).as_posix()
+    for path in _extraction_scan_files(root):
+        rel = path.relative_to(root).as_posix()
         if rel != PRIMITIVE_FILE and _extraction_triggers(rel, ast.parse(path.read_text(), filename=rel)):
             found.add(rel)
     return found
@@ -425,3 +440,43 @@ def test_a_module_that_is_not_an_extraction_module_is_not_checked(tmp_path) -> N
     plain = tmp_path / "plain.py"
     plain.write_text("import re\n\n_PATTERN = re.compile(r'x')\n\ndef select_nothing():\n    return None\n")
     assert _module_violations("libs/x/src/x/plain.py", plain.read_text()) == []
+
+
+def _write_module(root: Path, rel: str, source: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+
+
+def test_the_scan_roots_are_the_two_packages_that_extract_metrics() -> None:
+    assert EXTRACTION_SCAN_ROOTS == ("libs/factors/src", "apps/data-engine/src")
+
+
+def test_a_rogue_extract_function_under_every_scan_root_is_flagged(tmp_path) -> None:
+    """Red-proof (#1144): the scope change must not free a module inside a scanned root."""
+    for scan_root in EXTRACTION_SCAN_ROOTS:
+        rel = f"{scan_root}/pkg/rogue.py"
+        _write_module(tmp_path, rel, "def extract_total(text):\n    return int(text)\n")
+        violations = _scan_extraction_modules(debt=set(), root=tmp_path)
+        assert any(violation.startswith(rel) for violation in violations), (scan_root, violations)
+
+
+def test_a_module_under_the_llm_service_that_defines_extract_functions_is_not_scanned(tmp_path) -> None:
+    """The llm-service is a transport layer. Its `extract_*` helpers read identifiers from a
+    query. They extract no metric, so the guard must not scan them (#1144)."""
+    rel = "apps/llm-service/src/llm_service/mcp_server.py"
+    _write_module(
+        tmp_path,
+        rel,
+        "def extract_fund_resolution_candidates(query):\n    return [query]\n"
+        "\n"
+        "def extract_issuer_resolution_candidates(query):\n    return [query]\n",
+    )
+    assert _scan_extraction_modules(debt=set(), root=tmp_path) == []
+    assert _extraction_module_paths(root=tmp_path) == set()
+    assert rel not in {path.relative_to(tmp_path).as_posix() for path in _extraction_scan_files(tmp_path)}
+
+
+def test_a_file_named_extraction_under_the_llm_service_is_not_scanned_either(tmp_path) -> None:
+    _write_module(tmp_path, "apps/llm-service/src/llm_service/query_extraction.py", "VALUE = 1\n")
+    assert _scan_extraction_modules(debt=set(), root=tmp_path) == []
