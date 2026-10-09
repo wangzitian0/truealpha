@@ -156,10 +156,11 @@ class PostgresCompanyProfileReader:
         gppe_row: dict[str, Any] | None = None
         themes: list[dict[str, Any]] = []
 
-        clean_issuer = issuer_id.strip()
-        token = clean_issuer.split(":")[-1].strip()
-        upper_issuer = clean_issuer.upper()
-        upper_token = token.upper()
+        cand = extract_issuer_resolution_candidates(issuer_id)
+        clean_issuer = cand["clean_issuer"]
+        token = cand["token"]
+        upper_issuer = cand["upper_issuer"]
+        upper_token = cand["upper_token"]
 
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
@@ -362,6 +363,46 @@ class PostgresCompanyProfileReader:
         }
 
 
+def normalize_theme_slug(theme_id: str) -> str:
+    """Normalize a theme identifier or display name into a hyphenated slug."""
+    normalized_slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
+    while "--" in normalized_slug:
+        normalized_slug = normalized_slug.replace("--", "-")
+    return normalized_slug
+
+
+def extract_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
+    """Extract candidate identifiers and patterns for ETF profile queries."""
+    clean_id = fund_id.strip()
+    token = clean_id.split(":")[-1].split("/")[-1].strip()
+    upper_token = token.upper()
+    lower_token = token.lower()
+    clean_upper = clean_id.upper()
+    clean_lower = clean_id.lower()
+    series_candidate = f"etf:series:{upper_token}" if not clean_lower.startswith("etf:series:") else clean_id
+    enable_name_match = len(lower_token) >= 2
+    name_pattern = f"%{lower_token}%" if enable_name_match else ""
+    return {
+        "clean_id": clean_id,
+        "series_candidate": series_candidate,
+        "upper_token": upper_token,
+        "clean_upper": clean_upper,
+        "name_pattern": name_pattern,
+    }
+
+
+def extract_issuer_resolution_candidates(issuer_id: str) -> dict[str, str]:
+    """Extract candidate identifiers for issuer company 360 queries."""
+    clean_issuer = issuer_id.strip()
+    token = clean_issuer.split(":")[-1].strip()
+    return {
+        "clean_issuer": clean_issuer,
+        "token": token,
+        "upper_issuer": clean_issuer.upper(),
+        "upper_token": token.upper(),
+    }
+
+
 class PostgresThemePurityLeaderboardReader:
     """Reads theme purity leaderboard from mart tables for MCP consumers."""
 
@@ -371,10 +412,7 @@ class PostgresThemePurityLeaderboardReader:
     def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]:
         issuers: list[dict[str, Any]] = []
         clamped_limit = max(1, min(limit, 100))
-
-        normalized_slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
-        while "--" in normalized_slug:
-            normalized_slug = normalized_slug.replace("--", "-")
+        normalized_slug = normalize_theme_slug(theme_id)
 
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
@@ -461,21 +499,7 @@ class PostgresEtfProfileReader:
         fund_row: dict[str, Any] | None = None
         holdings: list[dict[str, Any]] = []
 
-        clean_id = fund_id.strip()
-        token = clean_id.split(":")[-1].split("/")[-1].strip()
-        upper_token = token.upper()
-        lower_token = token.lower()
-        clean_upper = clean_id.upper()
-        clean_lower = clean_id.lower()
-        name_pattern = f"%{lower_token}%"
-        series_candidate = f"etf:series:{upper_token}" if not clean_lower.startswith("etf:series:") else clean_id
-        query_params = {
-            "clean_id": clean_id,
-            "series_candidate": series_candidate,
-            "upper_token": upper_token,
-            "clean_upper": clean_upper,
-            "name_pattern": name_pattern,
-        }
+        query_params = extract_fund_resolution_candidates(fund_id)
 
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
@@ -510,15 +534,31 @@ class PostgresEtfProfileReader:
                                where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
                                   or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
                            )
-                           or lower(fund_name) like %(name_pattern)s
-                           or lower(fund_id) like %(name_pattern)s
-                        order by cutoff desc, created_at desc
+                           or (%(name_pattern)s <> '' and lower(fund_name) like %(name_pattern)s)
+                           or (%(name_pattern)s <> '' and lower(fund_id) like %(name_pattern)s)
+                        order by
+                            case
+                                when fund_id = %(clean_id)s or fund_id = %(series_candidate)s then 1
+                                when fund_id in (
+                                    select entity_id from staging.kg_identifiers
+                                    where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                       or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                ) then 2
+                                when fund_id in (
+                                    select entity_id::text from mart.entity_identity
+                                    where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
+                                       or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
+                                ) then 3
+                                else 4
+                            end asc,
+                            cutoff desc,
+                            created_at desc
                         limit 1
                         """,
                         query_params,
                     )
                     fund_row = cur.fetchone()
-                    target_fund_id = str(fund_row["fund_id"]) if fund_row else clean_id
+                    target_fund_id = str(fund_row["fund_id"]) if fund_row else query_params["clean_id"]
                     holdings_params = dict(query_params)
                     holdings_params["target_fund_id"] = target_fund_id
 
@@ -554,9 +594,20 @@ class PostgresEtfProfileReader:
                                where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
                                   or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
                            )
-                           or lower(v.fund_name) like %(name_pattern)s
-                           or lower(v.fund_id) like %(name_pattern)s
-                        order by v.percent_of_net_assets desc nulls last, v.holding_name asc
+                           or (%(name_pattern)s <> '' and lower(v.fund_name) like %(name_pattern)s)
+                           or (%(name_pattern)s <> '' and lower(v.fund_id) like %(name_pattern)s)
+                        order by
+                            case
+                                when v.fund_id = %(target_fund_id)s or v.fund_id = %(series_candidate)s then 1
+                                when v.fund_id in (
+                                    select entity_id from staging.kg_identifiers
+                                    where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                       or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                ) then 2
+                                else 3
+                            end asc,
+                            v.percent_of_net_assets desc nulls last,
+                            v.holding_name asc
                         limit 100
                         """,
                         holdings_params,
