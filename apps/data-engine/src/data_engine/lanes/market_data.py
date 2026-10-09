@@ -33,9 +33,22 @@ this but a cutoff of "this month's end" or "today" before that session's own clo
 reproduces the identical defect against a bar the parser correctly hasn't written yet
 -- both cutoff functions fall back to the most recent session that has actually
 closed).
+
+Two daily series (#1131, A6): the op also ingests the unadjusted daily bars (`adjust =
+'none'`), which the backtest needs for market value. Every read of a price table names its
+series. The cutoffs and the mask read the split-adjusted series (`SPLIT_ADJUSTED`), because
+the mask judges the series that returns are computed from.
+
+The op records one nightly verdict, `market_data_freshness` (#876, #1131): green when the
+newest bar of each daily series is within `MAX_BAR_LAG_SESSIONS` of the latest closed XNYS
+session, red when a series is behind that or holds no bar, and red when the op crashes. The
+lane failed 8 times between 2026-09-24 and 2026-10-05 with no check watching it.
+`tools/nightly_verdicts.json` carries the name; `libs/runtime/tests/test_nightly_verdicts.py`
+holds the two sets equal.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +56,8 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
+from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
 
 if TYPE_CHECKING:
@@ -53,6 +68,17 @@ MARKET_DATA_REFRESH_JOB_NAME = "market_data_refresh_pipeline"
 # Saturday 08:07 UTC run so that lane's weekly mask read always has the week's own
 # prices already ingested.
 MARKET_DATA_REFRESH_CRON = "15 21 * * 1-5"
+
+#: Verdict name (`mart.nightly_verdicts.check_name`) this lane records.
+MARKET_DATA_VERDICT = "market_data_freshness"
+NIGHTLY_VERDICTS: tuple[str, ...] = (MARKET_DATA_VERDICT,)
+#: The daily series the verdict judges, one bar-age check each.
+FRESHNESS_SERIES: tuple[str, ...] = (UNADJUSTED, SPLIT_ADJUSTED)
+#: How many XNYS sessions the newest bar of a series may trail the latest closed session.
+#: One: in winter the tick runs 15 minutes after the 21:00 UTC close, and the vendor may not
+#: list that day's bar yet. Monday's tick then finds Friday's bar and stays green. A series
+#: two sessions behind has missed a whole night, and the verdict goes red.
+MAX_BAR_LAG_SESSIONS = 1
 
 
 def _prior_month(year: int, month: int) -> tuple[int, int]:
@@ -107,14 +133,17 @@ def _monthly_cutoff(now: datetime) -> date:
     return last_xnys_session_of_month(year, month)
 
 
-def _distinct_trading_dates(connection: psycopg.Connection, table: str, symbols: Sequence[str]) -> list[date]:
-    """Every date this resolution's price table already holds for `symbols` -- the
-    backfill cutoff set (#938 contract item 2). Deriving cutoffs from the data actually
-    ingested, rather than an independent calendar sweep, keeps every mask cutoff aligned
-    to a bar that can actually answer it."""
-    query = f"select distinct trading_date from {table} where symbol = any(%s) order by trading_date;"
+def _distinct_trading_dates(
+    connection: psycopg.Connection, table: str, symbols: Sequence[str], *, adjust: str
+) -> list[date]:
+    """Every date this resolution's price table already holds for `symbols` in the series
+    `adjust` names -- the backfill cutoff set (#938 contract item 2). Deriving cutoffs from
+    the data actually ingested, rather than an independent calendar sweep, keeps every mask
+    cutoff aligned to a bar that can actually answer it. `adjust` has no default (#1131): a
+    date that only the other series holds is no cutoff of this series' mask."""
+    query = f"select distinct trading_date from {table} where symbol = any(%s) and adjust = %s order by trading_date;"
     with connection.cursor() as cur:
-        cur.execute(query, (list(symbols),))
+        cur.execute(query, (list(symbols), adjust))
         return [row[0] for row in cur.fetchall()]
 
 
@@ -150,18 +179,21 @@ def _refresh_market_data(
         now=now,
     )
     context.log.info(
-        f"market_data: ingested {summary.daily_inserted} daily / {summary.monthly_inserted} monthly new-vintage "
-        f"rows over {summary.total_calls} calls for {summary.total_symbols} symbols"
+        f"market_data: ingested {summary.daily_inserted} daily / {summary.unadjusted_daily_inserted} unadjusted "
+        f"daily / {summary.monthly_inserted} monthly new-vintage rows over {summary.total_calls} calls "
+        f"for {summary.total_symbols} symbols"
     )
 
     # Backfill: every cutoff either resolution's table already holds, plus this run's own
     # cutoff (covers a run whose fetch yielded nothing new, e.g. a holiday or an
     # unchanged re-fetch de-duplicated by `_latest_vintages`).
     daily_cutoffs = sorted(
-        set(_distinct_trading_dates(connection, "staging.market_prices_daily", symbols)) | {_daily_cutoff(now)}
+        set(_distinct_trading_dates(connection, "staging.market_prices_daily", symbols, adjust=SPLIT_ADJUSTED))
+        | {_daily_cutoff(now)}
     )
     monthly_cutoffs = sorted(
-        set(_distinct_trading_dates(connection, "staging.market_prices_monthly", symbols)) | {_monthly_cutoff(now)}
+        set(_distinct_trading_dates(connection, "staging.market_prices_monthly", symbols, adjust=SPLIT_ADJUSTED))
+        | {_monthly_cutoff(now)}
     )
 
     daily_mask = compute_and_persist_universe_mask_from_db(
@@ -169,6 +201,7 @@ def _refresh_market_data(
         symbols=symbols,
         cutoff_dates=daily_cutoffs,
         source_table="staging.market_prices_daily",
+        adjust=SPLIT_ADJUSTED,
         resolution="1D",
     )
     monthly_mask = compute_and_persist_universe_mask_from_db(
@@ -176,6 +209,7 @@ def _refresh_market_data(
         symbols=symbols,
         cutoff_dates=monthly_cutoffs,
         source_table="staging.market_prices_monthly",
+        adjust=SPLIT_ADJUSTED,
         resolution="1M",
     )
     context.log.info(
@@ -184,6 +218,7 @@ def _refresh_market_data(
     )
     return {
         "daily_inserted": summary.daily_inserted,
+        "unadjusted_daily_inserted": summary.unadjusted_daily_inserted,
         "monthly_inserted": summary.monthly_inserted,
         "daily_mask_rows": len(daily_mask),
         "monthly_mask_rows": len(monthly_mask),
@@ -192,20 +227,90 @@ def _refresh_market_data(
     }
 
 
+@dataclass(frozen=True)
+class BarFreshness:
+    """The freshness judgment: green or red, and the line the verdict publishes.
+
+    The summary goes to the public health endpoint: series names, dates and counts only.
+    """
+
+    ok: bool
+    summary: str
+
+
+def _newest_trading_date(connection: psycopg.Connection, symbols: Sequence[str], *, adjust: str) -> date | None:
+    query = "select max(trading_date) from staging.market_prices_daily where symbol = any(%s) and adjust = %s;"
+    with connection.cursor() as cur:
+        cur.execute(query, (list(symbols), adjust))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _oldest_fresh_session(latest_closed: date) -> date:
+    """The oldest date a fresh series may end on: `MAX_BAR_LAG_SESSIONS` XNYS sessions before
+    the latest closed session. A weekend or a holiday holds no session, so a long weekend
+    costs one session, not three days."""
+    from data_engine.datahub.market_prices import most_recent_xnys_session
+
+    oldest = latest_closed
+    for _ in range(MAX_BAR_LAG_SESSIONS):
+        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
+    return oldest
+
+
+def judge_bar_freshness(connection: psycopg.Connection, symbols: Sequence[str], *, now: datetime) -> BarFreshness:
+    """Is the newest daily bar of each series within `MAX_BAR_LAG_SESSIONS` of the latest closed session?
+
+    Each series is read by its own `adjust` value (#1131). A fresh split-adjusted bar must not
+    vouch for the unadjusted series, which a failing second fetch would leave behind.
+    """
+    latest_closed = _daily_cutoff(now)
+    oldest_fresh = _oldest_fresh_session(latest_closed)
+    problems: list[str] = []
+    newest_by_series: list[str] = []
+    for adjust in FRESHNESS_SERIES:
+        newest = _newest_trading_date(connection, symbols, adjust=adjust)
+        if newest is None:
+            problems.append(f"{adjust}: no bar")
+        elif newest < oldest_fresh:
+            problems.append(
+                f"{adjust}: newest bar {newest.isoformat()} is more than {MAX_BAR_LAG_SESSIONS} "
+                f"session behind {latest_closed.isoformat()}"
+            )
+        else:
+            newest_by_series.append(f"{adjust} {newest.isoformat()}")
+    if problems:
+        return BarFreshness(ok=False, summary="; ".join(problems))
+    return BarFreshness(
+        ok=True,
+        summary=f"newest daily bars: {', '.join(newest_by_series)}; latest closed session {latest_closed.isoformat()}",
+    )
+
+
 @dg.op
 def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
     """Ingest OHLCV bars for the TOPT universe, then recompute the PIT universe mask over
-    every cutoff each resolution's table holds."""
+    every cutoff each resolution's table holds, then judge the freshness of the daily bars.
+
+    The bars are committed before they are judged: a stale verdict fails the run and does not
+    roll back what the run did ingest."""
     from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 
-    now = datetime.now(UTC)
-    with (
-        gateway.run_scope(f"dagster:{context.run_id}"),
-        gateway.capacity_scope(),
-        psycopg.connect(settings.database_url) as connection,
-    ):
-        _refresh_market_data(context, connection, symbols=DEFAULT_TOPT_SYMBOLS, now=now)
-        connection.commit()
+    with verdict(
+        MARKET_DATA_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
+    ) as outcome:
+        now = datetime.now(UTC)
+        with (
+            gateway.run_scope(f"dagster:{context.run_id}"),
+            gateway.capacity_scope(),
+            psycopg.connect(settings.database_url) as connection,
+        ):
+            _refresh_market_data(context, connection, symbols=DEFAULT_TOPT_SYMBOLS, now=now)
+            connection.commit()
+            freshness = judge_bar_freshness(connection, DEFAULT_TOPT_SYMBOLS, now=now)
+        outcome.summary = freshness.summary
+        if not freshness.ok:
+            raise dg.Failure(f"market data freshness: {freshness.summary}")
 
 
 @dg.job(name=MARKET_DATA_REFRESH_JOB_NAME)
@@ -226,7 +331,9 @@ def market_data_refresh_pipeline_job() -> None:
     ),
 )
 def market_data_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
+    tick = context.scheduled_execution_time.isoformat()
+    # The job takes no config, so the tick travels as a tag: the verdict is dated by it.
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
 defs = dg.Definitions(jobs=[market_data_refresh_pipeline_job], schedules=[market_data_refresh_schedule])

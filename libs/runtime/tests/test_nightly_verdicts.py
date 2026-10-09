@@ -306,6 +306,28 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
     )
 
 
+def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
+    """#1131: the lane ticks on weekdays only, so Friday's verdict is the newest one until Monday night.
+
+    The deploy-freshness check reads at 07:00 UTC. On Monday that is 57.75 hours after Friday's
+    21:15 tick. A check declared with a daily cadence turns that Monday red. The lane failed
+    8 times between 2026-09-24 and 2026-10-05 with no check watching it.
+    """
+    expectation = EXPECTED["market_data_freshness"]
+    assert expectation.job == "market_data_refresh_pipeline"
+    friday_tick_to_monday_check_hours = 57.75
+    rest = [v for v in _all_green() if v["check"] != "market_data_freshness"]
+
+    weekend = rest + [_verdict("market_data_freshness", friday_tick_to_monday_check_hours)]
+    assert _run(weekend) == 0, "Monday morning goes red on Friday's green verdict"
+
+    stopped = rest + [_verdict("market_data_freshness", expectation.max_age_hours + 1)]
+    assert _run(stopped) == 1, "a lane that stopped ticking is not noticed"
+
+    red = rest + [_verdict("market_data_freshness", 2.0, ok=False, summary="failed: none: no bar")]
+    assert _run(red) == 1, "a red verdict of the lane is not noticed"
+
+
 def test_every_watched_check_names_a_deployed_job_and_a_valid_verdict_name() -> None:
     from data_engine.dagster_defs import defs
     from data_engine.quality.nightly_verdicts import is_valid_name

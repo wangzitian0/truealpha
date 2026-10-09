@@ -323,12 +323,18 @@ def compute_and_persist_universe_mask_from_db(
     symbols: Sequence[str],
     cutoff_dates: Sequence[date],
     *,
+    adjust: str,
     source_table: str = "staging.market_prices_monthly",
     listing_dates: Mapping[str, date] | None = None,
     min_periods: int = 12,
     resolution: str = "1M",
 ) -> list[UniverseMaskRecord]:
-    """Load historical prices from database, compute PIT universe mask, and persist."""
+    """Load historical prices from database, compute PIT universe mask, and persist.
+
+    `adjust` names the price series to read (#1131). It has no default: a price table holds
+    a split-adjusted and an unadjusted daily series, and a read that omits the filter mixes
+    them. The lane passes the split-adjusted series.
+    """
     if not symbols or not cutoff_dates:
         return []
 
@@ -338,11 +344,11 @@ def compute_and_persist_universe_mask_from_db(
     query = f"""
         select symbol, trading_date, open, high, low, close, volume
         from {source_table}
-        where symbol = any(%s) and trading_date <= %s
+        where symbol = any(%s) and trading_date <= %s and adjust = %s
         order by trading_date asc;
     """
     with connection.cursor() as cur:
-        cur.execute(query, (list(symbols), max_cutoff))
+        cur.execute(query, (list(symbols), max_cutoff, adjust))
         rows = cur.fetchall()
 
     prices = [
