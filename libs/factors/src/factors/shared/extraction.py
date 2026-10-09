@@ -8,7 +8,7 @@ inside `apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py`
 (`select_total`, `RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"`). #70's headcount
 slice became the primitive's first REAL use beside the primitive, not as it — exactly the
 drift AGENTS.md warns about. This module is now that primitive; `filing_extraction.py`
-is its SEC-filing adapter (recall regex -> `Candidate` -> `select_single_candidate`), and
+is its SEC-filing adapter (recall regex -> `Candidate` -> `extract_metric`), and
 `libs/factors/tests/test_extraction_ownership.py` fails CI the next time a module outside
 `libs/factors/shared/` reimplements this rule instead of calling it.
 
