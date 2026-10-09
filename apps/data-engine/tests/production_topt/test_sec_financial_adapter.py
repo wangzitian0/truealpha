@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.issuer_registry import (
     operating_branch_for_sic,
     revenue_proxy_allowed_for_sic,
 )
+from data_engine.datahub.production_topt.materialization import FinancialFactPayload
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     DEFAULT_RULESET,
     FinancialFactsBundle,
@@ -25,7 +27,20 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     pre_provision_profit,
     sec_financial_fetcher,
 )
-from factors.production_topt import OperatingBranch
+from factors.production_topt import (
+    GppeV0Definition,
+    MetricAvailability,
+    MetricFreshness,
+    OperatingBranch,
+    ToptCellQualityInput,
+    ToptCoreAvailability,
+    ToptCoreReasonCode,
+    ToptCoreSnapshotInput,
+    ToptGppeResult,
+    ToptMarketValueComponent,
+    ToptMetricInput,
+    compute_topt_gppe,
+)
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
@@ -1548,8 +1563,9 @@ def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() ->
 
 
 def test_period_mismatch_yields_zero_confidence() -> None:
-    # If operating_period_end (gross profit) and revenue_period_end differ,
-    # confidence must be Decimal("0.00") to prevent corrupting downstream ratios.
+    # Backstop (#1108). The adapter drops a stale operating metric (#1114), so this payload
+    # cannot leave the adapter. If one still reached `_confidence` with operating_period_end
+    # and revenue_period_end apart, confidence must be Decimal("0.00").
     payload = {
         "operating_period_end": "2018-09-29",
         "revenue_period_end": "2025-09-27",
@@ -1561,3 +1577,180 @@ def test_period_mismatch_yields_zero_confidence() -> None:
     from data_engine.datahub.production_topt.sec_financial_adapter import _confidence
 
     assert _confidence(payload) == Decimal("0.00")
+
+
+@pytest.mark.parametrize("branch", [OperatingBranch.NON_FINANCIAL, OperatingBranch.FINANCIAL])
+def test_a_period_mismatch_never_yields_a_positive_confidence_operating_metric(branch: OperatingBranch) -> None:
+    """The adapter output holds no operating metric when its period differs from the revenue period."""
+    stale_profit = Decimal("101839000000")
+    bundle = _bundle(
+        gross_profit=stale_profit,
+        pre_provision_profit=stale_profit if branch is OperatingBranch.FINANCIAL else None,
+        revenue=Decimal("391035000000"),
+        operating_period_end=date(2018, 9, 29),
+        revenue_period_end=date(2025, 9, 27),
+    )
+    item = _work_item("5" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target(branch=branch)}, lambda c, cut, b: bundle)
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["gross_profit"] is None
+    assert payload["pre_provision_profit"] is None
+    assert payload["operating_period_end"] is None
+    assert payload["operating_period_stale"] is True
+    assert payload["stale_operating_period_end"] == "2018-09-29"
+    assert payload["revenue_period_end"] == "2025-09-27"
+    # The other inputs stay: only the stale metric is dropped. Assets and shares give 0.80.
+    assert payload["revenue"] == "391035000000"
+    assert payload["total_assets"] == "500"
+    assert result.confidence == Decimal("0.80")
+    assert "gross_profit" not in payload["vintage"]
+
+
+def test_matching_periods_keep_the_operating_metric_and_add_no_stale_marker() -> None:
+    """The stale marker appears only on a dropped metric, so a current payload keeps its hash."""
+    bundle = _bundle(operating_period_end=date(2025, 12, 31), revenue_period_end=date(2025, 12, 31))
+    item = _work_item("6" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: bundle)
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["gross_profit"] == "120"
+    assert payload["operating_period_end"] == "2025-12-31"
+    assert "operating_period_stale" not in payload
+    assert "stale_operating_period_end" not in payload
+    assert result.confidence == Decimal("0.92")
+
+
+def _bkng_shaped_facts(*, gross_profit_end: str, gross_profit_filed: str) -> dict:
+    """BKNG shape (#1114): current revenue, assets and shares, and one reported gross profit."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": _units(
+                    [_annual(gross_profit_end, f"{gross_profit_end[:4]}-01-01", 12681000000, gross_profit_filed)]
+                ),
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 26917000000, "2026-02-25")]),
+                "Assets": {"units": {"USD": [{"end": "2025-12-31", "val": 28000000000, "filed": "2026-02-25"}]}},
+                "CommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 32000000, "filed": "2026-02-10"}]}
+                },
+            }
+        }
+    }
+
+
+def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
+    """Run the adapter and then module 2 on one company-facts document, as the pipeline does."""
+    item = _work_item("7" * 64)
+    headcount = HeadcountFact(value=Decimal("24000"), knowable_at=datetime(2026, 2, 25, tzinfo=UTC))
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL),
+        headcount_extractor=lambda c, cut: headcount,
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    financial = FinancialFactPayload(**result.record.payload)
+    cutoff = datetime(2026, 4, 2, tzinfo=UTC)
+    observation_ids = tuple(f"normalized-observation:{character * 64}" for character in "1234")
+
+    def metric(name: str, value: Decimal | None, unit: str) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=observation_ids[0],
+            metric=name,
+            value=value,
+            unit=unit,
+            confidence=result.confidence,
+            knowable_at=cutoff - timedelta(days=1),
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
+        )
+
+    snapshot = ToptCoreSnapshotInput(
+        snapshot_id=f"topt-core-snapshot:{'a' * 64}",
+        run_id=f"capture-run:{'b' * 64}",
+        release_manifest_id=f"release-manifest:{'c' * 64}",
+        universe_id="universe:test",
+        universe_version="1",
+        universe_sha256="d" * 64,
+        cutoff=cutoff,
+        issuer_id=financial.issuer_id,
+        instrument_id=financial.instrument_id,
+        listing_id=financial.listing_id,
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        observation_ids=observation_ids,
+        cell_inputs=tuple(
+            ToptCellQualityInput(
+                input_id=input_id,
+                confidence=result.confidence,
+                knowable_at=cutoff - timedelta(days=1),
+                freshness=MetricFreshness.FRESH,
+            )
+            for input_id in observation_ids
+        ),
+        gross_profit=metric("gross_profit", financial.gross_profit, "USD"),
+        total_assets=metric("total_assets", financial.total_assets, "USD"),
+        headcount=metric("headcount", financial.headcount, "employees"),
+        revenue=metric("revenue", financial.revenue, "USD"),
+        pre_provision_profit=metric("pre_provision_profit", financial.pre_provision_profit, "USD"),
+        market_value_components=(
+            ToptMarketValueComponent(
+                instrument_id=financial.instrument_id,
+                listing_id=financial.listing_id,
+                market_price=ToptMetricInput(
+                    input_id=observation_ids[1],
+                    metric="market_price",
+                    value=Decimal("5000"),
+                    unit="USD_per_share",
+                    confidence=Decimal("0.9"),
+                    knowable_at=cutoff - timedelta(days=1),
+                    freshness=MetricFreshness.FRESH,
+                    availability=MetricAvailability.AVAILABLE,
+                ),
+                shares_outstanding=metric("shares_outstanding", financial.shares_outstanding, "shares"),
+            ),
+        ),
+    )
+    gppe = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+    )
+    return result, gppe
+
+
+def test_a_gross_profit_older_than_the_revenue_period_makes_gppe_unavailable_with_a_reason() -> None:
+    """BKNG (#1114): GrossProfit ends 2017-12-31 and revenue ends 2025-12-31.
+
+    GPPE must not pair a 2017 gross profit with 2025 assets. The row reports
+    `missing_gross_profit` instead of a number or a zero-confidence value.
+    """
+    facts = _bkng_shaped_facts(gross_profit_end="2017-12-31", gross_profit_filed="2018-02-27")
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    # The fixture is BKNG-shaped: the parse itself still finds the old figure.
+    assert bundle.gross_profit == Decimal("12681000000")
+    assert (bundle.operating_period_end, bundle.revenue_period_end) == (date(2017, 12, 31), date(2025, 12, 31))
+
+    result, gppe = _gppe_for_facts(facts)
+
+    payload = result.record.payload
+    assert payload["gross_profit"] is None
+    assert payload["operating_period_stale"] is True
+    assert payload["stale_operating_period_end"] == "2017-12-31"
+    assert result.confidence > Decimal("0")
+    assert gppe.availability is ToptCoreAvailability.UNAVAILABLE
+    assert gppe.reason_codes == (ToptCoreReasonCode.MISSING_GROSS_PROFIT,)
+
+
+def test_a_gross_profit_of_the_revenue_period_keeps_gppe_available() -> None:
+    """Control for the test above: the same document with a current GrossProfit yields a GPPE value."""
+    facts = _bkng_shaped_facts(gross_profit_end="2025-12-31", gross_profit_filed="2026-02-25")
+
+    result, gppe = _gppe_for_facts(facts)
+
+    assert result.record.payload["gross_profit"] == "12681000000"
+    assert "operating_period_stale" not in result.record.payload
+    assert gppe.availability is ToptCoreAvailability.AVAILABLE
+    assert gppe.reason_codes == ()

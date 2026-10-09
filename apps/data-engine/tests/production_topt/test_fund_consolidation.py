@@ -168,6 +168,7 @@ def _insert_core_result(
     valuation_gap: float,
     availability: str = "available",
     confidence: float = 0.85,
+    availability_status: str | None = None,
 ) -> None:
     connection.execute("set local session_replication_role = replica")
     res_sha = f"{abs(hash((run_id, listing_id))):064x}"[:64]
@@ -183,7 +184,7 @@ def _insert_core_result(
             confidence, freshness, reason_codes, input_observation_ids,
             gppe_invocation_id, gppe_result_id,
             gppe_definition_id, gppe_definition_sha256,
-            tier_definition_id, tier_definition_sha256, payload
+            tier_definition_id, tier_definition_sha256, payload, availability_status
         ) values (
             'topt-core-result:' || %s, %s,
             'topt-core-invocation:' || repeat('b', 64),
@@ -191,18 +192,28 @@ def _insert_core_result(
             %s,
             'release-manifest:' || repeat('d', 64),
             'universe:test', '1', repeat('e', 64),
-            now(), 'issuer:test', 'inst:test', %s,
+            now(), 'issuer:' || %s, 'inst:test', %s,
             'non_financial', 'capital_adjusted_gppe', %s,
             100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
             %s, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
             'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
             'gppe-def:v0', repeat('1', 64),
             'tier-def:v0', repeat('2', 64),
-            '{}'::jsonb
+            '{}'::jsonb, %s
         )
         on conflict (result_id) do nothing
         """,
-        (res_sha, res_sha, run_id, listing_id, availability, valuation_gap, confidence),
+        (
+            res_sha,
+            res_sha,
+            run_id,
+            listing_id,
+            listing_id,
+            availability,
+            valuation_gap,
+            confidence,
+            availability_status,
+        ),
     )
 
 
@@ -240,6 +251,49 @@ def test_materialize_supports_legacy_string_listing_id(connection) -> None:
     assert fund.valued_weight == Decimal("70")
     assert fund.weighted_valuation_gap == Decimal("-0.15")
     assert fund.result.confidence == Decimal("0.90")
+
+
+def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate(connection) -> None:
+    """#1114: the factor column `availability` stays `available` for a low-confidence core row.
+
+    The producer reads the section 8 column `availability_status`. The low-confidence line
+    leaves the valued mass, so the aggregate confidence is the minimum of the consumed lines.
+    """
+    _seed(connection, isin="US0000000050", ticker="TCG", weight="60", filing=KNOWABLE_FILING, period="2026-06-30")
+    _seed(connection, isin="US0000000051", ticker="TCW", weight="30", filing=KNOWABLE_FILING, period="2026-06-30")
+    _insert_core_result(
+        connection,
+        run_id=RUN,
+        listing_id="listing:xnas:tcg",
+        valuation_gap=0.20,
+        confidence=0.85,
+        availability_status="available",
+    )
+    _insert_core_result(
+        connection,
+        run_id=RUN,
+        listing_id="listing:xnas:tcw",
+        valuation_gap=-0.90,
+        confidence=0.0,
+        availability="available",
+        availability_status="low_confidence",
+    )
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert (fund.lines, fund.valued_lines) == (2, 1)
+    assert fund.valued_weight == Decimal("60")
+    assert fund.resolved_weight == Decimal("90")
+    assert fund.weighted_valuation_gap == Decimal("0.20")
+    assert fund.result.confidence == Decimal("0.85")
+    row = connection.execute(
+        "select valued_lines, confidence, availability_status from mart.fund_virtual_company "
+        "where run_id = %s and fund_id = %s",
+        (RUN, FUND),
+    ).fetchone()
+    assert row == (1, Decimal("0.85"), "available")
 
 
 # --- the deployed call site -------------------------------------------------------

@@ -19,7 +19,16 @@ from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfCon
 CUTOFF = datetime(2026, 9, 9, tzinfo=UTC)
 
 
-def line(name: str, weight: str, *, listing: str | None, gap: str | None, availability: str | None, conf: str | None):
+def line(
+    name: str,
+    weight: str,
+    *,
+    listing: str | None,
+    gap: str | None,
+    availability: str | None,
+    conf: str | None,
+    status: str | None = None,
+):
     return HoldingLine(
         holding_name=name,
         weight=Decimal(weight),
@@ -27,6 +36,7 @@ def line(name: str, weight: str, *, listing: str | None, gap: str | None, availa
         valuation_gap=None if gap is None else Decimal(gap),
         availability=availability,
         confidence=None if conf is None else Decimal(conf),
+        availability_status=status,
     )
 
 
@@ -163,3 +173,51 @@ def test_a_fund_with_nothing_to_value_refuses(empty) -> None:
     result = consolidate_fund(empty, fund_id="f", as_of=CUTOFF, definition=ETF_CONSOLIDATION_V0)
     assert result.weighted_valuation_gap is None
     assert result.result.flags == ["resolved_weight_below_minimum"]
+
+
+@pytest.mark.parametrize("status", ["low_confidence", "stale", "unavailable", "excluded", "error"])
+def test_a_core_row_whose_status_is_not_available_is_not_valued(status: str) -> None:
+    """#1114: the factor column `availability` stays `available` for a low-confidence row.
+
+    The line carries a gap and the factor column says `available`. The section 8 status says
+    otherwise, so the line stays out of the valued mass. Its confidence of zero cannot
+    pull the aggregate confidence down, because the aggregate does not consume the line.
+    """
+    weak = line(
+        "Weak core row", "10", listing="listing:xnas:w", gap="0.50", availability="available", conf="0", status=status
+    )
+    result = consolidate_fund([*FUND, weak], fund_id="etf:series:S1", as_of=CUTOFF, definition=ETF_CONSOLIDATION_V0)
+    assert weak.valued is False
+    assert (result.total_weight, result.resolved_weight, result.valued_weight) == (
+        Decimal("110"),
+        Decimal("107"),
+        Decimal("90"),
+    )
+    assert result.valued_lines == 2
+    assert result.weighted_valuation_gap == Decimal("0.10"), "the weak line adds nothing to the numerator"
+    assert result.result.confidence == Decimal("0.70"), "the minimum is taken over the consumed lines only"
+    assert "partial_valued_mass" in result.result.flags, "the dropped mass stays visible"
+
+
+def test_an_available_status_keeps_the_line_valued() -> None:
+    """The status gate removes only non-available rows. An `available` status still values the line."""
+    strong = line(
+        "Strong core row",
+        "10",
+        listing="listing:xnas:s",
+        gap="0.50",
+        availability="available",
+        conf="0.80",
+        status="available",
+    )
+    assert strong.valued is True
+
+
+def test_a_row_without_a_status_falls_back_to_the_factor_column() -> None:
+    """Core rows written before #747 carry no section 8 status. Their factor column decides."""
+    legacy_available = line("Legacy A", "10", listing="listing:xnas:l", gap="0.5", availability="available", conf="0.8")
+    legacy_unavailable = line(
+        "Legacy U", "10", listing="listing:xnas:m", gap="0.5", availability="unavailable", conf="0.8"
+    )
+    assert legacy_available.valued is True
+    assert legacy_unavailable.valued is False

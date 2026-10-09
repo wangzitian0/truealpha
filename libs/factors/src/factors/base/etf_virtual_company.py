@@ -60,6 +60,11 @@ class HoldingLine:
     when the listing resolved but the run produced no available core row for it. The two
     cases are distinct on purpose: one is an identity gap, the other a data gap, and #36
     requires both to stay visible instead of collapsing into "missing".
+
+    `availability` is the factor column of the core row. It stays `available` for a row
+    that carries a number, even when that row is low confidence or stale (#1114).
+    `availability_status` is the section 8 status of the same row. It is None only for a
+    row written before #747.
     """
 
     holding_name: str
@@ -68,6 +73,7 @@ class HoldingLine:
     valuation_gap: Decimal | None
     availability: str | None
     confidence: Decimal | None = None
+    availability_status: str | None = None
 
     @property
     def resolved(self) -> bool:
@@ -81,11 +87,17 @@ class HoldingLine:
         contributes to neither numerator nor denominator, so counting it as valued would
         overstate `valued_lines` and let its confidence pull `min()` down for a line the
         number does not depend on (review on #727).
+
+        The section 8 status decides whether the core row is available. A low-confidence or
+        stale row keeps `availability == "available"` and carries a number, so the factor
+        column alone would value it (#1114). The factor column decides only when the row has
+        no status.
         """
+        core_row_status = self.availability_status if self.availability_status is not None else self.availability
         return (
             self.weight is not None
             and self.resolved
-            and self.availability == "available"
+            and core_row_status == "available"
             and self.valuation_gap is not None
         )
 
