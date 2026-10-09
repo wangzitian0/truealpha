@@ -11,6 +11,7 @@
     "question_coverage@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"},
     "report_surface_proof": {"cadence_hours": 24, "job": "output_invariants_check"},
     "theme_purity@topt": {"cadence_hours": 24, "job": "head_reports_pipeline"},
-    "theme_purity@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"}
+    "theme_purity@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"},
+    "nightly_backtest": {"cadence_hours": 72, "job": "nightly_backtest_pipeline"}
   }
 }
