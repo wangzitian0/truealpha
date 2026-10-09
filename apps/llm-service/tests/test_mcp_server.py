@@ -522,6 +522,8 @@ def test_postgres_etf_profile_reader_handles_connection_error() -> None:
     assert result["availability_status"] == "unavailable"
     assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]
     assert result["holdings"] == []
+
+
 # --- #1117: the theme readers meet the unvisited fill rows of Q6 ---------------------------------
 #
 # An issuer without a segment partition has a fill row for each theme. The row holds NULL in
