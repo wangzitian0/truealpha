@@ -16,7 +16,7 @@ third module (a future segment-revenue adapter, #769 acceptance criterion 2) doi
 same thing filing_extraction.py used to do goes red here, in review, rather than shipping
 unnoticed beside the primitive a second time.
 
-Two independent shapes are checked, matching the issue's own two examples:
+Three independent shapes are checked. The first two match the issue's own two examples:
 
 1. The extractor-id literal itself (`rule:single-candidate:v1`) is hardcoded ONLY where
    it is minted (the primitive) or genuinely needs it as data, not logic (a confidence
@@ -25,7 +25,15 @@ Two independent shapes are checked, matching the issue's own two examples:
    SEC-filing adapter, or the model-backed selector — i.e., a NEW module deciding
    candidate selection under a name that looks like it belongs to this problem.
 
-Both checks are exercised against the REAL repository content (not a synthetic fixture):
+3. STRUCTURAL (#1130): a module that is named `*_extraction.py`, or that defines a
+   function named `extract_*`, must import `factors.shared.extraction` and reference one
+   of its public functions. The first two shapes match text. This shape matches intent: a
+   module that extracts values and never calls the primitive is a second primitive,
+   whatever it names its constants and functions. `supply_chain_extraction.py` passed both
+   text shapes and still owns its own regex and candidate class. It sits in a shrink-only
+   debt set until #773 D8 removes it.
+
+Checks 1 and 2 are exercised against the REAL repository content (not a synthetic fixture):
 `test_the_literal_guard_actually_fires_...` and `test_the_selector_name_guard_actually_
 fires_...` re-run the same scan with `filing_extraction.py`'s entry removed from the
 allowlist and assert it goes red — proving the guard has teeth on the code that shipped
@@ -38,6 +46,8 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -77,6 +87,25 @@ ALLOWED_SELECTOR_FILES = {
 #: visible diff. The set is empty. Its only member, `select_recapture`, went with the replay
 #: harness in #1061.
 KNOWN_UNRELATED_SELECT_FUNCTIONS: set[str] = set()
+
+PRIMITIVE_FILE = "libs/factors/src/factors/shared/extraction.py"
+PRIMITIVE_MODULE = "factors.shared.extraction"
+PRIMITIVE_PACKAGE = "factors.shared"
+EXTRACTION_FILE_SUFFIX = "_extraction.py"
+EXTRACT_NAME_RE = re.compile(r"^extract_[a-z_]*$")
+
+SUPPLY_CHAIN_MODULE = "apps/data-engine/src/data_engine/datahub/standards/supply_chain_extraction.py"
+FILING_MODULE = "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py"
+SEGMENT_MODULE = "apps/data-engine/src/data_engine/datahub/standards/segment_extraction.py"
+
+#: Modules that extract values and do not call the shared primitive yet. This set may only
+#: shrink. A new module that bypasses the primitive must call it instead of joining this set.
+#: The shrink test below fails when a listed module starts to call the primitive.
+KNOWN_UNROUTED_EXTRACTION_MODULES: set[str] = {
+    # Known debt, issue #773 D8: supply-chain relationship extraction keeps its own module-level
+    # `re.compile` patterns and its own candidate class. D8 routes it through the primitive.
+    SUPPLY_CHAIN_MODULE,
+}
 
 
 def _src_python_files() -> list[Path]:
@@ -122,6 +151,95 @@ def _scan_selector_functions(*, allowed: set[str]) -> list[str]:
                 "function outside libs/factors/shared and its designated adapters"
             )
     return violations
+
+
+def _primitive_entrypoints() -> frozenset[str]:
+    """The public top-level functions of the primitive: the names a caller may use."""
+    tree = ast.parse((REPO_ROOT / PRIMITIVE_FILE).read_text(), filename=PRIMITIVE_FILE)
+    return frozenset(
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+    )
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    """`a.b.c` for a chain of attribute reads on a plain name; `None` for anything else."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
+def _extraction_triggers(rel: str, tree: ast.AST) -> list[str]:
+    """Why this module counts as an extraction module. An empty list means it does not."""
+    triggers = []
+    if rel.endswith(EXTRACTION_FILE_SUFFIX):
+        triggers.append(f"is named *{EXTRACTION_FILE_SUFFIX}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and EXTRACT_NAME_RE.match(node.name):
+            triggers.append(f"defines {node.name}() at line {node.lineno}")
+    return triggers
+
+
+def _references_primitive(tree: ast.AST, entrypoints: frozenset[str]) -> bool:
+    """True when the module imports the primitive AND uses one of its public functions.
+
+    An import alone does not count: an unused import is not a call. A function with the
+    same name from another module does not count either.
+    """
+    function_names: set[str] = set()
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            for alias in node.names:
+                if node.module == PRIMITIVE_MODULE and alias.name in entrypoints:
+                    function_names.add(alias.asname or alias.name)
+                elif node.module == PRIMITIVE_PACKAGE and alias.name == "extraction":
+                    module_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == PRIMITIVE_MODULE:
+                    module_names.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in function_names:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in entrypoints and _dotted_name(node.value) in module_names:
+            return True
+    return False
+
+
+def _module_violations(rel: str, source: str, entrypoints: frozenset[str] | None = None) -> list[str]:
+    """One message when the module is an extraction module that never uses the primitive."""
+    tree = ast.parse(source, filename=rel)
+    triggers = _extraction_triggers(rel, tree)
+    if not triggers:
+        return []
+    if _references_primitive(tree, _primitive_entrypoints() if entrypoints is None else entrypoints):
+        return []
+    return [f"{rel} {'; '.join(triggers)}, and never calls a function of {PRIMITIVE_MODULE}"]
+
+
+def _scan_extraction_modules(*, debt: set[str]) -> list[str]:
+    violations = []
+    entrypoints = _primitive_entrypoints()
+    for path in _src_python_files():
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel == PRIMITIVE_FILE or rel in debt:
+            continue
+        violations.extend(_module_violations(rel, path.read_text(), entrypoints))
+    return violations
+
+
+def _extraction_module_paths() -> set[str]:
+    """Every real module the structural guard treats as an extraction module."""
+    found = set()
+    for path in _src_python_files():
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel != PRIMITIVE_FILE and _extraction_triggers(rel, ast.parse(path.read_text(), filename=rel)):
+            found.add(rel)
+    return found
 
 
 def test_no_module_outside_the_primitive_hardcodes_the_rule_literal() -> None:
@@ -187,3 +305,123 @@ def test_a_brand_new_module_reimplementing_the_rule_is_caught_by_at_least_one_sc
         and node.name not in KNOWN_UNRELATED_SELECT_FUNCTIONS
     ]
     assert name_violations == ["select_segment_total"], "the selector-name scan's own regex does not match select_*"
+
+
+def test_the_primitive_exposes_the_entrypoints_the_structural_guard_expects() -> None:
+    entrypoints = _primitive_entrypoints()
+    assert {
+        "extract_metric",
+        "select_single_candidate",
+        "select_exhaustive_partition",
+        "select_first_balancing_set",
+    } <= entrypoints, f"the primitive's public functions changed: {sorted(entrypoints)}"
+
+
+def test_every_extraction_module_calls_the_shared_primitive() -> None:
+    violations = _scan_extraction_modules(debt=KNOWN_UNROUTED_EXTRACTION_MODULES)
+    assert not violations, "\n".join(violations)
+
+
+def test_the_structural_guard_actually_fires_against_the_real_supply_chain_module() -> None:
+    """Red-proof (#1130): `supply_chain_extraction.py` has its own regex and its own candidate
+    class and never imports the primitive. Only its debt entry keeps the real scan green.
+    Drop that entry and the same scan, over the same repository, must flag it."""
+    assert SUPPLY_CHAIN_MODULE in KNOWN_UNROUTED_EXTRACTION_MODULES, (
+        "supply_chain_extraction.py bypasses the primitive; it needs its debt entry (#773 D8)"
+    )
+    shrunk = KNOWN_UNROUTED_EXTRACTION_MODULES - {SUPPLY_CHAIN_MODULE}
+    violations = _scan_extraction_modules(debt=shrunk)
+    assert any(violation.startswith(SUPPLY_CHAIN_MODULE) for violation in violations), (
+        "removing the debt entry did not fail the scan — the structural guard is vacuous"
+    )
+
+
+def test_every_debt_entry_still_bypasses_the_primitive() -> None:
+    """The debt set may only shrink: a module that now calls the primitive must leave it."""
+    flagged = {violation.split(" ", 1)[0] for violation in _scan_extraction_modules(debt=set())}
+    stale = KNOWN_UNROUTED_EXTRACTION_MODULES - flagged
+    assert not stale, f"these modules call the primitive now; remove them from the debt set: {sorted(stale)}"
+
+
+def test_the_sec_filing_adapters_pass_the_guard_by_calling_the_primitive_not_by_debt() -> None:
+    checked = _extraction_module_paths()
+    assert {FILING_MODULE, SEGMENT_MODULE, SUPPLY_CHAIN_MODULE} <= checked, (
+        f"the guard no longer sees the three adapters: {sorted(checked)}"
+    )
+    assert FILING_MODULE not in KNOWN_UNROUTED_EXTRACTION_MODULES
+    assert SEGMENT_MODULE not in KNOWN_UNROUTED_EXTRACTION_MODULES
+    flagged = {violation.split(" ", 1)[0] for violation in _scan_extraction_modules(debt=set())}
+    assert FILING_MODULE not in flagged and SEGMENT_MODULE not in flagged
+
+
+def test_a_new_extraction_module_with_its_own_regex_and_no_primitive_is_flagged(tmp_path) -> None:
+    rogue = tmp_path / "foo_extraction.py"
+    rogue.write_text(
+        'import re\n\n_PATTERN = re.compile(r"\\d+ employees")\n\ndef find(text):\n    return _PATTERN.findall(text)\n'
+    )
+    rel = "apps/data-engine/src/data_engine/foo_extraction.py"
+    violations = _module_violations(rel, rogue.read_text())
+    assert len(violations) == 1 and violations[0].startswith(rel), violations
+    assert "is named *_extraction.py" in violations[0]
+
+
+def test_a_module_with_an_extract_function_and_no_primitive_is_flagged_whatever_its_file_name(tmp_path) -> None:
+    rogue = tmp_path / "totals.py"
+    rogue.write_text("def extract_total(text):\n    return int(text)\n")
+    rel = "apps/data-engine/src/data_engine/totals.py"
+    violations = _module_violations(rel, rogue.read_text())
+    assert len(violations) == 1 and "defines extract_total() at line 1" in violations[0], violations
+
+
+def test_a_module_that_imports_the_primitive_and_never_uses_it_is_flagged(tmp_path) -> None:
+    rogue = tmp_path / "bar_extraction.py"
+    rogue.write_text(
+        "from factors.shared.extraction import extract_metric\n\ndef extract_bar(text):\n    return int(text)\n"
+    )
+    violations = _module_violations("libs/x/src/x/bar_extraction.py", rogue.read_text())
+    assert len(violations) == 1, violations
+
+
+def test_a_module_that_imports_only_a_type_of_the_primitive_is_flagged(tmp_path) -> None:
+    rogue = tmp_path / "baz_extraction.py"
+    rogue.write_text(
+        "from factors.shared.extraction import Candidate\n"
+        "\n"
+        "def extract_baz(text):\n"
+        "    return Candidate(int(text), text)\n"
+    )
+    violations = _module_violations("libs/x/src/x/baz_extraction.py", rogue.read_text())
+    assert len(violations) == 1, violations
+
+
+def test_a_same_named_function_from_another_module_is_flagged(tmp_path) -> None:
+    rogue = tmp_path / "qux_extraction.py"
+    rogue.write_text(
+        "from somewhere_else import extract_metric\n\ndef extract_qux(candidates):\n    return extract_metric(candidates)\n"
+    )
+    violations = _module_violations("libs/x/src/x/qux_extraction.py", rogue.read_text())
+    assert len(violations) == 1, violations
+
+
+@pytest.mark.parametrize(
+    "imports, call",
+    [
+        ("from factors.shared.extraction import extract_metric", "extract_metric(candidates)"),
+        ("from factors.shared.extraction import extract_metric as run", "run(candidates)"),
+        ("from factors.shared.extraction import select_single_candidate", "select_single_candidate(candidates)"),
+        ("from factors.shared import extraction as primitive", "primitive.extract_metric(candidates)"),
+        ("from factors.shared import extraction", "extraction.extract_metric(candidates)"),
+        ("import factors.shared.extraction", "factors.shared.extraction.extract_metric(candidates)"),
+        ("import factors.shared.extraction as primitive", "primitive.extract_metric(candidates)"),
+    ],
+)
+def test_a_module_that_imports_and_calls_the_primitive_is_not_flagged(tmp_path, imports, call) -> None:
+    adapter = tmp_path / "good_extraction.py"
+    adapter.write_text(f"{imports}\n\ndef extract_good(candidates):\n    return {call}\n")
+    assert _module_violations("libs/x/src/x/good_extraction.py", adapter.read_text()) == []
+
+
+def test_a_module_that_is_not_an_extraction_module_is_not_checked(tmp_path) -> None:
+    plain = tmp_path / "plain.py"
+    plain.write_text("import re\n\n_PATTERN = re.compile(r'x')\n\ndef select_nothing():\n    return None\n")
+    assert _module_violations("libs/x/src/x/plain.py", plain.read_text()) == []

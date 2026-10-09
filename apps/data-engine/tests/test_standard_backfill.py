@@ -628,6 +628,169 @@ def test_a_declining_model_leaves_the_cell_honestly_open(monkeypatch) -> None:
     assert connection.headcount_rows == []
 
 
+def _spy_on_extract_metric(monkeypatch) -> list[tuple[list, object]]:
+    """Wrap the shared primitive's `extract_metric`; return one (candidates, selector) per call."""
+    from factors.shared import extraction as primitive
+
+    calls: list[tuple[list, object]] = []
+    real = primitive.extract_metric
+
+    def spy(candidates, selector=None):
+        calls.append((list(candidates), selector))
+        return real(candidates, selector)
+
+    monkeypatch.setattr(primitive, "extract_metric", spy)
+    return calls
+
+
+def test_the_rule_path_selects_through_extract_metric(monkeypatch) -> None:
+    """#1130: the adapter calls the shared primitive for selection. It owns no copy of the rule."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=False,
+    )
+    assert outcome.status == "resolved" and outcome.value == 42000
+    assert outcome.extractor == RULE_SINGLE_CANDIDATE
+    assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"
+    (shared_candidates, selector) = calls[0]
+    assert [c.value for c in shared_candidates] == [42000]
+    assert selector is None
+
+
+def test_the_model_path_passes_a_selector_to_extract_metric(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+    from factors.shared.extraction import Selector
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": json.dumps({"value": 50000, "candidate_index": 0, "reason": "company-wide"})}}
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240},
+        }
+    ).encode()
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        now=CUTOFF,
+        model_transport=lambda *_: (200, answer),
+        issuer_label="LLY",
+    )
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"
+    (shared_candidates, selector) = calls[0]
+    assert sorted(c.value for c in shared_candidates) == [12000, 50000]
+    assert isinstance(selector, Selector)
+    assert "model=glm-test" in outcome.detail and "(replayed)" not in outcome.detail
+
+
+def test_a_replayed_model_answer_is_marked_replayed_and_asks_the_provider_nothing(monkeypatch) -> None:
+    """The stored answer decides. The detail keeps the model name and the replayed mark."""
+    from data_engine.config import settings
+
+    class ReplayConnection(FakeConnection):
+        def execute(self, sql: str, params: tuple = ()):
+            if " ".join(sql.split()).startswith("select invocation_id, decision"):
+                stored = {"value": 50000, "candidate_index": 0, "reason": "company-wide"}
+                return _Result(
+                    [("model-invocation:stored", stored, "r" * 64, 200, 40, "q" * 64, "zai", "glm-test", "glm-test")]
+                )
+            return super().execute(sql, params)
+
+    def refuse_to_ask(*_args):
+        raise AssertionError("a replayed answer must not reach the provider")
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    connection = ReplayConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        now=CUTOFF,
+        model_transport=refuse_to_ask,
+        issuer_label="LLY",
+    )
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert "model=glm-test invocation=model-invocation:stored (replayed)" in outcome.detail
+    assert connection.model_invocations == []
+
+
+def test_a_declining_model_reports_its_reason_and_the_primitive_returns_no_selection(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"})
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 100},
+        }
+    ).encode()
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        model_transport=lambda *_: (200, answer),
+    )
+    assert len(calls) == 1
+    assert outcome.status == "model_declined" and outcome.value is None
+    assert outcome.extractor == RULE_SINGLE_CANDIDATE
+    assert "model=glm-test invocation=model-invocation:" in outcome.detail
+    assert outcome.detail.endswith("reason='both are segments'")
+
+
+def test_select_total_decides_through_extract_metric(monkeypatch) -> None:
+    """`select_total` stays as a thin wrapper, so a test or a caller gets the same rule."""
+    calls = _spy_on_extract_metric(monkeypatch)
+    found = candidates(filing_plain_text(_html(NVDA)))
+    status, chosen = select_total(found)
+    assert (status, chosen is found[0]) == ("resolved", True)
+    assert len(calls) == 1 and calls[0][1] is None
+
+
 def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch) -> None:
     from data_engine.config import settings
 

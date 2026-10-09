@@ -800,6 +800,7 @@ def as_selector(
     persist: bool = True,
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    on_model_selection: Callable[[ModelSelection], None] | None = None,
 ) -> extraction_primitive.Selector:
     """Bind this call's ledger/replay context and return a `Selector`-conformant callable
     (`libs/factors/shared/extraction.py`'s protocol) for a caller that only has the shared
@@ -809,6 +810,10 @@ def as_selector(
 
     `select_headcount`'s own ledger/replay/persistence behaviour (see above) is reached
     unchanged through the returned closure; nothing about it is reimplemented here.
+
+    The shared `Selection` does not carry the model name, the replayed mark or the decline
+    reason. A caller that reports them passes `on_model_selection`. The closure calls it once
+    per ask, with the full `ModelSelection`, before it returns.
     """
 
     def select(candidates: Sequence[extraction_primitive.Candidate]) -> extraction_primitive.Selection | None:
@@ -826,6 +831,8 @@ def as_selector(
             transport=transport,
             now=now,
         )
+        if on_model_selection is not None:
+            on_model_selection(selection)
         return as_selection(selection)
 
     return select
