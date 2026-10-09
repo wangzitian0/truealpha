@@ -5,17 +5,26 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS build
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
-COPY libs/contracts ./libs/contracts
-COPY libs/factors ./libs/factors
-COPY libs/runtime ./libs/runtime
-COPY apps/llm-service ./apps/llm-service
+COPY libs/contracts/pyproject.toml ./libs/contracts/pyproject.toml
+COPY libs/factors/pyproject.toml ./libs/factors/pyproject.toml
+COPY libs/runtime/pyproject.toml ./libs/runtime/pyproject.toml
+COPY apps/llm-service/pyproject.toml ./apps/llm-service/pyproject.toml
 # data-engine is a workspace member referenced by uv.lock; a stub pyproject
 # satisfies the resolver without pulling its dependencies into this image.
 COPY apps/data-engine/pyproject.toml ./apps/data-engine/pyproject.toml
 RUN mkdir -p apps/data-engine/src/data_engine && touch apps/data-engine/src/data_engine/__init__.py
+# Install third-party dependencies into .venv. This layer stays cached across code edits.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-workspace --package truealpha-llm-service
+
+COPY libs/contracts ./libs/contracts
+COPY libs/factors ./libs/factors
+COPY libs/runtime ./libs/runtime
+COPY apps/llm-service ./apps/llm-service
 # --no-editable: install workspace packages as built wheels so the venv is
 # self-contained and survives being copied into the runtime stage.
-RUN uv sync --frozen --no-dev --no-editable --package truealpha-llm-service
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-editable --package truealpha-llm-service
 
 FROM python:3.12-slim-bookworm AS runtime
 WORKDIR /app
