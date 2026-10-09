@@ -1390,6 +1390,15 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     assert registration.accepted, registration.summary
     assert registration.sequence is not None and registration.sequence >= 0
 
+    # #1062: age is evaluated at read time against now(). Stamping the pointer with a fresh
+    # advanced_at keeps the served head available rather than withheld past 30 days.
+    connection.execute("set session_replication_role = replica")
+    connection.execute(
+        "update mart.current_pointer set advanced_at = %s where target_run_id = %s",
+        (datetime.now(UTC), run.run_id),
+    )
+    connection.execute("set session_replication_role = origin")
+
     # State 4: the governed pointer path — the state in which #461 crashed.
     served = reader.latest()
     assert isinstance(served, ToptGppeReport), f"expected a report after the pointer advance, got {served!r}"

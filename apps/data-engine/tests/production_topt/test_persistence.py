@@ -1539,7 +1539,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
             snapshot.universe_id,
             snapshot.universe_version,
             plan.run_id,
-            CUTOFF,
+            datetime.now(UTC),
         ),
     )
     strategy_key = connection.execute(

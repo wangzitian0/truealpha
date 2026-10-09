@@ -69,18 +69,23 @@ class PostgresToptGppeRepository:
                 # reference runs registered in the evidence-graph plane; routing live
                 # capture through that plane is tracked as the #405 consolidation
                 # follow-up.
-                # #378: the governed head is mart.current_pointer_head (ADR A1). The
-                # acceptance-gated ORDER BY remains only as a fallback for databases
-                # where no pointer has been advanced yet.
+                # #1062: the governed head is mart.served_head, which computes freshness
+                # and availability at read time. A head whose age passes 30 days is withheld
+                # (run_id is null, availability = 'unavailable'). The acceptance-gated ORDER BY
+                # remains only as a fallback for databases where no pointer has been advanced yet.
                 head = conn.execute(
                     """
-                    select target_run_id as run_id from mart.current_pointer_head
-                    where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
-                    and universe_id like %s
+                    select run_id, freshness, availability, staleness_reason
+                    from mart.served_head
+                    where factor_id = 'gross_profit_per_employee'
+                      and universe_id like %s
                     order by advanced_at desc limit 1
                     """,
                     (f"{SERVED_UNIVERSE_PREFIX}%",),
                 ).fetchone()
+                if head is not None and (head["availability"] == "unavailable" or head["run_id"] is None):
+                    reason = head["staleness_reason"] or "older_than_30d"
+                    return ToptGppeUnavailable(reason=f"head_unavailable: {reason}")
                 if head is None:
                     head = conn.execute(
                         """
@@ -93,7 +98,7 @@ class PostgresToptGppeRepository:
                         """,
                         (f"{SERVED_UNIVERSE_PREFIX}%",),
                     ).fetchone()
-                if head is None:
+                if head is None or head["run_id"] is None:
                     return ToptGppeUnavailable(reason="no accepted (quality-reported) production TOPT run")
                 run_id = head["run_id"]
                 rows = conn.execute(

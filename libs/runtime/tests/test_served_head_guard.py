@@ -723,60 +723,12 @@ FOLLOW_UP = re.compile(r"#1062 PR [234]")
 #: `order by cutoff desc limit 1`, with no head. When PR 4 moves their head statement, rule B
 #: stops flagging those files. PR 4 must still move the newest-run statements by hand.
 BASELINE: tuple[Offender, ...] = (
-    Offender(
-        "A",
-        "libs/contracts/src/truealpha_contracts/strategy_run_postgres.py",
-        "mart.governed_strategy_run",
-        1,
-        "#1062 PR 2",
-    ),
-    Offender(
-        "B",
-        "libs/contracts/src/truealpha_contracts/strategy_run_postgres.py",
-        "mart.strategy_decisions",
-        1,
-        "#1062 PR 2",
-    ),
-    Offender(
-        "B",
-        "libs/contracts/src/truealpha_contracts/strategy_run_postgres.py",
-        "mart.strategy_run_capture",
-        1,
-        "#1062 PR 2",
-    ),
-    Offender(
-        "B", "libs/contracts/src/truealpha_contracts/strategy_run_postgres.py", "mart.strategy_runs", 1, "#1062 PR 2"
-    ),
-    Offender(
-        "B",
-        "libs/contracts/src/truealpha_contracts/strategy_run_postgres.py",
-        "mart.topt_core_results",
-        1,
-        "#1062 PR 2",
-    ),
-    Offender("A", "libs/contracts/src/truealpha_contracts/topt_read.py", "mart.current_pointer_head", 1, "#1062 PR 2"),
-    Offender(
-        "B", "libs/contracts/src/truealpha_contracts/topt_read.py", "mart.datahub_quality_report", 1, "#1062 PR 2"
-    ),
-    Offender("B", "libs/contracts/src/truealpha_contracts/topt_read.py", "mart.topt_capture_status", 1, "#1062 PR 2"),
-    Offender("B", "libs/contracts/src/truealpha_contracts/topt_read.py", "mart.topt_gppe_results", 1, "#1062 PR 2"),
     Offender("C", "apps/app-web/src/app/research/served-run-age.ts", "stale-after-constant", 2, "#1062 PR 3"),
     Offender("A", "apps/app-web/src/server/mart/fund-valuation.ts", "mart.current_pointer_head", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/fund-valuation.ts", "mart.datahub_quality_report", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/fund-valuation.ts", "mart.fund_virtual_company", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/fund-valuation.ts", "mart.topt_capture_status", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/fund-valuation.ts", "mart.topt_core_result_read", 1, "#1062 PR 3"),
-    Offender(
-        "A", "apps/app-web/src/server/mart/strategy-run-repository.ts", "mart.governed_strategy_run", 1, "#1062 PR 3"
-    ),
-    Offender(
-        "B", "apps/app-web/src/server/mart/strategy-run-repository.ts", "mart.strategy_decisions", 1, "#1062 PR 3"
-    ),
-    Offender(
-        "B", "apps/app-web/src/server/mart/strategy-run-repository.ts", "mart.strategy_run_capture", 1, "#1062 PR 3"
-    ),
-    Offender("B", "apps/app-web/src/server/mart/strategy-run-repository.ts", "mart.strategy_runs", 1, "#1062 PR 3"),
-    Offender("B", "apps/app-web/src/server/mart/strategy-run-repository.ts", "mart.topt_core_results", 1, "#1062 PR 3"),
     Offender("B", "apps/app-web/src/server/mart/theme-purity.ts", "mart.issuer_theme_purity", 1, "#1062 PR 3"),
     Offender("A", "apps/app-web/src/server/mart/topt-gppe-repository.ts", "mart.current_pointer_head", 1, "#1062 PR 3"),
     Offender(
