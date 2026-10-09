@@ -192,8 +192,7 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
     ts = (REPO_ROOT / "apps/app-web/src/server/mart/topt-gppe-repository.ts").read_text()
     head = ts.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
     for predicate in (
-        "current_pointer_head",
-        "environment = (select environment from mart.environment_identity)",
+        "served_head",
         "factor_id = 'gross_profit_per_employee'",
         "order by advanced_at desc",
     ):

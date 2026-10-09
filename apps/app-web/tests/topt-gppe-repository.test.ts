@@ -51,7 +51,7 @@ function fakeRunner(
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_capture_status")) throw new Error("must not fall back once the pointer resolves");
     if (sql.includes("topt_gppe_results")) {
@@ -91,7 +91,7 @@ function fakeRunner(
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
     if (sql.includes("topt_gppe_results")) {
@@ -104,7 +104,7 @@ function fakeRunner(
   const result = await new MartToptGppeRepository(runner).latest();
   assert("cells" in result, `expected a report, got unavailable: ${JSON.stringify(result)}`);
   assert(result.run_id === RUN_ID, "run_id must round-trip from the fallback head query");
-  assert(calls.some((c) => c.sql.includes("current_pointer_head")), "must try the pointer first");
+  assert(calls.some((c) => c.sql.includes("current_pointer_head") || c.sql.includes("served_head")), "must try the pointer first");
   const fallbackCall = calls.find((c) => c.sql.includes("topt_capture_status") && c.sql.includes("datahub_quality_report"));
   assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like 'universe:topt-%'"), "fallback query must filter to universe:topt-%");
 
@@ -116,7 +116,7 @@ function fakeRunner(
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [] };
     if (sql.includes("topt_capture_status")) return { rows: [] };
     throw new Error(`must not query further when no head is resolved: ${sql}`);
   }, calls);
@@ -134,7 +134,7 @@ function fakeRunner(
 // --- empty quality report: cells present, no quality row for that run ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
@@ -153,7 +153,7 @@ function fakeRunner(
 // null/undefined into the literal words "null"/"undefined" (Copilot review on #437) ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [{ listing_id: null, availability: "available", gppe: null, confidence: null }] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
@@ -170,7 +170,7 @@ function fakeRunner(
 // --- schema mismatch: a non-object quality payload fails closed ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [{ payload: "not-an-object" }] };
@@ -217,7 +217,7 @@ function fakeRunner(
 // is the capture plane's obligation_count for THE governed run, never a constant ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 100 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
@@ -234,7 +234,7 @@ function fakeRunner(
 // --- a governed run with no capture status row cannot report a denominator: unavailable ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
@@ -252,7 +252,7 @@ function fakeRunner(
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
-    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: [{ run_id: RUN_ID, availability: "available", freshness: "fresh", staleness_reason: null }] };
     if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 1 }] };
     if (sql.includes("topt_gppe_results")) {
       return {
@@ -277,4 +277,31 @@ function fakeRunner(
   assert(result.cells[0].listing_id === "listing:xnas:aapl", "symbolic listing_id must be returned");
 
   console.log("#954 topt-gppe-repository symbolic listing_id translation passed");
+}
+
+// --- #1062: head unavailable (older than 30d / withheld) returns head_unavailable without querying cells ---
+{
+  const calls: Call[] = [];
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head") || sql.includes("served_head")) {
+      return {
+        rows: [
+          {
+            run_id: null,
+            freshness: "stale",
+            availability: "unavailable",
+            staleness_reason: "older_than_30d",
+          },
+        ],
+      };
+    }
+    throw new Error(`must not query further when head is unavailable: ${sql}`);
+  }, calls);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert(!("cells" in result), "expected unavailable when head is withheld");
+  assert(result.reason === "head_unavailable: older_than_30d", `unexpected reason: ${result.reason}`);
+  assert(calls.length === 1, "exactly one query (the head query)");
+
+  console.log("#1062 topt-gppe-repository head-withholding path passed");
 }

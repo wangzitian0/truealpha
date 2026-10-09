@@ -11,7 +11,7 @@
  * change to either has to be made in both.
  */
 
-export const STALE_AFTER_HOURS = 36;
+export const STALE_HOURS = 36;
 
 export interface ServedRunAge {
 	/** Whole hours between the cutoff and `now`; never negative. */
@@ -25,11 +25,15 @@ export interface ServedRunAge {
 
 /** `null` when the cutoff cannot be read as an instant, so a malformed value is shown
  * as absent rather than as "0 h ago". */
-export function describeServedRunAge(cutoffIso: string, now: Date = new Date()): ServedRunAge | null {
+export function describeServedRunAge(
+	cutoffIso: string,
+	now: Date = new Date(),
+	staleHours: number = STALE_HOURS,
+): ServedRunAge | null {
 	const cutoff = new Date(cutoffIso);
 	if (Number.isNaN(cutoff.getTime())) return null;
 	const hours = Math.max(0, Math.floor((now.getTime() - cutoff.getTime()) / 3_600_000));
 	const days = Math.floor(hours / 24);
 	const label = days >= 1 ? `${days} d ${hours - days * 24} h ago` : `${hours} h ago`;
-	return { hours, label, stale: hours > STALE_AFTER_HOURS };
+	return { hours, label, stale: hours > staleHours };
 }

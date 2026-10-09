@@ -2,7 +2,7 @@
  * #575 scope 2: the served run's age is a number and a verdict, on the invariant's threshold.
  * Run standalone: `bun run tests/served-run-age.test.ts`.
  */
-import { STALE_AFTER_HOURS, describeServedRunAge } from "../src/app/research/served-run-age";
+import { STALE_HOURS, describeServedRunAge } from "../src/app/research/served-run-age";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -17,9 +17,9 @@ const now = new Date("2026-09-08T10:15:00Z");
 {
 	// exactly the threshold is still fresh; one hour past it is stale — the same edge the
 	// invariant's `> interval '36 hours'` draws
-	const edge = describeServedRunAge(new Date(now.getTime() - STALE_AFTER_HOURS * 3_600_000).toISOString(), now);
+	const edge = describeServedRunAge(new Date(now.getTime() - STALE_HOURS * 3_600_000).toISOString(), now);
 	assert(edge !== null && edge.hours === 36 && !edge.stale, "36 h is the last fresh hour");
-	const past = describeServedRunAge(new Date(now.getTime() - (STALE_AFTER_HOURS + 1) * 3_600_000).toISOString(), now);
+	const past = describeServedRunAge(new Date(now.getTime() - (STALE_HOURS + 1) * 3_600_000).toISOString(), now);
 	assert(past !== null && past.stale && past.label === "1 d 13 h ago", "37 h reads as a day and 13 hours, stale");
 }
 {
@@ -32,7 +32,7 @@ const now = new Date("2026-09-08T10:15:00Z");
 	assert(future !== null && future.hours === 0 && !future.stale, "a cutoff in the future clamps to 0 h");
 }
 assert(
-	STALE_AFTER_HOURS === 36,
+	STALE_HOURS === 36,
 	"this side of the duplicated 36 h threshold (the other is tools/output_invariants.py pointer-has-advanced-recently) — change both or neither",
 );
 console.log("#575 served-run age passed");

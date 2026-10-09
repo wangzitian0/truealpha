@@ -76,8 +76,8 @@ EXEMPTIONS_PATH = Path(__file__).with_name("output_invariant_exemptions.json")
 # every invariant below silently changed population.
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
 GOVERNED_HEAD = f"""
-    select target_run_id from mart.current_pointer_head
-    where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
+    select run_id from mart.served_head
+    where factor_id = 'gross_profit_per_employee'
       and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
     order by advanced_at desc limit 1
 """

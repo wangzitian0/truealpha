@@ -64,9 +64,13 @@ _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_s
 #: A purity row has a segment partition. The fill row of an issuer without one has none (#1117).
 #: A run that holds only fill rows is not populated, so no query here counts a fill row.
 _THEMES_HEAD_SQL = """
-select run_id, max(cutoff) as cutoff
-from mart.issuer_theme_purity
-where partition_id is not null
+select p.run_id, max(p.cutoff) as cutoff
+from mart.issuer_theme_purity p
+where p.partition_id is not null
+  and not exists (
+    select 1 from mart.served_head h
+    where h.head_run_id = p.run_id and h.availability = 'unavailable'
+  )
 group by run_id
 order by max(cutoff) desc
 limit 1
@@ -86,8 +90,9 @@ select exists (
 """
 #: `apps/app-web/src/server/mart/fund-valuation.ts` `QQQ_POINTER_HEAD_SQL`.
 _HOLDINGS_HEAD_SQL = """
-select target_run_id as run_id from mart.current_pointer_head
-where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
+select run_id, freshness, availability, staleness_reason
+from mart.served_head
+where factor_id = 'gross_profit_per_employee'
   and universe_id like 'universe:qqq-us-%%'
 order by advanced_at desc limit 1
 """

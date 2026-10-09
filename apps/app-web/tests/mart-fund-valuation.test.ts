@@ -75,7 +75,7 @@ function fakeRunner(
   return async <T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> => {
     const client: MartClientLike = {
       query: async (sql: string, params?: readonly unknown[]) => {
-        if (sql.includes("current_pointer_head")) return { rows: headRows };
+        if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: headRows };
         if (sql.includes("topt_capture_status")) return { rows: [] };
         // Filed/resolved mass is the filing's, not the run's: answered whether or not a
         // governed run exists.
@@ -170,6 +170,27 @@ function fakeRunner(
   assert(funds[0].valuedWeightPct === "0.00", "nothing is valued without a run");
   assert(funds[0].weightedGap === null, "no weighted gap without a run — absent, not zero");
   assert(funds[0].totalWeightPct === "99.50", "the filed mass still reports without a run");
+}
+
+{
+  // An unavailable (withheld, >30d) head joins nothing and renders unvalued with runId: null (#1062)
+  const capture: { runParam?: unknown } = {};
+  const funds = await loadFundValuation(
+    fakeRunner(
+      [
+        {
+          run_id: null,
+          availability: "unavailable",
+          freshness: "stale",
+          staleness_reason: "older_than_30d",
+        },
+      ],
+      capture,
+    ),
+  );
+  assert(capture.runParam === "capture-run:none", "an unavailable head joins nothing (withholding)");
+  assert(funds.length === 1 && funds[0].runId === null, "withheld head yields null runId");
+  assert(funds[0].valuedWeightPct === "0.00", "nothing valued when head is withheld");
 }
 
 console.log("mart fund-valuation coverage arithmetic passed");

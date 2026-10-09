@@ -57,9 +57,9 @@ export type FundValuation = {
 };
 
 const QQQ_POINTER_HEAD_SQL = `
-  select target_run_id as run_id from mart.current_pointer_head
-  where environment = (select environment from mart.environment_identity)
-    and factor_id = 'gross_profit_per_employee'
+  select run_id, freshness, availability, staleness_reason
+  from mart.served_head
+  where factor_id = 'gross_profit_per_employee'
     and universe_id like 'universe:qqq-us-%'
   order by advanced_at desc limit 1
 `;
@@ -152,10 +152,18 @@ export async function loadFundValuation(
 ): Promise<FundValuation[]> {
   return runWithClient(async (client) => {
     let head = await client.query(QQQ_POINTER_HEAD_SQL);
-    if (head.rows.length === 0) {
+    let rawRunId: unknown = null;
+    if (head.rows.length > 0) {
+      const row = head.rows[0];
+      if (row.availability === "unavailable" || row.run_id === null) {
+        rawRunId = null;
+      } else {
+        rawRunId = row.run_id;
+      }
+    } else {
       head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL);
+      rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
     }
-    const rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
     // Fail toward "no run" on a malformed head row: String(null) would forge
     // the literal "null" into the join parameter (review on #699).
     const runId = typeof rawRunId === "string" && rawRunId.length > 0 ? rawRunId : null;
