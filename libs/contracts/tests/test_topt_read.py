@@ -142,7 +142,11 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
 def test_latest_withheld_when_served_head_is_unavailable(monkeypatch: Any) -> None:
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
         if "served_head" in sql:
-            return [_served_head_row(sql, None, freshness="stale", availability="unavailable", staleness_reason="older_than_30d")]
+            return [
+                _served_head_row(
+                    sql, None, freshness="stale", availability="unavailable", staleness_reason="older_than_30d"
+                )
+            ]
         raise AssertionError(f"unexpected query: {sql}")
 
     _install_fake_connect(monkeypatch, responder)
@@ -156,7 +160,11 @@ def test_latest_withheld_when_served_head_is_unavailable(monkeypatch: Any) -> No
 def test_latest_serves_data_when_served_head_is_stale_but_available(monkeypatch: Any) -> None:
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
         if "served_head" in sql:
-            return [_served_head_row(sql, RUN_ID, freshness="stale", availability="available", staleness_reason="older_than_3d")]
+            return [
+                _served_head_row(
+                    sql, RUN_ID, freshness="stale", availability="available", staleness_reason="older_than_3d"
+                )
+            ]
         if "obligation_count" in sql:
             return [{"obligation_count": 84}]
         if "topt_gppe_results" in sql:
