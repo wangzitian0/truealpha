@@ -134,6 +134,9 @@ class ExtractionOutcome:
     raw_fetch_id: int | None = None
     fact_id: int | None = None
     detail: str = ""
+    #: None: no model was asked. False: the provider answered a new question. True: a stored
+    #: answer was replayed. The history run counts asks and replays from this field.
+    model_replayed: bool | None = None
 
 
 def filing_plain_text(body: bytes) -> str:
@@ -348,9 +351,11 @@ def extract_headcount(
     chosen = _chosen_total(totals, selection) if selection is not None else None
     extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
     model_detail = ""
+    model_replayed: bool | None = None
     if model_runs:
         # The primitive asks the selector at most once, so the list holds one run.
         (model_run,) = model_runs
+        model_replayed = model_run.replayed
         model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
             " (replayed)" if model_run.replayed else ""
         )
@@ -368,11 +373,18 @@ def extract_headcount(
         form=document.form,
         filing_date=document.filing_date,
         detail=f"{len(found)} candidate(s), {len({c.value for c in totals})} distinct total(s){model_detail}",
+        model_replayed=model_replayed,
     )
     if status != "resolved" or not write or chosen is None:
         return outcome
     if _already_recorded(connection, record_cik, document.accession):
-        return ExtractionOutcome(record_cik, "already_recorded", accession=document.accession, value=chosen.value)
+        return ExtractionOutcome(
+            record_cik,
+            "already_recorded",
+            accession=document.accession,
+            value=chosen.value,
+            model_replayed=model_replayed,
+        )
 
     landed_at = now or datetime.now(UTC)
     raw_id = insert_fetch(
@@ -417,6 +429,7 @@ def extract_headcount(
         raw_fetch_id=raw_id,
         fact_id=fact_id,
         detail=outcome.detail,
+        model_replayed=model_replayed,
     )
 
 

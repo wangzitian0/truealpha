@@ -15,6 +15,17 @@ Two sensors close the gaps a fixed schedule leaves:
   predated the release that made the weekly run cover every standard (#806), and the release
   that did reached production on a Tuesday.
 
+The history run (#1137, `standard_history_backfill_pipeline`) runs the `employees_total`
+backfill at each month-end cutoff of the last N months, so the backtest finds headcount at
+a historical cutoff. Its schedule fires on Monday 09:07 UTC. A manual replay is a Dagster
+launch of the same job (launchpad or GraphQL) with an explicit config::
+
+    {"ops": {"run_standard_history": {"config": {
+        "executed_at": "2026-10-12T09:07:00+00:00", "universe": "topt",
+        "standard": "employees_total", "months": 36}}}}
+
+`staging.pipeline_trigger_requests` cannot carry it: its CHECK admits three capture job names.
+
 Theme purity and the coverage report record their verdict per universe in
 `mart.nightly_verdicts` (#876 W1) from whichever job ran them; the daily fallback keeps both
 fresh, and deploy-freshness pages on a red, stale or missing one. `NIGHTLY_VERDICTS` below
@@ -43,6 +54,8 @@ from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
+from data_engine.datahub.standards.history import raise_if_every_attempt_failed
+from data_engine.datahub.standards.history import run_standard_history as _run_standard_history
 from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.quality.nightly_verdicts import check_name, newest_is_red, tick_from_config, verdict
 
@@ -53,6 +66,16 @@ STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # because a closed cell is never re-fetched.
 STANDARD_BACKFILL_CRON = "7 9 * * 0"
 STANDARD_BACKFILL_UNIVERSES = ("universe-list:qqq", "topt")
+
+STANDARD_HISTORY_JOB_NAME = "standard_history_backfill_pipeline"
+# Monday 09:07 UTC: the day after the weekly backfill. The SEC daily budget counts per UTC
+# day, so the two runs never share one budget.
+STANDARD_HISTORY_CRON = "7 9 * * 1"
+# The backtest reads the frozen TOPT universe (A6, decision 6). Another universe joins here.
+STANDARD_HISTORY_UNIVERSES = ("topt",)
+STANDARD_HISTORY_MONTHS = 36
+# The standards whose history the backtest reads. A standard joins after its own review.
+STANDARDS_WITH_HISTORY: tuple[str, ...] = ("employees_total",)
 
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records, per universe.
 THEME_PURITY_VERDICT = "theme_purity"
@@ -69,7 +92,13 @@ __all__ = (
     "STANDARD_BACKFILL_CRON",
     "STANDARD_BACKFILL_JOB_NAME",
     "STANDARD_BACKFILL_UNIVERSES",
+    "STANDARD_HISTORY_CRON",
+    "STANDARD_HISTORY_JOB_NAME",
+    "STANDARD_HISTORY_MONTHS",
+    "STANDARD_HISTORY_UNIVERSES",
+    "STANDARDS_WITH_HISTORY",
     "StandardBackfillConfig",
+    "StandardHistoryConfig",
     "THEME_PURITY_VERDICT",
     "analyst_ratings",
     "defs",
@@ -99,6 +128,18 @@ class StandardBackfillConfig(dg.Config):
     standard: str = ""
     mode: str = "backfill"
     max_issuers: int = 0
+
+
+class StandardHistoryConfig(dg.Config):
+    """`executed_at` is the tick (ISO 8601, timezone-aware), never the wall clock. The month-end
+    cutoffs derive from it. `standard` empty runs every standard in `STANDARDS_WITH_HISTORY`.
+    The history run has no probe mode: a probe records no model answer, so each cutoff would
+    ask the provider again."""
+
+    executed_at: str
+    universe: str = STANDARD_HISTORY_UNIVERSES[0]
+    standard: str = ""
+    months: int = STANDARD_HISTORY_MONTHS
 
 
 #: Tags on the runs this lane's schedules and sensors launch: the universe the run writes
@@ -133,6 +174,13 @@ def standards_to_run(selected: str) -> tuple[str, ...]:
             raise ValueError(f"unknown standard {selected!r}; registered: {sorted(STANDARDS)}")
         return (selected,)
     return tuple(sorted(STANDARDS))
+
+
+def history_standards(selected: str) -> tuple[str, ...]:
+    """Which standards one history run covers: the named one, or every standard with a history run."""
+    if selected:
+        return standards_to_run(selected)
+    return STANDARDS_WITH_HISTORY
 
 
 @dg.op
@@ -750,6 +798,68 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
+@dg.op
+def run_standard_history(context: dg.OpExecutionContext, config: StandardHistoryConfig) -> str:
+    """#1137: the month-end history of each standard in `STANDARDS_WITH_HISTORY` over one universe.
+
+    The summary holds counts only. A run whose every open cell failed ends as a failed run,
+    so a vendor outage cannot pass as a green run with zero rows.
+    """
+    tick = datetime.fromisoformat(config.executed_at)
+    names = history_standards(config.standard)
+    reports = []
+    with psycopg.connect(settings.database_url) as connection:
+        for name in names:
+            reports.append(
+                _run_standard_history(
+                    connection,
+                    universe=config.universe,
+                    standard_name=name,
+                    tick=tick,
+                    months=config.months,
+                    log=context.log.info,
+                )
+            )
+    counts = {name: report.counts() for name, report in zip(names, reports, strict=True)}
+    summaries = [{"universe": config.universe, "standard": name, **values} for name, values in counts.items()]
+    context.add_output_metadata(
+        {
+            "universe": config.universe,
+            "standards": ", ".join(names),
+            "months": config.months,
+            **{f"{name}_{key}": value for name, values in counts.items() for key, value in values.items()},
+        }
+    )
+    for report in reports:
+        raise_if_every_attempt_failed(report)
+    return json.dumps(summaries, sort_keys=True)
+
+
+@dg.job(name=STANDARD_HISTORY_JOB_NAME)
+def standard_history_backfill_pipeline_job() -> None:
+    run_standard_history()
+
+
+def history_run_config(executed_at: str, universe: str) -> dg.RunConfig:
+    """One universe's history run. The month count and the standards take their defaults."""
+    return dg.RunConfig(ops={"run_standard_history": StandardHistoryConfig(executed_at=executed_at, universe=universe)})
+
+
+@dg.schedule(
+    job=standard_history_backfill_pipeline_job,
+    cron_schedule=STANDARD_HISTORY_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def standard_history_schedule(context: dg.ScheduleEvaluationContext):
+    executed_at = context.scheduled_execution_time.isoformat()
+    for universe in STANDARD_HISTORY_UNIVERSES:
+        yield dg.RunRequest(
+            run_key=f"history:{executed_at}:{universe}",
+            run_config=history_run_config(executed_at, universe),
+        )
+
+
 STANDARD_BACKFILL_CATCHUP_SENSOR_NAME = "standard_backfill_catchup"
 #: Fifteen minutes between looks. The first look on a build only arms the sensor (see below),
 #: so a catch-up never starts inside the deploy walk that follows a promotion (#855 A5: a
@@ -976,7 +1086,7 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
 
 
 defs = dg.Definitions(
-    jobs=[standard_backfill_pipeline_job, head_reports_pipeline_job],
-    schedules=[standard_backfill_schedule, head_reports_schedule],
+    jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
+    schedules=[standard_backfill_schedule, standard_history_schedule, head_reports_schedule],
     sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
 )

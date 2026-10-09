@@ -26,6 +26,7 @@ from truealpha_contracts.standards import STANDARDS, EvidenceRequirement, Metric
 from data_engine.datahub.standards.filing_extraction import ExtractionOutcome
 from data_engine.datahub.standards.planner import (
     OpenCell,
+    UniverseIssuer,
     open_cells,
     resolve_missing_ciks,
     universe_issuers,
@@ -62,6 +63,17 @@ class BackfillReport:
         }
 
 
+def resolve_issuers(
+    connection: Any, universe: str, *, gateway: SourceGateway, http: Any = None
+) -> list[UniverseIssuer]:
+    """The universe's issuers with a CIK each. One SEC crosswalk call when a CIK is missing."""
+    issuers = universe_issuers(connection, universe)
+    if any(issuer.cik is None for issuer in issuers):
+        index = gateway.call("sec", "company_tickers", lambda: sec.ticker_cik_index(http))
+        issuers = resolve_missing_ciks(issuers, index)
+    return issuers
+
+
 def run_standard_backfill(
     connection: Any,
     *,
@@ -74,14 +86,21 @@ def run_standard_backfill(
     gateway: SourceGateway | None = None,
     store: RawObjectStore | None = None,
     log: Callable[[str], None] = print,
+    issuers: list[UniverseIssuer] | None = None,
+    record_summary: bool = True,
 ) -> BackfillReport:
+    """Run one standard over one universe at one cutoff.
+
+    A caller that runs many cutoffs (the history run) resolves the issuers once and passes
+    them in. It also sets `record_summary` to False: the health-log rows of a backfill say
+    "this standard was backfilled over this universe" (`never_backfilled`). A run over a
+    past cutoff must not say that.
+    """
     standard = STANDARDS[standard_name]
     report = BackfillReport(universe=universe, standard=standard_name, mode=mode, cutoff=cutoff)
     gateway = gateway or SourceGateway(connection, caller=f"{HEALTH_LOG_SOURCE}:{universe}:{standard_name}")
-    issuers = universe_issuers(connection, universe)
-    if any(issuer.cik is None for issuer in issuers):
-        index = gateway.call("sec", "company_tickers", lambda: sec.ticker_cik_index(http))
-        issuers = resolve_missing_ciks(issuers, index)
+    if issuers is None:
+        issuers = resolve_issuers(connection, universe, gateway=gateway, http=http)
     report.issuers = len(issuers)
     cells = open_cells(connection, issuers, standard=standard, cutoff=cutoff)
     report.open = len(cells)
@@ -106,7 +125,8 @@ def run_standard_backfill(
         if own_http and client is not None:
             client.close()
 
-    _persist_summary(connection, report)
+    if record_summary:
+        _persist_summary(connection, report)
     connection.commit()
     log(f"standard backfill done: {json.dumps(report.summary(), sort_keys=True)}")
     return report
@@ -209,6 +229,7 @@ def _cell_record(cell: OpenCell, outcome: ExtractionOutcome) -> dict[str, Any]:
         "extractor": outcome.extractor,
         "fact_id": outcome.fact_id,
         "detail": outcome.detail,
+        "model_replayed": outcome.model_replayed,
     }
 
 
