@@ -112,6 +112,26 @@ def test_a_declined_selection_becomes_none_not_a_guess(seated):
     assert selector(AEP) is None
 
 
+def test_the_selector_hands_the_full_model_selection_to_an_observer(seated):
+    """#1130: an adapter that needs the model name, the replayed mark or the decline reason
+    reads them from the observer. The shared `Selection` does not carry them."""
+    seen = []
+    selector = as_selector(
+        _Conn(),
+        cik=1,
+        accession="a",
+        form="10-K",
+        issuer_label="X",
+        caller="t",
+        transport=lambda *_: (200, _answer(None, None, "no total stated")),
+        on_model_selection=seen.append,
+    )
+    assert selector(AEP) is None
+    (model_selection,) = seen
+    assert model_selection.value is None and model_selection.reason == "no total stated"
+    assert model_selection.model == "glm-test" and model_selection.replayed is False
+
+
 def test_a_non_integral_candidate_value_raises_rather_than_silently_truncating(seated):
     """Copilot review on #782: `Candidate.value` is `int | float` on the shared primitive,
     but this module's own `Candidate` is `int`-only (headcount). A bare `int(42.7)` would

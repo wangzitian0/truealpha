@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -180,29 +181,39 @@ def candidates(text: str) -> list[FilingCandidate]:
     return list(found.values())
 
 
+def _shared_candidates(totals: Sequence[FilingCandidate]) -> list[extraction_primitive.Candidate]:
+    """Map this module's candidates onto the shared `Candidate`, which has no `partial` mark."""
+    return [extraction_primitive.Candidate(value=c.value, sentence=c.sentence, as_of=c.as_of) for c in totals]
+
+
+def _chosen_total(totals: Sequence[FilingCandidate], selection: extraction_primitive.Selection) -> FilingCandidate:
+    """The first company-wide candidate that states the selected value.
+
+    The rule and the model both select a value that is among the candidates. The first
+    candidate with that value carries the sentence and the as-of date of the outcome.
+    """
+    return next(c for c in totals if c.value == selection.value)
+
+
 def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, FilingCandidate | None]:
     """The deterministic half of selection: one company-wide statement, or defer.
 
-    The domain-specific half stays here — filtering to non-partial ("company-wide")
-    candidates, and mapping the primitive's chosen index back onto this module's own
-    `FilingCandidate` (which carries the sentence and partial mark the shared `Candidate`
-    does not). The actual rule — exactly one distinct value needs no judgement — is
-    `select_single_candidate` (libs/factors/shared/extraction.py, #769): this function
-    does not decide that itself, so a filing-shaped duplicate of the rule never has to be
-    invented for a different source (`libs/factors/tests/test_extraction_ownership.py`
-    fails CI if one is).
+    The domain-specific half stays here: filtering to non-partial ("company-wide")
+    candidates, and mapping the primitive's selection back onto this module's own
+    `FilingCandidate`. The rule itself is `extract_metric` without a selector
+    (libs/factors/shared/extraction.py, #769). This function does not decide the rule.
+    `libs/factors/tests/test_extraction_ownership.py` fails CI if a filing-shaped copy of
+    the rule appears in this module or in any other module.
     """
     totals = [candidate for candidate in found if not candidate.partial]
     if not totals:
         # Nothing, or only subset counts (a segment, a region, contractors): the filing
         # states no company-wide total, so there is nothing for a model to choose either.
         return "no_candidate", None
-    selection = extraction_primitive.select_single_candidate(
-        [extraction_primitive.Candidate(value=c.value, sentence=c.sentence, as_of=c.as_of) for c in totals]
-    )
+    selection = extraction_primitive.extract_metric(_shared_candidates(totals)).selection
     if selection is None:
         return "needs_model_selection", None
-    return "resolved", totals[selection.candidate_index]
+    return "resolved", _chosen_total(totals, selection)
 
 
 def parse_as_of(text: str | None) -> date | None:
@@ -304,36 +315,47 @@ def extract_headcount(
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F on file at the cutoff")
 
     found = candidates(filing_plain_text(document.body))
-    status, chosen = select_total(found)
-    extractor = RULE_SINGLE_CANDIDATE
-    model_detail = ""
-    if status == "needs_model_selection" and select_with_model and llm.is_configured():
-        # Precision is the model's half (#70 scope 2): it chooses among the enumerated
-        # company-wide statements, or declines. A declined or non-candidate answer stays
-        # an honest refusal on the cell. In write mode the invocation is recorded (answer
-        # or refusal); in probe mode only the ledger row is — probe writes nothing else.
-        totals = [c for c in found if not c.partial]
-        selection = llm.select_headcount(
+    totals = [c for c in found if not c.partial]
+    # Precision is the model's half (#70 scope 2): it chooses among the enumerated
+    # company-wide statements, or declines. A declined or non-candidate answer stays
+    # an honest refusal on the cell. In write mode the invocation is recorded (answer
+    # or refusal); in probe mode only the ledger row is — probe writes nothing else.
+    model_runs: list[llm.ModelSelection] = []
+    selector: extraction_primitive.Selector | None = None
+    if select_with_model and llm.is_configured():
+        selector = llm.as_selector(
             connection if write else None,
             cik=cik,
             accession=document.accession,
             form=document.form,
             issuer_label=issuer_label or f"CIK {cik}",
-            candidates=[llm.Candidate(c.value, c.sentence) for c in totals],
             caller=f"standard-backfill:{standard.metric}",
             standard=standard.metric,
             persist=write,
             transport=model_transport,
+            on_model_selection=model_runs.append,
         )
-        model_detail = f" model={selection.model} invocation={selection.invocation_id}" + (
-            " (replayed)" if selection.replayed else ""
+    selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
+    status: ExtractionStatus
+    if selection is not None:
+        status = "resolved"
+    elif not totals:
+        status = "no_candidate"
+    elif selector is not None:
+        status = "model_declined"
+    else:
+        status = "needs_model_selection"
+    chosen = _chosen_total(totals, selection) if selection is not None else None
+    extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
+    model_detail = ""
+    if model_runs:
+        # The primitive asks the selector at most once, so the list holds one run.
+        (model_run,) = model_runs
+        model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
+            " (replayed)" if model_run.replayed else ""
         )
-        if selection.value is not None:
-            chosen = next(c for c in totals if c.value == selection.value)
-            status, extractor = "resolved", selection.extractor
-        else:
-            status = "model_declined"
-            model_detail += f" reason={selection.reason!r}"
+        if status == "model_declined":
+            model_detail += f" reason={model_run.reason!r}"
     outcome = ExtractionOutcome(
         cik,
         status,
@@ -345,7 +367,7 @@ def extract_headcount(
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"{len(found)} candidate(s), {len({c.value for c in found if not c.partial})} distinct total(s){model_detail}",
+        detail=f"{len(found)} candidate(s), {len({c.value for c in totals})} distinct total(s){model_detail}",
     )
     if status != "resolved" or not write or chosen is None:
         return outcome
