@@ -693,6 +693,11 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
 
         governed = reader.execute("select target_run_id, strategy_run_id from mart.governed_strategy_run").fetchall()
         assert governed == [(forced["capture_run_id"], forced["strategy_run_id"])]
+        # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
+        # keeps the served head available rather than withheld past 30 days.
+        reader.execute("set session_replication_role = replica")
+        reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
+        reader.execute("set session_replication_role = origin")
         latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
         assert (latest[0], latest[3]) == (forced["strategy_run_id"], True)
 
@@ -736,6 +741,11 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
         main_latest = reader.execute(_MAIN_LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
         assert main_latest == (withheld["strategy_run_id"], True), main_latest
 
+        # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
+        # keeps the served head available rather than withheld past 30 days.
+        reader.execute("set session_replication_role = replica")
+        reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
+        reader.execute("set session_replication_role = origin")
         latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
         assert (latest[0], latest[3]) == (scheduled["strategy_run_id"], True)
         assert reader.execute("select strategy_run_id from mart.governed_strategy_run").fetchall() == [
