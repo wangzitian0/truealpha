@@ -88,6 +88,7 @@ class FinancialFactPayload(_FrozenModel):
     shares_period_end: date | None = None
     # #1176: banking tangible-common-equity inputs. Written on a FINANCIAL row only.
     stockholders_equity: Decimal | None = None
+    preferred_stock_value: Decimal | None = None
     goodwill: Decimal | None = None
     intangible_assets_net_excluding_goodwill: Decimal | None = None
     intangible_basis: str | None = None
@@ -130,6 +131,7 @@ class FinancialFactPayload(_FrozenModel):
         "net_income",
         "earnings_cagr_3y",
         "stockholders_equity",
+        "preferred_stock_value",
         "goodwill",
         "intangible_assets_net_excluding_goodwill",
         mode="before",

@@ -183,6 +183,7 @@ class FinancialFactsBundle:
     # #1176: the banking tangible-common-equity inputs. Set for the FINANCIAL branch only, all at
     # `tangible_equity_period_end`, or absent together. Nothing is substituted for a missing input.
     stockholders_equity: Decimal | None = None
+    preferred_stock_value: Decimal | None = None
     goodwill: Decimal | None = None
     intangible_assets_net_excluding_goodwill: Decimal | None = None
     intangible_basis: str | None = None
@@ -871,6 +872,7 @@ def build_bundle(
             financial.assets,
             financial.returns,
             tangible.stockholders_equity,
+            tangible.preferred_stock_value,
             tangible.goodwill,
             tangible.intangible_assets,
             *earnings_periods.values(),
@@ -889,6 +891,7 @@ def build_bundle(
             ("financial_assets", financial.assets),
             ("financial_returns", financial.returns),
             ("stockholders_equity", tangible.stockholders_equity),
+            ("preferred_stock_value", tangible.preferred_stock_value),
             ("goodwill", tangible.goodwill),
             ("intangible_assets_net_excluding_goodwill", tangible.intangible_assets),
         )
@@ -929,6 +932,7 @@ def build_bundle(
         latest_annual_period_end=latest_annual,
         document=facts,
         stockholders_equity=_v(tangible.stockholders_equity),
+        preferred_stock_value=_v(tangible.preferred_stock_value),
         goodwill=_v(tangible.goodwill),
         intangible_assets_net_excluding_goodwill=_v(tangible.intangible_assets),
         intangible_basis=tangible.intangible_basis,
@@ -1004,6 +1008,7 @@ class TangibleCommonEquityComponents:
     """The three balance-sheet facts a banking tangible-common-equity measurement needs (#1176)."""
 
     stockholders_equity: _Datum | None = None
+    preferred_stock_value: _Datum | None = None
     goodwill: _Datum | None = None
     intangible_assets: _Datum | None = None
     intangible_basis: str | None = None
@@ -1053,6 +1058,8 @@ def tangible_common_equity_components(
             continue
         return TangibleCommonEquityComponents(
             stockholders_equity=equity[end],
+            # Not required for the period: a missing preferred value stays None, never zero.
+            preferred_stock_value=series("preferred_stock_value").get(end),
             goodwill=goodwill[end],
             intangible_assets=intangibles,
             intangible_basis=basis,
@@ -1289,6 +1296,7 @@ class SecFinancialFactAdapter:
             payload.update(
                 {
                     "stockholders_equity": _s(bundle.stockholders_equity),
+                    "preferred_stock_value": _s(bundle.preferred_stock_value),
                     "goodwill": _s(bundle.goodwill),
                     "intangible_assets_net_excluding_goodwill": _s(bundle.intangible_assets_net_excluding_goodwill),
                     "intangible_basis": bundle.intangible_basis,

@@ -1830,3 +1830,48 @@ def test_a_bank_payload_carries_the_tangible_common_equity_inputs_and_a_non_bank
     assert isinstance(plain, FetchSuccess)
     assert "stockholders_equity" not in plain.record.payload
     assert "stockholders_equity" not in plain.record.payload["vintage"]
+
+
+# --- #1176 follow-up: deduct preferred stock; a missing preferred value is never zero ----------
+
+
+def _with_preferred_stock(facts: dict, *, value: int, end: str, filed: str, accn: str) -> dict:
+    # Fixture: a filer that tags the named concept. The value is the FY2025 10-K balance-sheet
+    # preferred line of JPM (20,045M). The companyfacts sample itself carries no such fact.
+    gaap = dict(facts["facts"]["us-gaap"])
+    entry = {"end": end, "val": value, "accn": accn, "fy": 2025, "fp": "FY", "form": "10-K", "filed": filed}
+    gaap["PreferredStockValue"] = {"label": "Preferred Stock, Value, Issued", "units": {"USD": [entry]}}
+    return {**facts, "facts": {**facts["facts"], "us-gaap": gaap}}
+
+
+def test_jpm_companyfacts_sample_has_no_preferred_stock_value_for_fy2025() -> None:
+    # The sample carries PreferredStockValue only for 2008-2009. JPM tags its current preferred
+    # line by series, which companyfacts does not return. The measurement is refused, not zero-filled.
+    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.preferred_stock_value is None
+    assert "preferred_stock_value" not in bundle.vintages
+    # The three other inputs are still measured at the same period.
+    assert bundle.stockholders_equity == Decimal("362438000000")
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+
+
+def test_a_filed_preferred_stock_value_is_taken_at_the_tangible_period() -> None:
+    facts = _with_preferred_stock(
+        _jpm_facts(), value=20045000000, end="2025-12-31", filed="2026-02-13", accn="0001628280-26-008131"
+    )
+    bundle = build_bundle(facts, _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.preferred_stock_value == Decimal("20045000000")
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+    assert bundle.vintages["preferred_stock_value"]["accession"] == "0001628280-26-008131"
+
+
+def test_the_bank_payload_names_an_absent_preferred_value_as_null() -> None:
+    item = _work_item("d" * 64)
+    result = SecFinancialFactAdapter(
+        {item.work_item_id: _target(branch=OperatingBranch.FINANCIAL)},
+        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert "preferred_stock_value" in result.record.payload
+    assert result.record.payload["preferred_stock_value"] is None
+    assert "preferred_stock_value" not in result.record.payload["vintage"]

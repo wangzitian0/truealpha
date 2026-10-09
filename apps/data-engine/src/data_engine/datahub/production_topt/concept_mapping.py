@@ -108,6 +108,14 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "Goodwill"},),
             },
             {
+                # #1176 follow-up: deducted from equity. A filer that does not report this concept
+                # (JPM, in the companyfacts sample) gives no value. The adapter never zero-fills it.
+                "field": "preferred_stock_value",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "PreferredStockValue"},),
+            },
+            {
                 "field": "intangible_assets_net_excluding_goodwill",
                 "unit": "USD",
                 "kind": "synonym",
