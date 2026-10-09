@@ -8,6 +8,7 @@ from factors.backtest.adapter import (
 from factors.backtest.engine import (
     BacktestEngineConfig,
     BacktestResult,
+    NumpySimulationEngine,
     VectorBTBacktestEngine,
     canonical_run_id,
 )
@@ -16,6 +17,7 @@ from factors.backtest.storage import persist_backtest_result
 __all__ = [
     "BacktestEngineConfig",
     "BacktestResult",
+    "NumpySimulationEngine",
     "VectorBTBacktestEngine",
     "canonical_run_id",
     "compile_factor_panel",

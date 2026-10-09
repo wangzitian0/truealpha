@@ -15,7 +15,7 @@ The repository cannot meet rule 16 today.
 - `staging.market_prices_daily` holds only `adjust = 'splits'` bars. Production held 15,556 rows on 2026-10-09.
 - Unadjusted bars without split events show about -90% NAV on a 10:1 split. That result is wrong.
 - A5 forbids combining adjusted prices with separately applied explicit actions.
-- The backtest engine is `libs/factors/src/factors/backtest/engine.py`. It is pure numpy. The class is named `VectorBTBacktestEngine`, but `vectorbt` is not in `uv.lock`.
+- The backtest engine is `libs/factors/src/factors/backtest/engine.py`. It is a pure numpy daily portfolio simulation engine named `NumpySimulationEngine` (aliased as `VectorBTBacktestEngine` for compatibility).
 - No binding pins the backtest engine, the adapter or the data snapshot. `run_id` defaults to `default_snapshot` (`engine.py#L29`).
 - `mart.backtest_runs`, `backtest_trades` and `backtest_valuations` hold 0 rows on production.
 
