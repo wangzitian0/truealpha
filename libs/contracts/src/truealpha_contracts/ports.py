@@ -46,4 +46,6 @@ class PointInTimeRepository(Protocol):
 class BacktestDataGateway(Protocol):
     """The only data boundary a backtest engine should consume."""
 
-    def load(self, query: AsOfQuery, *, price_start: date, price_end: date) -> BacktestDataset: ...
+    def load(
+        self, query: AsOfQuery, *, price_start: date, price_end: date, adjust: str = "splits"
+    ) -> BacktestDataset: ...

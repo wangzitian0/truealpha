@@ -1,5 +1,6 @@
 """The application-to-runtime dependency boundary."""
 
+from truealpha_runtime.backtest_gateway import PostgresBacktestDataGateway
 from truealpha_runtime.checks import (
     DatabaseCheck,
     DependencyStatus,
@@ -23,6 +24,7 @@ __all__ = [
     "EnvironmentTier",
     "GraphStoreCheck",
     "ObjectStorageCheck",
+    "PostgresBacktestDataGateway",
     "ProbeResult",
     "RuntimeSettings",
     "S3RawObjectStore",

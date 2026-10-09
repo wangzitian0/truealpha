@@ -71,8 +71,8 @@ def canonical_run_id(
     return f"backtest-run:{sha256(seed.encode()).hexdigest()}"
 
 
-class VectorBTBacktestEngine:
-    """Unified single-track daily portfolio backtest engine."""
+class NumpySimulationEngine:
+    """Unified single-track daily portfolio backtest engine implemented in pure NumPy/Pandas."""
 
     def __init__(self, config: BacktestEngineConfig | None = None) -> None:
         self.config = config or BacktestEngineConfig()
@@ -328,9 +328,13 @@ class VectorBTBacktestEngine:
         return nav_series, dd_series, gross_exp_series, cash_wt_series, trades, float(total_turnover)
 
 
+#: Backwards-compatible alias for NumpySimulationEngine.
+VectorBTBacktestEngine = NumpySimulationEngine
+
 __all__ = [
     "BacktestEngineConfig",
     "BacktestResult",
+    "NumpySimulationEngine",
     "VectorBTBacktestEngine",
     "canonical_run_id",
 ]

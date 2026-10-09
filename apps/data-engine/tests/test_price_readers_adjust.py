@@ -161,11 +161,18 @@ def _datahub_backtest_load_prices():
     return _load_prices
 
 
+def _gateway_price_bars():
+    from truealpha_runtime.backtest_gateway import PostgresBacktestDataGateway
+
+    return PostgresBacktestDataGateway.load
+
+
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
     "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
     "backtest-script": _load_prices_reader,
     "backtest-datahub": _datahub_backtest_load_prices,
+    "gateway-price-bars": _gateway_price_bars,
 }
 
 
@@ -190,6 +197,7 @@ REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
     "apps/data-engine/src/data_engine/lanes/backtest.py": "lane op, checks price presence via adjust filter",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
+    "libs/runtime/src/truealpha_runtime/backtest_gateway.py": "gateway reader, tested by test_a_reader_cannot_omit_the_adjust_filter",
     "tools/schema_drift.py": "prose in a docstring, no query",
 }
 SCANNED_ROOTS = ("apps", "libs", "tools")

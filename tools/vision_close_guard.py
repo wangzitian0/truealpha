@@ -117,8 +117,7 @@ def check_pr_body(body: str, *, labels_of: LabelsOf, default_repo: str = REPO) -
     refs = ", ".join(f"`Refs {target}`" for target in targets)
     return PrVerdict(
         False,
-        f"closing keyword names a scope:vision issue: {found}. Write {refs} instead. "
-        "GitHub acts on negated text too.",
+        f"closing keyword names a scope:vision issue: {found}. Write {refs} instead. GitHub acts on negated text too.",
     )
 
 
