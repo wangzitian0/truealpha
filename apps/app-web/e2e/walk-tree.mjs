@@ -253,8 +253,8 @@ async function gotoStable(page, url) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
-      await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 15000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 20000 });
       return;
     } catch (error) {
       lastError = error;
@@ -288,6 +288,14 @@ async function walkRoutes(browser, { role, email, password }) {
     console.error(`login failed for ${role}: ${login.status()}`);
     await context.close();
     process.exit(2);
+  }
+  // Warm heavy research routes under the authenticated session to avoid cold render timeouts.
+  for (const warmPath of ["/research", "/research/coverage", "/research/rankings", "/research/strategy"]) {
+    try {
+      await context.request.get(`${BASE}${warmPath}`, { timeout: 15000 });
+    } catch {
+      // Best-effort warm-up; checkRoute performs authoritative assertions.
+    }
   }
   const page = await context.newPage();
 

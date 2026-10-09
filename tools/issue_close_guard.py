@@ -126,6 +126,57 @@ def deployed(
     return code == 0, serving
 
 
+NON_PRODUCT_PREFIXES = (
+    "docs/",
+    "governance/",
+    "skills/",
+    ".agents/",
+    ".claude/",
+    ".github/",
+    ".ws-publish/",
+    "tools/",
+)
+NON_PRODUCT_FILES = {
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "init.md",
+    "vision.md",
+    "README.md",
+    ".gitignore",
+    ".gitattributes",
+    ".env.example",
+    "LICENSE",
+    "Makefile",
+}
+
+
+def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
+    """True when all files modified by commit belong to non-product paths.
+
+    Rule 6 states that product issues must be deployed, real, and evidenced.
+    Non-product changes (documentation, developer skills, harness rules,
+    governance records, and tooling) do not deliver code to production
+    containers. Checking whether production serves them causes false
+    reopenings.
+    """
+    code, out = git(["diff-tree", "-m", "--no-commit-id", "--name-only", "-r", commit])
+    if code != 0:
+        return False
+    files = [f.strip() for f in out.splitlines() if f.strip()]
+    if not files:
+        return False
+    for path in files:
+        if path in NON_PRODUCT_FILES:
+            continue
+        if any(path.startswith(prefix) for prefix in NON_PRODUCT_PREFIXES):
+            continue
+        if path.endswith(".md") and "/" not in path:
+            continue
+        return False
+    return True
+
+
 def judge(
     issue: int,
     *,
@@ -144,6 +195,13 @@ def judge(
     is_deployed, serving = deployed(commit, health_url=health_url, http_get=http_get, git=git)
     if is_deployed:
         return Verdict(False, f"#{issue} was closed by {commit[:8]}, which production is serving ({serving})")
+    if is_non_product_commit(commit, git=git):
+        return Verdict(
+            False,
+            f"#{issue} was closed by {commit[:8]}, which only changes non-product paths "
+            f"(documentation, rules, skills, governance, or tooling); production serving "
+            f"check is not applicable under rule 6",
+        )
     return Verdict(
         True,
         f"#{issue} was closed by merge commit {commit[:8]}, which production is NOT serving — it "
