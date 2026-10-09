@@ -80,15 +80,30 @@ def _src_python_files() -> list[Path]:
     return sorted(files)
 
 
+def _is_accepted_enum_member(node: ast.AST) -> bool:
+    """True for `FactorValidationStatus.ACCEPTED`, also behind a module chain such as `execution.`."""
+    if not isinstance(node, ast.Attribute) or node.attr != "ACCEPTED":
+        return False
+    owner = node.value
+    return (isinstance(owner, ast.Name) and owner.id == "FactorValidationStatus") or (
+        isinstance(owner, ast.Attribute) and owner.attr == "FactorValidationStatus"
+    )
+
+
 def _accepted_literal_lines(source: str, filename: str) -> list[int]:
-    """Line numbers of each string constant that is `accepted` or quotes `'accepted'` in SQL."""
+    """Line numbers that write the `accepted` status.
+
+    Three shapes count: a string constant that is `accepted`, a string that quotes `'accepted'`
+    in SQL, and the `ACCEPTED` member of `FactorValidationStatus`.
+    """
     tree = ast.parse(source, filename=filename)
     lines: list[int] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-            continue
-        if node.value.strip() == "accepted" or _QUOTED_ACCEPTED_SQL.search(node.value):
+        if _is_accepted_enum_member(node):
             lines.append(node.lineno)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value.strip() == "accepted" or _QUOTED_ACCEPTED_SQL.search(node.value):
+                lines.append(node.lineno)
     return sorted(lines)
 
 
@@ -99,7 +114,7 @@ def _scan_accepted_literal(files: list[Path], *, allowed: set[str]) -> list[str]
         if rel in allowed:
             continue
         for line in _accepted_literal_lines(path.read_text(), rel):
-            violations.append(f"{rel}:{line} writes the literal 'accepted'. Take the status from status_dimensions.")
+            violations.append(f"{rel}:{line} writes the status 'accepted'. Take the status from status_dimensions.")
     return violations
 
 
@@ -115,7 +130,8 @@ def test_no_data_engine_module_writes_the_accepted_literal_outside_the_status_so
 
 
 def test_the_accepted_literal_scan_fires_on_each_hard_coded_shape(tmp_path: Path) -> None:
-    """Red proof: the scan flags a plain constant, a dict default, an f-string part and SQL text."""
+    """Red proof: the scan flags a plain constant, a dict default, an f-string part, SQL text
+    and the `ACCEPTED` attribute of `FactorValidationStatus`, by name or through a module chain."""
     rogue = tmp_path / "rogue_writer.py"
     rogue.write_text(
         'val_status = "accepted"\n'
@@ -125,9 +141,15 @@ def test_the_accepted_literal_scan_fires_on_each_hard_coded_shape(tmp_path: Path
         "sql = \"insert into t (s) values ('accepted')\"\n"
         'prose = "the accepted fusion engine"\n'
         'table = "staging.accepted_ruleset_head"\n'
+        "via_name = FactorValidationStatus.ACCEPTED.value\n"
+        "via_chain = execution.FactorValidationStatus.ACCEPTED\n"
+        "other_enum = ReviewOutcome.ACCEPTED\n"
+        "other_member = FactorValidationStatus.NOT_EVALUATED\n"
     )
     lines = _accepted_literal_lines(rogue.read_text(), "rogue_writer.py")
-    assert lines == [1, 2, 3, 4, 5], "prose and table names that hold the word must not count"
+    assert lines == [1, 2, 3, 4, 5, 8, 9], (
+        "prose, table names, other enums and other members of the status enum must not count"
+    )
 
 
 # --- layer 2: run each writer on a recording connection
