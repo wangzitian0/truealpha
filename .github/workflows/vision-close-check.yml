@@ -1,0 +1,25 @@
+name: vision-close-check
+
+# #1174: a closing keyword in a PR body that names a scope:vision issue closes
+# that issue without Rule 6 evidence. GitHub acts on negated text too ("does not
+# close #N"), so this check does not read negation. Authors write `Refs #N` for
+# a vision issue. Re-runs on every body edit, so a fixed body clears the check.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block closing keywords that name a scope:vision issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/vision_close_guard.py check-pr

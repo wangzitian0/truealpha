@@ -49,6 +49,7 @@ _SPEC.loader.exec_module(_contract)
 WorkflowContractError = _contract.WorkflowContractError
 job = _contract.job
 job_step = _contract.job_step
+load = _contract.load
 source = _contract.source
 step = _contract.step
 steps = _contract.steps
@@ -823,6 +824,29 @@ def test_the_close_guard_can_reopen_and_sees_full_history() -> None:
     assert "issues: write" in workflow, "the guard cannot reopen anything without it"
     assert "fetch-depth: 0" in workflow and "fetch --tags" in workflow
     assert triggers(CLOSE_GUARD)["issues"]["types"] == ["closed"]
+
+
+# --- vision-close-check and vision-close-reopen (#1174) ----------------------
+
+VISION_CHECK = "vision-close-check.yml"
+VISION_REOPEN = "vision-close-reopen.yml"
+
+
+def test_the_vision_check_reruns_on_body_edits_and_only_reads() -> None:
+    """A body fixed after a failed check must re-run the check. The check needs read access only."""
+    assert set(triggers(VISION_CHECK)["pull_request"]["types"]) >= {"opened", "edited", "synchronize"}
+    permissions = load(VISION_CHECK)["permissions"]
+    assert set(permissions.values()) == {"read"}, permissions
+    assert "check-pr" in source(VISION_CHECK), "the check must call the tool's PR mode"
+
+
+def test_the_vision_reopen_runs_on_closed_issues_with_the_least_write_access() -> None:
+    """The reopen step writes to issues only. It reads pull requests and nothing more."""
+    assert triggers(VISION_REOPEN)["issues"]["types"] == ["closed"]
+    permissions = load(VISION_REOPEN)["permissions"]
+    assert permissions["issues"] == "write"
+    assert permissions["pull-requests"] == "read"
+    assert "reopen --issue" in source(VISION_REOPEN)
 
 
 # --- auto-release-staging: the owner's 2026-09-17 decision ("先在 staging 做吧，
