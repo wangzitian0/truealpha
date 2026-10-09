@@ -9,7 +9,7 @@
 [extend]
 useDefault = true
 
-[[allowlists]]
+[allowlist]
 description = "Content-addressed governance evidence identifiers are not credentials"
 # Match on the whole LINE: the default regexTarget is the captured secret group,
 # which for these records is an arbitrary hash fragment the id-prefix regex can
@@ -27,16 +27,14 @@ paths = [
   '''governance/.*''',
 ]
 
-# #1176: a metric node key such as `key="gppe_banking_tce_v1"` is an identifier, not a credential.
-# The generic-api-key rule reads its high-entropy value as a secret. Allow only this exact key
-# text, and only in the forest registry that declares the node. The same text elsewhere still fails.
-[[allowlists]]
-description = "Forest metric node keys in the GPPE registry are identifiers, not credentials (#1176)"
-condition = "AND"
-regexTarget = "line"
+# #1176: the forest registry declares metric node keys such as `key="gppe_banking_tce_v1"`.
+# The generic-api-key rule reads that high-entropy value as a credential. Allow this one rule for
+# this one file. The rule keeps its default regex, and every other file keeps the full scan.
+[[rules]]
+id = "generic-api-key"
+
+[rules.allowlist]
+description = "Forest registry metric node keys are identifiers, not credentials (#1176)"
 paths = [
   '''libs/factors/src/factors/forest/registry\.py$''',
-]
-regexes = [
-  '''key="gppe_banking_tce_v1"''',
 ]

@@ -101,13 +101,12 @@ _BANKING_TCE_V1 = LaborEfficiencyMetric(
 #: The one binding table for the live path (owner decision 2026-10-09, #1176): FINANCIAL issuers
 #: rank on measured tangible common equity; every other class ranks on the uniform total-assets
 #: charge. An issuer with no class has no entry: it gets `missing_issuer_class`, never a fallback.
-LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass, LaborEfficiencyMetric] = MappingProxyType(
-    {
-        IssuerClass.FINANCIAL: _BANKING_TCE_V1,
-        IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
-        IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
-    }
-)
+_LIVE_LABOR_EFFICIENCY: dict[IssuerClass | None, LaborEfficiencyMetric] = {
+    IssuerClass.FINANCIAL: _BANKING_TCE_V1,
+    IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
+    IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
+}
+LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(_LIVE_LABOR_EFFICIENCY)
 
 #: The frozen #21 replay binding, passed by name by the replay callers. Every class, and a
 #: classless input, ranks on the uniform charge the #21 golden was frozen with.
