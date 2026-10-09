@@ -69,7 +69,7 @@ All external vendor and model requests pass through `data_engine.sources.gateway
 - **Filing date is knowable-at**: `knowable_at` is derived from the filing date, never the
   fetch clock.
 - **Predecessor CIK fallback**: Post-reorganization holding companies with no filings under
-  their new CIK transparently resolve through `staging.issuer_cik_predecessors`.
+  their new CIK resolve through `staging.issuer_cik_predecessors`.
 
 ## Standing Guards (Drift & Regression Prevention)
 
