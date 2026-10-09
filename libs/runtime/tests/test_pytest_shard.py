@@ -202,6 +202,24 @@ def test_the_shards_carry_equal_measured_work() -> None:
     )
 
 
+def test_a_measured_file_weighs_its_measured_seconds(tmp_path: Path) -> None:
+    """The packer weighs a harvested file by its measured seconds, not its test count.
+
+    The balance check above reads today's tree. On that tree a count-based packer
+    balances within 10 percent, so the check passes even when measured weights are
+    removed. This test fixes the input instead: three tests and 500 measured seconds.
+    A count-based weight returns 3.0 and fails the first assertion.
+    """
+    path = tmp_path / "test_fixture.py"
+    path.write_text(
+        "def test_a():\n    pass\n\n\ndef test_b():\n    pass\n\n\ndef test_c():\n    pass\n",
+        encoding="utf-8",
+    )
+    assert pytest_shard.weight_of(path, {"test_fixture.py": 500.0}, tmp_path, rate=1.0) == 500.0
+    # A file the harvest does not know converts its test count at the measured rate.
+    assert pytest_shard.weight_of(path, {}, tmp_path, rate=2.0) == 6.0
+
+
 def test_the_weights_still_describe_the_tree_they_weigh() -> None:
     """Staleness has no symptom. A harvest taken before a directory was added
     stays valid-looking forever: every lane green, the balance quietly drifting
