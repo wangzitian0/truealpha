@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 from factors.forest import (
     FOREST,
+    GPPE_BANKING_TCE_TREE,
     GPPE_V0_TREE,
     PUBLISHED_COLUMNS,
     AliasKind,
@@ -51,13 +52,23 @@ MINTED = {
     "operating_gross_profit": "34a38955-e69e-559b-a483-91f81b9a6ab0",
     "capital_charge": "6b4ce481-f045-5503-9675-921160e2bcd2",
     "capital_adjusted_gross_profit": "c3428286-eb85-5107-a32a-b8757ad5b340",
-    "gppe": "6143cf17-ceba-5f78-a2d3-a7cc423c49a7",
+    "gppe_uniform_charge_v0": "6143cf17-ceba-5f78-a2d3-a7cc423c49a7",
+    # #1176: gppe_banking_tce_v1 and its measured-TCE inputs and derived nodes.
+    "stockholders_equity": "0aa53e41-0d12-5f11-92c4-fe6225166328",
+    "goodwill": "738c81a6-fd15-53ca-ad2f-679a2b700056",
+    "intangible_assets_net_excluding_goodwill": "14313d73-f5f7-5a47-a087-ed9ce71ebd88",
+    "tangible_deductions": "805d8f77-10aa-5dc4-b2bd-f47647e00593",
+    "tangible_common_equity": "8c346339-0ca5-588a-90d4-e67c96db8ecb",
+    "capital_charge_tce": "588a8f4d-b301-5a2e-b0f3-de6743d60af4",
+    "capital_adjusted_tce": "57204502-7b9c-5671-b392-424b4368d9f1",
+    "gppe_banking_tce_v1": "582c62d6-4873-5ff4-ad91-eba1d571fc4c",
 }
 
 
 def test_minted_uuids_never_change() -> None:
     assert {node.key: str(node.node_id) for node in FOREST.nodes} == MINTED
     assert str(GPPE_V0_TREE.tree_id) == "ef13b940-b695-5f5f-846a-a36face5cc3e"
+    assert str(GPPE_BANKING_TCE_TREE.tree_id) == "96fd6d4a-8983-5caf-b647-360122569d00"
 
 
 def test_captured_inputs_name_a_confidence_family_and_nothing_else_does() -> None:
@@ -74,8 +85,8 @@ def test_captured_inputs_name_a_confidence_family_and_nothing_else_does() -> Non
 
 def test_a_node_declares_a_sign_policy_for_exactly_its_classes() -> None:
     with pytest.raises(ValidationError, match="exactly its applicable classes"):
-        _node("gppe").model_validate(
-            {**_node("gppe").model_dump(), "sign_policy": {IssuerClass.FINANCIAL: SignPolicy.SIGN_IS_SIGNAL}}
+        _node("gppe_uniform_charge_v0").model_validate(
+            {**_node("gppe_uniform_charge_v0").model_dump(), "sign_policy": {IssuerClass.FINANCIAL: SignPolicy.SIGN_IS_SIGNAL}}
         )
 
 
@@ -88,7 +99,7 @@ def test_a_derived_node_has_one_decomposition_across_the_forest() -> None:
             "tree_id": UUID(int=1),
             "decompositions": (
                 Decomposition(
-                    output="gppe",
+                    output="gppe_uniform_charge_v0",
                     formula_id="ratio",
                     formula_version=1,
                     operands={c: ("operating_gross_profit", "employees_total") for c in IssuerClass},
@@ -110,7 +121,7 @@ def test_a_tree_is_acyclic_reachable_and_binds_every_class() -> None:
                     output="operating_gross_profit",
                     formula_id="identity",
                     formula_version=1,
-                    operands={c: ("gppe",) for c in IssuerClass},
+                    operands={c: ("gppe_uniform_charge_v0",) for c in IssuerClass},
                 ),
             )
         }
@@ -121,7 +132,7 @@ def test_a_tree_is_acyclic_reachable_and_binds_every_class() -> None:
         update={
             "decompositions": (
                 Decomposition(
-                    output="gppe",
+                    output="gppe_uniform_charge_v0",
                     formula_id="ratio",
                     formula_version=1,
                     operands={IssuerClass.FINANCIAL: ("capital_adjusted_gross_profit", "employees_total")},
@@ -153,14 +164,14 @@ def test_a_tree_is_acyclic_reachable_and_binds_every_class() -> None:
 def test_a_formula_is_registered_and_takes_its_arity() -> None:
     with pytest.raises(ValidationError, match="cannot take 3 operand"):
         Decomposition(
-            output="gppe",
+            output="gppe_uniform_charge_v0",
             formula_id="ratio",
             formula_version=1,
             operands={IssuerClass.FINANCIAL: ("a", "b", "c")},
         )
     with pytest.raises(ValidationError, match="not registered"):
         Decomposition(
-            output="gppe", formula_id="ratio", formula_version=2, operands={IssuerClass.FINANCIAL: ("a", "b")}
+            output="gppe_uniform_charge_v0", formula_id="ratio", formula_version=2, operands={IssuerClass.FINANCIAL: ("a", "b")}
         )
 
 
@@ -181,7 +192,7 @@ def test_the_tree_identity_does_not_depend_on_set_order() -> None:
     ],
 )
 def test_judge_sign(policy: SignPolicy, value: str, violation: bool, signal: bool, silent: bool) -> None:
-    node = _node("gppe").model_copy(update={"sign_policy": {c: policy for c in IssuerClass}})
+    node = _node("gppe_uniform_charge_v0").model_copy(update={"sign_policy": {c: policy for c in IssuerClass}})
     finding = judge_sign(node, issuer_class="financial", value=Decimal(value), subject="listing:x")
     assert (finding is None) == silent
     if finding is not None:
@@ -189,14 +200,14 @@ def test_judge_sign(policy: SignPolicy, value: str, violation: bool, signal: boo
 
 
 def test_a_class_the_node_does_not_declare_is_a_violation_whatever_the_sign() -> None:
-    finding = judge_sign(_node("gppe"), issuer_class="sovereign_fund", value=Decimal("5"), subject="listing:x")
+    finding = judge_sign(_node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=Decimal("5"), subject="listing:x")
     assert finding is not None and finding.violation and finding.policy is None
-    assert judge_sign(_node("gppe"), issuer_class="sovereign_fund", value=None, subject="listing:x") is None
+    assert judge_sign(_node("gppe_uniform_charge_v0"), issuer_class="sovereign_fund", value=None, subject="listing:x") is None
 
 
 def test_gppe_v020_declares_a_negative_value_a_signal_for_every_class() -> None:
     """#59's frozen reading, recorded where the invariants read it (#528)."""
-    for key in ("gppe", "capital_adjusted_gross_profit"):
+    for key in ("gppe_uniform_charge_v0", "capital_adjusted_gross_profit"):
         assert dict(_node(key).sign_policy) == {c: SignPolicy.SIGN_IS_SIGNAL for c in IssuerClass}
     assert _node("capital_charge").sign_policy[IssuerClass.FINANCIAL] is SignPolicy.MUST_BE_NON_NEGATIVE
 

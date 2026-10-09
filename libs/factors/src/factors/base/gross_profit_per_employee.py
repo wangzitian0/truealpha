@@ -1,7 +1,15 @@
 """Module 2: gross profit per employee (v0 capital-adjusted labor efficiency).
 
-Uniform formula frozen by issue #59 (2026-07-18 owner decision): one definition
-applies to every issuer, financial or not — no per-issuer arithmetic branch.
+Two named metrics (#1176, owner decision 2026-10-09). Each has its own forest node:
+
+- `gross_profit_per_employee` is `gppe_uniform_charge_v0`. Its capital base is total assets for
+  every issuer. It has no ratio test and no class branch.
+- `gross_profit_per_employee_banking_tce` is `gppe_banking_tce_v1`. Its capital base is measured
+  tangible common equity. The strategy applies it to FINANCIAL issuers only. Missing equity,
+  goodwill or intangibles gives an unavailable result. It never falls back to total assets.
+
+The uniform formula is frozen by issue #59 (2026-07-18 owner decision): one definition
+applies to every issuer, financial or not. The retired 8% leverage branch is gone.
 
     real_profit_v0 = gross_profit - total_assets * risk_free_rate
     labor_efficiency_v0 = real_profit_v0 / employees_total
@@ -93,8 +101,8 @@ def gross_profit_per_employee(
     entity_id: str,
     as_of: datetime,
     risk_free_rate: Decimal,
-    financial_leverage_adjusted: bool = False,
 ) -> FactorResult:
+    """`gppe_uniform_charge_v0`: the uniform total-assets charge for every issuer class."""
     gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
     total_assets = _find(facts, entity_id, _TOTAL_ASSETS)
     headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
@@ -128,17 +136,87 @@ def gross_profit_per_employee(
     assert gross_profit is not None and headcount is not None and total_assets is not None
     assert gross_profit.value is not None and headcount.value is not None and total_assets.value is not None
 
-    capital_base = total_assets.value
-    if financial_leverage_adjusted and gross_profit.value > Decimal("0"):
-        if (total_assets.value / gross_profit.value) > Decimal("15"):
-            capital_base = total_assets.value * Decimal("0.08")
-
-    real_profit = gross_profit.value - capital_base * risk_free_rate
+    real_profit = gross_profit.value - total_assets.value * risk_free_rate
     value = real_profit / headcount.value
     confidence = min(gross_profit.confidence, total_assets.confidence, headcount.confidence)
 
     return FactorResult(
         factor="gross_profit_per_employee",
+        entity_id=entity_id,
+        value=value,
+        unit_family=UnitFamily.PER_EMPLOYEE,
+        confidence=confidence,
+        as_of=as_of,
+        data_availability="unverified",
+        flags=[],
+    )
+
+
+_STOCKHOLDERS_EQUITY = "stockholders_equity"
+_GOODWILL = "goodwill"
+_INTANGIBLE_ASSETS = "intangible_assets_net_excluding_goodwill"
+
+#: The metrics `gppe_banking_tce_v1` reads. Total assets is not one of them.
+BANKING_TCE_INPUTS = (_GROSS_PROFIT, _STOCKHOLDERS_EQUITY, _GOODWILL, _INTANGIBLE_ASSETS, _EMPLOYEES_TOTAL)
+
+
+def gross_profit_per_employee_banking_tce(
+    facts: Sequence[Fact],
+    *,
+    entity_id: str,
+    as_of: datetime,
+    risk_free_rate: Decimal,
+) -> FactorResult:
+    """`gppe_banking_tce_v1` (#1176): `(gross_profit - TCE * risk_free_rate) / headcount`.
+
+    TCE is `stockholders_equity - (goodwill + intangible_assets_net_excluding_goodwill)`. It is
+    measured, never estimated. A missing TCE input gives an unavailable result with the flag
+    `missing_tangible_common_equity`. The factor never substitutes total assets or a ratio.
+    """
+    gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
+    equity = _find(facts, entity_id, _STOCKHOLDERS_EQUITY)
+    goodwill = _find(facts, entity_id, _GOODWILL)
+    intangibles = _find(facts, entity_id, _INTANGIBLE_ASSETS)
+    headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
+    tce_inputs = (equity, goodwill, intangibles)
+
+    flags: list[str] = []
+    if gross_profit is None or gross_profit.value is None:
+        flags.append("missing_gross_profit")
+    if any(item is None or item.value is None for item in tce_inputs):
+        flags.append("missing_tangible_common_equity")
+    if headcount is None or headcount.value is None:
+        flags.append("missing_employees_total")
+    elif headcount.value <= 0:
+        flags.append("non_positive_employees_total")
+    present = [item for item in (gross_profit, headcount, *tce_inputs) if item is not None]
+    if not flags and len({item.fiscal_period for item in present}) > 1:
+        flags.append("fiscal_period_mismatch")
+
+    if flags:
+        return FactorResult(
+            factor="gppe_banking_tce_v1",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.PER_EMPLOYEE,
+            confidence=Decimal("0"),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=flags,
+        )
+
+    assert gross_profit is not None and headcount is not None
+    assert equity is not None and goodwill is not None and intangibles is not None
+    assert gross_profit.value is not None and headcount.value is not None
+    assert equity.value is not None and goodwill.value is not None and intangibles.value is not None
+
+    tangible_common_equity = equity.value - (goodwill.value + intangibles.value)
+    real_profit = gross_profit.value - tangible_common_equity * risk_free_rate
+    value = real_profit / headcount.value
+    confidence = min(item.confidence for item in (gross_profit, headcount, *tce_inputs) if item is not None)
+
+    return FactorResult(
+        factor="gppe_banking_tce_v1",
         entity_id=entity_id,
         value=value,
         unit_family=UnitFamily.PER_EMPLOYEE,

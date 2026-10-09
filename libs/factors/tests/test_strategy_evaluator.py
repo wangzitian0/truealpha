@@ -18,6 +18,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
     rank_and_select,
 )
+from factors.forest import IssuerClass
 from truealpha_contracts.strategy import (
     ExclusionReason,
     GoldenDecisionOutcome,
@@ -416,27 +417,63 @@ def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
     assert decisions[0].tier == "traditional"
 
 
-def test_evaluator_evaluates_bank_with_leverage_adjusted_equity_charge() -> None:
-    # JPM bank scenario: PPNR = $86.8B, Total Assets = $4.42T, Headcount = 318,512.
-    # Evaluator wires financial_leverage_adjusted=True, so capital charge evaluates on 8% equity base ($353.99B),
-    # resulting in a positive capital-adjusted labor efficiency (~+$217k), not -$514k.
-    records = {
-        "gross_profit": (Decimal("86807000000"), Decimal("0.9")),
-        "revenue": (Decimal("150000000000"), Decimal("0.9")),
-        "total_assets": (Decimal("4424900000000"), Decimal("0.9")),
-        "headcount": (Decimal("318512"), Decimal("0.9")),
-        "shares_outstanding": (Decimal("2800000000"), Decimal("0.9")),
-        "last_close": (Decimal("200"), Decimal("0.9")),
-    }
-    issuer = IssuerInput(issuer_id="issuer:bank", records=records)
-    decisions = evaluate_cutoff(
-        [issuer],
-        definition=_definition(),
-        cutoff_at=_PEG_CUTOFF,
-        risk_free_rate=Decimal("0.05"),
-        financial_leverage_adjusted=True,
-    )
-    assert len(decisions) == 1
-    decision = decisions[0]
-    assert decision.capital_adjusted_labor_efficiency is not None
-    assert decision.capital_adjusted_labor_efficiency > Decimal("200000")
+_TCE_KEYS = ("stockholders_equity", "goodwill", "intangible_assets_net_excluding_goodwill")
+
+_BANK_RECORDS_WITH_TCE = {
+    "gross_profit": (Decimal("86807000000"), Decimal("0.9")),
+    "revenue": (Decimal("150000000000"), Decimal("0.9")),
+    "total_assets": (Decimal("4424900000000"), Decimal("0.9")),
+    "headcount": (Decimal("318512"), Decimal("0.9")),
+    "shares_outstanding": (Decimal("2800000000"), Decimal("0.9")),
+    "last_close": (Decimal("200"), Decimal("0.9")),
+    "stockholders_equity": (Decimal("340000000000"), Decimal("0.9")),
+    "goodwill": (Decimal("5000000000"), Decimal("0.9")),
+    "intangible_assets_net_excluding_goodwill": (Decimal("1000000000"), Decimal("0.9")),
+}
+
+
+def test_evaluator_ranks_a_bank_on_measured_tangible_common_equity() -> None:
+    # Banking v1 charges measured TCE (340B - 6B = 334B), not 8% of assets and not total assets.
+    # (86.807B - 334B * 0.05) / 318,512 = about +$220k per employee on this base.
+    issuer = IssuerInput(issuer_id="issuer:bank", records=_BANK_RECORDS_WITH_TCE, issuer_class=IssuerClass.FINANCIAL)
+    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    expected = (Decimal("86807000000") - Decimal("334000000000") * Decimal("0.05")) / Decimal("318512")
+    assert decision.exclusion_reason is None
+    assert decision.capital_adjusted_labor_efficiency == expected.quantize(Decimal("0.01"))
+
+
+def test_evaluator_excludes_a_bank_without_tangible_common_equity() -> None:
+    # No fallback value: the bank is excluded with the named reason, never ranked on total assets.
+    records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "goodwill"}
+    issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
+    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    assert decision.eligible is False
+    assert decision.capital_adjusted_labor_efficiency is None
+    assert decision.exclusion_reason is ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY
+
+
+def test_evaluator_charges_the_uniform_base_to_a_non_financial_issuer_above_fifteen_times() -> None:
+    # Assets / gross profit = 50.9 > 15. The uniform charge applies: no 8% base for a non-financial issuer.
+    records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key not in _TCE_KEYS}
+    issuer = IssuerInput(issuer_id="issuer:acme", records=records, issuer_class=IssuerClass.NON_FINANCIAL)
+    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05"))
+    expected = (Decimal("86807000000") - Decimal("4424900000000") * Decimal("0.05")) / Decimal("318512")
+    assert decision.capital_adjusted_labor_efficiency == expected.quantize(Decimal("0.01"))
+    assert decision.capital_adjusted_labor_efficiency < 0
+
+
+def test_the_leverage_flag_is_gone_from_the_evaluator() -> None:
+    # The retired eight-percent leverage branch was a ratio test that applied to every issuer.
+    # No flag may reach the evaluator: the capital base is chosen by the issuer class, never by a flag.
+    import inspect
+
+    assert "financial_leverage_adjusted" not in inspect.signature(evaluate_cutoff).parameters
+
+
+def test_binding_table_ranks_financial_on_banking_and_every_other_class_on_uniform() -> None:
+    from factors.composite.strategy_evaluator import LABOR_EFFICIENCY_BY_CLASS
+
+    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.FINANCIAL].metric == "gppe_banking_tce_v1"
+    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.NON_FINANCIAL].metric == "gppe_uniform_charge_v0"
+    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.INSURANCE].metric == "gppe_uniform_charge_v0"
+    assert LABOR_EFFICIENCY_BY_CLASS[None].metric == "gppe_uniform_charge_v0"

@@ -20,10 +20,11 @@ thresholds, bands, selection count) from the versioned
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
+from types import MappingProxyType
 
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, input_key_for_metric
 from truealpha_contracts.strategy import (
@@ -33,10 +34,15 @@ from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
 )
 
-from factors.base.gross_profit_per_employee import gross_profit_per_employee
+from factors.base.gross_profit_per_employee import (
+    BANKING_TCE_INPUTS,
+    gross_profit_per_employee,
+    gross_profit_per_employee_banking_tce,
+)
 from factors.base.peg import peg
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
+from factors.forest import IssuerClass
 from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
 
@@ -73,6 +79,42 @@ _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
 
 
 @dataclass(frozen=True)
+class LaborEfficiencyMetric:
+    """One named GPPE metric the strategy can rank an issuer on (#1176)."""
+
+    metric: str
+    compute: Callable[..., FactorResult]
+    input_keys: tuple[str, ...]
+
+
+_UNIFORM_CHARGE_V0 = LaborEfficiencyMetric(
+    metric="gppe_uniform_charge_v0",
+    compute=gross_profit_per_employee,
+    input_keys=_input_keys("gross_profit_per_employee"),
+)
+_BANKING_TCE_V1 = LaborEfficiencyMetric(
+    metric="gppe_banking_tce_v1",
+    compute=gross_profit_per_employee_banking_tce,
+    input_keys=tuple(input_key_for_metric(metric) for metric in BANKING_TCE_INPUTS),
+)
+
+#: The one binding table (owner decision 2026-10-09, #1176): FINANCIAL issuers rank on measured
+#: tangible common equity; every other class ranks on the uniform total-assets charge. A classless
+#: input (the frozen #21 replay carries no class) keeps the uniform definition it was frozen with.
+LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(
+    {
+        IssuerClass.FINANCIAL: _BANKING_TCE_V1,
+        IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
+        IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
+        None: _UNIFORM_CHARGE_V0,
+    }
+)
+
+#: The factor flag that names a missing tangible-common-equity input (`gppe_banking_tce_v1`).
+_MISSING_TCE_FLAG = "missing_tangible_common_equity"
+
+
+@dataclass(frozen=True)
 class IssuerInput:
     """One issuer's provenance-neutral factor inputs at a single cutoff.
 
@@ -90,6 +132,8 @@ class IssuerInput:
     issuer_id: str
     records: Mapping[str, tuple[Decimal, Decimal]]
     periodic_records: Mapping[str, Mapping[str, tuple[Decimal, Decimal]]] = field(default_factory=dict)
+    #: The issuer's operating class. It selects the labor-efficiency metric (LABOR_EFFICIENCY_BY_CLASS).
+    issuer_class: IssuerClass | None = None
 
 
 @dataclass(frozen=True)
@@ -188,7 +232,6 @@ def _evaluate_issuer(
     definition: LargeModelValueV0Definition,
     risk_free_rate: Decimal,
     as_of: datetime,
-    financial_leverage_adjusted: bool = False,
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     """Return this issuer's pre-ranking decision plus its valuation gap (or None
     when it is not a ranking candidate)."""
@@ -210,18 +253,23 @@ def _evaluate_issuer(
             None,
         )
 
-    gppe_result = gross_profit_per_employee(
-        _facts_for(issuer, _input_keys("gross_profit_per_employee"), as_of=as_of),
+    labor = LABOR_EFFICIENCY_BY_CLASS[issuer.issuer_class]
+    gppe_result = labor.compute(
+        _facts_for(issuer, labor.input_keys, as_of=as_of),
         entity_id=issuer.issuer_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
-        financial_leverage_adjusted=financial_leverage_adjusted,
     )
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
     )
     if gppe_result.value is None or ps_result.value is None:
-        return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, confidence=consumed_confidence), None
+        reason = (
+            ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY
+            if _MISSING_TCE_FLAG in gppe_result.flags
+            else ExclusionReason.STALE_REQUIRED_INPUT
+        )
+        return _excluded(issuer.issuer_id, reason, confidence=consumed_confidence), None
 
     # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
     # the owner decides how it enters selection, or landing the factor would silently move
@@ -370,7 +418,6 @@ def evaluate_cutoff(
     definition: LargeModelValueV0Definition,
     cutoff_at: datetime,
     risk_free_rate: Decimal,
-    financial_leverage_adjusted: bool = False,
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id."""
@@ -381,7 +428,6 @@ def evaluate_cutoff(
             definition=definition,
             risk_free_rate=risk_free_rate,
             as_of=cutoff_at,
-            financial_leverage_adjusted=financial_leverage_adjusted,
         )[0]
         for issuer in issuers
     ]

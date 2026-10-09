@@ -46,6 +46,18 @@ def _result(name: str, inputs: Sequence[FactorResult], entity_id: str) -> Factor
     return matches[0] if matches else None
 
 
+#: The labor-efficiency results the composite accepts: one per named GPPE metric (#1176).
+_LABOR_EFFICIENCY_FACTORS = ("gross_profit_per_employee", "gppe_uniform_charge_v0", "gppe_banking_tce_v1")
+
+
+def _labor_efficiency(inputs: Sequence[FactorResult], entity_id: str) -> FactorResult | None:
+    matches = [item for item in inputs if item.factor in _LABOR_EFFICIENCY_FACTORS and item.entity_id == entity_id]
+    if len(matches) > 1:
+        names = ", ".join(sorted({item.factor for item in matches}))
+        raise ValueError(f"{entity_id}: multiple factor results for factor {names!r}")
+    return matches[0] if matches else None
+
+
 @factor("three_tier_valuation", kind="composite", module=7)
 def three_tier_valuation(
     inputs: Sequence[FactorResult],
@@ -55,7 +67,7 @@ def three_tier_valuation(
     definition: ThreeTierValuationDefinition,
     gross_margin: Decimal | None = None,
 ) -> FactorResult:
-    gppe = _result("gross_profit_per_employee", inputs, entity_id)
+    gppe = _labor_efficiency(inputs, entity_id)
     price_to_sales = _result("price_to_sales", inputs, entity_id)
 
     if gppe is None or gppe.value is None:

@@ -1,9 +1,13 @@
 """The registered forest (#528, docs/metric-forest.md).
 
-Today it holds one tree: GPPE `production-topt-v0.2.0`, the uniform capital-adjusted labor
-efficiency that `factors.production_topt.compute_topt_gppe` used to spell out by hand and now
-evaluates from here. Registering it changed no number (the golden result identities in
-`tests/forest/test_gppe_tree.py` were captured before the change).
+It holds two named GPPE metrics (#1176, owner decision 2026-10-09):
+
+- `gppe_uniform_charge_v0`, in tree `gppe` `production-topt-v0.2.0`. The uniform capital-adjusted
+  labor efficiency that `factors.production_topt.compute_topt_gppe` used to spell out by hand.
+  Every class uses total assets as the capital base. The node key was `gppe` before #1176; the
+  arithmetic and the published values did not change (`tests/forest/test_gppe_tree.py` golden ids).
+- `gppe_banking_tce_v1`, in tree `gppe_banking_tce` `v1`. FINANCIAL only. The capital base is
+  measured tangible common equity, built from three captured inputs.
 
 Node and tree UUIDs were minted once as uuid5 values under the namespace
 `uuid5(NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/metric-forest")` and are
@@ -71,6 +75,11 @@ PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
         "employees_total": "a count of people",
         "risk_free_rate": "a definition parameter we set, not a captured fact",
         "capital_charge": "total_assets × risk_free_rate, both non-negative by the entries above",
+        "goodwill": "a carrying amount of goodwill; a negative balance is a sign or unit defect in the filing parse",
+        "intangible_assets_net_excluding_goodwill": (
+            "a carrying amount of intangible assets; a negative balance is a sign or unit defect in the filing parse"
+        ),
+        "tangible_deductions": "the sum of two non-negative balances (goodwill and intangibles)",
     }
 )
 
@@ -233,12 +242,13 @@ CAPITAL_ADJUSTED_GROSS_PROFIT = MetricNode(
 
 GPPE = MetricNode(
     node_id=UUID("6143cf17-ceba-5f78-a2d3-a7cc423c49a7"),
-    key="gppe",
+    key="gppe_uniform_charge_v0",
     kind=NodeKind.DERIVED,
     definition=(
-        "Capital-adjusted gross profit per employee, v0.2.0 (#59, #394): real profit v0 divided by "
-        "headcount. Negative means the issuer earns less than the risk-free return on its total "
-        "assets, which the definition ranks as a low signal."
+        "gppe_uniform_charge_v0 (#1176, #59, #394): capital-adjusted gross profit per employee, real "
+        "profit v0 divided by headcount, with total assets as the capital base for every class. "
+        "Negative means the issuer earns less than the risk-free return on its total assets, which "
+        "the definition ranks as a low signal."
     ),
     unit=UnitFamily.PER_EMPLOYEE,
     period=PeriodSemantics.FISCAL_YEAR_FLOW,
@@ -246,6 +256,173 @@ GPPE = MetricNode(
     sign_policy=_policy(SignPolicy.SIGN_IS_SIGNAL),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe"),
     confidence=_DERIVED_CONFIDENCE,
+)
+
+# --- gppe_banking_tce_v1 (#1176): FINANCIAL only, capital base = measured tangible common equity.
+# Node UUIDs are uuid5 of the key under the forest namespace, minted with the #1176 change.
+
+_FINANCIAL = frozenset({IssuerClass.FINANCIAL})
+
+
+def _financial_policy(policy: SignPolicy) -> dict[IssuerClass, SignPolicy]:
+    return _policy(policy, _FINANCIAL)
+
+
+STOCKHOLDERS_EQUITY = MetricNode(
+    node_id=UUID("0aa53e41-0d12-5f11-92c4-fe6225166328"),
+    key="stockholders_equity",
+    kind=NodeKind.INPUT,
+    definition="Total stockholders' equity at the fiscal year end, preferred equity included (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    # Negative equity is a real state (buybacks, losses). It is not a defect.
+    sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="stockholders_equity"),
+    confidence=_captured("stockholders_equity"),
+    aliases=(NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),),
+)
+
+GOODWILL = MetricNode(
+    node_id=UUID("738c81a6-fd15-53ca-ad2f-679a2b700056"),
+    key="goodwill",
+    kind=NodeKind.INPUT,
+    definition="Goodwill carrying amount at the fiscal year end (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="goodwill"),
+    confidence=_captured("goodwill"),
+    aliases=(NodeAlias(kind=AliasKind.METRIC, value="goodwill"),),
+)
+
+INTANGIBLE_ASSETS = MetricNode(
+    node_id=UUID("14313d73-f5f7-5a47-a087-ed9ce71ebd88"),
+    key="intangible_assets_net_excluding_goodwill",
+    kind=NodeKind.INPUT,
+    definition="Intangible assets net of amortization, excluding goodwill, at the fiscal year end (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="intangible_assets_net_excluding_goodwill"),
+    confidence=_captured("intangible_assets_net_excluding_goodwill"),
+    aliases=(NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),),
+)
+
+TANGIBLE_DEDUCTIONS = MetricNode(
+    node_id=UUID("805d8f77-10aa-5dc4-b2bd-f47647e00593"),
+    key="tangible_deductions",
+    kind=NodeKind.DERIVED,
+    definition="Equity that is not tangible: goodwill plus intangible assets (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
+TANGIBLE_COMMON_EQUITY = MetricNode(
+    node_id=UUID("8c346339-0ca5-588a-90d4-e67c96db8ecb"),
+    key="tangible_common_equity",
+    kind=NodeKind.DERIVED,
+    definition="Measured tangible common equity: stockholders' equity minus tangible deductions (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    # Tangible equity can be negative for a weak balance sheet. That is economic, not a defect.
+    sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
+CAPITAL_CHARGE_TCE = MetricNode(
+    node_id=UUID("588a8f4d-b301-5a2e-b0f3-de6743d60af4"),
+    key="capital_charge_tce",
+    kind=NodeKind.DERIVED,
+    definition="The risk-free return on measured tangible common equity: TCE x rate (#1176).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
+CAPITAL_ADJUSTED_TCE = MetricNode(
+    node_id=UUID("57204502-7b9c-5671-b392-424b4368d9f1"),
+    key="capital_adjusted_tce",
+    kind=NodeKind.DERIVED,
+    definition="Real profit on the tangible base (#1176): the operating numerator minus the TCE charge.",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.SIGN_IS_SIGNAL),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
+GPPE_BANKING_TCE_V1 = MetricNode(
+    node_id=UUID("582c62d6-4873-5ff4-ad91-eba1d571fc4c"),
+    key="gppe_banking_tce_v1",  # gitleaks:allow - a metric key, not a credential
+    kind=NodeKind.DERIVED,
+    definition=(
+        "gppe_banking_tce_v1 (#1176, #1108): labor efficiency for FINANCIAL issuers. Real profit on "
+        "measured tangible common equity, divided by headcount. Missing TCE gives no value; it never "
+        "falls back to total assets or a fixed equity share."
+    ),
+    unit=UnitFamily.PER_EMPLOYEE,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.SIGN_IS_SIGNAL),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
+GPPE_BANKING_TCE_TREE = MetricTree(
+    tree_id=UUID("96fd6d4a-8983-5caf-b647-360122569d00"),
+    key="gppe_banking_tce",
+    version="v1",
+    realizes=LABOR_EFFICIENCY.key,
+    root=GPPE_BANKING_TCE_V1.key,
+    applicability=_FINANCIAL,
+    decompositions=(
+        Decomposition(
+            output=GPPE_BANKING_TCE_V1.key,
+            formula_id="ratio",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (CAPITAL_ADJUSTED_TCE.key, EMPLOYEES_TOTAL.key)},
+        ),
+        # The banking numerator is the bank's pre-provision profit, read directly. The shared
+        # operating node binds every class, so a FINANCIAL-only tree cannot reuse its decomposition.
+        Decomposition(
+            output=CAPITAL_ADJUSTED_TCE.key,
+            formula_id="difference",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (PRE_PROVISION_PROFIT.key, CAPITAL_CHARGE_TCE.key)},
+        ),
+        Decomposition(
+            output=CAPITAL_CHARGE_TCE.key,
+            formula_id="product",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (TANGIBLE_COMMON_EQUITY.key, RISK_FREE_RATE.key)},
+        ),
+        Decomposition(
+            output=TANGIBLE_COMMON_EQUITY.key,
+            formula_id="difference",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (STOCKHOLDERS_EQUITY.key, TANGIBLE_DEDUCTIONS.key)},
+        ),
+        Decomposition(
+            output=TANGIBLE_DEDUCTIONS.key,
+            formula_id="sum",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (GOODWILL.key, INTANGIBLE_ASSETS.key)},
+        ),
+    ),
+    decimal_precision=34,
 )
 
 GPPE_V0_TREE = MetricTree(
@@ -304,8 +481,16 @@ FOREST = Forest(
         CAPITAL_CHARGE,
         CAPITAL_ADJUSTED_GROSS_PROFIT,
         GPPE,
+        STOCKHOLDERS_EQUITY,
+        GOODWILL,
+        INTANGIBLE_ASSETS,
+        TANGIBLE_DEDUCTIONS,
+        TANGIBLE_COMMON_EQUITY,
+        CAPITAL_CHARGE_TCE,
+        CAPITAL_ADJUSTED_TCE,
+        GPPE_BANKING_TCE_V1,
     ),
-    trees=(GPPE_V0_TREE,),
+    trees=(GPPE_V0_TREE, GPPE_BANKING_TCE_TREE),
 )
 
 #: Published mart columns -> the node each one carries, per table. The wide-row generator

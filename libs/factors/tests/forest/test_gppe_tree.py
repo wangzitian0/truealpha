@@ -82,7 +82,7 @@ def test_the_tree_equals_the_v020_kernel_over_a_grid() -> None:
             expected = _v020_kernel(
                 issuer_class.value, Decimal(numerator), Decimal(total_assets), Decimal(headcount), Decimal(rate)
             )
-            actual = (evaluation.values["capital_adjusted_gross_profit"], evaluation.values["gppe"])
+            actual = (evaluation.values["capital_adjusted_gross_profit"], evaluation.values["gppe_uniform_charge_v0"])
             # Equal AND identically represented: `Decimal("1.0") == Decimal("1")` would hide an
             # exponent change, and the result identity hashes the text.
             assert actual == expected and tuple(map(str, actual)) == tuple(map(str, expected)), (
@@ -114,9 +114,9 @@ def test_a_missing_input_or_a_zero_denominator_is_undefined_never_a_number() -> 
         issuer_class=IssuerClass.FINANCIAL,
         inputs={"total_assets": Decimal("1"), "employees_total": Decimal("1"), "risk_free_rate": Decimal("0.05")},
     )
-    assert missing.values["gppe"] is None
+    assert missing.values["gppe_uniform_charge_v0"] is None
     assert missing.undefined["pre_provision_profit"] == "missing_input"
-    assert missing.undefined["gppe"] == "undefined_operand"
+    assert missing.undefined["gppe_uniform_charge_v0"] == "undefined_operand"
     zero = evaluate(
         FOREST,
         GPPE_V0_TREE,
@@ -128,7 +128,7 @@ def test_a_missing_input_or_a_zero_denominator_is_undefined_never_a_number() -> 
             "risk_free_rate": Decimal("0.05"),
         },
     )
-    assert zero.values["gppe"] is None and zero.undefined == {"gppe": "zero_denominator"}
+    assert zero.values["gppe_uniform_charge_v0"] is None and zero.undefined == {"gppe_uniform_charge_v0": "zero_denominator"}
 
 
 def _metric(name: str, value: str | None, input_id: str = IDS[0]) -> ToptMetricInput:
@@ -258,10 +258,61 @@ def test_the_tree_is_the_definition_version_it_claims() -> None:
 #: sign policies, aliases or applicability, changes the identity; a changed identity under an
 #: unchanged version is a silent formula edit (#528 acceptance: "a definition change that
 #: alters a resolved value must bump definition_version"). Register a new version instead.
+#
+# #1176 renamed the uniform node `gppe` -> `gppe_uniform_charge_v0` and reworded its definition.
+# The tree's arithmetic is unchanged: the GOLDEN result identities above still pass, and a node
+# diff against main@e465d3d shows only `key` and `definition` changed on the node itself.
 FROZEN_TREES = {
-    ("gppe", "production-topt-v0.2.0"): "5f562c8a4272a69baf5c14eaf8959d1dbf7c21c8eb837b1bc172f776f299446f",
+    ("gppe", "production-topt-v0.2.0"): "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d",
+    ("gppe_banking_tce", "v1"): "69c6cfcf49b19247f082458276697f761f7a8cca4b3b5d19c096741945696bb4",
 }
 
 
 def test_registered_trees_are_frozen_under_their_version() -> None:
     assert {(tree.key, tree.version): FOREST.tree_sha256(tree) for tree in FOREST.trees} == FROZEN_TREES
+
+
+def test_both_named_gppe_metrics_are_registered_with_their_own_sign_policy() -> None:
+    # gppe_uniform_charge_v0 applies to every class; each class declares SIGN_IS_SIGNAL.
+    # gppe_banking_tce_v1 applies to FINANCIAL only and declares SIGN_IS_SIGNAL for it.
+    from factors.forest import SignPolicy
+
+    uniform = FOREST.node("gppe_uniform_charge_v0")
+    banking = FOREST.node("gppe_banking_tce_v1")
+    assert uniform.applicability == frozenset(IssuerClass)
+    assert set(uniform.sign_policy.values()) == {SignPolicy.SIGN_IS_SIGNAL}
+    assert banking.applicability == frozenset({IssuerClass.FINANCIAL})
+    assert banking.sign_policy == {IssuerClass.FINANCIAL: SignPolicy.SIGN_IS_SIGNAL}
+
+
+def test_banking_tree_evaluates_measured_tangible_common_equity_for_a_bank() -> None:
+    from factors.forest import GPPE_BANKING_TCE_TREE as BANKING_TCE_TREE
+
+    inputs = {
+        "pre_provision_profit": Decimal("86807000000"),
+        "stockholders_equity": Decimal("340000000000"),
+        "goodwill": Decimal("5000000000"),
+        "intangible_assets_net_excluding_goodwill": Decimal("1000000000"),
+        "employees_total": Decimal("318512"),
+        "risk_free_rate": Decimal("0.05"),
+    }
+    evaluation = evaluate(FOREST, BANKING_TCE_TREE, issuer_class=IssuerClass.FINANCIAL, inputs=inputs)
+    tangible_common_equity = Decimal("340000000000") - Decimal("5000000000") - Decimal("1000000000")
+    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        expected = (Decimal("86807000000") - tangible_common_equity * Decimal("0.05")) / Decimal("318512")
+    assert evaluation.values["gppe_banking_tce_v1"] == expected
+    assert evaluation.undefined == {}
+
+
+def test_banking_tree_leaves_a_missing_tangible_common_equity_undefined() -> None:
+    from factors.forest import GPPE_BANKING_TCE_TREE as BANKING_TCE_TREE
+
+    inputs = {
+        "pre_provision_profit": Decimal("86807000000"),
+        "stockholders_equity": Decimal("340000000000"),
+        "employees_total": Decimal("318512"),
+        "risk_free_rate": Decimal("0.05"),
+    }
+    evaluation = evaluate(FOREST, BANKING_TCE_TREE, issuer_class=IssuerClass.FINANCIAL, inputs=inputs)
+    assert evaluation.values["gppe_banking_tce_v1"] is None
+    assert evaluation.undefined["goodwill"] == "missing_input"

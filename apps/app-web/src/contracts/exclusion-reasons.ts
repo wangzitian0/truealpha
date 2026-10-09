@@ -16,6 +16,8 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   missing_revenue_fact: "Revenue fact not captured yet",
   missing_market_value_input: "Market-value inputs (shares × last close) incomplete",
   missing_risk_free_rate_parameter: "Risk-free rate parameter missing for this cutoff",
+  missing_tangible_common_equity:
+    "Banks: measured tangible common equity not captured yet (stockholders' equity, goodwill, intangibles)",
   below_confidence_floor: "Input confidence below the strategy's floor",
   stale_required_input: "A required input is older than the strategy allows",
   nonpositive_headcount: "Reported headcount is zero or negative",
