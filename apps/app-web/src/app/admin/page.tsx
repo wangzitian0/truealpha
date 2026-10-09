@@ -74,7 +74,13 @@ export default async function AdminOverviewPage() {
             <dt className="text-xs uppercase tracking-wide text-gray-500">
               Pointer · {pointer.universeId}
             </dt>
-            <dd className="mt-1 text-lg font-semibold tabular-nums">{hoursSince(pointer.advancedAt)} ago</dd>
+            <dd className="mt-1 text-lg font-semibold tabular-nums">
+              {pointer.ageHours !== null && pointer.ageHours !== undefined
+                ? pointer.ageHours < 1
+                  ? `${Math.round(pointer.ageHours * 60)}m ago`
+                  : `${pointer.ageHours.toFixed(1)}h ago`
+                : "—"}
+            </dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
               seq {pointer.sequence} · {pointer.targetRunId}
             </p>

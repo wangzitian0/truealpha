@@ -48,12 +48,12 @@ function assert(condition: unknown, message: string): asserts condition {
           ],
         };
       }
-      if (sql.includes("current_pointer_head")) {
+      if (sql.includes("served_head")) {
         // Two universes, canary first as Postgres orders them: the loader must keep both.
         return {
           rows: [
-            { universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z" },
-            { universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z" },
+            { universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z", age_hours: 12.5, freshness: "fresh", availability: "available" },
+            { universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z", age_hours: 4.2, freshness: "fresh", availability: "available" },
           ],
         };
       }
@@ -78,6 +78,7 @@ function assert(condition: unknown, message: string): asserts condition {
     outcome.data.pointers[1].universeId === "topt-core" && outcome.data.pointers[1].sequence === 7,
     "the core universe survives next to the canary",
   );
+  assert(outcome.data.pointers[1].ageHours === 4.2 && outcome.data.pointers[1].freshness === "fresh", "age and freshness passed through");
   assert(outcome.data.dataEngine !== null && outcome.data.dataEngine.gitSha === "4cf7291deadbeef", "data-engine build shape");
   assert(outcome.data.quotaToday[0].source === "twelve-data" && outcome.data.quotaToday[0].fetches === 21, "quota shape");
 }
@@ -87,7 +88,7 @@ function assert(condition: unknown, message: string): asserts condition {
   __setTestOpsClient({
     query: async (sql: string) => {
       if (sql.includes("dagster.runs")) throw new Error('relation "dagster.runs" does not exist');
-      if (sql.includes("current_pointer_head")) return { rows: [] };
+      if (sql.includes("served_head")) return { rows: [] };
       if (sql.includes("data_engine_identity")) throw new Error('relation "mart.data_engine_identity" does not exist');
       if (sql.includes("raw.fetches")) return { rows: [] };
       return { rows: [] };

@@ -9,7 +9,7 @@
  *   L2 facts     — mart.strategy_input_coverage (#496 metric)
  *   L3 factors   — GPPE availability per listing (mart read)
  *   L4 strategy  — decision waterfall from the latest run
- *   L5 consume   — governed pointer age (mart.current_pointer_head)
+ *   L5 consume   — governed pointer age (mart.served_head)
  */
 
 import { withMartReadonly } from "@/server/mart/db";
@@ -57,11 +57,11 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
         [runId],
       );
       const ptr = await client.query(
-        "select extract(epoch from (now() - advanced_at)) / 3600.0 as age " +
+        "select age_hours as age " +
           // Per universe, not collapsed: `order by sequence desc limit 1` reported one
           // universe's age and hid the rest, so a pipeline that stopped advancing looked
           // identical to one that never ran.
-          "from mart.current_pointer_head order by universe_id",
+          "from mart.served_head order by universe_id",
       );
       return [
         { total: Number(cov.rows[0]?.total ?? 0), complete: Number(cov.rows[0]?.complete ?? 0) },
@@ -137,7 +137,7 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
         headline: pointerAgeHours === null ? "no pointer" : `pointer ${pointerAgeHours.toFixed(1)}h old`,
         ratio: pointerAgeHours === null ? null : Math.max(0.04, Math.min(1, 1 - pointerAgeHours / 48)),
         status: pointerAgeHours === null ? "crit" : pointerAgeHours <= 26 ? "ok" : "warn",
-        detail: "mart.current_pointer_head — web/MCP/chat resolve the same governed run",
+        detail: "mart.served_head — web/MCP/chat resolve the same governed run",
       },
     ];
     return { kind: "ready", data: { runId, layers } };

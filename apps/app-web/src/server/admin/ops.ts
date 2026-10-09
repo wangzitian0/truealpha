@@ -2,7 +2,7 @@
  * #495 (surface 2b): the /admin ops overview loader — administrator-only,
  * read-only SQL through the dedicated `app_ops_reader` role (db/roles.sql):
  * run history from `dagster.runs`, pointer freshness per universe from
- * `mart.current_pointer_head`, the data-engine build behind the newest run from
+ * `mart.served_head`, the data-engine build behind the newest run from
  * `mart.data_engine_identity` (#712), per-source quota burn from `raw.fetches`.
  * Lives under `src/server/admin/` so the #493 boundary test keeps it
  * un-importable from research routes.
@@ -82,6 +82,10 @@ export interface OpsPointerRow {
   targetRunId: string;
   sequence: number;
   advancedAt: string;
+  ageHours?: number | null;
+  freshness?: "fresh" | "stale" | "unknown";
+  availability?: "available" | "unavailable";
+  stalenessReason?: string | null;
 }
 
 /** #712: which data-engine build produced the newest run, from
@@ -143,14 +147,19 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
         // An ops overview reports pointer freshness PER UNIVERSE. Collapsing with
         // `order by sequence desc limit 1` showed one universe and hid the rest, so a
         // canary that stopped advancing looked identical to one that never ran.
-        "select universe_id, target_run_id, sequence, advanced_at from mart.current_pointer_head " +
-          "order by universe_id",
+        "select universe_id, coalesce(run_id, head_run_id) as target_run_id, sequence, " +
+          "advanced_at, age_hours, freshness, availability, staleness_reason " +
+          "from mart.served_head order by universe_id",
       );
       const pointers: OpsPointerRow[] = pointerResult.rows.map((row) => ({
         universeId: String(row.universe_id),
         targetRunId: String(row.target_run_id),
         sequence: Number(row.sequence),
         advancedAt: new Date(row.advanced_at).toISOString(),
+        ageHours: row.age_hours !== null && row.age_hours !== undefined ? Number(row.age_hours) : null,
+        freshness: row.freshness ? (String(row.freshness) as "fresh" | "stale" | "unknown") : undefined,
+        availability: row.availability ? (String(row.availability) as "available" | "unavailable") : undefined,
+        stalenessReason: row.staleness_reason ? String(row.staleness_reason) : null,
       }));
 
       let dataEngine: OpsDataEngineBuild | null = null;

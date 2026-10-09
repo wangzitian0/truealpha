@@ -211,7 +211,7 @@ const confidenceRows = [
     query: async (sql: string) => {
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: confidenceRows } as never;
-      if (typeof sql === "string" && sql.includes("current_pointer_head"))
+      if (typeof sql === "string" && sql.includes("served_head"))
         return { rows: headRows } as never;
       // "as check" FIRST: capacity SQLs also mention raw.fetches, and matching the
       // sources stub first fed them SourceStatRow shapes while the count-only

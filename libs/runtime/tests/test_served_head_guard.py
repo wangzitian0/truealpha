@@ -722,21 +722,7 @@ FOLLOW_UP = re.compile(r"#1062 PR [234]")
 #: Rule B is per file. `datahub-stats.ts` and `funnel.ts` read the newest graded run with
 #: `order by cutoff desc limit 1`, with no head. When PR 4 moves their head statement, rule B
 #: stops flagging those files. PR 4 must still move the newest-run statements by hand.
-BASELINE: tuple[Offender, ...] = (
-    Offender("C", "apps/app-web/src/app/admin/page.tsx", "age-helper-on-advanced", 1, "#1062 PR 4"),
-    Offender("C", "apps/app-web/src/app/admin/page.tsx", "clock-with-advanced", 1, "#1062 PR 4"),
-    Offender("A", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.current_pointer_head", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.datahub_confidence_report", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.datahub_quality_report", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.question_coverage_report", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/datahub-stats.ts", "mart.topt_capture_status", 1, "#1062 PR 4"),
-    Offender("A", "apps/app-web/src/server/admin/funnel.ts", "mart.current_pointer_head", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/funnel.ts", "mart.strategy_input_coverage", 1, "#1062 PR 4"),
-    Offender("C", "apps/app-web/src/server/admin/funnel.ts", "extract-epoch-from-now", 1, "#1062 PR 4"),
-    Offender("C", "apps/app-web/src/server/admin/funnel.ts", "now-minus-advanced", 1, "#1062 PR 4"),
-    Offender("A", "apps/app-web/src/server/admin/ops.ts", "mart.current_pointer_head", 1, "#1062 PR 4"),
-    Offender("B", "apps/app-web/src/server/admin/ops.ts", "mart.data_engine_identity", 1, "#1062 PR 4"),
-)
+BASELINE: tuple[Offender, ...] = ()
 
 
 def counted(violations: list[Violation]) -> Counter[tuple[str, str, str]]:
@@ -788,7 +774,10 @@ def test_the_scan_reads_the_consumer_trees_and_finds_statements() -> None:
         if relation_references(literal.text, SERVED_HEAD)
     ]
     assert served, "no consumer statement reads mart.served_head, so the guard has seen no compliant reader"
-    assert violations, "the scan found no violation at all, so the rules cannot be reading the baseline readers"
+    if BASELINE:
+        assert violations, "the scan found no violation at all, so the rules cannot be reading the baseline readers"
+    else:
+        assert not violations, f"the baseline is empty, but the scan found violations: {violations}"
 
 
 def test_no_consumer_reads_the_pointer_or_computes_an_age_beyond_the_baseline() -> None:
