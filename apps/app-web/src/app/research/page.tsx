@@ -186,6 +186,19 @@ export default async function ResearchOverviewPage() {
 								</div>
 								<h2 className="mt-2 font-semibold">{module.name}</h2>
 								<p className="mt-1 text-sm text-gray-400">{module.note}</p>
+								<p className="mt-2 text-xs text-gray-500">
+									Source <code className="font-mono">{module.source}</code>
+								</p>
+								{module.output !== null && (
+									<p
+										className="mt-1 text-xs text-gray-500 tabular-nums"
+										data-testid="module-output"
+									>
+										{module.output.rows} rows · {module.output.availableRows}{" "}
+										available · latest cutoff{" "}
+										{module.output.latestCutoff ?? "—"}
+									</p>
+								)}
 								<div className="mt-3 flex items-center gap-2">
 									<AvailabilityBadge status={module.availability} />
 									{/* A status word cannot tell 4% from 100%. The badge was
