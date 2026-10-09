@@ -69,30 +69,38 @@ def fetch_log(run_id: str) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id")
-    parser.add_argument("--root", default="apps/data-engine/tests")
+    parser.add_argument(
+        "--root",
+        nargs="*",
+        default=None,
+        help="Root path prefixes to include; defaults to all harvested test files.",
+    )
     parser.add_argument("--out", default="tools/pytest_shard_weights.json")
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
+    roots = tuple(arguments.root) if arguments.root else None
     seconds = {
         path: value
         for path, value in durations_from_log(fetch_log(arguments.run_id)).items()
-        if path.startswith(arguments.root)
+        if roots is None or any(path.startswith(r) for r in roots)
     }
     if not seconds:
         # Fail closed: an empty harvest written over a good one silently
         # reverts every lane to the count-based estimate, and nothing would
         # say so (#527's green-while-empty).
+        prefix_desc = f"under {roots}" if roots else "across any test path"
         raise SystemExit(
-            f"harvest: run {arguments.run_id} yielded no durations under {arguments.root} — was it "
+            f"harvest: run {arguments.run_id} yielded no durations {prefix_desc} — was it "
             f"run with --durations=0? Refusing to write an empty harvest."
         )
 
     output = Path(arguments.out)
+    root_desc = list(roots) if roots else "all"
     output.write_text(
         json.dumps(
             {
                 "harvested_from_run": str(arguments.run_id),
-                "root": arguments.root,
+                "root": root_desc,
                 "files": len(seconds),
                 "total_seconds": round(sum(seconds.values()), 2),
                 "seconds_by_file": {key: round(value, 3) for key, value in sorted(seconds.items())},

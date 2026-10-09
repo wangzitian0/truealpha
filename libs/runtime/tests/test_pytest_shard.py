@@ -28,6 +28,12 @@ import pytest_shard  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SHARDED_ROOT = REPO_ROOT / "apps" / "data-engine" / "tests"
+CORE_ROOTS = [
+    REPO_ROOT / "libs" / "contracts" / "tests",
+    REPO_ROOT / "libs" / "factors" / "tests",
+    REPO_ROOT / "libs" / "runtime" / "tests",
+    REPO_ROOT / "apps" / "llm-service" / "tests",
+]
 
 
 @pytest.mark.parametrize("total", [1, 2, 3, 4, 7])
@@ -49,13 +55,7 @@ def test_shards_partition_the_tree(total: int) -> None:
 
 def test_shards_partition_multiple_roots() -> None:
     """Multi-root collection partitions all roots exactly across 2 shards (#1173)."""
-    roots = [
-        REPO_ROOT / "libs" / "contracts" / "tests",
-        REPO_ROOT / "libs" / "factors" / "tests",
-        REPO_ROOT / "libs" / "runtime" / "tests",
-        REPO_ROOT / "apps" / "llm-service" / "tests",
-    ]
-    files = pytest_shard.collect(roots)
+    files = pytest_shard.collect(CORE_ROOTS)
     assert len(files) >= 100, f"expected at least 100 files across core roots, got {len(files)}"
 
     seen: list[Path] = []
@@ -256,6 +256,42 @@ def test_the_weights_still_describe_the_tree_they_weigh() -> None:
         f"files) — refresh it with tools/harvest_shard_weights.py <run-id> from any green run, "
         f"or the packing is guessing for the rest"
     )
+
+    core_files = pytest_shard.collect(CORE_ROOTS)
+    core_known = [path for path in core_files if str(path.relative_to(REPO_ROOT)) in weights]
+    core_coverage = len(core_known) / len(core_files)
+    assert core_coverage >= 0.9, (
+        f"the harvest covers {core_coverage:.0%} of core tests ({len(core_known)}/{len(core_files)} "
+        f"files) — refresh it with tools/harvest_shard_weights.py <run-id> from any green run."
+    )
+
+
+def test_core_shards_carry_equal_measured_work() -> None:
+    """Core tests partitioned across 2 shards carry equal measured work (#1186)."""
+    measured = json.loads((REPO_ROOT / "tools" / "pytest_shard_weights.json").read_text(encoding="utf-8"))[
+        "seconds_by_file"
+    ]
+    files = pytest_shard.collect(CORE_ROOTS)
+    measured_tests = sum(pytest_shard.test_functions(REPO_ROOT / key) for key in measured if (REPO_ROOT / key).exists())
+    rate = (sum(measured.values()) / measured_tests) if measured_tests else 1.0
+
+    def seconds(path: Path) -> float:
+        key = str(path.relative_to(REPO_ROOT))
+        return measured[key] if key in measured else pytest_shard.test_functions(path) * rate
+
+    loads = [sum(seconds(path) for path in pytest_shard.shard(files, index, 2)) for index in range(2)]
+    assert min(loads) > 0
+    heaviest_path = max(files, key=seconds)
+    heaviest = seconds(heaviest_path)
+    if heaviest <= sum(loads) / 2:
+        assert max(loads) / min(loads) <= 1.25, (
+            f"the two core shards carry {[round(x) for x in loads]} measured seconds — "
+            f"this spread means the packing stopped using measured time"
+        )
+        return
+    rest = sorted(loads)[:1]
+    assert max(loads) <= heaviest * 1.1
+    assert max(rest) / min(rest) <= 1.4
 
 
 def test_the_assignment_is_stable_across_calls() -> None:
