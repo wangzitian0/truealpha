@@ -58,21 +58,35 @@ def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBackt
                 context.log.info("nightly_backtest: no monthly prices in staging; marking pending")
                 return
 
-            result = run_backtest(
-                connection,
-                strategy_key=config.strategy_key,
-                strategy_version=config.strategy_version,
-                universe_id=config.universe_id,
-                symbols=DEFAULT_TOPT_SYMBOLS,
-                factor_column=config.factor_column,
-                top_k=config.top_k,
-                dropout_k=config.dropout_k,
-            )
+            try:
+                result = run_backtest(
+                    connection,
+                    strategy_key=config.strategy_key,
+                    strategy_version=config.strategy_version,
+                    universe_id=config.universe_id,
+                    symbols=DEFAULT_TOPT_SYMBOLS,
+                    factor_column=config.factor_column,
+                    top_k=config.top_k,
+                    dropout_k=config.dropout_k,
+                )
+            except ValueError as exc:
+                if "no fundamental factor rows available" in str(exc):
+                    outcome.pending = True
+                    outcome.summary = f"pending: no fundamental factor rows available for {config.factor_column}"
+                    context.log.info(f"nightly_backtest: {outcome.summary}")
+                    return
+                raise
+
             connection.commit()
 
             if result.status != "succeeded":
                 outcome.summary = f"failed: {result.error_message or 'backtest failed'}"
                 raise dg.Failure(f"backtest simulation failed: {result.error_message}")
+
+            if len(result.trades) == 0:
+                outcome.summary = f"failed: backtest produced 0 trades for {config.strategy_key}"
+                context.log.error(f"nightly_backtest: {outcome.summary}")
+                raise dg.Failure(outcome.summary)
 
             summary_text = (
                 f"succeeded: {result.run_id[:25]} cagr={result.cagr_monthly:.4f} "

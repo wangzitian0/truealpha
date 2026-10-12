@@ -26,7 +26,15 @@ class BacktestEngineConfig:
     cash_sharing: bool = True
     top_k: int = 5
     dropout_k: int = 2
-    data_snapshot_hash: str = "snapshot_unspecified"
+    data_snapshot_hash: str = "snap-standalone"
+
+    def __post_init__(self) -> None:
+        if not self.data_snapshot_hash or self.data_snapshot_hash in ("default_snapshot", "snapshot_unspecified"):
+            raise ValueError(
+                f"Invalid data_snapshot_hash: {self.data_snapshot_hash!r}. "
+                "ADR A6 Decision 7 strictly forbids default_snapshot and snapshot_unspecified sentinels. "
+                "data_snapshot_hash must be explicitly resolved."
+            )
 
 
 @dataclass
@@ -61,9 +69,14 @@ def canonical_run_id(
     dropout_k: int = 2,
     fees: float = 0.001,
     slippage: float = 0.0005,
-    data_snapshot_hash: str = "snapshot_unspecified",
+    data_snapshot_hash: str = "snap-standalone",
 ) -> str:
     """Deterministic hash identifier binding all strategy, model, and execution parameters."""
+    if not data_snapshot_hash or data_snapshot_hash in ("default_snapshot", "snapshot_unspecified"):
+        raise ValueError(
+            f"Invalid data_snapshot_hash: {data_snapshot_hash!r}. "
+            "ADR A6 Decision 7 strictly forbids default_snapshot and snapshot_unspecified sentinels."
+        )
     seed = (
         f"{strategy_key}:{strategy_version}:{universe_id}:{start_date}:{end_date}:"
         f"{top_k}:{dropout_k}:{fees:.6f}:{slippage:.6f}:{data_snapshot_hash}"

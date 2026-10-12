@@ -166,10 +166,73 @@ def test_backtest_snapshot_hash_forbids_default_snapshot(connection: psycopg.Con
     df = pl.DataFrame({"symbol": ["AAPL"], "date": [date(2023, 1, 31)], "close": [150.0]})
     resolved = _resolve_snapshot_hash(connection, "topt", df)
     assert resolved not in ("default_snapshot", "snapshot_unspecified")
-    assert len(resolved) > 0
+    assert resolved.startswith("snap-") or len(resolved) > 10
 
-    assert _resolve_snapshot_hash(connection, "topt", df, "default_snapshot") != "default_snapshot"
-    assert _resolve_snapshot_hash(connection, "topt", df, "snapshot_unspecified") != "snapshot_unspecified"
+    # ADR A6 Decision 7: passing sentinels must fail-fast with ValueError
+    with pytest.raises(ValueError, match="ADR A6"):
+        _resolve_snapshot_hash(connection, "topt", df, "default_snapshot")
+
+    with pytest.raises(ValueError, match="ADR A6"):
+        _resolve_snapshot_hash(connection, "topt", df, "snapshot_unspecified")
+
+
+def test_nightly_backtest_op_marks_pending_when_fundamental_factors_missing(
+    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Dagster op marks pending when prices exist but fundamental factors are missing."""
+    symbols = ["AAPL", "MSFT"]
+    dates = [date(2023, 1, 31), date(2023, 2, 28)]
+    _insert_fixture_data(connection, symbols, dates)
+
+    class NonClosingConnection:
+        def __init__(self, conn: psycopg.Connection) -> None:
+            self._conn = conn
+
+        def __getattr__(self, name: str):
+            return getattr(self._conn, name)
+
+        def close(self) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    import data_engine.lanes.backtest as backtest_lane
+
+    monkeypatch.setattr(backtest_lane, "DEFAULT_TOPT_SYMBOLS", tuple(symbols))
+    proxy = NonClosingConnection(connection)
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: proxy)
+
+    context = dg.build_op_context(run_tags={TICK_TAG: "2026-10-12T21:30:00+00:00"})
+    config = NightlyBacktestConfig(
+        strategy_key="topt_gppe_rank",
+        strategy_version="v1",
+        universe_id="topt",
+        factor_column="gppe",
+        top_k=2,
+        dropout_k=1,
+    )
+
+    # Execute op - mart.topt_gppe_results has 0 rows for AAPL/MSFT
+    run_nightly_backtest_op(context, config)
+
+    # Verify verdict row in database is pending, NOT green succeeded
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            select ok, summary from mart.nightly_verdicts
+            where check_name = 'nightly_backtest'
+            order by ran_at desc, recorded_at desc
+            limit 1
+            """
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] is None, f"Expected pending/None ok, got {row}"
+        assert "pending: no fundamental" in row[1]
 
 
 def test_backtest_with_fundamental_factors(connection: psycopg.Connection) -> None:
@@ -274,3 +337,84 @@ def test_run_nightly_backtest_op_against_real_database(
         assert row is not None
         assert row[0] is True
         assert "succeeded:" in row[1]
+
+
+def test_nightly_backtest_op_fails_when_zero_trades_generated(
+    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Dagster op fails closed when backtest produces 0 trades for an active universe."""
+    symbols = ["AAPL"]
+    dates = [date(2023, 1, 31)]
+    _insert_fixture_data(connection, symbols, dates)
+
+    class NonClosingConnection:
+        def __init__(self, conn: psycopg.Connection) -> None:
+            self._conn = conn
+
+        def __getattr__(self, name: str):
+            return getattr(self._conn, name)
+
+        def close(self) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    import data_engine.lanes.backtest as backtest_lane
+    import pandas as pd
+    from factors.backtest.engine import BacktestResult
+
+    monkeypatch.setattr(backtest_lane, "DEFAULT_TOPT_SYMBOLS", tuple(symbols))
+    proxy = NonClosingConnection(connection)
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: proxy)
+
+    context = dg.build_op_context(run_tags={TICK_TAG: "2026-10-12T21:30:00+00:00"})
+    config = NightlyBacktestConfig(
+        strategy_key="demo_topk_rank",
+        strategy_version="v1",
+        universe_id="topt",
+        factor_column="close",
+        top_k=1,
+        dropout_k=1,
+    )
+
+    fake_result = BacktestResult(
+        run_id="backtest-run:fake0trades",
+        strategy_key="demo_topk_rank",
+        strategy_version="v1",
+        universe_id="topt",
+        start_date="2023-01-31",
+        end_date="2023-01-31",
+        status="succeeded",
+        cagr_monthly=0.0,
+        sharpe_daily=0.0,
+        max_dd_daily=0.0,
+        vol_daily=0.0,
+        turnover_monthly=0.0,
+        calmar_daily=0.0,
+        metrics_payload={},
+        valuations_monthly=pd.DataFrame(),
+        valuations_daily=pd.DataFrame(),
+        trades=[],
+    )
+    monkeypatch.setattr(backtest_lane, "run_backtest", lambda *args, **kwargs: fake_result)
+
+    with pytest.raises(dg.Failure, match="0 trades"):
+        run_nightly_backtest_op(context, config)
+
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            select ok, summary from mart.nightly_verdicts
+            where check_name = 'nightly_backtest'
+            order by ran_at desc, recorded_at desc
+            limit 1
+            """
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] is False
+        assert "0 trades" in row[1]
