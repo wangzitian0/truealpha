@@ -4,6 +4,17 @@ Status: Accepted E2. Amended 2026-09-23 (#969): the two red lines below named Ql
 selected at the time. They now name the engine role instead, so they survive the migration to the
 Polars AST / VectorBT stack recorded in A5. The boundary itself is unchanged.
 
+Amended 2026-10-12 (#1240): the storage that this record describes for decisions, grants,
+policy sets and audit events is retired. Seven `app` tables held 0 rows in Production and
+Staging, and no code read or wrote them: `access_audit_events`, `authorization_decisions`,
+`authorization_decision_grants`, `grant_revocations`, `publication_policy_sets`,
+`publication_policy_entitlements` and `publication_policy_set_seals`. The view
+`app.access_audit_metadata` and its trigger functions left with them. The tables
+`app.tenants`, `app.principals` and `app.entitlement_grants` stay. `AccessAuditRecord`,
+`AccessAuditEvent`, `AccessAuditRepository` and `build_access_audit_record` are deleted.
+`authorize_access` and `AuthorizationService` stay as the pure pre-query decision.
+A new capability that needs decision or audit storage must define a new schema and its own record.
+
 This record freezes the stable Local/CI contract boundary accepted by `init.md`. Its DTOs
 are exported from the `truealpha_contracts` package root for explicitly named consumers.
 
@@ -39,10 +50,10 @@ not persist or execute that request. A separate capability owns the append-only 
 service and Dagster adapter; no Web, MCP, chat, or access-layer code invokes the
 factor-expression or backtest engine, `BacktestDataGateway`, factors, or a Dagster launch API.
 
-One `AccessAuditRecord` pairs an immutable decision with its deterministic, content-free
-event. `AccessAuditRepository.append(record)` is the stable transactional port; the SQL
-schema independently rejects missing policy sets and cross-tenant, cross-principal, or
-policy-mismatched decision/grant associations.
+(Retired by #1240; see the amendment above.) One `AccessAuditRecord` pairs an immutable
+decision with its deterministic, content-free event. `AccessAuditRepository.append(record)`
+is the stable transactional port; the SQL schema independently rejects missing policy sets
+and cross-tenant, cross-principal, or policy-mismatched decision/grant associations.
 
 ## Computation Isolation
 

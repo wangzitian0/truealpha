@@ -293,46 +293,6 @@ class AuthorizationDecision(StrictFrozenModel):
         return self
 
 
-class AccessAuditEvent(StrictFrozenModel):
-    audit_event_id: str
-    decision_id: str
-    tenant_id: str | None
-    principal_id: str | None
-    event_kind: AccessAuditEventKind
-    occurred_at: datetime
-
-    @field_validator("audit_event_id")
-    @classmethod
-    def validate_audit_event_id(cls, value: str) -> str:
-        if re.fullmatch(r"access-audit-event:[0-9a-f]{64}", value) is None:
-            raise ValueError("audit_event_id must be a content-addressed access audit event")
-        return value
-
-    @field_validator("occurred_at")
-    @classmethod
-    def validate_occurred_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "occurred_at")
-
-
-class AccessAuditRecord(StrictFrozenModel):
-    decision: AuthorizationDecision
-    event: AccessAuditEvent
-
-    @model_validator(mode="after")
-    def validate_record(self) -> AccessAuditRecord:
-        if self.event.decision_id != self.decision.decision_id:
-            raise ValueError("audit event must reference its authorization decision")
-        if self.event.tenant_id != self.decision.tenant_id:
-            raise ValueError("audit event tenant must match its authorization decision")
-        if self.event.principal_id != self.decision.principal_id:
-            raise ValueError("audit event principal must match its authorization decision")
-        if self.event.event_kind is not self.decision.audit_event:
-            raise ValueError("audit event kind must match its authorization decision")
-        if self.event.occurred_at != self.decision.decided_at:
-            raise ValueError("audit event time must match its authorization decision")
-        return self
-
-
 def _decision(
     *,
     context: AccessContext | None,
@@ -512,25 +472,6 @@ def authorize_access(
     )
 
 
-def build_access_audit_record(decision: AuthorizationDecision) -> AccessAuditRecord:
-    """Create the deterministic, content-free event paired with one decision."""
-
-    coordinates = {
-        "decision_id": decision.decision_id,
-        "event_kind": decision.audit_event.value,
-        "occurred_at": decision.decided_at.isoformat(),
-    }
-    event = AccessAuditEvent(
-        audit_event_id=f"access-audit-event:{canonical_sha256(coordinates)}",
-        decision_id=decision.decision_id,
-        tenant_id=decision.tenant_id,
-        principal_id=decision.principal_id,
-        event_kind=decision.audit_event,
-        occurred_at=decision.decided_at,
-    )
-    return AccessAuditRecord(decision=decision, event=event)
-
-
 @runtime_checkable
 class AuthorizationService(Protocol):
     def authorize(
@@ -544,8 +485,3 @@ class AuthorizationService(Protocol):
         authentication_failure: AccessDenialReason | None = None,
         revoked_delegation_ids: frozenset[str] = frozenset(),
     ) -> AuthorizationDecision: ...
-
-
-@runtime_checkable
-class AccessAuditRepository(Protocol):
-    def append(self, record: AccessAuditRecord) -> bool: ...
