@@ -24,27 +24,12 @@ end $$;
 alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
-grant select on app.publication_policy_sets,
-    app.publication_policy_entitlements, app.publication_policy_set_seals to app_runtime;
-revoke select on app.access_audit_metadata from app_runtime;
-grant insert on app.authorization_decisions, app.authorization_decision_grants,
-    app.access_audit_events to app_runtime;
 -- #495: the ONE staging write exception — the DB-mediated pipeline trigger
 -- (migration 0034). USAGE on staging plus exactly this table exposes nothing
 -- else; consume-UPDATEs stay with the data-engine/migration role, and the
 -- table's own triggers enforce append-only/consume-once.
 grant usage on schema staging to app_runtime;
 grant select, insert on staging.pipeline_trigger_requests to app_runtime;
-revoke all on function app.validate_access_audit_decision_tenant() from public;
-revoke all on function app.validate_authorization_decision_policy_set() from public;
-revoke all on function app.validate_authorization_decision_grant() from public;
-revoke all on function app.validate_authorization_decision_required_grants() from public;
-revoke all on function app.validate_publication_policy_entitlement_insert() from public;
-revoke all on function app.validate_publication_policy_set_seal() from public;
-grant execute on function app.validate_access_audit_decision_tenant() to app_runtime;
-grant execute on function app.validate_authorization_decision_policy_set() to app_runtime;
-grant execute on function app.validate_authorization_decision_grant() to app_runtime;
-grant execute on function app.validate_authorization_decision_required_grants() to app_runtime;
 
 -- Login front door (#368, migration 0029). Login itself runs before any
 -- tenant/principal GUC is set (it is what *establishes* that context), so
@@ -78,7 +63,6 @@ end $$;
 alter role app_audit_reader set statement_timeout = '5s';
 
 grant usage on schema app to app_audit_reader;
-grant select on app.access_audit_metadata to app_audit_reader;
 grant select on app.conversation_audit_metadata to app_audit_reader;
 grant select on app.document_audit_metadata to app_audit_reader;
 

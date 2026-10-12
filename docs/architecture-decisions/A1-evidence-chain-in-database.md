@@ -96,7 +96,8 @@ input identity, never the backend, edges, or hashes.
 - Bitemporal columns; append-only via existing `reject_mutation`-style triggers.
 - `unit-of-work` = one Postgres transaction wrapping capture → normalize → snapshot →
   materialize (all-or-nothing).
-- `current_pointer` table behind `mart_readonly` + `app.authorization_decisions`.
+- `current_pointer` table behind `mart_readonly` + the server-side authorization of A0.
+  (The table `app.authorization_decisions` was retired empty by #1240.)
 - PIT reads via bitemporal predicates; trace via indexed edge joins.
 
 **Graph database (future, documented seam only):**

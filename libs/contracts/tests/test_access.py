@@ -13,8 +13,6 @@ from pydantic import ValidationError
 from truealpha_contracts.access import (
     AccessAction,
     AccessAuditEventKind,
-    AccessAuditRecord,
-    AccessAuditRepository,
     AccessContext,
     AccessDecisionKind,
     AccessDenialReason,
@@ -28,7 +26,6 @@ from truealpha_contracts.access import (
     PublicationPolicySet,
     PublicationRule,
     authorize_access,
-    build_access_audit_record,
 )
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import DecisionSnapshot, ReplayEventStream
@@ -284,29 +281,6 @@ def test_registered_replay_submission_is_policy_bound_and_administrator_only() -
     assert cross_tenant_administrator.reason is AccessDenialReason.TENANT_MISMATCH
 
 
-def test_audit_record_is_deterministic_content_free_and_tenant_consistent() -> None:
-    decision = _decision_for_case(_fixture(), _fixture()["authorization_cases"][0])
-    first = build_access_audit_record(decision)
-    second = build_access_audit_record(decision)
-    assert first == second
-    assert first.event.tenant_id == decision.tenant_id
-    assert first.event.principal_id == decision.principal_id
-    assert first.event.event_kind is decision.audit_event
-    assert set(type(first.event).model_fields) == {
-        "audit_event_id",
-        "decision_id",
-        "tenant_id",
-        "principal_id",
-        "event_kind",
-        "occurred_at",
-    }
-    with pytest.raises(ValidationError, match="tenant must match"):
-        AccessAuditRecord(
-            decision=decision,
-            event=first.event.model_copy(update={"tenant_id": "tenant:beta"}),
-        )
-
-
 def test_context_rejects_naive_time_client_claims_and_duplicate_grants() -> None:
     valid = {
         "context_id": "auth:browser:alpha:test",
@@ -390,7 +364,6 @@ def test_public_service_signatures_expose_complete_inputs() -> None:
         "authentication_failure",
         "revoked_delegation_ids",
     }
-    assert set(inspect.signature(AccessAuditRepository.append).parameters) == {"self", "record"}
 
 
 def test_stable_package_root_exports_access_contract() -> None:
@@ -399,11 +372,16 @@ def test_stable_package_root_exports_access_contract() -> None:
         "ActiveEntitlementGrant",
         "PublicationPolicySet",
         "AuthorizationService",
-        "AccessAuditRepository",
         "authorize_access",
-        "build_access_audit_record",
     }:
         assert hasattr(truealpha_contracts, name)
+
+
+def test_retired_audit_record_names_are_gone_from_the_package_root() -> None:
+    """#1240: the audit tables are retired. The record, event and repository types left with them."""
+    for name in {"AccessAuditEvent", "AccessAuditRecord", "AccessAuditRepository", "build_access_audit_record"}:
+        assert not hasattr(truealpha_contracts, name)
+        assert not hasattr(truealpha_contracts.access, name)
 
 
 def test_access_metadata_never_enters_computation_or_release_contracts() -> None:

@@ -3,6 +3,11 @@
 --
 -- #1061: app.tenant_memberships, app.publication_policies and app.private_research_objects
 -- are retired. 20261006T1325_datahub_retire_empty_planes.sql drops them in deployed databases.
+--
+-- #1240: app.grant_revocations, app.authorization_decisions, app.access_audit_events,
+-- app.access_audit_metadata and their trigger functions are retired.
+-- 20261012T1130_runtime_retire_app_access_tables.sql drops them in deployed databases.
+-- 0024_access_policy_bindings.sql no longer creates the other four tables of the access plane.
 
 create schema if not exists app;
 
@@ -38,132 +43,6 @@ create table if not exists app.entitlement_grants (
     check (recorded_at >= valid_from)
 );
 
-create table if not exists app.grant_revocations (
-    revocation_id text primary key check (length(revocation_id) > 0),
-    tenant_id     text not null references app.tenants (tenant_id),
-    grant_id      text not null references app.entitlement_grants (grant_id),
-    revoked_at    timestamptz not null,
-    reason_code   text not null check (length(reason_code) > 0),
-    recorded_at   timestamptz not null default now(),
-    check (recorded_at >= revoked_at)
-);
-
-create table if not exists app.authorization_decisions (
-    decision_id           text primary key check (decision_id ~ '^access-decision:[0-9a-f]{64}$'),
-    tenant_id             text,
-    principal_id          text,
-    action                text not null check (length(action) > 0),
-    resource_id           text not null check (length(resource_id) > 0),
-    publication_policy_id text not null check (length(publication_policy_id) > 0),
-    decision              text not null check (decision in ('allow', 'deny')),
-    reason_code           text,
-    decided_at            timestamptz not null,
-    recorded_at           timestamptz not null default now(),
-    check ((decision = 'allow' and reason_code is null) or (decision = 'deny' and reason_code is not null)),
-    check (recorded_at >= decided_at)
-);
-
-create table if not exists app.access_audit_events (
-    audit_event_id text primary key check (length(audit_event_id) > 0),
-    decision_id    text not null references app.authorization_decisions (decision_id),
-    tenant_id      text,
-    principal_id   text,
-    event_kind     text not null check (event_kind in ('access_allowed', 'access_denied', 'authentication_denied')),
-    occurred_at    timestamptz not null,
-    recorded_at    timestamptz not null default now(),
-    check (recorded_at >= occurred_at)
-);
-
-create or replace function app.validate_access_audit_decision_tenant()
-returns trigger
-language plpgsql
-security definer
-set search_path = pg_catalog, app
-as $$
-declare
-    decision_tenant_id text;
-begin
-    select tenant_id into decision_tenant_id
-    from app.authorization_decisions
-    where decision_id = new.decision_id;
-
-    if not found then
-        raise exception 'access audit decision does not exist';
-    end if;
-    if decision_tenant_id is distinct from new.tenant_id then
-        raise exception 'access audit tenant must match its authorization decision';
-    end if;
-    return new;
-end;
-$$;
-
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'app.access_audit_events'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_access_audit_events_validate_tenant BEFORE INSERT ON app.access_audit_events FOR EACH ROW EXECUTE FUNCTION app.validate_access_audit_decision_tenant()'
-    ) then
-        drop trigger if exists trg_access_audit_events_validate_tenant on app.access_audit_events;
-        create trigger trg_access_audit_events_validate_tenant
-        before insert on app.access_audit_events
-        for each row execute function app.validate_access_audit_decision_tenant();
-    end if;
-end
-$$;
-
--- drop first, not create-or-replace (#455): 0024 later widens this view with
--- additional trailing columns, which `create or replace view` cannot undo on a
--- second full-chain run -- Postgres rejects a `create or replace view` that would
--- remove existing columns ("cannot drop columns from view"), aborting the whole
--- apply_migrations.sh pass (ON_ERROR_STOP=1) before it ever reaches 0024's
--- redefinition. db/apply_migrations.sh re-applies every migration on every
--- container boot, so this fired on every restart after the first, crash-looping
--- the container. Drop-then-create has no such column-compatibility restriction;
--- 0024 (which always runs after 0022) redefines the view again immediately after,
--- and db/roles.sql (which always runs last) re-grants it, so the final state is
--- unaffected -- only the momentary mid-migration shape changes.
--- Boot-lock guard: 0024 owns this view's final definition (`create or replace`, guarded
--- by a definition compare), so this file only creates it where it does not exist yet.
--- Re-creating it here on every replay would take ACCESS EXCLUSIVE twice per boot and
--- flip the view to this narrower shape and back.
-do $$
-begin
-    if to_regclass('app.access_audit_metadata') is null then
-        drop view if exists app.access_audit_metadata;
-        create view app.access_audit_metadata
-        with (security_barrier = true)
-        as
-        select
-            event.audit_event_id,
-            event.decision_id,
-            event.tenant_id,
-            event.principal_id,
-            decision.action,
-            decision.resource_id,
-            decision.publication_policy_id,
-            decision.decision,
-            decision.reason_code,
-            event.event_kind,
-            event.occurred_at,
-            event.recorded_at
-        from app.access_audit_events as event
-        join app.authorization_decisions as decision
-          on decision.decision_id = event.decision_id
-         and decision.tenant_id is not distinct from event.tenant_id
-        where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-          and exists (
-              select 1
-              from app.principals as reader
-              where reader.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-                and reader.principal_kind = 'administrator'
-          );
-    end if;
-end
-$$;
-
 do $$
 declare
     table_name text;
@@ -171,10 +50,7 @@ begin
     foreach table_name in array array[
         'tenants',
         'principals',
-        'entitlement_grants',
-        'grant_revocations',
-        'authorization_decisions',
-        'access_audit_events'
+        'entitlement_grants'
     ]
     loop
         -- Boot-lock guard: drop + create is SHARE ROW EXCLUSIVE; skip it when the trigger

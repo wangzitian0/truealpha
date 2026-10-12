@@ -9,10 +9,7 @@ times in sixty days, was the single hottest merge-conflict surface in the repo.
 
 from truealpha_contracts.access import (
     AccessAction,
-    AccessAuditEvent,
     AccessAuditEventKind,
-    AccessAuditRecord,
-    AccessAuditRepository,
     AccessContext,
     AccessDecisionKind,
     AccessDenialReason,
@@ -26,7 +23,6 @@ from truealpha_contracts.access import (
     PublicationPolicySet,
     PublicationRule,
     authorize_access,
-    build_access_audit_record,
 )
 from truealpha_contracts.capture_contracts import (
     ApplicabilityBinding,
@@ -479,10 +475,7 @@ from truealpha_contracts.usage import (
 
 __all__ = [
     "AccessAction",
-    "AccessAuditEvent",
     "AccessAuditEventKind",
-    "AccessAuditRecord",
-    "AccessAuditRepository",
     "AccessContext",
     "AccessDecisionKind",
     "AccessDenialReason",
@@ -877,7 +870,6 @@ __all__ = [
     "authorize_access",
     "authorize_evaluation",
     "build_usage_frequency_slice",
-    "build_access_audit_record",
     "build_runner_input_selection",
     "build_runner_upstream_input_selection",
     "build_strategy_usage_audit",
