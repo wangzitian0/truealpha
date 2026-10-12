@@ -2578,6 +2578,10 @@ def test_the_chromium_cache_can_actually_save() -> None:
         "the chromium cache key is not derived from the lockfile — a constant key serves a stale "
         "browser forever, and a parsed version string is one rename from becoming constant"
     )
+    install = step(WEB, "Install chromium for the walk-tree suite")
+    assert "steps.chromium_cache.outputs.cache-hit != 'true'" in install.get("if", ""), (
+        "the browser job installs chromium unconditionally even when cached (#1208)"
+    )
 
 
 def test_no_job_holds_a_cache_grant_it_does_not_use() -> None:

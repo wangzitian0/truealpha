@@ -170,6 +170,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock', 'apps/app-web/bun.lockb', 'apps/app-web/package.json') }}
       - name: Install chromium for the walk-tree suite
+        if: steps.chromium_cache.outputs.cache-hit != 'true'
         run: bunx playwright install --with-deps chromium
       # The seed is about what the walk COVERS, not about whether it passes —
       # measured, not assumed. On a migrated database with principals but no
