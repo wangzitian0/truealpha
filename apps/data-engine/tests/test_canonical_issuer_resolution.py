@@ -749,7 +749,7 @@ def test_a_wide_row_issuer_id_that_is_not_a_uuid_ends_the_run_red_after_the_repo
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         assert _stored_ids(connection, table, head.run_id) == set(), table
     assert _stored_ids(connection, "mart.issuer_theme_purity", head.run_id) == set(), "Q6 writes no fill either"
-    assert json.loads(result.output_for_node("run_theme_purity"))[standards.UNVISITED_ISSUERS] == 0
+    assert json.loads(result.output_for_node("run_theme_purity"))["rows"] == 0
     reports = connection.execute("select count(*) from mart.question_coverage_report where run_id = %s", (head.run_id,))
     assert reports.fetchone() == (1,)
     assert _newest_verdict(connection) == (False, f"failed: analyst ratings: {failure}")
@@ -863,107 +863,6 @@ def test_the_reason_counts_are_sorted_and_counted_once() -> None:
     assert reason_counts([]) == {}
 
 
-# --- the fill upsert: a fill refreshes a fill, and a real row stays
-
-_FILL_RUN = "capture-run:" + "9" * 64
-
-
-def _write_real_purity_rows(connection: psycopg.Connection[Any], issuer: str, codes: list[str], status: str) -> None:
-    """One real Q6 row per governed theme, as the member path writes it. No theme stays free for a fill."""
-    available = status == "available"
-    for definition in THEMES.values():
-        connection.execute(
-            theme_purity._INSERT_SQL,  # noqa: SLF001
-            (
-                _FILL_RUN,
-                issuer,
-                4242,
-                definition.theme_id,
-                definition.theme,
-                definition.factor_version,
-                definition.content_sha256,
-                CUTOFF,
-                date(2026, 3, 31),
-                "segment-partition:" + "e" * 64,
-                Decimal("0.5") if available else None,
-                Decimal(100),
-                Decimal(50) if available else Decimal(0),
-                Decimal(50) if available else Decimal(0),
-                Decimal(0) if available else Decimal(100),
-                Decimal(0),
-                2,
-                Decimal("0.85") if available else Decimal(0),
-                codes,
-                "rule:test",
-                status,
-                "verified" if available else "degraded",
-                "not_evaluated",
-            ),
-        )
-
-
-_FILL_TABLES = {
-    "mart.issuer_theme_purity": (theme_purity.materialize_unvisited_issuers, _write_real_purity_rows),
-}
-
-
-def _fill_row(connection: psycopg.Connection[Any], table: str, issuer: str) -> tuple[str, str, list[str]] | None:
-    row = connection.execute(
-        f"select extractor, availability_status, reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
-        (_FILL_RUN, issuer),
-    ).fetchone()
-    return None if row is None else (row[0], row[1], list(row[2]))
-
-
-@pytest.mark.parametrize("table", sorted(_FILL_TABLES))
-@pytest.mark.parametrize(
-    ("status", "codes"), [("available", []), ("unavailable", ["fetch_error:OSError"])], ids=["answer", "fetch-error"]
-)
-def test_a_fill_row_refreshes_its_own_kind_and_never_replaces_a_real_row(
-    connection: psycopg.Connection[Any], table: str, status: str, codes: list[str]
-) -> None:
-    fill, write_real = _FILL_TABLES[table]
-    issuer = str(uuid.uuid4())
-
-    first = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "head_member_not_in_universe")])
-    assert first == [(issuer, "head_member_not_in_universe")]
-    assert _fill_row(connection, table, issuer) == ("lane:unvisited:v1", "unavailable", ["head_member_not_in_universe"])
-    second = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "member_resolves_elsewhere")])
-    assert second == [(issuer, "member_resolves_elsewhere")]
-    assert _fill_row(connection, table, issuer) == ("lane:unvisited:v1", "unavailable", ["member_resolves_elsewhere"])
-
-    write_real(connection, issuer, codes, status)
-    real = _fill_row(connection, table, issuer)
-    assert real is not None and real[0] != "lane:unvisited:v1" and real[1:] == (status, codes)
-    kept = fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(issuer, "join_floor_tripped")])
-    assert kept == [], "a real row stays, and the writer says it wrote nothing"
-    assert _fill_row(connection, table, issuer) == real, "a real row stays"
-
-
-class _Statements:
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, object]] = []
-
-    def execute(self, sql: str, params: object = None) -> None:
-        self.executed.append((sql, params))
-
-
-@pytest.mark.parametrize(
-    "fill",
-    [
-        theme_purity.materialize_unvisited_issuers,
-    ],
-)
-@pytest.mark.parametrize("legacy_id", ["issuer:lei:AAAAAAAAAAAAAAAAAA01", "issuer:cik:0000320193", ""])
-def test_a_fill_row_is_never_written_under_a_legacy_id(fill: Any, legacy_id: str) -> None:
-    connection = _Statements()
-
-    with pytest.raises(ValueError, match="not the wide row's id"):
-        fill(connection, run_id=_FILL_RUN, cutoff=CUTOFF, unvisited=[(legacy_id, "head_member_not_in_universe")])
-
-    assert connection.executed == []
-
-
 def test_unvisited_issuers_get_no_placeholder_rows(
     connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -976,6 +875,7 @@ def test_unvisited_issuers_get_no_placeholder_rows(
     for table in (
         "mart.issuer_analyst_ratings",
         "mart.issuer_supply_chain_exposure",
+        "mart.issuer_theme_purity",
     ):
         row = connection.execute(
             f"select extractor from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
@@ -986,25 +886,24 @@ def test_unvisited_issuers_get_no_placeholder_rows(
 
 # --- Q6: a wide-row issuer without a segment partition gets a row for each theme (#1117)
 
-#: What a Q6 fill row holds. The eight columns that describe a partition are NULL. A fill has no partition.
-_PURITY_FILL = {
-    "extractor": "lane:unvisited:v1",
-    "availability_status": "unavailable",
-    "source_evidence_status": "degraded",
-    "factor_validation_status": "not_evaluated",
-    "reason_codes": ["no_segment_partition"],
-    "segments": 0,
-    "confidence": Decimal(0),
-    "theme_share": None,
-    "cik": None,
-    "period_end": None,
-    "partition_id": None,
-    "consolidated_revenue": None,
-    "in_theme_revenue": None,
-    "out_of_theme_revenue": None,
-    "unclassified_revenue": None,
-    "partition_residual": None,
-}
+_PURITY_COLUMNS = (
+    "extractor",
+    "availability_status",
+    "source_evidence_status",
+    "factor_validation_status",
+    "reason_codes",
+    "segments",
+    "confidence",
+    "theme_share",
+    "cik",
+    "period_end",
+    "partition_id",
+    "consolidated_revenue",
+    "in_theme_revenue",
+    "out_of_theme_revenue",
+    "unclassified_revenue",
+    "partition_residual",
+)
 
 
 def _run_purity_op(universe: str = UNIVERSE) -> dict[str, Any]:
@@ -1015,7 +914,7 @@ def _run_purity_op(universe: str = UNIVERSE) -> dict[str, Any]:
 def _purity_rows(connection: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     """The Q6 rows of the run: issuer id, then theme id, then the columns of the row."""
     cursor = connection.execute(
-        f"select issuer_id, theme_id, {', '.join(_PURITY_FILL)} from mart.issuer_theme_purity where run_id = %s",  # noqa: S608
+        f"select issuer_id, theme_id, {', '.join(_PURITY_COLUMNS)} from mart.issuer_theme_purity where run_id = %s",  # noqa: S608
         (run_id,),
     )
     names = [column.name for column in cursor.description or ()]
@@ -1039,10 +938,13 @@ _PARTITION_COLUMNS = (
 )
 
 
+_PURITY_ROW_RUN = "capture-run:" + "9" * 64
+
+
 def _purity_row(**overrides: Any) -> dict[str, Any]:
     """The columns of a real refused row: it has a partition, no share, and masses that add up."""
     row: dict[str, Any] = {
-        "run_id": _FILL_RUN,
+        "run_id": _PURITY_ROW_RUN,
         "issuer_id": str(uuid.uuid4()),
         "theme_id": "ai-infrastructure",
         "theme": "AI infrastructure",
@@ -1139,7 +1041,7 @@ def test_the_mass_sum_still_binds_a_refused_row_that_has_a_partition(connection:
         _insert_purity_row(connection, _purity_row(unclassified_revenue=Decimal(99)))
 
 
-def test_the_purity_op_writes_a_row_for_each_theme_of_each_issuer_without_a_partition(
+def test_the_purity_op_writes_rows_only_for_issuers_with_a_partition(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wide = _wide_row_ids(connection, head.run_id)
@@ -1149,22 +1051,16 @@ def test_the_purity_op_writes_a_row_for_each_theme_of_each_issuer_without_a_part
     summary = _run_purity_op()
 
     rows = _purity_rows(connection, head.run_id)
-    assert set(rows) == wide, "every wide-row issuer ends with Q6 rows, not only the one with a partition"
+    assert set(rows) == {partitioned}, "only the issuer with a partition gets Q6 rows"
     for issuer_id, by_theme in rows.items():
         assert set(by_theme) == set(THEMES), f"{issuer_id} has one row for each governed theme"
-        if issuer_id == partitioned:
-            assert all(row["extractor"] != "lane:unvisited:v1" for row in by_theme.values()), "a real row stays real"
-            assert all(row["partition_id"] is not None for row in by_theme.values())
-        else:
-            assert all(row == _PURITY_FILL for row in by_theme.values()), issuer_id
-    assert summary[standards.UNVISITED_ISSUERS] == ISSUERS - 1
-    assert summary[standards.UNVISITED_WRITTEN] == ISSUERS - 1
-    assert summary[standards.KEPT_REAL_ROWS] == 0
-    assert summary[standards.UNVISITED_BY_REASON] == {"no_segment_partition": ISSUERS - 1}
-    assert summary[standards.WIDE_ROW_ISSUERS] == ISSUERS
+        assert all(row["extractor"] != "lane:unvisited:v1" for row in by_theme.values()), "a real row stays real"
+        assert all(row["partition_id"] is not None for row in by_theme.values())
+    assert summary["rows"] == len(THEMES)
+    assert summary["published"] == len(THEMES)
 
 
-def test_the_coverage_report_names_no_segment_partition_instead_of_no_row_for_q6(
+def test_the_coverage_report_names_no_row_for_q6_issuers_without_a_partition(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_one_partition(connection, head, monkeypatch)
@@ -1177,8 +1073,7 @@ def test_the_coverage_report_names_no_segment_partition_instead_of_no_row_for_q6
     assert report is not None
     entry = report["questions"]["q6"]
     assert entry["denominator"] == ISSUERS
-    assert question_coverage.NO_ROW not in entry["unavailable"], entry
-    assert entry["unavailable"]["no_segment_partition"] == ISSUERS - 1, entry
+    assert entry["unavailable"][question_coverage.NO_ROW] == ISSUERS - 1, entry
     assert entry["answered"] + sum(entry["unavailable"].values()) == ISSUERS, entry
 
 
@@ -1192,21 +1087,21 @@ def test_a_rerun_of_the_purity_op_keeps_one_row_per_issuer_and_theme(
     second_summary = _run_purity_op()
 
     assert _purity_rows(connection, head.run_id) == first
-    assert second_summary[standards.UNVISITED_BY_REASON] == {"no_segment_partition": ISSUERS - 1}
+    assert second_summary["rows"] == len(THEMES)
 
 
 def test_a_run_with_no_member_gets_no_fill_so_a_join_defect_still_reads_no_row(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#839: the member join found nothing, and Q6 fell from 12 of 20 to 0 of 20.
-    A fill reason would call that defect a missing partition. The report must keep `no_row`.
+    The report must keep `no_row`.
     """
     monkeypatch.setattr(theme_purity, "governed_members", lambda _connection, *, run_id: {})
 
     summary = _run_purity_op()
 
     assert _purity_rows(connection, head.run_id) == {}
-    assert summary[standards.UNVISITED_ISSUERS] == 0
+    assert summary["rows"] == 0
     report = question_coverage.compile_report(
         connection, universe=UNIVERSE, executed_at=datetime(2026, 10, 6, tzinfo=UTC)
     )

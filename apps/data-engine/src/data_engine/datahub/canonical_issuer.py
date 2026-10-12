@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
@@ -32,11 +32,9 @@ __all__ = (
     "HEAD_MEMBER_NOT_IN_UNIVERSE",
     "JOIN_FLOOR",
     "JOIN_FLOOR_MIN_ISSUERS",
-    "JOIN_FLOOR_TRIPPED",
     "MEMBER_RESOLVES_ELSEWHERE",
     "NOT_IN_WIDE_ROW",
     "NO_CANONICAL_ISSUER_ID",
-    "NO_SEGMENT_PARTITION",
     "CanonicalIssuer",
     "CanonicalUniverse",
     "UnmappedIssuer",
@@ -46,7 +44,6 @@ __all__ = (
     "is_canonical_issuer_id",
     "reason_counts",
     "require_canonical_issuer_id",
-    "write_unvisited",
 )
 
 #: Why an issuer got no row: the store holds no entity for its legacy id.
@@ -60,10 +57,6 @@ DUPLICATE_CORPUS_ID = "duplicate_corpus_id"
 #: Why a wide-row issuer got an unavailable row: its member resolves to an entity outside the wide row.
 #: The issuer is in the wide row, so the reason is not `not_in_wide_row`, which names the member.
 MEMBER_RESOLVES_ELSEWHERE = "member_resolves_elsewhere"
-#: Why a joined issuer got an unavailable row: the join floor tripped, so the lane fetched nothing.
-JOIN_FLOOR_TRIPPED = "join_floor_tripped"
-#: Why a wide-row issuer got an unavailable Q6 row: no accepted segment partition exists for it (#1117).
-NO_SEGMENT_PARTITION = "no_segment_partition"
 
 #: The share of the wide row that members must join. Below it, the lane fails like a total drop.
 JOIN_FLOOR = 0.5
@@ -127,16 +120,6 @@ class CanonicalUniverse:
 
     def unmapped_by_reason(self) -> dict[str, int]:
         return reason_counts(member.reason for member in self.unmapped)
-
-    def fills(self) -> list[tuple[str, str]]:
-        """(issuer id, reason) of each wide-row issuer that gets an unavailable row from the lane.
-
-        A tripped floor fills the joined issuers too, so both ops write the same row for each.
-        """
-        fills = [(issuer.issuer_id, issuer.reason) for issuer in self.unvisited]
-        if self.lane_failure() is not None:
-            fills = [(issuer.issuer_id, JOIN_FLOOR_TRIPPED) for issuer in self.issuers] + fills
-        return fills
 
     def lane_failure(self) -> str | None:
         """The message when too few wide-row issuers join a member, else None.
@@ -293,32 +276,3 @@ def account_for_head_members(
         for issuer_id in missing
     )
     return replace(universe, unvisited=unvisited, wide_row_issuers=len(wide_row_ids))
-
-
-def write_unvisited(
-    connection: psycopg.Connection[Any],
-    sql: str,
-    *,
-    run_id: str,
-    cutoff: datetime,
-    unvisited: Sequence[tuple[str, str]],
-    per_row: Sequence[Sequence[Any]] = ((),),
-) -> list[tuple[str, str]]:
-    """Run the fill statement `sql` for each (issuer id, reason) of `unvisited` (#1079).
-
-    The one writer of all three tables. It refuses an id that is not the wide row's.
-    The statement binds run id, issuer id, cutoff and the reason list, in this order.
-    `per_row` holds extra parameters, bound after those four. The statement runs once per
-    entry of `per_row` for each issuer. Q6 passes one entry for each governed theme (#1117).
-    Returns the pairs for which the statement wrote at least one row. A row it kept is not counted.
-    """
-    written: list[tuple[str, str]] = []
-    for issuer_id, reason in unvisited:
-        canonical = require_canonical_issuer_id(issuer_id)
-        wrote = False
-        for extra in per_row:
-            cursor = connection.execute(sql, (run_id, canonical, cutoff, [reason], *extra))
-            wrote = wrote or bool(cursor.rowcount)
-        if wrote:
-            written.append((issuer_id, reason))
-    return written

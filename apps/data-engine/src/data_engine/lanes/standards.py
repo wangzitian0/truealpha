@@ -48,7 +48,6 @@ from data_engine.datahub.canonical_issuer import (
     account_for_head_members,
     canonicalize_universe,
     is_canonical_issuer_id,
-    reason_counts,
 )
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
@@ -230,16 +229,8 @@ UNMAPPED_ISSUERS = "unmapped_issuers"
 #: The key those ops set, to the count of unmapped members per reason.
 UNMAPPED_BY_REASON = "unmapped_by_reason"
 
-#: The keys those ops set, to the wide-row issuers that joined a member and those that did not.
-#: Each issuer that did not gets an unavailable row, so every wide-row issuer ends with one row.
+#: The key those ops set, to the wide-row issuers that joined a member.
 JOINED_ISSUERS = "joined_issuers"
-UNVISITED_ISSUERS = "unvisited_issuers"
-UNVISITED_BY_REASON = "unvisited_by_reason"
-
-#: The keys those ops set, to the fill rows the statement wrote and the real rows it kept.
-#: `unvisited_by_reason` counts the written ones only, so the summary matches the table.
-UNVISITED_WRITTEN = "unvisited_written"
-KEPT_REAL_ROWS = "kept_real_rows"
 
 #: The key those ops set, to the count of issuers in the head's wide row.
 WIDE_ROW_ISSUERS = "wide_row_issuers"
@@ -334,24 +325,6 @@ def _canonical_universe_or_failure(
         return None, f"canonicalization failed: {type(error).__name__}"
 
 
-def _fill_summary(
-    universe: CanonicalUniverse, fills: list[tuple[str, str]], written: list[tuple[str, str]]
-) -> dict[str, Any]:
-    """The summary keys of the issuers the lane filled, from the rows its statements wrote (#1079).
-
-    Each filled issuer ends with one row. A fill that met a real row wrote nothing and kept it.
-    """
-    return {
-        UNVISITED_ISSUERS: len(fills),
-        UNVISITED_WRITTEN: len(written),
-        KEPT_REAL_ROWS: len(fills) - len(written),
-        UNVISITED_BY_REASON: reason_counts(reason for _, reason in written),
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
-    }
-
-
 def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
     """The lane failure and the verdict text that an upstream op put in its summary."""
     try:
@@ -413,9 +386,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     """
     from data_engine.datahub.production_topt.theme_purity import (
         materialize_theme_purity,
-        materialize_unvisited_issuers,
         summary_line,
-        unvisited_issuers,
     )
     from data_engine.datahub.question_coverage import governed_head
 
@@ -453,18 +424,6 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         # universe corpus the backfill labels its own asks with.
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
         rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers)
-        # Every wide-row issuer that got no row has no accepted segment partition (#1117). It gets an
-        # unavailable row for each theme, so the report names the reason and does not say `no_row`.
-        wide = sorted({cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)})
-        fills: list[tuple[str, str]] = []
-        if all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
-            fills = unvisited_issuers(
-                connection, run_id=head.run_id, wide_row_ids=wide, written_ids={row.entity_id for row in rows}
-            )
-        else:
-            # A row is written under the wide row's id only. The supply chain op fails the run on this defect.
-            context.log.error("theme purity: the wide row of %s holds an id that is not a canonical UUID", head.run_id)
-        written = materialize_unvisited_issuers(connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills)
         connection.commit()
         published = sum(1 for row in rows if row.result.value is not None)
         # Counts only: the purity values themselves are research output, and this line is public.
@@ -476,11 +435,6 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         "run_id": head.run_id,
         "rows": len(rows),
         "published": published,
-        UNVISITED_ISSUERS: len(fills),
-        UNVISITED_WRITTEN: len(written),
-        KEPT_REAL_ROWS: len(fills) - len(written),
-        UNVISITED_BY_REASON: reason_counts(reason for _, reason in written),
-        WIDE_ROW_ISSUERS: len(wide),
     }
     context.add_output_metadata(summary)
     return json.dumps(summary)
