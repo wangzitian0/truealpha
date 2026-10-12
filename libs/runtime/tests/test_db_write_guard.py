@@ -22,6 +22,12 @@ from truealpha_runtime.testing import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_guard_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate tests from external CI runtime flags to test skip semantics cleanly."""
+    monkeypatch.delenv("TRUEALPHA_REQUIRE_RUNTIME", raising=False)
+
+
 def test_guard_skips_when_write_not_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
     """When CI and ALLOW_CLEAR_TEST are unset, guard_db_write must skip and make zero connections."""
     monkeypatch.delenv("CI", raising=False)
@@ -83,3 +89,13 @@ def test_mutation_check_unprotected_write_fails_against_closed_port(
     with pytest.raises(psycopg.OperationalError):
         with psycopg.connect(closed_port_url, connect_timeout=1):
             pass
+
+
+def test_guard_fails_loudly_when_require_runtime_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When TRUEALPHA_REQUIRE_RUNTIME is set, skip_or_fail turns skips into hard failures."""
+    monkeypatch.setenv("TRUEALPHA_REQUIRE_RUNTIME", "1")
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("ALLOW_CLEAR_TEST", raising=False)
+
+    with pytest.raises(pytest.fail.Exception, match="TRUEALPHA_REQUIRE_RUNTIME is set"):
+        guard_db_write()
