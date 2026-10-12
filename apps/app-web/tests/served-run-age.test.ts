@@ -33,6 +33,6 @@ const now = new Date("2026-09-08T10:15:00Z");
 }
 assert(
 	STALE_HOURS === 36,
-	"this side of the duplicated 36 h threshold (the other is tools/output_invariants.py pointer-has-advanced-recently) — change both or neither",
+	"staleness threshold is 36 hours",
 );
 console.log("#575 served-run age passed");

@@ -5,10 +5,7 @@
  * against the clock to know whether it is this morning's run or one from three days
  * ago (the 2026-08-17 shape: a 67-hour-old head behind a page that said "Data as of"
  * and nothing else). This turns the cutoff into an age and a verdict on the threshold
- * `tools/output_invariants.py`'s `pointer-has-advanced-recently` uses — one daily cycle
- * plus slack, 36 hours. The constant is duplicated here on purpose (the page cannot
- * import a Python tool); `tests/served-run-age.test.ts` pins this side's value so a
- * change to either has to be made in both.
+ * of one daily cycle plus slack, 36 hours.
  */
 
 export const STALE_HOURS = 36;
