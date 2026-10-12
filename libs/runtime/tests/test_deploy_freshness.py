@@ -229,4 +229,3 @@ def test_warn_only_emits_warning_and_exits_zero(capsys: pytest.CaptureFixture[st
     assert exit_code == 0
     stdout = capsys.readouterr().out
     assert "::warning::production is stale" in stdout
-
