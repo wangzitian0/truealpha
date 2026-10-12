@@ -1,4 +1,4 @@
-"""Plausibility policy (#544, v2 since #528): is a published factor physically possible?
+"""Plausibility policy (#544, v3 since #1236): is a published factor physically possible?
 
 Four defects reached production in 2026-07 with every gate green — XOM's operating metric
 above NVIDIA's (a revenue proxy), MA's price-to-sales down 7x on a flat price (a share
@@ -24,6 +24,15 @@ a value published for a class the node does not declare is refused, and a negati
 node declares `sign-is-signal` passes and is reported by name on every tick (`sign_signals`).
 The other three rules and every threshold are unchanged.
 
+v3 (#1236): `unexplained-valuation-move` accepts a valuation move that a new fiscal year
+explains. MU filed its FY2026 10-K on 2026-10-09 with revenue 133.188B against FY2025's
+37.378B; price-to-sales fell 3.58x on a flat price, and v2 refused every tick from then on,
+because the previous accepted run cannot advance while the tick is refused. A move is now
+explained when the row's revenue period end is later than the previous row's. A revenue period
+that stays or moves back, or a share period change alone, still does not explain it: MA and V
+moved on a 2010 share count (#533, #529), which is an older period, not a newer one. Thresholds
+are unchanged.
+
 Pure functions over plain rows, so the same policy can judge a synthetic run in a test,
 a live tick in the data engine, and a historical replay in the backtest (#758 H4).
 """
@@ -31,11 +40,12 @@ a live tick in the data engine, and a historical replay in the backtest (#758 H4
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 from factors.forest import SignFinding, judge_sign, published_node
 
-POLICY_VERSION = "v2"
+POLICY_VERSION = "v3"
 
 RULE_UNIVERSE_MAX = "universe-max-regression"
 RULE_VALUATION_MOVE = "unexplained-valuation-move"
@@ -75,6 +85,9 @@ class Row:
     #: The price behind `current_ps` at this cutoff; None when the run carries no price
     #: for the issuer (then rule 2 cannot judge it and says so).
     last_close: Decimal | None = None
+    #: The period end of the revenue behind `current_ps`. A later period than the previous
+    #: row's is a new fiscal year, which explains a valuation move (v3, #1236).
+    revenue_period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -120,8 +133,9 @@ def unexplained_valuation_move(
 ) -> list[Violation]:
     """An issuer's price-to-sales may not move more than `valuation_move_ratio` run over
     run unless its price moved at least `price_move_floor` (#533 MA 15.55 → 2.17 on a
-    flat price; #529 V on a 2010 share count). Without a price on both sides the rule
-    cannot judge and stays silent — a missing measurement is not evidence either way."""
+    flat price; #529 V on a 2010 share count), or its revenue period end is later than the
+    previous row's (#1236: MU's FY2026 10-K). Without a price on both sides the rule cannot
+    judge and stays silent — a missing measurement is not evidence either way."""
     before = {row.listing_id: row for row in _available(previous)}
     violations: list[Violation] = []
     for row in _available(current):
@@ -136,16 +150,26 @@ def unexplained_valuation_move(
         price_move = _ratio(row.last_close, prior.last_close)
         if price_move is not None and price_move >= thresholds.price_move_floor:
             continue
+        if _new_fiscal_year(row, prior):
+            continue
         violations.append(
             Violation(
                 RULE_VALUATION_MOVE,
                 row.listing_id,
                 f"price-to-sales moved {move:.2f}x ({prior.current_ps} → {row.current_ps}) while the price moved "
-                f"{(price_move or Decimal(1)):.2f}x ({prior.last_close} → {row.last_close}); a valuation move that "
-                f"large without a price move is a share-count or revenue error",
+                f"{(price_move or Decimal(1)):.2f}x ({prior.last_close} → {row.last_close}) and the revenue period "
+                f"end did not advance ({prior.revenue_period_end} → {row.revenue_period_end}); a valuation move that "
+                f"large without a price move or a new fiscal year is a share-count or revenue error",
             )
         )
     return violations
+
+
+def _new_fiscal_year(row: Row, prior: Row) -> bool:
+    """True when the row's revenue period end is later than the previous row's."""
+    if row.revenue_period_end is None or prior.revenue_period_end is None:
+        return False
+    return row.revenue_period_end > prior.revenue_period_end
 
 
 def _sign_findings(current: list[Row]) -> list[SignFinding]:

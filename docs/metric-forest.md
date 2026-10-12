@@ -317,7 +317,7 @@ strategy path, so it is its own versioned step (H).
 
 ## 6. Sign policy: replacing `gppe-not-negative` and `sign-per-branch`
 
-| policy | a negative value is | nightly suite (`node-sign-policy`) | tick gate (policy v2) |
+| policy | a negative value is | nightly suite (`node-sign-policy`) | tick gate (policy v3) |
 |---|---|---|---|
 | `must-be-non-negative` | a defect | fails | refuses the tick |
 | `sign-is-signal` | a valid, ranked low signal | holds, and prints `SIGNAL <listing> <branch> <column> <node> <value>` | accepts, and `Verdict.signals` prints it |

@@ -1,5 +1,5 @@
 """The plausibility gate on a tick (#544): judge this run's published rows against
-the plausibility policy (v2 since #528) and the previous accepted run, in the tick's own
+the plausibility policy (v3 since #1236) and the previous accepted run, in the tick's own
 transaction, before the pointer advances.
 
 `lanes/capture.py` calls `judge_run` after materialization (and after the strategy
@@ -52,7 +52,7 @@ _SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 # a price is judged against the price it corrected, not against the run it replaced.
 _ROWS_SQL = """
     select r.listing_id, r.operating_branch, r.availability, r.operating_efficiency, r.current_ps,
-           price.last_close
+           price.last_close, r.revenue_period_end
     from mart.topt_core_results r
     left join lateral (
         select (payload.normalized_payload->>'close')::numeric as last_close
@@ -126,8 +126,11 @@ def _rows(connection: Any, run_id: str) -> list[Row]:
             operating_efficiency=Decimal(str(op)) if op is not None else None,
             current_ps=Decimal(str(ps)) if ps is not None else None,
             last_close=Decimal(str(close)) if close is not None else None,
+            revenue_period_end=revenue_period_end,
         )
-        for listing_id, branch, availability, op, ps, close in connection.execute(_ROWS_SQL, (run_id,)).fetchall()
+        for listing_id, branch, availability, op, ps, close, revenue_period_end in connection.execute(
+            _ROWS_SQL, (run_id,)
+        ).fetchall()
     ]
 
 

@@ -6,6 +6,7 @@ v2 (#528): the sign rule judges the metric-forest node's declared policy instead
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -24,6 +25,7 @@ def row(
     branch: str = "non_financial",
     close: str | None = None,
     availability: str = "available",
+    revenue_period_end: date | None = None,
 ) -> Row:
     return Row(
         listing_id=listing,
@@ -32,6 +34,7 @@ def row(
         operating_efficiency=D(op) if op is not None else None,
         current_ps=D(ps) if ps is not None else None,
         last_close=D(close) if close is not None else None,
+        revenue_period_end=revenue_period_end,
     )
 
 
@@ -65,6 +68,47 @@ def test_ma_price_to_sales_collapsing_on_a_flat_price_is_caught() -> None:
     # no price on one side: the rule cannot judge and stays silent
     silent = [row("listing:xnys:ma", "751418", "2.17")]
     assert evaluate(silent, PREVIOUS) == []
+
+
+# #1236: the production refusal of 2026-10-09, with MU's real values. Micron filed its FY2026
+# 10-K on 2026-10-09 (accession 0000723125-26-000023): revenue 133,188,000,000 for the year
+# ending 2026-09-03, against 37,378,000,000 for the year ending 2025-08-28 (SEC companyconcept).
+MU_BEFORE = row(
+    "listing:xnas:mu",
+    "154102",
+    "31.29837341569479372893145700679544",
+    close="1035.84",
+    revenue_period_end=date(2025, 8, 28),
+)
+
+
+def test_a_new_fiscal_year_explains_a_valuation_move() -> None:
+    """#1236: MU's price-to-sales fell 3.58x on a flat price because its revenue moved to a
+    new fiscal year. v2 refused every tick from 2026-10-09; v3 accepts the move."""
+    after = row(
+        "listing:xnas:mu",
+        "154102",
+        "8.741286641048743130011712766915938",
+        close="1029.00",
+        revenue_period_end=date(2026, 9, 3),
+    )
+    assert evaluate([after], [MU_BEFORE]) == []
+
+
+def test_a_valuation_move_on_the_same_or_an_older_revenue_period_is_still_caught() -> None:
+    """The fiscal-year explanation needs a LATER period. The same move on the same period is a
+    revenue or share-count error; a period that moves back is the #529/#533 stale-filing shape."""
+    for period in (date(2025, 8, 28), date(2010, 12, 31), None):
+        after = row(
+            "listing:xnas:mu",
+            "154102",
+            "8.741286641048743130011712766915938",
+            close="1029.00",
+            revenue_period_end=period,
+        )
+        (violation,) = evaluate([after], [MU_BEFORE])
+        assert violation.rule == policy.RULE_VALUATION_MOVE and violation.listing_id == "listing:xnas:mu"
+        assert "revenue period end did not advance" in violation.detail
 
 
 def test_a_negative_bank_metric_is_a_declared_signal_not_a_violation() -> None:
@@ -130,8 +174,8 @@ def test_the_first_accepted_run_has_no_previous_to_regress_against() -> None:
     assert evaluate(current, []) == []
 
 
-def test_the_policy_is_v2_with_v1_thresholds_and_named_rules() -> None:
-    assert policy.POLICY_VERSION == "v2"
+def test_the_policy_is_v3_with_v1_thresholds_and_named_rules() -> None:
+    assert policy.POLICY_VERSION == "v3"
     assert Thresholds() == Thresholds(D("1.5"), D("2"), D("1.4"))
     assert set(policy.RULES) == {
         "universe-max-regression",

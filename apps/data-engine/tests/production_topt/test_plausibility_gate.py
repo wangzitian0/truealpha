@@ -163,6 +163,65 @@ def test_xoms_shape_is_refused_against_the_previous_accepted_run(connection, tmp
     ).refused
 
 
+def test_a_new_fiscal_year_is_read_from_the_runs_own_row(connection, tmp_path, monkeypatch) -> None:
+    """#1236 through the deployed path: `_rows` must carry `revenue_period_end` from
+    mart.topt_core_results, or the policy cannot see a new fiscal year and refuses the tick, as
+    it did for MU every night from 2026-10-09. The previous row has a 3.58x higher P/S on the
+    same price; only the revenue period decides the verdict."""
+    from datetime import timedelta
+
+    from factors.composite.plausibility_policy import RULE_VALUATION_MOVE, Row
+
+    current_run_id, snapshot = _materialized_run(connection)
+    previous_run_id = _register_previous_run(connection, snapshot)
+    real_rows = plausibility_gate._rows
+    # The seed's financial payload carries no period end; production fills it on every
+    # available row (2026-10-12: TOPT 34/34, QQQ 273/273). Set MU's as its FY2026 10-K did.
+    _bypass_append_only(connection)
+    connection.execute(
+        "update mart.topt_core_results set revenue_period_end = date '2026-09-03' "
+        "where run_id = %s and listing_id = 'listing:xnas:mu'",
+        (current_run_id,),
+    )
+    current = {row.listing_id: row for row in real_rows(connection, current_run_id)}
+    mu = current["listing:xnas:mu"]
+    # Preconditions, so the verdict below cannot pass on a row the rule skips.
+    assert mu.availability == "available"
+    assert mu.current_ps is not None and mu.last_close is not None
+    assert mu.revenue_period_end is not None
+
+    def previous_mu(revenue_period_end) -> list[Row]:
+        return [
+            Row(
+                mu.listing_id,
+                mu.operating_branch,
+                "available",
+                mu.operating_efficiency,
+                mu.current_ps * Decimal("3.58"),
+                mu.last_close,
+                revenue_period_end,
+            )
+        ]
+
+    def judge(previous_rows: list[Row]):
+        monkeypatch.setattr(
+            plausibility_gate,
+            "_rows",
+            lambda conn, run_id: previous_rows if run_id == previous_run_id else real_rows(conn, run_id),
+        )
+        return plausibility_gate.judge_run(
+            connection,
+            run_id=current_run_id,
+            exemptions_path=_exemptions(tmp_path, "2000-01-01"),
+            today=date(2026, 10, 12),
+        )
+
+    older_year = judge(previous_mu(mu.revenue_period_end - timedelta(days=371)))
+    assert RULE_VALUATION_MOVE not in {violation.rule for violation in older_year.violations}
+    same_year = judge(previous_mu(mu.revenue_period_end))
+    assert (RULE_VALUATION_MOVE, "listing:xnas:mu") in {(v.rule, v.listing_id) for v in same_year.violations}
+
+
 def _jpm_negative(connection, run_id: str) -> None:
     _bypass_append_only(connection)
     connection.execute(
