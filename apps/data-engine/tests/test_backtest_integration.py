@@ -20,7 +20,7 @@ from data_engine.quality.nightly_verdicts import TICK_TAG
 
 
 @pytest.fixture
-def connection():
+def connection(monkeypatch: pytest.MonkeyPatch):
     """Yield an isolated transaction connection for testing."""
     try:
         active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
@@ -28,6 +28,8 @@ def connection():
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
+    # Intercept commit so the test transaction stays strictly uncommitted and rolls back cleanly at teardown
+    monkeypatch.setattr(active, "commit", lambda: None)
     try:
         yield active
     finally:
