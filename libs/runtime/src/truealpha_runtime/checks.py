@@ -4,7 +4,7 @@ import time
 
 import psycopg
 from infra2_sdk.runtime.health import DependencyStatus, ProbeResult
-from infra2_sdk.runtime.postgres import PostgresSettings, _redact_error, probe_postgres
+from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres, redact_postgres_error
 from infra2_sdk.runtime.s3 import probe_s3
 
 from truealpha_runtime.config import RuntimeSettings
@@ -24,7 +24,7 @@ def _redacted_detail(exc: Exception, settings: RuntimeSettings) -> str:
         )
     except Exception:  # noqa: BLE001
         return type(exc).__name__
-    return f"{type(exc).__name__}: {_redact_error(str(exc), postgres_settings)}"
+    return f"{type(exc).__name__}: {redact_postgres_error(str(exc), postgres_settings)}"
 
 
 class DatabaseCheck:

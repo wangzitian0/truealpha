@@ -19,6 +19,10 @@ class RuntimeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, env_ignore_empty=True)
 
     app_env: str = Field(default="dev", json_schema_extra={"source": "code", "injected": True, "group": "runtime"})
+    # GIT_COMMIT_SHA is the release identity of the running build. In deployed tiers it holds
+    # the release tag (for example v0.0.49), not a commit sha. The default is "unknown".
+    # Keep this fact in a comment, not in `Field(description=...)`. The description enters the
+    # generated manifest, and the data-engine release identity hashes each field declaration.
     git_commit_sha: str = Field(default="unknown", json_schema_extra={"source": "release", "group": "runtime"})
 
     # Composed by each service from the postgres service's password: the host and port

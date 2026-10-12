@@ -6,7 +6,7 @@ TypeScript app, written by hand. infra2 derives Vault Agent templates, policies 
 daily reconciliation from these files; this repository only has to keep them true.
 
 The driver -- rendering, the freshness check, the offline gate, boot-time validation -- is
-`infra2_sdk.manifests` (SDK 1.5.0). This file names the specs and nothing else, so a
+`infra2_sdk.manifests`. This file names the specs and nothing else, so a
 freshness rule or a gate fix lands in the SDK once instead of in every repository's copy.
 
     uv run python tools/env_manifest.py --write         # regenerate
