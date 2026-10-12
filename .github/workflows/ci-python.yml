@@ -28,6 +28,12 @@ on:
         required: false
         type: boolean
         default: false
+      data_engine_required:
+        description: >-
+          Whether data-engine test shards must run. Defaults to true.
+        required: false
+        type: boolean
+        default: true
 
 
 jobs:
@@ -162,7 +168,7 @@ jobs:
   # nobody runs — green, forever, which is the exact green-while-empty shape
   # (#527) this whole job exists to avoid.
   test-data-engine:
-    if: ${{ !inputs.dagster_liveness_only }}
+    if: ${{ !inputs.dagster_liveness_only && inputs.data_engine_required }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

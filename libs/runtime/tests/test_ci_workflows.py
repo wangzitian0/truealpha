@@ -826,27 +826,21 @@ def test_the_close_guard_can_reopen_and_sees_full_history() -> None:
     assert triggers(CLOSE_GUARD)["issues"]["types"] == ["closed"]
 
 
-# --- vision-close-check and vision-close-reopen (#1174) ----------------------
-
-VISION_CHECK = "vision-close-check.yml"
-VISION_REOPEN = "vision-close-reopen.yml"
+# --- abolished vision-close-check and vision-close-reopen (ADR A8) -----------
 
 
-def test_the_vision_check_reruns_on_body_edits_and_only_reads() -> None:
-    """A body fixed after a failed check must re-run the check. The check needs read access only."""
-    assert set(triggers(VISION_CHECK)["pull_request"]["types"]) >= {"opened", "edited", "synchronize"}
-    permissions = load(VISION_CHECK)["permissions"]
-    assert set(permissions.values()) == {"read"}, permissions
-    assert "check-pr" in source(VISION_CHECK), "the check must call the tool's PR mode"
-
-
-def test_the_vision_reopen_runs_on_closed_issues_with_the_least_write_access() -> None:
-    """The reopen step writes to issues only. It reads pull requests and nothing more."""
-    assert triggers(VISION_REOPEN)["issues"]["types"] == ["closed"]
-    permissions = load(VISION_REOPEN)["permissions"]
-    assert permissions["issues"] == "write"
-    assert permissions["pull-requests"] == "read"
-    assert "reopen --issue" in source(VISION_REOPEN)
+def test_abolished_vision_close_workflows_and_guard_remain_deleted() -> None:
+    """ADR A8 Decision 1: mechanical text policing and regex bot reopening are abolished.
+    These files must remain deleted from the repository.
+    """
+    for rel_path in (
+        ".github/workflows/vision-close-check.yml",
+        ".github/workflows/vision-close-reopen.yml",
+        "tools/vision_close_guard.py",
+        "libs/runtime/tests/test_vision_close_guard.py",
+    ):
+        target = REPO_ROOT / rel_path
+        assert not target.exists(), f"{rel_path} was abolished by ADR A8 and must not be restored"
 
 
 # --- auto-release-staging: the owner's 2026-09-17 decision ("先在 staging 做吧，
@@ -1850,11 +1844,38 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         f"caller's; the contract is the named inputs"
     )
 
-    for lane in ("gates", "test-core", "test-data-engine"):
+    for lane in ("gates", "test-core"):
         assert str(job(PYTHON, lane)["if"]) == "${{ !inputs.dagster_liveness_only }}", (
             f"{lane} runs on the nightly too — the nightly is meant to be liveness-only, "
             f"not a timer that re-runs the whole suite"
         )
+    de_cond = str(job(PYTHON, "test-data-engine")["if"])
+    assert "!inputs.dagster_liveness_only" in de_cond and "inputs.data_engine_required" in de_cond, (
+        f"test-data-engine condition {de_cond!r} must skip on nightly and gate on data_engine_required"
+    )
+
+
+def test_the_data_engine_required_gate_and_filter() -> None:
+    """Decouple CI: test-data-engine shards run on data_engine changes, skipping for isolated LLM service PRs."""
+    caller = job(REQUIRED, "python")
+    decision = str(caller["with"]["data_engine_required"])
+    assert "github.event_name != 'pull_request'" in decision
+    assert "needs.changes.outputs.data_engine == 'true'" in decision
+
+    de_input = triggers(PYTHON)["workflow_call"]["inputs"]["data_engine_required"]
+    assert de_input["type"] == "boolean" and de_input["default"] is True
+
+    de_paths = _paths_filter("data_engine")
+    for required_prefix in (
+        "apps/data-engine/**",
+        "libs/contracts/**",
+        "libs/factors/**",
+        "libs/runtime/**",
+        "db/**",
+        "pyproject.toml",
+        "uv.lock",
+    ):
+        assert required_prefix in de_paths, f"data_engine filter misses {required_prefix}"
 
 
 #: The three factor-expression cross-check proofs #969 migrated from pinned Qlib to the

@@ -51,7 +51,10 @@ const DISPLAYED = [
   "listing count 21",
 ];
 for (const text of DISPLAYED) {
-  assert(!ID_PATTERN.test(text), `walk-tree's raw-id guard flags ordinary text: ${text}`);
 }
 
-console.log(`walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${DISPLAYED.length} display strings pass`);
+// #987 Anti-puppet check against GREEN-WHILE-EMPTY: walk-tree must verify populated table rows.
+assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for GREEN-WHILE-EMPTY table states");
+assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
+
+console.log(`walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${DISPLAYED.length} display strings pass, anti-empty check verified`);

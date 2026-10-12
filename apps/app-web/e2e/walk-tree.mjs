@@ -43,6 +43,7 @@ const PASSWORD = process.env.TA_PASSWORD;
 // (e.g. against a deployment where only the owner has credentials), the
 // administrator pass runs alone exactly as before.
 const MEMBER_EMAIL = process.env.TA_MEMBER_EMAIL;
+const DATA_STATE = process.env.TA_DATA_STATE || "populated";
 if (!BASE || !EMAIL || !PASSWORD) {
   console.error("TA_BASE_URL, TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
@@ -88,12 +89,12 @@ async function assertNoVisibleRawIds(page, path, problems) {
 /**
  * (a2) #987 Anti-puppet check against GREEN-WHILE-EMPTY: Research data tables
  * must display non-empty tickers/labels rather than blank cells.
+ * Under populated data state, populated research routes MUST render at least 1 row.
  */
 async function assertNoBlankResearchTableCells(page, path, problems) {
   if (!["/research/rankings", "/research/strategy", "/research/compare", "/research/coverage"].includes(path)) return;
-  const emptyEntityCells = await page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const rows = Array.from(document.querySelectorAll("tbody tr"));
-    if (rows.length === 0) return 0;
     let emptyCount = 0;
     for (const row of rows) {
       const entityCell = row.querySelector('th[scope="row"]');
@@ -101,10 +102,17 @@ async function assertNoBlankResearchTableCells(page, path, problems) {
         emptyCount += 1;
       }
     }
-    return emptyCount;
+    return { rowCount: rows.length, emptyCount };
   });
-  if (emptyEntityCells > 0) {
-    problems.push(`found ${emptyEntityCells} table row(s) with blank entity cell (th[scope="row"]) on ${path}`);
+
+  if (DATA_STATE === "populated" && ["/research/rankings", "/research/strategy"].includes(path)) {
+    if (result.rowCount === 0) {
+      problems.push(`GREEN-WHILE-EMPTY: expected populated table rows on ${path} in ${DATA_STATE} state, found 0`);
+    }
+  }
+
+  if (result.emptyCount > 0) {
+    problems.push(`found ${result.emptyCount} table row(s) with blank entity cell (th[scope="row"]) on ${path}`);
   }
 }
 

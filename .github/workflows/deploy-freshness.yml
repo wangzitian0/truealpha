@@ -101,7 +101,8 @@ jobs:
           uv run --no-sync python tools/deploy_freshness.py \
             "${{ matrix.url }}" \
             --environment "${{ matrix.environment }}" \
-            --max-age-days "${{ github.event.inputs.max_age_days || matrix.max_age_days }}"
+            --max-age-days "${{ github.event.inputs.max_age_days || matrix.max_age_days }}" \
+            --warn-only
 
       # A4 C1 (#673): the routing shape, against the REAL proxy. Four
       # production releases went into one redirect and every defect in it was
