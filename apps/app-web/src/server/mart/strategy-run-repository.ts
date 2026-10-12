@@ -91,6 +91,7 @@ export const DECISIONS_SQL = `
          d.capital_adjusted_labor_efficiency, d.tier,
          d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
          d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
+         d.labor_efficiency_metric,
          -- #615-adjacent, and init.md's reason for point-in-time in the first
          -- place: "every step downstream has to be traceable back to the
          -- original raw material". The decision row records what was decided
@@ -228,7 +229,7 @@ function boundedDecimalString(value: unknown, field: string): string | null {
 	return text;
 }
 
-function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
+export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
 	if (typeof row.issuer_id !== "string" || row.issuer_id.length === 0) {
 		throw new SchemaMismatchError("issuer_id is not a non-empty string");
 	}
@@ -275,6 +276,10 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
 		peg: decimalString(row.peg, "peg"),
 		// Module 1's own ordering (#284). Independent of `rank`: PEG does not select.
 		peg_rank: typeof row.peg_rank === "number" ? row.peg_rank : null,
+		// #1176: the metric name the strategy used for this value. Null for a row written before
+		// the column existed, or for an issuer with no metric (no class, or excluded before one was chosen).
+		labor_efficiency_metric:
+			typeof row.labor_efficiency_metric === "string" ? row.labor_efficiency_metric : null,
 	};
 }
 

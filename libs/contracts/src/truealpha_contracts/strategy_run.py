@@ -63,6 +63,9 @@ class StrategyRunDecision(_StrictFrozenModel):
     peg: Decimal | None = None
     # Module 1 ordering (#284). Independent of `rank`; PEG does not select.
     peg_rank: int | None = None
+    # #1176: the metric name the strategy used for capital_adjusted_labor_efficiency. None when no metric
+    # was recorded (a row written before the column, or an issuer with no metric).
+    labor_efficiency_metric: str | None = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     exclusion_reason: str | None = None
     rank: int | None = Field(default=None, ge=1)

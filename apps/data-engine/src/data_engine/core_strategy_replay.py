@@ -84,6 +84,10 @@ class Decision:
     # would make every run already persisted raise `strategy decision identity conflict` on
     # its next replay.
     peg_reason_codes: tuple[str, ...] = ()
+    # #1176: the labor-efficiency metric name. Deliberately NOT in `to_json` (the content hash), for the
+    # same reason as peg_reason_codes: the name annotates the value, and adding it to the identity would
+    # make every run already persisted raise `strategy decision identity conflict` on replay.
+    labor_efficiency_metric: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -147,6 +151,7 @@ def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
         peg=evaluated.peg,
         peg_rank=evaluated.peg_rank,
         peg_reason_codes=evaluated.peg_reason_codes,
+        labor_efficiency_metric=evaluated.labor_efficiency_metric,
     )
 
 

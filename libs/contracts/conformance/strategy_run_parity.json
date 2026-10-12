@@ -90,7 +90,8 @@
           "target_price_to_sales": "18.75",
           "target_weight": "1.0",
           "tier": "tech",
-          "valuation_gap": "0.5"
+          "valuation_gap": "0.5",
+          "labor_efficiency_metric": null
         },
         {
           "capital_adjusted_labor_efficiency": null,
@@ -107,7 +108,8 @@
           "target_price_to_sales": null,
           "target_weight": null,
           "tier": null,
-          "valuation_gap": null
+          "valuation_gap": null,
+          "labor_efficiency_metric": null
         }
       ],
       "golden_mismatches": [],

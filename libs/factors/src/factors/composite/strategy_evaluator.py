@@ -181,6 +181,9 @@ class EvaluatedDecision:
     # names every degenerate case, and dropping the name here left the question-coverage
     # report able to say only `unrecorded_reason` (#837).
     peg_reason_codes: tuple[str, ...] = ()
+    # #1176: the labor-efficiency metric this decision was computed with, from the binding that selected it.
+    # None when no metric was selected (no class, or excluded before the selection).
+    labor_efficiency_metric: str | None = None
 
 
 def peg_reason_codes(result: FactorResult) -> tuple[str, ...]:
@@ -285,7 +288,10 @@ def _evaluate_issuer(
             (reason for flag, reason in _BANKING_FLAG_REASONS if flag in gppe_result.flags),
             ExclusionReason.STALE_REQUIRED_INPUT,
         )
-        return _excluded(issuer.issuer_id, reason, confidence=consumed_confidence), None
+        return (
+            _excluded(issuer.issuer_id, reason, confidence=consumed_confidence, labor_efficiency_metric=labor.metric),
+            None,
+        )
 
     # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
     # the owner decides how it enters selection, or landing the factor would silently move
@@ -326,6 +332,7 @@ def _evaluate_issuer(
                 issuer.issuer_id,
                 ExclusionReason.MISSING_MARKET_VALUE_INPUT,
                 confidence=tier_result.confidence,
+                labor_efficiency_metric=labor.metric,
             ),
             None,
         )
@@ -349,6 +356,7 @@ def _evaluate_issuer(
                 outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND,
                 exclusion_reason=None,
                 confidence=confidence,
+                labor_efficiency_metric=labor.metric,
             ),
             None,
         )
@@ -366,12 +374,19 @@ def _evaluate_issuer(
             outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
             exclusion_reason=None,
             confidence=confidence,
+            labor_efficiency_metric=labor.metric,
         ),
         valuation_gap,
     )
 
 
-def _excluded(issuer_id: str, reason: ExclusionReason, *, confidence: Decimal | None) -> EvaluatedDecision:
+def _excluded(
+    issuer_id: str,
+    reason: ExclusionReason,
+    *,
+    confidence: Decimal | None,
+    labor_efficiency_metric: str | None = None,
+) -> EvaluatedDecision:
     return EvaluatedDecision(
         issuer_id=issuer_id,
         capital_adjusted_labor_efficiency=None,
@@ -383,6 +398,7 @@ def _excluded(issuer_id: str, reason: ExclusionReason, *, confidence: Decimal | 
         outcome=GoldenDecisionOutcome.EXCLUDED,
         exclusion_reason=reason,
         confidence=confidence,
+        labor_efficiency_metric=labor_efficiency_metric,
     )
 
 
