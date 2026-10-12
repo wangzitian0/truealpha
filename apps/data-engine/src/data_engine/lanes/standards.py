@@ -334,24 +334,6 @@ def _canonical_universe_or_failure(
         return None, f"canonicalization failed: {type(error).__name__}"
 
 
-def _fill_summary(
-    universe: CanonicalUniverse, fills: list[tuple[str, str]], written: list[tuple[str, str]]
-) -> dict[str, Any]:
-    """The summary keys of the issuers the lane filled, from the rows its statements wrote (#1079).
-
-    Each filled issuer ends with one row. A fill that met a real row wrote nothing and kept it.
-    """
-    return {
-        UNVISITED_ISSUERS: len(fills),
-        UNVISITED_WRITTEN: len(written),
-        KEPT_REAL_ROWS: len(fills) - len(written),
-        UNVISITED_BY_REASON: reason_counts(reason for _, reason in written),
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
-    }
-
-
 def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
     """The lane failure and the verdict text that an upstream op put in its summary."""
     try:
