@@ -381,11 +381,15 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # did. Zero is said, not omitted: a nonzero count is the primary's outage, visible here.
     served_by_failover = int(pipeline.quality.get("served_by_failover_count", 0))
     summary += f"; served by failover {served_by_failover}"
-    if registration.accepted:
-        context.log.info(f"{summary}; pointer sequence {registration.sequence}")
+    if registration.advanced:
+        if not registration.unmet:
+            context.log.info(f"{summary}; pointer sequence {registration.sequence}")
+        else:
+            context.log.warning(
+                f"{summary}; pointer sequence {registration.sequence} (DEGRADED: {registration.summary})"
+            )
     else:
-        # #536 acceptance: which objective failed is readable from the run log and the
-        # op's output metadata, without opening the database.
+        # Which objective failed is readable from the run log and the op's output metadata.
         context.log.warning(
             f"{summary}; POINTER WITHHELD at sequence {registration.sequence} "
             f"— unmet service objectives: {registration.summary}"
@@ -401,9 +405,10 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         "capacity_refused": corroborations.capacity_refused,
         "budget_exhausted": corroborations.budget_exhausted,
         "served_by_failover": served_by_failover,
-        "pointer_advanced": registration.accepted,
+        "pointer_advanced": registration.advanced,
         "pointer_sequence": registration.sequence,
         "unmet_service_objectives": registration.summary,
+        "is_degraded": registration.is_degraded,
     }
     context.add_output_metadata(metadata)
     return pipeline.run_id

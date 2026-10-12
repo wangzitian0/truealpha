@@ -230,13 +230,14 @@ def _run_tick(monkeypatch, registration: PointerRegistration):
 
 
 def test_a_withheld_pointer_names_the_failing_objective_in_op_metadata(monkeypatch) -> None:
-    # #536 acceptance: the failing objective is visible without reading the database.
+    # The failing objective is visible without reading the database.
     metadata = _run_tick(
         monkeypatch,
         PointerRegistration(
             run_id="capture-run:" + "a" * 64,
             sequence=9,
             unmet=(UnmetObjective(objective="corroborated_share", required="0.95", observed="0.2353"),),
+            advanced=False,
         ),
     )
 
@@ -245,6 +246,24 @@ def test_a_withheld_pointer_names_the_failing_objective_in_op_metadata(monkeypat
     assert "corroborated_share" in metadata["unmet_service_objectives"]
     assert "required >= 0.95" in metadata["unmet_service_objectives"]
     assert "observed 0.2353" in metadata["unmet_service_objectives"]
+    assert metadata["is_degraded"] is True
+
+
+def test_a_degraded_pointer_advances_under_weak_gate(monkeypatch) -> None:
+    metadata = _run_tick(
+        monkeypatch,
+        PointerRegistration(
+            run_id="capture-run:" + "a" * 64,
+            sequence=10,
+            unmet=(UnmetObjective(objective="corroborated_share", required="0.95", observed="0.2353"),),
+            advanced=True,
+        ),
+    )
+
+    assert metadata["pointer_advanced"] is True
+    assert metadata["pointer_sequence"] == 10
+    assert metadata["is_degraded"] is True
+    assert "corroborated_share" in metadata["unmet_service_objectives"]
 
 
 def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
@@ -255,6 +274,7 @@ def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
 
     assert metadata["pointer_advanced"] is True
     assert metadata["pointer_sequence"] == 10
+    assert metadata["is_degraded"] is False
     assert metadata["unmet_service_objectives"] == "every objective met"
 
 

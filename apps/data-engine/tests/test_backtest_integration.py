@@ -20,7 +20,7 @@ from data_engine.quality.nightly_verdicts import TICK_TAG
 
 
 @pytest.fixture
-def connection():
+def connection(monkeypatch: pytest.MonkeyPatch):
     """Yield an isolated transaction connection for testing."""
     try:
         active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
@@ -28,10 +28,23 @@ def connection():
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
+    # Intercept commit so the test transaction stays strictly uncommitted and rolls back cleanly at teardown
+    monkeypatch.setattr(active, "commit", lambda: None)
     try:
         yield active
     finally:
-        active.rollback()
+        try:
+            with active.cursor() as cur:
+                cur.execute("delete from staging.strategy_backtest_inputs where issuer_id in ('FUND_A', 'FUND_B')")
+                cur.execute(
+                    "delete from staging.market_prices_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
+                )
+                cur.execute(
+                    "delete from staging.market_universe_masks_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
+                )
+                active.commit()
+        except Exception:
+            active.rollback()
         active.close()
 
 
