@@ -1,8 +1,9 @@
-# A5 — The Polars AST is the factor-expression engine; VectorBT is the backtest engine
+# A5 — The Polars AST is the factor-expression engine; VectorBT is the selected backtest engine
 
 Status: Accepted. Owner decision 2026-09-23, carried out by #969. Supersedes `init.md` rule 25's
 selection of Qlib, which had been in force since 2026-07-17.
 Date: 2026-09-23
+Correction 2026-10-12 (#1239): the repository does not use VectorBT. The backtest engine is a numpy simulation. See Decision 2.
 
 ## Context
 
@@ -36,8 +37,11 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 1. **The Polars AST is the factor-expression engine.** Factor expressions are versioned
    `truealpha_contracts.ast` definitions compiled to `polars.Expr` through `factors.expressions`.
-2. **VectorBT is the backtest/portfolio-simulation engine**, invoked only through adapters in
-   `libs/factors`.
+2. **VectorBT is the selected backtest/portfolio-simulation engine**, invoked only through adapters in
+   `libs/factors`. Correction 2026-10-12: the repository does not use VectorBT yet. The `vectorbt`
+   package is absent from `uv.lock`. The engine is `NumpySimulationEngine` in
+   `libs/factors/src/factors/backtest/engine.py`. The name `VectorBTBacktestEngine` is an alias for it.
+   ADR A6 records that the engine pin is open.
 3. **Every engine-independent constraint from the old rule 25 carries over unchanged.** Neither
    engine is a data or semantic authority. Only `libs/factors` adapters may invoke them. They
    receive provenance-neutral inputs projected from durable PIT snapshots and the explicit
@@ -90,8 +94,9 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 ## What this ADR does not decide
 
-It does not build the multi-cutoff backtest runner, and it does not claim the VectorBT engine is
-production-ready: `factors.backtest` is still unreachable from `dagster_defs.py`, and #938's three
-inter-layer contracts remain the standing acceptance bar for it. This ADR settles which engine the
+It does not build the multi-cutoff backtest runner, and it does not claim the backtest engine is
+production-ready. Since 2026-10-12 (#1239), `factors.backtest` is reachable from `dagster_defs.py`
+through `data_engine.lanes.backtest`. #938's three inter-layer contracts remain the standing
+acceptance bar for it. This ADR settles which engine the
 repository is building on, so that work stops being done against a contract that names a different
 one.

@@ -29,9 +29,9 @@ We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板�
 ### 2. Strong Dashboards (Radical Observability as Primary Governance)
 - Reality, quality, and progress are verified through **live, transparent Observability Dashboards**:
   - **DataHub Freshness (`/admin/datahub`)**: Directly exposes pointer timestamps, universe freshness, partition arrival times, and frozen head alerts.
-  - **Question Coverage & Factor Quality (`/admin/datahub/coverage`)**: Renders row-by-row reality across the six core questions (verified vs. degraded vs. unavailable with reason), leaving zero room for fake constants or hidden missing cells.
+  - **Question Coverage (`/admin/datahub`)**: Renders row-by-row reality across the core questions (verified vs. degraded vs. unavailable with reason), leaving zero room for fake constants or hidden missing cells. It reads `mart.question_coverage_report`.
   - **Strategy & Backtest Observability (`/research/backtest`)**: Exposes historical backtest cutoffs, returns, drawdowns, and live Dagster execution verdicts directly to researchers.
-- Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models (`mart.datahub_freshness`, `mart.factor_quality_report`, `mart.pipeline_verdicts`), surfaced uniformly across web surfaces, CLI probes, and health endpoints.
+- Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. A migration creates each one: `mart.served_head` (pointer freshness), `mart.question_coverage_report` (question coverage), and `mart.nightly_verdicts` (nightly check verdicts). The web surfaces above and the health endpoints read these models.
 
 ### 3. Issue Lifecycle and Verification
 - Issues are closed when an agent or engineer independently verifies deployment reality on the relevant dashboard or via physical read-only probes (SQL rows / HTTP responses).
