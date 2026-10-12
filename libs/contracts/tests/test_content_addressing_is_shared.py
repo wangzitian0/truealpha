@@ -47,13 +47,6 @@ _THE_DEFINITIONS = frozenset(
 #: with the reason it cannot simply call it. Every entry is a known cost, not an exemption:
 #: #997 tracks them, and anything not listed here fails.
 _NOT_YET_MERGED = {
-    # A different serializer, not a different style: `mode="python"` through a local
-    # normalizer that renders datetime, Decimal, timedelta and set differently from
-    # `mode="json"`. Its digests are therefore not the ones `identify` computes, and merging
-    # it would change ids already minted under this module's rule.
-    "libs/contracts/src/truealpha_contracts/policy_bundle.py._content_address": (
-        "hashes a differently normalized payload"
-    ),
     # A second concept: the id is hashed over a DECLARED SUBSET of fields (a natural key)
     # while the hash covers the whole payload. `identify` has no such grain, so these cannot
     # call it -- but they duplicate each OTHER, in two variants that differ in whether the

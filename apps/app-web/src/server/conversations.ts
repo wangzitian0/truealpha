@@ -1,8 +1,7 @@
 /**
  * #396: owner-scoped conversation persistence — the TypeScript adapter over
  * migration 0030's `app.conversations`/`app.conversation_messages`/
- * `app.clarification_tokens`/`app.research_gap_requests`. Structurally
- * mirrors `truealpha_contracts.conversations` (Python); this file performs
+ * `app.clarification_tokens`/`app.research_gap_requests`. This file performs
  * no intent extraction, no query selection, and computes nothing — it is
  * pure storage over already-decided outcomes, same boundary #370's mart
  * adapter holds for factor values (init.md Section 1, rule 2).

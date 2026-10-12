@@ -2,11 +2,7 @@
  * #373: owner-scoped research document lifecycle — the TypeScript adapter
  * over migration 0031's `app.research_documents`/`research_document_revisions`/
  * `research_document_tombstones`/`research_document_download_tickets`.
- * Implements `truealpha_contracts.documents` (Python)'s `OwnedDocumentService`
- * port at the method-signature level (same operations, same parameters);
- * individual DTOs are not field-for-field identical (e.g. `DocumentTombstone`/
- * `DocumentDownloadTicket` here carry fewer fields than their Python
- * counterparts). This file performs no rendering and no authorization
+ * This file performs no rendering and no authorization
  * decision — it persists an already-rendered #369/#372 artifact's bytes as
  * an opaque, content-addressed revision, same boundary #396's conversations
  * adapter holds for conversation storage (init.md Section 1, rule 2).
@@ -137,11 +133,11 @@ export function assertNonEmptyText(value: string, fieldName: string): string {
 }
 
 // Mirrors truealpha_contracts.common.STABLE_ID_PATTERN exactly (the shared
-// grammar truealpha_contracts.access._stable_coordinate validates against,
-// which documents.py's _stable_id delegates to) — sourceArtifactId is a
-// caller-supplied stable lineage identifier (a #369/#372 report_id/card_id),
-// so the TS adapter must reject the same inputs the Python DTO would, or the
-// two sides silently disagree about what's a valid id. Exported so
+// grammar truealpha_contracts.access._stable_coordinate validates against) —
+// sourceArtifactId is a caller-supplied stable lineage identifier (a
+// #369/#372 report_id/card_id), so the TS adapter must reject the same inputs
+// the Python contracts would, or the two sides silently disagree about what's
+// a valid id. Exported so
 // tests/stable-identifier-parity.test.ts can measure it against the Python
 // pattern the conformance bundle exports (#1010) — TypeScript cannot import
 // the Python constant directly, so this is the boundary that keeps it pinned.
@@ -164,7 +160,7 @@ function validateNewRevision(revision: NewDocumentRevisionInput): NewDocumentRev
     ...revision,
     // No trim here: a stable identifier with leading/trailing whitespace
     // should be REJECTED, not silently normalized — trimming first could
-    // accept an input the Python DTOs' _stable_id would reject outright.
+    // accept an input the shared stable-identifier grammar would reject outright.
     sourceArtifactId: assertStableId(revision.sourceArtifactId, "sourceArtifactId"),
     contentType: assertNonEmptyText(revision.contentType, "contentType"),
   };

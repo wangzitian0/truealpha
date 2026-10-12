@@ -46,8 +46,8 @@ def test_every_public_pydantic_contract_has_a_closed_json_schema() -> None:
 
 #: sha256 over the sorted `__all__` at the moment the aggregate was frozen. Adding a name
 #: changes it; so does removing one, which is allowed only together with the symbol.
-FROZEN_EXPORT_COUNT = 504
-FROZEN_EXPORT_SHA256 = "1b172b3d61c75c1c2e062416143984550adcfd7963acba792b6a4d1e5545b3e2"
+FROZEN_EXPORT_COUNT = 424
+FROZEN_EXPORT_SHA256 = "c20f1e1bb347268757b637602b807bc9d84956c4e61ebc1b8af930e9b1520dcc"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = REPO_ROOT / "libs/contracts/src/truealpha_contracts"

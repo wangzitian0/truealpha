@@ -229,12 +229,11 @@ def _stable_identifier_fields() -> dict[str, TypeAdapter[Any]]:
 
 
 def test_the_sweep_reaches_the_fields_that_disagreed() -> None:
-    """Named anchors, so the sweep cannot go quiet by selecting nothing: the two narrow copies and
-    one field from the majority must all be in it."""
+    """Named anchors, so the sweep cannot go quiet by selecting nothing: the narrow copy that remains
+    and one field from the majority must both be in it."""
     fields = _stable_identifier_fields()
     for anchor in (
         "truealpha_contracts.capture_contracts.CaptureCell.partition_key",
-        "truealpha_contracts.gates.ComparisonCriterion.metric_id",
         "truealpha_contracts.usage.DataRequirement.valid_period_rule_id",
     ):
         assert anchor in fields, f"the sweep did not select {anchor}; it selected {len(fields)} fields"
