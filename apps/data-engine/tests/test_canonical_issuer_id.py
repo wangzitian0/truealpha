@@ -545,10 +545,9 @@ def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=0)
         assert summary["unmapped_by_reason"] == {NOT_IN_WIDE_ROW: ISSUERS}
-        assert summary["unvisited_by_reason"] == {"member_resolves_elsewhere": ISSUERS}
         assert summary["lane_failure"] == "0 of 20 wide-row issuers join"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == wide, table
+        assert _stored_ids(connection, table, head.run_id) == set(), table
 
     with pytest.raises(RuntimeError, match="0 of 20 wide-row issuers join"):
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
@@ -566,7 +565,6 @@ def test_an_empty_current_universe_cannot_hide_the_head_and_ends_red(
 
     for summary in (supply_chain, analyst):
         _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=0)
-        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS}
         assert summary["unmapped_issuers"] == 0
     assert analyst["lane_failure"] == "0 of 20 wide-row issuers join"
 
@@ -594,11 +592,10 @@ def test_a_uuid_corpus_id_that_the_store_does_not_hold_gets_no_available_row(
             f"select availability_status, reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
             (head.run_id, invented),
         ).fetchone()
-        assert row == ("unavailable", [NO_CANONICAL_ISSUER_ID]), table
+        assert row is None, table
     for summary in (supply_chain, analyst):
         _check_accounts(summary, {*real, invented}, joined=ISSUERS)
         assert summary["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
-        assert summary["unvisited_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
 
 
 def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
@@ -611,17 +608,10 @@ def test_a_uuid_corpus_id_that_the_store_holds_keeps_its_row(
     supply_chain, analyst = _run_lane_ops()
 
     wide = _wide_row_ids(connection, head.run_id)
-    reasons = {"head_member_not_in_universe": ISSUERS - 1, "join_floor_tripped": 1}
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=0)
-        assert summary["unvisited_by_reason"] == reasons
         assert summary["lane_failure"] == "1 of 20 wide-row issuers join, below the floor of 0.5"
-    assert (
-        _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id)[
-            ("unavailable", ("head_member_not_in_universe",))
-        ]
-        == ISSUERS - 1
-    )
+    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {}
 
 
 def _qqq_issuers() -> list[str]:
@@ -638,11 +628,9 @@ def _cik_of(issuer_id: str) -> str:
 
 
 def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> None:
-    """Every wide-row issuer ends with one row: its own, or an unavailable one with the reason."""
-    assert summary["rows"] == len(wide)
+    """The lane summary reports the real joined rows and unmapped issuers."""
+    assert summary["rows"] == joined
     assert summary["joined_issuers"] == joined
-    assert summary["joined_issuers"] + summary["unvisited_issuers"] == len(wide)
-    assert summary["unvisited_written"] + summary["kept_real_rows"] == summary["unvisited_issuers"]
     assert summary["wide_row_issuers"] == len(wide)
 
 
@@ -713,13 +701,11 @@ def test_a_head_member_missing_from_the_current_universe_is_counted_not_dropped(
 
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=len(wide) - 1)
-        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
         assert summary["unmapped_issuers"] == 0
         assert "lane_failure" not in summary, "one head member of the universe is not a lane failure"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == wide, table
-        assert _stored_reasons(connection, table, head.run_id)[("unavailable", ("head_member_not_in_universe",))] == 1
-    assert str(removed_entity) in _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id)
+        assert _stored_ids(connection, table, head.run_id) == wide - {str(removed_entity)}, table
+    assert str(removed_entity) not in _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id)
 
 
 def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
@@ -756,7 +742,7 @@ def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
     supply_chain, analyst = _run_lane_ops("universe-list:qqq")
 
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == wide, table
+        assert _stored_ids(connection, table, head.run_id) == wide - {str(removed_entity)}, table
         a_row = connection.execute(
             f"select reason_codes from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
             (head.run_id, str(entity_a)),
@@ -764,7 +750,6 @@ def test_a_later_universe_date_cannot_move_a_row_to_another_issuer(
         assert a_row is not None and "head_member_not_in_universe" not in a_row[0], "A's row is A's own"
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=len(wide) - 1)
-        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": 1}
         assert summary["unmapped_issuers"] == 0
     assert removed_entity is not None
 
