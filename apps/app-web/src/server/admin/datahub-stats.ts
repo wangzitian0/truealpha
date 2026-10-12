@@ -91,6 +91,7 @@ export interface RecentCallRow {
 export interface QuestionCoverageQuestion {
   question: string;
   text: string;
+  scope?: string;
   column: string | null;
   tracking_issue: string;
   answered: number;
@@ -119,6 +120,7 @@ interface QuestionCoverageDbRow {
       string,
       {
         text?: string;
+        scope?: string;
         column?: string | null;
         tracking_issue?: string;
         answered?: number;
@@ -162,6 +164,7 @@ function questionCoverageRows(
           return {
             question,
             text: entry.text ?? "",
+            scope: entry.scope ?? (question === "q5" ? "fund" : "issuer"),
             column: entry.column ?? null,
             tracking_issue: entry.tracking_issue ?? "",
             answered: entry.answered ?? 0,

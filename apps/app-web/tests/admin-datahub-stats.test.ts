@@ -282,8 +282,9 @@ const confidenceRows = [
     q1 !== undefined &&
       q1.answered === 18 &&
       q1.unavailable_total === 2 &&
+      q1.scope === "issuer" &&
       q1.top_reasons === "missing_gross_profit=2",
-    "q1 flattened with its top reasons",
+    "q1 flattened with its top reasons and scope",
   );
   const q3 = stats.questionCoverage[0].questions.find(
     (q) => q.question === "q3",
