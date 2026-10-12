@@ -41,7 +41,7 @@ def require_stable_and_immutable(value: str, field_name: str, *, mutable_tokens:
     `reconciliation._MUTABLE_TOKENS` has six; each module keeps its own set exactly as it was, and
     nothing this function accepts or refuses changes at either call site. Sharing the WRAPPER while
     each site keeps its own token set is safe by construction, the same way `identify()` shares the
-    hash-and-stamp wrapper while `policy_bundle._content_address` keeps its own serializer.
+    hash-and-stamp wrapper.
     Unifying WHICH words are mutable across the eleven sites #1011 found is a decision with its own
     equivalence argument -- a supplied token set here is a parameter, not that decision.
     """
