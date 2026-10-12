@@ -193,9 +193,6 @@ def test_a_stored_report_the_tables_no_longer_agree_with_is_stale_even_on_the_ri
     assert coverage.detail == "q1: stored 18 answered, tables say 19"
 
 
-NOT_APPLICABLE_Q2 = {"answered": 0, "unavailable": {}, "missing": 0, "denominator": 0, "not_applicable": 100}
-
-
 def _coverage_verdict(monkeypatch, *, stored, fresh):
     """The coverage surface verdict when the stored report is `stored` and the tables say `fresh`."""
     _heads(monkeypatch, qqq=None)
@@ -204,36 +201,12 @@ def _coverage_verdict(monkeypatch, *, stored, fresh):
     return next(v for v in prove(tables, executed_at=NOW) if v.surface == "/admin/datahub coverage [topt]")
 
 
-def test_a_stored_report_that_carries_not_applicable_stays_green_when_the_tables_agree(monkeypatch) -> None:
-    """#1115: a question no column governs is graded `not_applicable`. The drift check keeps the count."""
-    questions = {"q1": REPORT["questions"]["q1"], "q2": NOT_APPLICABLE_Q2}
-    verdict = _coverage_verdict(monkeypatch, stored=questions, fresh=dict(questions))
-    assert verdict.ok and verdict.state == "MATCH" and verdict.detail == "recomputed report agrees"
-
-
-def test_a_stored_report_from_before_the_not_applicable_key_stays_green_when_the_count_is_zero(monkeypatch) -> None:
-    """#1115: a report stored before the key existed has no `not_applicable`. Read it as zero."""
-    older = {"answered": 18, "unavailable": {"x": 2}, "missing": 0}
-    fresh = {"answered": 18, "unavailable": {"x": 2}, "missing": 0, "not_applicable": 0}
-    verdict = _coverage_verdict(monkeypatch, stored={"q1": older}, fresh={"q1": fresh})
-    assert verdict.ok and verdict.state == "MATCH" and verdict.detail == "recomputed report agrees"
-
-
-def test_a_stored_report_that_differs_only_in_not_applicable_is_stale(monkeypatch) -> None:
-    """#1115: if the count of `not_applicable` subjects changes, the stored report is stale."""
-    stored = {"q2": {"answered": 0, "unavailable": {}, "missing": 0, "denominator": 0, "not_applicable": 0}}
-    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh={"q2": NOT_APPLICABLE_Q2})
+def test_a_stored_report_that_differs_only_in_missing_is_stale(monkeypatch) -> None:
+    stored = {"q2": {"answered": 0, "unavailable": {}, "missing": 0, "denominator": 100}}
+    fresh = {"q2": {"answered": 0, "unavailable": {}, "missing": 100, "denominator": 100}}
+    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh=fresh)
     assert not verdict.ok
-    assert verdict.detail == "q2: not_applicable 0 -> 100"
-
-
-def test_a_stored_report_from_before_the_grade_names_both_fields_that_moved(monkeypatch) -> None:
-    """#1115: a QQQ report stored before the grade holds `missing` 100. The recomputed one holds
-    `not_applicable` 100. The message names both fields with both values, not equal `answered` counts."""
-    stored = {"q2": {"answered": 0, "unavailable": {}, "missing": 100, "denominator": 100}}
-    verdict = _coverage_verdict(monkeypatch, stored=stored, fresh={"q2": NOT_APPLICABLE_Q2})
-    assert not verdict.ok
-    assert verdict.detail == "q2: missing 100 -> 0, not_applicable 0 -> 100"
+    assert verdict.detail == "q2: missing 0 -> 100"
 
 
 def test_a_stored_report_that_differs_only_in_unavailable_names_that_field(monkeypatch) -> None:
@@ -245,10 +218,10 @@ def test_a_stored_report_that_differs_only_in_unavailable_names_that_field(monke
 
 
 def test_a_stored_report_with_equal_answered_counts_names_every_other_field_that_moved(monkeypatch) -> None:
-    stored = {"q2": {"answered": 0, "unavailable": {"x": 2}, "missing": 100}}
-    fresh = {"q2": {"answered": 0, "unavailable": {}, "missing": 0, "not_applicable": 100}}
+    stored = {"q2": {"answered": 0, "unavailable": {"x": 2}, "missing": 98}}
+    fresh = {"q2": {"answered": 0, "unavailable": {}, "missing": 100}}
     verdict = _coverage_verdict(monkeypatch, stored=stored, fresh=fresh)
-    assert verdict.detail == "q2: unavailable {'x': 2} -> {}, missing 100 -> 0, not_applicable 0 -> 100"
+    assert verdict.detail == "q2: unavailable {'x': 2} -> {}, missing 98 -> 100"
 
 
 def test_a_head_with_no_strategy_run_and_a_holdings_head_with_no_fund_row_are_named(monkeypatch) -> None:

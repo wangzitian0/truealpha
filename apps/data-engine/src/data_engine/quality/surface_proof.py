@@ -424,12 +424,11 @@ def _no_theme_rows(connection: Connection[Any], head: GovernedHead | None) -> st
 
 
 #: The fields of one question the drift check compares.
-_DRIFT_FIELDS = ("answered", "unavailable", "missing", "not_applicable")
+_DRIFT_FIELDS = ("answered", "unavailable", "missing")
 
 
 def _drift_value(entry: Mapping[str, Any], field: str) -> Any:
-    """One compared field. A report stored before #1115 has no `not_applicable` key: read it as zero."""
-    return entry.get(field, 0) if field == "not_applicable" else entry.get(field)
+    return entry.get(field)
 
 
 def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:

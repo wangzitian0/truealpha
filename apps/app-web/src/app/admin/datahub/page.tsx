@@ -5,7 +5,7 @@
  * psql sessions, on one page.
  */
 
-import { coverageAnsweredCell, loadDatahubStats } from "@/server/admin/datahub-stats";
+import { loadDatahubStats } from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -107,9 +107,8 @@ export default async function AdminDatahubPage() {
         <h2 className="text-lg font-semibold">Question coverage (init.md §0, weekly)</h2>
         <p className="text-sm text-gray-500">
           Expected from the question registry, observed from the governed head&apos;s status dimensions.
-          &quot;missing&quot; means the registry holds no column for the question — owned by the issue shown,
-          never counted as unavailable. &quot;not applicable&quot; means the registry holds columns, but none
-          governs that universe — those subjects stay out of the answered denominator.
+          &quot;missing&quot; means no column exists for that universe yet — owned by the issue shown, never
+          counted as unavailable.
         </p>
         {stats.questionCoverage.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No coverage report yet.</p>
@@ -128,7 +127,6 @@ export default async function AdminDatahubPage() {
                   <th className="pr-4 font-normal">answered</th>
                   <th className="pr-4 font-normal">unavailable (top reasons)</th>
                   <th className="pr-4 font-normal">missing</th>
-                  <th className="pr-4 font-normal">not applicable</th>
                   <th className="font-normal">column / owner</th>
                 </tr>
               </thead>
@@ -138,13 +136,14 @@ export default async function AdminDatahubPage() {
                     <td className="pr-4">
                       <span className="font-mono">{q.question}</span> {q.text}
                     </td>
-                    <td className="pr-4">{coverageAnsweredCell(q)}</td>
+                    <td className="pr-4">
+                      {q.answered}/{q.denominator}
+                    </td>
                     <td className="pr-4 text-gray-400">
                       {q.unavailable_total}
                       {q.top_reasons ? ` (${q.top_reasons})` : ""}
                     </td>
                     <td className="pr-4">{q.missing}</td>
-                    <td className="pr-4">{q.not_applicable}</td>
                     <td className="font-mono text-gray-400">{q.column ?? q.tracking_issue}</td>
                   </tr>
                 ))}

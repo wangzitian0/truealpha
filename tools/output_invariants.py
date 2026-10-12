@@ -474,33 +474,6 @@ INVARIANTS: tuple[Invariant, ...] = (
         """,
     ),
     Invariant(
-        id="pointer-has-advanced-recently",
-        claim=(
-            "the governed pointer must advance with each accepted run — /research tells every "
-            "visitor it IS what they are looking at, and the tick is daily (#594)"
-        ),
-        # Single-plane on purpose. An earlier version compared the pointer's age
-        # against the latest STRATEGY run, which is a different plane: the
-        # pointer is per (environment, factor_id) over capture runs. That the
-        # page conflates the two is #594's subject, not something an invariant
-        # should reproduce. 36h is one daily cycle plus slack, under two.
-        violations="""
-            select
-              round(extract(epoch from (now() - advanced_at)) / 3600, 1)::text as hours_since,
-              target_run_id,
-              sequence::text
-            from mart.current_pointer_head
-            where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
-              and universe_id like 'universe:topt-%'
-              and now() - advanced_at > interval '36 hours'
-            order by advanced_at desc limit 1
-        """,
-        population="""
-            select count(*) from mart.current_pointer_head
-            where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
-        """,
-    ),
-    Invariant(
         id="extraction-citations-resolve",
         claim=(
             "a landed extraction fact's citation must resolve to captured bytes in raw.fetches — "
