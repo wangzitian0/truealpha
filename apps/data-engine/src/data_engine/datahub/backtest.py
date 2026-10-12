@@ -7,6 +7,7 @@ It simulates portfolio performance with the backtest engine and writes results t
 
 from __future__ import annotations
 
+import logging
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,8 @@ from factors.backtest.storage import persist_backtest_result
 from factors.expressions.dsl import col
 
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -66,7 +69,9 @@ def _resolve_snapshot_hash(
     explicit_hash: str | None = None,
 ) -> str:
     """Resolve a deterministic data snapshot hash, strictly forbidding sentinel placeholders (ADR A6)."""
-    if explicit_hash and explicit_hash not in ("default_snapshot", "snapshot_unspecified"):
+    if explicit_hash in ("default_snapshot", "snapshot_unspecified"):
+        raise ValueError(f"Sentinel snapshot hash {explicit_hash!r} is strictly forbidden by ADR A6 Decision 7.")
+    if explicit_hash:
         return explicit_hash
 
     # 1. Try to read the newest served head run_id for this universe
@@ -75,17 +80,17 @@ def _resolve_snapshot_hash(
             cur.execute(
                 """
                 select head_run_id from mart.served_head
-                where universe_id like %s
+                where universe_id = %s
                 order by advanced_at desc
                 limit 1
                 """,
-                (f"%{universe_id}%",),
+                (universe_id,),
             )
             row = cur.fetchone()
             if row and row[0]:
                 return str(row[0])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("failed to query mart.served_head for universe %s: %s", universe_id, exc)
 
     # 2. Try to read from mart.current_pointer_head
     try:
@@ -93,17 +98,17 @@ def _resolve_snapshot_hash(
             cur.execute(
                 """
                 select target_run_id from mart.current_pointer_head
-                where universe_id like %s
+                where universe_id = %s
                 order by advanced_at desc
                 limit 1
                 """,
-                (f"%{universe_id}%",),
+                (universe_id,),
             )
             row = cur.fetchone()
             if row and row[0]:
                 return str(row[0])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("failed to query mart.current_pointer_head for universe %s: %s", universe_id, exc)
 
     # 3. Deterministic hash of dataset shape and boundaries
     if not monthly_prices.is_empty():
@@ -204,18 +209,19 @@ def run_backtest(
     # If factor_column is not close, load fundamental factor metrics
     if factor_column != "close":
         fund_factors = _load_fundamental_factors(connection, symbols, factor_column)
-        if not fund_factors.is_empty():
-            # Align quarter-end / historical cutoffs to monthly trading dates strictly without lookahead
-            monthly_prices = monthly_prices.sort(["date", "symbol"])
-            fund_factors = fund_factors.sort(["date", "symbol"])
-            monthly_prices = monthly_prices.join_asof(
-                fund_factors,
-                on="date",
-                by="symbol",
-                strategy="backward",
+        if fund_factors.is_empty():
+            raise ValueError(
+                f"no fundamental factor rows available for factor_column={factor_column!r} in symbols={list(symbols)}"
             )
-        else:
-            monthly_prices = monthly_prices.with_columns(pl.lit(None, dtype=pl.Float64).alias(factor_column))
+        # Align quarter-end / historical cutoffs to monthly trading dates strictly without lookahead
+        monthly_prices = monthly_prices.sort(["date", "symbol"])
+        fund_factors = fund_factors.sort(["date", "symbol"])
+        monthly_prices = monthly_prices.join_asof(
+            fund_factors,
+            on="date",
+            by="symbol",
+            strategy="backward",
+        )
 
     factor_expr = col(factor_column).rank()
     panel = compile_factor_panel(factor_expr, monthly_prices, mask_df=mask if not mask.is_empty() else None)

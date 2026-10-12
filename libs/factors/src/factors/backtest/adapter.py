@@ -66,7 +66,6 @@ def compile_factor_panel(
 
     compiled = compile_to_polars(factor_expr, symbol_col="symbol", date_col="date", cutoff_col="cutoff")
     pdf = pdf.with_columns(factor_value=compiled)
-    pdf = pdf.with_columns(factor_val=pl.col("factor_value"))
 
     # Apply dynamic universe mask if provided (Fail-Closed: missing mask row -> eligible = False)
     if mask_df is not None:
@@ -94,10 +93,6 @@ def compile_factor_panel(
                 .then(pl.col("factor_value"))
                 .otherwise(None)
                 .alias("factor_value"),
-                pl.when(pl.col("eligible") == True)  # noqa: E712
-                .then(pl.col("factor_val"))
-                .otherwise(None)
-                .alias("factor_val"),
             )
 
     return pdf
