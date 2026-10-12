@@ -22,7 +22,7 @@ from factors.base.analyst_track_record import (
 )
 from psycopg import Connection
 
-from data_engine.datahub.canonical_issuer import require_canonical_issuer_id, write_unvisited
+from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 __all__ = (
@@ -35,7 +35,6 @@ __all__ = (
     "analyst_track_record",
     "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
-    "materialize_unvisited_issuers",
     "materialize_universe_analyst_ratings",
 )
 
@@ -78,19 +77,6 @@ where not (
 )
 """
 
-
-#: An unavailable row for a wide-row issuer that has no row of its own. It refreshes an earlier
-#: fill of the run. A row from a member, an answer or a fetch error, stays.
-_UNVISITED_SQL = """
-insert into mart.issuer_analyst_ratings (
-    run_id, issuer_id, cutoff, reason_codes, extractor,
-    availability_status, source_evidence_status, factor_validation_status
-) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
-on conflict (run_id, issuer_id) do update set
-    cutoff = excluded.cutoff,
-    reason_codes = excluded.reason_codes
-where mart.issuer_analyst_ratings.extractor = 'lane:unvisited:v1'
-"""
 
 _RATING_MIN = 1
 _RATING_MAX = 5
@@ -440,15 +426,3 @@ def materialize_universe_analyst_ratings(
             failures.append(failure)
     rows = materialize_analyst_ratings(connection, run_id=run_id, cutoff=cutoff, ratings_data=fetched)
     return UniverseCapture(rows=rows, failures=tuple(failures))
-
-
-def materialize_unvisited_issuers(
-    connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
-) -> list[tuple[str, str]]:
-    """Write an unavailable row for each wide-row issuer that has no row of its own (#1079).
-
-    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
-    A row from a member stays, and an earlier fill takes the new reason.
-    Returns the (issuer id, reason) pairs that the statement wrote. A kept row is not among them.
-    """
-    return write_unvisited(connection, _UNVISITED_SQL, run_id=run_id, cutoff=cutoff, unvisited=unvisited)

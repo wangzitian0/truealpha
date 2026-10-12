@@ -203,7 +203,7 @@ def test_run_nightly_backtest_op_against_real_database(
     connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Dagster op executes against the physical database without errors."""
-    symbols = ["OP_AAPL", "OP_MSFT"]
+    symbols = ["AAPL", "MSFT"]
     dates = [date(2023, 1, 31), date(2023, 2, 28)]
     _insert_fixture_data(connection, symbols, dates)
 

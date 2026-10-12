@@ -35,15 +35,11 @@ from data_engine.datahub.analyst_ratings import (
     materialize_analyst_ratings,
     materialize_universe_analyst_ratings,
 )
-from data_engine.datahub.analyst_ratings import materialize_unvisited_issuers as unvisited_analyst_ratings
 from data_engine.datahub.canonical_issuer import CanonicalIssuer
 from data_engine.datahub.production_topt import status_dimensions
 from data_engine.datahub.standards.supply_chain_extraction import (
     materialize_supply_chain_exposure,
     materialize_universe_supply_chain_exposure,
-)
-from data_engine.datahub.standards.supply_chain_extraction import (
-    materialize_unvisited_issuers as unvisited_supply_chain,
 )
 from data_engine.sources import moomoo as moomoo_source
 from data_engine.strategy_replay_repository import write_strategy_decision
@@ -298,13 +294,6 @@ def _drive_q4_universe(connection: _RecordingConnection) -> tuple[str, ...]:
     return ()
 
 
-def _drive_q4_unvisited(connection: _RecordingConnection) -> tuple[str, ...]:
-    unvisited_analyst_ratings(
-        connection, run_id="run:honesty", cutoff=_CUTOFF, unvisited=[(_issuer_id("l"), "head_member_not_in_universe")]
-    )
-    return ()
-
-
 def _drive_q3_dict_rows(connection: _RecordingConnection) -> tuple[str, ...]:
     materialize_supply_chain_exposure(
         connection,
@@ -341,13 +330,6 @@ def _drive_q3_universe(connection: _RecordingConnection) -> tuple[str, ...]:
     return ()
 
 
-def _drive_q3_unvisited(connection: _RecordingConnection) -> tuple[str, ...]:
-    unvisited_supply_chain(
-        connection, run_id="run:honesty", cutoff=_CUTOFF, unvisited=[(_issuer_id("u"), "head_member_not_in_universe")]
-    )
-    return ()
-
-
 def _drive_strategy_decisions(connection: _RecordingConnection) -> tuple[str, ...]:
     decisions, definition = run_strategy_replay()
     for decision in decisions:
@@ -371,11 +353,9 @@ WRITER_CASES = {
     "q4-factor-records": WriterCase(_drive_q4_factor_records, "mart.issuer_analyst_ratings", 2),
     "q4-capture-ticker": WriterCase(_drive_q4_capture, "mart.issuer_analyst_ratings", 2),
     "q4-universe": WriterCase(_drive_q4_universe, "mart.issuer_analyst_ratings", 3),
-    "q4-unvisited-fill": WriterCase(_drive_q4_unvisited, "mart.issuer_analyst_ratings", 1, routed=False),
     "q3-dict-rows": WriterCase(_drive_q3_dict_rows, "mart.issuer_supply_chain_exposure", 4),
     "q3-factor-records": WriterCase(_drive_q3_factor_records, "mart.issuer_supply_chain_exposure", 2),
     "q3-universe": WriterCase(_drive_q3_universe, "mart.issuer_supply_chain_exposure", 2),
-    "q3-unvisited-fill": WriterCase(_drive_q3_unvisited, "mart.issuer_supply_chain_exposure", 1, routed=False),
     "strategy-decisions": WriterCase(_drive_strategy_decisions, "mart.strategy_decisions", 10),
 }
 

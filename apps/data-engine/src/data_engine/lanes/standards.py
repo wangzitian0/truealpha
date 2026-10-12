@@ -498,7 +498,6 @@ def run_supply_chain_exposure(
     from data_engine.datahub.standards.planner import universe_issuers
     from data_engine.datahub.standards.supply_chain_extraction import (
         materialize_universe_supply_chain_exposure,
-        materialize_unvisited_issuers,
     )
 
     context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
@@ -527,25 +526,23 @@ def run_supply_chain_exposure(
                     VERDICT_TEXT: f"supply chain: {identity_failure}",
                 }
             )
-        # The floor is judged before any row is written, as in the analyst op. A tripped floor
-        # writes fills only, so both tables hold the same reason for each issuer.
         floor_failure = universe.lane_failure()
-        fills = universe.fills()
         joined = 0
         if floor_failure is None:
             joined = materialize_universe_supply_chain_exposure(
                 connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
             )
-        written = materialize_unvisited_issuers(connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills)
         connection.commit()
 
-    context.log.info("published %s supply-chain exposure rows for %s", joined + len(written), config.universe)
+    context.log.info("published %s supply-chain exposure rows for %s", joined, config.universe)
     summary: dict[str, Any] = {
         "universe": config.universe,
         "run_id": head.run_id,
-        "rows": joined + len(fills),
+        "rows": joined,
         JOINED_ISSUERS: joined,
-        **_fill_summary(universe, fills, written),
+        UNMAPPED_ISSUERS: len(universe.unmapped),
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
     if floor_failure is not None:
         summary[LANE_FAILURE] = floor_failure
@@ -597,15 +594,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         # The ids are resolved. End the reads now, so no transaction stays open across the vendor
         # calls. The rows are written after the last fetch, in one transaction.
         connection.rollback()
-        # The floor depends on the head and the universe only, so a retry would repeat it. It is
-        # judged before any fetch. A tripped floor fetches nothing and opens no OpenD context.
-        # Every wide-row issuer then gets an unavailable row, a joined one with its own reason.
         floor_failure = universe.lane_failure()
-        fills = universe.fills()
-        # Only the open of the context is a fetch failure. A write error fails the op and rolls
-        # the rows back. The rows commit BEFORE the context closes, so a close error fails the op
-        # but cannot undo them. No second pass runs. A rerun keeps an `available` row of this run
-        # when its own fetch fails (the upsert's WHERE).
         captured = analyst_ratings.UniverseCapture(rows=0)
         with ExitStack() as stack:
             if floor_failure is None and universe.issuers:
@@ -626,19 +615,18 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                     ctx=ctx,
                     open_error=open_error,
                 )
-            written = analyst_ratings.materialize_unvisited_issuers(
-                connection, run_id=head.run_id, cutoff=head.cutoff, unvisited=fills
-            )
             connection.commit()
 
     summary: dict[str, Any] = {
         "universe": config.universe,
         "executed_at": config.executed_at,
         "run_id": head.run_id,
-        "rows": captured.rows + len(fills),
+        "rows": captured.rows,
         JOINED_ISSUERS: captured.rows,
         "fetch_errors": len(captured.failures),
-        **_fill_summary(universe, fills, written),
+        UNMAPPED_ISSUERS: len(universe.unmapped),
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
     # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
     # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.

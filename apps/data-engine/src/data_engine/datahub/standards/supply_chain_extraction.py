@@ -20,7 +20,7 @@ from factors.base.supply_chain_exposure import (
 )
 from psycopg import Connection
 
-from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id, write_unvisited
+from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 __all__ = (
@@ -29,7 +29,6 @@ __all__ = (
     "SupplyChainPartner",
     "extract_supply_chain_relationships",
     "materialize_supply_chain_exposure",
-    "materialize_unvisited_issuers",
     "materialize_universe_supply_chain_exposure",
     "supply_chain_exposure",
 )
@@ -64,20 +63,6 @@ on conflict (run_id, issuer_id) do update set
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
     factor_validation_status = excluded.factor_validation_status
-"""
-
-
-#: An unavailable row for a wide-row issuer that has no row of its own. It refreshes an earlier
-#: fill of the run. A row from a member, an answer or a fetch error, stays.
-_UNVISITED_SQL = """
-insert into mart.issuer_supply_chain_exposure (
-    run_id, issuer_id, cutoff, reason_codes, extractor,
-    availability_status, source_evidence_status, factor_validation_status
-) values (%s, %s, %s, %s, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
-on conflict (run_id, issuer_id) do update set
-    cutoff = excluded.cutoff,
-    reason_codes = excluded.reason_codes
-where mart.issuer_supply_chain_exposure.extractor = 'lane:unvisited:v1'
 """
 
 
@@ -353,15 +338,3 @@ def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> b
         (cutoff,),
     ).fetchone()
     return bool(row and row[0])
-
-
-def materialize_unvisited_issuers(
-    connection: Connection[Any], *, run_id: str, cutoff: datetime, unvisited: Sequence[tuple[str, str]]
-) -> list[tuple[str, str]]:
-    """Write an unavailable row for each wide-row issuer that has no row of its own (#1079).
-
-    `unvisited` holds (issuer id, reason code). The report then shows the reason, not `no_row`.
-    A row from a member stays, and an earlier fill takes the new reason.
-    Returns the (issuer id, reason) pairs that the statement wrote. A kept row is not among them.
-    """
-    return write_unvisited(connection, _UNVISITED_SQL, run_id=run_id, cutoff=cutoff, unvisited=unvisited)
