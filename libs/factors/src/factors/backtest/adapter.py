@@ -76,7 +76,7 @@ def compile_factor_panel(
         m_date_col = _find_date_col(mdf.columns)
         join_right_cols = ["symbol", m_date_col, "eligible"]
         avail_right_cols = [c for c in join_right_cols if c in mdf.columns]
-        mdf_sub = mdf.select(avail_right_cols)
+        mdf_sub = mdf.select(avail_right_cols).unique(subset=["symbol", m_date_col])
 
         pdf = pdf.join(
             mdf_sub,
@@ -140,8 +140,11 @@ def compute_topk_dropout_weights(
         mdf = _to_polars(mask_df)
         m_date_col = _find_date_col(mdf.columns)
         join_cols = [c for c in ["symbol", m_date_col, "eligible"] if c in mdf.columns]
+        mdf_unique = mdf.select(join_cols).unique(subset=["symbol", m_date_col])
+        if "eligible" in fdf.columns:
+            fdf = fdf.drop("eligible")
         fdf = fdf.join(
-            mdf.select(join_cols),
+            mdf_unique,
             left_on=["symbol", cutoff_col],
             right_on=["symbol", m_date_col],
             how="left",
@@ -258,8 +261,11 @@ def pivot_to_vbt_matrices(
     p_pdf["_date_key"] = pd.to_datetime(p_pdf[p_date_col])
     w_pdf["_date_key"] = pd.to_datetime(w_pdf[w_date_col])
 
-    close_matrix = p_pdf.pivot(index="_date_key", columns="symbol", values=p_val_col)
-    weights_matrix = w_pdf.pivot(index="_date_key", columns="symbol", values=w_val_col)
+    p_clean = p_pdf.drop_duplicates(subset=["_date_key", "symbol"], keep="last")
+    w_clean = w_pdf.drop_duplicates(subset=["_date_key", "symbol"], keep="last")
+
+    close_matrix = p_clean.pivot(index="_date_key", columns="symbol", values=p_val_col)
+    weights_matrix = w_clean.pivot(index="_date_key", columns="symbol", values=w_val_col)
 
     all_symbols = sorted(list(set(close_matrix.columns).union(set(weights_matrix.columns))))
 

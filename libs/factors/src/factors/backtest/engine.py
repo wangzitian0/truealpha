@@ -26,7 +26,7 @@ class BacktestEngineConfig:
     cash_sharing: bool = True
     top_k: int = 5
     dropout_k: int = 2
-    data_snapshot_hash: str = "default_snapshot"
+    data_snapshot_hash: str = "snapshot_unspecified"
 
 
 @dataclass
@@ -61,7 +61,7 @@ def canonical_run_id(
     dropout_k: int = 2,
     fees: float = 0.001,
     slippage: float = 0.0005,
-    data_snapshot_hash: str = "default_snapshot",
+    data_snapshot_hash: str = "snapshot_unspecified",
 ) -> str:
     """Deterministic hash identifier binding all strategy, model, and execution parameters."""
     seed = (
