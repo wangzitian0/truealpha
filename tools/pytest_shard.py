@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import functools
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -46,7 +45,6 @@ def collect(root: Path | Sequence[Path]) -> list[Path]:
     return sorted(found)
 
 
-@functools.cache
 def test_functions(path: Path) -> int:
     """How many test functions a file defines, parsed rather than grepped.
 

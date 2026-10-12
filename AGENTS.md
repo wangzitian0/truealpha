@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=30355b6b17472aac96ddce9167d2a90cad62d8da4b77b3ce5c1e5f4f6b948c5f -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=e23fe8eabcb158eb64457ba99f7b8b9c07b7cc081345c7b3a4136b820dd9e1ec -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -64,21 +64,14 @@ tests prove it, review and green CI gate the merge.
    you touch them. A finding outside your lane is filed with its evidence and handed to
    the owning lane — recording it is in scope, adopting it is not.
 4. **Before starting**: `git status --short --branch`, sync `main`, check open issues and
-   PRs for the same work. The configured code-review process is every reviewer required by
-   repository settings or explicitly requested on the PR. It is complete only when each has
-   submitted a review for the exact head SHA. An actionable finding is an unresolved review
-   comment that requests a concrete code, documentation, test, or process change; questions
-   and informational comments do not count. Before declaring a PR merge-ready, require that
-   process to complete; an empty thread list before completion is not evidence of a clean
-   review. For each reviewer, only their latest effective decision counts; a latest
-   `Changes requested` decision blocks readiness until a later approval or dismissal, even
-   when it created no review thread. Each actionable finding must be classified in its own
-   review thread as exactly `Severity: High`, `Severity: Medium`, or `Severity: Low`; a
-   classification only in a review summary does not count. An unclassified actionable
-   finding blocks readiness.
-   Evaluate unresolved actionable findings against the budget of High = 0, Medium <= 2, and
-   Low <= 4 on the exact head immediately before merge readiness is declared. A green
-   `ci-required`, a deployable `main`, and backward-compatible migrations are also required.
+   PRs for the same work. **Strong dashboards, weak gates**: Merge gates enforce baseline
+   correctness (compilation, type checks, backward-compatible migrations, secrets scanning,
+   focused test suites, and deployable `main`). Third-party and AI reviewer feedback is advisory:
+   reviewer platform errors, timeouts, or unparseable reviews emit warnings and do not fail-close
+   or deadlock PR readiness. Actionable code review findings are tracked, with unresolved blockers
+   budgeted (High = 0, Medium <= 2, Low <= 4). Observability and reality are governed through
+   transparent, live Dashboards (`/admin/datahub`, `/research/backtest`, Postgres `mart` health
+   tables) rather than brittle, blocking mechanical regexes on PR descriptions or issue comments.
    Once a PR is merge-ready, the agent that owns it merges it. A merge whose pipeline
    reaches production (a release promote, see `docs/release-protocol.md`) waits for the
    owner. **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. A release workflow deploys, promotes or applies to a production environment. The release code is the code that a release workflow runs. The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter. Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this. A workflow that defines a required check is part of the gate, so this rule covers its edits too. In a repository with a release workflow, the owner also approves workflow edits and edits to the release code. A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`. With a verified run, the agent merges an edit to the release code. With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check. With a verified run, the agent merges a proven tightening of the infra2 gate inventory. In a repository whose gate does not print `production lock verified`, these edits stay with the owner. A Repo tier may record an owner decision that replaces this rule for that repository.

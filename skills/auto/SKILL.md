@@ -34,9 +34,9 @@ Task completion requires both code landing and physical reality verification.
    Transition to Reality Probe or deployment verification before declaring task complete.
 6. Execute the post-delivery retrospective checks before closing the delivery.
 
-## Post-delivery retrospective (three principles via Retrospective Swarm)
+## Post-delivery retrospective (Retrospective Swarm: M=3)
 
-Do not stop immediately after `git merge`. Execute three physical retrospective checks before concluding the delivery, optionally dispatching a quick 3-Intern batch via `subagent_batch`:
+Do not stop immediately after `git merge`. Dispatch 1 Retrospective Swarm (M=3 Interns via `subagent_batch`) before concluding the delivery:
 
 1. **Intern 1: Recurring mistake and harness constraint check**:
    - Check if any review comment, gate rejection, or CI retry occurred during this delivery.

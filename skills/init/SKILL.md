@@ -64,9 +64,9 @@ git stash list --format=%ct | awk -v c=$(( $(date +%s) - 2592000 )) '$1 < c {n++
 gh pr list --state merged --limit 300 --json headRefName --jq '.[].headRefName' | sort -u | comm -12 - <(git for-each-ref --format='%(refname:short)' refs/heads | sort) | awk 'END {print NR}'
 ```
 
-## 5. Init Swarm (Optional 4-Intern parallel discovery)
+## 5. Init Swarm (M=4)
 
-For complex tasks or large repositories, dispatch a quick 4-Intern discovery batch via `subagent_batch`:
+For complex tasks or large repositories, dispatch 1 Init Swarm (M=4 Interns via `subagent_batch`):
 - **Intern 1 (Key List)**: Scans `MANIFEST.yaml` and `tools/` for reusable components.
 - **Intern 2 (Intent & History)**: Runs git log search for past PRs touching the target subsystem.
 - **Intern 3 (Memory Recall)**: Executes global `search_notes` across all projects.
