@@ -325,7 +325,6 @@ def _canonical_universe_or_failure(
         return None, f"canonicalization failed: {type(error).__name__}"
 
 
-
 def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
     """The lane failure and the verdict text that an upstream op put in its summary."""
     try:

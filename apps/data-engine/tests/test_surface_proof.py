@@ -670,7 +670,16 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
                 segments, confidence, extractor, availability_status, source_evidence_status, factor_validation_status
             ) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
             """,
-            (run_id, issuer_id, cutoff, ["no_segment_partition"], t.theme_id, t.theme, t.factor_version, t.content_sha256),
+            (
+                run_id,
+                issuer_id,
+                cutoff,
+                ["no_segment_partition"],
+                t.theme_id,
+                t.theme,
+                t.factor_version,
+                t.content_sha256,
+            ),
         )
     count = connection.execute(
         "select count(*) from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'", (run_id,)

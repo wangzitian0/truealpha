@@ -22,7 +22,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
@@ -447,8 +447,6 @@ def materialize_theme_purity(
             )
             written.append(purity)
     return tuple(written)
-
-
 
 
 def _short_id(entity_id: str) -> str:

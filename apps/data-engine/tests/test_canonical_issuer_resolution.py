@@ -938,10 +938,13 @@ _PARTITION_COLUMNS = (
 )
 
 
+_PURITY_ROW_RUN = "capture-run:" + "9" * 64
+
+
 def _purity_row(**overrides: Any) -> dict[str, Any]:
     """The columns of a real refused row: it has a partition, no share, and masses that add up."""
     row: dict[str, Any] = {
-        "run_id": _FILL_RUN,
+        "run_id": _PURITY_ROW_RUN,
         "issuer_id": str(uuid.uuid4()),
         "theme_id": "ai-infrastructure",
         "theme": "AI infrastructure",

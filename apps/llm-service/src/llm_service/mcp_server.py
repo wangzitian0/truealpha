@@ -375,9 +375,7 @@ class PostgresCompanyProfileReader:
             if decision_row
             else None,
             "theme_purity": themes,
-            "availability_status": "available"
-            if (decision_row or gppe_row or bool(themes))
-            else "unavailable",
+            "availability_status": "available" if (decision_row or gppe_row or bool(themes)) else "unavailable",
         }
 
 

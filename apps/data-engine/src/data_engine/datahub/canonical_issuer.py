@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
@@ -120,7 +120,6 @@ class CanonicalUniverse:
 
     def unmapped_by_reason(self) -> dict[str, int]:
         return reason_counts(member.reason for member in self.unmapped)
-
 
     def lane_failure(self) -> str | None:
         """The message when too few wide-row issuers join a member, else None.
@@ -277,5 +276,3 @@ def account_for_head_members(
         for issuer_id in missing
     )
     return replace(universe, unvisited=unvisited, wide_row_issuers=len(wide_row_ids))
-
-
