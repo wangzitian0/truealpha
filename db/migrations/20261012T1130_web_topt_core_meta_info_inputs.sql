@@ -10,7 +10,12 @@
 -- from `normalized_payload` through a fixed whitelist of keys. A whitelisted key that the
 -- payload does not hold stays absent. Nothing is defaulted. A key that the payload holds as
 -- JSON null stays null: the payload asserts "no value", and the reader renders "not recorded".
--- An observation with none of the keys (identity, membership) gets the empty object.
+-- An observation with none of the keys gets the empty object.
+--
+-- The whitelist names the five financial inputs and the price close, the `currency` that
+-- prices them, and the `listing_id` that owns them. A core result covers one issuer. An issuer
+-- with two listings (dual-class) has two financial-fact and two market-price items in one
+-- lineage, and only `listing_id` tells them apart (#1241 audit).
 --
 -- Every column and every other lineage key is identical to 20260910T0930. Nothing stored
 -- changes. The privileges of the view stay as they are: `create or replace view` keeps the
@@ -76,7 +81,7 @@ join lateral (
                 from jsonb_each(payload.normalized_payload) field
                 where field.key in (
                     'gross_profit', 'total_assets', 'headcount', 'revenue',
-                    'shares_outstanding', 'close', 'period_end'
+                    'shares_outstanding', 'close', 'currency', 'listing_id'
                 )
             )
         ) order by observation.observation_id

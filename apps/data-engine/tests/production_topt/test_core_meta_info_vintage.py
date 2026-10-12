@@ -10,8 +10,9 @@ These assert the two halves of that: the envelope really does lack business fiel
 future reader does not "fix" this back), and the view really does read the payload table.
 
 #1241 adds `inputs` to every lineage item: the input values (gross_profit, total_assets,
-headcount, revenue, shares_outstanding, close, period_end) copied from the same payload table
-through a fixed whitelist. The last tests in this file assert that, on a seeded run.
+headcount, revenue, shares_outstanding, close), their `currency` and the `listing_id` that owns
+them, copied from the same payload table through a fixed whitelist. The last tests in this file
+assert that, on a seeded run.
 """
 
 from __future__ import annotations
@@ -83,7 +84,8 @@ INPUT_WHITELIST = (
     "revenue",
     "shares_outstanding",
     "close",
-    "period_end",
+    "currency",
+    "listing_id",
 )
 
 ENVELOPE_KEYS = {
@@ -273,19 +275,23 @@ def test_the_inputs_of_a_served_row_carry_the_values_of_the_payload_table(connec
     # The values the seeder wrote, as literals: the oracle above reads the same table the view
     # reads, so this pins the numbers themselves.
     assert {item["inputs"]["close"] for item in by_type["market-price"]} == {"40"}
-    assert all(set(item["inputs"]) == {"close"} for item in by_type["market-price"])
-    assert all(item["inputs"] == {} for item in by_type["listing-identity"])
-    assert all(item["inputs"] == {} for item in by_type["universe-membership"])
+    assert all(set(item["inputs"]) == {"close", "currency", "listing_id"} for item in by_type["market-price"])
+    # Identity and membership hold no input. They hold the listing, which the whitelist also names.
+    assert all(set(item["inputs"]) == {"listing_id"} for item in by_type["listing-identity"])
+    assert all(set(item["inputs"]) == {"listing_id"} for item in by_type["universe-membership"])
     financial = by_type["financial-fact"]
     non_bank = [item for item in financial if item["inputs"]["gross_profit"] is not None]
     assert non_bank, "the seeded run must hold a non-financial issuer"
     for item in non_bank:
+        listing_id = payloads[item["observation_id"]]["listing_id"]
         assert item["inputs"] == {
             "gross_profit": "210000000",
             "total_assets": "200000000",
             "headcount": "100",
             "revenue": "100000000",
             "shares_outstanding": "10000000",
+            "currency": "USD",
+            "listing_id": listing_id,
         }
     # A bank's payload holds gross_profit as JSON null. The key stays, with null: "no value".
     banks = [item for item in financial if item["inputs"]["gross_profit"] is None]
@@ -305,5 +311,6 @@ def test_an_input_the_payload_lacks_stays_absent(connection) -> None:
         """,
         (run.run_id,),
     ).fetchone()
+    # `period_end` is not a payload key, and it is not on the whitelist. A price holds no financial input.
     assert "period_end" not in item["inputs"]
     assert "gross_profit" not in item["inputs"]

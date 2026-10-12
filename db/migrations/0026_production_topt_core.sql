@@ -742,9 +742,9 @@ begin
 end
 $$;
 
--- Boot-lock guard: 0039_semantic_freshness_windows.sql, 20260908T1014_factors_core_meta_info_vintage.sql and
--- 20260910T0930_factors_vintage_reaches_mart.sql redefine this view with the same columns, and the last
--- definition owns it. Replacing it here on every boot would take ACCESS EXCLUSIVE twice
+-- Boot-lock guard: 0039_semantic_freshness_windows.sql, 20260908T1014_factors_core_meta_info_vintage.sql,
+-- 20260910T0930_factors_vintage_reaches_mart.sql and 20261012T1130_web_topt_core_meta_info_inputs.sql
+-- redefine this view with the same columns, and the last definition owns it. Replacing it here on every boot would take ACCESS EXCLUSIVE twice
 -- (this definition, then the later one) for nothing, so this file only creates it.
 do $$
 begin

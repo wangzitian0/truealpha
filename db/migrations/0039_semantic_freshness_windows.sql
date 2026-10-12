@@ -42,11 +42,12 @@ $$;
 -- Both freshness-grading views, redefined verbatim from 0026 with the window
 -- expression swapped for the per-semantic coalesce.
 
--- Replay guard: 20260908T1014 and 20260910T0930 redefine this view after this file,
+-- Replay guard: 20260908T1014, 20260910T0930 and 20261012T1130 redefine this view after this file,
 -- so re-replacing it here on every boot would take ACCESS EXCLUSIVE on it (blocking
 -- every reader) only to have the later files replace it back. This definition is
 -- applied only while the view does not exist; the last migration that defines the
--- view owns its shape and replaces it when its definition differs.
+-- view (20261012T1130_web_topt_core_meta_info_inputs.sql) owns its shape and replaces
+-- it when its definition differs.
 do $$
 begin
     if to_regclass('mart.topt_core_meta_info') is null then

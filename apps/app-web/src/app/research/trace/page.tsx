@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadTrace } from "@/server/dashboard";
-import { TraceInputsTable } from "@/components/trace-inputs-table";
+import { GovernedRunNotice, TraceInputsTable } from "@/components/trace-inputs-table";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,8 @@ export default async function TracePage({
 
       <ReadStateNotice state={state} />
 
+      {state.kind === "ready" && <GovernedRunNotice governed={state.data.governed} />}
+
       {state.kind === "ready" && (
         <dl className="space-y-4 rounded-xl border border-border bg-card p-5 text-sm">
           <div>
@@ -53,7 +55,7 @@ export default async function TracePage({
           <div>
             <dt className="text-gray-500">Decision inputs</dt>
             <dd>
-              <TraceInputsTable inputs={state.data.inputs} lineageResultId={state.data.lineageResultId} />
+              <TraceInputsTable listings={state.data.listings} lineageResultId={state.data.lineageResultId} />
             </dd>
           </div>
           <div>
