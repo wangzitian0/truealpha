@@ -30,7 +30,7 @@
       "has_default": true,
       "sensitive": false,
       "group": "runtime",
-      "description": "",
+      "description": "Release identity of the running build. In deployed tiers it holds the release tag (for example v0.0.49), not a commit sha. The default is unknown.",
       "source": "release",
       "empty_ok": false,
       "scope": "env",

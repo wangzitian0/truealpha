@@ -1,7 +1,7 @@
 """Poll a deployed TrueAlpha URL until the target release is actually live.
 
 The generic polling algorithm (HTTP-200 + status-field check, the version/
-git_sha stable-mismatch budget) is infra2_sdk.deploy_health's responsibility
+git_sha stable-mismatch budget) is infra2_sdk.deploy.poll_until_healthy's responsibility
 (#508); this wrapper only supplies TrueAlpha's own health endpoint and its
 {"status": "ok"} convention -- llm-service's /health, reached through
 Traefik's /api prefix route (tools/route_manifest.json).
@@ -40,8 +40,9 @@ DATA_ENGINE_IMAGE = "wangzitian0/truealpha-data-engine"
 
 # #526: the two sides of this gate must speak the same kind of identifier.
 # `deploy-release.yml` passed `source_sha` (a 40-hex commit sha) while the
-# deployed service reports `GIT_COMMIT_SHA`, which the deployers set to the
-# release TAG. The SDK's version match is a two-way prefix match, so a tag and
+# deployed service reports `GIT_COMMIT_SHA`, a release TAG in deployed tiers
+# (`RuntimeSettings.git_commit_sha`, libs/runtime/.../config.py, states this once).
+# The SDK's version match is a two-way prefix match, so a tag and
 # a sha can never match and the gate burned its whole 24-attempt budget before
 # reporting "did not become healthy (last status: HTTP 200)" — the endpoint was
 # fine, the comparison was impossible. Every prod release recorded as FAILURE,
@@ -226,7 +227,7 @@ def _await_data_engine(
 def resolve_data_engine_digest(tag: str, *, transport: HttpTransport | None = None) -> str:
     """The registry digest of `ghcr.io/wangzitian0/truealpha-data-engine:<tag>`.
 
-    `infra2_sdk.release.resolve_image_digest` (SDK 1.5.0) reads it through the anonymous
+    `infra2_sdk.refs.resolve_image_digest` reads it through the anonymous
     Registry v2 manifest API with the OCI accept set -- the same digest `docker pull
     image@…` and infra2's runner pin from the tag -- so the gate and the promotion agree by
     construction, not by a copied string. Every way the registry can fail to name a digest

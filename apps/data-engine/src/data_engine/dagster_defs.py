@@ -63,11 +63,11 @@ __all__ = [
     "topt_live_schedule",
 ]
 
-# OTLP telemetry for infra2's shared SigNoz (#1034). Every process that loads these definitions --
-# the Dagster code server and each run worker it launches -- exports ERROR logs (and traces/metrics
-# of anything instrumented) under the identity infra2's deploy renders into OTEL_SERVICE_NAME /
-# OTEL_RESOURCE_ATTRIBUTES. Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set; once on, a missing
-# identity refuses the import, which the code server reports as a failed location load.
+# OTLP telemetry hook for infra2's shared SigNoz (#1034). It is off in deployed data-engine.
+# Infra2 issues no OTEL_* variable to the dagster-* roles, and the three roles run on the host
+# network, which cannot reach the collector (infra2 ops.observability section 4.2). So
+# init_telemetry() returns None there. If an endpoint is set, a missing identity refuses the
+# import, and the code server reports a failed location load.
 init_telemetry()
 
 defs = dg.Definitions.merge(*lane_definitions().values())

@@ -27,8 +27,8 @@ files = [
     "libs/runtime/src",
 ]
 
-# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients;
-# infra2_sdk ships no py.typed marker).
+# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
+# infra2_sdk ships a py.typed marker since 2.4.0, so mypy checks it and it needs no entry.
 # Scoped per-module so a typo'd or missing dependency still fails the check.
 # mypy's `foo.*` matches `foo` itself too; bare names listed anyway so the
 # intent survives a reader who doesn't know that.
@@ -40,8 +40,6 @@ module = [
     "boto3.*",
     "botocore",
     "botocore.*",
-    "infra2_sdk",
-    "infra2_sdk.*",
 ]
 ignore_missing_imports = true
 
