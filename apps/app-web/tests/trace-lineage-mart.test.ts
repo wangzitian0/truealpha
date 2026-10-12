@@ -522,7 +522,10 @@ if (admin !== null) {
       const trace4 = await readTrace(issuer2.legacyId, CUTOFF_1);
       assert(trace4.lineageResultId === r2c1.resultId, `issuer 2 reads its own result: ${trace4.lineageResultId}`);
       assert(trace4.listings.length === 2, `two listings of one issuer: ${trace4.listings.length}`);
-      assert(trace4.listings[0].listingId === "listing:xnas:goog" && trace4.listings[0].isResultListing, "the result's listing leads");
+      // Which listing carries the result flag is an identity check; the order case lives in
+      // trace-lineage-inputs.test.ts, where the result listing does not sort first.
+      const flagged = trace4.listings.filter((l) => l.isResultListing).map((l) => l.listingId);
+      assert(flagged.length === 1 && flagged[0] === "listing:xnas:goog", `only the result listing is flagged: ${flagged}`);
       const goog = listingNamed(trace4, "listing:xnas:goog");
       const googl = listingNamed(trace4, "listing:xnas:googl");
       assert(input(goog, "shares_outstanding").value === "10000000" && input(goog, "close").value === "40", "GOOG shares and close under GOOG");

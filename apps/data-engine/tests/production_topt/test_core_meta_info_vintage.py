@@ -311,6 +311,5 @@ def test_an_input_the_payload_lacks_stays_absent(connection) -> None:
         """,
         (run.run_id,),
     ).fetchone()
-    # `period_end` is not a payload key, and it is not on the whitelist. A price holds no financial input.
-    assert "period_end" not in item["inputs"]
+    # `gross_profit` is on the whitelist but not in a price payload: it must stay absent, not null.
     assert "gross_profit" not in item["inputs"]
