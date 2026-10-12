@@ -1,6 +1,6 @@
 -- Governed research access: the storage boundary that remains after #1240.
 -- The decision, grant-binding, policy-set and audit tables are retired. No code wrote to them.
--- This contract checks two things:
+-- This contract checks three things:
 --   * The retired relations and functions do not exist in a migrated database.
 --   * The identity tables that stay (tenants, principals, entitlement grants) are append-only.
 --   * The runtime and audit roles keep their grant boundary on the remaining audit views.
