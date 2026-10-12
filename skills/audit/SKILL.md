@@ -1,11 +1,13 @@
 ---
 name: audit
-description: Step 2 of the five-step flow. Falsify a result against two independent external sources, then run the 10-Intern adversarial swarm audit. Use before you call work done or correct.
+description: Step 2 of the five-step flow. Executes a deterministic 3-Round Swarm pipeline (each round 10 Interns) to falsify claims and eradicate defects.
 ---
 
 # audit: try to prove it wrong
 
 A system's own tests, CI, and issue states are claims written by the system. A test cannot catch its author's premise.
+Audit executes a **deterministic 3-Round Swarm pipeline** via `subagent_batch`. Each round dispatches 1 Swarm of 10 Interns (`M=10`).
+The Director MUST NOT stop or return a final report before completing all 3 Swarms.
 
 ## Phase 0: Touch Reality (run before any scout)
 
@@ -46,45 +48,32 @@ Each gate came from a measured failure.
 4. **Screening output carries anchors.** Each fact cites `file#Lxx-Lyy` or a note id.
    The Director reads 1 to 2 anchors before a decision. Lossy small-model summaries hide facts.
 
-## The 10-Intern Scout Matrix
+## The 10-Intern Scout Matrix (used in Round 1 Discovery Swarm)
 
-The 10 parallel Interns in Round 1 are allocated across non-overlapping audit dimensions. The Director dynamically tailors the focus dimensions and weight distribution to the change:
-
-**Category M: Contract and impact (reads docs and code).**
+The 10 parallel Interns in Round 1 are allocated across non-overlapping audit dimensions:
 - M1 breaking changes (Intern 1): Renamed fields, new required parameters, breaking protobuf/schema contracts.
 - M2 design promises (Intern 2): Does code do what the README and architecture specify, or stub it with `pass` and TODO?
 - M3 blast radius (Intern 3): Shared state, events, or middleware that break downstream consumers or callers.
 - M4 semantic drift (Intern 4): Config names, default values, environment variable names, error codes.
-
-**Category G: General engineering (doc-blind).** Give these scouts source code and tests only. Withhold `*.md` and `docs/`. They must not guess business intent.
-- G1 SRE defense (Intern 5): Leaks, missing locks, child processes not killed as a group, timeouts, shutdown signals.
-- G2 hygiene (Intern 6): Swallowed errors (`except: pass`, ignored error objects), dead code, empty stubs, hidden hardcodes.
-- G3 fake tests (Intern 7): GREEN-WHILE-EMPTY, `assert True`, `assert len(x) >= 0`, over-mocking, shadowed test functions.
-
-**Category T: Goal and side effects (reads issue, PR text, and code).**
+- G1 SRE defense (Intern 5, doc-blind): Leaks, missing locks, child processes not killed as a group, timeouts, shutdown signals.
+- G2 hygiene (Intern 6, doc-blind): Swallowed errors (`except: pass`, ignored error objects), dead code, empty stubs, hidden hardcodes.
+- G3 fake tests (Intern 7, doc-blind): GREEN-WHILE-EMPTY, `assert True`, `assert len(x) >= 0`, over-mocking, shadowed test functions.
 - T1 completeness (Intern 8): Did the change finish the stated goal, or only the happy path?
 - T2 side effects (Intern 9): Latency, rate limits, lock contention, broken global invariants.
-
-**Category S: Single source of truth & rules (reads SSOT, MANIFEST, and rules).**
 - S1 SSOT and drift (Intern 10): Mismatches between implementation, MANIFEST.yaml keys, and rule boundaries.
 
-The Director cross-checks scouts: a doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature; a completeness claim (T1) against empty-run tests (G3) is false prosperity.
+## Deterministic 3-Round Swarm Pipeline
 
-## Swarm execution workflow
+Audit executes strictly across 3 sequential Swarms (each round M=10 Interns via `subagent_batch`). Premature exit is forbidden:
 
-Audit executes in a deterministic mode with 10 Interns and up to 5 rounds via the `swarm` skill state machine. The Director may skip audit for trivial or document-only changes. When invoked, the Director dynamically defines focus directions and round counts:
+1. **Round 1 (Discovery Swarm: M=10)**: Dispatch 10 Interns across the Scout Matrix (M1-M4, G1-G3, T1-T2, S1). Output dense defect hypotheses with exact `file#Lxx-Lyy` anchors.
+2. **Round 2 (Adversarial Confrontation Swarm: M=10)**: Pair Interns as opponents (Red Team vs Blue Team) to disprove Round 1 hypotheses with code counterexamples. Classify each finding strictly as `[DISPROVEN]` or `[CONFIRMED]`.
+3. **Round 3 (Independent Verdict Swarm: M=10 + Director Touch Reality)**: 10 fresh Interns blind-verify surviving `[CONFIRMED]` findings. The Director executes read-only Touch Reality probes to reject false positives.
 
-1. **Round 1 (Propose)**: The Director dispatches 10 parallel Interns across defined dimensions via `subagent_batch`. Each Intern outputs structured defect hypotheses with exact `file#Lxx-Lyy` anchors and counterexamples.
-2. **Round 2 (Cross-Falsify)**: Interns cross-examine opposing claims. Opponents must actively seek counterexamples in code to disprove hypotheses. Hypotheses are marked strictly as `[DISPROVEN]` or `[CONFIRMED]`.
-3. **Round 3 (Director Triangulation)**: The Director reviews surviving `[CONFIRMED]` claims, runs targeted physical reality checks (Touch Reality), and rejects false positives.
-4. **Round 4-5 (Extended Confrontation)**: When HIGH findings remain contested after Round 3, the Director dispatches focused cross-falsification rounds up to Round 5.
+## Loop Driver and Exit Guard (MANDATORY)
 
-A round with zero HIGH and zero new MIDDLE findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
-During review rounds, run focused tests only (`pytest <file>::<test> -x`). Never run full test suites during audit rounds.
-
-## Scout liveness
-
-Scouts are Interns dispatched via `subagent_batch`. The Director monitors task progression:
-- Child processes have OS-level timeouts (50s default).
-- The Director checks task outputs and worker logs (`~/.local/state/subagent-worker/worker.log`).
-- Accept exit code zero plus a real diff or commit as completion. Prose is not evidence.
+- **Mechanical Loop**: `WHILE round_counter < 3: dispatch_swarm(round=round_counter, M=10); record_checkpoint()`.
+- **Exit Guard**: `IF round_counter < 3: ABORT (premature stop forbidden; dispatch next round immediately)`.
+- **Zero Satisficing**: Never stop after Round 1 or Round 2. Rich findings are unverified hypotheses.
+- **Convergence Rule**: A pipeline with zero HIGH and zero new MIDDLE findings converges at Round 3. If HIGH findings remain contested, extend up to Round 5 at most.
+- **Terminal Round**: The final round is audit-only. It edits no code.

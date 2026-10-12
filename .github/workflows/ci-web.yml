@@ -75,11 +75,13 @@ jobs:
           set -eu
           # #580: a second database, migrated identically and left empty, so
           # the browser suite can walk the absent-state branch of every surface.
-          # Apply migrations once to truealpha, then clone truealpha_empty from truealpha (#1204).
-          echo "== truealpha"
-          DATABASE_URL="postgresql://postgres:postgres@localhost:5432/truealpha" sh db/apply_migrations.sh
-          psql -h localhost -U postgres -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'truealpha' AND pid <> pg_backend_pid();"
-          createdb -h localhost -U postgres -T truealpha truealpha_empty
+          # The loop is over DATABASES; the chain itself is applied by the one
+          # applier every call site shares (#984).
+          createdb -h localhost -U postgres truealpha_empty
+          for db in truealpha truealpha_empty; do
+            echo "== $db"
+            DATABASE_URL="postgresql://postgres:postgres@localhost:5432/$db" sh db/apply_migrations.sh
+          done
       # Runs every tests/*.test.ts file, not just one hardcoded name — #373
       # found that only issue58-conformance.test.ts was ever invoked here,
       # so the other 13 (auth, conversations, documents, dashboard, route-group
@@ -143,11 +145,13 @@ jobs:
           set -eu
           # #580: a second database, migrated identically and left empty, so
           # the browser suite can walk the absent-state branch of every surface.
-          # Apply migrations once to truealpha, then clone truealpha_empty from truealpha (#1204).
-          echo "== truealpha"
-          DATABASE_URL="postgresql://postgres:postgres@localhost:5432/truealpha" sh db/apply_migrations.sh
-          psql -h localhost -U postgres -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'truealpha' AND pid <> pg_backend_pid();"
-          createdb -h localhost -U postgres -T truealpha truealpha_empty
+          # The loop is over DATABASES; the chain itself is applied by the one
+          # applier every call site shares (#984).
+          createdb -h localhost -U postgres truealpha_empty
+          for db in truealpha truealpha_empty; do
+            echo "== $db"
+            DATABASE_URL="postgresql://postgres:postgres@localhost:5432/$db" sh db/apply_migrations.sh
+          done
       - run: bun run build
 
       # #494 criterion 1: the frozen route tree, walked in a real browser, on

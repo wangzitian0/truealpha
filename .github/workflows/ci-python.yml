@@ -97,6 +97,32 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
+      # A docker-run step rather than a service container: GitHub services can't
+      # override the container command, and the official minio image (the same
+      # pin docker-compose.yml uses) needs `server /data`.
+      #
+      # #823 pinned quay.io by digest after Docker Hub's minio/minio 404'd (2026-09-15):
+      # "the digest makes the reference immutable whatever a registry does next" -- true of
+      # the bytes, not of MinIO's willingness to serve them. #1041 (2026-09-24): MinIO
+      # discontinued free/anonymous distribution entirely (quay.io now requires auth even
+      # to list tags, Docker Hub's repo and Bitnami's mirror are gone, dl.min.io returns
+      # "410 Gone: ... archived and no longer maintained"). This pin builds the same
+      # AGPLv3-licensed release from MinIO's still-public GitHub source once
+      # (.github/workflows/mirror-minio.yml) and publishes it to this repo's own GHCR, so
+      # the reference no longer depends on a vendor's distribution decision.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
+            ghcr.io/wangzitian0/minio-mirror@sha256:986342c576435342b38fa75d14ed2bb63831242f37907fd1c83239631f9c5b80 server /data
+          for attempt in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            echo "Waiting for MinIO ($attempt/30)"
+            sleep 1
+          done
+          echo "MinIO did not become healthy" >&2
+          docker logs minio >&2
+          exit 1
       - name: Apply the migration chain
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
