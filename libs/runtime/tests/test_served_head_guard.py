@@ -90,6 +90,8 @@ NOT_RUN_KEYS = {
 SERVED = (
     "mart.topt_core_results",
     "mart.topt_core_result_read",
+    # #1241: /research/trace reads the lineage and the input values of the strategy run's capture run.
+    "mart.topt_core_meta_info",
     "mart.topt_gppe_results",
     "mart.strategy_decisions",
     "mart.strategy_runs",
@@ -113,7 +115,6 @@ SERVED = (
 #: `test_no_consumer_reaches_a_relation_listed_as_not_served` fails when a file names one.
 NOT_SERVED = {
     "mart.topt_capture_meta_info": "metadata of one capture run; no consumer reads it",
-    "mart.topt_core_meta_info": "metadata of one core run; no consumer reads it",
     "mart.topt_core_invocations": "factor invocation records; no consumer reads them",
     "mart.topt_gppe_invocations": "factor invocation records; no consumer reads them",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
@@ -820,6 +821,15 @@ def test_the_health_endpoint_reads_the_served_head() -> None:
     assert not any(entry.file == relative for entry in BASELINE)
 
 
+def test_the_app_reads_the_core_lineage_view_through_the_trace_reader() -> None:
+    """#1241: SERVED must name a relation that a consumer reads, or the list says what is not true.
+    `mart.topt_core_meta_info` moved here from NOT_SERVED when /research/trace began to read it."""
+    readers = consumer_references(REPO_ROOT, ("mart.topt_core_meta_info",))
+    assert "apps/app-web/src/server/mart/research-read.ts" in readers, sorted(readers)
+    assert "mart.topt_core_meta_info" in SERVED
+    assert "mart.topt_core_meta_info" not in NOT_SERVED
+
+
 def test_no_consumer_reaches_a_relation_listed_as_not_served() -> None:
     """NOT_SERVED means that no consumer reads the relation. The list is checked, not trusted."""
     assert consumer_references(REPO_ROOT, tuple(NOT_SERVED)) == {}
@@ -1201,12 +1211,12 @@ def test_a_consumer_file_that_names_a_not_served_relation_is_reported(tmp_path: 
     _write(
         tmp_path,
         "libs/contracts/src/truealpha_contracts/meta.py",
-        'SQL = "select 1 from MART.TOPT_CORE_META_INFO"\n',
+        'SQL = "select 1 from MART.TOPT_CORE_INVOCATIONS"\n',
     )
     _write(tmp_path, "apps/app-web/src/server/mart/quiet.ts", "// mart.topt_capture_meta_info in a comment only\n")
     assert consumer_references(tmp_path, tuple(NOT_SERVED)) == {
         "apps/app-web/src/server/mart/capture.ts": ["mart.topt_capture_meta_info"],
-        "libs/contracts/src/truealpha_contracts/meta.py": ["mart.topt_core_meta_info"],
+        "libs/contracts/src/truealpha_contracts/meta.py": ["mart.topt_core_invocations"],
     }
 
 

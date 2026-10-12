@@ -88,15 +88,14 @@ join lateral (
 ) lineage on true
 $view$;
 begin
-    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
-    -- changes, queueing every reader behind it; replace only when the definition differs.
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.topt_core_meta_info') is null
-       or pg_get_viewdef(to_regclass('mart.topt_core_meta_info'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20261012T1130_web_topt_core_meta_info_inputs.sql (#1241) redefines this view
+    -- later in the chain, with `inputs` added, and owns its definition. A boot replays this
+    -- file first. Replacing the view here would put this older definition back (ACCESS
+    -- EXCLUSIVE on the view) on every replay, only for that file to replace it again. So this
+    -- file creates the view only on a database that has none. The same rule is in
+    -- 20260908T1014, 0039 and 0026 for the same view.
+    if to_regclass('mart.topt_core_meta_info') is null then
         execute 'create or replace view mart.topt_core_meta_info as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;

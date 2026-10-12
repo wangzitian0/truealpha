@@ -220,6 +220,38 @@ export interface TraceLink {
 	reference: string | null;
 }
 
+/** The text the surface prints for a lineage field that the lineage does not carry (#1241).
+ * A missing field is shown as missing. It is never replaced by a default or a guess. */
+export const NOT_RECORDED = "not recorded";
+
+/** The six inputs of one TOPT decision, in display order. `key` is the payload key that
+ * `mart.topt_core_meta_info` copies into `inputs` (20261012T1130). `semanticType` names the
+ * lineage item that carries the input. */
+export const TRACE_INPUT_SPECS = [
+	{ key: "gross_profit", label: "Gross profit", semanticType: "financial-fact" },
+	{ key: "total_assets", label: "Total assets", semanticType: "financial-fact" },
+	{ key: "headcount", label: "Headcount", semanticType: "financial-fact" },
+	{ key: "shares_outstanding", label: "Shares outstanding", semanticType: "financial-fact" },
+	{ key: "revenue", label: "Revenue", semanticType: "financial-fact" },
+	{ key: "close", label: "Price (close)", semanticType: "market-price" },
+] as const;
+
+/** One input of a decision, as its lineage item records it. Every field except `key` and
+ * `label` is null when the lineage does not carry it. */
+export interface TraceInput {
+	key: string;
+	label: string;
+	/** The value as the payload stores it: a base-10 string, copied verbatim. */
+	value: string | null;
+	/** The period the figure describes: the filing's period end. */
+	period: string | null;
+	/** When the lineage item became knowable. One time per observation, shared by its inputs. */
+	knowableAt: string | null;
+	/** The filing accession. Null for a price, and for a headcount without a filing. */
+	accession: string | null;
+	sourceVintageId: string | null;
+}
+
 export interface TraceView {
 	traceId: string;
 	strategyId: string;
@@ -228,6 +260,10 @@ export interface TraceView {
 	cutoffAt: string;
 	corpusSha256: string;
 	links: readonly TraceLink[];
+	/** The inputs of the decision (#1241). Always the six in `TRACE_INPUT_SPECS`. */
+	inputs: readonly TraceInput[];
+	/** The core result whose lineage supplied `inputs`. Null when no lineage was read. */
+	lineageResultId: string | null;
 }
 
 export class MartReadUnavailable extends Error {
@@ -381,6 +417,77 @@ export function decisionAvailability(
 		return "excluded";
 	}
 	return "available";
+}
+
+/**
+ * #1241: the lineage of one strategy decision. The decision joins the core result of its capture
+ * run on issuer and cutoff, the same join DECISIONS_SQL makes. The capture run comes from
+ * `mart.strategy_run_capture`, which prefers the governed head's run. So the lineage read here
+ * belongs to the run that the page serves, and never to the newest row. `$2` is the issuer id the
+ * page shows, which is the legacy id when `mart.entity_identity` has one. Every core result of one
+ * capture run reads the same frozen snapshot, so any of them names the same four observations.
+ */
+export const TRACE_LINEAGE_SQL = `
+	select m.result_id, m.lineage
+	from mart.strategy_decisions d
+	join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+	join mart.topt_core_meta_info m
+	  on m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.cutoff = d.cutoff_at
+	left join lateral (
+	    select ei.legacy_id
+	    from mart.entity_identity ei
+	    where ei.entity_id::text = d.issuer_id
+	    limit 1
+	) ei on true
+	where d.strategy_run_id = $1
+	  and coalesce(ei.legacy_id, d.issuer_id) = $2
+	  and d.cutoff_at = $3::timestamptz
+	order by m.result_id
+	limit 1
+`;
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+/** A lineage field is text, or it is not recorded. Any other type means the view changed shape. */
+function lineageText(value: unknown, field: string): string | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value === "string") return value.length > 0 ? value : null;
+	throw new MartReadUnavailable(`lineage ${field} is not text`);
+}
+
+/**
+ * Maps the `lineage` array of one `mart.topt_core_meta_info` row to the six inputs of the decision.
+ * It copies fields and computes nothing. A field that the lineage does not carry stays null.
+ */
+export function traceInputsFromLineage(lineage: unknown): TraceInput[] {
+	if (!Array.isArray(lineage)) {
+		throw new MartReadUnavailable("lineage is not an array");
+	}
+	const items = lineage.map((item) => {
+		const record = recordOf(item);
+		if (record === null) throw new MartReadUnavailable("a lineage item is not an object");
+		return record;
+	});
+	return TRACE_INPUT_SPECS.map((spec) => {
+		const item = items.find((candidate) => candidate.semantic_type === spec.semanticType);
+		const inputs = recordOf(item?.inputs);
+		const filing = recordOf(recordOf(item?.vintage)?.[spec.key]);
+		return {
+			key: spec.key,
+			label: spec.label,
+			value: lineageText(inputs?.[spec.key], `${spec.key} value`),
+			period:
+				lineageText(filing?.period_end, `${spec.key} period_end`) ??
+				lineageText(inputs?.period_end, "inputs period_end"),
+			knowableAt: lineageText(item?.knowable_at, "knowable_at"),
+			accession: lineageText(filing?.accession, `${spec.key} accession`),
+			sourceVintageId: lineageText(item?.source_vintage_id, "source_vintage_id"),
+		};
+	});
 }
 
 function traceId(
@@ -711,6 +818,10 @@ export class StrategyRunReadAdapter {
 			(d) => d.issuer_id === issuerId && d.cutoff_at === cutoffAt,
 		);
 		if (decision === undefined) return null;
+		const lineage = await this.readTraceLineage(
+			(report as { strategy_run_id?: string }).strategy_run_id,
+			decision,
+		);
 		return {
 			traceId: traceId(report.source, issuerId, cutoffAt, report.corpus_sha256),
 			strategyId: report.strategy_id,
@@ -731,7 +842,27 @@ export class StrategyRunReadAdapter {
 				},
 				{ kind: "raw", label: "Immutable raw bytes", reference: null },
 			],
+			inputs: traceInputsFromLineage(lineage?.lineage ?? []),
+			lineageResultId: lineage?.resultId ?? null,
 		};
+	}
+
+	/** The lineage row of the decision's own capture run (#1241). A report with no run id (the
+	 * checked-in fixture, tests only) and a decision with no core result both read nothing. */
+	private async readTraceLineage(
+		strategyRunId: string | undefined,
+		decision: StrategyRunDecision,
+	): Promise<{ resultId: string; lineage: unknown } | null> {
+		if (strategyRunId === undefined) return null;
+		const result = await this.runWithClient((client) =>
+			client.query(TRACE_LINEAGE_SQL, [strategyRunId, decision.issuer_id, decision.cutoff_at]),
+		);
+		const row = result.rows[0];
+		if (row === undefined) return null;
+		if (typeof row.result_id !== "string") {
+			throw new MartReadUnavailable("lineage row has no result_id");
+		}
+		return { resultId: row.result_id, lineage: row.lineage };
 	}
 
 	async entityThemePurity(

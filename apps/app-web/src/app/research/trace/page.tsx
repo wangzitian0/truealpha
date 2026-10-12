@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadTrace } from "@/server/dashboard";
+import { TraceInputsTable } from "@/components/trace-inputs-table";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,12 @@ export default async function TracePage({
             <dt className="text-gray-500">Subject / cutoff</dt>
             <dd>
               {state.data.issuerId} @ {state.data.cutoffAt}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-gray-500">Decision inputs</dt>
+            <dd>
+              <TraceInputsTable inputs={state.data.inputs} lineageResultId={state.data.lineageResultId} />
             </dd>
           </div>
           <div>
