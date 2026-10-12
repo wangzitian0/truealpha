@@ -252,7 +252,7 @@ jobs:
               sleep 1
             done
             curl -fsS -o /dev/null "$TA_BASE_URL/login"
-            if ! TA_PASSWORD="$E2E_PASSWORD" node e2e/walk-tree.mjs; then
+            if ! TA_PASSWORD="$E2E_PASSWORD" TA_DATA_STATE="$state" node e2e/walk-tree.mjs; then
               echo "::error::the walk failed against the ${state} database. A failure here only \
           on ${state} means the page handles one data state and not the other — the shape of \
           every UI defect #580 was opened for."

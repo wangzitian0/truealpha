@@ -71,6 +71,7 @@ jobs:
       image_llm_service: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_llm_service }}
       image_data_engine: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_data_engine }}
       dagster_liveness: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.dagster_liveness }}
+      data_engine: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.data_engine }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,6 +146,19 @@ jobs:
               - 'apps/data-engine/Dockerfile'
               - 'docker-compose.yml'
               - '.github/workflows/ci-python.yml'
+            data_engine:
+              - 'apps/data-engine/**'
+              - 'libs/contracts/**'
+              - 'libs/factors/**'
+              - 'libs/runtime/**'
+              - 'db/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
+              - '.github/workflows/ci-python.yml'
+              - '.github/workflows/ci-required.yml'
+              - 'docker-compose.yml'
+              - 'tools/**'
             runtime:
               # #984: ci-runtime executes tools/schema_drift.py against the schema the
               # compose bootstrap produced — the same reason `db` above carries
@@ -271,6 +285,7 @@ jobs:
       # `github.event_name` inside the called workflow, so the caller's real event
       # is what decides it regardless of how that context behaves once called.
       dagster_liveness_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dagster_liveness == 'true' }}
+      data_engine_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.data_engine == 'true' }}
     # ci-python/ci-runtime both use `setup-uv` with `enable-cache: true`,
     # and a called workflow cannot exceed the caller's grant. Without `actions:
     # write` the cache RESTORES and cannot SAVE: harmless while the key keeps

@@ -212,3 +212,20 @@ def test_the_cli_passes_the_bound_through(monkeypatch: pytest.MonkeyPatch) -> No
     assert seen["max_age_days"] == PRODUCTION_MAX_AGE_DAYS
     assert seen["environment"] == "production"
     assert seen["url"] == URL
+
+
+def test_warn_only_emits_warning_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    """ADR A8: Telemetry mode logs warning on stale soak age and exits 0 instead of blocking."""
+    oldest = (NOW - timedelta(days=15)).isoformat()
+    exit_code = check_freshness(
+        URL,
+        environment="production",
+        http_get=_health("v0.0.19"),
+        now=NOW,
+        max_age_days=PRODUCTION_MAX_AGE_DAYS,
+        warn_only=True,
+        run=_git([f"{oldest}\x1fBump infra2-sdk pin"]),
+    )
+    assert exit_code == 0
+    stdout = capsys.readouterr().out
+    assert "::warning::production is stale" in stdout

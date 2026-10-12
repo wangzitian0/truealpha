@@ -132,6 +132,7 @@ def check_freshness(
     http_get: HttpGet | None = None,
     now: datetime | None = None,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    warn_only: bool = False,
 ) -> int:
     http_get = http_get or default_http_get()
     max_age = timedelta(days=max_age_days)
@@ -148,7 +149,11 @@ def check_freshness(
     age = staleness.oldest_unreleased_age
     assert age is not None
     if age > max_age:
-        print(f"freshness check failed: {format_failure(staleness, max_age)}", file=sys.stderr)
+        failure_msg = format_failure(staleness, max_age)
+        if warn_only:
+            print(f"::warning::{failure_msg}")
+            return 0
+        print(f"freshness check failed: {failure_msg}", file=sys.stderr)
         return 1
     print(
         f"{staleness.environment} is fresh enough: serving {deployed_ref}, "
@@ -164,6 +169,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment", default="")
     parser.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS)
     parser.add_argument("--repo", default=".")
+    parser.add_argument("--warn-only", action="store_true", default=False, help="Emit warning and exit 0 on age exceedance")
     return parser
 
 
@@ -174,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         environment=args.environment,
         max_age_days=args.max_age_days,
         repo=args.repo,
+        warn_only=args.warn_only,
     )
 
 
