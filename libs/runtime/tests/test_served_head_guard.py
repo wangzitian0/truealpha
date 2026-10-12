@@ -44,14 +44,12 @@ from __future__ import annotations
 
 import ast
 import io
-import os
 import re
 import tokenize
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -1222,11 +1220,6 @@ def test_the_served_and_not_served_lists_are_disjoint_and_explained() -> None:
     assert all(len(reason) >= 20 for reason in NOT_RUN_KEYS.values())
 
 
-def _named(database: str) -> str:
-    base = urlsplit(os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha"))
-    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
-
-
 #: Every column of a `mart` table, view, materialized view or partitioned table that looks like a
 #: run key. `information_schema.tables` lists no materialized view, so this reads `pg_class`.
 #: The name pattern matches whole tokens: `run_id` and `target_run_id` match, `truncated_at` does not.
@@ -1245,9 +1238,9 @@ where n.nspname = 'mart'
 
 @pytest.fixture(scope="module")
 def migrated_database() -> Iterator[str]:
-    """The name of a scratch database with the declared chain applied."""
+    """The scratch database URL with the declared chain applied."""
     with isolated_test_database("served_guard") as db:
-        yield db.name
+        yield str(db)
 
 
 @pytest.fixture(scope="module")
@@ -1256,7 +1249,7 @@ def run_key_columns(migrated_database: str) -> list[tuple[str, str]]:
 
     The filter is wide on purpose. The tests then decide which of the columns are real keys.
     """
-    with psycopg.connect(_named(migrated_database)) as connection:
+    with psycopg.connect(migrated_database) as connection:
         return [(row[0], row[1]) for row in connection.execute(RUN_LIKE_COLUMNS_SQL).fetchall()]
 
 

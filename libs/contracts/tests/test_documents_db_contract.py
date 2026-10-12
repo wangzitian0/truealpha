@@ -15,16 +15,20 @@ import psycopg
 import pytest
 
 _CONTRACT_SQL = Path(__file__).resolve().parents[3] / "db" / "tests" / "documents_contract.sql"
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 
-def _database_url() -> str:
-    return os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+def _database_url() -> str | None:
+    return os.environ.get("DATABASE_URL")
 
 
 @pytest.fixture
 def database_url() -> str:
+    from truealpha_runtime.testing import skip_or_fail
+
     url = _database_url()
+    if not url:
+        skip_or_fail("DATABASE_URL must be explicitly provided for DB contract tests (no default to port 5432)")
+        return ""
     try:
         conn = psycopg.connect(url, connect_timeout=3)
     except psycopg.OperationalError as error:

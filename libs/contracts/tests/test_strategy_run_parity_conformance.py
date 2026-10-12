@@ -30,7 +30,6 @@ from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnava
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
 _FIXTURE_PATH = Path(__file__).parents[1] / "conformance" / "strategy_run_parity.json"
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 _RUN_SQL = """insert into mart.strategy_runs
  (strategy_run_id, content_sha256, strategy_key, strategy_version, definition_content_sha256,
@@ -48,8 +47,8 @@ _DECISION_SQL = """insert into mart.strategy_decisions
   %(rank)s, %(target_weight)s, %(peg)s, %(peg_rank)s)"""
 
 
-def _database_url() -> str:
-    return os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+def _database_url() -> str | None:
+    return os.environ.get("DATABASE_URL")
 
 
 class _BorrowedConnection:
@@ -71,9 +70,15 @@ class _BorrowedConnection:
 
 @pytest.fixture
 def seeded(monkeypatch: pytest.MonkeyPatch):
+    from truealpha_runtime.testing import skip_or_fail
+
+    url = _database_url()
+    if not url:
+        skip_or_fail("DATABASE_URL must be explicitly provided for DB parity tests (no default to port 5432)")
+        return
     fixture = json.loads(_FIXTURE_PATH.read_text())
     try:
-        connection = psycopg.connect(_database_url(), connect_timeout=3, autocommit=False)
+        connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

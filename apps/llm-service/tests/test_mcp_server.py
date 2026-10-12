@@ -601,7 +601,12 @@ def theme_database(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     import psycopg
 
-    url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        from truealpha_runtime.testing import skip_or_fail
+
+        skip_or_fail("DATABASE_URL must be explicitly provided for MCP tests (no default to port 5432)")
+        return
     try:
         connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:

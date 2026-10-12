@@ -356,7 +356,9 @@ REAL_CONNECT = psycopg.connect
 
 
 def _named(database: str) -> str:
-    base = urlsplit(os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha"))
+    from truealpha_runtime.testing import guard_db_write
+
+    base = urlsplit(guard_db_write())
     return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 

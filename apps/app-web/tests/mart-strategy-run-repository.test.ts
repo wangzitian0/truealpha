@@ -16,15 +16,19 @@ import { Client } from "pg";
 import { DECISIONS_SQL, MartStrategyRunRepository } from "../src/server/mart/strategy-run-repository";
 import type { AccessContext } from "../src/contracts/strategyRun";
 
+import { requireDb } from "./helpers/db-guard";
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const dbUrl = requireDb("mart-strategy-run-repository", { write: true });
+if (!dbUrl) {
+  process.exit(0);
+}
+const DATABASE_URL: string = dbUrl;
+process.env.DATABASE_URL = DATABASE_URL;
 const REQUIRE_DB = Boolean(process.env.DATABASE_URL || process.env.TRUEALPHA_REQUIRE_RUNTIME);
-// The repository under test reads process.env.DATABASE_URL (via withMartReadonly);
-// default it so a bare local run points the read and the seed at the same DB.
-process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/truealpha";
-const DATABASE_URL = process.env.DATABASE_URL;
 
 const CONTEXT: AccessContext = {
   contextId: "ctx:test",

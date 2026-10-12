@@ -26,14 +26,19 @@ import { Client } from "pg";
 
 import { PostgresDocumentsRepository } from "../src/server/documents";
 import type { AccessContext } from "../src/contracts/strategyRun";
+import { requireDb } from "./helpers/db-guard";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const dbUrl = requireDb("documents-pagination", { write: true });
+if (!dbUrl) {
+  process.exit(0);
+}
+const DATABASE_URL: string = dbUrl;
+process.env.DATABASE_URL = DATABASE_URL;
 const REQUIRE_DB = Boolean(process.env.DATABASE_URL || process.env.TRUEALPHA_REQUIRE_RUNTIME);
-process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/truealpha";
-const DATABASE_URL = process.env.DATABASE_URL;
 
 async function reachable(): Promise<Client | null> {
   const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });

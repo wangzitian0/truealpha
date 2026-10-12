@@ -41,8 +41,6 @@ import pytest
 from llm_service.mcp_server import build_mcp_server
 from psycopg.rows import dict_row
 
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
-
 # The canonical 8-4-4-4-12 form. `staging.entities.entity_id` is a uuidv5, so this is
 # exactly what an untranslated mart entity coordinate looks like on the wire.
 _BARE_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
@@ -101,8 +99,8 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
 }
 
 
-def _database_url() -> str:
-    return os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+def _database_url() -> str | None:
+    return os.environ.get("DATABASE_URL")
 
 
 class _BorrowedConnection:
@@ -159,8 +157,14 @@ def seeded_entity(monkeypatch: pytest.MonkeyPatch):
     in for one. That is the whole point -- the fixture has to be the same coordinate
     #928's writer produces.
     """
+    from truealpha_runtime.testing import skip_or_fail
+
+    url = _database_url()
+    if not url:
+        skip_or_fail("DATABASE_URL must be explicitly provided for MCP identity tests (no default to port 5432)")
+        return
     try:
-        connection = psycopg.connect(_database_url(), connect_timeout=3, autocommit=False)
+        connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

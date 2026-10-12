@@ -26,3 +26,12 @@ def mcp_allowed_hosts() -> Iterator[None]:
         os.environ.pop("MCP_ALLOWED_HOSTS", None)
     else:
         os.environ["MCP_ALLOWED_HOSTS"] = previous
+
+
+@pytest.fixture(autouse=True)
+def isolate_ambient_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When DATABASE_URL is unset, tests must not connect to ambient localhost:5432 (#1197)."""
+    if "DATABASE_URL" not in os.environ:
+        from truealpha_runtime import runtime_settings
+
+        monkeypatch.setattr(runtime_settings, "database_url", "postgresql://127.0.0.1:1/unreachable")

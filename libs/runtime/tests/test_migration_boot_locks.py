@@ -33,12 +33,12 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from truealpha_runtime.testing import guard_db_write
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DB_DIR = REPO_ROOT / "db"
 RUNNER = DB_DIR / "apply_migrations.sh"
 REPLAY_SEED = DB_DIR / "tests" / "contract_kind_replay_seed.sql"
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 #: Application schemas the migrations own; a lock anywhere in them can stall a boot.
 APPLICATION_SCHEMAS = ("raw", "staging", "mart", "app", "ops", "dagster")
@@ -49,7 +49,7 @@ STRICT = {"TRUEALPHA_MIGRATION_LOCK_TIMEOUT": "1s", "TRUEALPHA_MIGRATION_LOCK_AT
 
 
 def _admin_url() -> str:
-    parameters = conninfo_to_dict(os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL))
+    parameters = conninfo_to_dict(guard_db_write())
     return make_conninfo(**(parameters | {"dbname": "postgres"}))
 
 

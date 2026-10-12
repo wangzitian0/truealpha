@@ -44,11 +44,9 @@ def _issuer_id(name: str) -> str:
 
 @pytest.fixture
 def connection():
-    url = (
-        os.environ.get("TRUEALPHA_TEST_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or "postgresql://postgres@localhost:5432/truealpha_m1_m2"
-    )
+    from truealpha_runtime.testing import guard_db_write
+
+    url = guard_db_write(os.environ.get("TRUEALPHA_TEST_DATABASE_URL"))
     try:
         conn = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:

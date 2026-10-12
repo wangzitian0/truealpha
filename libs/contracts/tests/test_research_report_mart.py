@@ -21,14 +21,14 @@ from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.research_report import ResearchReportKind, ResearchReportRequest, build_research_report
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
+from truealpha_runtime.testing import guard_db_write
 
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 _HASH64 = "d" * 64
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
 
 
 def _resolve_database_url() -> str:
-    return os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+    return guard_db_write()
 
 
 def _unique_strategy_key() -> str:
@@ -51,8 +51,9 @@ def _context() -> AccessContext:
 
 @pytest.fixture
 def connection():
+    url = guard_db_write()
     try:
-        active = psycopg.connect(_resolve_database_url(), connect_timeout=3, autocommit=True)
+        active = psycopg.connect(url, connect_timeout=3, autocommit=True)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
