@@ -35,14 +35,15 @@ def _safe_div(left: pl.Expr, right: pl.Expr) -> pl.Expr:
 def _safe_rank(inner: pl.Expr, cutoff_col: str) -> pl.Expr:
     """Cross-sectional ranking normalized to [0, 1] over cutoff, strictly treating NaN as null."""
     clean_inner = pl.when(inner.is_null() | _safe_is_nan(inner)).then(None).otherwise(inner)
-    rank_expr = clean_inner.rank(method="average").over(cutoff_col)
-    count_expr = clean_inner.count().over(cutoff_col)
+    rank_expr = clean_inner.rank(method="average").over(cutoff_col).cast(pl.Float64)
+    count_expr = clean_inner.count().over(cutoff_col).cast(pl.Float64)
+    safe_denom = pl.max_horizontal(count_expr - 1.0, pl.lit(1.0))
     return (
         pl.when(clean_inner.is_null())
         .then(None)
-        .when(count_expr <= 1)
+        .when(count_expr <= 1.0)
         .then(0.0)
-        .otherwise((rank_expr - 1) / (count_expr - 1))
+        .otherwise((rank_expr - 1.0) / safe_denom)
     )
 
 

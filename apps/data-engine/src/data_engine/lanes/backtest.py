@@ -26,10 +26,10 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
 class NightlyBacktestConfig(dg.Config):
     """Configuration for nightly backtest execution."""
 
-    strategy_key: str = "demo_topk_rank"
+    strategy_key: str = "topt_gppe_rank"
     strategy_version: str = "v1"
     universe_id: str = "topt"
-    factor_column: str = "close"
+    factor_column: str = "gppe"
     top_k: int = 5
     dropout_k: int = 2
 
