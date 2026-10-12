@@ -51,6 +51,7 @@ const DISPLAYED = [
   "listing count 21",
 ];
 for (const text of DISPLAYED) {
+  assert(!ID_PATTERN.test(text), `walk-tree's raw-id guard flags ordinary text: ${text}`);
 }
 
 // #987 Anti-puppet check against GREEN-WHILE-EMPTY: walk-tree must verify populated table rows.
