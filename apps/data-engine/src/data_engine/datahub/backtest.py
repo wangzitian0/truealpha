@@ -65,8 +65,8 @@ def _resolve_snapshot_hash(
     monthly_prices: pl.DataFrame,
     explicit_hash: str | None = None,
 ) -> str:
-    """Resolve a deterministic data snapshot hash, strictly forbidding 'default_snapshot' (ADR A6)."""
-    if explicit_hash and explicit_hash != "default_snapshot":
+    """Resolve a deterministic data snapshot hash, strictly forbidding sentinel placeholders (ADR A6)."""
+    if explicit_hash and explicit_hash not in ("default_snapshot", "snapshot_unspecified"):
         return explicit_hash
 
     # 1. Try to read the newest served head run_id for this universe
