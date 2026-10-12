@@ -219,13 +219,13 @@ def register_run_evidence(
     quality_report: Mapping[str, Any],
     objectives: ServiceObjectives = ACCEPTED_SERVICE_OBJECTIVES,
 ) -> PointerRegistration:
-    """Bind the run to its release manifest, then advance the pointer only when the run's
-    report meets `objectives`.
+    """Bind the run to its release manifest and advance the pointer monotonically.
 
-    Idempotent per run: appends dedupe on node identity, and an already-heading run
-    advances nothing. The release-manifest node and its `bound_to` edge are appended
-    whether or not the pointer advances — a withheld run is still a run that happened,
-    and its evidence is what explains the stall.
+    Under the 'strong dashboard, weak gate' policy, unmet service objectives are
+    recorded as degraded status on the registration for telemetry and the admin
+    dashboard rather than withholding pointer advance. Idempotent per run: appends
+    dedupe on node identity, and an already-heading run advances nothing. The
+    release-manifest node and its `bound_to` edge are always appended.
     """
     status = connection.execute(
         "select universe_id, universe_version, cutoff, environment from mart.topt_capture_status where run_id = %s",
