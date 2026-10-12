@@ -1,5 +1,5 @@
 """Tests for tools/health_check.py -- confirms TrueAlpha's deployed release is
-actually live, using infra2_sdk.deploy.poll_until_healthy's shared polling
+actually live, using infra2_sdk.deploy_health.poll_until_healthy's shared polling
 algorithm against llm-service's {"status": "ok", "git_sha": ...} convention."""
 
 from __future__ import annotations
@@ -378,7 +378,7 @@ def test_without_an_expected_digest_the_identity_stays_a_report(capsys: pytest.C
 
 def test_the_tag_resolver_reads_the_registry_digest_and_refuses_junk() -> None:
     """#712: the digest the gate requires is the one the registry names for the tag, read
-    through `infra2_sdk.refs.resolve_image_digest` -- anonymous pull token,
+    through `infra2_sdk.release.resolve_image_digest` (SDK 1.5.0) -- anonymous pull token,
     then a HEAD on the manifest with that bearer. Every way the registry fails to name a
     digest is the one RuntimeError the CLI prints as its red."""
     from infra2_sdk.transport import HttpResponse

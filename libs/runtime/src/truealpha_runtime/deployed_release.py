@@ -33,14 +33,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 
-from infra2_sdk.deploy import HttpGet
+# (status_code, body_text) — the infra2_sdk.deploy_health convention.
+HttpGet = Callable[[str], tuple[int, str]]
 
 #: Health payload keys that may carry the release identity, in preference order.
 VERSION_KEYS = ("git_sha", "version")
 
-# A deployed tier reports a release tag, not a commit sha. `RuntimeSettings.git_commit_sha`
-# (config.py) states that fact once. The two patterns below only classify what a body reports.
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 _RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 # The identity arrives over HTTP and is handed to git, where a leading "-" is

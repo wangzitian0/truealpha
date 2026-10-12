@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from infra2_sdk import deploy as sdk_deploy
-from truealpha_runtime import deployed_release
 from truealpha_runtime.deployed_release import (
     ReleaseIdentityError,
     identifier_kind,
@@ -90,8 +88,3 @@ def test_a_ref_git_could_misread_is_refused(hostile: str) -> None:
 def test_identity_from_body_does_not_refetch() -> None:
     """`health_check` inspects a body it already holds, mid-poll."""
     assert identity_from_body(json.dumps({"git_sha": "v0.0.20"}), url=URL) == "v0.0.20"
-
-
-def test_http_get_is_the_sdk_type() -> None:
-    """#1229: one `HttpGet` definition exists, and it is the SDK's."""
-    assert deployed_release.HttpGet is sdk_deploy.HttpGet

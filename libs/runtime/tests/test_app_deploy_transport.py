@@ -1,6 +1,6 @@
 """Tests for tools/app_deploy_transport.py -- the thin wrapper that validates a raw
 request under TrueAlpha's sender policy, then delegates dispatch to
-infra2_sdk.deploy.dispatch_and_wait (the shared infra2-receiver-boundary
+infra2_sdk.dispatch.dispatch_and_wait (the shared infra2-receiver-boundary
 implementation; its own watermark/ambiguity-guard/log-verification behavior is
 covered by infra2-sdk's own test suite, not re-tested here)."""
 
