@@ -154,15 +154,20 @@ def test_backtest_snapshot_hash_forbids_default_snapshot(connection: psycopg.Con
     )
 
     assert "default_snapshot" not in result.run_id
+    assert "snapshot_unspecified" not in result.run_id
     assert not result.run_id.endswith("default_snapshot")
+    assert not result.run_id.endswith("snapshot_unspecified")
 
     # Explicit test of _resolve_snapshot_hash helper
     import polars as pl
 
     df = pl.DataFrame({"symbol": ["AAPL"], "date": [date(2023, 1, 31)], "close": [150.0]})
     resolved = _resolve_snapshot_hash(connection, "topt", df)
-    assert resolved != "default_snapshot"
+    assert resolved not in ("default_snapshot", "snapshot_unspecified")
     assert len(resolved) > 0
+
+    assert _resolve_snapshot_hash(connection, "topt", df, "default_snapshot") != "default_snapshot"
+    assert _resolve_snapshot_hash(connection, "topt", df, "snapshot_unspecified") != "snapshot_unspecified"
 
 
 def test_backtest_with_fundamental_factors(connection: psycopg.Connection) -> None:
