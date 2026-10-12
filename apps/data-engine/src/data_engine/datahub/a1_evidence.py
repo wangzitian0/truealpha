@@ -104,20 +104,28 @@ class UnmetObjective:
 class PointerRegistration:
     """Outcome of one registration.
 
-    `sequence` is the governed head's sequence *after* this call — the newly advanced one
-    when the run was accepted, the untouched incumbent's when it was withheld, and `None`
-    when the pointer has no head at all yet. `unmet` is empty exactly when this run heads
-    the pointer.
+    Under the strong-dashboard weak-gate policy, the governed pointer advances
+    monotonically so consumers always serve fresh data at cutoff.
+    The registration records any unmet service objectives as degraded status
+    for telemetry and admin dashboard visualization instead of stalling pipelines.
     """
 
     run_id: str
     sequence: int | None
     unmet: tuple[UnmetObjective, ...]
+    advanced: bool = True
 
     @property
     def accepted(self) -> bool:
         """True when this run heads the governed pointer after this call."""
-        return not self.unmet
+        if not self.advanced:
+            return not self.unmet
+        return self.sequence is not None
+
+    @property
+    def is_degraded(self) -> bool:
+        """True when the run heads the pointer but missed one or more objectives."""
+        return bool(self.unmet)
 
     @property
     def summary(self) -> str:
@@ -249,14 +257,14 @@ def register_run_evidence(
     if head is not None and head.target_run.node_id == run_id:
         # Retried tick: this run already heads the pointer. The report is a function of
         # the same run, so re-judging it could only reach the same verdict.
-        return PointerRegistration(run_id=run_id, sequence=head.sequence, unmet=())
+        return PointerRegistration(run_id=run_id, sequence=head.sequence, unmet=(), advanced=False)
 
     unmet = unmet_objectives(quality_report, objectives)
-    if unmet:
-        # Refusal, not an exception: the caller still commits the run, its report and its
-        # evidence; only the head stays where it is.
-        return PointerRegistration(run_id=run_id, sequence=None if head is None else head.sequence, unmet=unmet)
 
+    # Under the 'strong dashboard, weak gate' policy, unmet objectives record quality
+    # degradation for telemetry and the admin dashboard without freezing the governed
+    # pointer. Monotonic pointer advance ensures downstream consumers receive the freshest
+    # data knowable at cutoff.
     pointer = CurrentPointer(
         key=key,
         target_run=run_ref,
@@ -264,4 +272,9 @@ def register_run_evidence(
         previous_run=None if head is None else head.target_run,
         advanced_at=cutoff,
     )
-    return PointerRegistration(run_id=run_id, sequence=repo.advance(pointer).sequence, unmet=())
+    return PointerRegistration(
+        run_id=run_id,
+        sequence=repo.advance(pointer).sequence,
+        unmet=unmet,
+        advanced=True,
+    )

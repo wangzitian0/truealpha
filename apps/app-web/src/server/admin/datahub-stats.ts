@@ -29,6 +29,10 @@ export interface HeadStatusRow {
   availability: string | null;
   agreed_cells: number | null;
   total_cells: number | null;
+  freshness: "fresh" | "stale" | "unknown";
+  age_hours: number | null;
+  limit_hours: number | null;
+  staleness_reason: string | null;
   factors: FactorAvailabilityRow[];
 }
 
@@ -365,6 +369,10 @@ const HEADS_SQL = `
            where c.value->>'outcome' = 'agreed') as agreed_cells,
          (select count(*)::int
             from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb))) as total_cells,
+         h.freshness,
+         h.age_hours::float as age_hours,
+         h.limit_hours::float as limit_hours,
+         h.staleness_reason,
          coalesce(q.payload->'factor_availability', '{}'::jsonb) as factor_availability
   from mart.served_head h
   left join mart.datahub_quality_report q on q.run_id = coalesce(h.run_id, h.head_run_id)
@@ -579,6 +587,16 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         availability: row.availability,
         agreed_cells: row.agreed_cells,
         total_cells: row.total_cells,
+        freshness: (row.freshness ?? "unknown") as "fresh" | "stale" | "unknown",
+        age_hours:
+          row.age_hours !== null && row.age_hours !== undefined
+            ? Number(row.age_hours)
+            : null,
+        limit_hours:
+          row.limit_hours !== null && row.limit_hours !== undefined
+            ? Number(row.limit_hours)
+            : null,
+        staleness_reason: row.staleness_reason ?? null,
         factors: Object.entries(row.factor_availability ?? {}).map(
           ([factorId, grade]) => ({
             factor_id: factorId,

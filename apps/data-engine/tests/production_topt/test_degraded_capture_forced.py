@@ -365,7 +365,8 @@ def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch
     context = dg.build_op_context()
     run_topt_live_tick(context, ToptLiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
     metadata = context.get_output_metadata("result")
-    assert metadata["pointer_advanced"] is accept
+    assert metadata["pointer_advanced"] is True
+    assert metadata["is_degraded"] is not accept
     assert metadata["forced_fetch"] is force_fetch
     return metadata
 
@@ -664,8 +665,8 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
     assert all(decision.confidence == forced_confidence[decision.issuer_id] for decision in report.decisions)
 
 
-def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_database_url, monkeypatch) -> None:
-    """The other side of the verdict: a forced tick whose advance is withheld does not move the head."""
+def test_a_degraded_forced_tick_advances_head_as_degraded(tick_database_url, monkeypatch) -> None:
+    """Under weak gate policy, a degraded forced tick advances the head monotonically with degraded telemetry."""
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
@@ -675,19 +676,21 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("38")), price_cutoff=day)
-    withheld = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=False)
-    assert withheld["pointer_sequence"] == scheduled["pointer_sequence"], "the head did not move"
-    assert withheld["strategy_run_id"] != scheduled["strategy_run_id"]
+    degraded = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=False)
+    assert degraded["pointer_sequence"] == scheduled["pointer_sequence"] + 1, "the head moves monotonically"
+    assert degraded["is_degraded"] is True
+    assert "corroborated_share" in degraded["unmet_service_objectives"]
+    assert degraded["strategy_run_id"] != scheduled["strategy_run_id"]
 
     with psycopg.connect(tick_database_url) as reader:
         head = reader.execute(
             "select target_run_id from mart.current_pointer_head "
             "where universe_id like 'universe:topt-%' order by advanced_at desc limit 1"
         ).fetchone()[0]
-        assert head == scheduled["capture_run_id"]
+        assert head == degraded["capture_run_id"]
 
         main_latest = reader.execute(_MAIN_LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
-        assert main_latest == (withheld["strategy_run_id"], True), main_latest
+        assert main_latest == (degraded["strategy_run_id"], True), main_latest
 
         # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
         # keeps the served head available rather than withheld past 30 days.
@@ -695,18 +698,18 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
         reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
         reader.execute("set session_replication_role = origin")
         latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
-        assert (latest[0], latest[3]) == (scheduled["strategy_run_id"], True)
+        assert (latest[0], latest[3]) == (degraded["strategy_run_id"], True)
         assert reader.execute("select strategy_run_id from mart.governed_strategy_run").fetchall() == [
-            (scheduled["strategy_run_id"],)
+            (degraded["strategy_run_id"],)
         ]
         head_decisions = reader.execute(
             "select issuer_id, peg is not null from mart.strategy_decisions where strategy_run_id = %s",
-            (scheduled["strategy_run_id"],),
+            (degraded["strategy_run_id"],),
         ).fetchall()
         assert {(cell.subject_id, cell.answered) for cell in peg_cells(reader, run_id=head)} == set(head_decisions)
-        assert peg_cells(reader, run_id=withheld["capture_run_id"]) != ()
-        scheduled_confidence = _core_confidence(reader, scheduled["capture_run_id"])
+        assert peg_cells(reader, run_id=degraded["capture_run_id"]) != ()
+        degraded_confidence = _core_confidence(reader, degraded["capture_run_id"])
 
     report = _served_report(tick_database_url)
     assert len(report.decisions) == 20
-    assert all(decision.confidence == scheduled_confidence[decision.issuer_id] for decision in report.decisions)
+    assert all(decision.confidence == degraded_confidence[decision.issuer_id] for decision in report.decisions)

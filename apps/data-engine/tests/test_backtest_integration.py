@@ -33,7 +33,18 @@ def connection(monkeypatch: pytest.MonkeyPatch):
     try:
         yield active
     finally:
-        active.rollback()
+        try:
+            with active.cursor() as cur:
+                cur.execute("delete from staging.strategy_backtest_inputs where issuer_id in ('FUND_A', 'FUND_B')")
+                cur.execute(
+                    "delete from staging.market_prices_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
+                )
+                cur.execute(
+                    "delete from staging.market_universe_masks_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
+                )
+                active.commit()
+        except Exception:
+            active.rollback()
         active.close()
 
 

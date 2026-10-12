@@ -304,15 +304,16 @@ def test_a_run_meeting_every_objective_takes_the_governed_head(connection) -> No
     assert _head(connection, universe_id) == (run_id, 0)
 
 
-def test_a_run_missing_an_objective_leaves_the_head_and_still_persists_everything(connection) -> None:
-    universe_id = "universe:a1-evidence-withheld"
-    accepted_run, degraded_run = _seed_runs(connection, label="withheld", count=2)
-    # An accepted tick first, so "unchanged" means a real head stayed put rather than an
-    # empty pointer staying empty.
+def test_a_run_missing_an_objective_advances_head_as_degraded_and_persists_everything(connection) -> None:
+    universe_id = "universe:a1-evidence-degraded"
+    accepted_run, degraded_run = _seed_runs(connection, label="degraded", count=2)
+    # An accepted tick first, so sequence 0 exists.
     assert _register(connection, accepted_run, _report(run_id=accepted_run)).accepted
     assert _head(connection, universe_id) == (accepted_run, 0)
 
-    # The exact Production shape from #536: every price cell graded, none corroborated.
+    # Every price cell graded, none corroborated.
+    # Under strong-dashboard weak-gate, the pointer advances monotonically so consumers
+    # serve fresh data, but the run is flagged as degraded with unmet objectives recorded.
     degraded = _report(
         run_id=degraded_run,
         independent_reconciliation="0.0000",
@@ -320,16 +321,17 @@ def test_a_run_missing_an_objective_leaves_the_head_and_still_persists_everythin
     )
     registration = _register(connection, degraded_run, degraded)
 
-    assert not registration.accepted
+    assert registration.accepted
+    assert registration.is_degraded
     assert [item.objective for item in registration.unmet] == ["corroborated_share"]
-    # 1. the head did not move
-    assert _head(connection, universe_id) == (accepted_run, 0)
-    assert registration.sequence == 0  # the incumbent's sequence, not the refused run's
+    # 1. the head moved monotonically under weak gate
+    assert _head(connection, universe_id) == (degraded_run, 1)
+    assert registration.sequence == 1
     # 2. the run still exists
     assert (
         connection.execute("select 1 from raw.capture_runs where run_id = %s", (degraded_run,)).fetchone() is not None
     )
-    # 3. its report still exists, with the numbers that refused it
+    # 3. its report still exists, with the numbers that flagged it
     stored = connection.execute(
         "select payload from mart.datahub_quality_report where run_id = %s", (degraded_run,)
     ).fetchone()

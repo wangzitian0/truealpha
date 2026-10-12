@@ -835,6 +835,7 @@ def test_the_deployed_run_projects_the_issuers_the_strategy_consumes(connection,
     import data_engine.datahub.strategy_history as history
 
     issuer = _issuer(5)
+    connection.execute("delete from staging.strategy_backtest_inputs")
     connection.execute(
         """
         insert into staging.strategy_backtest_inputs

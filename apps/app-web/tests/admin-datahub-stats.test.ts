@@ -22,6 +22,10 @@ const headRows = [
     availability: "0.7819",
     agreed_cells: 102,
     total_cells: 102,
+    freshness: "fresh",
+    age_hours: 12.5,
+    limit_hours: 72.0,
+    staleness_reason: null,
     factor_availability: {
       gross_profit_per_employee: {
         required_semantics: ["financial-fact"],
@@ -319,6 +323,13 @@ const confidenceRows = [
   assert(
     stats.heads[0].availability === "0.7819",
     "capture-level headline rides along",
+  );
+  assert(
+    stats.heads[0].freshness === "fresh" &&
+      stats.heads[0].age_hours === 12.5 &&
+      stats.heads[0].limit_hours === 72.0 &&
+      stats.heads[0].staleness_reason === null,
+    "head freshness columns pass through from mart.served_head",
   );
   assert(
     stats.heads[0].factors.length === 1,
