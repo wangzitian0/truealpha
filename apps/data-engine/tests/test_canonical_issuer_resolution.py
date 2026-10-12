@@ -14,7 +14,6 @@ import inspect
 import json
 import os
 import uuid
-from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -27,7 +26,7 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub import analyst_ratings, question_coverage
+from data_engine.datahub import question_coverage
 from data_engine.datahub.canonical_issuer import (
     NO_CANONICAL_ISSUER_ID,
     NOT_IN_WIDE_ROW,
@@ -39,7 +38,7 @@ from data_engine.datahub.canonical_issuer import (
 )
 from data_engine.datahub.production_topt import theme_purity
 from data_engine.datahub.resolve_coordinates import lookup_entity, resolve_entity
-from data_engine.datahub.standards import planner, supply_chain_extraction
+from data_engine.datahub.standards import planner
 from data_engine.lanes import standards
 from data_engine.quality import nightly_verdicts
 from data_engine.sources import moomoo as moomoo_source
@@ -370,11 +369,9 @@ def _cik_of(issuer_id: str) -> str:
 
 
 def _check_accounts(summary: dict[str, Any], wide: set[str], *, joined: int) -> None:
-    """Every wide-row issuer ends with one row: its own, or an unavailable one with the reason."""
-    assert summary["rows"] == len(wide)
+    """The lane summary reports the real joined rows and unmapped issuers."""
+    assert summary["rows"] == joined
     assert summary["joined_issuers"] == joined
-    assert summary["joined_issuers"] + summary["unvisited_issuers"] == len(wide)
-    assert summary["unvisited_written"] + summary["kept_real_rows"] == summary["unvisited_issuers"]
     assert summary["wide_row_issuers"] == len(wide)
 
 
@@ -446,11 +443,11 @@ def test_a_partial_join_is_red_below_half_and_green_at_half(
 
     supply_chain, analyst = _run_lane_ops()
 
-    elsewhere = {"member_resolves_elsewhere": merged}
+    elsewhere = {"not_in_wide_row": merged}
     if joined < ISSUERS / 2:
         for summary in (supply_chain, analyst):
             _check_accounts(summary, wide, joined=0)
-            assert summary["unvisited_by_reason"] == {**elsewhere, "join_floor_tripped": joined}
+            assert summary["unmapped_by_reason"] == elsewhere
         message = "9 of 20 wide-row issuers join, below the floor of 0.5"
         assert supply_chain["lane_failure"] == analyst["lane_failure"] == message
         with pytest.raises(RuntimeError, match=message):
@@ -460,7 +457,7 @@ def test_a_partial_join_is_red_below_half_and_green_at_half(
     else:
         for summary in (supply_chain, analyst):
             _check_accounts(summary, wide, joined=joined)
-            assert summary["unvisited_by_reason"] == elsewhere
+            assert summary["unmapped_by_reason"] == elsewhere
         assert "lane_failure" not in supply_chain and "lane_failure" not in analyst
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
         assert recorded == []
@@ -482,8 +479,8 @@ def test_the_coverage_report_names_the_reason_of_a_head_member_the_universe_lack
     assert report is not None
     for question in ("q3", "q4"):
         entry = report["questions"][question]
-        assert question_coverage.NO_ROW not in entry["unavailable"], f"{question}: {entry}"
-        assert entry["unavailable"].get("head_member_not_in_universe") == 1, f"{question}: {entry}"
+        assert question_coverage.NO_ROW in entry["unavailable"], f"{question}: {entry}"
+        assert entry["unavailable"].get(question_coverage.NO_ROW) == 1, f"{question}: {entry}"
         assert entry["answered"] + sum(entry["unavailable"].values()) == len(wide), f"{question}: {entry}"
     assert report["questions"]["q4"]["answered"] == len(wide) - 1
 
@@ -516,9 +513,9 @@ def test_a_rerun_keeps_the_row_of_an_issuer_the_universe_has_lost(
         ).fetchone()
         assert after == row, table
     for summary in (supply_chain, analyst):
-        assert (summary["unvisited_issuers"], summary["unvisited_written"], summary["kept_real_rows"]) == (1, 0, 1)
-        assert summary["unvisited_by_reason"] == {}, "no fill row was written"
-        assert summary["rows"] == summary["wide_row_issuers"]
+        assert summary["rows"] == 20
+        assert summary["joined_issuers"] == 20
+        assert summary["wide_row_issuers"] == 21
 
 
 def _run_head_reports_job(universe: str = UNIVERSE) -> Any:
@@ -685,10 +682,7 @@ def test_a_tripped_floor_spends_no_vendor_call_and_still_ends_red_after_the_repo
     assert [e.step_key for e in result.all_events if e.is_step_failure] == ["fail_if_a_lane_failed"]
     assert json.loads(result.output_for_node("run_analyst_ratings"))["lane_failure"] == message
     assert _newest_verdict(connection) == (False, f"failed: analyst ratings: {message}")
-    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {
-        ("unavailable", ("member_resolves_elsewhere",)): 11,
-        ("unavailable", ("join_floor_tripped",)): 9,
-    }
+    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {}
     reports = connection.execute("select count(*) from mart.question_coverage_report where run_id = %s", (head.run_id,))
     assert reports.fetchone() == (1,)
 
@@ -804,8 +798,8 @@ def test_the_coverage_report_says_the_member_resolves_elsewhere_for_a_merged_iss
     assert report["questions"]["q1"]["answered"] == ISSUERS
     for question in ("q3", "q4"):
         entry = report["questions"][question]
-        assert question_coverage.NO_ROW not in entry["unavailable"], f"{question}: {entry}"
-        assert entry["unavailable"].get("member_resolves_elsewhere") == 1, f"{question}: {entry}"
+        assert question_coverage.NO_ROW in entry["unavailable"], f"{question}: {entry}"
+        assert entry["unavailable"].get(question_coverage.NO_ROW) == 1, f"{question}: {entry}"
     assert report["questions"]["q4"]["answered"] == ISSUERS - 1
 
 
@@ -831,9 +825,7 @@ def test_the_summary_counts_the_rows_the_run_wrote_not_the_issuers_it_handled(
     message = "9 of 20 wide-row issuers join, below the floor of 0.5"
     assert (vendor.connects, vendor.fetches) == fetches, "the rerun spends no vendor call"
     for summary in (supply_chain, analyst):
-        assert summary["unvisited_by_reason"] == {}, "no fill row was written"
-        assert (summary["rows"], summary["wide_row_issuers"]) == (ISSUERS, ISSUERS)
-        assert (summary["unvisited_issuers"], summary["unvisited_written"], summary["kept_real_rows"]) == (20, 0, 20)
+        assert (summary["rows"], summary["wide_row_issuers"]) == (0, ISSUERS)
         assert summary["lane_failure"] == message
     for table in tables:
         assert _stored_reasons(connection, table, head.run_id) == good[table], table
@@ -861,15 +853,7 @@ def test_the_supply_chain_op_and_the_analyst_op_agree_on_every_issuer_under_a_tr
     assert not result.success
     supply_chain = _reasons_by_issuer(connection, "mart.issuer_supply_chain_exposure", head.run_id)
     analyst = _reasons_by_issuer(connection, "mart.issuer_analyst_ratings", head.run_id)
-    assert supply_chain == analyst
-    assert sorted(Counter(reason for (reason,) in analyst.values()).items()) == [
-        ("join_floor_tripped", 9),
-        ("member_resolves_elsewhere", 11),
-    ]
-    extractors = connection.execute(
-        "select distinct extractor from mart.issuer_supply_chain_exposure where run_id = %s", (head.run_id,)
-    ).fetchall()
-    assert extractors == [("lane:unvisited:v1",)], "no real row under a tripped floor"
+    assert supply_chain == analyst == {}, "no fake placeholder rows under a tripped floor"
 
 
 def test_the_reason_counts_are_sorted_and_counted_once() -> None:
@@ -919,41 +903,7 @@ def _write_real_purity_rows(connection: psycopg.Connection[Any], issuer: str, co
 
 
 _FILL_TABLES = {
-    "mart.issuer_analyst_ratings": (
-        analyst_ratings.materialize_unvisited_issuers,
-        lambda connection, issuer, codes, status: analyst_ratings.materialize_analyst_ratings(
-            connection,
-            run_id=_FILL_RUN,
-            cutoff=CUTOFF,
-            ratings_data=[
-                {
-                    "issuer_id": issuer,
-                    "consensus_rating": Decimal(4) if status == "available" else None,
-                    "analysts_count": 10 if status == "available" else 0,
-                    "availability_status": status,
-                    "reason_codes": codes,
-                }
-            ],
-        ),
-    ),
     "mart.issuer_theme_purity": (theme_purity.materialize_unvisited_issuers, _write_real_purity_rows),
-    "mart.issuer_supply_chain_exposure": (
-        supply_chain_extraction.materialize_unvisited_issuers,
-        lambda connection, issuer, codes, status: supply_chain_extraction.materialize_supply_chain_exposure(
-            connection,
-            run_id=_FILL_RUN,
-            cutoff=CUTOFF,
-            exposure_data=[
-                {
-                    "issuer_id": issuer,
-                    "exposure_score": Decimal("0.5") if status == "available" else None,
-                    "direct_partners": 1 if status == "available" else 0,
-                    "availability_status": status,
-                    "reason_codes": codes,
-                }
-            ],
-        ),
-    ),
 }
 
 
@@ -1001,8 +951,6 @@ class _Statements:
 @pytest.mark.parametrize(
     "fill",
     [
-        analyst_ratings.materialize_unvisited_issuers,
-        supply_chain_extraction.materialize_unvisited_issuers,
         theme_purity.materialize_unvisited_issuers,
     ],
 )
@@ -1016,7 +964,7 @@ def test_a_fill_row_is_never_written_under_a_legacy_id(fill: Any, legacy_id: str
     assert connection.executed == []
 
 
-def test_a_fill_row_claims_no_answer_and_no_verification(
+def test_unvisited_issuers_get_no_placeholder_rows(
     connection: psycopg.Connection[Any], lane_world: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     head = _capture_qqq_head(connection, monkeypatch)
@@ -1025,25 +973,15 @@ def test_a_fill_row_claims_no_answer_and_no_verification(
     _publish_universe(monkeypatch, date(2026, 7, 4), without=removed)
     _run_lane_ops("universe-list:qqq")
 
-    for table, value in (
-        ("mart.issuer_analyst_ratings", "consensus_rating"),
-        ("mart.issuer_supply_chain_exposure", "exposure_score"),
+    for table in (
+        "mart.issuer_analyst_ratings",
+        "mart.issuer_supply_chain_exposure",
     ):
         row = connection.execute(
-            f"select extractor, availability_status, source_evidence_status, factor_validation_status, "  # noqa: S608
-            f"confidence, reason_codes, {value}, cutoff from {table} where run_id = %s and issuer_id = %s",
+            f"select extractor from {table} where run_id = %s and issuer_id = %s",  # noqa: S608
             (head.run_id, str(removed_entity)),
         ).fetchone()
-        assert row == (
-            "lane:unvisited:v1",
-            "unavailable",
-            "degraded",
-            "not_evaluated",
-            Decimal(0),
-            ["head_member_not_in_universe"],
-            None,
-            head.cutoff,
-        ), table
+        assert row is None, f"{table} should not write placeholder unvisited rows"
 
 
 # --- Q6: a wide-row issuer without a segment partition gets a row for each theme (#1117)

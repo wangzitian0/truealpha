@@ -317,7 +317,6 @@ def test_an_issuer_without_an_entity_gets_no_row_and_is_counted(
     assert (analyst["rows"], analyst["unmapped_issuers"]) == (ISSUERS, 1)
     assert supply_chain["unmapped_by_reason"] == analyst["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
     assert supply_chain["wide_row_issuers"] == analyst["wide_row_issuers"] == ISSUERS
-    assert supply_chain["unvisited_issuers"] == analyst["unvisited_issuers"] == 0
     assert "lane_failure" not in analyst, "one unmapped issuer of twenty is not a lane failure"
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
         stored = _stored_ids(connection, table, head.run_id)
@@ -392,12 +391,9 @@ def test_a_universe_without_any_entity_fails_the_run_after_the_report(
     for summary in (supply_chain, analyst):
         _check_accounts(summary, _wide_row_ids(connection, head.run_id), joined=0)
         assert summary["unmapped_by_reason"] == {NO_CANONICAL_ISSUER_ID: 1}
-        assert summary["unvisited_by_reason"] == {"head_member_not_in_universe": ISSUERS}
     assert analyst["lane_failure"] == "0 of 20 wide-row issuers join"
     assert supply_chain["lane_failure"] == "0 of 20 wide-row issuers join"
-    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {
-        ("unavailable", ("head_member_not_in_universe",)): ISSUERS
-    }
+    assert _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id) == {}
 
     with pytest.raises(RuntimeError, match="0 of 20 wide-row issuers join"):
         standards.fail_if_a_lane_failed(dg.build_op_context(), json.dumps(analyst), "{}")
@@ -528,19 +524,11 @@ def test_a_merge_recorded_after_the_capture_moves_a_row_only_when_knowable_at_th
     supply_chain, analyst = _run_lane_ops()
 
     for table in ("mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"):
-        assert _stored_ids(connection, table, head.run_id) == wide, "every wide-row issuer has its row"
+        assert _stored_ids(connection, table, head.run_id) == (wide - {str(wide_entity)} if moves else wide)
     assert str(survivor) not in _stored_ids(connection, "mart.issuer_analyst_ratings", head.run_id)
     for summary in (supply_chain, analyst):
         _check_accounts(summary, wide, joined=len(wide) - (1 if moves else 0))
         assert summary["unmapped_by_reason"] == ({NOT_IN_WIDE_ROW: 1} if moves else {})
-        assert summary["unvisited_by_reason"] == ({"member_resolves_elsewhere": 1} if moves else {})
-    if moves:
-        assert (
-            _stored_reasons(connection, "mart.issuer_analyst_ratings", head.run_id)[
-                ("unavailable", ("member_resolves_elsewhere",))
-            ]
-            == 1
-        ), "the moved issuer's row names why"
 
 
 def test_a_head_whose_wide_row_holds_none_of_the_universe_ends_red(

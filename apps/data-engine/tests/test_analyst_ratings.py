@@ -1211,7 +1211,7 @@ def _verdict_rows(shared_connection, check: str) -> list[tuple[bool | None, str,
     rows = shared_connection.execute(
         "select ok, ran_at, summary from mart.nightly_verdicts where check_name = %s order by verdict_id", (check,)
     ).fetchall()
-    return [(ok, ran_at.isoformat(), summary) for ok, ran_at, summary in rows]
+    return [(ok, ran_at.astimezone(UTC).isoformat(), summary) for ok, ran_at, summary in rows]
 
 
 def _health_verdict(shared_connection, check: str) -> tuple[bool | None, str]:
@@ -1219,7 +1219,8 @@ def _health_verdict(shared_connection, check: str) -> tuple[bool | None, str]:
     from llm_service.main import NIGHTLY_VERDICTS_SQL
 
     reported = {
-        name: (ok, ran_at.isoformat()) for name, ran_at, ok, _summary in shared_connection.execute(NIGHTLY_VERDICTS_SQL)
+        name: (ok, ran_at.astimezone(UTC).isoformat())
+        for name, ran_at, ok, _summary in shared_connection.execute(NIGHTLY_VERDICTS_SQL)
     }
     return reported[check]
 
