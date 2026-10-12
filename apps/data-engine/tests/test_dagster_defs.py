@@ -9,7 +9,7 @@ idempotency semantics.
 
 The op-body checks at the bottom keep that promise: they invoke `run_topt_live_tick`
 directly with every collaborator faked, so the op's reporting surface (#536: which
-service objective withheld the governed pointer) is asserted without a database.
+service objective degraded or unchanged the governed pointer) is asserted without a database.
 """
 
 from __future__ import annotations
@@ -229,7 +229,7 @@ def _run_tick(monkeypatch, registration: PointerRegistration):
     return context.get_output_metadata("result")
 
 
-def test_a_withheld_pointer_names_the_failing_objective_in_op_metadata(monkeypatch) -> None:
+def test_an_unadvanced_pointer_names_the_failing_objective_in_op_metadata(monkeypatch) -> None:
     # The failing objective is visible without reading the database.
     metadata = _run_tick(
         monkeypatch,

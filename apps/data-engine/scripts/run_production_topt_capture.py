@@ -103,11 +103,11 @@ def main() -> int:
     print(f"== quality report {result.quality_report_id} ==")
     print(f"== {seeded} strategy inputs seeded; L2 coverage {l2_complete}/{l2_total} ==")
     print(f"== strategy run {strategy_run_id} ({decision_count} decisions, snapshot {snapshot_id}) ==")
-    if registration.accepted:
-        print(f"== current_pointer sequence {registration.sequence} ==")
+    if registration.advanced:
+        degraded_suffix = f" (DEGRADED: {registration.summary})" if registration.is_degraded else ""
+        print(f"== current_pointer sequence {registration.sequence}{degraded_suffix} ==")
     else:
-        # #536: the manual path refuses the same advances the scheduled tick refuses.
-        print(f"== current_pointer WITHHELD at sequence {registration.sequence}: {registration.summary} ==")
+        print(f"== current_pointer unchanged at sequence {registration.sequence}: {registration.summary} ==")
     for key, value in result.quality.items():
         print(f"  {key}: {value}")
     return 0

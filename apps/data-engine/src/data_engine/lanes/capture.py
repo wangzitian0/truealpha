@@ -389,10 +389,10 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 f"{summary}; pointer sequence {registration.sequence} (DEGRADED: {registration.summary})"
             )
     else:
-        # Which objective failed is readable from the run log and the op's output metadata.
-        context.log.warning(
-            f"{summary}; POINTER WITHHELD at sequence {registration.sequence} "
-            f"— unmet service objectives: {registration.summary}"
+        # Retried tick or idempotent run where pointer was already at this run.
+        context.log.info(
+            f"{summary}; pointer already at sequence {registration.sequence}"
+            + (f" (DEGRADED: {registration.summary})" if registration.unmet else "")
         )
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,

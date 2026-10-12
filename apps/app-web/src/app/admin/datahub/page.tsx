@@ -95,16 +95,9 @@ export default async function AdminDatahubPage() {
   const totalHeads = stats.heads.length;
   const freshHeads = stats.heads.filter((h) => h.freshness === "fresh").length;
   const staleHeads = stats.heads.filter((h) => h.freshness === "stale").length;
-  const anyHeadDegraded = stats.heads.some((head) => {
-    const availNum = head.availability ? parseFloat(head.availability) : null;
-    const isAvailDegraded = availNum !== null && availNum < 0.95;
-    const hasCorroboration = head.total_cells !== null && head.total_cells > 0;
-    const isCorroborationDegraded =
-      hasCorroboration &&
-      head.agreed_cells !== null &&
-      head.agreed_cells / head.total_cells! < 0.95;
-    return isAvailDegraded || isCorroborationDegraded || head.freshness === "stale";
-  });
+  const anyHeadDegraded = stats.heads.some(
+    (head) => head.is_degraded || head.freshness === "stale",
+  );
 
   // 2. Question Matrix Connectivity Metrics
   let totalQuestionsEvaluated = 0;
@@ -537,74 +530,60 @@ export default async function AdminDatahubPage() {
         {stats.heads.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No pointer heads yet.</p>
         )}
-        {stats.heads.map((head) => {
-          const availNum = head.availability ? parseFloat(head.availability) : null;
-          const isAvailDegraded = availNum !== null && availNum < 0.95;
-          const hasCorroboration = head.total_cells !== null && head.total_cells > 0;
-          const isCorroborationDegraded =
-            hasCorroboration &&
-            head.agreed_cells !== null &&
-            head.agreed_cells / head.total_cells! < 0.95;
-          const isDegraded = isAvailDegraded || isCorroborationDegraded;
+        {stats.heads.map((head) => (
+          <div key={head.universe_id} className="rounded-lg border border-border bg-card p-4">
+            <div className="flex flex-wrap items-baseline gap-3">
+              <span className="font-mono text-accent">{head.universe_id}</span>
+              <span className="text-sm text-gray-400">seq {head.sequence}</span>
+              <span className="text-sm text-gray-500">{head.advanced_at}</span>
 
-          return (
-            <div key={head.universe_id} className="rounded-lg border border-border bg-card p-4">
-              <div className="flex flex-wrap items-baseline gap-3">
-                <span className="font-mono text-accent">{head.universe_id}</span>
-                <span className="text-sm text-gray-400">seq {head.sequence}</span>
-                <span className="text-sm text-gray-500">{head.advanced_at}</span>
+              {head.freshness === "fresh" ? (
+                <span className="inline-flex items-center rounded-full bg-emerald-950/60 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
+                  fresh{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
+                </span>
+              ) : head.freshness === "stale" ? (
+                <span className="inline-flex items-center rounded-full bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-400 border border-rose-800">
+                  stale{(() => {
+                    const details = [
+                      head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null,
+                      head.staleness_reason ?? null,
+                    ].filter(Boolean).join(" — ");
+                    return details ? ` (${details})` : "";
+                  })()}
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-400 border border-gray-700">
+                  freshness unknown
+                </span>
+              )}
 
-                {head.freshness === "fresh" ? (
-                  <span className="inline-flex items-center rounded-full bg-emerald-950/60 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
-                    fresh{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
-                  </span>
-                ) : head.freshness === "stale" ? (
-                  <span className="inline-flex items-center rounded-full bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-400 border border-rose-800">
-                    stale{(() => {
-                      const details = [
-                        head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null,
-                        head.staleness_reason ?? null,
-                      ].filter(Boolean).join(" — ");
-                      return details ? ` (${details})` : "";
-                    })()}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-400 border border-gray-700">
-                    freshness unknown
-                  </span>
-                )}
-
-                {isDegraded ? (
-                  <span className="inline-flex items-center rounded-full bg-amber-950/60 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
-                    degraded {isAvailDegraded ? `availability (${(availNum! * 100).toFixed(1)}% < 95%)` : ""}
-                    {isAvailDegraded && isCorroborationDegraded ? " · " : ""}
-                    {isCorroborationDegraded
-                      ? `corroboration (${(((head.agreed_cells! / head.total_cells!) * 100)).toFixed(1)}% < 95%)`
-                      : ""}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center rounded-full bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-500/80 border border-emerald-900/50">
-                    objectives met
-                  </span>
-                )}
+              {head.is_degraded ? (
+                <span className="inline-flex items-center rounded-full bg-amber-950/60 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
+                  degraded {head.degraded_reasons.join(" · ")}
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-500/80 border border-emerald-900/50">
+                  objectives met
+                </span>
+              )}
+            </div>
+            <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="text-gray-500">target run</dt>
+                <dd className="font-mono">{shortRun(head.target_run_id)}</dd>
               </div>
-              <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-                <div>
-                  <dt className="text-gray-500">target run</dt>
-                  <dd className="font-mono">{shortRun(head.target_run_id)}</dd>
-                </div>
-                <div>
-                  <dt className="text-gray-500">capture availability</dt>
-                  <dd className={isAvailDegraded ? "text-amber-400 font-medium" : ""}>
-                    {head.availability ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-gray-500">corroborated cells</dt>
-                  <dd className={isCorroborationDegraded ? "text-amber-400 font-medium" : ""}>
-                    {head.agreed_cells ?? "—"}/{head.total_cells ?? "—"}
-                  </dd>
-                </div>
+              <div>
+                <dt className="text-gray-500">capture availability</dt>
+                <dd className={head.is_avail_degraded ? "text-amber-400 font-medium" : ""}>
+                  {head.availability ?? "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">corroborated cells</dt>
+                <dd className={head.is_corroboration_degraded ? "text-amber-400 font-medium" : ""}>
+                  {head.agreed_cells ?? "—"}/{head.total_cells ?? "—"}
+                </dd>
+              </div>
                 <div>
                   <dt className="text-gray-500">freshness status</dt>
                   <dd className={head.freshness === "stale" ? "text-rose-400 font-medium" : ""}>
@@ -634,9 +613,8 @@ export default async function AdminDatahubPage() {
                   </tbody>
                 </table>
               )}
-            </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
 
       <div className="space-y-3">

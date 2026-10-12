@@ -11,6 +11,7 @@
  * app_ops_reader, like every loader in this directory.
  */
 
+import { ACCEPTED_SERVICE_OBJECTIVES } from "../../contracts/serviceObjectives";
 import { withOpsReader } from "./ops";
 
 export interface FactorAvailabilityRow {
@@ -33,6 +34,10 @@ export interface HeadStatusRow {
   age_hours: number | null;
   limit_hours: number | null;
   staleness_reason: string | null;
+  is_degraded: boolean;
+  is_avail_degraded: boolean;
+  is_corroboration_degraded: boolean;
+  degraded_reasons: string[];
   factors: FactorAvailabilityRow[];
 }
 
@@ -582,34 +587,67 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
     return {
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
-      heads: heads.rows.map((row: HeadDbRow) => ({
-        universe_id: row.universe_id,
-        sequence: row.sequence,
-        advanced_at: row.advanced_at,
-        target_run_id: row.target_run_id,
-        availability: row.availability,
-        agreed_cells: row.agreed_cells,
-        total_cells: row.total_cells,
-        freshness: (row.freshness ?? "unknown") as "fresh" | "stale" | "unknown",
-        age_hours:
-          row.age_hours !== null && row.age_hours !== undefined
-            ? Number(row.age_hours)
-            : null,
-        limit_hours:
-          row.limit_hours !== null && row.limit_hours !== undefined
-            ? Number(row.limit_hours)
-            : null,
-        staleness_reason: row.staleness_reason ?? null,
-        factors: Object.entries(row.factor_availability ?? {}).map(
-          ([factorId, grade]) => ({
-            factor_id: factorId,
-            required_semantics: grade.required_semantics,
-            complete_subjects: grade.complete_subjects,
-            universe_subjects: grade.universe_subjects,
-            ratio: grade.ratio,
-          }),
-        ),
-      })),
+      heads: heads.rows.map((row: HeadDbRow) => {
+        const availNum = row.availability ? parseFloat(row.availability) : null;
+        const isAvailDegraded =
+          availNum !== null &&
+          availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability;
+        const hasCorroboration =
+          row.total_cells !== null && row.total_cells > 0;
+        const corroborationRatio =
+          row.total_cells !== null && row.total_cells > 0 && row.agreed_cells !== null
+            ? row.agreed_cells / row.total_cells
+            : null;
+        const isCorroborationDegraded =
+          corroborationRatio !== null &&
+          corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
+
+        const degraded_reasons: string[] = [];
+        if (isAvailDegraded && availNum !== null) {
+          degraded_reasons.push(
+            `availability (${(availNum * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_availability * 100).toFixed(0)}%)`,
+          );
+        }
+        if (isCorroborationDegraded && corroborationRatio !== null) {
+          degraded_reasons.push(
+            `corroboration (${(corroborationRatio * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share * 100).toFixed(0)}%)`,
+          );
+        }
+        const is_degraded = degraded_reasons.length > 0;
+
+        return {
+          universe_id: row.universe_id,
+          sequence: row.sequence,
+          advanced_at: row.advanced_at,
+          target_run_id: row.target_run_id,
+          availability: row.availability,
+          agreed_cells: row.agreed_cells,
+          total_cells: row.total_cells,
+          freshness: (row.freshness ?? "unknown") as "fresh" | "stale" | "unknown",
+          age_hours:
+            row.age_hours !== null && row.age_hours !== undefined
+              ? Number(row.age_hours)
+              : null,
+          limit_hours:
+            row.limit_hours !== null && row.limit_hours !== undefined
+              ? Number(row.limit_hours)
+              : null,
+          staleness_reason: row.staleness_reason ?? null,
+          is_degraded,
+          is_avail_degraded: isAvailDegraded,
+          is_corroboration_degraded: isCorroborationDegraded,
+          degraded_reasons,
+          factors: Object.entries(row.factor_availability ?? {}).map(
+            ([factorId, grade]) => ({
+              factor_id: factorId,
+              required_semantics: grade.required_semantics,
+              complete_subjects: grade.complete_subjects,
+              universe_subjects: grade.universe_subjects,
+              ratio: grade.ratio,
+            }),
+          ),
+        };
+      }),
       sources: sources.rows,
       runs: runs.rows,
       validation: [

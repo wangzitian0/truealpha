@@ -333,6 +333,14 @@ const confidenceRows = [
     "head freshness columns pass through from mart.served_head",
   );
   assert(
+    stats.heads[0].is_degraded === true &&
+      stats.heads[0].is_avail_degraded === true &&
+      stats.heads[0].is_corroboration_degraded === false &&
+      stats.heads[0].degraded_reasons.length === 1 &&
+      stats.heads[0].degraded_reasons[0].startsWith("availability (78.2% < 95"),
+    "head degraded status is server-computed from objectives",
+  );
+  assert(
     stats.heads[0].factors.length === 1,
     "factor grades unpacked from the payload map",
   );
