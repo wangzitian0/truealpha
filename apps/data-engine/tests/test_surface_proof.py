@@ -656,16 +656,22 @@ _REAL_CUTOFF = datetime(2099, 1, 1, tzinfo=UTC)
 
 
 def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
-    """The Q6 fill of one issuer, one row per governed theme, written by the lane's own writer."""
+    """The Q6 fill of one issuer, one row per governed theme, inserted directly to test legacy fill exclusion."""
     import uuid
 
-    from data_engine.datahub.production_topt import theme_purity
     from truealpha_contracts.theme_purity import THEMES
 
-    written = theme_purity.materialize_unvisited_issuers(
-        connection, run_id=run_id, cutoff=cutoff, unvisited=[(str(uuid.uuid4()), "no_segment_partition")]
-    )
-    assert len(written) == 1
+    issuer_id = str(uuid.uuid4())
+    for t in THEMES.values():
+        connection.execute(
+            """
+            insert into mart.issuer_theme_purity (
+                run_id, issuer_id, cutoff, reason_codes, theme_id, theme, definition_version, definition_sha256,
+                segments, confidence, extractor, availability_status, source_evidence_status, factor_validation_status
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated')
+            """,
+            (run_id, issuer_id, cutoff, ["no_segment_partition"], t.theme_id, t.theme, t.factor_version, t.content_sha256),
+        )
     count = connection.execute(
         "select count(*) from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'", (run_id,)
     ).fetchone()

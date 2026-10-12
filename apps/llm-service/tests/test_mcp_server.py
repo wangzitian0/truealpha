@@ -676,7 +676,7 @@ def _leaderboard_reader() -> Any:
     return PostgresThemePurityLeaderboardReader(database_url="postgresql://unused")
 
 
-def test_company_profile_names_why_a_theme_has_no_answer_and_stays_unavailable(theme_database: Any) -> None:
+def test_company_profile_ignores_legacy_fill_rows_and_stays_unavailable(theme_database: Any) -> None:
     import uuid
 
     issuer = str(uuid.uuid4())
@@ -685,15 +685,8 @@ def test_company_profile_names_why_a_theme_has_no_answer_and_stays_unavailable(t
 
     profile = _profile_reader().get_company_profile(issuer_id=issuer)
 
-    assert [(t["theme_id"], t["unvisited_reason"]) for t in profile["theme_purity"]] == [
-        ("zz-theme-a", "no_segment_partition"),
-        ("zz-theme-b", "no_segment_partition"),
-    ]
-    for theme in profile["theme_purity"]:
-        assert (theme["theme_share"], theme["segments"], theme["confidence"]) == (None, None, None), (
-            "a fill has no share, no segment count and no confidence; it is not a refused real row"
-        )
-    assert profile["availability_status"] == "unavailable", "a fill row is not data for the profile"
+    assert profile["theme_purity"] == [], "fill rows are not data and are excluded from theme_purity"
+    assert profile["availability_status"] == "unavailable", "an issuer with only fill rows has no profile data"
 
 
 def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_fill(theme_database: Any) -> None:
@@ -707,9 +700,9 @@ def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_f
     profile = _profile_reader().get_company_profile(issuer_id=issuer)
 
     themes = {t["theme_id"]: t for t in profile["theme_purity"]}
+    assert "zz-theme-a" in themes
     assert themes["zz-theme-a"]["theme_share"] == "0.5", "the newer fill must not hide the real row"
-    assert themes["zz-theme-a"]["unvisited_reason"] is None
-    assert themes["zz-theme-b"]["unvisited_reason"] == "no_segment_partition"
+    assert "zz-theme-b" not in themes, "fill rows are ignored"
     assert profile["availability_status"] == "available", "one real theme row is data"
 
 
