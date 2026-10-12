@@ -181,7 +181,13 @@ export default async function AdminDatahubPage() {
                   </span>
                 ) : head.freshness === "stale" ? (
                   <span className="inline-flex items-center rounded-full bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-400 border border-rose-800">
-                    stale{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h` : ""}{head.staleness_reason ? ` — ${head.staleness_reason})` : ")"}
+                    stale{(() => {
+                      const details = [
+                        head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null,
+                        head.staleness_reason ?? null,
+                      ].filter(Boolean).join(" — ");
+                      return details ? ` (${details})` : "";
+                    })()}
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-400 border border-gray-700">
