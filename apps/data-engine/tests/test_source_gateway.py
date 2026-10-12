@@ -745,9 +745,11 @@ def warehouse_seat(monkeypatch):
     import uuid
 
     import psycopg
+    from truealpha_runtime.testing import guard_db_write
 
+    url = guard_db_write()
     try:
-        psycopg.connect(gateway.settings.database_url, connect_timeout=3).close()
+        psycopg.connect(url, connect_timeout=3).close()
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

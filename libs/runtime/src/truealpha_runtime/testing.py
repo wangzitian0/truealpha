@@ -72,6 +72,31 @@ def skip_or_fail(reason: str) -> None:
     pytest.skip(reason)
 
 
+def can_write_test_database() -> bool:
+    """True when tests are authorized to write or mutate databases (CI or explicit opt-in)."""
+    return (
+        os.environ.get("CI", "").strip().lower() in {"1", "true", "yes", "on"}
+        or os.environ.get("ALLOW_CLEAR_TEST", "").strip() == "1"
+    )
+
+
+def guard_db_write(database_url: str | None = None) -> str:
+    """Enforce runtime safety invariants for DB write tests (#1197).
+
+    Acceptance:
+    1. A DB-backed test writes only when CI=true or ALLOW_CLEAR_TEST=1.
+       Otherwise it skips with a visible warning.
+    2. A test never defaults DATABASE_URL to port 5432 for writes.
+    """
+    if not can_write_test_database():
+        skip_or_fail("DB write tests require CI=true or ALLOW_CLEAR_TEST=1 to protect ambient databases")
+    url = database_url or os.environ.get("DATABASE_URL")
+    if not url:
+        skip_or_fail("DATABASE_URL must be explicitly provided for DB write tests (no default to port 5432)")
+    assert url is not None
+    return url
+
+
 def apply_migration_chain(
     database_url: str,
     *,
@@ -384,7 +409,7 @@ def isolated_test_database(
     """
     import pytest
 
-    base_url = database_url or os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
+    base_url = guard_db_write(database_url)
     admin_url = _admin_url_for(base_url)
     name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     target_url = _named_url_for(base_url, name)
@@ -447,11 +472,7 @@ def clone_test_database(
     Terminates active connections on source before cloning to prevent concurrency conflicts.
     Drops the clone on context exit.
     """
-    base_url = (
-        source_database
-        if "://" in source_database
-        else os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/truealpha")
-    )
+    base_url = guard_db_write(source_database if "://" in source_database else None)
     source_name = _dbname_for(source_database) if "://" in source_database else source_database
     admin_url = _admin_url_for(base_url)
     clone_name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"

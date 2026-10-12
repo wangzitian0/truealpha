@@ -20,12 +20,18 @@ import type { AccessContext } from "../src/contracts/strategyRun";
 import { __setTestClient } from "../src/server/mart/db";
 import { StrategyRunReadAdapter } from "../src/server/mart/research-read";
 
+import { requireDb } from "./helpers/db-guard";
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const DATABASE_URL = requireDb("mart-entity-theme-purity");
+if (!DATABASE_URL) {
+  process.exit(0);
+}
+process.env.DATABASE_URL = DATABASE_URL;
 const REQUIRE_DB = Boolean(process.env.DATABASE_URL || process.env.TRUEALPHA_REQUIRE_RUNTIME);
-process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/truealpha";
 
 const CONTEXT: AccessContext = {
   contextId: "ctx:themes",

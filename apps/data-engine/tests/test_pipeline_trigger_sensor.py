@@ -20,7 +20,6 @@ from datetime import UTC, datetime
 import dagster as dg
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.dagster_defs import pipeline_trigger_sensor
 
 _EXECUTED_AT = datetime(2026, 7, 27, 22, 15, tzinfo=UTC)
@@ -28,8 +27,11 @@ _EXECUTED_AT = datetime(2026, 7, 27, 22, 15, tzinfo=UTC)
 
 @pytest.fixture
 def connection():
+    from truealpha_runtime.testing import guard_db_write
+
+    url = guard_db_write()
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+        active = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

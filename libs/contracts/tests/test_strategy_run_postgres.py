@@ -24,8 +24,8 @@ from truealpha_contracts.access import AccessContext, AuthenticationMethod, Prin
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+from truealpha_runtime.testing import guard_db_write
 
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 _HASH64 = "c" * 64
 # The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
 # is what an untranslated identity looks like on a consumer surface (#953).
@@ -33,12 +33,7 @@ _BARE_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 
 def _resolve_database_url() -> str:
-    """Match whatever `DATABASE_URL` the environment configures (CI sets its
-    own; a developer's local override should not be silently ignored) rather
-    than a value hard-coded independently of it -- otherwise the fixture's
-    connectivity check and the repository under test can end up pointed at
-    two different databases."""
-    return os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+    return guard_db_write()
 
 
 def _unique_strategy_key() -> str:
@@ -68,8 +63,9 @@ def _context() -> AccessContext:
 
 @pytest.fixture
 def connection():
+    url = guard_db_write()
     try:
-        active = psycopg.connect(_resolve_database_url(), connect_timeout=3, autocommit=True)
+        active = psycopg.connect(url, connect_timeout=3, autocommit=True)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

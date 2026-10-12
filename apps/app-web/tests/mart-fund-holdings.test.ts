@@ -13,13 +13,19 @@ import { Client } from "pg";
 
 import { loadFundHoldings } from "../src/server/mart/fund-holdings";
 
+import { requireDb } from "./helpers/db-guard";
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const dbUrl = requireDb("mart-fund-holdings", { write: true });
+if (!dbUrl) {
+  process.exit(0);
+}
+const DATABASE_URL: string = dbUrl;
+process.env.DATABASE_URL = DATABASE_URL;
 const REQUIRE_DB = Boolean(process.env.DATABASE_URL || process.env.TRUEALPHA_REQUIRE_RUNTIME);
-process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/truealpha";
-const DATABASE_URL = process.env.DATABASE_URL;
 
 const FUND = "etf:series:TEST-HOLDINGS-READER";
 const HOLDING_A = "company:isin:TEST00000001";

@@ -24,11 +24,10 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, load_tool
+from truealpha_runtime.testing import apply_migration_chain, guard_db_write, load_tool
 
 drift = load_tool("schema_drift")
 
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 RESET = Path(__file__).resolve().parents[3] / "db" / "reset_database.sh"
 
 #: The table and column #939 reshaped, and the exact drift #984 was opened for.
@@ -40,7 +39,7 @@ def _named(database: str) -> str:
     """The configured server, naming a different database — as a URI, because that is
     what this repository's DATABASE_URL contract is (RuntimeSettings.validate_database_url)
     and what db/reset_database.sh takes."""
-    base = urlsplit(os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL))
+    base = urlsplit(guard_db_write())
     return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 

@@ -30,7 +30,6 @@ from truealpha_runtime.testing import isolated_test_database, read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 AS_OF = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 HOUR = timedelta(hours=1)

@@ -30,14 +30,13 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, load_tool
+from truealpha_runtime.testing import apply_migration_chain, guard_db_write, load_tool
 
 drift = load_tool("schema_drift")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1325_datahub_retire_empty_planes.sql"
 OLD_SHAPE = Path(__file__).resolve().parent / "fixtures" / "retired_planes_old_shape.sql"
-_DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 RETIRED_TABLES = (
     "app.private_research_objects",
@@ -101,7 +100,7 @@ WAIT_LOCK_TIMEOUT = "45s"
 
 
 def _named(database: str) -> str:
-    base = urlsplit(os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL))
+    base = urlsplit(guard_db_write())
     return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 

@@ -12,7 +12,6 @@ from decimal import Decimal
 import dagster as dg
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.backtest import _load_mask, _resolve_snapshot_hash, run_backtest
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED
 from data_engine.lanes.backtest import NightlyBacktestConfig, run_nightly_backtest_op
@@ -22,8 +21,11 @@ from data_engine.quality.nightly_verdicts import TICK_TAG
 @pytest.fixture
 def connection(monkeypatch: pytest.MonkeyPatch):
     """Yield an isolated transaction connection for testing."""
+    from truealpha_runtime.testing import guard_db_write
+
+    url = guard_db_write()
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+        active = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)

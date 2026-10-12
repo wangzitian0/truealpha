@@ -9,7 +9,6 @@ Asserts that:
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import UTC, datetime
 
@@ -20,6 +19,7 @@ from truealpha_contracts.ports import RawObjectStore
 from truealpha_runtime.testing import (
     REPO_ROOT,
     InMemoryRawObjectStore,
+    _admin_url_for,
     clone_test_database,
     isolated_test_database,
 )
@@ -71,9 +71,7 @@ def test_isolated_test_database_lifecycle_and_table_parity() -> None:
         created_name = db_url.name
 
     # After context exit, the database must be dropped
-    admin_url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
-    if "/truealpha" in admin_url:
-        admin_url = admin_url.replace("/truealpha", "/postgres")
+    admin_url = _admin_url_for(db_url)
     with psycopg.connect(admin_url, autocommit=True) as admin:
         exists = admin.execute("select 1 from pg_database where datname = %s", (created_name,)).fetchone()
         assert exists is None, f"database {created_name} was not dropped on context exit"
