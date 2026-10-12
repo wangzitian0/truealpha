@@ -5,17 +5,16 @@ continuous, explainable score and shows how it responds to source independence,
 freshness, semantic quality, lineage, completeness, and conflict. It is not a
 Production threshold or a claim that the full TOPT universe is calibrated.
 
+Status 2026-10-12 (#1239): the evaluator, the report builder, and their tests
+were deleted, because no deployed path called them. This document keeps the
+formula and the sensitivity table as a design reference. The DTOs remain in
+`libs/contracts`.
+
 Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
 
-Report identity:
+Identity of the last report that the deleted builder produced:
 `confidence-calibration-report:d77de4934cbbb968e76a91a3ab1d6764dbcedbc3d9bff6bcd6b48b0a761c8cb6`.
-
-Regenerate the machine-readable report with:
-
-```bash
-uv run --package truealpha-data-engine python apps/data-engine/scripts/report_topt_confidence.py
-```
 
 ## Formula
 
@@ -48,11 +47,10 @@ score_100 = 100 * confidence
 ```
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
-report are content-addressed. The sole formula implementation and report
-verifier live in `libs/factors/src/factors/confidence.py`; the data-engine report
-builder must pass every embedded policy and input through that verifier, so a
-plausible but forged decomposition is rejected without placing computation in
-the contracts or application layers. The evaluator uses `Decimal`; binary floats are rejected.
+report are content-addressed in the DTOs of `libs/contracts`. The formula
+implementation and the report verifier were deleted. A new implementation
+belongs in `libs/factors`, so computation stays out of the contracts and
+application layers. It must use `Decimal` and reject binary floats.
 Freshness, availability, applicability, quality state, and reason codes remain
 separate queryable facts rather than being replaced by this scalar.
 
@@ -74,9 +72,9 @@ separate queryable facts rather than being replaced by this scalar.
 ## Empirical Boundary
 
 The checked-in Yahoo/Twelve Data aggregate comparison covers 754 common dates
-for DDOG, DUOL, NICE, and SHOP. The generator derives, rather than hardcodes,
+for DDOG, DUOL, NICE, and SHOP. The deleted generator derived, rather than hardcoded,
 15,069 conforming checks out of the 15,080 declared OHLCV checks. It also
-verifies the four Yahoo CSV hashes against the checked-in manifest and binds all
+verified the four Yahoo CSV hashes against the checked-in manifest and bound all
 artifact and provider-response hashes into the confidence input.
 
 The Twelve Data response hashes are recorded, but the raw response bytes are
