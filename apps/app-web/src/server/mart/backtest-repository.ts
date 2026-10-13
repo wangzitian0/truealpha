@@ -34,6 +34,16 @@ export interface BacktestRunRecord {
   error_message: string | null;
   executed_at: string;
   created_at: string;
+  /** #758: the strategy definition the run evaluated. */
+  definition_content_sha256: string | null;
+  /** #758: how returns were priced, e.g. "unadjusted_open_explicit_splits". */
+  price_basis: string | null;
+  /** #758: the strongest claim the run supports, e.g. "price_return_no_dividends". */
+  claim_ceiling: string | null;
+  /** #758: the benchmark computed beside the strategy on the same window and prices. */
+  benchmark_rule: string | null;
+  benchmark_cagr: number | null;
+  benchmark_max_dd: number | null;
 }
 
 export interface BacktestValuationRecord {
@@ -44,6 +54,8 @@ export interface BacktestValuationRecord {
   drawdown: number;
   gross_exposure: number;
   cash_weight: number;
+  /** #758: the benchmark's cumulative NAV on the same session. */
+  benchmark_cum_nav: number | null;
 }
 
 export interface BacktestTradeRecord {
@@ -67,7 +79,9 @@ export async function listBacktestRuns(limit: number = 20): Promise<BacktestRunR
               start_date::text, end_date::text, status,
               cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
               vol_daily::float, turnover_monthly::float, calmar_daily::float,
-              metrics_payload, error_message, executed_at::text, created_at::text
+              metrics_payload, error_message, executed_at::text, created_at::text,
+              definition_content_sha256, price_basis, claim_ceiling,
+              benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
        from mart.backtest_runs
        order by created_at desc
        limit $1`,
@@ -84,7 +98,9 @@ export async function getBacktestRun(runId: string): Promise<BacktestRunRecord |
               start_date::text, end_date::text, status,
               cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
               vol_daily::float, turnover_monthly::float, calmar_daily::float,
-              metrics_payload, error_message, executed_at::text, created_at::text
+              metrics_payload, error_message, executed_at::text, created_at::text,
+              definition_content_sha256, price_basis, claim_ceiling,
+              benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
        from mart.backtest_runs
        where run_id = $1`,
       [runId]
@@ -101,12 +117,14 @@ export async function getBacktestValuations(
   return withMartReadonly(async (client: PoolClient) => {
     const query = resolution
       ? `select run_id, resolution, valuation_date::text,
-                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float
+                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float,
+                benchmark_cum_nav::float
          from mart.backtest_valuations
          where run_id = $1 and resolution = $2
          order by valuation_date asc`
       : `select run_id, resolution, valuation_date::text,
-                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float
+                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float,
+                benchmark_cum_nav::float
          from mart.backtest_valuations
          where run_id = $1
          order by valuation_date asc`;

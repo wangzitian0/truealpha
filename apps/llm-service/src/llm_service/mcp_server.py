@@ -747,7 +747,11 @@ class PostgresBacktestReader:
                                    turnover_monthly::text as turnover_monthly,
                                    calmar_daily::text as calmar_daily,
                                    metrics_payload, error_message,
-                                   executed_at::text, created_at::text
+                                   executed_at::text, created_at::text,
+                                   definition_content_sha256, price_basis, claim_ceiling,
+                                   benchmark_rule,
+                                   benchmark_cagr::text as benchmark_cagr,
+                                   benchmark_max_dd::text as benchmark_max_dd
                             from mart.backtest_runs
                             where run_id = %s
                             limit 1
@@ -763,7 +767,8 @@ class PostgresBacktestReader:
                                        cum_nav::text as cum_nav,
                                        drawdown::text as drawdown,
                                        gross_exposure::text as gross_exposure,
-                                       cash_weight::text as cash_weight
+                                       cash_weight::text as cash_weight,
+                                       benchmark_cum_nav::text as benchmark_cum_nav
                                 from mart.backtest_valuations
                                 where run_id = %s
                                 order by valuation_date desc
@@ -801,7 +806,11 @@ class PostgresBacktestReader:
                                    turnover_monthly::text as turnover_monthly,
                                    calmar_daily::text as calmar_daily,
                                    metrics_payload, error_message,
-                                   executed_at::text, created_at::text
+                                   executed_at::text, created_at::text,
+                                   definition_content_sha256, price_basis, claim_ceiling,
+                                   benchmark_rule,
+                                   benchmark_cagr::text as benchmark_cagr,
+                                   benchmark_max_dd::text as benchmark_max_dd
                             from mart.backtest_runs
                         """
                         params: list[Any] = []
@@ -959,7 +968,8 @@ def build_mcp_server(
         name="governed_backtest",
         description=(
             "Read governed backtest execution runs, performance metrics (CAGR, Sharpe, MaxDD), "
-            "valuations and simulated trades from mart."
+            "valuations and simulated trades from mart. Each run states its price basis, its claim "
+            "ceiling (for example price return only, no dividends) and its benchmark."
         ),
     )
     def governed_backtest(request: BacktestToolRequest) -> dict[str, Any]:

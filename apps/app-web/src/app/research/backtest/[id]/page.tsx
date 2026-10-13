@@ -6,6 +6,7 @@ import {
   getBacktestTrades,
 } from "@/server/mart/backtest-repository";
 import { formatPercentFromFraction } from "@/client/format";
+import { BacktestBasis } from "@/components/backtest-basis";
 import { BacktestChart } from "@/components/backtest-chart";
 
 export const dynamic = "force-dynamic";
@@ -60,18 +61,23 @@ export default async function BacktestDetailPage({ params }: PageProps) {
         </div>
       </div>
 
+      {/* #758: price basis, claim ceiling, benchmark and definition */}
+      <BacktestBasis run={run} />
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-xs font-medium text-gray-400">CAGR (10Y Monthly)</div>
+          <div className="text-xs font-medium text-gray-400">CAGR</div>
           <div className="mt-1 text-2xl font-bold font-mono text-emerald-400">
             {run.cagr_monthly !== null ? formatPercentFromFraction(String(run.cagr_monthly)) : "—"}
           </div>
-          <div className="text-[10px] text-gray-500">Long-term compound annual growth</div>
+          <div className="text-[10px] text-gray-500">
+            Benchmark {run.benchmark_cagr !== null ? formatPercentFromFraction(String(run.benchmark_cagr)) : "—"}
+          </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-xs font-medium text-gray-400">Sharpe Ratio (3Y Daily)</div>
+          <div className="text-xs font-medium text-gray-400">Sharpe Ratio (daily)</div>
           <div className="mt-1 text-2xl font-bold font-mono text-white">
             {run.sharpe_daily !== null ? run.sharpe_daily.toFixed(2) : "—"}
           </div>
@@ -79,11 +85,13 @@ export default async function BacktestDetailPage({ params }: PageProps) {
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-xs font-medium text-gray-400">Max Drawdown (3Y Daily)</div>
+          <div className="text-xs font-medium text-gray-400">Max Drawdown (daily)</div>
           <div className="mt-1 text-2xl font-bold font-mono text-rose-400">
             {run.max_dd_daily !== null ? formatPercentFromFraction(String(run.max_dd_daily)) : "—"}
           </div>
-          <div className="text-[10px] text-gray-500">Peak-to-trough high watermark drop</div>
+          <div className="text-[10px] text-gray-500">
+            Benchmark {run.benchmark_max_dd !== null ? formatPercentFromFraction(String(run.benchmark_max_dd)) : "—"}
+          </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
@@ -91,14 +99,14 @@ export default async function BacktestDetailPage({ params }: PageProps) {
           <div className="mt-1 text-2xl font-bold font-mono text-amber-400">
             {run.vol_daily !== null ? formatPercentFromFraction(String(run.vol_daily)) : "—"}
           </div>
-          <div className="text-[10px] text-gray-500">3-Year daily annualized volatility</div>
+          <div className="text-[10px] text-gray-500">Daily returns, annualized</div>
         </div>
       </div>
 
       {/* Performance Charts */}
       <div className="space-y-2">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-          Dual-Resolution Equity Performance
+          Strategy and benchmark NAV
         </h2>
         <BacktestChart valuationsMonthly={valM} valuationsDaily={valD} />
       </div>

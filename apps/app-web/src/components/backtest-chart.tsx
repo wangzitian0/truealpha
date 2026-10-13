@@ -25,8 +25,14 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
     return <div className="p-8 text-center text-gray-400">No valuation data available</div>;
   }
 
-  const minNav = Math.min(...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)));
-  const maxNav = Math.max(...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)));
+  // #758: the benchmark NAV of each daily session, drawn beside the strategy on the NAV tab.
+  const benchmark = activeTab === "nav" ? dataD.filter((v) => v.benchmark_cum_nav !== null) : [];
+  const plotted = [
+    ...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)),
+    ...benchmark.map((v) => v.benchmark_cum_nav as number),
+  ];
+  const minNav = Math.min(...plotted);
+  const maxNav = Math.max(...plotted);
   const rangeNav = Math.max(maxNav - minNav, 0.01);
 
   const width = 800;
@@ -36,9 +42,14 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
   const toX = (idx: number, total: number) => padding + (idx / Math.max(total - 1, 1)) * (width - 2 * padding);
   const toY = (val: number) => height - padding - ((val - minNav) / rangeNav) * (height - 2 * padding);
 
-  const renderPath = (data: BacktestValuationRecord[], color: string, strokeWidth = 2) => {
+  const renderPath = (
+    data: BacktestValuationRecord[],
+    color: string,
+    strokeWidth = 2,
+    value: (d: BacktestValuationRecord) => number = (d) => (activeTab === "nav" ? d.cum_nav : d.drawdown),
+  ) => {
     if (data.length === 0) return null;
-    const points = data.map((d, i) => `${toX(i, data.length)},${toY(activeTab === "nav" ? d.cum_nav : d.drawdown)}`);
+    const points = data.map((d, i) => `${toX(i, data.length)},${toY(value(d))}`);
     return <path d={`M ${points.join(" L ")}`} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />;
   };
 
@@ -80,14 +91,14 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
             onClick={() => setResolution("1M")}
             className={`rounded px-2 py-0.5 ${resolution === "1M" ? "bg-primary text-white" : "text-gray-400"}`}
           >
-            10Y Monthly
+            Month ends
           </button>
           <button
             type="button"
             onClick={() => setResolution("1D")}
             className={`rounded px-2 py-0.5 ${resolution === "1D" ? "bg-primary text-white" : "text-gray-400"}`}
           >
-            3Y Daily
+            Daily
           </button>
         </div>
       </div>
@@ -111,6 +122,7 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
           {/* Lines */}
           {resolution !== "1D" && renderPath(dataM, "#3b82f6", 2.5)}
           {resolution !== "1M" && renderPath(dataD, "#10b981", 1.5)}
+          {renderPath(benchmark, "#a3a3a3", 1.5, (d) => d.benchmark_cum_nav as number)}
         </svg>
       </div>
 
@@ -118,13 +130,19 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
         {resolution !== "1D" && (
           <div className="flex items-center gap-2">
             <span className="h-2 w-4 rounded bg-blue-500" />
-            <span>10-Year Monthly Master (CAGR Track)</span>
+            <span>Strategy, month ends</span>
           </div>
         )}
         {resolution !== "1M" && (
           <div className="flex items-center gap-2">
             <span className="h-2 w-4 rounded bg-emerald-500" />
-            <span>3-Year Daily Overlay (Sharpe & Drawdown Track)</span>
+            <span>Strategy, daily</span>
+          </div>
+        )}
+        {benchmark.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-4 rounded bg-neutral-400" />
+            <span>Benchmark, daily</span>
           </div>
         )}
       </div>
