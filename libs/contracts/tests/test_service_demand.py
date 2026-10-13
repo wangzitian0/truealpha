@@ -474,5 +474,5 @@ def test_datetime_sample_assertion_accepts_rfc3339_z() -> None:
     case["content_sha256"] = ""
     payload["representative_samples"]["sample_manifest_id"] = ""
     payload["representative_samples"]["content_sha256"] = ""
-
-    DataHubServiceDemand.model_validate(payload)
+    validated = DataHubServiceDemand.model_validate(payload)
+    assert validated.representative_samples.cases[0].assertions[0].expected_value == "2026-07-17T00:00:00Z"

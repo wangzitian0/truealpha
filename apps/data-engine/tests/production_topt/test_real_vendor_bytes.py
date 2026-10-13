@@ -68,8 +68,8 @@ def test_cassettes_are_the_exact_bytes_production_captured() -> None:
     The digest is the content address ``raw.fetches`` recorded, so the fixture's
     identity is anchored to the warehouse, not to this repo's history.
     """
-    _bytes(_YAHOO)
-    _bytes(_TWELVE)
+    assert len(_bytes(_YAHOO)) == _YAHOO[2]
+    assert len(_bytes(_TWELVE)) == _TWELVE[2]
 
 
 def test_yahoo_parser_reproduces_the_production_close() -> None:

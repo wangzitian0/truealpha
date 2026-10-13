@@ -139,7 +139,7 @@ def test_the_identity_keeps_the_shape_infra2_asserts_before_it_deploys() -> None
     assert identity.manifest_id == f"release-manifest:{identity.content_sha256}"
     # truealpha/truealpha/20.data_engine/deploy.py: `^release-manifest:[0-9a-f]{64}$`.
     assert len(identity.content_sha256) == 64 and identity.content_sha256.islower()
-    assert int(identity.content_sha256, 16) >= 0
+    assert int(identity.content_sha256, 16) > 0
 
 
 def test_this_repositorys_canonical_hash_is_the_estates() -> None:

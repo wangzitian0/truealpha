@@ -8,6 +8,9 @@ revenue, #769's acceptance criterion 2) can trust it without re-deriving the cas
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
+import pytest
 from factors.shared.extraction import (
     RULE_SINGLE_CANDIDATE,
     Candidate,
@@ -55,11 +58,8 @@ def test_selection_and_candidate_are_frozen() -> None:
     candidate = Candidate(1, "s")
     selection = Selection(1, 0, RULE_SINGLE_CANDIDATE, "reason")
     for obj, field, value in ((candidate, "value", 2), (selection, "value", 2)):
-        try:
+        with pytest.raises(FrozenInstanceError):
             setattr(obj, field, value)
-        except Exception:  # noqa: BLE001 - any exception proves immutability; the type varies by dataclass
-            continue
-        raise AssertionError(f"{obj!r}.{field} was mutable")
 
 
 def test_extraction_bundles_candidates_and_a_selection() -> None:

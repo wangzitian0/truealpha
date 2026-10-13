@@ -2880,3 +2880,26 @@ def test_the_owner_gate_runs_first_cannot_be_skipped_and_reads_the_input() -> No
             f"{later!r} runs before the owner gate: a prod dispatch must fail in seconds, before any "
             f"install, evidence read or dispatch to infra2"
         )
+
+
+def test_gates_runs_complexity_gate() -> None:
+    """The gates job in ci-python.yml must execute tools/complexity_gate.py --check."""
+    workflow = yaml.safe_load(source(PYTHON))
+    gate_steps = [str(s.get("run", "")) for s in workflow["jobs"]["gates"]["steps"]]
+    assert any("tools/complexity_gate.py --check" in s for s in gate_steps), (
+        "ci-python.yml gates job must run tools/complexity_gate.py --check"
+    )
+
+
+def test_ci_python_caches_and_verifies_infra2_wheel() -> None:
+    """#1248: Every ci-python job that syncs dependencies must verify and cache the
+    infra2-sdk wheel before running uv sync, setting UV_FIND_LINKS to prevent 504 flakes."""
+    workflow = yaml.safe_load(source(PYTHON))
+    for job_name, job_spec in workflow["jobs"].items():
+        runs = [str(s.get("run", "")) for s in job_spec.get("steps", [])]
+        assert any("tools/infra2_wheel_cache.py" in r for r in runs), (
+            f"ci-python.yml job {job_name} must run tools/infra2_wheel_cache.py before uv sync"
+        )
+        assert any("UV_FIND_LINKS=" in r for r in runs), (
+            f"ci-python.yml job {job_name} must export UV_FIND_LINKS for uv sync"
+        )

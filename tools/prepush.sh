@@ -98,6 +98,7 @@ done
 if [ "${#PY[@]}" -gt 0 ]; then
   run "ruff format --check (${#PY[@]} files)" uv run ruff format --check "${PY[@]}"
   run "ruff check (${#PY[@]} files)" uv run ruff check "${PY[@]}"
+  run "cyclomatic complexity gate" python3 tools/complexity_gate.py --check
 fi
 for path in "${YML[@]}"; do
   # uv's interpreter, not the system one: PyYAML is a workspace dependency and

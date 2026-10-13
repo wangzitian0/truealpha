@@ -433,9 +433,9 @@ def test_a_run_where_every_attempt_failed_raises() -> None:
 def test_a_run_with_one_landed_or_declined_attempt_or_none_does_not_raise() -> None:
     from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 
-    raise_if_every_attempt_failed(_report_with({"error": 2, "resolved": 1}))
-    raise_if_every_attempt_failed(_report_with({"error": 2, "model_declined": 1}))
-    raise_if_every_attempt_failed(_report_with({}))
+    assert raise_if_every_attempt_failed(_report_with({"error": 2, "resolved": 1})) is None
+    assert raise_if_every_attempt_failed(_report_with({"error": 2, "model_declined": 1})) is None
+    assert raise_if_every_attempt_failed(_report_with({})) is None
 
 
 # --- registration in the standards lane -----------------------------------------------------

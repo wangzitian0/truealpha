@@ -53,6 +53,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
+      - uses: actions/cache@v4
+        id: infra2-sdk-cache
+        with:
+          path: ~/.cache/infra2-sdk
+          key: infra2-sdk-${{ hashFiles('uv.lock') }}
+      - name: Cache and verify infra2-sdk wheel
+        run: |
+          python3 tools/infra2_wheel_cache.py
+          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -64,6 +74,7 @@ jobs:
       # the datahub columns factors read. Stdlib only, no database, so it runs here.
       - run: python3 tools/check_factor_contract.py
       - run: python3 tools/reachability_ratchet.py --check
+      - run: python3 tools/complexity_gate.py --check
       - run: python3 tools/sql_literal_gate.py
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
@@ -99,6 +110,16 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
+      - uses: actions/cache@v4
+        id: infra2-sdk-cache
+        with:
+          path: ~/.cache/infra2-sdk
+          key: infra2-sdk-${{ hashFiles('uv.lock') }}
+      - name: Cache and verify infra2-sdk wheel
+        run: |
+          python3 tools/infra2_wheel_cache.py
+          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -191,6 +212,16 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
+      - uses: actions/cache@v4
+        id: infra2-sdk-cache
+        with:
+          path: ~/.cache/infra2-sdk
+          key: infra2-sdk-${{ hashFiles('uv.lock') }}
+      - name: Cache and verify infra2-sdk wheel
+        run: |
+          python3 tools/infra2_wheel_cache.py
+          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -286,6 +317,16 @@ jobs:
       DAGSTER_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/truealpha?options=-csearch_path%3Ddagster
     steps:
       - uses: actions/checkout@v4
+      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
+      - uses: actions/cache@v4
+        id: infra2-sdk-cache
+        with:
+          path: ~/.cache/infra2-sdk
+          key: infra2-sdk-${{ hashFiles('uv.lock') }}
+      - name: Cache and verify infra2-sdk wheel
+        run: |
+          python3 tools/infra2_wheel_cache.py
+          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
