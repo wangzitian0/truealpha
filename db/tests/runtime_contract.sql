@@ -17,13 +17,27 @@ begin
         raise exception 'immutable Gate 0 contract repository is missing';
     end if;
 
+    -- #1258: staging.financial_facts is retired; verify it does not exist.
+    if to_regclass('staging.financial_facts') is not null then
+        raise exception 'retired staging.financial_facts must not exist';
+    end if;
+
     select column_default into default_expression
     from information_schema.columns
     where table_schema = 'staging'
-      and table_name = 'financial_facts'
+      and table_name = 'capture_normalized_observations'
+      and column_name = 'knowable_at';
+    if not found or default_expression is not null then
+        raise exception 'capture_normalized_observations.knowable_at must exist and be explicit';
+    end if;
+
+    select column_default into default_expression
+    from information_schema.columns
+    where table_schema = 'staging'
+      and table_name = 'market_prices_daily'
       and column_name = 'transaction_time';
-    if default_expression is not null then
-        raise exception 'financial_facts.transaction_time must be explicit';
+    if not found or default_expression is not null then
+        raise exception 'market_prices_daily.transaction_time must exist and be explicit';
     end if;
 end;
 $$;

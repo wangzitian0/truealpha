@@ -29,28 +29,5 @@ begin
 end
 $$;
 
-create table if not exists staging.financial_facts (
-    id                bigint generated always as identity primary key,
-    unified_id        text not null references staging.kg_entities(id),
-    metric            text not null,          -- 'revenue' / 'gross_profit' / ...
-    fiscal_period     text not null,          -- '2025Q4'
-    valid_time        daterange not null,
-    transaction_time  timestamptz not null default now(),
-    value             numeric,
-    -- MANDATORY on every row. Absorbs both extraction uncertainty (LLM-derived facts
-    -- self-report a score) and source reliability (yfinance's lack of an SLA lives
-    -- here, not in an ad hoc rule). Official filed data (SEC) defaults to 1.0.
-    confidence        numeric not null check (confidence >= 0 and confidence <= 1),
-    source            text not null,          -- 'sec' | 'yfinance' | 'twelvedata' | 'moomoo'
-    raw_ref           text,
-    is_restatement    boolean not null default false
-);
-
-do $$
-begin
-    if to_regclass('staging.idx_financial_facts_asof') is null then
-        create index if not exists idx_financial_facts_asof
-            on staging.financial_facts (unified_id, metric, fiscal_period, transaction_time desc);
-    end if;
-end
-$$;
+-- #1258: staging.financial_facts and idx_financial_facts_asof are retired.
+-- 20261013T0700_datahub_retire_staging_financial_facts.sql drops them in deployed databases.

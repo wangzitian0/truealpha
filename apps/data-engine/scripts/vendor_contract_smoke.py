@@ -43,14 +43,15 @@ def _check(name: str, ok: bool, detail: str = "") -> None:
 
 def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes]:
     """Status + body, treating an HTTP error status as an answer, exactly as the
-    origin's `_get` does post-#557 — the body IS the vendor's reply."""
+    origin's `_get` does post-#557 — the body IS the vendor's reply.
+    Through the external call gateway (#729, init.md §1 rule 6)."""
+    from data_engine.sources import gateway
+
     query = urllib.parse.urlencode({**params, "apikey": api_key})
+    url = f"https://api.twelvedata.com/{path}?{query}"
     try:
-        with urllib.request.urlopen(f"https://api.twelvedata.com/{path}?{query}", timeout=20) as r:  # noqa: S310
-            return r.status, bytes(r.read())
-    except urllib.error.HTTPError as error:
-        with error:
-            return error.code, bytes(error.read())
+        status, body = gateway.urlopen("twelvedata", path, url, caller="vendor_contract_smoke._twelve", timeout=20)
+        return status or 0, body
     except OSError as error:
         # DNS, timeout, refused, TLS — transport failure is itself a drifted
         # assumption for a monitor: report it as a failed check, never crash past
