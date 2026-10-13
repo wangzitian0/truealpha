@@ -5,7 +5,8 @@ Sixteen Python copies of the pattern lived under five names -- `_STABLE_ID`, `_S
 `gates` copy required a lowercase first character and the `capture_contracts` copy lowercase
 throughout, so four of the seven partition keys this repository's contracts use were valid on a
 `PlannedDemandCell` -- whose `partition_key` checks only that it is non-empty -- and refused by the
-`CaptureCell` that demand is supposed to become.
+`CaptureCell` that demand is supposed to become. #1238 deleted both modules; the guards below stay
+because they measure every contract that remains.
 
 Two guards, because a copy can drift in two ways. The source guard finds a copy by what its
 character class ADMITS, not by how it is spelled, so `a-zA-Z` versus `A-Za-z`, `+-` versus `+\\-`,
@@ -29,10 +30,7 @@ from typing import Annotated, Any
 import pytest
 import truealpha_contracts
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-from truealpha_contracts.capture_contracts import CaptureCell, CaptureRecordEvidence
 from truealpha_contracts.common import STABLE_ID_BODY, STABLE_ID_PATTERN
-from truealpha_contracts.data_quality import DataDomain
-from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
@@ -148,7 +146,7 @@ def test_the_boundary_list_has_no_entry_that_is_gone() -> None:
     [
         r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",  # the second spelling eleven sites used
         r"^[0-9A-Za-z][-+@/:_.0-9A-Za-z]*$",  # reordered
-        r"^[a-z0-9][a-z0-9._:/@+\-]*$",  # the narrowed capture_contracts copy
+        r"^[a-z0-9][a-z0-9._:/@+\-]*$",  # the narrowed lowercase copy the deleted capture_contracts held
         r"^raw(?:\.[a-z][a-z0-9_]*)+:[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$",  # embedded behind a prefix
         r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*",  # unanchored, as capture_control wrote it
         r"^[A-Za-z0-9][A-Za-z0-9._:/@+~\-]*$",  # drifted by one extra mark
@@ -210,12 +208,6 @@ def _stable_identifier_fields() -> dict[str, TypeAdapter[Any]]:
     """Every contract field declared with a pattern that accepts a BARE stable identifier,
     validated by pydantic through the field's own metadata -- not by re-reading its pattern with
     `re`, which would measure a replica of the check rather than the check.
-
-    `capture_contracts.CaptureRecordEvidence.raw_id` and `.normalized_id` embed the grammar behind
-    a mandatory literal prefix (`raw.sec:...`, `normalized-record-type:...`) rather than accepting
-    it bare, so a lone `"a"` correctly fails them and would show up here as a false disagreement
-    with `STABLE_ID_PATTERN`. `test_a_prefixed_identifier_embeds_the_same_grammar_after_its_prefix`
-    covers those two directly instead.
     """
     fields: dict[str, TypeAdapter[Any]] = {}
     for model in _contract_models():
@@ -228,12 +220,12 @@ def _stable_identifier_fields() -> dict[str, TypeAdapter[Any]]:
     return fields
 
 
-def test_the_sweep_reaches_the_fields_that_disagreed() -> None:
-    """Named anchors, so the sweep cannot go quiet by selecting nothing: the narrow copy that remains
-    and one field from the majority must both be in it."""
+def test_the_sweep_reaches_the_stable_identifier_fields() -> None:
+    """Named anchors, so the sweep cannot go quiet by selecting nothing: one field from `usage` and
+    one from `datahub` must both be in it."""
     fields = _stable_identifier_fields()
     for anchor in (
-        "truealpha_contracts.capture_contracts.CaptureCell.partition_key",
+        "truealpha_contracts.datahub.CaptureSchedulePolicy.policy_version",
         "truealpha_contracts.usage.DataRequirement.valid_period_rule_id",
     ):
         assert anchor in fields, f"the sweep did not select {anchor}; it selected {len(fields)} fields"
@@ -254,87 +246,7 @@ def test_every_stable_identifier_field_accepts_exactly_the_shared_grammar() -> N
     )
 
 
-# -- The symptom ----------------------------------------------------------------------------------
-
-
-@functools.cache
-def _partition_keys_in_use() -> tuple[str, ...]:
-    """Every literal `partition_key=` this repository passes, in source, tests and the conformance
-    export -- measured, so a new form is covered the day someone writes it."""
-    roots = (
-        *_PYTHON_ROOTS,
-        _REPO_ROOT / "libs" / "contracts" / "tests",
-        _REPO_ROOT / "libs" / "contracts" / "conformance",
-    )
-    keys: set[str] = set()
-    for root in roots:
-        for path in root.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-                if (
-                    isinstance(node, ast.keyword)
-                    and node.arg == "partition_key"
-                    and isinstance(node.value, ast.Constant)
-                    and isinstance(node.value.value, str)
-                ):
-                    keys.add(node.value.value)
-    return tuple(sorted(keys))
-
-
-def test_the_partition_keys_in_use_include_the_forms_that_were_refused() -> None:
-    """Without an uppercase key the next test could pass against the narrowed copy."""
-    keys = _partition_keys_in_use()
-    assert any(key != key.lower() for key in keys), f"no uppercase partition key in use, found {keys}"
-
-
-@pytest.mark.parametrize("partition_key", _partition_keys_in_use())
-def test_every_partition_key_in_use_can_become_a_capture_cell(partition_key: str) -> None:
-    """The divergence as a caller meets it. `2025FY`, `2026FY`, `2026Q2` and `FY2025` were valid on
-    every demand-side model -- `PlannedDemandCell`, `SnapshotDemandCell`, `SourceCoverageEntry` check
-    only that a partition key is non-empty -- and refused here."""
-    cell = CaptureCell(
-        subject=SubjectRef(kind=SubjectKind.ISSUER, id="issuer:alphabet"),
-        domain=DataDomain.FINANCIAL_FACTS,
-        partition_key=partition_key,
-        capture_requirement_id="capture-requirement:" + "0" * 64,
-        applicability="required",
-        status="missing",
-    )
-    assert cell.partition_key == partition_key
-
-
-@pytest.mark.parametrize("field", ["raw_id", "normalized_id"])
-def test_a_prefixed_identifier_embeds_the_same_grammar_after_its_prefix(field: str) -> None:
-    """`raw_id` and `normalized_id` put a namespace in front of the grammar. They embedded the
-    majority reading while every other field in the same module used the lowercase one; they now
-    embed `STABLE_ID_BODY`, and after the prefix they must accept exactly what a bare field does."""
-    adapter = TypeAdapter(Annotated[(str, *CaptureRecordEvidence.model_fields[field].metadata)])
-    prefix = "raw.sec:" if field == "raw_id" else "normalized:"
-    assert _accepts(adapter, prefix + "CIK0000320193"), "the prefixed field refuses an uppercase identifier"
-    disagreements = [
-        probe
-        for character in _PROBE_CHARACTERS
-        for probe in (character, f"a{character}")
-        if _accepts(adapter, prefix + probe) != _accepts(_SHARED, probe)
-    ]
-    assert not disagreements, f"{field} disagrees with STABLE_ID_PATTERN after its prefix on {disagreements}"
-
-
 def test_the_embedding_form_is_the_same_grammar() -> None:
     """`STABLE_ID_BODY` is what a prefixed pattern embeds and `STABLE_ID_PATTERN` is it anchored;
     if the two drift, prefixed ids and bare ids stop agreeing again."""
     assert STABLE_ID_PATTERN == f"^{STABLE_ID_BODY}$"
-
-
-def test_a_value_the_shared_grammar_refuses_is_refused_where_it_is_embedded() -> None:
-    """The embedded form still refuses what the bare one refuses -- widening one did not loosen
-    the other past the grammar."""
-    cell_kwargs: dict[str, Any] = {
-        "subject": SubjectRef(kind=SubjectKind.ISSUER, id="issuer:alphabet"),
-        "domain": DataDomain.FINANCIAL_FACTS,
-        "capture_requirement_id": "capture-requirement:" + "0" * 64,
-        "applicability": "required",
-        "status": "missing",
-    }
-    for refused in ("-leading-mark", "has space", ""):
-        with pytest.raises(ValidationError):
-            CaptureCell(partition_key=refused, **cell_kwargs)

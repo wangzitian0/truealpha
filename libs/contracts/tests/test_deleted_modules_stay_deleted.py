@@ -2,6 +2,7 @@
 
 Each module below had no importer outside its own tests and the deleted cluster.
 Nothing deployed used it, so the code only added review and merge cost.
+`capture_contracts` and `readiness` left last: only the Issue 58 conformance export imported them.
 This test fails when any listed module name is importable again.
 Add a name to the list in the same change that deletes the module.
 """
@@ -21,6 +22,8 @@ DELETED_MODULES = (
     "market",
     "documents",
     "conversations",
+    "capture_contracts",
+    "readiness",
 )
 
 

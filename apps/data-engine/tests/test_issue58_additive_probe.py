@@ -5,22 +5,8 @@ from decimal import Decimal
 import pytest
 from factors.base.registered_semantic_probe import registered_semantic_probe
 from pydantic import BaseModel, ConfigDict
-from truealpha_contracts.capture_contracts import (
-    ApplicabilityMapping,
-    CaptureCell,
-    CaptureEvaluationReport,
-    CaptureManifest,
-    CaptureRecordEvidence,
-    CaptureRequirement,
-    CaptureScope,
-    SourceCoverageMapping,
-    canonical_applicability_projection_sha256,
-    canonical_source_coverage_projection_sha256,
-    compile_capture_requirement_bindings,
-    evaluate_capture_manifest,
-)
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.data_quality import DataDomain, QualityStatus
+from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.execution import (
     FactorExecution,
     FactorInvocationTemplate,
@@ -79,6 +65,17 @@ EXPECTED_STAGES = frozenset(
 
 def _hash(character: str) -> str:
     return character * 64
+
+
+# #1238 deleted the capture contracts. The catalog, universe and capture identifiers below stand in
+# for the objects that the snapshot, usage and audit contracts still name by identifier and hash.
+RESEARCH_CATALOG_SHA256 = _hash("a")
+APPLICABILITY_CATALOG_SHA256 = _hash("c")
+SLO_CATALOG_SHA256 = _hash("e")
+UNIVERSE = UniverseRef(universe_id="universe.topt-probe", universe_version="2026-07-12", content_sha256=_hash("b"))
+CAPTURE_REQUIREMENT_ID = "capture-requirement:" + _hash("2")
+CAPTURE_MANIFEST_ID = "capture-manifest:" + _hash("3")
+CAPTURE_EVIDENCE_ID = "capture-evidence:" + _hash("5")
 
 
 class _ProbeSignalPayload(BaseModel):
@@ -165,87 +162,18 @@ def _additive_registry() -> RegistrySnapshot:
     )
 
 
-def _capture_requirement(probe_type: SemanticTypeRegistryEntry) -> CaptureRequirement:
-    return CaptureRequirement(
-        semantic_type_id=probe_type.semantic_type_id,
-        semantic_type_version=probe_type.version,
-        domain=probe_type.domain,
-        required_fields=("probe_signal",),
-        subject_kinds=(SubjectKind.ISSUER,),
-        cadence=timedelta(days=1),
-        partition_rule_id="partition.fiscal:v1",
-        freshness_policy_id="freshness.daily:v1",
-        maximum_age=timedelta(days=2),
-        quality_policy_ids=("quality.non_null:v1",),
-    )
-
-
-def _data_requirement(capture_requirement: CaptureRequirement, *, metric: str = "probe_signal") -> DataRequirement:
+def _data_requirement(probe_type: SemanticTypeRegistryEntry, *, metric: str = "probe_signal") -> DataRequirement:
     return DataRequirement(
-        capture_requirement_id=capture_requirement.capture_requirement_id,
-        semantic_type_id=capture_requirement.semantic_type_id,
-        domain=capture_requirement.domain,
+        capture_requirement_id=CAPTURE_REQUIREMENT_ID,
+        semantic_type_id=probe_type.semantic_type_id,
+        domain=probe_type.domain,
         metric=metric,
-        subject_kinds=frozenset(capture_requirement.subject_kinds),
+        subject_kinds=frozenset({SubjectKind.ISSUER}),
         level=RequirementLevel.REQUIRED,
         lookback=timedelta(days=30),
-        valid_period_rule_id=capture_requirement.partition_rule_id,
-        maximum_age=capture_requirement.maximum_age,
-        cadence=capture_requirement.cadence,
-    )
-
-
-def _projections(
-    capture_requirement: CaptureRequirement,
-) -> tuple[ApplicabilityMapping, SourceCoverageMapping, str, str]:
-    applicability_key = (
-        SUBJECT.kind,
-        SUBJECT.id,
-        capture_requirement.domain,
-        PARTITION,
-        capture_requirement.capture_requirement_id,
-    )
-    applicability: ApplicabilityMapping = {
-        applicability_key: ("required", CUTOFF - timedelta(days=30)),
-    }
-    staging_entry = "source-coverage-entry:" + _hash("4")
-    production_entry = "source-coverage-entry:" + _hash("5")
-    source_coverage: SourceCoverageMapping = {
-        (CaptureEnvironment.STAGING, *applicability_key): (staging_entry,),
-        (CaptureEnvironment.PRODUCTION, *applicability_key): (production_entry,),
-    }
-    return applicability, source_coverage, staging_entry, production_entry
-
-
-def _capture_scope(
-    registry: RegistrySnapshot,
-    capture_requirement: CaptureRequirement,
-    applicability: ApplicabilityMapping,
-    source_coverage: SourceCoverageMapping,
-) -> CaptureScope:
-    return CaptureScope(
-        research_catalog_id="research-catalog:" + _hash("a"),
-        research_catalog_sha256=_hash("a"),
-        universe=UniverseRef(
-            universe_id="universe.topt-probe",
-            universe_version="2026-07-12",
-            content_sha256=_hash("b"),
-        ),
-        applicability_catalog_id="applicability:" + _hash("c"),
-        applicability_catalog_sha256=_hash("c"),
-        applicability_projection_sha256=canonical_applicability_projection_sha256(applicability),
-        source_coverage_catalog_id="source-coverage:" + _hash("d"),
-        source_coverage_catalog_sha256=_hash("d"),
-        source_coverage_projection_sha256=canonical_source_coverage_projection_sha256(source_coverage),
-        slo_catalog_id="module-slo:" + _hash("e"),
-        slo_catalog_sha256=_hash("e"),
-        source_registry_id=registry.source_registry_snapshot_id,
-        source_registry_sha256=registry.source_registry_sha256,
-        semantic_type_registry_id=registry.semantic_type_registry_snapshot_id,
-        semantic_type_registry_sha256=registry.semantic_type_registry_sha256,
-        requirements=(capture_requirement,),
-        effective_at=CUTOFF - timedelta(days=30),
-        owner="data-platform",
+        valid_period_rule_id="partition.fiscal:v1",
+        maximum_age=timedelta(days=2),
+        cadence=timedelta(days=1),
     )
 
 
@@ -289,89 +217,6 @@ def _normalized_probe_record(
         confidence=Decimal("0.97"),
     )
     return payload, record
-
-
-def _capture_evidence(
-    capture_requirement: CaptureRequirement,
-    record: NormalizedRecordRef,
-    source_coverage_entry_id: str,
-    *,
-    knowable_at: datetime | None = None,
-) -> CaptureRecordEvidence:
-    return CaptureRecordEvidence(
-        source_coverage_entry_id=source_coverage_entry_id,
-        raw_id="raw.fetches:probe-signal-1",
-        raw_sha256=record.raw_object_sha256,
-        normalized_id=record.normalized_record_id,
-        semantic_type_id=capture_requirement.semantic_type_id,
-        semantic_type_version=capture_requirement.semantic_type_version,
-        populated_fields=capture_requirement.required_fields,
-        knowable_at=knowable_at or record.draft.knowable_at,
-        recorded_at=record.recorded_at,
-        valid_from=CUTOFF - timedelta(days=30),
-        valid_to=CUTOFF + timedelta(days=30),
-        confidence=record.confidence,
-        mapping_version=record.mapping_version,
-        policy_versions={
-            capture_requirement.freshness_policy_id: "v1",
-            capture_requirement.partition_rule_id: "v1",
-        },
-        quality_check_ids=capture_requirement.quality_policy_ids,
-        quality_status=QualityStatus.PASS,
-        lineage_sha256=record.content_sha256,
-    )
-
-
-def _capture_manifest(scope: CaptureScope, evidence: CaptureRecordEvidence) -> CaptureManifest:
-    requirement = scope.requirements[0]
-    cell = CaptureCell(
-        subject=SUBJECT,
-        domain=requirement.domain,
-        partition_key=PARTITION,
-        capture_requirement_id=requirement.capture_requirement_id,
-        applicability="required",
-        status="complete",
-        evidence=(evidence,),
-    )
-    return CaptureManifest(
-        capture_scope_id=scope.capture_scope_id,
-        capture_scope_sha256=scope.content_sha256,
-        environment=CaptureEnvironment.STAGING,
-        research_catalog_id=scope.research_catalog_id,
-        research_catalog_sha256=scope.research_catalog_sha256,
-        applicability_catalog_id=scope.applicability_catalog_id,
-        applicability_catalog_sha256=scope.applicability_catalog_sha256,
-        source_coverage_catalog_id=scope.source_coverage_catalog_id,
-        source_coverage_catalog_sha256=scope.source_coverage_catalog_sha256,
-        slo_catalog_id=scope.slo_catalog_id,
-        slo_catalog_sha256=scope.slo_catalog_sha256,
-        source_registry_id=scope.source_registry_id,
-        source_registry_sha256=scope.source_registry_sha256,
-        semantic_type_registry_id=scope.semantic_type_registry_id,
-        semantic_type_registry_sha256=scope.semantic_type_registry_sha256,
-        partition_key=PARTITION,
-        as_of=CUTOFF,
-        started_at=CUTOFF,
-        cells=(cell,),
-        created_at=CUTOFF + timedelta(minutes=1),
-    )
-
-
-def _evaluate_capture(
-    scope: CaptureScope,
-    manifest: CaptureManifest,
-    applicability: ApplicabilityMapping,
-    source_coverage: SourceCoverageMapping,
-) -> CaptureEvaluationReport:
-    return evaluate_capture_manifest(
-        scope,
-        manifest,
-        applicability_catalog_id=scope.applicability_catalog_id,
-        applicability_catalog_sha256=scope.applicability_catalog_sha256,
-        applicability=applicability,
-        source_coverage=source_coverage,
-        evaluated_at=manifest.created_at + timedelta(minutes=1),
-    )
 
 
 def _snapshot(
@@ -495,14 +340,13 @@ def _planned_cell(data_requirement: DataRequirement) -> PlannedDemandCell:
 def _usage_events(
     data_requirement: DataRequirement,
     record: NormalizedRecordRef,
-    capture_manifest: CaptureManifest,
     snapshot: SnapshotManifest,
     selection: RunnerInputSelection,
     output: MaterializedFactorOutput,
 ) -> tuple[DataUsageEvent, ...]:
     evidence_by_stage = {
-        UsageStage.CAPTURE: (capture_manifest.capture_manifest_id,),
-        UsageStage.NORMALIZATION: (capture_manifest.cells[0].evidence[0].evidence_id,),
+        UsageStage.CAPTURE: (CAPTURE_MANIFEST_ID,),
+        UsageStage.NORMALIZATION: (CAPTURE_EVIDENCE_ID,),
         UsageStage.SNAPSHOT_SELECTION: (snapshot.snapshot_id,),
         UsageStage.FACTOR_CONSUMPTION: (selection.selection_id, output.materialized_output_id),
     }
@@ -567,7 +411,6 @@ def _reverse_lineage(
 
 def _usage_audit(
     registry: RegistrySnapshot,
-    scope: CaptureScope,
     planned_cell: PlannedDemandCell,
     events: tuple[DataUsageEvent, ...],
     *,
@@ -582,13 +425,13 @@ def _usage_audit(
         trace_bundle_ids=("trace-bundle:" + _hash("e"),),
         reverse_lineage=reverse_lineage or _reverse_lineage(events),
         affected_decision_ids=("decision:additive-probe",),
-        research_catalog_id=scope.research_catalog_id,
-        research_catalog_sha256=scope.research_catalog_sha256,
-        universe=scope.universe,
-        applicability_catalog_id=scope.applicability_catalog_id,
-        applicability_catalog_sha256=scope.applicability_catalog_sha256,
-        slo_catalog_id=scope.slo_catalog_id,
-        slo_catalog_sha256=scope.slo_catalog_sha256,
+        research_catalog_id="research-catalog:" + RESEARCH_CATALOG_SHA256,
+        research_catalog_sha256=RESEARCH_CATALOG_SHA256,
+        universe=UNIVERSE,
+        applicability_catalog_id="applicability:" + APPLICABILITY_CATALOG_SHA256,
+        applicability_catalog_sha256=APPLICABILITY_CATALOG_SHA256,
+        slo_catalog_id="module-slo:" + SLO_CATALOG_SHA256,
+        slo_catalog_sha256=SLO_CATALOG_SHA256,
         release_manifest_id="release-manifest:" + _hash("f"),
         registry_snapshot=registry,
         run_started_at=run_started_at,
@@ -631,16 +474,10 @@ def _quality_review(
 @dataclass(frozen=True)
 class _ProbeClosure:
     registry: RegistrySnapshot
-    capture_requirement: CaptureRequirement
+    probe_type: SemanticTypeRegistryEntry
     data_requirement: DataRequirement
-    applicability: ApplicabilityMapping
-    source_coverage: SourceCoverageMapping
-    scope: CaptureScope
     payload: _ProbeSignalPayload
     record: NormalizedRecordRef
-    evidence: CaptureRecordEvidence
-    capture_manifest: CaptureManifest
-    capture_report: CaptureEvaluationReport
     demand: SnapshotDemandCell
     snapshot: SnapshotManifest
     execution: FactorExecution
@@ -658,22 +495,13 @@ class _ProbeClosure:
 def _build_probe_closure() -> _ProbeClosure:
     registry = _additive_registry()
     probe_type = next(item for item in registry.semantic_types if item.semantic_type_id == "semantic.probe-signal")
-    capture_requirement = _capture_requirement(probe_type)
-    data_requirement = _data_requirement(capture_requirement)
-    assert compile_capture_requirement_bindings((data_requirement,), (capture_requirement,)) == {
-        data_requirement.requirement_id: capture_requirement
-    }
-    applicability, source_coverage, staging_entry, _production_entry = _projections(capture_requirement)
-    scope = _capture_scope(registry, capture_requirement, applicability, source_coverage)
+    data_requirement = _data_requirement(probe_type)
     payload, record = _normalized_probe_record(registry)
-    evidence = _capture_evidence(capture_requirement, record, staging_entry)
-    capture_manifest = _capture_manifest(scope, evidence)
-    capture_report = _evaluate_capture(scope, capture_manifest, applicability, source_coverage)
     demand, snapshot = _snapshot(registry, data_requirement, record)
     execution, selection, read_event, output = _run_probe(data_requirement, snapshot)
     planned_cell = _planned_cell(data_requirement)
-    events = _usage_events(data_requirement, record, capture_manifest, snapshot, selection, output)
-    audit = _usage_audit(registry, scope, planned_cell, events)
+    events = _usage_events(data_requirement, record, snapshot, selection, output)
+    audit = _usage_audit(registry, planned_cell, events)
     quality, review = _quality_review(audit, planned_cell)
     frequency = build_usage_frequency_slice(
         audits=(audit,),
@@ -682,16 +510,10 @@ def _build_probe_closure() -> _ProbeClosure:
     )
     return _ProbeClosure(
         registry=registry,
-        capture_requirement=capture_requirement,
+        probe_type=probe_type,
         data_requirement=data_requirement,
-        applicability=applicability,
-        source_coverage=source_coverage,
-        scope=scope,
         payload=payload,
         record=record,
-        evidence=evidence,
-        capture_manifest=capture_manifest,
-        capture_report=capture_report,
         demand=demand,
         snapshot=snapshot,
         execution=execution,
@@ -713,7 +535,6 @@ def test_additive_source_type_and_probe_close_the_full_generic_path() -> None:
 
     assert {"semantic.financial-fact", "semantic.probe-signal"}.issubset(fixture_source.supported_type_ids)
     assert closure.payload.metric == "probe_signal"
-    assert closure.capture_report.ready
     assert closure.demand.planned_cell_id == closure.planned_cell.planned_cell_id
     assert closure.selection.factor_inputs[0].observation.payload_sha256 == closure.record.draft.payload_sha256
     assert closure.output.consumed_input_ids == (closure.record.normalized_record_id,)
@@ -725,26 +546,8 @@ def test_additive_source_type_and_probe_close_the_full_generic_path() -> None:
     assert closure.review.ready
 
 
-def test_additive_probe_fails_stale_wrong_type_and_missing_runner_reads() -> None:
+def test_additive_probe_fails_wrong_type_and_missing_runner_reads() -> None:
     closure = _build_probe_closure()
-    staging_entry = closure.capture_manifest.cells[0].evidence[0].source_coverage_entry_id
-    assert staging_entry is not None
-    stale_evidence = _capture_evidence(
-        closure.capture_requirement,
-        closure.record,
-        staging_entry,
-        knowable_at=CUTOFF - closure.capture_requirement.maximum_age - timedelta(seconds=1),
-    )
-    stale_manifest = _capture_manifest(closure.scope, stale_evidence)
-    stale_report = _evaluate_capture(
-        closure.scope,
-        stale_manifest,
-        closure.applicability,
-        closure.source_coverage,
-    )
-    assert not stale_report.ready
-    assert any(code.startswith("evidence.stale:") for code in stale_report.blocking_reason_codes)
-
     financial_type = next(
         item for item in closure.registry.semantic_types if item.semantic_type_id == "semantic.financial-fact"
     )
@@ -796,7 +599,7 @@ def test_additive_probe_fails_stale_wrong_type_and_missing_runner_reads() -> Non
 
 def test_additive_probe_fails_undeclared_broken_and_required_zero_use() -> None:
     closure = _build_probe_closure()
-    undeclared_requirement = _data_requirement(closure.capture_requirement, metric="undeclared_probe_signal")
+    undeclared_requirement = _data_requirement(closure.probe_type, metric="undeclared_probe_signal")
     undeclared_event = DataUsageEvent(
         **closure.events[0].model_dump(
             exclude={
@@ -811,7 +614,6 @@ def test_additive_probe_fails_undeclared_broken_and_required_zero_use() -> None:
     with pytest.raises(ValueError, match="not declared by planned demand"):
         _usage_audit(
             closure.registry,
-            closure.scope,
             closure.planned_cell,
             (undeclared_event,),
             reverse_lineage=_reverse_lineage((undeclared_event,)),
@@ -823,7 +625,6 @@ def test_additive_probe_fails_undeclared_broken_and_required_zero_use() -> None:
     with pytest.raises(ValueError, match="reverse lineage is incomplete"):
         _usage_audit(
             closure.registry,
-            closure.scope,
             closure.planned_cell,
             closure.events,
             reverse_lineage=broken_lineage,
@@ -832,7 +633,6 @@ def test_additive_probe_fails_undeclared_broken_and_required_zero_use() -> None:
     partial_events = tuple(event for event in closure.events if event.stage is not UsageStage.FACTOR_CONSUMPTION)
     incomplete_audit = _usage_audit(
         closure.registry,
-        closure.scope,
         closure.planned_cell,
         partial_events,
     )
