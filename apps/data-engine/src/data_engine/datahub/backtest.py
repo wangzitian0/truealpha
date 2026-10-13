@@ -443,6 +443,20 @@ def run_limitations(never_filled: Sequence[str]) -> tuple[str, ...]:
     )
 
 
+def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
+    """Each split the simulation applied to held shares, as stored evidence."""
+    return [
+        {
+            "symbol": item.symbol,
+            "ex_date": item.ex_date.isoformat(),
+            "factor": f"{item.numerator}/{item.denominator}",
+            "shares_before": str(item.shares_before),
+            "shares_after": str(item.shares_after),
+        }
+        for item in simulation.splits_applied
+    ]
+
+
 def _decimal_map(value: Performance) -> dict[str, str | None]:
     return {key: None if item is None else str(item) for key, item in value.__dict__.items()}
 
@@ -555,6 +569,7 @@ def _record(
                 for item in benchmark.deferred_fills
             ],
             "never_filled": list(never_filled),
+            "splits_applied": _splits_applied(benchmark),
             **_decimal_map(benchmark_performance),
         },
         "turnover_monthly": str(turnover_monthly),
@@ -564,16 +579,7 @@ def _record(
             {"symbol": event.symbol, "ex_date": event.ex_date.isoformat(), "factor": str(event.factor)}
             for event in book.splits
         ],
-        "splits_applied": [
-            {
-                "symbol": item.symbol,
-                "ex_date": item.ex_date.isoformat(),
-                "factor": f"{item.numerator}/{item.denominator}",
-                "shares_before": str(item.shares_before),
-                "shares_after": str(item.shares_after),
-            }
-            for item in strategy.splits_applied
-        ],
+        "splits_applied": _splits_applied(strategy),
         "unresolved_issuers": list(unresolved),
         "ignored_legacy_issuer_ids": list(ignored_legacy_ids),
         "limitations": list(run_limitations(never_filled)),

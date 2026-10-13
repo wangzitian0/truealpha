@@ -383,6 +383,9 @@ def test_the_benchmark_holds_the_first_cutoff_issuers_and_records_a_late_fill(se
         {"symbol": "T758C", "ordered_session": "2024-04-01", "filled_session": "2024-04-02"}
     ]
     assert benchmark["never_filled"] == ["T758E"]
+    assert [(item["symbol"], item["ex_date"], item["factor"]) for item in benchmark["splits_applied"]] == [
+        ("T758A", "2024-06-10", "10/1")
+    ], "the benchmark holds T758A through its split and records the event"
     assert payload["binding"]["benchmark_universe"] == ["T758A", "T758B", "T758C", "T758E"]
 
 
