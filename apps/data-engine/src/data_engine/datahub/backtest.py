@@ -39,7 +39,6 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
-from factors.backtest.corporate_actions import SeriesBar, SplitEvent, derive_split_events
 from factors.backtest.engine import (
     BENCHMARK_RULE,
     CLAIM_CEILING,
@@ -68,15 +67,21 @@ from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     HistoryIssuer,
+    canonical_history_issuers,
     is_schedule_cutoff,
     quarter_end_cutoffs,
-    stored_history_issuers,
 )
-from data_engine.strategy_backtest_gateway import StrategyBacktestGateway, combine_snapshot_ids
+from data_engine.strategy_backtest_gateway import (
+    StrategyBacktestGateway,
+    combine_snapshot_ids,
+    issuer_inputs_from_rows,
+    snapshot_id_from_rows,
+)
 
 #: The notional scale of a run. Shares are fractional, so no result depends on it.
 NOTIONAL_CAPITAL = Decimal("1000000")
@@ -129,13 +134,20 @@ def schedule_cutoffs(connection: psycopg.Connection[Any], schedule: QuarterlyCut
     """The schedule cutoffs that hold inputs, oldest first. Raise when a quarter is missing between them."""
     rows = connection.execute("select distinct cutoff_at from staging.strategy_backtest_inputs").fetchall()
     found = sorted({row[0].astimezone(UTC) for row in rows if is_schedule_cutoff(row[0], schedule)})
+    return require_contiguous_quarters(found, schedule)
+
+
+def require_contiguous_quarters(cutoffs: Sequence[datetime], schedule: QuarterlyCutoffSchedule) -> list[datetime]:
+    """The cutoffs, oldest first. Raise when a quarter is missing between the first and the latest."""
+    found = sorted(cutoffs)
     if not found:
         return []
     missing = sorted(set(quarter_end_cutoffs(schedule, start=found[0], end=found[-1])) - set(found))
     if missing:
         raise ValueError(
-            "the quarter-end input history has gaps: no inputs at "
-            f"{[cutoff.isoformat() for cutoff in missing]}; run strategy_history_projection_pipeline"
+            f"the quarter-end cutoffs are not contiguous: {[cutoff.isoformat() for cutoff in missing]} are "
+            f"missing between {found[0].isoformat()} and {found[-1].isoformat()}; "
+            "run strategy_history_projection_pipeline"
         )
     return found
 
@@ -209,47 +221,15 @@ def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
 
 # -- prices -----------------------------------------------------------------------------
 
-DailySeries = dict[str, dict[date, tuple[Decimal | None, Decimal | None]]]
-
-_SERIES_SQL = """
-select distinct on (symbol, trading_date) symbol, trading_date, open, close
-from staging.market_prices_daily
-where symbol = any(%s) and adjust = %s
-order by symbol, trading_date, recorded_at desc
-"""
-
-
-def load_daily_series(connection: psycopg.Connection[Any], symbols: Sequence[str], *, adjust: str) -> DailySeries:
-    """The latest vintage of each daily bar of one series, as (open, close) per symbol and session."""
-    series: DailySeries = {}
-    for symbol, trading_date, open_, close in connection.execute(_SERIES_SQL, (list(symbols), adjust)).fetchall():
-        series.setdefault(symbol, {})[trading_date] = (open_, close)
-    return series
-
 
 def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
     """Unadjusted bars and the split events the two series show. Raise on an ambiguous split."""
-    bars: dict[str, dict[date, Bar]] = {}
-    splits: list[SplitEvent] = []
-    for symbol in sorted(unadjusted):
-        adjusted = split_adjusted.get(symbol, {})
-        bars[symbol] = {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
-        sessions = sorted(set(unadjusted[symbol]) | set(adjusted))
-        splits.extend(
-            derive_split_events(
-                symbol,
-                [
-                    SeriesBar(
-                        session=day,
-                        unadjusted_open=unadjusted[symbol].get(day, (None, None))[0],
-                        unadjusted_close=unadjusted[symbol].get(day, (None, None))[1],
-                        split_adjusted_close=adjusted.get(day, (None, None))[1],
-                    )
-                    for day in sessions
-                ],
-            )
-        )
-    return PriceBook(bars=bars, splits=tuple(splits))
+    bars = {
+        symbol: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
+        for symbol in sorted(unadjusted)
+    }
+    events = split_events_by_symbol(sorted(unadjusted), unadjusted, split_adjusted)
+    return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
 
 
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:
@@ -305,22 +285,33 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
-    # Each cutoff's inputs and their snapshot id come from ONE read, before any decision, so
-    # run_id describes exactly the inputs the decisions used. The issuer list comes from it too.
+    # ONE read per cutoff, before any decision. The issuer list, the inputs and the snapshot id
+    # all derive from it, so run_id describes exactly the inputs the decisions used.
     gateway = StrategyBacktestGateway(connection)
-    inputs_by_cutoff: dict[datetime, list[IssuerInput]] = {}
-    snapshot_ids: list[str] = []
-    for cutoff in cutoffs:
-        inputs_by_cutoff[cutoff], snapshot_id = gateway.issuer_inputs_with_snapshot(cutoff)
-        snapshot_ids.append(snapshot_id)
-    issuer_ids = sorted({item.issuer_id for inputs in inputs_by_cutoff.values() for item in inputs})
-    resolved = stored_history_issuers(connection, issuer_ids, known_at=tick)
-    if not resolved:
+    rows_by_cutoff = {cutoff: gateway.rows_at(cutoff) for cutoff in cutoffs}
+    issuer_ids = sorted({row[0] for rows in rows_by_cutoff.values() for row in rows})
+    # #1257: the table holds each issuer under a legacy id and under its entity UUID. The run
+    # reads the canonical rows only. Old-generation rows stay in the append-only table, unread.
+    canonical = canonical_history_issuers(connection, issuer_ids, known_at=tick)
+    if not canonical.issuers:
         raise RuntimeError(f"no stored lineage resolves any of the {len(issuer_ids)} issuers with quarter-end inputs")
-    issuers = {issuer.issuer_id: issuer for issuer in resolved}
-    tickers = [issuer.ticker for issuer in resolved]
+    issuers = {issuer.issuer_id: issuer for issuer in canonical.issuers}
+    # The fail-closed check stays AFTER canonicalization: two entities on one ticker is a lineage defect.
+    tickers = [issuer.ticker for issuer in canonical.issuers]
     if len(set(tickers)) != len(tickers):
         raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
+    canonical_rows = {
+        cutoff: [row for row in rows if row[0] in canonical.canonical_ids] for cutoff, rows in rows_by_cutoff.items()
+    }
+    cutoffs = require_contiguous_quarters(
+        [cutoff for cutoff, rows in canonical_rows.items() if rows], definition.schedule
+    )
+    if not cutoffs:
+        raise BacktestPending(
+            "no quarter-end inputs under canonical issuer ids; run strategy_history_projection_pipeline"
+        )
+    inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs}
+    snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
 
     decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, risk_free_rate=RISK_FREE_RATE)
     if not any(decision.weights for decision in decisions):
@@ -373,7 +364,9 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         "cutoffs": [cutoff.isoformat() for cutoff in cutoffs],
         "input_snapshot_id": combine_snapshot_ids(snapshot_ids),
         "benchmark_universe": first_universe,
-        "issuers": sorted([issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in resolved),
+        "issuers": sorted(
+            [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
+        ),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
         "risk_free_rate": str(RISK_FREE_RATE),
         "capital": str(NOTIONAL_CAPITAL),
@@ -389,7 +382,8 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         strategy=strategy,
         benchmark=benchmark,
         book=book,
-        unresolved=sorted(set(issuer_ids) - set(issuers)),
+        unresolved=canonical.unresolved,
+        ignored_legacy_ids=sorted(canonical.merged),
         benchmark_universe=first_universe,
         cost_basis_points=definition.transaction_cost.basis_points,
     )
@@ -449,6 +443,20 @@ def run_limitations(never_filled: Sequence[str]) -> tuple[str, ...]:
     )
 
 
+def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
+    """Each split the simulation applied to held shares, as stored evidence."""
+    return [
+        {
+            "symbol": item.symbol,
+            "ex_date": item.ex_date.isoformat(),
+            "factor": f"{item.numerator}/{item.denominator}",
+            "shares_before": str(item.shares_before),
+            "shares_after": str(item.shares_after),
+        }
+        for item in simulation.splits_applied
+    ]
+
+
 def _decimal_map(value: Performance) -> dict[str, str | None]:
     return {key: None if item is None else str(item) for key, item in value.__dict__.items()}
 
@@ -499,6 +507,7 @@ def _record(
     benchmark: Simulation,
     book: PriceBook,
     unresolved: Sequence[str],
+    ignored_legacy_ids: Sequence[str],
     benchmark_universe: Sequence[str],
     cost_basis_points: Decimal,
 ) -> BacktestRecord:
@@ -560,6 +569,7 @@ def _record(
                 for item in benchmark.deferred_fills
             ],
             "never_filled": list(never_filled),
+            "splits_applied": _splits_applied(benchmark),
             **_decimal_map(benchmark_performance),
         },
         "turnover_monthly": str(turnover_monthly),
@@ -569,17 +579,9 @@ def _record(
             {"symbol": event.symbol, "ex_date": event.ex_date.isoformat(), "factor": str(event.factor)}
             for event in book.splits
         ],
-        "splits_applied": [
-            {
-                "symbol": item.symbol,
-                "ex_date": item.ex_date.isoformat(),
-                "factor": f"{item.numerator}/{item.denominator}",
-                "shares_before": str(item.shares_before),
-                "shares_after": str(item.shares_after),
-            }
-            for item in strategy.splits_applied
-        ],
+        "splits_applied": _splits_applied(strategy),
         "unresolved_issuers": list(unresolved),
+        "ignored_legacy_issuer_ids": list(ignored_legacy_ids),
         "limitations": list(run_limitations(never_filled)),
     }
     symbols = sorted(book.bars)
@@ -694,7 +696,6 @@ __all__ = [
     "benchmark_never_filled",
     "decide",
     "deployed_code_identity",
-    "load_daily_series",
     "persist_backtest_run",
     "price_book",
     "price_snapshot_sha256",

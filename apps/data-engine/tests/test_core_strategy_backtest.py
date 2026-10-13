@@ -112,7 +112,10 @@ def test_schedule_cutoffs_keep_the_quarter_ends_and_drop_monthly_and_live_cutoff
 def test_a_missing_quarter_between_the_first_and_the_latest_stops_the_run() -> None:
     schedule = load_strategy_definition().schedule
 
-    with pytest.raises(ValueError, match="2024-06-30T23:59:59"):
+    # The message holds at both call sites, before and after canonicalization (review on #1266).
+    with pytest.raises(
+        ValueError, match=r"quarter-end cutoffs are not contiguous: \['2024-06-30T23:59:59\+00:00'\] are missing"
+    ):
         schedule_cutoffs(_Connection([Q1, Q3]), schedule)  # type: ignore[arg-type]
 
 
@@ -162,3 +165,33 @@ def test_strategy_weights_sum_to_exactly_one_when_six_are_selected() -> None:
     assert sum(decision.weights.values()) == 1
     assert sorted(decision.weights.values())[-1] == Decimal("0.166667")
     TargetPortfolio(Q1, decision.weights)
+
+
+def test_unadjusted_bars_without_a_split_adjusted_series_stop_split_derivation() -> None:
+    """#1257: without the second series no split can be seen, so no share count or return can rely on it."""
+    from data_engine.datahub.price_series import split_events_of
+
+    unadjusted = {"ONE": {date(2024, 6, 7): (Decimal("100"), Decimal("100"))}}
+
+    with pytest.raises(SplitDerivationError, match="without split-adjusted bars"):
+        split_events_of("ONE", unadjusted, {})
+    assert split_events_of("NONE", {}, {}) == (), "a symbol with no bar has no split"
+
+
+def test_the_price_book_names_every_symbol_without_derivable_splits() -> None:
+    """Review round 3, item 3c: two symbols fail split derivation in one book. The error names both;
+    a book that stops at the first symbol hides the second until the next run."""
+    day, next_day = date(2024, 6, 7), date(2024, 6, 10)
+    flat = {day: (Decimal("100"), Decimal("100")), next_day: (Decimal("100"), Decimal("100"))}
+    unadjusted = {"ALFA": flat, "BRAV": flat, "GOOD": flat}
+    split_adjusted = {
+        "ALFA": {day: (Decimal("10"), Decimal("10")), next_day: (Decimal("100"), Decimal("100"))},
+        "GOOD": flat,
+    }
+
+    with pytest.raises(SplitDerivationError) as raised:
+        price_book(unadjusted, split_adjusted)
+
+    message = str(raised.value)
+    assert "ALFA" in message and "BRAV" in message
+    assert "GOOD" not in message

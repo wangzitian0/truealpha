@@ -117,8 +117,8 @@ def test_mutating_input_fact_changes_snapshot_and_corpus_sha256(connection) -> N
     assert mutated_corpus_sha != original_corpus_sha
 
 
-def test_rows_for_cutoff_supersedes_by_knowable_at_not_insertion_order(connection) -> None:
-    """#530: `_rows_for_cutoff` used to break ties on `recorded_at` (ingestion audit
+def test_rows_at_supersedes_by_knowable_at_not_insertion_order(connection) -> None:
+    """#530: `rows_at` (then `_rows_for_cutoff`) used to break ties on `recorded_at` (ingestion audit
     time) -- init.md §6 says explicitly "as-of resolution never reads it", and this IS
     an as-of resolution (`where cutoff_at = %s`). Construct the exact shape that made
     the old rule wrong: a row with an EARLIER `knowable_at` inserted SECOND (later
@@ -151,7 +151,7 @@ def test_rows_for_cutoff_supersedes_by_knowable_at_not_insertion_order(connectio
     )
 
     gateway = StrategyBacktestGateway(connection)
-    rows = gateway._rows_for_cutoff(cutoff_at)
+    rows = gateway.rows_at(cutoff_at)
     matching = [row for row in rows if row[0] == issuer_id]
     assert len(matching) == 1, f"expected one resolved row for this (issuer, input_key), got {matching}"
     assert matching[0][2] == 100, (

@@ -158,6 +158,21 @@ def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEv
     return tuple(events)
 
 
+def split_factor_between(events: Sequence[SplitEvent], *, after: date, through: date) -> Fraction:
+    """The product of the factors of the splits with an ex-date in ``(after, through]``; 1 when none.
+
+    #1257: a share count on the share basis of the date ``after`` (its basis date) meets a close of
+    the session ``through``. Multiplying the count by this factor puts both on one basis, so their
+    product is the market value. A split with its ex-date on ``after`` itself is taken as already
+    in the count: a count dated on the ex-date, or a filing issued on it, reflects the split.
+    """
+    factor = Fraction(1)
+    for event in events:
+        if after < event.ex_date <= through:
+            factor *= event.factor
+    return factor
+
+
 __all__ = [
     "MAX_FACTOR_DENOMINATOR",
     "RATIO_TOLERANCE",
@@ -165,4 +180,5 @@ __all__ = [
     "SplitDerivationError",
     "SplitEvent",
     "derive_split_events",
+    "split_factor_between",
 ]

@@ -24,7 +24,7 @@ The repository cannot meet rule 16 today.
 1. Every run before #1121 is a `preview`. The run summary and the report name the price basis `split_adjusted_preview`.
 2. Returns use split-adjusted bars. The run applies no explicit events, so A5's ban on mixing adjusted prices with explicit actions holds.
 3. The run is a price return. It omits dividends. The strategy definition declares a constant risk-free rate.
-4. Market value is the unadjusted close times the as-filed share count. The prices PR adds `adjust = 'none'` bars. Every reader of `staging.market_prices_daily` filters on `adjust`.
+4. Market value is the unadjusted close times the as-filed share count. The prices PR adds `adjust = 'none'` bars. Every reader of `staging.market_prices_daily` filters on `adjust`. Amended 2026-10-13 (#1257): the share count is put on the share basis of the close; see the status update.
 5. Fills happen at the next open after the signal date. The run reports a benchmark.
 6. The universe is the frozen `universe:topt-us-2026-03-31`. The report prints the survivorship bias this causes.
 7. A run pins four values: the engine id, the adapter version (the image git sha), the strategy definition sha256 and a data-snapshot hash. `run_id` derives from them. The value `default_snapshot` is forbidden.
@@ -52,9 +52,19 @@ each decision:
   stops the run.
 - Decision 3 holds. No dividend source exists. `mart.backtest_runs.claim_ceiling` records
   `price_return_no_dividends`. The risk-free rate is the constant `RISK_FREE_RATE` of the live path.
-- Decision 4 holds. Market value at each cutoff is the unadjusted close times the as-filed share
-  count, from the projector's `last_close` and `shares_outstanding` inputs. The backtest reads
-  each price series by its `adjust` value.
+- Decision 4 is amended (#1257). Market value at each cutoff is the unadjusted close times the
+  share count on the share basis of that close. The projector multiplies the filed count by each
+  split with an ex-date after the count's basis date and on or before the close's session. The
+  basis date of a cover-page count is its own date. The basis date of a statement count is its
+  filing date, because the filing restates it for an earlier split. Without this rule, NVDA at
+  2024-06-30 and NFLX at 2025-12-31 had a market value ten times too small and were selected. The
+  backtest reads each price series by its `adjust` value.
+- The corrected share row wins by `knowable_at`. It is appended with the knowable time of the
+  close, which is later than the filed row. The reader takes the latest `knowable_at` first. A
+  later correction with an earlier `knowable_at` would lose to the row it corrects. So a spurious
+  split must stop the run before it writes a row. The split derivation does this. A ratio step
+  that is not a simple split ratio raises `SplitDerivationError`. A ratio step that the unadjusted
+  price does not confirm also raises it.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
@@ -64,11 +74,18 @@ each decision:
 - Decision 6 no longer holds. No frozen universe list exists. The universe is the issuers that hold
   strategy inputs today, resolved through today's stored lineage. That is a survivorship bias, and
   each run stores it in `metrics_payload.limitations`. The page and the MCP response show it.
-- Decision 7 is done. `run_id` hashes the engine label, the deployed code identity
-  (`GIT_COMMIT_SHA`, the value `/api/health` reports), the definition hash, the input snapshot,
-  the issuer mapping, the benchmark universe, the price snapshot and the run parameters. The input
-  snapshot comes from the same read as the decisions' inputs. A same `run_id` with a different
-  result stops the run.
+- Decision 7 is done. `run_id` hashes eight values:
+  - the engine label;
+  - the deployed code identity (`GIT_COMMIT_SHA`, the value `/api/health` reports);
+  - the definition hash;
+  - the input snapshot;
+  - the issuer mapping;
+  - the benchmark universe;
+  - the price snapshot;
+  - the run parameters.
+
+  The input snapshot comes from the same read as the decisions' inputs. A same `run_id` with a
+  different result stops the run.
 - Decision 8 holds. No holdout record exists, so no run is `validated`.
 - Decision 9 is done in part. #758 removed the split-adjusted returns basis without #1121: the
   split events come from the two stored series, not from a corporate-action source. Dividends

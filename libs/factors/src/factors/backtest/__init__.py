@@ -1,6 +1,12 @@
 """The core strategy backtest computation: split events and the definition-driven simulation (#758)."""
 
-from factors.backtest.corporate_actions import SeriesBar, SplitDerivationError, SplitEvent, derive_split_events
+from factors.backtest.corporate_actions import (
+    SeriesBar,
+    SplitDerivationError,
+    SplitEvent,
+    derive_split_events,
+    split_factor_between,
+)
 from factors.backtest.engine import (
     BENCHMARK_RULE,
     CLAIM_CEILING,
@@ -51,4 +57,5 @@ __all__ = [
     "monthly_turnover",
     "performance",
     "simulate",
+    "split_factor_between",
 ]

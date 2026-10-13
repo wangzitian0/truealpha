@@ -21,7 +21,16 @@ Rules this module enforces:
 * Each input carries its own filed date and its own fiscal period, exactly where the live
   writer does. There is no blended value.
 * ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
-  before the cutoff date. Shares are as filed (A6 decision 4).
+  before the cutoff date. Shares are as filed (A6 decision 4), on the share basis of that close
+  (#1257): a split with an ex-date after the count's basis date and on or before the close's
+  session multiplies the filed count. The basis date of a cover-page count is its own date; the
+  basis date of a statement count is its filing date, because the filing restates it for an
+  earlier split (``share_count_as_of``). Without this rule, NVDA at 2024-06-30 multiplied a
+  pre-split count by a post-split close, its market value fell tenfold, and the strategy selected
+  it. The split events come from the two stored price series (``datahub.price_series``).
+* Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
+  and under its entity UUID. The universe is the set of entities those ids name, and each history
+  is written under the entity UUID. No row is written under a legacy id.
 * The run is idempotent. The unique index of the table includes ``recorded_at``, so a second
   insert of the same fact would duplicate the row. The projector skips a row that exists for
   the same issuer, cutoff, input key and fiscal period with the same value and ``knowable_at``.
@@ -44,14 +53,17 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
 import psycopg
+from factors.backtest.corporate_actions import SplitEvent, split_factor_between
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
+from data_engine.datahub.canonical_issuer import stored_entity_of
+from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
@@ -72,6 +84,8 @@ DEFAULT_MONTHS = 36
 #: The ``adjust`` value of the unadjusted daily bars (#1131, ``market_prices.UNADJUSTED``).
 #: Market value is the unadjusted close times the as-filed share count (A6 decision 4).
 UNADJUSTED_BARS = "none"
+#: The ``adjust`` value of the split-adjusted daily bars (``market_prices.SPLIT_ADJUSTED``).
+SPLIT_ADJUSTED_BARS = "splits"
 
 _COMPANY_FACTS_PREFIX = "companyfacts:CIK"
 #: The payload carries a period series as ``<metric>_by_period``. Its filings sit in the
@@ -80,6 +94,8 @@ _PERIOD_SERIES_SUFFIX = "_periods"
 
 #: The input row this module writes beside the financial inputs.
 _LAST_CLOSE_KEY = "last_close"
+#: The share count that multiplies ``last_close`` into a market value.
+_SHARES_KEY = "shares_outstanding"
 
 FactsLoader = Callable[[int], tuple[bytes, dict[str, Any]] | None]
 
@@ -97,6 +113,8 @@ class LastClose(NamedTuple):
 
 
 PriceReader = Callable[[str, datetime], LastClose | None]
+#: The split events of one symbol, oldest first.
+SplitReader = Callable[[str], tuple[SplitEvent, ...]]
 
 
 @dataclass(frozen=True)
@@ -136,6 +154,14 @@ class Projection:
     no_outcome: int = 0
     #: Inputs dropped because the payload names no filing for them.
     undated: int = 0
+    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
+    split_adjusted: int = 0
+    #: Share counts classed as cover-page counts: their basis date is their own date.
+    share_basis_cover: int = 0
+    #: Share counts classed as statement figures: their basis date is their filing date.
+    share_basis_statement: int = 0
+    #: Share counts that match no stored entry: they fall back to their filing date, which can under-adjust.
+    share_basis_unrecognised: int = 0
 
 
 @dataclass(frozen=True)
@@ -148,6 +174,16 @@ class HistorySummary:
     undated: int
     #: Issuers of the strategy universe that stored lineage could not resolve.
     unresolved_issuers: tuple[str, ...] = ()
+    #: Old-generation ids that name a projected entity. Their history is written under the entity UUID.
+    merged_ids: int = 0
+    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
+    split_adjusted: int = 0
+    #: Share counts classed as cover-page counts (basis date: their own date).
+    share_basis_cover: int = 0
+    #: Share counts classed as statement figures (basis date: their filing date).
+    share_basis_statement: int = 0
+    #: Share counts that match no stored entry (basis date: their filing date, which can under-adjust).
+    share_basis_unrecognised: int = 0
 
 
 # -- cutoffs and the strict date rule ---------------------------------------------------
@@ -281,6 +317,18 @@ def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
     return last_close
 
 
+def postgres_split_events(connection: psycopg.Connection[Any], symbols: Sequence[str]) -> SplitReader:
+    """The split events of each symbol, derived from its two stored daily series, before any projection.
+
+    Raise ONE ``SplitDerivationError`` that names every symbol whose series disagree: a share count
+    cannot be put on the basis of a close when the splits between them are unknown.
+    """
+    unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED_BARS)
+    split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED_BARS)
+    events = split_events_by_symbol(symbols, unadjusted, split_adjusted)
+    return lambda symbol: events.get(symbol, ())
+
+
 def load_stored_company_facts(
     connection: psycopg.Connection[Any], cik: int, *, store: Any | None = None
 ) -> tuple[bytes, dict[str, Any]] | None:
@@ -308,23 +356,31 @@ def load_stored_company_facts(
 # -- stored issuer lineage --------------------------------------------------------------
 
 _LATEST_FINANCIAL_SQL = """
-select distinct on (p.normalized_payload ->> 'issuer_id') p.normalized_payload, v.source_record_id
-from staging.capture_normalized_observations o
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+select distinct on (named.entity_id) named.entity_id, p.normalized_payload, v.source_record_id
+from unnest(%s::text[], %s::text[]) as named (issuer_id, entity_id)
+join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = named.issuer_id
+join staging.capture_normalized_observations o on o.observation_id = p.observation_id
 join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
 where o.semantic_type = 'financial-fact'
   and o.parser_version = %s
-  and p.normalized_payload ->> 'issuer_id' = any(%s)
-order by p.normalized_payload ->> 'issuer_id', o.recorded_at desc, o.knowable_at desc, o.observation_id desc
+order by named.entity_id, o.recorded_at desc, o.knowable_at desc, o.observation_id desc
 """
 
 
 def latest_financial_observations(
-    connection: psycopg.Connection[Any], issuer_ids: Sequence[str], *, parser_version: str = PARSER_VERSION
-) -> list[tuple[dict[str, Any], str]]:
-    """Per issuer, the payload and the source record id of its newest financial-fact observation."""
-    rows = connection.execute(_LATEST_FINANCIAL_SQL, (parser_version, list(issuer_ids))).fetchall()
-    return [(dict(payload), str(record_id)) for payload, record_id in rows]
+    connection: psycopg.Connection[Any],
+    ids_by_entity: Mapping[str, Sequence[str]],
+    *,
+    parser_version: str = PARSER_VERSION,
+) -> dict[str, tuple[dict[str, Any], str]]:
+    """Per entity, the payload and source record id of the newest financial-fact observation
+    recorded under any of the entity's ids (#1257: a legacy id and the entity UUID name one issuer)."""
+    pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
+    rows = connection.execute(
+        _LATEST_FINANCIAL_SQL,
+        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], parser_version),
+    ).fetchall()
+    return {str(entity_id): (dict(payload), str(record_id)) for entity_id, payload, record_id in rows}
 
 
 def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, known_at: datetime | None) -> str | None:
@@ -395,29 +451,114 @@ def issuer_from_observation(
     )
 
 
-def stored_history_issuers(
+@dataclass(frozen=True)
+class CanonicalIssuers:
+    """Issuer ids resolved to their canonical entity (#1257).
+
+    ``staging.strategy_backtest_inputs`` holds each issuer under two id generations: the legacy
+    ``issuer:lei:`` id of the old live seeds and the entity UUID of the seeds since the identity
+    unification. Old rows never leave the append-only table. Readers use the canonical ids only.
+    """
+
+    #: One projection target per canonical entity, keyed by the entity UUID.
+    issuers: tuple[HistoryIssuer, ...]
+    #: Every id that is itself a canonical entity id, with or without resolved lineage.
+    canonical_ids: frozenset[str]
+    #: Each other id and the entity it names. Readers ignore its rows; the projector never writes it.
+    merged: Mapping[str, str]
+    #: Ids that name no entity, and the ids of an entity whose lineage names no CIK, ticker or branch.
+    unresolved: tuple[str, ...]
+
+
+def canonical_history_issuers(
     connection: psycopg.Connection[Any],
     issuer_ids: Sequence[str],
     *,
+    known_at: datetime,
     parser_version: str = PARSER_VERSION,
-    known_at: datetime | None = None,
+) -> CanonicalIssuers:
+    """The canonical projection targets of the given ids, resolved from stored lineage only.
+
+    Each id resolves to its entity through ``stored_entity_of``: it reads the aliases, never
+    mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the
+    newest financial-fact observation recorded under any of its ids, so an issuer captured only
+    under its legacy id still resolves, under its UUID.
+    """
+    if known_at.tzinfo is None or known_at.utcoffset() is None:
+        raise ValueError("known_at must carry a time zone")
+    as_of = known_at.astimezone(UTC).date()
+    ids_by_entity: dict[str, list[str]] = {}
+    unresolved: list[str] = []
+    for issuer_id in sorted(set(issuer_ids)):
+        named = stored_entity_of(connection, issuer_id, as_of=as_of, known_at=known_at)
+        if named is None:
+            unresolved.append(issuer_id)
+        else:
+            ids_by_entity.setdefault(str(named), []).append(issuer_id)
+    observations = latest_financial_observations(
+        connection,
+        {entity: sorted({entity, *ids}) for entity, ids in ids_by_entity.items()},
+        parser_version=parser_version,
+    )
+    issuers: list[HistoryIssuer] = []
+    for entity, ids in sorted(ids_by_entity.items()):
+        found = observations.get(entity)
+        issuer = None if found is None else issuer_from_observation(*found, connection=connection, known_at=known_at)
+        if issuer is None:
+            unresolved.extend(ids)
+        else:
+            issuers.append(dataclasses.replace(issuer, issuer_id=entity))
+    resolved = {issuer.issuer_id for issuer in issuers}
+    return CanonicalIssuers(
+        issuers=tuple(_with_predecessors(connection, issuers, ids_by_entity)),
+        canonical_ids=frozenset(entity for entity, ids in ids_by_entity.items() if entity in ids),
+        merged={issuer_id: entity for entity in resolved for issuer_id in ids_by_entity[entity] if issuer_id != entity},
+        unresolved=tuple(sorted(unresolved)),
+    )
+
+
+class ConflictingPredecessorError(ValueError):
+    """Two signed registry rows name different predecessor CIKs for one issuer."""
+
+
+def _with_predecessors(
+    connection: psycopg.Connection[Any], issuers: Sequence[HistoryIssuer], ids_by_entity: Mapping[str, Sequence[str]]
 ) -> list[HistoryIssuer]:
-    """The projection targets of the given issuers, resolved from stored capture lineage only."""
-    issuers = [
-        issuer
-        for payload, record_id in latest_financial_observations(connection, issuer_ids, parser_version=parser_version)
-        if (issuer := issuer_from_observation(payload, record_id, connection=connection, known_at=known_at))
-    ]
+    """Each issuer with the predecessor CIK that ``predecessor_ciks`` resolves for its listing.
+
+    The signed registry (``staging.issuer_cik_predecessors``) is keyed by the id it was written
+    under, and its rows predate the entity UUIDs: ExxonMobil's row names ``issuer:lei:``. So each
+    of the entity's ids is presented in turn, and a signed resolution under any of them wins.
+    """
     if not issuers:
         return []
-    predecessors = predecessor_ciks(
-        connection,
-        [issuer.listing_id for issuer in issuers],
-        {issuer.listing_id: issuer.issuer_id for issuer in issuers},
-    )
+    listings = [issuer.listing_id for issuer in issuers]
+    candidates = {
+        issuer.listing_id: sorted({issuer.issuer_id, *ids_by_entity.get(issuer.issuer_id, ())}) for issuer in issuers
+    }
+    found: dict[str, Any] = {}
+    signed: dict[str, dict[int, str]] = {}
+    for index in range(max(len(ids) for ids in candidates.values())):
+        presented = {listing: ids[index] for listing, ids in candidates.items() if index < len(ids)}
+        for listing, resolution in predecessor_ciks(connection, listings, presented).items():
+            if resolution.signed:
+                signed.setdefault(listing, {}).setdefault(int(resolution), presented[listing])
+            current = found.get(listing)
+            if current is None or (resolution.signed and not current.signed):
+                found[listing] = resolution
+    conflicts = {listing: named for listing, named in signed.items() if len(named) > 1}
+    if conflicts:
+        issuer_of = {issuer.listing_id: issuer.issuer_id for issuer in issuers}
+        raise ConflictingPredecessorError(
+            "signed predecessor rows disagree: "
+            + "; ".join(
+                f"{issuer_of[listing]}: " + ", ".join(f"CIK {cik} under {named[cik]}" for cik in sorted(named))
+                for listing, named in sorted(conflicts.items())
+            )
+        )
     resolved: list[HistoryIssuer] = []
     for issuer in issuers:
-        predecessor = predecessors.get(issuer.listing_id)
+        predecessor = found.get(issuer.listing_id)
         if predecessor is None or int(predecessor) == issuer.cik:
             resolved.append(issuer)
         else:
@@ -447,6 +588,7 @@ def project_issuer_rows(
     load_facts: FactsLoader,
     headcount_extractor: HeadcountExtractor,
     last_close: PriceReader,
+    split_events: SplitReader,
     ruleset: ConceptMappingRuleset,
 ) -> Projection:
     """The input rows of one issuer at each cutoff. Reads only. Writes nothing.
@@ -467,7 +609,10 @@ def project_issuer_rows(
         return build_bundle(facts, as_of, branch, raw_bytes=body, ruleset=ruleset)
 
     rows: list[HistoryRow] = []
-    no_outcome = undated = 0
+    no_outcome = undated = split_adjusted = 0
+    splits: tuple[SplitEvent, ...] | None = None
+    cover_concepts, statement_concepts = _share_count_concepts(ruleset)
+    bases = {COVER: 0, STATEMENT: 0, UNRECOGNISED: 0}
     for cutoff_at in cutoffs:
         as_of = cutoff_at.astimezone(UTC).date() - timedelta(days=1)
         item = _work_item(issuer, cutoff_at)
@@ -501,21 +646,27 @@ def project_issuer_rows(
             undated += len(expected) - len(projected)
         else:
             no_outcome += 1
-        for input_key, value, confidence, knowable_at, fiscal_period in projected:
-            rows.append(
-                _checked(
-                    HistoryRow(
-                        issuer.issuer_id,
-                        cutoff_at,
-                        input_key,
-                        Decimal(str(value)),
-                        confidence,
-                        knowable_at,
-                        fiscal_period,
-                    )
-                )
-            )
         bar = last_close(issuer.ticker, cutoff_at)
+        for input_key, value, confidence, knowable_at, fiscal_period in projected:
+            row = HistoryRow(
+                issuer.issuer_id, cutoff_at, input_key, Decimal(str(value)), confidence, knowable_at, fiscal_period
+            )
+            if input_key == _SHARES_KEY and fiscal_period is None and bar is not None:
+                if splits is None:
+                    splits = split_events(issuer.ticker)
+                basis = share_count_as_of(
+                    (payload.get("vintage") or {}).get(_SHARES_KEY),
+                    row.value,
+                    [stored[1] for stored in documents.values() if stored is not None],
+                    cover_concepts=cover_concepts,
+                    statement_concepts=statement_concepts,
+                    filed_fallback=row.knowable_at.astimezone(UTC).date(),
+                )
+                bases[basis.kind] += 1
+                on_basis = _on_close_basis(row, bar, splits, as_of=basis.as_of)
+                split_adjusted += on_basis is not row
+                row = on_basis
+            rows.append(_checked(row))
         if bar is not None:
             rows.append(
                 _checked(
@@ -524,7 +675,116 @@ def project_issuer_rows(
                     )
                 )
             )
-    return Projection(tuple(rows), no_outcome=no_outcome, undated=undated)
+    return Projection(
+        tuple(rows),
+        no_outcome=no_outcome,
+        undated=undated,
+        split_adjusted=split_adjusted,
+        share_basis_cover=bases[COVER],
+        share_basis_statement=bases[STATEMENT],
+        share_basis_unrecognised=bases[UNRECOGNISED],
+    )
+
+
+#: The ruleset fields whose concepts can produce the share count (``build_bundle``).
+_SHARE_COUNT_FIELDS = (_SHARES_KEY, "shares_outstanding_last_resort")
+#: How a share count was classed (``ShareBasis.kind``).
+COVER, STATEMENT, UNRECOGNISED = "cover", "statement", "unrecognised"
+
+
+class ShareBasis(NamedTuple):
+    """The date whose share basis a filed share count is on, and how the count was classed."""
+
+    as_of: date
+    kind: str
+
+
+def _share_count_concepts(ruleset: ConceptMappingRuleset) -> tuple[tuple[ConceptRef, ...], tuple[ConceptRef, ...]]:
+    """(cover concepts, statement concepts) of the share count. Cover is the ``dei`` (Document and
+    Entity Information) taxonomy; every other concept of the share-count fields is a statement figure."""
+    concepts = [
+        concept
+        for field in _SHARE_COUNT_FIELDS
+        if (mapping := ruleset.mapping_for(field)) is not None
+        for concept in mapping.concepts
+    ]
+    return (
+        tuple(concept for concept in concepts if concept.taxonomy == "dei"),
+        tuple(concept for concept in concepts if concept.taxonomy != "dei"),
+    )
+
+
+def _carries(
+    documents: Sequence[Mapping[str, Any]],
+    concepts: Sequence[ConceptRef],
+    *,
+    accession: str,
+    period_end: str,
+    value: Decimal,
+) -> bool:
+    """True when a stored entry of one of ``concepts`` has this accession, this period end and this value."""
+    for facts in documents:
+        for concept in concepts:
+            units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
+            for entries in units.values():
+                for item in entries:
+                    if item.get("accn") != accession or item.get("end") != period_end or item.get("val") is None:
+                        continue
+                    try:
+                        if Decimal(str(item["val"])) == value:
+                            return True
+                    except InvalidOperation:
+                        continue
+    return False
+
+
+def share_count_as_of(
+    entry: object,
+    value: Decimal,
+    documents: Sequence[Mapping[str, Any]],
+    *,
+    cover_concepts: Sequence[ConceptRef],
+    statement_concepts: Sequence[ConceptRef],
+    filed_fallback: date,
+) -> ShareBasis:
+    """The share basis of a filed share count, from the stored entry that carries it.
+
+    A cover-page count is a count as of its own date, its ``period_end``. A statement count (a
+    balance-sheet count or a weighted average) is restated for a split before its filing is
+    issued (SAB Topic 4C), so it is on the basis of the filing date. The vintage names the filing
+    and the period end, not the concept, so the stored document decides. Only an entry with the
+    same accession, the same period end AND the same value classifies the count: a 20-F can hold
+    a cover count and a restated balance-sheet count of one date under one accession.
+
+    A count that no stored entry carries is UNRECOGNISED. It falls back to its filing date, which
+    under-adjusts a cover count; the projector counts each case, so the summary shows how often.
+    """
+    if not isinstance(entry, Mapping) or not entry.get("filed"):
+        return ShareBasis(filed_fallback, UNRECOGNISED)
+    filed = date.fromisoformat(str(entry["filed"]))
+    accession, period_end = entry.get("accession"), entry.get("period_end")
+    if not accession or not period_end:
+        return ShareBasis(filed, UNRECOGNISED)
+    if _carries(documents, cover_concepts, accession=str(accession), period_end=str(period_end), value=value):
+        return ShareBasis(date.fromisoformat(str(period_end)), COVER)
+    if _carries(documents, statement_concepts, accession=str(accession), period_end=str(period_end), value=value):
+        return ShareBasis(filed, STATEMENT)
+    return ShareBasis(filed, UNRECOGNISED)
+
+
+def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent], *, as_of: date) -> HistoryRow:
+    """The share row on the share basis of ``bar``, or the row itself when no split lies between.
+
+    The filed count is on the basis of ``as_of`` (``share_count_as_of``). A split with an ex-date
+    after that date and on or before the close's session multiplies it. The product is knowable
+    once both the filing and the close are: the close's session is on or after the ex-date, and
+    before the cutoff date.
+    """
+    factor = split_factor_between(splits, after=as_of, through=bar.knowable_at.astimezone(UTC).date())
+    if factor == 1:
+        return shares
+    value = shares.value * Decimal(factor.numerator) / Decimal(factor.denominator)
+    return dataclasses.replace(shares, value=value, knowable_at=max(shares.knowable_at, bar.knowable_at))
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
@@ -596,6 +856,7 @@ def run_strategy_history(
     months: int = DEFAULT_MONTHS,
     headcount_extractor: HeadcountExtractor | None = None,
     last_close: PriceReader | None = None,
+    split_events: SplitReader | None = None,
     ruleset: ConceptMappingRuleset | None = None,
     schedule: QuarterlyCutoffSchedule | None = None,
 ) -> HistorySummary:
@@ -609,17 +870,33 @@ def run_strategy_history(
     cutoffs = history_cutoffs(tick, months, schedule if schedule is not None else load_strategy_definition().schedule)
     extractor = headcount_extractor if headcount_extractor is not None else PostgresHeadcountExtractor(connection)
     reader = last_close if last_close is not None else postgres_last_close(connection)
+    splits = (
+        split_events
+        if split_events is not None
+        else postgres_split_events(connection, [issuer.ticker for issuer in issuers])
+    )
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
-    inserted = already_present = no_outcome = undated = 0
+    inserted = already_present = no_outcome = undated = split_adjusted = 0
+    basis_cover = basis_statement = basis_unrecognised = 0
     for issuer in issuers:
         projection = project_issuer_rows(
-            issuer, cutoffs, load_facts=load_facts, headcount_extractor=extractor, last_close=reader, ruleset=rules
+            issuer,
+            cutoffs,
+            load_facts=load_facts,
+            headcount_extractor=extractor,
+            last_close=reader,
+            split_events=splits,
+            ruleset=rules,
         )
         skipped = _write_new_rows(connection, issuer, projection.rows)
         already_present += skipped
         inserted += len(projection.rows) - skipped
         no_outcome += projection.no_outcome
         undated += projection.undated
+        split_adjusted += projection.split_adjusted
+        basis_cover += projection.share_basis_cover
+        basis_statement += projection.share_basis_statement
+        basis_unrecognised += projection.share_basis_unrecognised
     return HistorySummary(
         issuers=len(issuers),
         cutoffs=len(cutoffs),
@@ -627,6 +904,10 @@ def run_strategy_history(
         already_present=already_present,
         no_outcome=no_outcome,
         undated=undated,
+        split_adjusted=split_adjusted,
+        share_basis_cover=basis_cover,
+        share_basis_statement=basis_statement,
+        share_basis_unrecognised=basis_unrecognised,
     )
 
 
@@ -639,23 +920,25 @@ def project_deployed_history(
 ) -> HistorySummary:
     """The deployed run: extend the history of every issuer the strategy already consumes.
 
-    The universe is the set of issuers that hold a row in ``staging.strategy_backtest_inputs``.
-    The run fails when it resolves no issuer or projects no row, so an empty run cannot report
-    success.
+    The universe is the canonical entities of the ids that hold a row in
+    ``staging.strategy_backtest_inputs`` (#1257). The table holds each issuer under a legacy id
+    and under its entity UUID, so the run resolves every id to its entity and projects one
+    history per entity, under the UUID. It never writes a row under a legacy id. The run fails
+    when it resolves no issuer or projects no row, so an empty run cannot report success.
     """
     issuer_ids = [
         row[0]
         for row in connection.execute("select distinct issuer_id from staging.strategy_backtest_inputs order by 1")
     ]
-    issuers = stored_history_issuers(connection, issuer_ids, known_at=tick)
-    if not issuers:
+    canonical = canonical_history_issuers(connection, issuer_ids, known_at=tick)
+    if not canonical.issuers:
         raise RuntimeError(
             f"no issuer to project: {len(issuer_ids)} issuers hold strategy inputs, none resolves from stored lineage"
         )
     summary = run_strategy_history(
         connection,
         tick=tick,
-        issuers=issuers,
+        issuers=list(canonical.issuers),
         months=months,
         load_facts=lambda cik: load_stored_company_facts(connection, cik, store=store),
     )
@@ -663,7 +946,4 @@ def project_deployed_history(
         raise RuntimeError(
             f"the projector produced no row for {summary.issuers} issuers over {summary.cutoffs} cutoffs"
         )
-    resolved = {issuer.issuer_id for issuer in issuers}
-    return dataclasses.replace(
-        summary, unresolved_issuers=tuple(issuer_id for issuer_id in issuer_ids if issuer_id not in resolved)
-    )
+    return dataclasses.replace(summary, unresolved_issuers=canonical.unresolved, merged_ids=len(canonical.merged))

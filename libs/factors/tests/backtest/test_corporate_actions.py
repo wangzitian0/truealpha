@@ -106,3 +106,25 @@ def test_an_unadjusted_session_after_the_split_adjusted_series_stops_the_run() -
 
     with pytest.raises(SplitDerivationError, match="cannot be derived"):
         derive_split_events("NVDA", trimmed)
+
+
+def test_the_split_factor_counts_splits_after_the_filing_through_the_close() -> None:
+    """#1257: a count filed on `after` meets a close of `through`; splits in between multiply it."""
+    from fractions import Fraction
+
+    from factors.backtest.corporate_actions import split_factor_between
+
+    events = (SplitEvent("X", date(2024, 2, 26), 3, 1), SplitEvent("X", date(2024, 6, 10), 10, 1))
+
+    assert split_factor_between(events, after=date(2024, 5, 29), through=date(2024, 6, 28)) == 10
+    assert split_factor_between(events, after=date(2024, 1, 31), through=date(2024, 6, 28)) == 30
+    assert split_factor_between(events, after=date(2024, 6, 10), through=date(2024, 6, 28)) == 1, (
+        "a split on the filing date is reflected in the filing"
+    )
+    assert split_factor_between(events, after=date(2024, 5, 29), through=date(2024, 6, 10)) == 10, (
+        "the close of the ex-date is on the new basis"
+    )
+    assert split_factor_between(events, after=date(2024, 5, 29), through=date(2024, 6, 7)) == 1
+    assert split_factor_between(
+        (SplitEvent("Y", date(2024, 3, 1), 1, 10),), after=date(2024, 1, 1), through=date(2024, 3, 1)
+    ) == Fraction(1, 10)
