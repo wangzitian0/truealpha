@@ -1,5 +1,5 @@
 const CONTRACT_SET = "truealpha.issue-58.exact-contracts.v1";
-const CONTRACT_NAMES = ["CaptureScope", "CaptureManifest", "SnapshotManifest", "ReleaseManifest"] as const;
+const CONTRACT_NAMES = ["SnapshotManifest", "ReleaseManifest"] as const;
 const MUTABLE_VERSION_ALIASES = new Set(["latest", "current", "default", "stable", "main", "head"]);
 
 export type ContractName = (typeof CONTRACT_NAMES)[number];
@@ -11,6 +11,7 @@ export interface Issue58SchemaBundle {
   contract_set: string;
   schema_sha256: Record<ContractName, string>;
   schemas: Record<ContractName, JsonObject>;
+  stable_id_pattern: string;
 }
 
 export interface Issue58FixtureBundle {
@@ -265,65 +266,6 @@ function objectArray(value: JsonObject, key: string, path: string): JsonObject[]
   return items as JsonObject[];
 }
 
-async function validateCaptureIdentities(scope: JsonObject, manifest: JsonObject): Promise<void> {
-  await assertIdentity(scope, "capture_scope_id", "content_sha256", "capture-scope");
-  const requirements = objectArray(scope, "requirements", "$.CaptureScope.requirements");
-  const requirementById = new Map(
-    requirements.map((requirement) => [requirement.capture_requirement_id, requirement]),
-  );
-  for (const requirement of requirements) {
-    await assertIdentity(requirement, "capture_requirement_id", "content_sha256", "capture-requirement");
-  }
-  await assertIdentity(manifest, "capture_manifest_id", "content_sha256", "capture-manifest");
-  for (const cell of objectArray(manifest, "cells", "$.CaptureManifest.cells")) {
-    const requirement = requirementById.get(cell.capture_requirement_id);
-    if (requirement === undefined) {
-      fail("$.CaptureManifest.cells[].capture_requirement_id", "unknown CaptureRequirement");
-    }
-    const evidenceRows = objectArray(cell, "evidence", "$.CaptureManifest.cells[].evidence");
-    if (cell.status === "complete" && evidenceRows.length === 0) {
-      fail("$.CaptureManifest.cells[].evidence", "complete cell is missing required evidence");
-    }
-    for (const evidence of evidenceRows) {
-      await assertIdentity(evidence, "evidence_id", "content_sha256", "capture-evidence");
-      if (
-        evidence.semantic_type_id !== requirement.semantic_type_id ||
-        evidence.semantic_type_version !== requirement.semantic_type_version
-      ) {
-        fail("$.CaptureManifest.cells[].evidence[].semantic_type_id", "CaptureRequirement semantic type mismatch");
-      }
-      const populatedFields = evidence.populated_fields;
-      const requiredFields = requirement.required_fields;
-      if (!Array.isArray(populatedFields) || !Array.isArray(requiredFields)) {
-        fail("$.CaptureManifest.cells[].evidence[].populated_fields", "missing required populated-fields evidence");
-      }
-      const populated = new Set(populatedFields);
-      const missingFields = requiredFields.filter((field) => !populated.has(field));
-      if (missingFields.length > 0) {
-        fail(
-          "$.CaptureManifest.cells[].evidence[].populated_fields",
-          `missing required fields: ${missingFields.join(", ")}`,
-        );
-      }
-      if (evidence.quality_status !== "pass") {
-        fail("$.CaptureManifest.cells[].evidence[].quality_status", "quality status is not pass");
-      }
-    }
-    await assertIdentity(cell, "capture_cell_id", "content_sha256", "capture-cell");
-  }
-  for (const [idField, hashField] of [
-    ["research_catalog_id", "research_catalog_sha256"],
-    ["applicability_catalog_id", "applicability_catalog_sha256"],
-    ["source_coverage_catalog_id", "source_coverage_catalog_sha256"],
-    ["slo_catalog_id", "slo_catalog_sha256"],
-    ["source_registry_id", "source_registry_sha256"],
-    ["semantic_type_registry_id", "semantic_type_registry_sha256"],
-  ]) {
-    assertReferencePair(scope, idField, hashField, false);
-    assertReferencePair(manifest, idField, hashField, false);
-  }
-}
-
 async function validateSnapshotIdentity(snapshot: JsonObject): Promise<void> {
   await assertIdentity(snapshot, "snapshot_id", "content_sha256", "snapshot");
   const request = nestedObject(snapshot, "request", "$.SnapshotManifest.request");
@@ -475,57 +417,19 @@ function assertSnapshotExtractionBindings(snapshot: JsonObject, release: JsonObj
 }
 
 function assertCrossContractBindings(contracts: Record<ContractName, JsonObject>): void {
-  const scope = contracts.CaptureScope;
-  const manifest = contracts.CaptureManifest;
   const snapshot = contracts.SnapshotManifest;
   const release = contracts.ReleaseManifest;
   const request = nestedObject(snapshot, "request", "$.SnapshotManifest.request");
   const registry = nestedObject(snapshot, "registry_snapshot", "$.SnapshotManifest.registry_snapshot");
 
-  assertSame(manifest.capture_scope_id, scope.capture_scope_id, "$.CaptureManifest.capture_scope_id");
-  assertSame(manifest.capture_scope_sha256, scope.content_sha256, "$.CaptureManifest.capture_scope_sha256");
-  assertSame(release.capture_scope_id, scope.capture_scope_id, "$.ReleaseManifest.capture_scope_id");
-  assertSame(release.capture_scope_sha256, scope.content_sha256, "$.ReleaseManifest.capture_scope_sha256");
-  assertSame(release.universe, scope.universe, "$.ReleaseManifest.universe");
-  assertSame(request.universe, scope.universe, "$.SnapshotManifest.request.universe");
-  assertSame(release.research_catalog_id, scope.research_catalog_id, "$.ReleaseManifest.research_catalog_id");
+  assertSame(release.universe, request.universe, "$.ReleaseManifest.universe");
   assertSame(release.registry_snapshot_id, registry.registry_snapshot_id, "$.ReleaseManifest.registry_snapshot_id");
   assertSame(release.registry_snapshot_sha256, registry.content_sha256, "$.ReleaseManifest.registry_snapshot_sha256");
-  assertSame(scope.source_registry_id, registry.source_registry_snapshot_id, "$.CaptureScope.source_registry_id");
-  assertSame(
-    scope.semantic_type_registry_id,
-    registry.semantic_type_registry_snapshot_id,
-    "$.CaptureScope.semantic_type_registry_id",
-  );
   assertSame(
     release.identifier_type_registry_id,
     registry.identifier_type_registry_snapshot_id,
     "$.ReleaseManifest.identifier_type_registry_id",
   );
-
-  const captureRequirements = new Map(
-    objectArray(scope, "requirements", "$.CaptureScope.requirements").map((requirement) => [
-      requirement.capture_requirement_id,
-      requirement,
-    ]),
-  );
-  for (const demand of objectArray(request, "demand_cells", "$.SnapshotManifest.request.demand_cells")) {
-    const captureRequirement = captureRequirements.get(demand.capture_requirement_id);
-    if (captureRequirement === undefined) {
-      fail("$.SnapshotManifest.request.demand_cells[].capture_requirement_id", "unknown CaptureRequirement");
-    }
-    assertSame(
-      demand.semantic_type_id,
-      captureRequirement.semantic_type_id,
-      "$.SnapshotManifest.request.demand_cells[].semantic_type_id",
-    );
-    assertSame(
-      demand.semantic_type_version,
-      captureRequirement.semantic_type_version,
-      "$.SnapshotManifest.request.demand_cells[].semantic_type_version",
-    );
-    assertSame(demand.domain, captureRequirement.domain, "$.SnapshotManifest.request.demand_cells[].domain");
-  }
   assertSnapshotExtractionBindings(snapshot, release);
 }
 
@@ -552,11 +456,12 @@ export async function validateIssue58Conformance(
 ): Promise<Record<ContractName, JsonObject>> {
   const schemaBundle = asObject(schemaInput, "$.schema_bundle");
   const fixtureBundle = asObject(fixtureInput, "$.fixture_bundle");
-  assertExactKeys(schemaBundle, ["contract_set", "schema_sha256", "schemas"], "$.schema_bundle");
+  assertExactKeys(schemaBundle, ["contract_set", "schema_sha256", "schemas", "stable_id_pattern"], "$.schema_bundle");
   assertExactKeys(fixtureBundle, ["contract_set", "schema_sha256", "contracts"], "$.fixture_bundle");
   if (schemaBundle.contract_set !== CONTRACT_SET || fixtureBundle.contract_set !== CONTRACT_SET) {
     fail("$.contract_set", "unknown conformance contract set");
   }
+  asString(schemaBundle.stable_id_pattern, "$.schema_bundle.stable_id_pattern");
 
   const schemas = parseContractMap(schemaBundle.schemas, "$.schema_bundle.schemas");
   const schemaHashes = parseHashMap(schemaBundle.schema_sha256, "$.schema_bundle.schema_sha256");
@@ -571,7 +476,6 @@ export async function validateIssue58Conformance(
     validateJsonSchema(schemas[name], contracts[name], `$.contracts.${name}`);
   }
 
-  await validateCaptureIdentities(contracts.CaptureScope, contracts.CaptureManifest);
   await validateSnapshotIdentity(contracts.SnapshotManifest);
   await validateReleaseIdentity(contracts.ReleaseManifest);
   assertCrossContractBindings(contracts);

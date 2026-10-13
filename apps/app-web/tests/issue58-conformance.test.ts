@@ -49,16 +49,6 @@ async function rehashIdentity(
   value[hashField] = digest;
 }
 
-async function rehashCaptureManifest(bundle: unknown): Promise<Record<string, unknown>> {
-  const manifest = nested(bundle, "contracts", "CaptureManifest");
-  const cell = firstObject(manifest, "cells");
-  const evidence = firstObject(cell, "evidence");
-  await rehashIdentity(evidence, "evidence_id", "content_sha256", "capture-evidence");
-  await rehashIdentity(cell, "capture_cell_id", "content_sha256", "capture-cell");
-  await rehashIdentity(manifest, "capture_manifest_id", "content_sha256", "capture-manifest");
-  return evidence;
-}
-
 async function rehashSnapshotManifest(bundle: unknown): Promise<Record<string, unknown>> {
   const snapshot = nested(bundle, "contracts", "SnapshotManifest");
   const record = firstObject(snapshot, "normalized_records");
@@ -111,11 +101,10 @@ async function expectRejected(label: string, action: () => Promise<unknown>, mes
 
 const schemaBundle = readJson(schemaUrl);
 const fixtureBundle = readJson(fixtureUrl);
-const contracts = await validateIssue58Conformance(schemaBundle, fixtureBundle);
-assert(contracts.CaptureScope.capture_scope_id === contracts.CaptureManifest.capture_scope_id, "scope binding drift");
+await validateIssue58Conformance(schemaBundle, fixtureBundle);
 
 const unknownTopLevel = structuredClone(fixtureBundle);
-nested(unknownTopLevel, "contracts", "CaptureScope").unexpected = "drift";
+nested(unknownTopLevel, "contracts", "SnapshotManifest").unexpected = "drift";
 await expectRejected(
   "unknown top-level DTO field",
   () => validateIssue58Conformance(schemaBundle, unknownTopLevel),
@@ -123,7 +112,7 @@ await expectRejected(
 );
 
 const unknownNested = structuredClone(fixtureBundle);
-nested(unknownNested, "contracts", "CaptureScope", "universe").unexpected = "drift";
+nested(unknownNested, "contracts", "SnapshotManifest", "request", "universe").unexpected = "drift";
 await expectRejected(
   "unknown nested DTO field",
   () => validateIssue58Conformance(schemaBundle, unknownNested),
@@ -144,36 +133,6 @@ await expectRejected(
   "stale template ID-only ReleaseManifest binding",
   () => validateIssue58Conformance(schemaBundle, staleTemplateIdShape),
   /unknown field approved_extraction_template_ids/,
-);
-
-const missingRequiredField = structuredClone(fixtureBundle);
-const missingFieldEvidence = nested(missingRequiredField, "contracts", "CaptureManifest");
-delete firstObject(firstObject(missingFieldEvidence, "cells"), "evidence").populated_fields;
-await rehashCaptureManifest(missingRequiredField);
-await expectRejected(
-  "missing required populated-fields evidence",
-  () => validateIssue58Conformance(schemaBundle, missingRequiredField),
-  /missing required populated-fields evidence/,
-);
-
-const wrongSemanticType = structuredClone(fixtureBundle);
-const wrongTypeEvidence = await rehashCaptureManifest(wrongSemanticType);
-wrongTypeEvidence.semantic_type_id = "semantic.other-type";
-await rehashCaptureManifest(wrongSemanticType);
-await expectRejected(
-  "wrong capture semantic type",
-  () => validateIssue58Conformance(schemaBundle, wrongSemanticType),
-  /semantic type mismatch/,
-);
-
-const failedQuality = structuredClone(fixtureBundle);
-const failedQualityEvidence = await rehashCaptureManifest(failedQuality);
-failedQualityEvidence.quality_status = "fail";
-await rehashCaptureManifest(failedQuality);
-await expectRejected(
-  "failed capture quality",
-  () => validateIssue58Conformance(schemaBundle, failedQuality),
-  /quality status is not pass/,
 );
 
 const missingInvocationBinding = structuredClone(fixtureBundle);
@@ -233,8 +192,6 @@ await expectRejected(
 );
 
 for (const [contractName, mutatedField] of [
-  ["CaptureScope", "owner"],
-  ["CaptureManifest", "partition_key"],
   ["SnapshotManifest", "resolver_version"],
   ["ReleaseManifest", "contract_version"],
 ] as const) {
@@ -248,7 +205,7 @@ for (const [contractName, mutatedField] of [
 }
 
 const driftedSchema = structuredClone(schemaBundle);
-nested(driftedSchema, "schemas", "CaptureScope").title = "DriftedCaptureScope";
+nested(driftedSchema, "schemas", "SnapshotManifest").title = "DriftedSnapshotManifest";
 await expectRejected(
   "schema drift",
   () => validateIssue58Conformance(driftedSchema, fixtureBundle),
@@ -258,8 +215,8 @@ await expectRejected(
 const substitutedRelease = structuredClone(fixtureBundle);
 const release = nested(substitutedRelease, "contracts", "ReleaseManifest");
 const substituteDigest = "0".repeat(64);
-release.capture_scope_id = `capture-scope:${substituteDigest}`;
-release.capture_scope_sha256 = substituteDigest;
+release.registry_snapshot_id = `registry-snapshot:${substituteDigest}`;
+release.registry_snapshot_sha256 = substituteDigest;
 const releasePayload = Object.fromEntries(
   Object.entries(release).filter(
     ([key]) => !["release_manifest_id", "manifest_sha256", "manifest_signature_ref"].includes(key),

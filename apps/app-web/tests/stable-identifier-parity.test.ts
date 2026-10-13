@@ -3,9 +3,9 @@
  * _stable_coordinate exactly" and nothing checked that. TypeScript cannot import the Python
  * constant directly, so this measures the two against each other through the one artifact both
  * sides already trust: the conformance bundle `export_issue58.py --check` keeps in sync with the
- * Python contracts in CI. `CaptureManifest.partition_key` is declared with the shared
- * `truealpha_contracts.common.STABLE_ID_PATTERN` (see #1010), so its emitted JSON Schema `pattern`
- * is that grammar, in Python's own regex spelling.
+ * Python contracts in CI. The bundle exports `truealpha_contracts.common.STABLE_ID_PATTERN` as
+ * `stable_id_pattern`, in Python's own regex spelling (#1238: the `CaptureManifest.partition_key`
+ * schema that carried it before was deleted with `capture_contracts`).
  *
  * Comparing regex SOURCE TEXT would fail on any harmless reordering or escaping difference
  * between Python's and JavaScript's regex dialects. Comparing BEHAVIOR — what each pattern
@@ -43,12 +43,8 @@ const PROBE_CHARACTERS = [...PRINTABLE_ASCII, "é", "Ａ", "٣"];
 
 function run(): void {
   const schemaBundle = object(readJson(schemaUrl), "$.schema_bundle");
-  const captureManifestSchema = object(schemaBundle.schemas, "$.schemas")["CaptureManifest"];
-  const partitionKeySchema = object(object(captureManifestSchema, "$.schemas.CaptureManifest").properties, "$.properties")[
-    "partition_key"
-  ];
-  const pythonPattern = object(partitionKeySchema, "$.properties.partition_key").pattern;
-  assert(typeof pythonPattern === "string", "CaptureManifest.partition_key must declare a string pattern");
+  const pythonPattern = schemaBundle.stable_id_pattern;
+  assert(typeof pythonPattern === "string", "the conformance bundle must declare a string stable_id_pattern");
 
   const pythonRegex = new RegExp(pythonPattern);
 
