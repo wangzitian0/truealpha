@@ -41,7 +41,7 @@ The repository cannot meet rule 16 today.
 
 ## Status update 2026-10-13 (#758)
 
-The nightly lane now backtests `large_model_value_v0`, not `topt_gppe_rank`. What changed against
+The nightly lane now backtests `large_model_value_v0`, not `topt_gppe_rank`. This is the state of
 each decision:
 
 - Decisions 1 and 2 no longer hold. The run prices returns on unadjusted bars
@@ -52,14 +52,26 @@ each decision:
   stops the run.
 - Decision 3 holds. No dividend source exists. `mart.backtest_runs.claim_ceiling` records
   `price_return_no_dividends`. The risk-free rate is the constant `RISK_FREE_RATE` of the live path.
+- Decision 4 holds. Market value at each cutoff is the unadjusted close times the as-filed share
+  count, from the projector's `last_close` and `shares_outstanding` inputs. The backtest reads
+  each price series by its `adjust` value.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
-  at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark of the
-  same universe on the same prices (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
-  `mart.backtest_valuations.benchmark_cum_nav`).
-- Decision 7 is done in part. `run_id` hashes the engine id, the definition hash, the input
-  snapshot, the issuer mapping, the price snapshot and the run parameters. The image git sha is
-  not in it: a rerun of a new image on the same data is the same run. A same `run_id` with a
-  different result stops the run, so an engine change must change `ENGINE_ID`.
+  at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
+  (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
+  `mart.backtest_valuations.benchmark_cum_nav`). Its universe is the issuers with inputs at the
+  first cutoff. A benchmark symbol without an open on the first fill session is bought at its next
+  open, and the run records the delay.
+- Decision 6 no longer holds. No frozen universe list exists. The universe is the issuers that hold
+  strategy inputs today, resolved through today's stored lineage. That is a survivorship bias, and
+  each run stores it in `metrics_payload.limitations`. The page and the MCP response show it.
+- Decision 7 is done. `run_id` hashes the engine label, the deployed code identity
+  (`GIT_COMMIT_SHA`, the value `/api/health` reports), the definition hash, the input snapshot,
+  the issuer mapping, the benchmark universe, the price snapshot and the run parameters. The input
+  snapshot comes from the same read as the decisions' inputs. A same `run_id` with a different
+  result stops the run.
 - Decision 8 holds. No holdout record exists, so no run is `validated`.
+- Decision 9 is done in part. #758 removed the split-adjusted returns basis without #1121: the
+  split events come from the two stored series, not from a corporate-action source. Dividends
+  still need a source, so the claim ceiling stays a price return.
 - The cutoffs are the definition's calendar quarter ends. The projector writes the inputs as of
   each quarter end. `first_cutoff_at` anchors the live schedule, not the historical window.
