@@ -54,7 +54,7 @@ try {
        $3::jsonb, now(), $2, 'unadjusted_open_explicit_splits', 'price_return_no_dividends',
        'equal_weight_buy_and_hold_first_cutoff_issuers', 0.0987, 0.15
      )`,
-    [runId, definitionSha, JSON.stringify({ limitations: LIMITATIONS })],
+    [runId, definitionSha, JSON.stringify({ limitations: LIMITATIONS, benchmark: { never_filled: ["T758E"] } })],
   );
   await admin.query(
     `insert into mart.backtest_valuations (
@@ -87,6 +87,10 @@ try {
     "the detail page must say which universe the benchmark holds and how a late symbol fills",
   );
   assert(!/vectorbt/i.test(detail), "the detail page names VectorBT");
+  assert(
+    detail.includes('data-benchmark-never-filled="T758E"') && detail.includes("held as cash for the whole run: T758E"),
+    "the detail page must show the benchmark symbols that were never bought",
+  );
   for (const item of LIMITATIONS) {
     assert(detail.includes(item), `the detail page lost the limitation: ${item}`);
   }

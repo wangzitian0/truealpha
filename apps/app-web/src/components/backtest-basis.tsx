@@ -45,6 +45,16 @@ export function BacktestLimitations({ run }: { run: BacktestRunRecord }) {
   );
 }
 
+/** Benchmark symbols that no open ever bought, so their weight stayed cash (#758). */
+export function benchmarkNeverFilled(run: BacktestRunRecord): string[] {
+  const benchmark = (run.metrics_payload ?? {})["benchmark"];
+  const stored =
+    benchmark !== null && typeof benchmark === "object"
+      ? (benchmark as Record<string, unknown>)["never_filled"]
+      : undefined;
+  return Array.isArray(stored) ? stored.map((item) => String(item)) : [];
+}
+
 function percent(value: number | null): string {
   return (value !== null ? formatPercentFromFraction(String(value)) : null) ?? "—";
 }
@@ -72,6 +82,11 @@ export function BacktestBasis({ run }: { run: BacktestRunRecord }) {
           <dd data-benchmark-rule={run.benchmark_rule ?? ""}>
             {describe(BENCHMARK_LABELS, run.benchmark_rule)} CAGR {percent(run.benchmark_cagr)}, max drawdown{" "}
             {percent(run.benchmark_max_dd)}.
+            {benchmarkNeverFilled(run).length > 0 && (
+              <span className="mt-1 block text-amber-400" data-benchmark-never-filled={benchmarkNeverFilled(run).join(",")}>
+                Never bought, so held as cash for the whole run: {benchmarkNeverFilled(run).join(", ")}.
+              </span>
+            )}
           </dd>
         </div>
         <div>

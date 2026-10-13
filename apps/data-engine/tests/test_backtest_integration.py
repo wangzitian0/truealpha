@@ -42,11 +42,13 @@ ISSUERS = {
         cik=758_000 + ord(name),
         operating_branch=OperatingBranch.NON_FINANCIAL,
     )
-    for name in ("a", "b", "c", "d")
+    # Issuer f holds no seeded inputs: only the writer in the issuer-list test lands one.
+    for name in ("a", "b", "c", "d", "e", "f")
 }
 #: The last close each issuer reports at each cutoff: 1 or 2 is cheap (selected), 1000 is above its band.
 LAST_CLOSE = {
-    Q1: {"a": "1", "b": "2", "c": "1000"},
+    # Issuer e holds inputs at Q1 only, and its ticker T758E never has a bar.
+    Q1: {"a": "1", "b": "2", "c": "1000", "e": "1000"},
     # Issuer d holds inputs from Q2 only: it is in the strategy's universe, not in the benchmark's.
     Q2: {"a": "1", "b": "2", "c": "1000", "d": "1000"},
     Q3: {"a": "1000", "b": "2", "c": "1", "d": "1000"},
@@ -312,12 +314,12 @@ def test_the_benchmark_holds_the_first_cutoff_issuers_and_records_a_late_fill(se
     payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
 
     benchmark = payload["benchmark"]
-    assert benchmark["universe"] == ["T758A", "T758B", "T758C"]
+    assert benchmark["universe"] == ["T758A", "T758B", "T758C", "T758E"]
     assert benchmark["deferred_fills"] == [
         {"symbol": "T758C", "ordered_session": "2024-04-01", "filled_session": "2024-04-02"}
     ]
-    assert benchmark["never_filled"] == []
-    assert payload["binding"]["benchmark_universe"] == ["T758A", "T758B", "T758C"]
+    assert benchmark["never_filled"] == ["T758E"]
+    assert payload["binding"]["benchmark_universe"] == ["T758A", "T758B", "T758C", "T758E"]
 
 
 def test_the_run_id_binds_the_deployed_code_identity(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,6 +370,77 @@ def test_the_run_stores_its_limitations(seeded) -> None:
 
     payload = _run_row(seeded["connection"], _run_op()["run_id"])["metrics_payload"]
 
-    assert payload["limitations"] == list(LIMITATIONS)
+    assert payload["limitations"][: len(LIMITATIONS)] == list(LIMITATIONS)
+    (extra,) = payload["limitations"][len(LIMITATIONS) :]
+    assert "T758E" in extra and "stayed cash for the whole run" in extra, (
+        "round-2 audit item 3: a benchmark symbol that never opens must be a stated limitation"
+    )
     assert any("vintage" in item for item in payload["limitations"])
     assert any("exchange calendar" in item for item in payload["limitations"])
+
+
+@pytest.mark.parametrize("app_env", ["staging", "production", "prod"])
+@pytest.mark.parametrize("sha", ["unknown", ""])
+def test_a_deployed_environment_without_a_code_identity_refuses_the_run(
+    seeded, monkeypatch: pytest.MonkeyPatch, app_env: str, sha: str
+) -> None:
+    """Round-2 audit item 1: GIT_COMMIT_SHA defaults to "unknown". Two code versions would then
+    share one run_id in staging or production, so the run fails and persists nothing."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "git_commit_sha", sha)
+    connection = seeded["connection"]
+    before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
+
+    with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA"):
+        _run_op()
+
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone()[0] == before
+    assert seeded["verdicts"][-1][0] is False
+
+
+@pytest.mark.parametrize("app_env", ["dev", "test"])
+def test_a_local_environment_without_a_code_identity_still_runs(
+    seeded, monkeypatch: pytest.MonkeyPatch, app_env: str
+) -> None:
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "git_commit_sha", "unknown")
+
+    metadata = _run_op()
+
+    binding = _run_row(seeded["connection"], metadata["run_id"])["metrics_payload"]["binding"]
+    assert binding["code_git_commit_sha"] == "unknown"
+
+
+def test_the_issuer_list_comes_from_the_same_read_as_the_inputs(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round-2 audit item 2: a writer that lands a new issuer f at Q1 just before the input read.
+
+    Red when the issuer list is read in a separate, earlier query: f is then in the inputs but not
+    in the issuer list, so lineage is never asked for it.
+    """
+    connection = seeded["connection"]
+    gateway_type = datahub_backtest.StrategyBacktestGateway
+    real_read = gateway_type.issuer_inputs_with_snapshot
+    landed: list[bool] = []
+
+    def writer_lands_first(self, cutoff_at):
+        if not landed:
+            _seed_inputs(connection, {Q1: {"f": "1000"}})
+            landed.append(True)
+        return real_read(self, cutoff_at)
+
+    asked: list[str] = []
+
+    def lineage(_connection, ids, **_kwargs):
+        asked.extend(ids)
+        return [issuer for issuer in ISSUERS.values() if issuer.issuer_id in ids]
+
+    monkeypatch.setattr(gateway_type, "issuer_inputs_with_snapshot", writer_lands_first)
+    monkeypatch.setattr(datahub_backtest, "stored_history_issuers", lineage)
+    payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
+
+    assert ISSUERS["f"].issuer_id in asked
+    assert "T758F" in payload["benchmark"]["universe"], "f holds inputs at Q1 in the read the run used"

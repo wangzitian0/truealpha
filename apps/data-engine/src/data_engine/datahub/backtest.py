@@ -16,10 +16,14 @@ One path, from staging to mart:
    gives the split events (``factors.backtest.corporate_actions``).
 4. Simulation. ``factors.backtest.engine`` with the definition's execution, transaction-cost,
    total-return and sizing rules as its only parameters. The benchmark is an equal weight of the
-   same universe, bought at the first fill and held, on the same prices and costs.
-5. Persistence. ``run_id`` is the content hash of the engine id, the definition hash, the input
-   snapshot, the issuer mapping, the price snapshot and the run parameters. A rerun on the same
-   data writes nothing. The same ``run_id`` with a different result stops the run.
+   issuers with inputs at the first cutoff, bought at the first fill session open and held, on the
+   same prices and costs. A benchmark symbol without an open on that session is bought at its next
+   open. A symbol that never opens stays cash, and the run's limitations name it.
+5. Persistence. ``run_id`` is the content hash of the engine label, the deployed code identity
+   (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the benchmark
+   universe, the price snapshot and the run parameters. A rerun of one release on the same data
+   writes nothing. The same ``run_id`` with a different result stops the run. In staging and
+   production, a run without a code identity stops before it writes.
 
 No dividend source exists, so each run is a price return. The run records that on
 ``mart.backtest_runs.claim_ceiling``.
@@ -89,6 +93,29 @@ LIMITATIONS = (
     "A session is any date with a bar of any universe symbol. No exchange calendar is applied.",
     "An input is admitted only when it is knowable before the cutoff's calendar date.",
 )
+
+
+#: The environments whose nightly schedule runs by default (`lanes.backtest` reads this tuple).
+#: A run there must carry the deployed code identity.
+DEPLOYED_ENVIRONMENTS = ("production", "prod", "staging")
+#: The value `GIT_COMMIT_SHA` takes when the deployment injected none (truealpha_runtime config).
+_NO_CODE_IDENTITY = ("", "unknown")
+
+
+def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
+    """The code identity a run binds. Raise in staging or production when the deployment set none.
+
+    `GIT_COMMIT_SHA` defaults to "unknown". Two releases on the same data would then share one
+    run_id, and the second would be refused as a non-deterministic result or hide the first.
+    Local and test environments keep "unknown": they publish nothing.
+    """
+    sha = (git_commit_sha or "").strip()
+    if app_env.strip().lower() in DEPLOYED_ENVIRONMENTS and sha.lower() in _NO_CODE_IDENTITY:
+        raise RuntimeError(
+            f"the backtest refuses to run in {app_env!r} without a code identity: GIT_COMMIT_SHA is "
+            f"{git_commit_sha!r}; the deployment must inject the release ref"
+        )
+    return sha
 
 
 class BacktestPending(RuntimeError):
@@ -271,19 +298,22 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     """
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
+    code_identity = deployed_code_identity(settings.app_env, settings.git_commit_sha)
     definition = load_strategy_definition()
     rules = execution_rules(definition)
     cutoffs = schedule_cutoffs(connection, definition.schedule)
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
-    issuer_ids = [
-        row[0]
-        for row in connection.execute(
-            "select distinct issuer_id from staging.strategy_backtest_inputs where cutoff_at = any(%s) order by 1",
-            (cutoffs,),
-        ).fetchall()
-    ]
+    # Each cutoff's inputs and their snapshot id come from ONE read, before any decision, so
+    # run_id describes exactly the inputs the decisions used. The issuer list comes from it too.
+    gateway = StrategyBacktestGateway(connection)
+    inputs_by_cutoff: dict[datetime, list[IssuerInput]] = {}
+    snapshot_ids: list[str] = []
+    for cutoff in cutoffs:
+        inputs_by_cutoff[cutoff], snapshot_id = gateway.issuer_inputs_with_snapshot(cutoff)
+        snapshot_ids.append(snapshot_id)
+    issuer_ids = sorted({item.issuer_id for inputs in inputs_by_cutoff.values() for item in inputs})
     resolved = stored_history_issuers(connection, issuer_ids, known_at=tick)
     if not resolved:
         raise RuntimeError(f"no stored lineage resolves any of the {len(issuer_ids)} issuers with quarter-end inputs")
@@ -292,14 +322,6 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     if len(set(tickers)) != len(tickers):
         raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
 
-    # Each cutoff's inputs and their snapshot id come from ONE read, before any decision, so
-    # run_id describes exactly the inputs the decisions used.
-    gateway = StrategyBacktestGateway(connection)
-    inputs_by_cutoff: dict[datetime, list[IssuerInput]] = {}
-    snapshot_ids: list[str] = []
-    for cutoff in cutoffs:
-        inputs_by_cutoff[cutoff], snapshot_id = gateway.issuer_inputs_with_snapshot(cutoff)
-        snapshot_ids.append(snapshot_id)
     decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, risk_free_rate=RISK_FREE_RATE)
     if not any(decision.weights for decision in decisions):
         outcomes: dict[str, int] = {}
@@ -345,7 +367,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         "engine_id": ENGINE_ID,
         # The deployed code identity: the release ref the deployment injects (GIT_COMMIT_SHA),
         # the value /api/health reports as data_engine_git_sha. ENGINE_ID is only a label.
-        "code_git_commit_sha": settings.git_commit_sha,
+        "code_git_commit_sha": code_identity,
         "strategy_key": definition.strategy_id,
         "definition_content_sha256": definition.content_sha256,
         "cutoffs": [cutoff.isoformat() for cutoff in cutoffs],
@@ -407,6 +429,26 @@ class BacktestRecord:
     result_sha256: str
 
 
+def benchmark_never_filled(benchmark: Simulation) -> tuple[str, ...]:
+    """Benchmark symbols ordered at the first fill that no later open bought."""
+    if not benchmark.fills:
+        return ()
+    late = {item.symbol for item in benchmark.deferred_fills}
+    return tuple(sorted(set(benchmark.fills[0].unfilled_symbols) - late))
+
+
+def run_limitations(never_filled: Sequence[str]) -> tuple[str, ...]:
+    """The limitations stored with one run: the standing ones and those of this run's data."""
+    if not never_filled:
+        return LIMITATIONS
+    return (
+        *LIMITATIONS,
+        "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole run: "
+        + ", ".join(never_filled)
+        + ".",
+    )
+
+
 def _decimal_map(value: Performance) -> dict[str, str | None]:
     return {key: None if item is None else str(item) for key, item in value.__dict__.items()}
 
@@ -460,6 +502,7 @@ def _record(
     benchmark_universe: Sequence[str],
     cost_basis_points: Decimal,
 ) -> BacktestRecord:
+    never_filled = benchmark_never_filled(benchmark)
     benchmark_by_session = {item.session: item for item in benchmark.valuations}
     valuations = _valuation_rows(month_end_valuations(strategy.valuations), benchmark_by_session, "1M")
     valuations += _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
@@ -516,11 +559,7 @@ def _record(
                 }
                 for item in benchmark.deferred_fills
             ],
-            "never_filled": sorted(
-                set(benchmark.fills[0].unfilled_symbols) - {item.symbol for item in benchmark.deferred_fills}
-            )
-            if benchmark.fills
-            else [],
+            "never_filled": list(never_filled),
             **_decimal_map(benchmark_performance),
         },
         "turnover_monthly": str(turnover_monthly),
@@ -541,7 +580,7 @@ def _record(
             for item in strategy.splits_applied
         ],
         "unresolved_issuers": list(unresolved),
-        "limitations": list(LIMITATIONS),
+        "limitations": list(run_limitations(never_filled)),
     }
     symbols = sorted(book.bars)
     return BacktestRecord(
@@ -651,11 +690,15 @@ __all__ = [
     "BacktestPending",
     "BacktestRecord",
     "CutoffDecision",
+    "DEPLOYED_ENVIRONMENTS",
+    "benchmark_never_filled",
     "decide",
+    "deployed_code_identity",
     "load_daily_series",
     "persist_backtest_run",
     "price_book",
     "price_snapshot_sha256",
     "run_core_strategy_backtest",
+    "run_limitations",
     "schedule_cutoffs",
 ]

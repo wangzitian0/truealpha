@@ -13,7 +13,9 @@ The schedule runs in production and in staging, so staging evidence exists befor
 staging TOPT tick (22:45 UTC, ``lanes.capture.live_topt_cron``).
 
 Manual replay: launch the job from the Dagster UI launchpad, or through GraphQL, with the run
-config below. A rerun on the same data writes nothing.
+config below. A rerun of one release on the same data writes nothing. A new release on the same
+data writes a new run, because run_id binds the deployed code identity (GIT_COMMIT_SHA). In staging
+and production a run without that identity fails before it writes.
 
     ops:
       run_nightly_backtest_op:
@@ -25,15 +27,16 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.backtest import BacktestPending, run_core_strategy_backtest
+from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
 # Weekdays 21:30 UTC: 15 minutes after market_data_refresh_pipeline (21:15 UTC), 75 minutes
 # before the staging TOPT tick (22:45 UTC).
 BACKTEST_CRON = "30 21 * * 1-5"
-#: The environments whose schedule runs by default. Elsewhere the job runs only by hand.
-SCHEDULED_ENVIRONMENTS = ("production", "prod", "staging")
+#: The environments whose schedule runs by default. Elsewhere the job runs only by hand. The same
+#: tuple decides where a run must carry a code identity (`datahub.backtest.deployed_code_identity`).
+SCHEDULED_ENVIRONMENTS = DEPLOYED_ENVIRONMENTS
 
 NIGHTLY_BACKTEST_VERDICT = "nightly_backtest"
 NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
