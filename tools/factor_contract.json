@@ -23,7 +23,9 @@
       "availability_status",
       "source_evidence_status",
       "factor_validation_status",
-      "labor_efficiency_metric"
+      "labor_efficiency_metric",
+      "current_price_to_gross_profit",
+      "target_price_to_gross_profit"
     ],
     "staging.strategy_backtest_inputs": [
       "id",
@@ -97,6 +99,18 @@
       "module_path": "libs/factors/src/factors/base/theme_purity.py",
       "signature": "(segments: Sequence[ThemeSegment], *, entity_id: str, theme: str, as_of: datetime, consolidated_revenue: Decimal | None, partition_residual: Decimal = _ZERO, confidence: Decimal = _ZERO, minimum_classified_share: Decimal = _ZERO) -> ThemePurity"
     },
+    "price_to_gross_profit": {
+      "function": "price_to_gross_profit",
+      "kind": "feeder",
+      "module": 7,
+      "module_path": "libs/factors/src/factors/base/price_to_gross_profit.py",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult",
+      "inputs": [
+        "price",
+        "shares_outstanding",
+        "gross_profit"
+      ]
+    },
     "price_to_sales": {
       "function": "price_to_sales",
       "kind": "feeder",
@@ -121,7 +135,7 @@
       "kind": "composite",
       "module": 7,
       "module_path": "libs/factors/src/factors/composite/three_tier_valuation.py",
-      "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: ThreeTierValuationDefinition, gross_margin: Decimal | None = None) -> FactorResult"
+      "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: LargeModelValueV0Definition, gross_margin: Decimal | None) -> FactorResult"
     }
   }
 }
