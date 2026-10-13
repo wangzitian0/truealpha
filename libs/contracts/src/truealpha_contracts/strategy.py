@@ -526,8 +526,8 @@ class StrategyEngineBinding(_StrictFrozenModel):
     """Binds one exact strategy definition to one exact engine identity.
 
     The operator set is no longer a separately versioned artifact: the Polars
-    AST's node types ship inside ``truealpha_contracts`` and its compiler inside
-    ``factors.expressions``, so ``adapter_id`` plus
+    AST's node types ship inside ``truealpha_contracts`` and its compiler is a
+    test-time oracle in ``libs/factors/tests/support/expression_oracle`` (#758), so ``adapter_id`` plus
     ``adapter_implementation_sha256`` already pin which operator semantics ran.
     The previous engine's ``operator_registry_id``/``operator_registry_sha256``
     pair pointed at a separate registry artifact that #969 deletes; carrying its

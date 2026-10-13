@@ -6,13 +6,18 @@ form (`market cap / net income`, recency-weighted) and these tests never touched
 there is one function and this exercises it.
 """
 
+import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import polars as pl
 import pytest
 from factors.base.peg import peg
 from factors.types import Fact, GrowthConvention, UnitFamily
+
+# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
 _ENTITY = "company:cik:1045810"
@@ -203,8 +208,8 @@ def test_the_polars_expression_reproduces_the_decimal_peg() -> None:
     since it landed; module 1 shipped without one, and until #969 both were skipped in
     ci-python behind the previous engine's optional import. This one executes.
     """
+    from expression_oracle.compiler import compile_expression
     from factors.base.peg import PEG_EXPRESSION_DEFINITION
-    from factors.expressions.compiler import compile_expression
 
     native = _call(_inputs(*_STEADY))
     assert native.value is not None, native.flags

@@ -1,112 +1,93 @@
-"""Nightly backtest simulation and mart persistence lane (#758, Milestone M3).
+"""The nightly backtest of the core strategy, ``large_model_value_v0`` (#758, Milestone M3).
 
-This lane runs on weekdays at 21:30 UTC, 15 minutes after market data refresh.
-It loads monthly and daily market prices and universe eligibility masks.
-It compiles the factor panel and calculates Top-K Dropout target weights.
-It simulates portfolio performance and writes backtest runs, valuations, and trades to mart tables.
-It records a nightly verdict in mart.nightly_verdicts.
+One op runs ``datahub.backtest.run_core_strategy_backtest``. It evaluates the strategy with
+``strategy_evaluator.evaluate_cutoff`` at each calendar quarter end that holds point-in-time
+inputs, fills each target at the next session's unadjusted open with the definition's cost,
+applies the split events once, and writes ``mart.backtest_runs``, ``mart.backtest_valuations``
+and ``mart.backtest_trades``. It records the nightly verdict ``nightly_backtest``: green when a
+run is written or already exists, pending when this environment holds no quarter-end inputs or
+no bars yet, red on any failure.
+
+The schedule runs in production and in staging, so staging evidence exists before production.
+21:30 UTC on weekdays is after the production market data refresh (21:15 UTC) and before the
+staging TOPT tick (22:45 UTC, ``lanes.capture.live_topt_cron``).
+
+Manual replay: launch the job from the Dagster UI launchpad, or through GraphQL, with the run
+config below. A rerun of one release on the same data writes nothing. A new release on the same
+data writes a new run, because run_id binds the deployed code identity (GIT_COMMIT_SHA). In staging
+and production a run without that identity fails before it writes.
+
+    ops:
+      run_nightly_backtest_op:
+        config:
+          executed_at: "2026-10-12T21:30:00+00:00"
 """
 
 import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.backtest import run_backtest
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS, SPLIT_ADJUSTED
-from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
+from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
+from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
-# Weekdays 21:30 UTC: 15 minutes after market_data_refresh_pipeline (21:15 UTC).
+# Weekdays 21:30 UTC: 15 minutes after market_data_refresh_pipeline (21:15 UTC), 75 minutes
+# before the staging TOPT tick (22:45 UTC).
 BACKTEST_CRON = "30 21 * * 1-5"
+#: The environments whose schedule runs by default. Elsewhere the job runs only by hand. The same
+#: tuple decides where a run must carry a code identity (`datahub.backtest.deployed_code_identity`).
+SCHEDULED_ENVIRONMENTS = DEPLOYED_ENVIRONMENTS
 
 NIGHTLY_BACKTEST_VERDICT = "nightly_backtest"
 NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
 
 
 class NightlyBacktestConfig(dg.Config):
-    """Configuration for nightly backtest execution."""
+    """`executed_at` is the tick time (ISO 8601 with a time zone), never the wall clock."""
 
-    strategy_key: str = "topt_gppe_rank"
-    strategy_version: str = "v1"
-    universe_id: str = "topt"
-    factor_column: str = "gppe"
-    top_k: int = 5
-    dropout_k: int = 2
+    executed_at: str
+
+
+def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
+    """RUNNING in production and staging, STOPPED in any other environment."""
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if app_env.strip().lower() in SCHEDULED_ENVIRONMENTS
+        else dg.DefaultScheduleStatus.STOPPED
+    )
 
 
 @dg.op
 def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBacktestConfig) -> None:
-    """Execute nightly portfolio backtest and persist results to mart tables."""
+    """Backtest large_model_value_v0 over the quarter-end history and persist the run."""
+    tick = tick_from_config(config.executed_at)
     with verdict(
         NIGHTLY_BACKTEST_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
         with psycopg.connect(settings.database_url) as connection:
-            with connection.cursor() as cur:
-                cur.execute(
-                    """
-                    select 1 from staging.market_prices_monthly
-                    where symbol = any(%s) and adjust = %s
-                    limit 1
-                    """,
-                    (list(DEFAULT_TOPT_SYMBOLS), SPLIT_ADJUSTED),
-                )
-                has_prices = cur.fetchone() is not None
-
-            if not has_prices:
-                outcome.pending = True
-                outcome.summary = "pending: no monthly prices in staging.market_prices_monthly"
-                context.log.info("nightly_backtest: no monthly prices in staging; marking pending")
-                return
-
             try:
-                result = run_backtest(
-                    connection,
-                    strategy_key=config.strategy_key,
-                    strategy_version=config.strategy_version,
-                    universe_id=config.universe_id,
-                    symbols=DEFAULT_TOPT_SYMBOLS,
-                    factor_column=config.factor_column,
-                    top_k=config.top_k,
-                    dropout_k=config.dropout_k,
-                )
-            except ValueError as exc:
-                if "no fundamental factor rows available" in str(exc):
-                    outcome.pending = True
-                    outcome.summary = f"pending: no fundamental factor rows available for {config.factor_column}"
-                    context.log.info(f"nightly_backtest: {outcome.summary}")
-                    return
-                raise
-
+                result = run_core_strategy_backtest(connection, tick=tick)
+            except BacktestPending as pending:
+                connection.rollback()
+                outcome.pending = True
+                outcome.summary = f"pending: {pending}"
+                context.log.info(f"nightly_backtest: {outcome.summary}")
+                return
             connection.commit()
-
-            if result.status != "succeeded":
-                outcome.summary = f"failed: {result.error_message or 'backtest failed'}"
-                raise dg.Failure(f"backtest simulation failed: {result.error_message}")
-
-            if len(result.trades) == 0:
-                outcome.summary = f"failed: backtest produced 0 trades for {config.strategy_key}"
-                context.log.error(f"nightly_backtest: {outcome.summary}")
-                raise dg.Failure(outcome.summary)
-
-            summary_text = (
-                f"succeeded: {result.run_id[:25]} cagr={result.cagr_monthly:.4f} "
-                f"sharpe={result.sharpe_daily:.4f} max_dd={result.max_dd_daily:.4f}"
-            )
-            outcome.summary = summary_text
-            context.log.info(f"nightly_backtest: {summary_text}")
-            context.add_output_metadata(
-                {
-                    "run_id": result.run_id,
-                    "strategy_key": result.strategy_key,
-                    "cagr_monthly": float(result.cagr_monthly),
-                    "sharpe_daily": float(result.sharpe_daily),
-                    "max_dd_daily": float(result.max_dd_daily),
-                    "vol_daily": float(result.vol_daily),
-                    "turnover_monthly": float(result.turnover_monthly),
-                    "status": result.status,
-                    "trades_count": len(result.trades),
-                }
-            )
+        outcome.summary = result.summary
+        context.log.info(f"nightly_backtest: {result.summary}")
+        context.add_output_metadata(
+            {
+                "run_id": result.run_id,
+                "inserted": result.inserted,
+                "strategy_key": result.strategy_key,
+                "cutoffs": result.cutoffs,
+                "trades": result.trades,
+                "cagr": None if result.strategy.cagr is None else float(result.strategy.cagr),
+                "benchmark_cagr": None if result.benchmark.cagr is None else float(result.benchmark.cagr),
+                "max_drawdown": float(result.strategy.max_drawdown),
+            }
+        )
 
 
 @dg.job(name=BACKTEST_JOB_NAME)
@@ -118,18 +99,14 @@ def nightly_backtest_pipeline_job() -> None:
     job=nightly_backtest_pipeline_job,
     cron_schedule=BACKTEST_CRON,
     execution_timezone="UTC",
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if settings.app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    ),
+    default_status=schedule_status(settings.app_env),
 )
 def nightly_backtest_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()
     return dg.RunRequest(
         run_key=tick,
         tags={TICK_TAG: tick},
-        run_config={"ops": {"run_nightly_backtest_op": {"config": {}}}},
+        run_config={"ops": {"run_nightly_backtest_op": {"config": {"executed_at": tick}}}},
     )
 
 

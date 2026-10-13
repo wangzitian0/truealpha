@@ -25,7 +25,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
-from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.production_topt.composition import RISK_FREE_RATE, live_version_for, run_topt_pipeline
 from data_engine.datahub.production_topt.corroboration_audit import CorroborationTally, corroboration_tally
 from data_engine.datahub.production_topt.fund_consolidation import (
     materialize_fund_consolidation,
@@ -302,7 +302,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 connection,
                 cutoff=cutoff,
                 executed_at=cutoff,
-                risk_free_rate=Decimal("0.05"),
+                risk_free_rate=RISK_FREE_RATE,
                 capture_run_id=pipeline.run_id,
             )
             strategy = {

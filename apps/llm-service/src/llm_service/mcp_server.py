@@ -719,6 +719,16 @@ def _default_etf_profile_reader() -> EtfProfileReader:
     return PostgresEtfProfileReader(database_url=settings.database_url)
 
 
+def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
+    """The limitations the nightly lane stored with a run (#758), as their own response field.
+
+    A run written before #758 stores none, and the field is then an empty list.
+    """
+    payload = run.get("metrics_payload")
+    stored = payload.get("limitations") if isinstance(payload, dict) else None
+    return [str(item) for item in stored] if isinstance(stored, list) else []
+
+
 class PostgresBacktestReader:
     """Reads backtest runs, valuations, and trades from mart for MCP consumers."""
 
@@ -747,7 +757,11 @@ class PostgresBacktestReader:
                                    turnover_monthly::text as turnover_monthly,
                                    calmar_daily::text as calmar_daily,
                                    metrics_payload, error_message,
-                                   executed_at::text, created_at::text
+                                   executed_at::text, created_at::text,
+                                   definition_content_sha256, price_basis, claim_ceiling,
+                                   benchmark_rule,
+                                   benchmark_cagr::text as benchmark_cagr,
+                                   benchmark_max_dd::text as benchmark_max_dd
                             from mart.backtest_runs
                             where run_id = %s
                             limit 1
@@ -763,7 +777,8 @@ class PostgresBacktestReader:
                                        cum_nav::text as cum_nav,
                                        drawdown::text as drawdown,
                                        gross_exposure::text as gross_exposure,
-                                       cash_weight::text as cash_weight
+                                       cash_weight::text as cash_weight,
+                                       benchmark_cum_nav::text as benchmark_cum_nav
                                 from mart.backtest_valuations
                                 where run_id = %s
                                 order by valuation_date desc
@@ -801,7 +816,11 @@ class PostgresBacktestReader:
                                    turnover_monthly::text as turnover_monthly,
                                    calmar_daily::text as calmar_daily,
                                    metrics_payload, error_message,
-                                   executed_at::text, created_at::text
+                                   executed_at::text, created_at::text,
+                                   definition_content_sha256, price_basis, claim_ceiling,
+                                   benchmark_rule,
+                                   benchmark_cagr::text as benchmark_cagr,
+                                   benchmark_max_dd::text as benchmark_max_dd
                             from mart.backtest_runs
                         """
                         params: list[Any] = []
@@ -823,6 +842,8 @@ class PostgresBacktestReader:
                 "error": str(e),
             }
 
+        for run in runs:
+            run["limitations"] = backtest_run_limitations(run)
         return {
             "runs": runs,
             "valuations": valuations,
@@ -959,7 +980,8 @@ def build_mcp_server(
         name="governed_backtest",
         description=(
             "Read governed backtest execution runs, performance metrics (CAGR, Sharpe, MaxDD), "
-            "valuations and simulated trades from mart."
+            "valuations and simulated trades from mart. Each run states its price basis, its claim "
+            "ceiling (for example price return only, no dividends) and its benchmark."
         ),
     )
     def governed_backtest(request: BacktestToolRequest) -> dict[str, Any]:

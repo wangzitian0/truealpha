@@ -11,8 +11,8 @@ Provides:
 - Persistence to staging.universe_mask, keyed by (symbol, cutoff_date, resolution)
 
 A mask row's ABSENCE means "ineligible" (fail-closed) -- the caller side of that contract
-(`compile_factor_panel`/`compute_topk_dropout_weights` in the layer-2 adapter) is out of
-this module's scope; this module only ever WRITES a row for every (symbol, cutoff) pair it
+is out of this module's scope (its one reader, the top-k adapter, was deleted in #758, and
+no module reads the mask today); this module only ever WRITES a row for every (symbol, cutoff) pair it
 is asked to evaluate, so a caller reading "no row" as ineligible sees the true absence of a
 decision, never a decision this module made and declined to persist.
 

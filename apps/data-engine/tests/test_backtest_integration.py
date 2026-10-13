@@ -1,26 +1,64 @@
-"""Integration tests for backtest execution and persistence (#758, Milestone M3).
+"""#758: the deployed Dagster op backtests large_model_value_v0 on a real database.
 
-This module tests multi-asset price panels, dual-resolution masks, and fundamental factor joins.
+The op runs unchanged against a migrated database: real `staging.strategy_backtest_inputs`
+rows at three quarter ends, real unadjusted and split-adjusted daily bars (one held symbol
+splits 10-for-1), the real strategy definition, `evaluate_cutoff`, the simulation and the mart
+writes. One seam is replaced: `stored_history_issuers`, the issuer-to-ticker lineage, which needs
+a full capture chain and has its own tests in `test_strategy_history.py`.
+
+The op's connection is the test's connection with `commit` disabled, so every row rolls back.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import dagster as dg
 import psycopg
 import pytest
-from data_engine.datahub.backtest import _load_mask, _resolve_snapshot_hash, run_backtest
-from data_engine.datahub.market_prices import SPLIT_ADJUSTED
-from data_engine.lanes.backtest import NightlyBacktestConfig, run_nightly_backtest_op
+from data_engine.datahub import backtest as datahub_backtest
+from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, is_xnys_trading_day
+from data_engine.datahub.strategy_bridge import load_strategy_definition
+from data_engine.datahub.strategy_history import HistoryIssuer
+from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
+from factors.production_topt import OperatingBranch
+
+Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
+Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
+Q3 = datetime(2024, 9, 30, 23, 59, 59, tzinfo=UTC)
+SPLIT_DAY = date(2024, 6, 10)
+FIRST_SESSION, LAST_SESSION = date(2024, 3, 25), date(2024, 10, 11)
+TICK = "2024-10-14T21:30:00+00:00"
+ISSUERS = {
+    name: HistoryIssuer(
+        issuer_id=f"issuer:t758:{name}",
+        instrument_id=f"security:t758:{name}",
+        listing_id=f"listing:xnas:t758{name}",
+        ticker=f"T758{name.upper()}",
+        cik=758_000 + ord(name),
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    # Issuer f holds no seeded inputs: only the writer in the issuer-list test lands one.
+    for name in ("a", "b", "c", "d", "e", "f")
+}
+#: The last close each issuer reports at each cutoff: 1 or 2 is cheap (selected), 1000 is above its band.
+LAST_CLOSE = {
+    # Issuer e holds inputs at Q1 only, and its ticker T758E never has a bar.
+    Q1: {"a": "1", "b": "2", "c": "1000", "e": "1000"},
+    # Issuer d holds inputs from Q2 only: it is in the strategy's universe, not in the benchmark's.
+    Q2: {"a": "1", "b": "2", "c": "1000", "d": "1000"},
+    Q3: {"a": "1000", "b": "2", "c": "1", "d": "1000"},
+}
+#: T758C has no bar on the first fill session: the benchmark buys it at its next open.
+NO_BAR = {("T758C", date(2024, 4, 1))}
 
 
 @pytest.fixture
-def connection(monkeypatch: pytest.MonkeyPatch):
-    """Yield an isolated transaction connection for testing."""
+def connection():
     from truealpha_runtime.testing import guard_db_write
 
     url = guard_db_write()
@@ -30,391 +68,379 @@ def connection(monkeypatch: pytest.MonkeyPatch):
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
-    # Intercept commit so the test transaction stays strictly uncommitted and rolls back cleanly at teardown
-    monkeypatch.setattr(active, "commit", lambda: None)
     try:
         yield active
     finally:
-        try:
-            with active.cursor() as cur:
-                cur.execute("delete from staging.strategy_backtest_inputs where issuer_id in ('FUND_A', 'FUND_B')")
-                cur.execute(
-                    "delete from staging.market_prices_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
-                )
-                cur.execute(
-                    "delete from staging.market_universe_masks_monthly where symbol in ('FUND_A', 'FUND_B', 'OP_AAPL', 'OP_MSFT')"
-                )
-                active.commit()
-        except Exception:
-            active.rollback()
+        active.rollback()
         active.close()
 
 
-def _insert_fixture_data(conn: psycopg.Connection, symbols: list[str], dates: list[date]) -> None:
-    """Insert monthly price bars and dual-resolution masks."""
-    with conn.cursor() as cur:
-        for sym in symbols:
-            for d in dates:
-                cur.execute(
-                    """
-                    insert into staging.market_prices_monthly (
-                        symbol, trading_date, open, high, low, close, volume,
-                        source, adjust, transaction_time, confidence, raw_ref
-                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        sym,
-                        d,
-                        Decimal("100.0"),
-                        Decimal("110.0"),
-                        Decimal("90.0"),
-                        Decimal("100.0"),
-                        Decimal("50000"),
-                        "twelvedata",
-                        SPLIT_ADJUSTED,
-                        datetime(d.year, d.month, d.day, 21, 0, tzinfo=UTC),
-                        Decimal("0.85"),
-                        "test_ref",
-                    ),
+class _Borrowed:
+    """The op's `with psycopg.connect(...)` block, over the test's own transaction."""
+
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> psycopg.Connection:
+        return self._connection
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def _sessions() -> list[date]:
+    days = (FIRST_SESSION + timedelta(days=offset) for offset in range((LAST_SESSION - FIRST_SESSION).days + 1))
+    return [day for day in days if is_xnys_trading_day(day)]
+
+
+def _unadjusted(symbol: str, index: int, day: date) -> Decimal:
+    base = {"T758A": Decimal(1000), "T758B": Decimal(50), "T758C": Decimal(20), "T758D": Decimal(30)}[symbol]
+    price = base * (1 + Decimal("0.002") * index)
+    return price / 10 if symbol == "T758A" and day >= SPLIT_DAY else price
+
+
+def _seed_prices(connection: psycopg.Connection, *, shock: Decimal = Decimal(1)) -> None:
+    for symbol in ("T758A", "T758B", "T758C", "T758D"):
+        unadjusted, adjusted = [], []
+        for index, day in enumerate(_sessions()):
+            if (symbol, day) in NO_BAR:
+                continue
+            close = _unadjusted(symbol, index, day) * (shock if day == LAST_SESSION else 1)
+            open_ = close * Decimal("0.995")
+            unadjusted.append(PriceBarRecord(symbol, day, open_, close, open_, close, Decimal(1000)))
+            factor = Decimal(10) if symbol == "T758A" and day < SPLIT_DAY else Decimal(1)
+            adjusted.append(
+                PriceBarRecord(
+                    symbol, day, open_ / factor, close / factor, open_ / factor, close / factor, Decimal(1000)
                 )
-                # Insert 1D and 1M masks to verify dual-resolution filtering
-                cur.execute(
-                    """
-                    insert into staging.universe_mask (
-                        symbol, cutoff_date, resolution, eligible, reason_code
-                    ) values (%s, %s, %s, %s, %s)
-                    on conflict (symbol, cutoff_date, resolution) do update
-                    set eligible = excluded.eligible, reason_code = excluded.reason_code
-                    """,
-                    (sym, d, "1M", True, "ok"),
-                )
-                cur.execute(
-                    """
-                    insert into staging.universe_mask (
-                        symbol, cutoff_date, resolution, eligible, reason_code
-                    ) values (%s, %s, %s, %s, %s)
-                    on conflict (symbol, cutoff_date, resolution) do update
-                    set eligible = excluded.eligible, reason_code = excluded.reason_code
-                    """,
-                    (sym, d, "1D", True, "ok"),
-                )
-
-
-def test_load_mask_filters_by_resolution(connection: psycopg.Connection) -> None:
-    """_load_mask filters rows by resolution to prevent duplicate entries."""
-    symbols = ["MASK_SYM_A", "MASK_SYM_B"]
-    dates = [date(2023, 1, 31), date(2023, 2, 28)]
-    _insert_fixture_data(connection, symbols, dates)
-
-    # 1M mask returns exactly one row per symbol and date
-    mask_1m = _load_mask(connection, symbols, resolution="1M")
-    assert len(mask_1m) == len(symbols) * len(dates)
-
-    # 1D mask also returns exactly one row per symbol and date
-    mask_1d = _load_mask(connection, symbols, resolution="1D")
-    assert len(mask_1d) == len(symbols) * len(dates)
-
-
-def test_backtest_with_dual_resolution_masks(connection: psycopg.Connection) -> None:
-    """run_backtest executes cleanly without duplicate index errors when dual masks exist."""
-    symbols = ["AAPL", "MSFT", "NVDA"]
-    dates = [date(2023, 1, 31), date(2023, 2, 28), date(2023, 3, 31)]
-    _insert_fixture_data(connection, symbols, dates)
-
-    result = run_backtest(
-        connection,
-        strategy_key="demo_topk_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        symbols=symbols,
-        factor_column="close",
-        top_k=2,
-        dropout_k=1,
-    )
-
-    assert result.status == "succeeded"
-    assert result.strategy_key == "demo_topk_rank"
-    assert len(result.valuations_monthly) == len(dates)
-    assert result.metrics_payload["initial_cash"] == 10_000_000.0
-
-
-def test_backtest_snapshot_hash_forbids_default_snapshot(connection: psycopg.Connection) -> None:
-    """Snapshot hash resolution never returns default_snapshot per ADR A6 Decision 7."""
-    symbols = ["AAPL"]
-    dates = [date(2023, 1, 31)]
-    _insert_fixture_data(connection, symbols, dates)
-
-    result = run_backtest(
-        connection,
-        strategy_key="demo_topk_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        symbols=symbols,
-        factor_column="close",
-        top_k=1,
-        dropout_k=1,
-    )
-
-    assert "default_snapshot" not in result.run_id
-    assert "snapshot_unspecified" not in result.run_id
-    assert not result.run_id.endswith("default_snapshot")
-    assert not result.run_id.endswith("snapshot_unspecified")
-
-    # Explicit test of _resolve_snapshot_hash helper
-    import polars as pl
-
-    df = pl.DataFrame({"symbol": ["AAPL"], "date": [date(2023, 1, 31)], "close": [150.0]})
-    resolved = _resolve_snapshot_hash(connection, "topt", df)
-    assert resolved not in ("default_snapshot", "snapshot_unspecified")
-    assert resolved.startswith("snap-") or len(resolved) > 10
-
-    # ADR A6 Decision 7: passing sentinels must fail-fast with ValueError
-    with pytest.raises(ValueError, match="ADR A6"):
-        _resolve_snapshot_hash(connection, "topt", df, "default_snapshot")
-
-    with pytest.raises(ValueError, match="ADR A6"):
-        _resolve_snapshot_hash(connection, "topt", df, "snapshot_unspecified")
-
-
-def test_nightly_backtest_op_marks_pending_when_fundamental_factors_missing(
-    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The Dagster op marks pending when prices exist but fundamental factors are missing."""
-    symbols = ["AAPL", "MSFT"]
-    dates = [date(2023, 1, 31), date(2023, 2, 28)]
-    _insert_fixture_data(connection, symbols, dates)
-
-    class NonClosingConnection:
-        def __init__(self, conn: psycopg.Connection) -> None:
-            self._conn = conn
-
-        def __getattr__(self, name: str):
-            return getattr(self._conn, name)
-
-        def close(self) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
-
-    import data_engine.lanes.backtest as backtest_lane
-
-    monkeypatch.setattr(backtest_lane, "DEFAULT_TOPT_SYMBOLS", tuple(symbols))
-    proxy = NonClosingConnection(connection)
-    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: proxy)
-
-    context = dg.build_op_context(run_tags={TICK_TAG: "2026-10-12T21:30:00+00:00"})
-    config = NightlyBacktestConfig(
-        strategy_key="topt_gppe_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        factor_column="gppe",
-        top_k=2,
-        dropout_k=1,
-    )
-
-    # Execute op - mart.topt_gppe_results has 0 rows for AAPL/MSFT
-    run_nightly_backtest_op(context, config)
-
-    # Verify verdict row in database is pending, NOT green succeeded
-    with connection.cursor() as cur:
-        cur.execute(
-            """
-            select ok, summary from mart.nightly_verdicts
-            where check_name = 'nightly_backtest'
-            order by ran_at desc, recorded_at desc
-            limit 1
-            """
-        )
-        row = cur.fetchone()
-        assert row is not None
-        assert row[0] is None, f"Expected pending/None ok, got {row}"
-        assert "pending: no fundamental" in row[1]
-
-
-def test_backtest_with_fundamental_factors(connection: psycopg.Connection) -> None:
-    """run_backtest integrates fundamental factors and handles backward alignment."""
-    symbols = ["FUND_A", "FUND_B"]
-    dates = [date(2023, 3, 31), date(2023, 4, 28), date(2023, 5, 31)]
-    _insert_fixture_data(connection, symbols, dates)
-
-    # Insert fundamental inputs at quarter-end (2023-03-31)
-    with connection.cursor() as cur:
-        cur.execute("delete from staging.strategy_backtest_inputs where issuer_id = any(%s)", (symbols,))
-        for sym, gppe_val in [("FUND_A", 0.45), ("FUND_B", 0.35)]:
-            cur.execute(
-                """
-                insert into staging.strategy_backtest_inputs (
-                    input_key, issuer_id, cutoff_at, knowable_at, recorded_at,
-                    value, confidence, fiscal_period
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    "gppe",
-                    sym,
-                    datetime(2023, 3, 31, 23, 59, tzinfo=UTC),
-                    datetime(2023, 3, 31, 23, 59, tzinfo=UTC),
-                    datetime(2023, 3, 31, 23, 59, tzinfo=UTC),
-                    Decimal(str(gppe_val)),
-                    Decimal("0.9"),
-                    "2023Q1",
-                ),
             )
+        insert_market_prices_daily(connection, unadjusted, adjust="none")
+        insert_market_prices_daily(connection, adjusted, adjust="splits")
 
-    result = run_backtest(
-        connection,
-        strategy_key="topt_gppe_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        symbols=symbols,
-        factor_column="gppe",
-        top_k=1,
-        dropout_k=1,
+
+def _seed_inputs(connection: psycopg.Connection, last_close: dict[datetime, dict[str, str]]) -> None:
+    for cutoff, closes in last_close.items():
+        for name, close in closes.items():
+            values = {
+                "gross_profit": "10000000000",
+                "total_assets": "10000000000",
+                "headcount": "1000",
+                "revenue": "20000000000",
+                "shares_outstanding": "1000000000",
+                "last_close": close,
+            }
+            for key, value in values.items():
+                connection.execute(
+                    """
+                    insert into staging.strategy_backtest_inputs
+                        (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
+                    values (%s, %s, %s, %s, '0.90', %s, clock_timestamp())
+                    """,
+                    (ISSUERS[name].issuer_id, cutoff, key, value, cutoff - timedelta(days=2)),
+                )
+
+
+@pytest.fixture
+def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    connection.execute("delete from staging.strategy_backtest_inputs")
+    _seed_inputs(connection, LAST_CLOSE)
+    # A monthly and a live cutoff: the backtest evaluates schedule cutoffs only.
+    _seed_inputs(connection, {datetime(2024, 4, 1, tzinfo=UTC): LAST_CLOSE[Q1]})
+    _seed_prices(connection)
+    monkeypatch.setattr(connection, "commit", lambda: None)
+    monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
+    monkeypatch.setattr(
+        datahub_backtest,
+        "stored_history_issuers",
+        lambda _connection, ids, **_kwargs: [i for i in ISSUERS.values() if i.issuer_id in ids],
+    )
+    verdicts: list[tuple[bool | None, str]] = []
+    monkeypatch.setattr(
+        "data_engine.quality.nightly_verdicts.record",
+        lambda name, *, ran_at, ok, summary, run_id: verdicts.append((ok, summary)),
+    )
+    return {"connection": connection, "verdicts": verdicts}
+
+
+def _run_op() -> dict[str, Any]:
+    context = dg.build_op_context(run_tags={TICK_TAG: TICK})
+    lane.run_nightly_backtest_op(context, lane.NightlyBacktestConfig(executed_at=TICK))
+    return dict(context.get_output_metadata("result"))
+
+
+def _run_row(connection: psycopg.Connection, run_id: str) -> dict[str, Any]:
+    with connection.cursor(row_factory=psycopg.rows.dict_row) as cursor:
+        cursor.execute("select * from mart.backtest_runs where run_id = %s", (run_id,))
+        row = cursor.fetchone()
+    assert row is not None, run_id
+    return row
+
+
+def _trades(connection: psycopg.Connection, run_id: str) -> list[tuple]:
+    return connection.execute(
+        "select trade_date, symbol, side, shares, execution_price, trade_value, fee_paid from mart.backtest_trades "
+        "where run_id = %s order by trade_date, side desc, symbol",
+        (run_id,),
+    ).fetchall()
+
+
+def test_the_deployed_op_writes_a_large_model_value_v0_run_with_basis_ceiling_and_benchmark(seeded) -> None:
+    connection = seeded["connection"]
+    definition = load_strategy_definition()
+
+    metadata = _run_op()
+
+    run = _run_row(connection, metadata["run_id"])
+    assert run["strategy_key"] == "large_model_value_v0"
+    assert run["strategy_version"] == definition.definition_version
+    assert run["status"] == "succeeded"
+    assert run["definition_content_sha256"] == definition.content_sha256
+    assert run["price_basis"] == "unadjusted_open_explicit_splits"
+    assert run["claim_ceiling"] == "price_return_no_dividends"
+    assert run["benchmark_rule"] == "equal_weight_buy_and_hold_first_cutoff_issuers"
+    assert run["benchmark_cagr"] is not None and run["benchmark_max_dd"] is not None
+    assert (run["start_date"], run["end_date"]) == (date(2024, 4, 1), LAST_SESSION)
+    payload = run["metrics_payload"]
+    assert [entry["cutoff_at"] for entry in payload["cutoffs"]] == [Q1.isoformat(), Q2.isoformat(), Q3.isoformat()]
+    assert payload["binding"]["definition_content_sha256"] == definition.content_sha256
+    assert seeded["verdicts"][-1][0] is True
+
+    daily = connection.execute(
+        "select valuation_date, cum_nav, benchmark_cum_nav from mart.backtest_valuations "
+        "where run_id = %s and resolution = '1D' order by valuation_date",
+        (metadata["run_id"],),
+    ).fetchall()
+    assert [row[0] for row in daily] == [day for day in _sessions() if day >= date(2024, 4, 1)]
+    assert all(row[2] is not None for row in daily), "each session carries the benchmark NAV"
+
+
+def test_orders_fill_at_the_next_session_open_with_the_definition_cost(seeded) -> None:
+    connection = seeded["connection"]
+    metadata = _run_op()
+    trades = _trades(connection, metadata["run_id"])
+    opens = {
+        (row[0], row[1]): row[2]
+        for row in connection.execute(
+            "select symbol, trading_date, open from staging.market_prices_daily where adjust = 'none' and symbol like 'T758%%'"
+        ).fetchall()
+    }
+
+    # Q1 (Sunday 2024-03-31) fills Monday 2024-04-01; Q3 (Monday 2024-09-30) fills Tuesday 2024-10-01.
+    assert {(row[0], row[1], row[2]) for row in trades if row[0] == date(2024, 4, 1)} == {
+        (date(2024, 4, 1), "T758A", "BUY"),
+        (date(2024, 4, 1), "T758B", "BUY"),
+    }
+    assert {(row[1], row[2]) for row in trades if row[0] == date(2024, 10, 1)} >= {("T758A", "SELL"), ("T758C", "BUY")}
+    assert not [row for row in trades if row[0] == date(2024, 9, 30)], "the cutoff day's own session is not eligible"
+    for trade_date, symbol, _side, _shares, price, value, fee in trades:
+        assert price == opens[(symbol, trade_date)], "every fill uses the unadjusted open of its session"
+        # A full-spend buy carries the last-digit Decimal residual in its fee (cash ends at zero).
+        assert abs(fee - value * Decimal("0.0005")) <= value * Decimal("1e-20")
+
+
+def test_the_held_split_applies_once_and_keeps_the_nav_continuous(seeded) -> None:
+    connection = seeded["connection"]
+    metadata = _run_op()
+    run = _run_row(connection, metadata["run_id"])
+
+    applied = run["metrics_payload"]["splits_applied"]
+    assert [(item["symbol"], item["ex_date"], item["factor"]) for item in applied] == [("T758A", "2024-06-10", "10/1")]
+    nav = dict(
+        connection.execute(
+            "select valuation_date, cum_nav from mart.backtest_valuations where run_id = %s and resolution = '1D'",
+            (metadata["run_id"],),
+        ).fetchall()
+    )
+    assert Decimal("0.95") < nav[SPLIT_DAY] / nav[date(2024, 6, 7)] < Decimal("1.05")
+
+
+def test_a_rerun_on_the_same_data_writes_nothing_and_new_data_is_a_new_run(seeded) -> None:
+    connection = seeded["connection"]
+    first = _run_op()
+    trades = len(_trades(connection, first["run_id"]))
+
+    again = _run_op()
+    assert again["run_id"] == first["run_id"] and again["inserted"] is False
+    assert (
+        connection.execute("select count(*) from mart.backtest_runs where run_id = %s", (first["run_id"],)).fetchone()[
+            0
+        ]
+        == 1
+    )
+    assert len(_trades(connection, first["run_id"])) == trades
+
+    _seed_prices(connection, shock=Decimal("1.5"))
+    changed = _run_op()
+    assert changed["run_id"] != first["run_id"], "a new price vintage is new data"
+    assert changed["inserted"] is True
+
+
+def test_a_later_cutoff_input_changes_no_earlier_decision(seeded) -> None:
+    """No lookahead through the database: a new Q3 vintage changes Q3 only.
+
+    Red when the input read takes any cutoff other than its own, for example
+    `where cutoff_at >= %s`: the newest-knowable Q3 row then wins at Q1 and Q2.
+    """
+    connection = seeded["connection"]
+    first = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["cutoffs"]
+
+    _seed_inputs(connection, {Q3: {"b": "1000"}})
+    second = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["cutoffs"]
+
+    assert second[:2] == first[:2], "a Q3 input changed a Q1 or Q2 decision"
+    assert second[2]["weights"] != first[2]["weights"], "the Q3 change must take effect"
+
+
+def test_the_same_run_id_with_a_different_result_stops_the_run(seeded) -> None:
+    """The mart is append-only: a rerun never updates a run. A different result for the same
+    inputs means the engine changed without a new ENGINE_ID, and the run goes red."""
+    connection = seeded["connection"]
+    run_id = _run_op()["run_id"]
+    connection.execute(
+        "update mart.backtest_runs set metrics_payload = jsonb_set(metrics_payload, '{result_sha256}', '\"0\"') "
+        "where run_id = %s",
+        (run_id,),
     )
 
-    assert result.status == "succeeded"
-    assert result.strategy_key == "topt_gppe_rank"
-    assert len(result.valuations_monthly) == len(dates)
+    with pytest.raises(RuntimeError, match="different result"):
+        _run_op()
+    assert seeded["verdicts"][-1][0] is False
 
 
-def test_run_nightly_backtest_op_against_real_database(
-    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+def test_the_benchmark_holds_the_first_cutoff_issuers_and_records_a_late_fill(seeded) -> None:
+    """Audit finding 2: issuer d enters the inputs at Q2, so it is not in the benchmark. T758C has
+    no bar on 2024-04-01, so the benchmark buys it at its next open and records the delay."""
+    connection = seeded["connection"]
+    payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
+
+    benchmark = payload["benchmark"]
+    assert benchmark["universe"] == ["T758A", "T758B", "T758C", "T758E"]
+    assert benchmark["deferred_fills"] == [
+        {"symbol": "T758C", "ordered_session": "2024-04-01", "filled_session": "2024-04-02"}
+    ]
+    assert benchmark["never_filled"] == ["T758E"]
+    assert payload["binding"]["benchmark_universe"] == ["T758A", "T758B", "T758C", "T758E"]
+
+
+def test_the_run_id_binds_the_deployed_code_identity(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit finding 3: the same data under another release is another run."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.9.1")
+    first = _run_op()
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.9.2")
+    second = _run_op()
+
+    assert first["run_id"] != second["run_id"]
+    binding = _run_row(seeded["connection"], second["run_id"])["metrics_payload"]["binding"]
+    assert binding["code_git_commit_sha"] == "v0.9.2"
+    assert binding["engine_id"].startswith("factors.backtest.engine:")
+
+
+def test_the_input_snapshot_describes_the_rows_the_decisions_read(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit finding 10: a writer that lands a Q3 row after the decisions must not change run_id.
+
+    Red when the snapshot is read after the decisions: it then hashes a row no decision used.
+    """
+    from data_engine.strategy_backtest_gateway import StrategyBacktestGateway, combine_snapshot_ids
+
+    connection = seeded["connection"]
+    gateway = StrategyBacktestGateway(connection)
+    seen: dict[str, str] = {}
+    real_decide = datahub_backtest.decide
+
+    def decide_then_a_writer_lands(*args, **kwargs):
+        decisions = real_decide(*args, **kwargs)
+        seen["used"] = combine_snapshot_ids([gateway.snapshot_id(cutoff) for cutoff in (Q1, Q2, Q3)])
+        _seed_inputs(connection, {Q3: {"b": "3"}})
+        return decisions
+
+    monkeypatch.setattr(datahub_backtest, "decide", decide_then_a_writer_lands)
+    binding = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["binding"]
+
+    assert binding["input_snapshot_id"] == seen["used"]
+    assert binding["input_snapshot_id"] != combine_snapshot_ids([gateway.snapshot_id(c) for c in (Q1, Q2, Q3)]), (
+        "the writer must change the stored inputs, or this test proves nothing"
+    )
+
+
+def test_the_run_stores_its_limitations(seeded) -> None:
+    """Audit finding 4: the disclosed limitations travel with the run, including vintage and session rules."""
+    from data_engine.datahub.backtest import LIMITATIONS
+
+    payload = _run_row(seeded["connection"], _run_op()["run_id"])["metrics_payload"]
+
+    assert payload["limitations"][: len(LIMITATIONS)] == list(LIMITATIONS)
+    (extra,) = payload["limitations"][len(LIMITATIONS) :]
+    assert "T758E" in extra and "stayed cash for the whole run" in extra, (
+        "round-2 audit item 3: a benchmark symbol that never opens must be a stated limitation"
+    )
+    assert any("vintage" in item for item in payload["limitations"])
+    assert any("exchange calendar" in item for item in payload["limitations"])
+
+
+@pytest.mark.parametrize("app_env", ["staging", "production", "prod"])
+@pytest.mark.parametrize("sha", ["unknown", ""])
+def test_a_deployed_environment_without_a_code_identity_refuses_the_run(
+    seeded, monkeypatch: pytest.MonkeyPatch, app_env: str, sha: str
 ) -> None:
-    """The Dagster op executes against the physical database without errors."""
-    symbols = ["AAPL", "MSFT"]
-    dates = [date(2023, 1, 31), date(2023, 2, 28)]
-    _insert_fixture_data(connection, symbols, dates)
+    """Round-2 audit item 1: GIT_COMMIT_SHA defaults to "unknown". Two code versions would then
+    share one run_id in staging or production, so the run fails and persists nothing."""
+    from data_engine.config import settings
 
-    class NonClosingConnection:
-        def __init__(self, conn: psycopg.Connection) -> None:
-            self._conn = conn
+    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "git_commit_sha", sha)
+    connection = seeded["connection"]
+    before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
 
-        def __getattr__(self, name: str):
-            return getattr(self._conn, name)
+    with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA"):
+        _run_op()
 
-        def close(self) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
-
-    import data_engine.lanes.backtest as backtest_lane
-
-    monkeypatch.setattr(backtest_lane, "DEFAULT_TOPT_SYMBOLS", tuple(symbols))
-    proxy = NonClosingConnection(connection)
-    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: proxy)
-
-    context = dg.build_op_context(run_tags={TICK_TAG: "2026-10-12T21:30:00+00:00"})
-    config = NightlyBacktestConfig(
-        strategy_key="demo_topk_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        factor_column="close",
-        top_k=2,
-        dropout_k=1,
-    )
-
-    # Execute op without monkeypatching run_backtest
-    run_nightly_backtest_op(context, config)
-
-    # Verify verdict row in database within the same transaction
-    with connection.cursor() as cur:
-        cur.execute(
-            """
-            select ok, summary from mart.nightly_verdicts
-            where check_name = 'nightly_backtest'
-            order by ran_at desc, recorded_at desc
-            limit 1
-            """
-        )
-        row = cur.fetchone()
-        assert row is not None
-        assert row[0] is True
-        assert "succeeded:" in row[1]
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone()[0] == before
+    assert seeded["verdicts"][-1][0] is False
 
 
-def test_nightly_backtest_op_fails_when_zero_trades_generated(
-    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("app_env", ["dev", "test"])
+def test_a_local_environment_without_a_code_identity_still_runs(
+    seeded, monkeypatch: pytest.MonkeyPatch, app_env: str
 ) -> None:
-    """The Dagster op fails closed when backtest produces 0 trades for an active universe."""
-    symbols = ["AAPL"]
-    dates = [date(2023, 1, 31)]
-    _insert_fixture_data(connection, symbols, dates)
+    from data_engine.config import settings
 
-    class NonClosingConnection:
-        def __init__(self, conn: psycopg.Connection) -> None:
-            self._conn = conn
+    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "git_commit_sha", "unknown")
 
-        def __getattr__(self, name: str):
-            return getattr(self._conn, name)
+    metadata = _run_op()
 
-        def close(self) -> None:
-            pass
+    binding = _run_row(seeded["connection"], metadata["run_id"])["metrics_payload"]["binding"]
+    assert binding["code_git_commit_sha"] == "unknown"
 
-        def __enter__(self):
-            return self
 
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
+def test_the_issuer_list_comes_from_the_same_read_as_the_inputs(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round-2 audit item 2: a writer that lands a new issuer f at Q1 just before the input read.
 
-    import data_engine.lanes.backtest as backtest_lane
-    import pandas as pd
-    from factors.backtest.engine import BacktestResult
+    Red when the issuer list is read in a separate, earlier query: f is then in the inputs but not
+    in the issuer list, so lineage is never asked for it.
+    """
+    connection = seeded["connection"]
+    gateway_type = datahub_backtest.StrategyBacktestGateway
+    real_read = gateway_type.issuer_inputs_with_snapshot
+    landed: list[bool] = []
 
-    monkeypatch.setattr(backtest_lane, "DEFAULT_TOPT_SYMBOLS", tuple(symbols))
-    proxy = NonClosingConnection(connection)
-    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: proxy)
+    def writer_lands_first(self, cutoff_at):
+        if not landed:
+            _seed_inputs(connection, {Q1: {"f": "1000"}})
+            landed.append(True)
+        return real_read(self, cutoff_at)
 
-    context = dg.build_op_context(run_tags={TICK_TAG: "2026-10-12T21:30:00+00:00"})
-    config = NightlyBacktestConfig(
-        strategy_key="demo_topk_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        factor_column="close",
-        top_k=1,
-        dropout_k=1,
-    )
+    asked: list[str] = []
 
-    fake_result = BacktestResult(
-        run_id="backtest-run:fake0trades",
-        strategy_key="demo_topk_rank",
-        strategy_version="v1",
-        universe_id="topt",
-        start_date="2023-01-31",
-        end_date="2023-01-31",
-        status="succeeded",
-        cagr_monthly=0.0,
-        sharpe_daily=0.0,
-        max_dd_daily=0.0,
-        vol_daily=0.0,
-        turnover_monthly=0.0,
-        calmar_daily=0.0,
-        metrics_payload={},
-        valuations_monthly=pd.DataFrame(),
-        valuations_daily=pd.DataFrame(),
-        trades=[],
-    )
-    monkeypatch.setattr(backtest_lane, "run_backtest", lambda *args, **kwargs: fake_result)
+    def lineage(_connection, ids, **_kwargs):
+        asked.extend(ids)
+        return [issuer for issuer in ISSUERS.values() if issuer.issuer_id in ids]
 
-    with pytest.raises(dg.Failure, match="0 trades"):
-        run_nightly_backtest_op(context, config)
+    monkeypatch.setattr(gateway_type, "issuer_inputs_with_snapshot", writer_lands_first)
+    monkeypatch.setattr(datahub_backtest, "stored_history_issuers", lineage)
+    payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
 
-    with connection.cursor() as cur:
-        cur.execute(
-            """
-            select ok, summary from mart.nightly_verdicts
-            where check_name = 'nightly_backtest'
-            order by ran_at desc, recorded_at desc
-            limit 1
-            """
-        )
-        row = cur.fetchone()
-        assert row is not None
-        assert row[0] is False
-        assert "0 trades" in row[1]
+    assert ISSUERS["f"].issuer_id in asked
+    assert "T758F" in payload["benchmark"]["universe"], "f holds inputs at Q1 in the read the run used"

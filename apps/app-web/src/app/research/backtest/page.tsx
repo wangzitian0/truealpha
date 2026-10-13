@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listBacktestRuns } from "@/server/mart/backtest-repository";
 import { formatPercentFromFraction } from "@/client/format";
+import { BacktestLimitations, runLimitations } from "@/components/backtest-basis";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,8 @@ export default async function BacktestListPage() {
             Portfolio Backtests
           </h1>
           <p className="mt-1 text-sm text-gray-400">
-            VectorBT simulation on dual-resolution PIT market data (10Y Monthly CAGR + 3Y Daily Sharpe &amp; Drawdown).
+            Quarter-end backtests of the core strategy on point-in-time inputs. Each run states its price basis
+            and its claim ceiling.
           </p>
         </div>
       </div>
@@ -48,9 +50,11 @@ export default async function BacktestListPage() {
                 <th className="px-4 py-3">Strategy</th>
                 <th className="px-4 py-3">Universe</th>
                 <th className="px-4 py-3">Time Horizon</th>
-                <th className="px-4 py-3 text-right">CAGR (10Y M)</th>
-                <th className="px-4 py-3 text-right">Sharpe (3Y D)</th>
-                <th className="px-4 py-3 text-right">Max DD (3Y D)</th>
+                <th className="px-4 py-3">Basis</th>
+                <th className="px-4 py-3 text-right">CAGR</th>
+                <th className="px-4 py-3 text-right">Benchmark CAGR</th>
+                <th className="px-4 py-3 text-right">Sharpe (rf 0)</th>
+                <th className="px-4 py-3 text-right">Max DD</th>
                 <th className="px-4 py-3 text-right">Turnover</th>
                 <th className="px-4 py-3 text-center">Status</th>
                 <th className="px-4 py-3 text-right">Action</th>
@@ -67,8 +71,21 @@ export default async function BacktestListPage() {
                   <td className="px-4 py-3 text-xs text-gray-400">
                     {r.start_date} ~ {r.end_date}
                   </td>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-400">
+                    <div data-price-basis={r.price_basis ?? ""}>{r.price_basis ?? "not recorded"}</div>
+                    <div className="text-amber-400" data-claim-ceiling={r.claim_ceiling ?? ""}>
+                      {r.claim_ceiling ?? "not recorded"}
+                    </div>
+                    <details className="mt-1 font-sans text-gray-400">
+                      <summary>Limitations ({runLimitations(r).length})</summary>
+                      <BacktestLimitations run={r} />
+                    </details>
+                  </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-emerald-400">
                     {r.cagr_monthly !== null ? formatPercentFromFraction(String(r.cagr_monthly)) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-gray-300">
+                    {r.benchmark_cagr !== null ? formatPercentFromFraction(String(r.benchmark_cagr)) : "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
                     {r.sharpe_daily !== null ? r.sharpe_daily.toFixed(2) : "—"}

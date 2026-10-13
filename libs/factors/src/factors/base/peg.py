@@ -59,10 +59,11 @@ _SHARES = "shares_outstanding"
 
 # The `peg_from_rate` arithmetic as a matrix-compatible `truealpha_contracts.ast`
 # expression, built only from shared node types — the same shape modules 2 and 7 already
-# carry, and the one `factors.expressions.compiler` exists to carry ("init.md Section 7
-# modules 1-6"; module 1 is this one). init.md rule 25 makes the Polars AST the
-# factor-expression engine; module 1 shipped without its expression, so a vectorised run
-# could reproduce GPPE and P/S but had nothing to reproduce here.
+# carry, and the one the test-time Polars oracle compiles (`libs/factors/tests/support/expression_oracle`, #758;
+# "init.md Section 7 modules 1-6", module 1 is this one). init.md rule 25 makes that
+# oracle the reproducibility check of the Decimal path; module 1 shipped without its
+# expression, so a vectorised run could reproduce GPPE and P/S but had nothing to
+# reproduce here.
 #
 # As in module 2, the Decimal path below stays the source of truth — fast and exact — and
 # this definition is the reproducibility proof, cross-checked by test rather than invoked

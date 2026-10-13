@@ -1890,7 +1890,7 @@ POLARS_CROSS_CHECK_SOURCES = {
     "libs/factors/src/factors/base/gross_profit_per_employee.py",
     "libs/factors/src/factors/base/peg.py",
     "libs/factors/src/factors/base/price_to_sales.py",
-    "libs/factors/src/factors/expressions/compiler.py",
+    "libs/factors/tests/support/expression_oracle/compiler.py",
     "libs/contracts/src/truealpha_contracts/ast.py",
 }
 
