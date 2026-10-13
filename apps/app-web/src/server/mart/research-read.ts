@@ -220,6 +220,62 @@ export interface TraceLink {
 	reference: string | null;
 }
 
+/** The text the surface prints for a lineage field that the lineage does not carry (#1241).
+ * A missing field is shown as missing. It is never replaced by a default or a guess. */
+export const NOT_RECORDED = "not recorded";
+
+/** The six inputs of one TOPT decision, in display order. `key` is the payload key that
+ * `mart.topt_core_meta_info` copies into `inputs` (20261012T1130). `semanticType` names the
+ * lineage item that carries the input. `monetary` marks a value that the item's `currency` prices. */
+export const TRACE_INPUT_SPECS = [
+	{ key: "gross_profit", label: "Gross profit", semanticType: "financial-fact", monetary: true },
+	{ key: "total_assets", label: "Total assets", semanticType: "financial-fact", monetary: true },
+	{ key: "headcount", label: "Headcount", semanticType: "financial-fact", monetary: false },
+	{ key: "shares_outstanding", label: "Shares outstanding", semanticType: "financial-fact", monetary: false },
+	{ key: "revenue", label: "Revenue", semanticType: "financial-fact", monetary: true },
+	{ key: "close", label: "Price (close)", semanticType: "market-price", monetary: true },
+] as const;
+
+/** Which time a `knowableAt` cell shows. A filing date is the most exact. A headcount fact has its own
+ * time. The observation time is the latest of every input in the observation, so it is the least exact. */
+export type KnowableAtBasis = "filed" | "input" | "observation";
+
+/** What a `source` cell names. A headcount never takes the source vintage of the filing facts. */
+export type SourceKind = "source vintage" | "raw pointer" | "evidence ref";
+
+/** One input of a decision, as its lineage item records it. Every field except `key` and
+ * `label` is null when the lineage does not carry it. */
+export interface TraceInput {
+	key: string;
+	label: string;
+	/** The value as the payload stores it: a base-10 string, copied verbatim. */
+	value: string | null;
+	/** The currency of a monetary value. Null for a count, and when the payload names none. */
+	currency: string | null;
+	/** True when `currency` applies to this input. */
+	monetary: boolean;
+	/** The period the figure describes: the filing's period end. */
+	period: string | null;
+	/** The filing date of this input when the vintage names it, else the time of the input or of its observation. */
+	knowableAt: string | null;
+	knowableAtBasis: KnowableAtBasis | null;
+	/** The filing accession. Null for a price, and for a headcount without a filing. */
+	accession: string | null;
+	/** The source of this input: its own vintage id or pointer. */
+	source: string | null;
+	sourceKind: SourceKind | null;
+}
+
+/** The inputs of one listing. An issuer with two listings (dual-class) has one set for each (#1241). */
+export interface TraceListing {
+	/** The listing that owns these inputs, from the lineage payload. Null when no input names one. */
+	listingId: string | null;
+	/** True for the listing that the core result itself names. */
+	isResultListing: boolean;
+	/** Always the six in `TRACE_INPUT_SPECS`. */
+	inputs: readonly TraceInput[];
+}
+
 export interface TraceView {
 	traceId: string;
 	strategyId: string;
@@ -228,6 +284,13 @@ export interface TraceView {
 	cutoffAt: string;
 	corpusSha256: string;
 	links: readonly TraceLink[];
+	/** The inputs of the decision (#1241), one set per listing. */
+	listings: readonly TraceListing[];
+	/** The core result whose lineage supplied `listings`. Null when no lineage was read. */
+	lineageResultId: string | null;
+	/** True when the governed head resolves this run. False when the page shows the newest recorded run
+	 * because no head resolves one. Null when the report does not say (the checked-in fixture). */
+	governed: boolean | null;
 }
 
 export class MartReadUnavailable extends Error {
@@ -381,6 +444,153 @@ export function decisionAvailability(
 		return "excluded";
 	}
 	return "available";
+}
+
+/**
+ * #1241: the lineage of one strategy decision. The decision joins the core result of its capture
+ * run on issuer and cutoff, the same join DECISIONS_SQL makes. The capture run comes from
+ * `mart.strategy_run_capture`, which prefers the governed head's run. So the lineage read here
+ * belongs to the run that the page serves, and never to the newest row. `$2` is the issuer id the
+ * page shows, which is the legacy id when `mart.entity_identity` has one. Every core result of one
+ * capture run reads the same frozen snapshot, so any of them names the same observations.
+ * `listing_id` is the listing that the core result itself names.
+ */
+export const TRACE_LINEAGE_SQL = `
+	select m.result_id, m.listing_id, m.lineage
+	from mart.strategy_decisions d
+	join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+	join mart.topt_core_meta_info m
+	  on m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.cutoff = d.cutoff_at
+	left join lateral (
+	    select ei.legacy_id
+	    from mart.entity_identity ei
+	    where ei.entity_id::text = d.issuer_id
+	    limit 1
+	) ei on true
+	where d.strategy_run_id = $1
+	  and coalesce(ei.legacy_id, d.issuer_id) = $2
+	  and d.cutoff_at = $3::timestamptz
+	order by m.result_id
+	limit 1
+`;
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+/** A lineage field is text, or it is not recorded. Any other type means the view changed shape. */
+function lineageText(value: unknown, field: string): string | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value === "string") return value.length > 0 ? value : null;
+	throw new MartReadUnavailable(`lineage ${field} is not text`);
+}
+
+type TraceSpec = (typeof TRACE_INPUT_SPECS)[number];
+
+function traceInputOf(
+	spec: TraceSpec,
+	item: Record<string, unknown> | undefined,
+): TraceInput {
+	const inputs = recordOf(item?.inputs);
+	const filing = recordOf(recordOf(item?.vintage)?.[spec.key]);
+	const value = lineageText(inputs?.[spec.key], `${spec.key} value`);
+	const observationAt = lineageText(item?.knowable_at, "knowable_at");
+	const filed = lineageText(filing?.filed, `${spec.key} filed`);
+	// A headcount fact carries its own knowable_at. No other vintage entry does.
+	const inputAt =
+		spec.key === "headcount" ? lineageText(filing?.knowable_at, "headcount knowable_at") : null;
+	const [knowableAt, knowableAtBasis]: [string | null, KnowableAtBasis | null] =
+		filed !== null
+			? [filed, "filed"]
+			: inputAt !== null
+				? [inputAt, "input"]
+				: observationAt !== null
+					? [observationAt, "observation"]
+					: [null, null];
+	// The headcount comes from another source than the filing facts, so it names its own pointer.
+	// The observation's source vintage is the filing facts' vintage and never labels a headcount.
+	const headcountRaw = spec.key === "headcount" ? lineageText(filing?.raw, "headcount raw") : null;
+	const headcountRef =
+		spec.key === "headcount" ? lineageText(filing?.evidence_ref, "headcount evidence_ref") : null;
+	const [source, sourceKind]: [string | null, SourceKind | null] =
+		spec.key !== "headcount"
+			? [lineageText(item?.source_vintage_id, "source_vintage_id"), "source vintage"]
+			: headcountRaw !== null
+				? [headcountRaw, "raw pointer"]
+				: headcountRef !== null
+					? [headcountRef, "evidence ref"]
+					: [null, null];
+	return {
+		key: spec.key,
+		label: spec.label,
+		value,
+		currency: spec.monetary ? lineageText(inputs?.currency, "currency") : null,
+		monetary: spec.monetary,
+		period: lineageText(filing?.period_end, `${spec.key} period_end`),
+		knowableAt,
+		knowableAtBasis,
+		accession: lineageText(filing?.accession, `${spec.key} accession`),
+		source,
+		sourceKind: source === null ? null : sourceKind,
+	};
+}
+
+/**
+ * Maps the `lineage` array of one `mart.topt_core_meta_info` row to the inputs of the decision, one
+ * set per listing. A core result covers an issuer. An issuer with two listings has two financial-fact
+ * and two market-price items, and `inputs.listing_id` says which item belongs to which listing. It
+ * copies fields and computes nothing. A field that the lineage does not carry stays null.
+ */
+export function traceInputsFromLineage(
+	lineage: unknown,
+	resultListingId: string | null = null,
+): TraceListing[] {
+	if (!Array.isArray(lineage)) {
+		throw new MartReadUnavailable("lineage is not an array");
+	}
+	const items = lineage.map((item) => {
+		const record = recordOf(item);
+		if (record === null) throw new MartReadUnavailable("a lineage item is not an object");
+		return record;
+	});
+	const listingOf = (item: Record<string, unknown>): string => {
+		const listingId = lineageText(recordOf(item.inputs)?.listing_id, "inputs listing_id");
+		if (listingId === null) {
+			throw new MartReadUnavailable("a lineage item names no listing");
+		}
+		return listingId;
+	};
+	const carriers = items.filter(
+		(item) => item.semantic_type === "financial-fact" || item.semantic_type === "market-price",
+	);
+	const listingIds = [...new Set(carriers.map(listingOf))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	if (listingIds.length === 0) {
+		// Nothing was read: show the six inputs as not recorded, under the listing the result names.
+		return [
+			{
+				listingId: resultListingId,
+				isResultListing: resultListingId !== null,
+				inputs: TRACE_INPUT_SPECS.map((spec) => traceInputOf(spec, undefined)),
+			},
+		];
+	}
+	// The listing that the result names comes first, then the others in id order.
+	const ordered = [
+		...listingIds.filter((listingId) => listingId === resultListingId),
+		...listingIds.filter((listingId) => listingId !== resultListingId),
+	];
+	return ordered.map((listingId) => ({
+		listingId,
+		isResultListing: listingId === resultListingId,
+		inputs: TRACE_INPUT_SPECS.map((spec) =>
+			traceInputOf(
+				spec,
+				carriers.find((item) => item.semantic_type === spec.semanticType && listingOf(item) === listingId),
+			),
+		),
+	}));
 }
 
 function traceId(
@@ -711,6 +921,10 @@ export class StrategyRunReadAdapter {
 			(d) => d.issuer_id === issuerId && d.cutoff_at === cutoffAt,
 		);
 		if (decision === undefined) return null;
+		const lineage = await this.readTraceLineage(
+			(report as { strategy_run_id?: string }).strategy_run_id,
+			decision,
+		);
 		return {
 			traceId: traceId(report.source, issuerId, cutoffAt, report.corpus_sha256),
 			strategyId: report.strategy_id,
@@ -731,6 +945,31 @@ export class StrategyRunReadAdapter {
 				},
 				{ kind: "raw", label: "Immutable raw bytes", reference: null },
 			],
+			listings: traceInputsFromLineage(lineage?.lineage ?? [], lineage?.listingId ?? null),
+			lineageResultId: lineage?.resultId ?? null,
+			governed: report.governed ?? null,
+		};
+	}
+
+	/** The lineage row of the decision's own capture run (#1241). A report with no run id (the
+	 * checked-in fixture, tests only) and a decision with no core result both read nothing. */
+	private async readTraceLineage(
+		strategyRunId: string | undefined,
+		decision: StrategyRunDecision,
+	): Promise<{ resultId: string; listingId: string | null; lineage: unknown } | null> {
+		if (strategyRunId === undefined) return null;
+		const result = await this.runWithClient((client) =>
+			client.query(TRACE_LINEAGE_SQL, [strategyRunId, decision.issuer_id, decision.cutoff_at]),
+		);
+		const row = result.rows[0];
+		if (row === undefined) return null;
+		if (typeof row.result_id !== "string") {
+			throw new MartReadUnavailable("lineage row has no result_id");
+		}
+		return {
+			resultId: row.result_id,
+			listingId: lineageText(row.listing_id, "result listing_id"),
+			lineage: row.lineage,
 		};
 	}
 

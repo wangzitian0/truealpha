@@ -4,7 +4,7 @@
 -- replaced in place; nothing stored changes.
 do $$
 begin
-    -- Superseded: 20260910T0930_factors_vintage_reaches_mart.sql redefines mart.topt_core_meta_info
+    -- Superseded: 20261012T1130_web_topt_core_meta_info_inputs.sql redefines mart.topt_core_meta_info
     -- later in the chain and owns its definition. Replacing it here would put this
     -- older definition back (ACCESS EXCLUSIVE on the view) on every replay, only for
     -- that file to replace it again, so this definition creates the view only on a
