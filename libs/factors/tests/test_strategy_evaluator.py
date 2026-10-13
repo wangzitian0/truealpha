@@ -427,11 +427,9 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
     assert decisions[0].exclusion_reason == ExclusionReason.MISSING_MARKET_VALUE_INPUT
 
 
-def test_a_low_margin_issuer_takes_the_tier_of_its_labor_efficiency() -> None:
-    """#1235: the hidden 0.35 gross-margin gate is deleted. It was not in the definition or
-    its hash. GPPE = (35B - 70B * 0.05) / 200k = 157,500, which is the tech band of 0.1.0
-    (100,000 <= x < 300,000). The gross margin is 35B / 250B = 0.14, which the deleted gate
-    forced to traditional. The tier now follows labor efficiency only."""
+def test_definition_0_1_0_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
+    """#1235: 0.1.0 replays with its legacy 0.35 margin gate. GPPE = (35B - 70B * 0.05) / 200k
+    = 157,500, the 0.1.0 tech band; the margin 35B / 250B = 0.14 keeps it traditional."""
     records = {
         "gross_profit": (Decimal("35000000000"), Decimal("0.9")),
         "revenue": (Decimal("250000000000"), Decimal("0.9")),
@@ -450,7 +448,28 @@ def test_a_low_margin_issuer_takes_the_tier_of_its_labor_efficiency() -> None:
     )
     assert len(decisions) == 1
     assert decisions[0].capital_adjusted_labor_efficiency == Decimal("157500.00")
-    assert decisions[0].tier == "tech"
+    assert decisions[0].tier == "traditional"
+    assert decisions[0].target_price_to_sales == Decimal("1.1500")
+
+
+def test_definition_1_0_0_tiers_a_low_margin_issuer_on_labor_efficiency_only() -> None:
+    """1.0.0 has no margin gate: labor efficiency 1,500,000 is tech at a 0.10 margin."""
+    decision = _evaluate_v1(
+        IssuerInput(
+            issuer_id="issuer:thin",
+            records={
+                "gross_profit": (Decimal("1500000"), Decimal("0.9")),
+                "total_assets": (Decimal("0"), Decimal("0.9")),
+                "headcount": (Decimal("1"), Decimal("0.9")),
+                "revenue": (Decimal("15000000"), Decimal("0.9")),
+                "shares_outstanding": (Decimal("18000000"), Decimal("0.9")),
+                "last_close": (Decimal("1"), Decimal("0.9")),
+            },
+        )
+    )["issuer:thin"]
+    assert decision.tier == "tech"
+    assert decision.current_price_to_gross_profit == Decimal("12.0000")
+    assert decision.target_price_to_gross_profit == Decimal("12.8600")
 
 
 _TCE_KEYS = (

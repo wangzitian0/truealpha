@@ -132,9 +132,22 @@ def test_the_tick_definition_selects_wmt_then_meta_on_the_2026_10_08_head() -> N
     assert by_ticker["JPM"].outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
 
 
-def test_definition_0_1_0_does_not_select_wmt_and_meta_on_the_same_head() -> None:
-    """The acceptance above must be able to fail: the same inputs under 0.1.0 select others.
-    On 2026-10-08 production 0.1.0 selected JNJ then NFLX with the hidden margin gate. That gate
-    is deleted (#1235), so 0.1.0 now tiers COST (100,946 >= 100,000) as tech and selects it."""
-    _decisions, selected = _replay(load_packaged_definition(HISTORICAL_V0_DEFINITION_RESOURCE))
-    assert [item.issuer_id for item in selected] == ["COST", "JNJ"]
+def test_definition_0_1_0_replays_its_published_selection_on_the_same_head() -> None:
+    """History replays exactly: 0.1.0 on the same inputs selects what production published on
+    2026-10-08, JNJ (+0.3715) then NFLX (+0.3645). That run used the 0.35 gross-margin gate,
+    which lived in code and not in the 0.1.0 definition or its hash, so 0.1.0 keeps it as a
+    named legacy rule. The gate keeps COST (100,946 >= 100,000, margin 0.128) in the traditional
+    band, where its P/S 1.386 gives a gap of 1.1500 / 1.3860 - 1 = -0.1703.
+
+    It is also the reason the 1.0.0 acceptance above can fail: these inputs under 0.1.0 do
+    not select WMT and META."""
+    decisions, selected = _replay(load_packaged_definition(HISTORICAL_V0_DEFINITION_RESOURCE))
+    assert [(item.issuer_id, item.rank, item.valuation_gap) for item in selected] == [
+        ("JNJ", 1, Decimal("0.3715")),
+        ("NFLX", 2, Decimal("0.3645")),
+    ]
+    by_ticker = {item.issuer_id: item for item in decisions}
+    assert by_ticker["COST"].tier == "traditional"
+    assert by_ticker["COST"].valuation_gap == Decimal("-0.1703")
+    # 0.1.0 tiers on 100,000 / 300,000: 11 issuers are large_model_native, as recorded on #1235.
+    assert Counter(item.tier for item in decisions)["large_model_native"] == 11

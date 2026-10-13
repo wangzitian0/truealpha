@@ -48,7 +48,7 @@ from factors.base.gross_profit_per_employee import (
 from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
-from factors.composite.three_tier_valuation import three_tier_valuation
+from factors.composite.three_tier_valuation import three_tier_valuation, tier_band
 from factors.forest import IssuerClass
 from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
@@ -342,6 +342,10 @@ def _evaluate_issuer(
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
     current_multiple = _quantize(multiple_result.value, multiple_q)
+    # Read by the 0.1.0 legacy margin gate only (`LEGACY_V0_MARGIN_GATE`, #1235); None when
+    # revenue is not positive, which leaves the band unchanged.
+    revenue = issuer.records["revenue"][0]
+    gross_margin = issuer.records["gross_profit"][0] / revenue if revenue > 0 else None
     tier_result = three_tier_valuation(
         [
             gppe_result.model_copy(update={"value": labor_efficiency}),
@@ -349,9 +353,10 @@ def _evaluate_issuer(
         ],
         entity_id=issuer.issuer_id,
         as_of=as_of,
-        definition=definition.tier_valuation,
+        definition=definition,
+        gross_margin=gross_margin,
     )
-    band = definition.tier_valuation.band_for(labor_efficiency)
+    band = tier_band(definition, labor_efficiency, gross_margin=gross_margin)
     target_multiple = _quantize((band.target_lower_bound + band.target_upper_bound) / Decimal(2), tier_q)
     if tier_result.value is None:
         return (
