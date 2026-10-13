@@ -40,10 +40,8 @@ from pathlib import Path
 from typing import Any
 
 from truealpha_contracts.strategy import (
-    HISTORICAL_V0_DEFINITION_RESOURCE,
     LIVE_STRATEGY_DEFINITION_RESOURCE,
     load_live_strategy_definition,
-    load_strategy_definition,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -54,7 +52,7 @@ _MIGRATIONS = _REPO / "db" / "migrations"
 #: This PR's migration. Every migration from it on is in scope; the older ones are history.
 _FIRST_SCANNED_MIGRATION = "20261013T0201_factors_price_to_gross_profit.sql"
 _DATA = _REPO / "libs" / "contracts" / "src" / "truealpha_contracts" / "data"
-_ALLOWED = frozenset({_DATA / LIVE_STRATEGY_DEFINITION_RESOURCE, _DATA / HISTORICAL_V0_DEFINITION_RESOURCE})
+_ALLOWED = frozenset({_DATA / LIVE_STRATEGY_DEFINITION_RESOURCE})
 _BAND_FIELD = re.compile(
     r"^(?:labor_efficiency|gppe)_(?:lower|upper)(?:_bound)?$|^target_[a-z]+_(?:lower|upper|midpoint)(?:_bound)?$"
 )
@@ -87,8 +85,7 @@ def _live_fractional_targets() -> set[Decimal]:
 
 def _strict_band_values() -> frozenset[Decimal]:
     live = load_live_strategy_definition()
-    history = load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE)
-    return frozenset(_labor_cuts(live) | _labor_cuts(history) | _live_fractional_targets())
+    return frozenset(_labor_cuts(live) | _live_fractional_targets())
 
 
 def _wide_band_values() -> frozenset[Decimal]:
@@ -239,3 +236,28 @@ def test_the_guard_sees_a_planted_band_set() -> None:
     assert not text_violations(
         "row.target_ps_midpoint === null ? null : String(row.target_ps_midpoint)\n", "ok.ts", wide
     )
+
+
+def test_no_hardcoded_risk_free_rate_or_margin_gate_in_runtime_code() -> None:
+    """Topic 1: eliminates scattered 0.35 margin gates and 0.05 risk-free rate constants.
+
+    The live strategy definition (large_model_value_v0_definition_1_0_0.json) is the sole
+    source of parameters for valuation bands, midpoint, and risk-free rates. Runtime code
+    in apps/ and libs/ must not declare hardcoded literals for these values.
+    """
+    risk_free_pattern = re.compile(r"\bRISK_FREE_RATE\s*=\s*(?:Decimal\([\"']0\.05[\"']\)|0\.05)")
+    margin_gate_pattern = re.compile(
+        r"\b(?:LEGACY_V0_MARGIN_GATE|MARGIN_GATE)\b|gross_margin\s*[<>=!]+\s*(?:0\.35|Decimal\([\"']0\.35[\"']\))"
+    )
+
+    violations: list[str] = []
+    for root in _PYTHON_ROOTS:
+        for py_file in root.rglob("*.py"):
+            text = py_file.read_text(encoding="utf-8")
+            rel = py_file.relative_to(_REPO)
+            if risk_free_pattern.search(text):
+                violations.append(f"{rel}: hardcoded 0.05 RISK_FREE_RATE found")
+            if margin_gate_pattern.search(text):
+                violations.append(f"{rel}: hardcoded 0.35 margin gate found")
+
+    assert not violations, "hardcoded risk-free rate or margin gate found in runtime code:\n" + "\n".join(violations)

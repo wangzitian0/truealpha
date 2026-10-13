@@ -17,9 +17,7 @@ from data_engine.config import settings
 from data_engine.core_strategy_replay import Decision
 from data_engine.strategy_replay_repository import write_replay
 from truealpha_contracts.strategy import (
-    HISTORICAL_V0_DEFINITION_RESOURCE,
     load_live_strategy_definition,
-    load_strategy_definition,
 )
 
 _HASH64 = "b" * 64
@@ -134,7 +132,7 @@ def test_the_mart_refuses_an_ambiguous_valuation_basis(connection, overrides: di
 
 
 def test_the_core_invocation_accepts_a_strategy_definition_id(connection) -> None:
-    definition = load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE)
+    definition = load_live_strategy_definition()
     constraint = connection.execute(
         """
         select pg_get_constraintdef(oid) from pg_constraint

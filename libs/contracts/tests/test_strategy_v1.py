@@ -30,14 +30,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.strategy import (
-    HISTORICAL_V0_DEFINITION_RESOURCE,
     LIVE_STRATEGY_DEFINITION_RESOURCE,
     GoldenDecisionSet,
     GoldenExpectation,
     LargeModelValueV0Definition,
     ValuationBasis,
     load_live_strategy_definition,
-    load_strategy_definition,
     load_strategy_definition_corpus,
 )
 
@@ -57,7 +55,6 @@ _VISION_PS_ANCHORS = {
 _CONFIDENCE_FLOOR = Decimal("0.70")
 _SELECTION_COUNT = 2
 _V1_SHA256 = "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803"
-_V0_SHA256 = "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d"
 
 
 def _q(value: Decimal, places: int) -> Decimal:
@@ -158,33 +155,19 @@ def test_the_bands_follow_the_recorded_derivation() -> None:
         assert _q(ps_upper / margin, 2) == target_upper
 
 
-def test_definition_1_0_0_moves_the_tier_cuts_and_the_valuation_and_keeps_the_rest() -> None:
-    """Two things change from 0.1.0: the labor-efficiency cuts move up by a factor of ten
-    (100,000 / 300,000 to 1,000,000 / 3,000,000), and the valuation basis moves from P/S to
-    P/GP with new bands. The tier formula, P/S, the universe, the schedule, eligibility,
-    selection, sizing, execution, cost and return are 0.1.0's, with their exact value or identity."""
+def test_definition_1_0_0_tier_cuts_and_valuation_contracts() -> None:
+    """The labor-efficiency cuts are 1,000,000 / 3,000,000 and the valuation basis is P/GP."""
     v1 = load_live_strategy_definition()
-    v0 = load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE)
-    v0_cuts = [band.labor_efficiency_upper_bound for band in v0.tier_valuation.bands[:2]]
     v1_cuts = [band.labor_efficiency_upper_bound for band in v1.tier_valuation.bands[:2]]
-    assert v0_cuts == [Decimal("100000"), Decimal("300000")]
-    assert v1_cuts == [cut * 10 for cut in v0_cuts if cut is not None]
-    assert v0.content_sha256 == _V0_SHA256
-    assert v1.labor_efficiency.factor_definition_id == v0.labor_efficiency.factor_definition_id
-    assert v1.price_to_sales.factor_definition_id == v0.price_to_sales.factor_definition_id
-    for name in ("universe", "schedule", "eligibility", "selection", "sizing", "execution", "transaction_cost"):
-        assert getattr(v1, name) == getattr(v0, name), name
-    assert v1.total_return == v0.total_return
-    assert v1.valuation_gap.model_dump(exclude={"rule_id", "formula"}) == v0.valuation_gap.model_dump(
-        exclude={"rule_id", "formula"}
-    )
+    assert v1_cuts == [Decimal("1000000"), Decimal("3000000")]
+    assert v1.content_sha256 == _V1_SHA256
     assert (v1.valuation_gap.rule_id, v1.valuation_gap.formula) == (
         "target_pgp_over_current_pgp_minus_one",
         "target_pgp/current_pgp-1",
     )
     assert v1.price_to_gross_profit is not None
     assert v1.price_to_gross_profit.quantization == v1.price_to_sales.quantization
-    assert v1.required_input_keys() == v0.required_input_keys()
+    assert v1.valuation_basis is ValuationBasis.PRICE_TO_GROSS_PROFIT
 
 
 def test_the_golden_expectations_equal_the_independent_oracle() -> None:
@@ -217,14 +200,6 @@ def test_the_golden_expectations_equal_the_independent_oracle() -> None:
     assert outcomes == {"selected", "ranked_beyond_selection_count", "rejected_valuation_above_tier_band", "excluded"}
 
 
-def test_definition_0_1_0_stays_loadable_with_its_pinned_identity() -> None:
-    v0 = load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE)
-    assert v0.content_sha256 == _V0_SHA256
-    assert v0.valuation_basis is ValuationBasis.PRICE_TO_SALES
-    assert v0.price_to_gross_profit is None
-    assert "price_to_gross_profit" not in v0.model_dump(mode="json")
-
-
 def test_a_pgp_band_set_requires_the_pgp_factor_definition() -> None:
     payload = _definition_payload()
     payload.pop("price_to_gross_profit")
@@ -248,10 +223,45 @@ def test_provisional_semantics_must_match_the_band_review_state() -> None:
 
 
 def test_a_ps_definition_refuses_a_pgp_factor_definition() -> None:
-    v0 = load_strategy_definition_corpus(HISTORICAL_V0_DEFINITION_RESOURCE)["strategy_definition"]
-    payload = copy.deepcopy(v0)
-    payload["price_to_gross_profit"] = _definition_payload()["price_to_gross_profit"]
-    with pytest.raises(ValidationError, match="price_to_gross_profit factor definition"):
+    payload = _definition_payload()
+    payload["provisional_semantics"] = True
+    payload["tier_valuation"] = {
+        "factor_key": "three_tier_valuation",
+        "factor_version": "0.1.0",
+        "boundary_rule": "lower_inclusive_upper_exclusive",
+        "target_ps_selection": "band_midpoint",
+        "provisional_thresholds": True,
+        "unit": {"dimension": "dimensionless", "unit_code": "ratio"},
+        "quantization": {"decimal_places": 4, "rounding": "half_even"},
+        "bands": [
+            {
+                "tier": "traditional",
+                "labor_efficiency_lower_bound": None,
+                "labor_efficiency_upper_bound": "1000000",
+                "target_ps_lower_bound": "3.00",
+                "target_ps_upper_bound": "4.00",
+            },
+            {
+                "tier": "tech",
+                "labor_efficiency_lower_bound": "1000000",
+                "labor_efficiency_upper_bound": "3000000",
+                "target_ps_lower_bound": "8.00",
+                "target_ps_upper_bound": "10.00",
+            },
+            {
+                "tier": "large_model_native",
+                "labor_efficiency_lower_bound": "3000000",
+                "labor_efficiency_upper_bound": None,
+                "target_ps_lower_bound": "20.00",
+                "target_ps_upper_bound": "30.00",
+            },
+        ],
+    }
+    payload["valuation_gap"]["rule_id"] = "target_ps_over_current_ps_minus_one"
+    payload["valuation_gap"]["formula"] = "target_ps/current_ps-1"
+    with pytest.raises(
+        ValidationError, match="a P/GP tier valuation requires exactly the price_to_gross_profit factor definition"
+    ):
         _validate(payload)
 
 

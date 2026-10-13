@@ -189,7 +189,7 @@ def _snapshot(branch: str, gross_profit: str | None, ppnr: str | None, assets: s
 
 # (branch, gross_profit, pre_provision_profit, total_assets, headcount, rate) -> result id and
 # gppe as main@f5807a7 published them. JPM's inputs are the strategy corpus's
-# (`large_model_value_v0_strategy.v1.json`, jpm-2026-06-30); the rest cover every class, a
+# (`large_model_value_v0_definition_1_0_0.json`, jpm-2026-06-30); the rest cover every class, a
 # negative non-financial value, a non-terminating division and each unavailable path.
 GOLDEN = {
     "jpm_production_rate": (

@@ -128,7 +128,7 @@
       "kind": "composite",
       "module": 7,
       "module_path": "libs/factors/src/factors/composite/three_tier_valuation.py",
-      "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: LargeModelValueV0Definition, gross_margin: Decimal | None) -> FactorResult"
+      "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: LargeModelValueV0Definition) -> FactorResult"
     }
   }
 }

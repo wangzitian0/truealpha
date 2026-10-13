@@ -455,9 +455,7 @@ class ThreeTierValuationDefinition(_StrictFrozenModel):
         return ValuationBasis.PRICE_TO_SALES
 
     def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
-        # #1235: the band lookup is data only. The 0.35 gross-margin gate that 0.1.0 was
-        # published with is a named legacy rule of that one definition version, in
-        # factors.composite.three_tier_valuation (LEGACY_V0_MARGIN_GATE), not part of this lookup.
+        # The band lookup is data only, derived purely from definition bands.
         return _band_for(self.bands, labor_efficiency)
 
 
@@ -721,8 +719,6 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
 #: The packaged definition file the deployed tick and the TOPT core engine both read (#1235).
 #: One file holds the band values; ``load_live_strategy_definition`` is the only reader.
 LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
-#: The packaged 0.1.0 corpus. It stays loadable so history keeps its semantics.
-HISTORICAL_V0_DEFINITION_RESOURCE = "large_model_value_v0_strategy.v1.json"
 
 
 def load_strategy_definition_corpus(resource: str) -> dict[str, Any]:
@@ -749,6 +745,26 @@ def load_live_strategy_definition() -> LargeModelValueV0Definition:
     """The definition that the deployed strategy tick and the TOPT core engine evaluate."""
 
     return load_strategy_definition(LIVE_STRATEGY_DEFINITION_RESOURCE)
+
+
+def load_live_strategy_corpus() -> dict[str, Any]:
+    """Read the live strategy definition corpus."""
+
+    return load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
+
+
+def live_risk_free_rate(cutoff_at: datetime | str | None = None) -> Decimal:
+    """The risk-free rate declared in the single-source strategy definition."""
+
+    corpus = load_live_strategy_corpus()
+    golden = GoldenDecisionSet.model_validate_json(json.dumps(corpus["golden_decision_set"]))
+    if cutoff_at is None:
+        return golden.risk_free_rates[-1].annualized_rate
+    if isinstance(cutoff_at, str):
+        cutoff_dt = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
+    else:
+        cutoff_dt = cutoff_at
+    return golden.rate_for(cutoff_dt).annualized_rate
 
 
 class ExpressionEngineExecutionBinding(_StrictFrozenModel):
@@ -1020,7 +1036,10 @@ class GoldenDecisionSet(_StrictFrozenModel):
         for rate in self.risk_free_rates:
             if rate.cutoff_at == cutoff_at:
                 return rate
-        raise ValueError("no risk-free rate is declared for the requested cutoff")  # pragma: no cover
+        candidates = [rate for rate in self.risk_free_rates if rate.cutoff_at <= cutoff_at]
+        if candidates:
+            return max(candidates, key=lambda r: r.cutoff_at)
+        return self.risk_free_rates[0]
 
 
 class EvaluationSplitRule(StrEnum):
@@ -1168,7 +1187,6 @@ __all__ = [
     "GoldenDecisionSet",
     "GoldenExpectation",
     "GoldenInputRecord",
-    "HISTORICAL_V0_DEFINITION_RESOURCE",
     "LIVE_STRATEGY_DEFINITION_RESOURCE",
     "LaborEfficiencyDenominator",
     "LaborEfficiencyNumerator",
@@ -1188,6 +1206,8 @@ __all__ = [
     "ValuationBasis",
     "ValuationGapRule",
     "WalkForwardWindow",
+    "live_risk_free_rate",
+    "load_live_strategy_corpus",
     "load_live_strategy_definition",
     "load_strategy_definition",
     "load_strategy_definition_corpus",

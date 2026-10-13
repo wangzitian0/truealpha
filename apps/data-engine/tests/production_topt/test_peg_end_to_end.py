@@ -215,10 +215,6 @@ def test_the_database_refuses_a_non_positive_peg(connection) -> None:
 
 
 def _definition() -> LargeModelValueV0Definition:
-    import json
-    from importlib import resources
+    from truealpha_contracts.strategy import load_live_strategy_definition
 
-    corpus = json.loads(
-        resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json").read_text()
-    )
-    return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+    return load_live_strategy_definition()

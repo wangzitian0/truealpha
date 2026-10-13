@@ -6,10 +6,8 @@ session, a cost literal, a split that is ignored, a buy that spends more cash th
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from importlib import resources
 
 import pytest
 from factors.backtest.corporate_actions import SeriesBar, derive_split_events
@@ -27,7 +25,7 @@ from factors.backtest.engine import (
     performance,
     simulate,
 )
-from truealpha_contracts.strategy import LargeModelValueV0Definition
+from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 
 CAPITAL = Decimal(1_000_000)
 #: Monday 2024-09-30 is a session. The cutoff closes that day at 23:59:59Z, after its session.
@@ -35,10 +33,7 @@ CUTOFF = datetime(2024, 9, 30, 23, 59, 59, tzinfo=UTC)
 
 
 def _definition() -> LargeModelValueV0Definition:
-    corpus = json.loads(
-        resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json").read_bytes()
-    )
-    return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+    return load_live_strategy_definition()
 
 
 def _cost_of(trade, rate: str) -> bool:

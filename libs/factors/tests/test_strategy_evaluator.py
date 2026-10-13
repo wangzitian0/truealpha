@@ -30,8 +30,7 @@ from truealpha_contracts.strategy import (
     load_strategy_definition_corpus,
 )
 
-_CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
-_CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
+_CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 
 
 def _s(value: object) -> str | None:
@@ -39,7 +38,7 @@ def _s(value: object) -> str | None:
 
 
 def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
-    raw = _CORPUS_RESOURCE.read_bytes()
+    raw = resources.files("truealpha_contracts.data").joinpath(LIVE_STRATEGY_DEFINITION_RESOURCE).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
     corpus = json.loads(raw)
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
@@ -80,7 +79,9 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
             assert _s(got.capital_adjusted_labor_efficiency) == _s(expected["capital_adjusted_labor_efficiency"])
             assert got.tier == expected["tier"]
             assert _s(got.current_price_to_sales) == _s(expected["current_price_to_sales"])
-            assert _s(got.target_price_to_sales) == _s(expected["target_price_to_sales"])
+            assert got.target_price_to_sales is None
+            assert _s(got.current_price_to_gross_profit) == _s(expected.get("current_price_to_gross_profit"))
+            assert _s(got.target_price_to_gross_profit) == _s(expected.get("target_price_to_gross_profit"))
             assert _s(got.valuation_gap) == _s(expected["valuation_gap"])
             assert got.eligible == expected["eligible"]
             assert got.outcome.value == expected["outcome"]
@@ -94,8 +95,7 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
 
 
 def _definition() -> LargeModelValueV0Definition:
-    corpus = json.loads(_CORPUS_RESOURCE.read_bytes())
-    return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+    return load_live_strategy_definition()
 
 
 def _candidate(issuer_id: str, gap: str) -> EvaluatedDecision:
@@ -146,18 +146,17 @@ def test_rank_and_select_tie_breaks_by_ascending_issuer_id() -> None:
 
 
 def test_in_band_issuer_is_not_rejected_above_band() -> None:
-    # Invariant guarding the #393 regression: an issuer whose P/S sits between its
+    # Invariant guarding the #393 regression: an issuer whose P/GP sits between its
     # tier-band midpoint and upper bound must NOT be rejected — rejection is only
-    # above the upper bound. (The frozen golden never exercises this window, which
-    # is exactly why the midpoint-vs-upper divergence went unnoticed.)
+    # above the upper bound.
     issuer = IssuerInput(
         issuer_id="issuer:inband",
         records={
-            "gross_profit": (Decimal("200000"), Decimal("0.9")),  # -> tech-tier labor efficiency 200000
+            "gross_profit": (Decimal("2000000"), Decimal("0.9")),  # -> tech-tier labor efficiency 2000000
             "total_assets": (Decimal("0"), Decimal("0.9")),
             "headcount": (Decimal("1"), Decimal("0.9")),
             "revenue": (Decimal("1"), Decimal("0.9")),
-            "shares_outstanding": (Decimal("5"), Decimal("0.9")),  # -> current P/S = 5.0
+            "shares_outstanding": (Decimal("26000000"), Decimal("0.9")),  # -> current P/GP = 13.0
             "last_close": (Decimal("1"), Decimal("0.9")),
         },
     )
@@ -170,10 +169,10 @@ def test_in_band_issuer_is_not_rejected_above_band() -> None:
         risk_free_rate=Decimal("0"),
     )
 
-    # tech band [2.50, 6.00], midpoint 4.25: current P/S 5.0 is above the midpoint
+    # tech band [11.43, 14.29], midpoint 12.8600: current P/GP 13.0 is above the midpoint
     # (negative gap) but below the upper bound -> eligible and ranked, not rejected.
     assert decision.tier == "tech"
-    assert decision.current_price_to_sales == Decimal("5.0000")
+    assert decision.current_price_to_gross_profit == Decimal("13.0000")
     assert decision.valuation_gap is not None and decision.valuation_gap < 0
     assert decision.outcome is not GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
     assert decision.eligible
@@ -378,6 +377,7 @@ def test_the_evaluator_projects_the_keys_the_registry_declares() -> None:
 
     assert _input_keys("gross_profit_per_employee") == ("gross_profit", "total_assets", "headcount")
     assert _input_keys("price_to_sales") == ("last_close", "shares_outstanding", "revenue")
+    assert _input_keys("price_to_gross_profit") == ("last_close", "shares_outstanding", "gross_profit")
     assert _input_keys("peg") == ("last_close", "shares_outstanding", "net_income")
 
 
@@ -425,31 +425,6 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
     assert len(decisions) == 1
     assert decisions[0].eligible is False
     assert decisions[0].exclusion_reason == ExclusionReason.MISSING_MARKET_VALUE_INPUT
-
-
-def test_definition_0_1_0_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
-    """#1235: 0.1.0 replays with its legacy 0.35 margin gate. GPPE = (35B - 70B * 0.05) / 200k
-    = 157,500, the 0.1.0 tech band; the margin 35B / 250B = 0.14 keeps it traditional."""
-    records = {
-        "gross_profit": (Decimal("35000000000"), Decimal("0.9")),
-        "revenue": (Decimal("250000000000"), Decimal("0.9")),
-        "total_assets": (Decimal("70000000000"), Decimal("0.9")),
-        "headcount": (Decimal("200000"), Decimal("0.9")),
-        "shares_outstanding": (Decimal("443000000"), Decimal("0.9")),
-        "last_close": (Decimal("500"), Decimal("0.9")),
-    }
-    issuer = IssuerInput(issuer_id="issuer:retail", records=records)
-    decisions = evaluate_cutoff(
-        [issuer],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
-        definition=_definition(),
-        cutoff_at=_PEG_CUTOFF,
-        risk_free_rate=Decimal("0.05"),
-    )
-    assert len(decisions) == 1
-    assert decisions[0].capital_adjusted_labor_efficiency == Decimal("157500.00")
-    assert decisions[0].tier == "traditional"
-    assert decisions[0].target_price_to_sales == Decimal("1.1500")
 
 
 def test_definition_1_0_0_tiers_a_low_margin_issuer_on_labor_efficiency_only() -> None:
@@ -784,19 +759,6 @@ def test_v1_excludes_nonpositive_gross_profit_with_its_own_reason() -> None:
     assert decision.current_price_to_gross_profit is None
 
 
-def test_v0_decisions_carry_no_pgp_value() -> None:
-    [decision] = evaluate_cutoff(
-        [_peg_inputs()],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
-        definition=_definition(),
-        cutoff_at=_PEG_CUTOFF,
-        risk_free_rate=Decimal("0"),
-    )
-    assert decision.target_price_to_sales is not None
-    assert decision.current_price_to_gross_profit is None
-    assert decision.target_price_to_gross_profit is None
-
-
 def _recorded_ps_issuer(**revenue: str) -> IssuerInput:
     """Labor efficiency 1,000 (traditional), P/GP 5 (inside 7.50-10.00 is not needed: below it ranks)."""
     records = {
@@ -826,15 +788,3 @@ def test_v1_records_ps_and_never_gates_on_it(revenue: dict[str, str]) -> None:
     assert decision.current_price_to_gross_profit == Decimal("5.0000")
     expected_ps = Decimal("50.0000") if revenue.get("value") == "100" else None
     assert decision.current_price_to_sales == expected_ps
-
-
-def test_v0_still_gates_on_its_ps_inputs() -> None:
-    """Definition 0.1.0 values by P/S, so a revenue that gives no P/S still excludes there."""
-    [decision] = evaluate_cutoff(
-        [_recorded_ps_issuer(value="0")],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
-        definition=_definition(),
-        cutoff_at=_PEG_CUTOFF,
-        risk_free_rate=Decimal("0"),
-    )
-    assert decision.eligible is False

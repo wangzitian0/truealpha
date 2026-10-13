@@ -15,7 +15,6 @@ from truealpha_contracts.strategy import (
     GoldenDecisionSet,
     GoldenInputRecord,
     LargeModelValueV0Definition,
-    StrategyEngineBinding,
 )
 
 # The end-to-end recompute of these golden decisions now lives in
@@ -23,8 +22,8 @@ from truealpha_contracts.strategy import (
 # `strategy_evaluator` both this golden and the #26 replay consume (#393). This
 # module keeps the schema-, identity-, and negative-case contract tests.
 
-CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
-CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
+CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_definition_1_0_0.json")
+CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 
 
 def _corpus() -> dict[str, object]:
@@ -57,14 +56,6 @@ def _golden_payload() -> dict[str, object]:
 
 def _golden() -> GoldenDecisionSet:
     return GoldenDecisionSet.model_validate_json(json.dumps(_golden_payload()))
-
-
-def _binding_payload(key: str = "engine_binding") -> dict[str, object]:
-    return copy.deepcopy(_corpus()[key])
-
-
-def _binding(key: str = "engine_binding") -> StrategyEngineBinding:
-    return StrategyEngineBinding.model_validate_json(json.dumps(_binding_payload(key)))
 
 
 def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) -> None:
@@ -114,7 +105,6 @@ def test_frozen_corpus_pins_one_canonical_strategy_identity() -> None:
 
     for factor in (first.labor_efficiency, first.price_to_sales, first.tier_valuation):
         assert factor.factor_definition_id == f"factor-definition:{factor.content_sha256}"
-        assert factor.factor_version == "0.1.0"
 
 
 def test_semantic_content_hash_tracks_every_parameter() -> None:
@@ -122,7 +112,7 @@ def test_semantic_content_hash_tracks_every_parameter() -> None:
     mutations = (
         ("eligibility.minimum_confidence", "0.75"),
         ("selection.selection_count", 3),
-        ("tier_valuation.bands.1.target_ps_upper_bound", "7.00"),
+        ("tier_valuation.bands.1.target_pgp_upper_bound", "15.00"),
         ("labor_efficiency.factor_version", "0.2.0"),
         ("transaction_cost.basis_points", "10"),
     )
@@ -153,65 +143,6 @@ def test_formula_variants_are_configuration_not_structure() -> None:
     # one uniform schema. The former financial-asset-base variant was removed with
     # the financial branch (2026-07-18 owner decision): there is no separate
     # financial capital-charge base -- every issuer uses total_assets.
-
-
-def test_engine_identity_stays_outside_the_semantic_hash() -> None:
-    """Two engine runtimes, one semantics. #969 swapped the factor-expression engine for
-    the Polars AST and this is the property that made the swap safe: the two bindings
-    carry DIFFERENT engine coordinates over the SAME strategy_definition_sha256, and
-    that definition hash is byte-for-byte the one the corpus has always pinned. If an
-    engine coordinate ever reaches the semantic hash, the pinned id moves and this
-    fails — which is what it is here to catch.
-    """
-    expected = _expected()
-    binding = _binding()
-    alternate = _binding("engine_binding_alternate")
-    assert binding.engine_binding_id == expected["engine_binding_id"]
-    assert alternate.engine_binding_id == expected["engine_binding_alternate_id"]
-    assert binding.engine_binding_id != alternate.engine_binding_id
-    assert binding.execution_binding.version != alternate.execution_binding.version
-    assert binding.execution_binding.runtime_artifact_sha256 != alternate.execution_binding.runtime_artifact_sha256
-    # One engine, two builds of it: the operator semantics are the same across both,
-    # which is what the retired operator-registry pair used to say here. That registry
-    # was a separately versioned artifact of the previous engine; the Polars AST's
-    # operators ship inside the distribution, so the distribution literal now carries it.
-    assert binding.execution_binding.distribution == alternate.execution_binding.distribution
-    # The load-bearing half: both engine coordinates resolve to one unchanged semantic
-    # identity, and it is the value the corpus pinned before the engine migration.
-    assert binding.strategy_definition_id == expected["strategy_definition_id"]
-    assert alternate.strategy_definition_id == expected["strategy_definition_id"]
-    assert expected["strategy_definition_sha256"] == "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d"
-
-    definition_text = json.dumps(_corpus()["strategy_definition"])
-    for engine_coordinate in ("polars", "operator_registry", "adapter", "distribution", "release_commit"):
-        assert engine_coordinate not in definition_text, (
-            f"{engine_coordinate!r} reached the semantic definition — an engine coordinate is now inside "
-            f"the content hash, so the same semantics on a different engine build would get a new identity"
-        )
-
-
-def test_corpus_negative_cases_fail_closed() -> None:
-    corpus = _corpus()
-    negative_cases = corpus["negative_cases"]
-    assert isinstance(negative_cases, list)
-    assert len(negative_cases) == 26
-    payloads = {
-        "strategy_definition": _definition_payload,
-        "golden_decision_set": _golden_payload,
-        "engine_binding": _binding_payload,
-    }
-    validators = {
-        "strategy_definition": LargeModelValueV0Definition,
-        "golden_decision_set": GoldenDecisionSet,
-        "engine_binding": StrategyEngineBinding,
-    }
-    for case in negative_cases:
-        assert isinstance(case, dict)
-        target = str(case["target"])
-        candidate = payloads[target]()
-        _apply_corpus_mutation(candidate, case)
-        with pytest.raises(ValidationError):
-            validators[target].model_validate_json(json.dumps(candidate))
 
 
 def test_python_mode_rejects_binary_float_parameters() -> None:
@@ -249,9 +180,8 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
 
     outcomes = [decision.expected.outcome for decision in golden.decisions]
     assert outcomes.count(GoldenDecisionOutcome.SELECTED) == 4
-    # JPM now flows through the uniform formula at both cutoffs: negative labor
-    # efficiency -> traditional tier -> P/S above that tier's band -> rejected.
-    assert outcomes.count(GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND) == 4
+    assert outcomes.count(GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT) == 1
+    assert outcomes.count(GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND) == 3
     assert outcomes.count(GoldenDecisionOutcome.EXCLUDED) == 2
 
     by_issuer = {
@@ -259,7 +189,6 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
         for issuer in issuers
     }
     assert by_issuer["issuer:ddog"] == {ExclusionReason.BELOW_CONFIDENCE_FLOOR}
-    # JPM is no longer sector-excluded; a rejected decision carries no reason code.
     assert by_issuer["issuer:jpm"] == {None}
 
     for decision in golden.decisions:
@@ -270,3 +199,5 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
     assert definition.labor_efficiency.unit.dimension is FactorDimension.REPORTING_CURRENCY_PER_EMPLOYEE
     assert definition.price_to_sales.unit.dimension is FactorDimension.DIMENSIONLESS
     assert definition.tier_valuation.unit.dimension is FactorDimension.DIMENSIONLESS
+    assert definition.price_to_gross_profit is not None
+    assert definition.price_to_gross_profit.unit.dimension is FactorDimension.DIMENSIONLESS

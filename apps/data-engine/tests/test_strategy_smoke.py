@@ -57,18 +57,21 @@ def test_excluded_and_rejected_issuers_carry_no_rank_or_weight() -> None:
 def test_financial_issuer_flows_through_the_uniform_formula_and_is_rejected() -> None:
     decisions, _ = RUNNER.run()
 
-    jpm = [item for item in decisions if item.issuer_id == "issuer:jpm"]
+    jpm = {item.cutoff_at: item for item in decisions if item.issuer_id == "issuer:jpm"}
     assert len(jpm) == 2
-    for decision in jpm:
+    for decision in jpm.values():
         # The v0 formula is uniform (2026-07-18 owner decision): JPM takes the
         # identical capital-adjusted path. Its large balance sheet drives labor
-        # efficiency negative -> traditional tier -> P/S above that band, so it
-        # is rejected exactly like any other over-valued issuer, not sector-excluded.
+        # efficiency negative -> traditional tier.
         assert decision.capital_adjusted_labor_efficiency is not None
         assert decision.capital_adjusted_labor_efficiency < 0
         assert decision.tier == "traditional"
-        assert decision.outcome == "rejected_valuation_above_tier_band"
         assert decision.exclusion_reason is None
+
+    # Under definition 1.0.0 (P/GP basis): at 2026-03-31 P/GP 9.1393 is in-band (<= 10.00)
+    # but ranks beyond selection count; at 2026-06-30 P/GP 10.1699 is above band upper bound.
+    assert jpm["2026-03-31T23:59:59Z"].outcome == "ranked_beyond_selection_count"
+    assert jpm["2026-06-30T23:59:59Z"].outcome == "rejected_valuation_above_tier_band"
 
 
 def test_below_confidence_floor_issuer_is_excluded_despite_complete_inputs() -> None:

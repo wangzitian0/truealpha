@@ -169,7 +169,7 @@ def test_card_id_fails_closed_on_mismatch() -> None:
 def test_negative_value_flows_through_unmodified() -> None:
     card = GOLDEN_CARDS["negative"]()
     gap = next(m for m in card.subjects[0].metrics if m.label == "valuation_gap")
-    assert gap.value == "-0.3250"
+    assert gap.value == "-0.6845"
 
 
 def test_multi_currency_value_is_not_clipped_or_converted() -> None:
@@ -314,8 +314,8 @@ def test_claim_class_is_most_conservative_across_multiple_sections() -> None:
 def test_ranking_card_preserves_rank_order() -> None:
     card = GOLDEN_CARDS["ranking"]()
     ranks = [(s.subject_id, s.rank) for s in card.subjects]
-    assert ranks[0] == ("issuer:adm", 1)
-    assert ranks[1] == ("issuer:nice", 2)
+    assert ranks[0] == ("issuer:nice", 1)
+    assert ranks[1] == ("issuer:adm", 2)
 
 
 def test_card_rejects_unknown_field() -> None:

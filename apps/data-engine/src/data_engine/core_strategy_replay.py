@@ -1,7 +1,7 @@
 """Preview replay: run large_model_value_v0 against #335's golden fixture.
 
 This reproduces the ten hand-verified golden decisions (5 issuers x 2
-cutoffs) from `truealpha_contracts.data/large_model_value_v0_strategy.v1.json`
+cutoffs) from `truealpha_contracts.data/large_model_value_v0_definition_1_0_0.json`
 by projecting the golden corpus into `factors.composite.strategy_evaluator`
 inputs and mapping its decisions onto the mart `Decision` dataclass. The whole
 decision algorithm -- factor orchestration, eligibility, the tier-band verdict,
@@ -55,8 +55,8 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 # same pattern truealpha_contracts.strategy_run_fixture already uses.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FIXTURE_PACKAGE = "truealpha_contracts.data"
-_FIXTURE_NAME = "large_model_value_v0_strategy.v1.json"
-CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
+_FIXTURE_NAME = "large_model_value_v0_definition_1_0_0.json"
+CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 STRATEGY_ID = "large_model_value_v0"
 
 

@@ -67,12 +67,16 @@ from factors.backtest.engine import (
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.forest import IssuerClass
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
+from truealpha_contracts.strategy import (
+    GoldenDecisionOutcome,
+    LargeModelValueV0Definition,
+    QuarterlyCutoffSchedule,
+    live_risk_free_rate,
+)
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_by_symbol
-from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     HistoryIssuer,
@@ -188,13 +192,14 @@ def decide(
     issuers: Mapping[str, HistoryIssuer],
     definition: LargeModelValueV0Definition,
     *,
-    risk_free_rate: Decimal,
+    risk_free_rate: Decimal | None = None,
 ) -> list[CutoffDecision]:
     """Evaluate the strategy at each cutoff over the inputs of that cutoff only."""
     decisions: list[CutoffDecision] = []
     for cutoff in cutoffs:
+        rate = live_risk_free_rate(cutoff) if risk_free_rate is None else risk_free_rate
         inputs = [replace(item, issuer_class=_issuer_class(issuers.get(item.issuer_id))) for item in inputs_at(cutoff)]
-        evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=risk_free_rate)
+        evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=rate)
         selected: list[str] = []
         tickers: list[str] = []
         evaluator_weights: set[Decimal | None] = set()
@@ -393,7 +398,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs}
     snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
 
-    decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, risk_free_rate=RISK_FREE_RATE)
+    decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition)
     if not any(decision.weights for decision in decisions):
         outcomes: dict[str, int] = {}
         for decision in decisions:
@@ -455,7 +460,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
             [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
         ),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
-        "risk_free_rate": str(RISK_FREE_RATE),
+        "risk_free_rate": str(live_risk_free_rate(cutoffs[-1])) if cutoffs else str(live_risk_free_rate()),
         "capital": str(NOTIONAL_CAPITAL),
         "benchmark_rule": BENCHMARK_RULE,
     }

@@ -135,8 +135,12 @@ def test_company_values_reproduce_strategy_fixture_exactly() -> None:
             values[result.label] = result.value
 
     assert values["capital_adjusted_labor_efficiency"] == str(decision.capital_adjusted_labor_efficiency)
-    assert values["current_price_to_sales"] == str(decision.current_price_to_sales)
-    assert values["target_price_to_sales"] == str(decision.target_price_to_sales)
+    if decision.valuation_basis == "price_to_gross_profit":
+        assert values["current_price_to_gross_profit"] == str(decision.current_price_to_gross_profit)
+        assert values["target_price_to_gross_profit"] == str(decision.target_price_to_gross_profit)
+    else:
+        assert values["current_price_to_sales"] == str(decision.current_price_to_sales)
+        assert values["target_price_to_sales"] == str(decision.target_price_to_sales)
     assert values["valuation_gap"] == str(decision.valuation_gap)
     assert values["target_weight"] == str(decision.target_weight)
     assert values["tier"] == decision.tier.value
@@ -230,8 +234,8 @@ def test_valuation_section_reports_the_basis_of_the_decision() -> None:
 def test_ranking_is_ordered_and_reproduces_ranks() -> None:
     report = _build("theme_ranking")
     ranked = [(s.subject_id, s.rank) for s in report.subjects]
-    assert ranked[0] == ("issuer:adm", 1)
-    assert ranked[1] == ("issuer:nice", 2)
+    assert ranked[0] == ("issuer:nice", 1)
+    assert ranked[1] == ("issuer:adm", 2)
     # Unranked members follow, sorted by issuer id.
     assert [s for s, _ in ranked[2:]] == ["issuer:ddog", "issuer:jpm", "issuer:shop"]
 

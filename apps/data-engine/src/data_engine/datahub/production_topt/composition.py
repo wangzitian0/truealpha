@@ -46,7 +46,6 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from typing import Any, NoReturn
 
 import psycopg
@@ -75,6 +74,9 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+
+# The four semantics, their owners, freshness windows and routes are declared once in
+from truealpha_contracts.strategy import live_risk_free_rate
 
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
@@ -111,14 +113,10 @@ from data_engine.datahub.production_topt.universe_corpus import (
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
 from data_engine.release_identity import measure as measure_release_identity
 
-# The four semantics, their owners, freshness windows and routes are declared once in
 # source_registrations.py (#72); this module derives, never enumerates.
 SEMANTIC_TYPES = registered_semantic_types()
 _RELEASE_SEMANTICS = RELEASE_SEMANTICS
 _MAX_ATTEMPTS = 3
-#: The one risk-free rate of the deployed path: the GPPE materialization, the live strategy
-#: replay and the nightly backtest read it here. A6 decision 3 records it as a constant.
-RISK_FREE_RATE = Decimal("0.05")
 
 
 def live_version_for(cutoff: datetime) -> str:
@@ -994,7 +992,9 @@ def run_topt_pipeline(
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=RISK_FREE_RATE))
+    results = core.materialize(
+        snapshot, gppe_definition=GppeV0Definition(risk_free_rate=live_risk_free_rate(snapshot.cutoff))
+    )
 
     graded = quality_report.build_report(connection, plan.run_id)
     return ToptPipelineResult(
