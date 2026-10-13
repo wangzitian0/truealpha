@@ -995,8 +995,8 @@ def test_a_real_refused_row_with_a_partition_is_accepted(connection: psycopg.Con
     row = _purity_row()
     _insert_purity_row(connection, row)
     cursor = connection.execute(
-        "select count(*) from mart.issuer_theme_purity where theme_purity_id = %s",
-        (row["theme_purity_id"],),
+        "select count(*) from mart.issuer_theme_purity where run_id = %s and issuer_id = %s",
+        (row["run_id"], row["issuer_id"]),
     )
     assert cursor.fetchone()[0] == 1
 
