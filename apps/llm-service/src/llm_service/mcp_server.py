@@ -566,12 +566,6 @@ class PostgresEtfProfileReader:
                         where fund_id = %(clean_id)s
                            or fund_id = %(series_candidate)s
                            or fund_id in (
-                               select entity_id
-                               from staging.kg_identifiers
-                               where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                                  or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                           )
-                           or fund_id in (
                                select entity_id::text
                                from mart.entity_identity
                                where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
@@ -583,16 +577,11 @@ class PostgresEtfProfileReader:
                             case
                                 when fund_id = %(clean_id)s or fund_id = %(series_candidate)s then 1
                                 when fund_id in (
-                                    select entity_id from staging.kg_identifiers
-                                    where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                                       or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                                ) then 2
-                                when fund_id in (
                                     select entity_id::text from mart.entity_identity
                                     where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
                                        or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
-                                ) then 3
-                                else 4
+                                ) then 2
+                                else 3
                             end asc,
                             cutoff desc,
                             created_at desc
@@ -626,12 +615,6 @@ class PostgresEtfProfileReader:
                         where v.fund_id = %(target_fund_id)s
                            or v.fund_id = %(series_candidate)s
                            or v.fund_id in (
-                               select entity_id
-                               from staging.kg_identifiers
-                               where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                                  or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                           )
-                           or v.fund_id in (
                                select entity_id::text
                                from mart.entity_identity
                                where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
@@ -643,9 +626,9 @@ class PostgresEtfProfileReader:
                             case
                                 when v.fund_id = %(target_fund_id)s or v.fund_id = %(series_candidate)s then 1
                                 when v.fund_id in (
-                                    select entity_id from staging.kg_identifiers
-                                    where (identifier_type = 'ticker' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
-                                       or (identifier_type = 'sec_series' and upper(identifier_value) in (%(upper_token)s, %(clean_upper)s))
+                                    select entity_id::text from mart.entity_identity
+                                    where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
+                                       or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
                                 ) then 2
                                 else 3
                             end asc,

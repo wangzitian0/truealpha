@@ -58,5 +58,5 @@ alpha; that requires a separate empirical claim and evidence.
 | **Module 6: Pure-Blood Company Screening** | `factors.base.theme_purity` | Segment revenue exposure purity | **[Building]** | Core logic implemented; full production schedule under M2-B (#772) |
 | **Module 7: Three-Tier Valuation Gap** | `factors.composite.three_tier_valuation` | P/GP tier gap against GPPE (definition 1.0.0, #1235) | **[Live]** | Composite factor verified; definition locked in contracts |
 | **Xiaohongshu Card Deck Generation** | `contracts/research_cards` | Automated material export | **[Building]** | Contract defined; Next.js server-side Satori PNG export in progress |
-| **Conversational Research Q&A** | `apps/app-web` `/research/conversations` | Natural language fact retrieval | **[Building]** | Tier 3 in roadmap; routes currently under construction |
+| **Conversational Research Q&A** | `apps/llm-service` MCP | Natural language fact retrieval | **[Building]** | Tier 3 in roadmap; served via FastAPI MCP endpoint (`apps/llm-service`); web prototype routes retired |
 

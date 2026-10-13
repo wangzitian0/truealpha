@@ -26,13 +26,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MART_READERS = REPO_ROOT / "apps" / "app-web" / "src" / "server" / "mart"
+RESEARCH_ROUTES = REPO_ROOT / "apps" / "app-web" / "src" / "app" / "research"
+SCAN_ROOTS = (MART_READERS, RESEARCH_ROUTES)
 
 #: Aggregation the App may not perform. `count(` is deliberately absent: counting rows a
 #: reader already holds is presentation, not a new metric.
 FORBIDDEN = (
     re.compile(r"\bsum\s*\(", re.IGNORECASE),
     re.compile(r"\bavg\s*\(", re.IGNORECASE),
-    re.compile(r"\bover\s*\(\s*partition\b", re.IGNORECASE),
+    re.compile(r"\bstddev\s*\(", re.IGNORECASE),
+    re.compile(r"\bvariance\s*\(", re.IGNORECASE),
+    re.compile(r"\bover\s*\(", re.IGNORECASE),
 )
 
 #: file name -> the issue that authorized the aggregate. Empty on purpose: every
@@ -40,28 +44,33 @@ FORBIDDEN = (
 ALLOWED: dict[str, str] = {}
 
 
-def offenders(root: Path = MART_READERS) -> list[tuple[Path, int, str]]:
+def offenders(roots: tuple[Path, ...] = SCAN_ROOTS) -> list[tuple[Path, int, str]]:
     found: list[tuple[Path, int, str]] = []
-    for path in sorted(root.glob("*.ts")):
-        if path.name in ALLOWED:
+    for root in roots:
+        if not root.is_dir():
             continue
-        for number, line in enumerate(path.read_text().splitlines(), start=1):
-            # A comment explaining the rule is not a violation of it.
-            stripped = line.strip()
-            if stripped.startswith(("*", "//", "/*")):
-                continue
-            if any(pattern.search(line) for pattern in FORBIDDEN):
-                found.append((path, number, stripped))
+        for ext in ("*.ts", "*.tsx"):
+            for path in sorted(root.rglob(ext)):
+                if path.name in ALLOWED:
+                    continue
+                for number, line in enumerate(path.read_text().splitlines(), start=1):
+                    # A comment explaining the rule is not a violation of it.
+                    stripped = line.strip()
+                    if stripped.startswith(("*", "//", "/*")):
+                        continue
+                    if any(pattern.search(line) for pattern in FORBIDDEN):
+                        found.append((path, number, stripped))
     return found
 
 
 def main() -> int:
-    if not MART_READERS.is_dir():
-        print(f"no mart reader directory at {MART_READERS}", file=sys.stderr)
-        return 1
+    for root in SCAN_ROOTS:
+        if not root.is_dir():
+            print(f"no directory at {root}", file=sys.stderr)
+            return 1
     found = offenders()
     if not found:
-        print(f"app-layer aggregation check: {MART_READERS.relative_to(REPO_ROOT)}/*.ts compute no cross-row metric")
+        print("app-layer aggregation check: web layer computes no cross-row metric")
         return 0
     for path, number, line in found:
         location = f"{path.relative_to(REPO_ROOT)}:{number}"
