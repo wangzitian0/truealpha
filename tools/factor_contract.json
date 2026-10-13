@@ -109,13 +109,6 @@
         "revenue"
       ]
     },
-    "registered_composite_probe": {
-      "function": "registered_composite_probe",
-      "kind": "composite",
-      "module": 7,
-      "module_path": "libs/factors/src/factors/composite/registered_composite_probe.py",
-      "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-composite-probe') -> FactorOutputDraft"
-    },
     "three_tier_valuation": {
       "function": "three_tier_valuation",
       "kind": "composite",
