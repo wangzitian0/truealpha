@@ -22,10 +22,12 @@ Rules this module enforces:
   writer does. There is no blended value.
 * ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
   before the cutoff date. Shares are as filed (A6 decision 4), on the share basis of that close
-  (#1257): a split with an ex-date after the filing and on or before the close's session
-  multiplies the filed count. Without it, NVDA at 2024-06-30 multiplied a pre-split count by a
-  post-split close, its market value fell tenfold, and the strategy selected it. The split events
-  come from the two stored price series (``datahub.price_series``).
+  (#1257): a split with an ex-date after the count's basis date and on or before the close's
+  session multiplies the filed count. The basis date of a cover-page count is its own date; the
+  basis date of a statement count is its filing date, because the filing restates it for an
+  earlier split (``share_count_as_of``). Without this rule, NVDA at 2024-06-30 multiplied a
+  pre-split count by a post-split close, its market value fell tenfold, and the strategy selected
+  it. The split events come from the two stored price series (``datahub.price_series``).
 * Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
   and under its entity UUID. The universe is the set of entities those ids name, and each history
   is written under the entity UUID. No row is written under a legacy id.

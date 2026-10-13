@@ -24,7 +24,7 @@ The repository cannot meet rule 16 today.
 1. Every run before #1121 is a `preview`. The run summary and the report name the price basis `split_adjusted_preview`.
 2. Returns use split-adjusted bars. The run applies no explicit events, so A5's ban on mixing adjusted prices with explicit actions holds.
 3. The run is a price return. It omits dividends. The strategy definition declares a constant risk-free rate.
-4. Market value is the unadjusted close times the as-filed share count. The prices PR adds `adjust = 'none'` bars. Every reader of `staging.market_prices_daily` filters on `adjust`.
+4. Market value is the unadjusted close times the as-filed share count. The prices PR adds `adjust = 'none'` bars. Every reader of `staging.market_prices_daily` filters on `adjust`. Amended 2026-10-13 (#1257): the share count is put on the share basis of the close; see the status update.
 5. Fills happen at the next open after the signal date. The run reports a benchmark.
 6. The universe is the frozen `universe:topt-us-2026-03-31`. The report prints the survivorship bias this causes.
 7. A run pins four values: the engine id, the adapter version (the image git sha), the strategy definition sha256 and a data-snapshot hash. `run_id` derives from them. The value `default_snapshot` is forbidden.
@@ -52,9 +52,18 @@ each decision:
   stops the run.
 - Decision 3 holds. No dividend source exists. `mart.backtest_runs.claim_ceiling` records
   `price_return_no_dividends`. The risk-free rate is the constant `RISK_FREE_RATE` of the live path.
-- Decision 4 holds. Market value at each cutoff is the unadjusted close times the as-filed share
-  count, from the projector's `last_close` and `shares_outstanding` inputs. The backtest reads
-  each price series by its `adjust` value.
+- Decision 4 is amended (#1257). Market value at each cutoff is the unadjusted close times the
+  share count on the share basis of that close. The projector multiplies the filed count by each
+  split with an ex-date after the count's basis date and on or before the close's session. The
+  basis date of a cover-page count is its own date. The basis date of a statement count is its
+  filing date, because the filing restates it for an earlier split. Without this rule, NVDA at
+  2024-06-30 and NFLX at 2025-12-31 had a market value ten times too small and were selected. The
+  backtest reads each price series by its `adjust` value.
+- The corrected share row wins by `knowable_at`: it is appended with the close's knowable time,
+  later than the filed row, and the reader takes the latest `knowable_at` first. A later
+  correction with an earlier `knowable_at` would lose to the row it corrects. So a spurious split
+  must stop the run before it writes a row, and it does: a ratio step that is not a simple split
+  ratio, or that the unadjusted price does not confirm, raises `SplitDerivationError`.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
