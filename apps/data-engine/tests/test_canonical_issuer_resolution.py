@@ -992,7 +992,13 @@ def _insert_purity_row(connection: psycopg.Connection[Any], row: dict[str, Any])
 
 
 def test_a_real_refused_row_with_a_partition_is_accepted(connection: psycopg.Connection[Any]) -> None:
-    _insert_purity_row(connection, _purity_row())
+    row = _purity_row()
+    _insert_purity_row(connection, row)
+    cursor = connection.execute(
+        "select count(*) from mart.issuer_theme_purity where run_id = %s and issuer_id = %s",
+        (row["run_id"], row["issuer_id"]),
+    )
+    assert cursor.fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("column", _PARTITION_COLUMNS)

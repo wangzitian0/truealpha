@@ -26,11 +26,8 @@ def test_gate_blocks_once_budget_exhausted(tmp_path, monkeypatch):
     ledger.gate("get_rating_change", "test")
     ledger.record("get_rating_change", "test", ok=True)
 
-    try:
+    with pytest.raises(ledger.BudgetExceededError):
         ledger.gate("get_rating_change", "test")
-        raise AssertionError("expected BudgetExceededError")
-    except ledger.BudgetExceededError:
-        pass
 
 
 def test_record_counts_failed_calls_too(tmp_path, monkeypatch):

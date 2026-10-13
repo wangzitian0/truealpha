@@ -112,8 +112,10 @@ def vendor(monkeypatch):
 
 
 def test_the_error_cassettes_are_the_bytes_the_vendor_sent() -> None:
-    for cassette in (_AUTH, _NO_EOD, _NO_SERIES, _MINUTE):
-        _bytes(cassette)
+    cassettes = (_AUTH, _NO_EOD, _NO_SERIES, _MINUTE)
+    assert len(cassettes) == 4
+    for cassette in cassettes:
+        assert len(_bytes(cassette)) == cassette[2]
 
 
 def test_a_revoked_key_is_raised_and_counted_not_read_as_no_end_of_day(vendor, call_ledger, caplog) -> None:

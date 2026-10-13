@@ -30,6 +30,8 @@ def test_every_question_is_registered_once() -> None:
 
 
 def test_every_column_names_a_registered_factor_with_its_module() -> None:
+    columns = [col for item in QUESTION_REQUIREMENTS for col in item.columns]
+    assert len(columns) > 0, "No factor columns found in QUESTION_REQUIREMENTS"
     for item in QUESTION_REQUIREMENTS:
         for column in item.columns:
             spec = FACTOR_REGISTRY.get(column.factor)
@@ -37,10 +39,22 @@ def test_every_column_names_a_registered_factor_with_its_module() -> None:
             assert spec.module == column.module, f"{column.factor}: registry module {spec.module} != {column.module}"
 
 
-def test_a_question_without_a_column_names_the_issue_that_owns_it() -> None:
+def test_every_question_declares_an_owning_issue() -> None:
+    assert len(QUESTION_REQUIREMENTS) == 6
     for item in QUESTION_REQUIREMENTS:
-        if not item.has_column:
-            assert item.tracking_issue.startswith("#")
+        assert item.tracking_issue.startswith("#"), f"{item.question} must declare an owning issue"
+
+
+def test_a_question_without_a_column_requires_tracking_issue() -> None:
+    """Contract: if a requirement has no factor column, it must still name an owning tracking issue."""
+    item = QuestionRequirement(
+        question=Question.Q1_MODEL_LEVERAGE,
+        columns=(),
+        standards=(),
+        tracking_issue="#999",
+    )
+    assert not item.has_column
+    assert item.tracking_issue.startswith("#")
 
 
 def test_the_registry_sha_moves_with_the_mapping() -> None:

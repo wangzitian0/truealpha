@@ -143,10 +143,14 @@ def test_build_routes_payload_still_satisfies_the_strict_identity_model() -> Non
     every listing-identity/universe-membership row, not just this test's fixture."""
     from data_engine.datahub.production_topt.materialization import IdentityPayload
 
+    validated_count = 0
     for published_at in (datetime(2026, 2, 10, tzinfo=UTC), None):
         context = _context(universe_published_at=published_at)
         adapter = build_route(context, [_cell("wi-1")])
-        IdentityPayload.model_validate(adapter.targets["wi-1"].payload)
+        validated = IdentityPayload.model_validate(adapter.targets["wi-1"].payload)
+        assert validated is not None
+        validated_count += 1
+    assert validated_count == 2
 
 
 def test_an_unknown_knowable_at_basis_is_refused_before_it_can_land() -> None:

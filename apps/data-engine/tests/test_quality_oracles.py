@@ -147,12 +147,14 @@ def connection():
 def test_every_invariant_executes_and_returns_a_count(connection) -> None:
     """Validity only. An empty CI database satisfies every invariant vacuously, which is
     precisely why passing here is not evidence about production data."""
+    assert len(INVARIANTS) > 0
     results = check(connection)
     assert len(results) == len(INVARIANTS)
-    assert all(item.violations >= 0 for item in results)
+    assert all(isinstance(item.violations, int) for item in results)
 
 
 def test_each_invariant_declares_why_it_needs_no_domain_knowledge() -> None:
+    assert len(INVARIANTS) > 0
     for invariant in INVARIANTS:
         assert invariant.self_evident_because, f"{invariant.id} must say why it is self-evident"
         assert invariant.statement

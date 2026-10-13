@@ -1,3 +1,4 @@
+import pytest
 from truealpha_contracts.metrics import (
     METRICS,
     MetricSpec,
@@ -27,6 +28,7 @@ def test_every_module_core_metric_is_registered():
 
 
 def test_priorities_are_nonempty_and_deduplicated():
+    assert len(METRICS) > 0
     for name, spec in METRICS.items():
         assert spec.source_priority, name
         assert len(set(spec.source_priority)) == len(spec.source_priority), name
@@ -41,11 +43,8 @@ def test_fusion_rank_orders_declared_sources_and_excludes_others():
 
 def test_unregistered_metric_fails_loud():
     # Fusion must not invent an order for a metric nobody declared.
-    try:
+    with pytest.raises(KeyError):
         source_priority("share_of_wallet")
-    except KeyError:
-        return
-    raise AssertionError("expected KeyError for unregistered metric")
 
 
 def test_gross_profit_declares_the_financial_issuer_branch():

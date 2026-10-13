@@ -33,13 +33,16 @@ def _resolve_local_reference(schema: dict[str, object], reference: str) -> objec
 
 
 def test_every_public_pydantic_contract_has_a_closed_json_schema() -> None:
+    examined_count = 0
     for name in truealpha_contracts.__all__:
         contract = getattr(truealpha_contracts, name)
         if not isinstance(contract, type) or not issubclass(contract, BaseModel):
             continue
         schema = contract.model_json_schema(mode="validation")
+        examined_count += 1
         for reference in _schema_references(schema):
             _resolve_local_reference(schema, reference)
+    assert examined_count >= 50, f"Expected at least 50 Pydantic contracts, examined {examined_count}"
 
 
 # --- #731: the aggregate is frozen ------------------------------------------------------

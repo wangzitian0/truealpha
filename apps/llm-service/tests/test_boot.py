@@ -35,7 +35,7 @@ def test_a_local_boot_tolerates_what_nothing_injects(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("S3_ENDPOINT", raising=False)
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="dev"))
-    main.refuse_to_boot_on_a_missing_environment()
+    assert main.refuse_to_boot_on_a_missing_environment() is None
 
 
 def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
