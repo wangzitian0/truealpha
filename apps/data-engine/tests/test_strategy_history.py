@@ -139,6 +139,10 @@ def _no_price(_symbol: str, _cutoff: datetime) -> LastClose | None:
     return None
 
 
+def _no_splits(_symbol: str) -> tuple:
+    return ()
+
+
 def _no_headcount(_cik: int, _as_of: date) -> HeadcountFact | None:
     return None
 
@@ -157,6 +161,7 @@ def _rows(
         load_facts=_loader({issuer.cik: document}),
         headcount_extractor=headcount,
         last_close=last_close,
+        split_events=_no_splits,
         ruleset=DEFAULT_RULESET,
     )
     return list(projection.rows)
@@ -606,7 +611,9 @@ def test_h1_query_over_20_issuers_and_every_history_cutoff_lists_every_input_bef
     assert len(cutoffs) == 48
     for issuer in issuers:
         for cutoff in cutoffs:
+            # Both stored series, as production holds them: the projector derives splits from the pair (#1257).
             _insert_bar(connection, issuer.ticker, cutoff.date() - timedelta(days=1), "50")
+            _insert_bar(connection, issuer.ticker, cutoff.date() - timedelta(days=1), "50", adjust="splits")
 
     summary = run_strategy_history(connection, tick=TICK, issuers=issuers, load_facts=_loader(documents))
 
@@ -764,6 +771,7 @@ def test_headcount_from_the_fact_table_obeys_the_strict_date_rule(connection) ->
         load_facts=_loader({issuer.cik: _doc()}),
         headcount_extractor=PostgresHeadcountExtractor(connection),
         last_close=_no_price,
+        split_events=_no_splits,
         ruleset=DEFAULT_RULESET,
     )
     rows = list(projection.rows)

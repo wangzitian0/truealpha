@@ -162,3 +162,14 @@ def test_strategy_weights_sum_to_exactly_one_when_six_are_selected() -> None:
     assert sum(decision.weights.values()) == 1
     assert sorted(decision.weights.values())[-1] == Decimal("0.166667")
     TargetPortfolio(Q1, decision.weights)
+
+
+def test_unadjusted_bars_without_a_split_adjusted_series_stop_split_derivation() -> None:
+    """#1257: without the second series no split can be seen, so no share count or return can rely on it."""
+    from data_engine.datahub.price_series import split_events_of
+
+    unadjusted = {"ONE": {date(2024, 6, 7): (Decimal("100"), Decimal("100"))}}
+
+    with pytest.raises(SplitDerivationError, match="without split-adjusted bars"):
+        split_events_of("ONE", unadjusted, {})
+    assert split_events_of("NONE", {}, {}) == (), "a symbol with no bar has no split"

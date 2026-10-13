@@ -39,7 +39,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
-from factors.backtest.corporate_actions import SeriesBar, SplitEvent, derive_split_events
+from factors.backtest.corporate_actions import SplitEvent
 from factors.backtest.engine import (
     BENCHMARK_RULE,
     CLAIM_CEILING,
@@ -68,6 +68,7 @@ from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_of
 from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
@@ -220,46 +221,14 @@ def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
 
 # -- prices -----------------------------------------------------------------------------
 
-DailySeries = dict[str, dict[date, tuple[Decimal | None, Decimal | None]]]
-
-_SERIES_SQL = """
-select distinct on (symbol, trading_date) symbol, trading_date, open, close
-from staging.market_prices_daily
-where symbol = any(%s) and adjust = %s
-order by symbol, trading_date, recorded_at desc
-"""
-
-
-def load_daily_series(connection: psycopg.Connection[Any], symbols: Sequence[str], *, adjust: str) -> DailySeries:
-    """The latest vintage of each daily bar of one series, as (open, close) per symbol and session."""
-    series: DailySeries = {}
-    for symbol, trading_date, open_, close in connection.execute(_SERIES_SQL, (list(symbols), adjust)).fetchall():
-        series.setdefault(symbol, {})[trading_date] = (open_, close)
-    return series
-
 
 def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
     """Unadjusted bars and the split events the two series show. Raise on an ambiguous split."""
     bars: dict[str, dict[date, Bar]] = {}
     splits: list[SplitEvent] = []
     for symbol in sorted(unadjusted):
-        adjusted = split_adjusted.get(symbol, {})
         bars[symbol] = {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
-        sessions = sorted(set(unadjusted[symbol]) | set(adjusted))
-        splits.extend(
-            derive_split_events(
-                symbol,
-                [
-                    SeriesBar(
-                        session=day,
-                        unadjusted_open=unadjusted[symbol].get(day, (None, None))[0],
-                        unadjusted_close=unadjusted[symbol].get(day, (None, None))[1],
-                        split_adjusted_close=adjusted.get(day, (None, None))[1],
-                    )
-                    for day in sessions
-                ],
-            )
-        )
+        splits.extend(split_events_of(symbol, unadjusted, split_adjusted))
     return PriceBook(bars=bars, splits=tuple(splits))
 
 
@@ -721,7 +690,6 @@ __all__ = [
     "benchmark_never_filled",
     "decide",
     "deployed_code_identity",
-    "load_daily_series",
     "persist_backtest_run",
     "price_book",
     "price_snapshot_sha256",

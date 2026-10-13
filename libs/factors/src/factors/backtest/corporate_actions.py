@@ -158,6 +158,22 @@ def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEv
     return tuple(events)
 
 
+def split_factor_between(events: Sequence[SplitEvent], *, after: date, through: date) -> Fraction:
+    """The product of the factors of the splits with an ex-date in ``(after, through]``; 1 when none.
+
+    #1257: a share count filed on ``after`` is on the share basis of its filing. A close of the
+    session ``through`` is on the basis of that session. Multiplying the count by this factor
+    puts both on one basis, so their product is the market value. A split on the filing date
+    itself is taken as reflected in the filing: GAAP restates share counts for a split before
+    the statements are issued.
+    """
+    factor = Fraction(1)
+    for event in events:
+        if after < event.ex_date <= through:
+            factor *= event.factor
+    return factor
+
+
 __all__ = [
     "MAX_FACTOR_DENOMINATOR",
     "RATIO_TOLERANCE",
@@ -165,4 +181,5 @@ __all__ = [
     "SplitDerivationError",
     "SplitEvent",
     "derive_split_events",
+    "split_factor_between",
 ]

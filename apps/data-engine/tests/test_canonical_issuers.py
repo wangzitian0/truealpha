@@ -161,3 +161,94 @@ def test_a_signed_predecessor_keyed_by_the_legacy_id_still_applies_to_the_canoni
     assert (issuer.predecessor_cik, issuer.predecessor_signed) == (1257999, True)
     assert resolved.merged == {both.legacy_issuer_id: both.canonical_issuer_id}
     assert resolved.canonical_ids == frozenset({both.canonical_issuer_id})
+
+
+# -- #1257 replay finding: a filed share count and a later close must share one share basis -----
+
+
+def _seed_split_series(connection, ticker: str, *, ex_date, sessions) -> None:
+    """Two stored series of one symbol with a 10-for-1 split on ``ex_date``."""
+    from decimal import Decimal
+
+    from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
+
+    unadjusted, adjusted = [], []
+    for index, day in enumerate(sessions):
+        close = Decimal(1000) * (1 + Decimal("0.001") * index)
+        close = close / 10 if day >= ex_date else close
+        factor = Decimal(10) if day < ex_date else Decimal(1)
+        unadjusted.append(PriceBarRecord(ticker, day, close, close, close, close, Decimal(1000)))
+        adjusted.append(
+            PriceBarRecord(ticker, day, close / factor, close / factor, close / factor, close / factor, Decimal(1000))
+        )
+    insert_market_prices_daily(connection, unadjusted, adjust="none")
+    insert_market_prices_daily(connection, adjusted, adjust="splits")
+
+
+def test_a_share_count_filed_before_a_split_is_put_on_the_basis_of_the_close(connection) -> None:
+    """The replay of the staging export found NVDA selected at 2024-06-30: its last close (2024-06-28)
+    was after the 10:1 split of 2024-06-10, its share count was filed on 2024-05-29, before it. The
+    product understated the market value tenfold. Red on the code before the fix: the projector
+    writes the filed count unchanged. After it, the count at a cutoff after the split carries the
+    factor, and becomes knowable with the close."""
+    from datetime import date
+
+    from data_engine.datahub.market_prices import is_xnys_trading_day
+
+    issuer = mint_issuer(
+        connection, lei="H1257SPLITXXXXXXXX00", mic="XNAS", ticker="H1257S", cik=1_257_301, known_at=MINTED_AT
+    )
+    document = annual_company_facts(base=5000, years=range(2018, 2025))
+    # FY2024's count, filed 2025-02-20, is already on the post-split basis.
+    for entry in document["facts"]["us-gaap"]["CommonStockSharesOutstanding"]["units"]["shares"]:
+        if entry["fy"] == 2024:
+            entry["val"] *= 10
+    store = MemoryStore()
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                issuer.canonical_issuer_id, issuer.canonical_listing_id, issuer.cik, "non_financial", at(2024, 3, 1)
+            )
+        ],
+        company_facts={issuer.cik: document},
+        store=store,
+        cutoff=at(2024, 3, 1),
+    )
+    connection.execute("delete from staging.strategy_backtest_inputs")
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
+        values (%s, '2024-03-02T00:00:00Z', 'revenue', '1', '0.9', '2024-03-01T00:00:00Z')
+        """,
+        (issuer.canonical_issuer_id,),
+    )
+    first, last = date(2024, 1, 2), date(2025, 3, 31)
+    sessions = [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
+    _seed_split_series(
+        connection, "H1257S", ex_date=date(2024, 6, 10), sessions=[d for d in sessions if is_xnys_trading_day(d)]
+    )
+
+    summary = project_deployed_history(connection, tick=at(2025, 4, 15), months=16, store=store)
+
+    def shares_at(cutoff: str):
+        return connection.execute(
+            """
+            select value, knowable_at from staging.strategy_backtest_inputs
+            where issuer_id = %s and cutoff_at = %s and input_key = 'shares_outstanding'
+            order by knowable_at desc, recorded_at desc limit 1
+            """,
+            (issuer.canonical_issuer_id, cutoff),
+        ).fetchone()
+
+    filed = 5_000_000 + 2023
+    before, after, refiled = (
+        shares_at("2024-03-31T23:59:59Z"),
+        shares_at("2024-06-30T23:59:59Z"),
+        shares_at("2025-03-31T23:59:59Z"),
+    )
+    assert before[0] == filed, "before the split, the filed count stands"
+    assert after[0] == filed * 10, "after the split, the filed count is put on the basis of the close"
+    assert after[1] == datetime(2024, 6, 28, 20, 0, tzinfo=UTC), "the product is knowable at the close's session close"
+    assert refiled[0] == (5_000_000 + 2024) * 10, "a count filed after the split is already on the new basis"
+    assert summary.split_adjusted > 0

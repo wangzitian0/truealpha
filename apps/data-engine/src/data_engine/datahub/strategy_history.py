@@ -21,7 +21,11 @@ Rules this module enforces:
 * Each input carries its own filed date and its own fiscal period, exactly where the live
   writer does. There is no blended value.
 * ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
-  before the cutoff date. Shares are as filed (A6 decision 4).
+  before the cutoff date. Shares are as filed (A6 decision 4), on the share basis of that close
+  (#1257): a split with an ex-date after the filing and on or before the close's session
+  multiplies the filed count. Without it, NVDA at 2024-06-30 multiplied a pre-split count by a
+  post-split close, its market value fell tenfold, and the strategy selected it. The split events
+  come from the two stored price series (``datahub.price_series``).
 * Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
   and under its entity UUID. The universe is the set of entities those ids name, and each history
   is written under the entity UUID. No row is written under a legacy id.
@@ -47,6 +51,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
 import psycopg
+from factors.backtest.corporate_actions import SplitEvent, split_factor_between
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
@@ -55,6 +60,7 @@ from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
+from data_engine.datahub.price_series import load_daily_series, split_events_of
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
@@ -75,6 +81,8 @@ DEFAULT_MONTHS = 36
 #: The ``adjust`` value of the unadjusted daily bars (#1131, ``market_prices.UNADJUSTED``).
 #: Market value is the unadjusted close times the as-filed share count (A6 decision 4).
 UNADJUSTED_BARS = "none"
+#: The ``adjust`` value of the split-adjusted daily bars (``market_prices.SPLIT_ADJUSTED``).
+SPLIT_ADJUSTED_BARS = "splits"
 
 _COMPANY_FACTS_PREFIX = "companyfacts:CIK"
 #: The payload carries a period series as ``<metric>_by_period``. Its filings sit in the
@@ -83,6 +91,8 @@ _PERIOD_SERIES_SUFFIX = "_periods"
 
 #: The input row this module writes beside the financial inputs.
 _LAST_CLOSE_KEY = "last_close"
+#: The share count that multiplies ``last_close`` into a market value.
+_SHARES_KEY = "shares_outstanding"
 
 FactsLoader = Callable[[int], tuple[bytes, dict[str, Any]] | None]
 
@@ -100,6 +110,8 @@ class LastClose(NamedTuple):
 
 
 PriceReader = Callable[[str, datetime], LastClose | None]
+#: The split events of one symbol, oldest first.
+SplitReader = Callable[[str], tuple[SplitEvent, ...]]
 
 
 @dataclass(frozen=True)
@@ -139,6 +151,8 @@ class Projection:
     no_outcome: int = 0
     #: Inputs dropped because the payload names no filing for them.
     undated: int = 0
+    #: Share rows put on the share basis of their close by a split after the filing (#1257).
+    split_adjusted: int = 0
 
 
 @dataclass(frozen=True)
@@ -153,6 +167,8 @@ class HistorySummary:
     unresolved_issuers: tuple[str, ...] = ()
     #: Old-generation ids that name a projected entity. Their history is written under the entity UUID.
     merged_ids: int = 0
+    #: Share rows put on the share basis of their close by a split after the filing (#1257).
+    split_adjusted: int = 0
 
 
 # -- cutoffs and the strict date rule ---------------------------------------------------
@@ -284,6 +300,21 @@ def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
         return None if row is None else LastClose(Decimal(row[0]), Decimal(row[1]), row[2])
 
     return last_close
+
+
+def postgres_split_events(connection: psycopg.Connection[Any]) -> SplitReader:
+    """The split events of a symbol, derived from its two stored daily series.
+
+    Raise ``SplitDerivationError`` when the two series disagree: a share count cannot be put on
+    the basis of a close when the splits between them are unknown.
+    """
+
+    def split_events(symbol: str) -> tuple[SplitEvent, ...]:
+        unadjusted = load_daily_series(connection, [symbol], adjust=UNADJUSTED_BARS)
+        split_adjusted = load_daily_series(connection, [symbol], adjust=SPLIT_ADJUSTED_BARS)
+        return split_events_of(symbol, unadjusted, split_adjusted)
+
+    return split_events
 
 
 def load_stored_company_facts(
@@ -527,6 +558,7 @@ def project_issuer_rows(
     load_facts: FactsLoader,
     headcount_extractor: HeadcountExtractor,
     last_close: PriceReader,
+    split_events: SplitReader,
     ruleset: ConceptMappingRuleset,
 ) -> Projection:
     """The input rows of one issuer at each cutoff. Reads only. Writes nothing.
@@ -547,7 +579,8 @@ def project_issuer_rows(
         return build_bundle(facts, as_of, branch, raw_bytes=body, ruleset=ruleset)
 
     rows: list[HistoryRow] = []
-    no_outcome = undated = 0
+    no_outcome = undated = split_adjusted = 0
+    splits: tuple[SplitEvent, ...] | None = None
     for cutoff_at in cutoffs:
         as_of = cutoff_at.astimezone(UTC).date() - timedelta(days=1)
         item = _work_item(issuer, cutoff_at)
@@ -581,21 +614,18 @@ def project_issuer_rows(
             undated += len(expected) - len(projected)
         else:
             no_outcome += 1
-        for input_key, value, confidence, knowable_at, fiscal_period in projected:
-            rows.append(
-                _checked(
-                    HistoryRow(
-                        issuer.issuer_id,
-                        cutoff_at,
-                        input_key,
-                        Decimal(str(value)),
-                        confidence,
-                        knowable_at,
-                        fiscal_period,
-                    )
-                )
-            )
         bar = last_close(issuer.ticker, cutoff_at)
+        for input_key, value, confidence, knowable_at, fiscal_period in projected:
+            row = HistoryRow(
+                issuer.issuer_id, cutoff_at, input_key, Decimal(str(value)), confidence, knowable_at, fiscal_period
+            )
+            if input_key == _SHARES_KEY and fiscal_period is None and bar is not None:
+                if splits is None:
+                    splits = split_events(issuer.ticker)
+                on_basis = _on_close_basis(row, bar, splits)
+                split_adjusted += on_basis is not row
+                row = on_basis
+            rows.append(_checked(row))
         if bar is not None:
             rows.append(
                 _checked(
@@ -604,7 +634,23 @@ def project_issuer_rows(
                     )
                 )
             )
-    return Projection(tuple(rows), no_outcome=no_outcome, undated=undated)
+    return Projection(tuple(rows), no_outcome=no_outcome, undated=undated, split_adjusted=split_adjusted)
+
+
+def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent]) -> HistoryRow:
+    """The share row on the share basis of ``bar``, or the row itself when no split lies between.
+
+    The filed count is on the basis of its filing date. A split with an ex-date after that date
+    and on or before the close's session multiplies it. The product is knowable once the close
+    is: the close's session is on or after the ex-date, and before the cutoff date.
+    """
+    factor = split_factor_between(
+        splits, after=shares.knowable_at.astimezone(UTC).date(), through=bar.knowable_at.astimezone(UTC).date()
+    )
+    if factor == 1:
+        return shares
+    value = shares.value * Decimal(factor.numerator) / Decimal(factor.denominator)
+    return dataclasses.replace(shares, value=value, knowable_at=max(shares.knowable_at, bar.knowable_at))
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
@@ -676,6 +722,7 @@ def run_strategy_history(
     months: int = DEFAULT_MONTHS,
     headcount_extractor: HeadcountExtractor | None = None,
     last_close: PriceReader | None = None,
+    split_events: SplitReader | None = None,
     ruleset: ConceptMappingRuleset | None = None,
     schedule: QuarterlyCutoffSchedule | None = None,
 ) -> HistorySummary:
@@ -689,17 +736,25 @@ def run_strategy_history(
     cutoffs = history_cutoffs(tick, months, schedule if schedule is not None else load_strategy_definition().schedule)
     extractor = headcount_extractor if headcount_extractor is not None else PostgresHeadcountExtractor(connection)
     reader = last_close if last_close is not None else postgres_last_close(connection)
+    splits = split_events if split_events is not None else postgres_split_events(connection)
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
-    inserted = already_present = no_outcome = undated = 0
+    inserted = already_present = no_outcome = undated = split_adjusted = 0
     for issuer in issuers:
         projection = project_issuer_rows(
-            issuer, cutoffs, load_facts=load_facts, headcount_extractor=extractor, last_close=reader, ruleset=rules
+            issuer,
+            cutoffs,
+            load_facts=load_facts,
+            headcount_extractor=extractor,
+            last_close=reader,
+            split_events=splits,
+            ruleset=rules,
         )
         skipped = _write_new_rows(connection, issuer, projection.rows)
         already_present += skipped
         inserted += len(projection.rows) - skipped
         no_outcome += projection.no_outcome
         undated += projection.undated
+        split_adjusted += projection.split_adjusted
     return HistorySummary(
         issuers=len(issuers),
         cutoffs=len(cutoffs),
@@ -707,6 +762,7 @@ def run_strategy_history(
         already_present=already_present,
         no_outcome=no_outcome,
         undated=undated,
+        split_adjusted=split_adjusted,
     )
 
 

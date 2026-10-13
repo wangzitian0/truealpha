@@ -18,8 +18,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.backtest import load_daily_series
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
+from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.strategy_history import postgres_last_close
 from data_engine.datahub.universe_mask import UniverseMaskReason, compute_and_persist_universe_mask_from_db
 from data_engine.lanes.market_data import _distinct_trading_dates
@@ -167,7 +167,7 @@ def test_a_reader_cannot_omit_the_adjust_filter(name: str) -> None:
 #: Every file that names a price table, with what it does there. A new file in this scan
 #: needs a row here AND a test above that fails when its query drops the `adjust` filter.
 REVIEWED_PRICE_TABLE_FILES = {
-    "apps/data-engine/src/data_engine/datahub/backtest.py": "reader, tested by test_load_daily_series_*",
+    "apps/data-engine/src/data_engine/datahub/price_series.py": "reader, tested by test_load_daily_series_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
