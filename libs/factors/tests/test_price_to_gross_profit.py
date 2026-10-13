@@ -1,12 +1,17 @@
+import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import polars as pl
 import pytest
 from factors import FACTOR_REGISTRY
 from factors.base.price_to_gross_profit import PRICE_TO_GROSS_PROFIT_EXPRESSION_DEFINITION, price_to_gross_profit
-from factors.expressions.compiler import compile_expression
 from factors.types import Fact, UnitFamily
+
+# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from expression_oracle.compiler import compile_expression  # noqa: E402
 
 _AS_OF = datetime(2026, 10, 8, tzinfo=UTC)
 _UNIT_FAMILY = {
