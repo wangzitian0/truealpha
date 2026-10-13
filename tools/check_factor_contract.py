@@ -41,7 +41,6 @@ QUESTIONS = REPO / "libs" / "contracts" / "src" / "truealpha_contracts" / "quest
 NOT_A_QUESTION_COLUMN = {
     "three_tier_valuation": "the module-7 composite; `tier` is the strategy's sorting, and q1 is answered by gppe (#770)",
     "registered_semantic_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
-    "registered_composite_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
 }
 
 

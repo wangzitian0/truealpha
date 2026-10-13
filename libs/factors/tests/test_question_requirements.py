@@ -12,7 +12,6 @@ import factors.base.peg  # noqa: F401
 import factors.base.price_to_sales  # noqa: F401
 import factors.base.supply_chain_exposure  # noqa: F401
 import factors.base.theme_purity  # noqa: F401
-import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 from factors.registry import FACTOR_REGISTRY
 from truealpha_contracts.question_requirements import (
