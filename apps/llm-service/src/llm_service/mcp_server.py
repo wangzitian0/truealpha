@@ -188,6 +188,8 @@ class PostgresCompanyProfileReader:
                                d.valuation_gap::text as valuation_gap,
                                d.current_price_to_sales::text as current_price_to_sales,
                                d.target_price_to_sales::text as target_price_to_sales,
+                               d.current_price_to_gross_profit::text as current_price_to_gross_profit,
+                               d.target_price_to_gross_profit::text as target_price_to_gross_profit,
                                d.outcome,
                                d.rank,
                                d.peg::text as peg,
@@ -308,6 +310,21 @@ class PostgresCompanyProfileReader:
             if decision_row and decision_row.get("target_price_to_sales") is not None
             else None
         )
+        # #1235: definition 1.0.0 values by P/GP. The gap divides the multiple named by
+        # `valuation_basis`; a reader must not read a P/GP gap against a P/S figure.
+        current_pgp = (
+            str(decision_row["current_price_to_gross_profit"])
+            if decision_row and decision_row.get("current_price_to_gross_profit") is not None
+            else None
+        )
+        target_pgp = (
+            str(decision_row["target_price_to_gross_profit"])
+            if decision_row and decision_row.get("target_price_to_gross_profit") is not None
+            else None
+        )
+        valuation_basis = (
+            "price_to_gross_profit" if target_pgp is not None else "price_to_sales" if target_ps is not None else None
+        )
         peg = str(decision_row["peg"]) if decision_row and decision_row.get("peg") is not None else None
         peg_rank = int(decision_row["peg_rank"]) if decision_row and decision_row.get("peg_rank") is not None else None
         peg_reason_codes = (
@@ -346,8 +363,11 @@ class PostgresCompanyProfileReader:
             "issuer_id": resolved_issuer_id,
             "tier": tier,
             "valuation_gap": valuation_gap,
+            "valuation_basis": valuation_basis,
             "current_price_to_sales": current_ps,
             "target_price_to_sales": target_ps,
+            "current_price_to_gross_profit": current_pgp,
+            "target_price_to_gross_profit": target_pgp,
             "peg": peg,
             "peg_rank": peg_rank,
             "peg_reason_codes": peg_reason_codes,
@@ -366,8 +386,11 @@ class PostgresCompanyProfileReader:
                 "outcome": outcome,
                 "tier": tier,
                 "valuation_gap": valuation_gap,
+                "valuation_basis": valuation_basis,
                 "current_price_to_sales": current_ps,
                 "target_price_to_sales": target_ps,
+                "current_price_to_gross_profit": current_pgp,
+                "target_price_to_gross_profit": target_pgp,
                 "peg": peg,
                 "peg_rank": peg_rank,
                 "peg_reason_codes": peg_reason_codes,
@@ -530,6 +553,7 @@ class PostgresEtfProfileReader:
                                to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
                                to_char(report_period, 'YYYY-MM-DD') as report_period,
                                weighted_valuation_gap::text as weighted_valuation_gap,
+                               valuation_basis,
                                total_weight_pct::text as total_weight_pct,
                                resolved_weight_pct::text as resolved_weight_pct,
                                valued_weight_pct::text as valued_weight_pct,
@@ -662,6 +686,11 @@ class PostgresEtfProfileReader:
             if fund_row and fund_row.get("weighted_valuation_gap") is not None
             else None
         )
+        # #1235: the multiple the weighted gap divides, as the producer recorded it. None before
+        # #1235 and on a refused aggregate; a P/GP run and a P/S run never read the same.
+        weighted_gap_basis = (
+            str(fund_row["valuation_basis"]) if fund_row and fund_row.get("valuation_basis") is not None else None
+        )
         total_weight = (
             str(fund_row["total_weight_pct"]) if fund_row and fund_row.get("total_weight_pct") is not None else "0.00"
         )
@@ -695,6 +724,7 @@ class PostgresEtfProfileReader:
             "cutoff": cutoff,
             "report_period": report_period,
             "weighted_valuation_gap": weighted_gap,
+            "weighted_valuation_gap_basis": weighted_gap_basis,
             "total_weight_pct": total_weight,
             "resolved_weight_pct": resolved_weight,
             "valued_weight_pct": valued_weight,
@@ -902,7 +932,13 @@ def build_mcp_server(
     )
     active_backtest: BacktestReader = backtest_reader if backtest_reader is not None else _default_backtest_reader()
 
-    @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
+    @server.tool(
+        name="strategy_run",
+        description=(
+            "Read the latest large_model_value_v0 Core Strategy run. Under definition 1.0.0 each decision's "
+            "valuation_gap divides P/GP (current/target_price_to_gross_profit) and target_price_to_sales is null."
+        ),
+    )
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
         return active_repository.get_latest(strategy_id=request.strategy_id, context=_service_access_context())
 
@@ -956,7 +992,9 @@ def build_mcp_server(
         name="company_360_profile",
         description=(
             "Read an issuer's comprehensive 360 profile across gross-profit-per-employee (GPPE), "
-            "three-tier valuation tag, valuation gap, historical CAGR PEG, and theme purity."
+            "three-tier valuation tag, valuation gap, historical CAGR PEG, and theme purity. "
+            "valuation_basis names the multiple the gap divides: P/GP (market value / gross profit) "
+            "under strategy definition 1.0.0, P/S under 0.1.0."
         ),
     )
     def company_360_profile(request: CompanyProfileToolRequest) -> dict[str, Any]:

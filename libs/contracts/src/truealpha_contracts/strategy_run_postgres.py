@@ -110,7 +110,8 @@ _DECISIONS_SQL = (
     """
     select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
            d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
-           d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
+           d.current_price_to_sales, d.target_price_to_sales,
+           d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,
            d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
            d.labor_efficiency_metric, t.confidence
 """
@@ -133,6 +134,9 @@ def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
         capital_adjusted_labor_efficiency=row["capital_adjusted_labor_efficiency"],
         current_price_to_sales=row["current_price_to_sales"],
         target_price_to_sales=row["target_price_to_sales"],
+        # #1235: the P/GP pair of definition 1.0.0; both twins carry it.
+        current_price_to_gross_profit=row["current_price_to_gross_profit"],
+        target_price_to_gross_profit=row["target_price_to_gross_profit"],
         valuation_gap=row["valuation_gap"],
         # From mart.topt_core_results (same join as the TypeScript twin); None when the
         # run is bound to no capture or its capture has no core result for the issuer,

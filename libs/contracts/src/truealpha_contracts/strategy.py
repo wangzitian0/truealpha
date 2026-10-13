@@ -1,12 +1,18 @@
-"""Versioned ``large_model_value_v0`` strategy definition and golden decisions.
+"""Versioned ``large_model_value_v0`` strategy definitions and golden decisions.
 
-This module carries the first product artifact for the large_model_value_v0
-strategy: a serializable, frozen, versioned definition of the v0 semantics
-locked on 2026-07-17, plus typed golden-decision models that anchor
-engineering regressions.  The v0 core metric is capital-adjusted gross profit
-per employee::
+This module carries the product artifact for the large_model_value_v0 strategy:
+serializable, frozen, versioned definitions of its semantics, plus typed
+golden-decision models that anchor engineering regressions.  The core metric is
+capital-adjusted gross profit per employee::
 
     (gross_profit - total_assets * risk_free_rate) / headcount
+
+Two definition versions exist. Definition 0.1.0 (locked 2026-07-17) values the
+issuer by price-to-sales against provisional bands. Definition 1.0.0 (owner
+decision 2026-10-12, #1235) values the issuer by market value over gross profit
+(P/GP) against reviewed bands. Both are instances of one schema; the valuation
+basis is a field of the tier-valuation definition, so 0.1.0 keeps its content
+hash and stays loadable for history.
 
 Design invariants:
 
@@ -26,14 +32,24 @@ Design invariants:
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from importlib import resources
 from itertools import pairwise
-from typing import Literal, Self
+from typing import Any, Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.models import _require_aware
@@ -133,6 +149,9 @@ class ExclusionReason(StrEnum):
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_LABOR_COST = "nonpositive_labor_cost"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"
+    #: Definition 1.0.0 divides market value by gross profit. Zero or negative gross
+    #: profit gives no P/GP multiple, so the issuer cannot be valued (#1235).
+    NONPOSITIVE_GROSS_PROFIT = "nonpositive_gross_profit"
 
 
 class RiskFreeInstrument(StrEnum):
@@ -276,6 +295,95 @@ class PriceToSalesDefinition(_StrictFrozenModel):
         return self
 
 
+class PriceToGrossProfitDefinition(_StrictFrozenModel):
+    """Market value over gross profit (P/GP), the valuation basis of definition 1.0.0.
+
+    Market value uses the same rule as price-to-sales. Gross profit is the same
+    latest-complete-fiscal-year gross profit that the labor-efficiency numerator uses,
+    so one input feeds both the tier and the multiple (#1235).
+    """
+
+    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    factor_key: Literal["price_to_gross_profit"]
+    factor_version: str = Field(pattern=_VERSION_PATTERN)
+    market_value_rule: Literal["shares_outstanding_times_last_unadjusted_close"]
+    price_rule: Literal["last_unadjusted_close_at_or_before_cutoff"]
+    shares_rule: Literal["latest_knowable_shares_outstanding_at_or_before_cutoff"]
+    gross_profit_rule: Literal["latest_complete_fiscal_year_gross_profit"]
+    unit: FactorUnitSpec
+    quantization: DecimalQuantization
+    missing_market_value_reason: ExclusionReason
+    missing_gross_profit_reason: ExclusionReason
+    nonpositive_gross_profit_reason: ExclusionReason
+
+    @field_validator("factor_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "factor_version")
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
+            raise ValueError("price-to-gross-profit is a dimensionless ratio")
+        if self.missing_market_value_reason is not ExclusionReason.MISSING_MARKET_VALUE_INPUT:
+            raise ValueError("missing market-value inputs must use their exact reason code")
+        if self.missing_gross_profit_reason is not ExclusionReason.MISSING_GROSS_PROFIT_FACT:
+            raise ValueError("missing gross profit must use its exact reason code")
+        if self.nonpositive_gross_profit_reason is not ExclusionReason.NONPOSITIVE_GROSS_PROFIT:
+            raise ValueError("nonpositive gross profit must use its exact reason code")
+        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        return self
+
+
+class ValuationBasis(StrEnum):
+    """The multiple that a tier band targets. It names the factor that computes it."""
+
+    PRICE_TO_SALES = "price_to_sales"
+    PRICE_TO_GROSS_PROFIT = "price_to_gross_profit"
+
+
+_TIER_ORDER = {
+    ValuationTier.TRADITIONAL: 0,
+    ValuationTier.TECH: 1,
+    ValuationTier.LARGE_MODEL_NATIVE: 2,
+}
+
+
+class _TierBand(Protocol):
+    @property
+    def tier(self) -> ValuationTier: ...
+    @property
+    def labor_efficiency_lower_bound(self) -> Decimal | None: ...
+    @property
+    def labor_efficiency_upper_bound(self) -> Decimal | None: ...
+
+
+def _ordered_tier_bands[BandT: _TierBand](bands: tuple[BandT, ...]) -> tuple[BandT, ...]:
+    """Sort bands into tier order and refuse a set that does not partition the domain."""
+
+    ordered = tuple(sorted(bands, key=lambda item: _TIER_ORDER[item.tier]))
+    if {band.tier for band in ordered} != set(ValuationTier):
+        raise ValueError("tier bands require exactly traditional, tech, and large-model-native")
+    if ordered[0].labor_efficiency_lower_bound is not None or ordered[-1].labor_efficiency_upper_bound is not None:
+        raise ValueError("tier bands must cover the complete labor-efficiency domain")
+    for left, right in pairwise(ordered):
+        if left.labor_efficiency_upper_bound != right.labor_efficiency_lower_bound:
+            raise ValueError("tier bands must be contiguous and unambiguous")
+    return ordered
+
+
+def _band_for[BandT: _TierBand](bands: tuple[BandT, ...], labor_efficiency: Decimal) -> BandT:
+    """The one band whose labor-efficiency range holds the value: lower inclusive, upper exclusive."""
+
+    for band in bands:
+        lower_ok = band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
+        upper_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
+        if lower_ok and upper_ok:
+            return band
+    raise ValueError("tier bands do not cover the supplied labor efficiency")  # pragma: no cover
+
+
 class ProvisionalTierBand(_StrictFrozenModel):
     tier: ValuationTier
     labor_efficiency_lower_bound: Decimal | None
@@ -303,16 +411,19 @@ class ProvisionalTierBand(_StrictFrozenModel):
             raise ValueError("tier target P/S lower bound must be below its upper bound")
         return self
 
+    @property
+    def target_lower_bound(self) -> Decimal:
+        """The band's lower target multiple, in the basis of its definition (P/S here)."""
+        return self.target_ps_lower_bound
 
-_TIER_ORDER = {
-    ValuationTier.TRADITIONAL: 0,
-    ValuationTier.TECH: 1,
-    ValuationTier.LARGE_MODEL_NATIVE: 2,
-}
+    @property
+    def target_upper_bound(self) -> Decimal:
+        """The band's upper target multiple, in the basis of its definition (P/S here)."""
+        return self.target_ps_upper_bound
 
 
 class ThreeTierValuationDefinition(_StrictFrozenModel):
-    """Three-tier P/S bands over the labor-efficiency domain; thresholds provisional."""
+    """Definition 0.1.0: three-tier P/S bands over the labor-efficiency domain; thresholds provisional."""
 
     factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
@@ -334,37 +445,116 @@ class ThreeTierValuationDefinition(_StrictFrozenModel):
     def validate_and_identify(self) -> Self:
         if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
             raise ValueError("target P/S is a dimensionless ratio")
-        bands = tuple(sorted(self.bands, key=lambda item: _TIER_ORDER[item.tier]))
-        if {band.tier for band in bands} != set(ValuationTier):
-            raise ValueError("tier bands require exactly traditional, tech, and large-model-native")
-        if bands[0].labor_efficiency_lower_bound is not None or bands[-1].labor_efficiency_upper_bound is not None:
-            raise ValueError("tier bands must cover the complete labor-efficiency domain")
-        for left, right in pairwise(bands):
-            if left.labor_efficiency_upper_bound != right.labor_efficiency_lower_bound:
-                raise ValueError("tier bands must be contiguous and unambiguous")
-        object.__setattr__(self, "bands", bands)
+        object.__setattr__(self, "bands", _ordered_tier_bands(self.bands))
         _identify(self, id_field="factor_definition_id", prefix="factor-definition")
         return self
 
-    def band_for(self, labor_efficiency: Decimal, *, gross_margin: Decimal | None = None) -> ProvisionalTierBand:
-        for band in self.bands:
-            lower_ok = (
-                band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
-            )
-            upper_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
-            if lower_ok and upper_ok:
-                # Anti-fraud margin gate: thin-margin retail/wholesale businesses (e.g. Costco)
-                # cannot enter Tech or Large Model Native tiers regardless of gross labor efficiency
-                if gross_margin is not None and gross_margin < Decimal("0.35"):
-                    if band.tier in (ValuationTier.TECH, ValuationTier.LARGE_MODEL_NATIVE):
-                        return next(b for b in self.bands if b.tier == ValuationTier.TRADITIONAL)
-                return band
-        raise ValueError("tier bands do not cover the supplied labor efficiency")  # pragma: no cover
+    @property
+    def valuation_basis(self) -> ValuationBasis:
+        """Definition 0.1.0 values the issuer by P/S. A property, so the content hash is unchanged."""
+        return ValuationBasis.PRICE_TO_SALES
+
+    def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
+        # #1235: the band lookup is data only. The 0.35 gross-margin gate that 0.1.0 was
+        # published with is a named legacy rule of that one definition version, in
+        # factors.composite.three_tier_valuation (LEGACY_V0_MARGIN_GATE), not part of this lookup.
+        return _band_for(self.bands, labor_efficiency)
+
+
+class PriceToGrossProfitTierBand(_StrictFrozenModel):
+    """One reviewed tier band of definition 1.0.0: a labor-efficiency range and its target P/GP range."""
+
+    tier: ValuationTier
+    labor_efficiency_lower_bound: Decimal | None
+    labor_efficiency_upper_bound: Decimal | None
+    target_pgp_lower_bound: Decimal = Field(gt=0)
+    target_pgp_upper_bound: Decimal = Field(gt=0)
+
+    @field_validator(
+        "labor_efficiency_lower_bound",
+        "labor_efficiency_upper_bound",
+        "target_pgp_lower_bound",
+        "target_pgp_upper_bound",
+        mode="before",
+    )
+    @classmethod
+    def reject_float_bounds(cls, value: object) -> object:
+        return None if value is None else _reject_binary_float(value)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> Self:
+        if self.labor_efficiency_lower_bound is not None and self.labor_efficiency_upper_bound is not None:
+            if self.labor_efficiency_lower_bound >= self.labor_efficiency_upper_bound:
+                raise ValueError("tier labor-efficiency lower bound must be below its upper bound")
+        if self.target_pgp_lower_bound >= self.target_pgp_upper_bound:
+            raise ValueError("tier target P/GP lower bound must be below its upper bound")
+        return self
+
+    @property
+    def target_lower_bound(self) -> Decimal:
+        """The band's lower target multiple, in the basis of its definition (P/GP here)."""
+        return self.target_pgp_lower_bound
+
+    @property
+    def target_upper_bound(self) -> Decimal:
+        """The band's upper target multiple, in the basis of its definition (P/GP here)."""
+        return self.target_pgp_upper_bound
+
+
+class ThreeTierPgpValuationDefinition(_StrictFrozenModel):
+    """Definition 1.0.0: three-tier P/GP bands over the labor-efficiency domain (#1235).
+
+    The band values are the owner's business decision. They are data in the packaged
+    definition file and nowhere else; this class holds only their shape and invariants.
+    """
+
+    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    factor_key: Literal["three_tier_valuation"]
+    factor_version: str = Field(pattern=_VERSION_PATTERN)
+    valuation_basis: Literal[ValuationBasis.PRICE_TO_GROSS_PROFIT]
+    bands: tuple[PriceToGrossProfitTierBand, ...] = Field(min_length=3, max_length=3)
+    boundary_rule: Literal["lower_inclusive_upper_exclusive"]
+    target_pgp_selection: Literal["band_midpoint"]
+    provisional_thresholds: bool
+    unit: FactorUnitSpec
+    quantization: DecimalQuantization
+
+    @field_validator("factor_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "factor_version")
+
+    @field_validator("valuation_basis", mode="before")
+    @classmethod
+    def parse_basis(cls, value: object) -> object:
+        # Strict mode admits only the enum member; JSON carries its text value.
+        return ValuationBasis(value) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
+            raise ValueError("target P/GP is a dimensionless ratio")
+        object.__setattr__(self, "bands", _ordered_tier_bands(self.bands))
+        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        return self
+
+    def band_for(self, labor_efficiency: Decimal) -> PriceToGrossProfitTierBand:
+        return _band_for(self.bands, labor_efficiency)
+
+
+#: The gap-rule pair each valuation basis uses. A definition must use the pair of its basis.
+_GAP_RULES: dict[ValuationBasis, tuple[str, str]] = {
+    ValuationBasis.PRICE_TO_SALES: ("target_ps_over_current_ps_minus_one", "target_ps/current_ps-1"),
+    ValuationBasis.PRICE_TO_GROSS_PROFIT: ("target_pgp_over_current_pgp_minus_one", "target_pgp/current_pgp-1"),
+}
 
 
 class ValuationGapRule(_StrictFrozenModel):
-    rule_id: Literal["target_ps_over_current_ps_minus_one"]
-    formula: Literal["target_ps/current_ps-1"]
+    """Gap = target multiple midpoint / current multiple - 1, in the basis of the tier bands."""
+
+    rule_id: Literal["target_ps_over_current_ps_minus_one", "target_pgp_over_current_pgp_minus_one"]
+    formula: Literal["target_ps/current_ps-1", "target_pgp/current_pgp-1"]
     quantization: DecimalQuantization
     above_band_outcome: Literal["rejected_valuation_above_tier_band"]
     ranking_direction: Literal["descending_valuation_gap"]
@@ -435,23 +625,30 @@ class QuarterlyCutoffSchedule(_StrictFrozenModel):
 
 
 class LargeModelValueV0Definition(_StrictFrozenModel):
-    """Complete versioned semantics of the v0 strategy; engine identity lives elsewhere.
+    """Complete versioned semantics of the large_model_value_v0 strategy; engine identity lives elsewhere.
 
     The content hash covers every semantic parameter and no engine coordinate,
     so re-running the same definition on a different engine build provably
     reuses the same semantics.
+
+    The class is named for the strategy, not for a definition version. Definition
+    0.1.0 values by P/S against provisional bands. Definition 1.0.0 values by P/GP
+    against reviewed bands and also records P/S. A P/S definition has no
+    ``price_to_gross_profit`` member, and the serializer omits the absent member,
+    so the 0.1.0 content hash is the one pinned before P/GP existed (#1235).
     """
 
     strategy_definition_id: str = Field(default="", pattern=r"^(?:|strategy-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     strategy_id: Literal["large_model_value_v0"]
     definition_version: str = Field(pattern=_VERSION_PATTERN)
-    provisional_semantics: Literal[True]
+    provisional_semantics: bool
     universe: UniverseRef
     schedule: QuarterlyCutoffSchedule
     labor_efficiency: CapitalAdjustedLaborEfficiencyDefinition
     price_to_sales: PriceToSalesDefinition
-    tier_valuation: ThreeTierValuationDefinition
+    price_to_gross_profit: PriceToGrossProfitDefinition | None = None
+    tier_valuation: ThreeTierValuationDefinition | ThreeTierPgpValuationDefinition
     valuation_gap: ValuationGapRule
     eligibility: ConfidenceEligibilityRule
     selection: SelectionRule
@@ -465,17 +662,41 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     def reject_mutable_version(cls, value: str) -> str:
         return _reject_mutable_coordinate(value, "definition_version")
 
+    @model_serializer(mode="wrap")
+    def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.price_to_gross_profit is None:
+            data.pop("price_to_gross_profit", None)
+        return data
+
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
-        versions = {
-            self.labor_efficiency.factor_key: self.labor_efficiency.factor_version,
-            self.price_to_sales.factor_key: self.price_to_sales.factor_version,
-            self.tier_valuation.factor_key: self.tier_valuation.factor_version,
-        }
-        if len(versions) != 3:
-            raise ValueError("the strategy requires its three distinct factor definitions")  # pragma: no cover
+        basis = self.tier_valuation.valuation_basis
+        if (basis is ValuationBasis.PRICE_TO_GROSS_PROFIT) != (self.price_to_gross_profit is not None):
+            raise ValueError("a P/GP tier valuation requires exactly the price_to_gross_profit factor definition")
+        if (self.valuation_gap.rule_id, self.valuation_gap.formula) != _GAP_RULES[basis]:
+            raise ValueError("the valuation-gap rule must use the multiple of the tier bands")
+        if self.provisional_semantics != self.tier_valuation.provisional_thresholds:
+            raise ValueError("provisional_semantics must equal the tier valuation's provisional_thresholds")
+        factor_keys = [self.labor_efficiency.factor_key, self.price_to_sales.factor_key, self.tier_valuation.factor_key]
+        if self.price_to_gross_profit is not None:
+            factor_keys.append(self.price_to_gross_profit.factor_key)
+        if len(set(factor_keys)) != len(factor_keys):
+            raise ValueError("the strategy requires distinct factor definitions")  # pragma: no cover
         _identify(self, id_field="strategy_definition_id", prefix="strategy-definition")
         return self
+
+    @property
+    def valuation_basis(self) -> ValuationBasis:
+        """The multiple the tier bands target, the gap divides, and the above-band rule compares."""
+        return self.tier_valuation.valuation_basis
+
+    @property
+    def valuation_quantization(self) -> DecimalQuantization:
+        """The quantization of the current multiple in the valuation basis."""
+        if self.price_to_gross_profit is not None:
+            return self.price_to_gross_profit.quantization
+        return self.price_to_sales.quantization
 
     def required_input_keys(self) -> frozenset[str]:
         """#496: the per-issuer input keys this definition's factors consume,
@@ -488,12 +709,46 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
                 self.labor_efficiency.denominator.value,
                 self.labor_efficiency.capital_charge_base.value,
                 # price_to_sales rules: market value = shares x last close;
-                # sales = latest complete fiscal-year revenue.
+                # sales = latest complete fiscal-year revenue. P/GP divides the same
+                # market value by the gross profit the numerator already consumes.
                 "shares_outstanding",
                 "last_close",
                 "revenue",
             }
         )
+
+
+#: The packaged definition file the deployed tick and the TOPT core engine both read (#1235).
+#: One file holds the band values; ``load_live_strategy_definition`` is the only reader.
+LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
+#: The packaged 0.1.0 corpus. It stays loadable so history keeps its semantics.
+HISTORICAL_V0_DEFINITION_RESOURCE = "large_model_value_v0_strategy.v1.json"
+
+
+def load_strategy_definition_corpus(resource: str) -> dict[str, Any]:
+    """Read one packaged definition file from ``truealpha_contracts.data``."""
+
+    payload = json.loads(resources.files("truealpha_contracts.data").joinpath(resource).read_bytes())
+    if not isinstance(payload, dict):
+        raise ValueError(f"{resource} must decode to a JSON object, got {type(payload).__name__}")
+    return payload
+
+
+def load_strategy_definition(resource: str) -> LargeModelValueV0Definition:
+    """Validate the definition of one packaged file against the content id that the file pins."""
+
+    corpus = load_strategy_definition_corpus(resource)
+    definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+    pinned = corpus["expected"]["strategy_definition_id"]
+    if definition.strategy_definition_id != pinned:
+        raise ValueError(f"{resource}: definition id {definition.strategy_definition_id} != pinned {pinned}")
+    return definition
+
+
+def load_live_strategy_definition() -> LargeModelValueV0Definition:
+    """The definition that the deployed strategy tick and the TOPT core engine evaluate."""
+
+    return load_strategy_definition(LIVE_STRATEGY_DEFINITION_RESOURCE)
 
 
 class ExpressionEngineExecutionBinding(_StrictFrozenModel):
@@ -577,6 +832,14 @@ class GoldenInputRecord(_StrictFrozenModel):
 
 
 class GoldenExpectation(_StrictFrozenModel):
+    """The expected decision for one golden issuer at one cutoff.
+
+    A P/S definition expects a target P/S. A P/GP definition expects the current and
+    target P/GP, records the current P/S, and expects no target P/S. The two P/GP members
+    are omitted from the serialized form when absent, so the 0.1.0 golden set keeps the
+    content hash pinned before P/GP existed (#1235).
+    """
+
     capital_adjusted_labor_efficiency: Decimal | None
     tier: ValuationTier | None
     current_price_to_sales: Decimal | None
@@ -587,6 +850,8 @@ class GoldenExpectation(_StrictFrozenModel):
     exclusion_reason: ExclusionReason | None
     rank: int | None = Field(ge=1)
     target_weight: Decimal | None = Field(ge=0, le=1)
+    current_price_to_gross_profit: Decimal | None = None
+    target_price_to_gross_profit: Decimal | None = None
 
     @field_validator(
         "capital_adjusted_labor_efficiency",
@@ -594,33 +859,44 @@ class GoldenExpectation(_StrictFrozenModel):
         "target_price_to_sales",
         "valuation_gap",
         "target_weight",
+        "current_price_to_gross_profit",
+        "target_price_to_gross_profit",
         mode="before",
     )
     @classmethod
     def reject_float_values(cls, value: object) -> object:
         return None if value is None else _reject_binary_float(value)
 
+    @model_serializer(mode="wrap")
+    def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        for name in ("current_price_to_gross_profit", "target_price_to_gross_profit"):
+            if getattr(self, name) is None:
+                data.pop(name, None)
+        return data
+
     @model_validator(mode="after")
     def validate_outcome_consistency(self) -> Self:
-        factor_fields = (
-            self.capital_adjusted_labor_efficiency,
-            self.tier,
-            self.current_price_to_sales,
-            self.target_price_to_sales,
-            self.valuation_gap,
-        )
+        pgp_fields = (self.current_price_to_gross_profit, self.target_price_to_gross_profit)
         if self.outcome is GoldenDecisionOutcome.EXCLUDED:
             if self.exclusion_reason is None:
                 raise ValueError("an excluded decision requires a machine-readable reason code")
             if self.eligible or self.rank is not None or self.target_weight is not None:
                 raise ValueError("an excluded decision cannot be eligible, ranked, or weighted")
+            if any(value is not None for value in pgp_fields):
+                raise ValueError("an excluded decision carries no P/GP value")
             return self
         if self.exclusion_reason is not None:
             raise ValueError("only excluded decisions carry an exclusion reason")
         if not self.eligible:
             raise ValueError("non-excluded decisions passed eligibility")
-        if any(value is None for value in factor_fields):
+        common = (self.capital_adjusted_labor_efficiency, self.tier, self.current_price_to_sales, self.valuation_gap)
+        if any(value is None for value in common):
             raise ValueError("eligible decisions require every expected factor value")
+        valued_by_sales = self.target_price_to_sales is not None and all(value is None for value in pgp_fields)
+        valued_by_gross_profit = self.target_price_to_sales is None and all(value is not None for value in pgp_fields)
+        if not (valued_by_sales or valued_by_gross_profit):
+            raise ValueError("eligible decisions require the target multiple of exactly one valuation basis")
         if self.outcome is GoldenDecisionOutcome.SELECTED:
             if self.rank is None or self.target_weight is None:
                 raise ValueError("a selected decision requires a rank and a target weight")
@@ -892,9 +1168,13 @@ __all__ = [
     "GoldenDecisionSet",
     "GoldenExpectation",
     "GoldenInputRecord",
+    "HISTORICAL_V0_DEFINITION_RESOURCE",
+    "LIVE_STRATEGY_DEFINITION_RESOURCE",
     "LaborEfficiencyDenominator",
     "LaborEfficiencyNumerator",
     "LargeModelValueV0Definition",
+    "PriceToGrossProfitDefinition",
+    "PriceToGrossProfitTierBand",
     "PriceToSalesDefinition",
     "ProvisionalTierBand",
     "QuarterlyCutoffSchedule",
@@ -903,7 +1183,12 @@ __all__ = [
     "RiskFreeRatePolicy",
     "SelectionRule",
     "StrategyEngineBinding",
+    "ThreeTierPgpValuationDefinition",
     "ThreeTierValuationDefinition",
+    "ValuationBasis",
     "ValuationGapRule",
     "WalkForwardWindow",
+    "load_live_strategy_definition",
+    "load_strategy_definition",
+    "load_strategy_definition_corpus",
 ]

@@ -722,3 +722,67 @@ def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_is
     assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill])
     assert board["count"] == 2
     assert all(i["theme_share"] == "0.5" and i["cik"] == 4242 for i in board["issuers"])
+
+
+def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(theme_database: Any) -> None:
+    """#1235: a 1.0.0 decision's gap divides P/GP. The profile carries the P/GP pair and names
+    the basis, so a caller never reads that gap against the P/S figure beside it."""
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    run_id = "strategy-run:" + "7" * 64
+    theme_database.execute(
+        """
+        insert into mart.strategy_runs (strategy_run_id, content_sha256, strategy_key, strategy_version,
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
+        values (%s, %s, 'large_model_value_v0', '1.0.0', %s, %s, 'preview', %s)
+        """,
+        (run_id, "7" * 64, "a" * 64, "b" * 64, _NEW_CUTOFF),
+    )
+    theme_database.execute(
+        """
+        insert into mart.strategy_decisions (strategy_decision_id, content_sha256, strategy_run_id, issuer_id,
+            cutoff_at, capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
+            current_price_to_gross_profit, target_price_to_gross_profit, valuation_gap, eligible, outcome, rank,
+            target_weight)
+        values (%s, %s, %s, %s, %s, '74439', 'traditional', '1.2420', null, '5.1302', '8.7500', '0.7056', true,
+            'selected', 1, '0.5')
+        """,
+        ("strategy-decision:" + "6" * 64, "6" * 64, run_id, issuer, _NEW_CUTOFF),
+    )
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    assert profile["valuation_basis"] == "price_to_gross_profit"
+    assert profile["current_price_to_gross_profit"] == "5.1302"
+    assert profile["target_price_to_gross_profit"] == "8.7500"
+    assert profile["target_price_to_sales"] is None
+    assert profile["current_price_to_sales"] == "1.2420"
+    assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"
+    assert profile["strategy_decision"]["valuation_gap"] == "0.7056"
+
+
+def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None:
+    """#1235 audit: the fund-level gap averages core gaps of one run, so it divides that run's
+    multiple. The profile carries the producer's recorded basis next to the gap."""
+    from llm_service.mcp_server import PostgresEtfProfileReader
+
+    theme_database.execute(
+        """
+        insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time,
+            cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+            reason_codes, availability_status, source_evidence_status, factor_validation_status)
+        values ('capture-run:mcp-1235', 'etf:series:ZZPGP1235', 'PGP Test Fund', '2026-06-30', %s, %s, 'v0',
+            %s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available',
+            'verified', 'not_evaluated')
+        """,
+        (_NEW_CUTOFF, _NEW_CUTOFF, "c" * 64),
+    )
+
+    profile = PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(
+        fund_id="etf:series:ZZPGP1235"
+    )
+
+    assert profile["weighted_valuation_gap"] == "0.4200"
+    assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"

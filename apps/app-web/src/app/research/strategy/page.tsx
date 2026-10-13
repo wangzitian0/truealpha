@@ -3,7 +3,14 @@ import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
-import type { StrategyRunDecision, StrategyRunOutcome } from "@/contracts/strategyRun";
+import {
+  currentMultipleOf,
+  reportValuationBasis,
+  targetMultipleOf,
+  valuationBasisLabel,
+  type StrategyRunDecision,
+  type StrategyRunOutcome,
+} from "@/contracts/strategyRun";
 
 const STRATEGY_ID = "large_model_value_v0";
 
@@ -40,6 +47,10 @@ export default async function StrategyRunsPage() {
   // guard pattern `dashboard.ts` documents), so this stays conditional.
   const names: Map<string, EntityDisplay> =
     outcome.kind === "ready" ? await loadEntityDisplayMap() : new Map();
+  // #1235: the gap divides the multiple of the run's definition — P/GP under 1.0.0.
+  const basisLabel = valuationBasisLabel(
+    outcome.kind === "ready" ? reportValuationBasis(outcome.report.decisions) : null,
+  );
 
   return (
     <section aria-labelledby="strategy-runs-heading">
@@ -101,7 +112,13 @@ export default async function StrategyRunsPage() {
                   Tier
                 </th>
                 <th scope="col" className="px-4 py-3">
-                  Valuation gap
+                  Current {basisLabel}
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Target {basisLabel}
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Valuation gap ({basisLabel})
                 </th>
                 <th scope="col" className="px-4 py-3">
                   Confidence
@@ -123,6 +140,12 @@ export default async function StrategyRunsPage() {
                   <td className="px-4 py-3">{decision.cutoff_at}</td>
                   <td className="px-4 py-3">{decisionLabel(decision)}</td>
                   <td className="px-4 py-3">{cell(decision.tier)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
+                    {cell(formatRatio(currentMultipleOf(decision)))}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
+                    {cell(formatRatio(targetMultipleOf(decision)))}
+                  </td>
                   <td
                     className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
                     title={decision.valuation_gap ?? undefined}

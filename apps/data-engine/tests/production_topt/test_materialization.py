@@ -42,6 +42,7 @@ from truealpha_contracts.datahub import (
     SourceVintage,
 )
 from truealpha_contracts.evidence_graph import BitemporalStamp, EvidenceNode, EvidenceNodeKind, EvidenceNodeRef
+from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.strategy_run import StrategyRunReport
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
@@ -522,6 +523,24 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert financial.tier is not None
     assert financial.current_ps is not None
     assert financial.reason_codes == ()
+    # #1235: the deployed default tiers with the live strategy definition, the one band set
+    # the strategy tick also reads, and the P/GP valuation reaches its own mart columns.
+    live = load_live_strategy_definition()
+    assert {item.tier_definition_sha256 for item in results} == {live.content_sha256}
+    assert alphabet.current_pgp is not None and alphabet.target_pgp_midpoint is not None
+    assert connection.execute(
+        """
+        select current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint, tier_definition_id
+        from mart.topt_core_results where result_id = %s
+        """,
+        (alphabet.result_id,),
+    ).fetchone() == (
+        alphabet.current_pgp,
+        alphabet.target_pgp_lower,
+        alphabet.target_pgp_upper,
+        alphabet.target_pgp_midpoint,
+        live.strategy_definition_id,
+    )
     identity = ToptCoreIdentity(
         run_id=run.run_id,
         release_manifest_id=release_manifest_id,
@@ -534,6 +553,13 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     reads = repository.results(identity)
     meta_info = repository.meta_info(identity)
     assert len(reads) == len(meta_info) == 20
+    # #1235 audit: the read DTO carries the P/GP valuation and marks the P/S target implied.
+    by_result = {item.result_id: item for item in results}
+    for read in reads:
+        written = by_result[read.result_id]
+        assert (read.current_pgp, read.target_pgp_midpoint) == (written.current_pgp, written.target_pgp_midpoint)
+        assert read.target_ps_is_implied is (written.target_pgp_midpoint is not None)
+    assert all(read.target_ps_is_implied for read in reads if read.availability == "available")
     assert all(item.gppe_invocation_id == results[0].gppe_invocation_id for item in reads)
     assert {item.gppe_result_id for item in reads} == {item.gppe_result_id for item in results}
     assert sorted(len(item.lineage) for item in meta_info) == [4] * 19 + [8]
@@ -603,6 +629,96 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
                 corrupt_sha256,
                 results[1].gppe_result_id,
                 psycopg.types.json.Jsonb(corrupt_payload),
+                results[0].result_id,
+            ),
+        )
+
+    # A P/GP column the payload does not assert is refused like any other column (#1235).
+    pgp_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
+    pgp_payload["current_pgp"] = "1"
+    pgp_sha256 = canonical_sha256(pgp_payload)
+    with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
+        connection.execute(
+            """
+            insert into mart.topt_core_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload
+            )
+            select
+                %s, %s, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, %s
+            from mart.topt_core_results where result_id = %s
+            on conflict (result_id) do nothing
+            """,
+            (
+                f"topt-core-result:{pgp_sha256}",
+                pgp_sha256,
+                psycopg.types.json.Jsonb(pgp_payload),
+                results[0].result_id,
+            ),
+        )
+
+    # #1235 audit: a P/GP valuation is all four values or none. A half-filled available row
+    # (here target_pgp_lower absent, consistently in payload and column) must be refused.
+    half_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
+    half_payload["target_pgp_lower"] = None
+    half_sha256 = canonical_sha256(half_payload)
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="topt_core_results_pgp_values_check"),
+        connection.transaction(),
+    ):
+        connection.execute(
+            """
+            insert into mart.topt_core_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload
+            )
+            select
+                %s, %s, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, null, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, %s
+            from mart.topt_core_results where result_id = %s
+            on conflict (result_id) do nothing
+            """,
+            (
+                f"topt-core-result:{half_sha256}",
+                half_sha256,
+                psycopg.types.json.Jsonb(half_payload),
                 results[0].result_id,
             ),
         )

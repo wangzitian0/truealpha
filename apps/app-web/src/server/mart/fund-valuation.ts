@@ -19,6 +19,7 @@
  * multi-fund tranche's problem.
  */
 
+import type { ValuationBasis } from "@/contracts/strategyRun";
 import { withMartReadonly } from "./db";
 import type { MartClientLike } from "./topt-gppe-repository";
 
@@ -27,7 +28,14 @@ export type ValuedHoldingRow = {
   ticker: string | null;
   weightPct: string | null;
   currentPs: string | null;
+  /** The band midpoint on a row of the former P/S bands. On a P/GP row (currentPgp set) it is
+   * IMPLIED: the P/S that the P/GP band gives at the issuer's own gross margin. Render the
+   * P/GP target for such a row, or label this one implied. */
   targetPsMidpoint: string | null;
+  /** #1235: the P/GP valuation of a core row tiered by strategy definition 1.0.0. Null on a
+   * row of the former P/S bands; then the gap divides P/S and targetPsMidpoint is its band. */
+  currentPgp: string | null;
+  targetPgpMidpoint: string | null;
   valuationGap: string | null;
   tier: string | null;
   availability: string | null;
@@ -47,6 +55,9 @@ export type FundValuation = {
    * mart.fund_virtual_company. Null when the factor REFUSED the aggregate on coverage
    * (see availabilityStatus/reasonCodes) or when no consolidation row exists. */
   weightedGap: string | null;
+  /** #1235: the multiple the weighted gap divides, as the producer recorded it from the run's
+   * core rows. Null on a row written before #1235 and on a refused aggregate. */
+  weightedGapBasis: ValuationBasis | null;
   /** The three §8 status dimensions of the consolidation row (#747); null when the
    * tick wrote no row for this fund — an absent aggregate, not a failed one. */
   availabilityStatus: string | null;
@@ -83,6 +94,8 @@ const VALUED_LINES_SQL = `
          v.percent_of_net_assets::text as weight_pct,
          r.current_ps::text as current_ps,
          r.target_ps_midpoint::text as target_ps_midpoint,
+         r.current_pgp::text as current_pgp,
+         r.target_pgp_midpoint::text as target_pgp_midpoint,
          r.valuation_gap::text as valuation_gap,
          r.tier,
          r.availability
@@ -92,10 +105,14 @@ const VALUED_LINES_SQL = `
            c.run_id,
            c.current_ps,
            c.target_ps_midpoint,
+           t.current_pgp,
+           t.target_pgp_midpoint,
            c.valuation_gap,
            c.tier,
            c.availability
     from mart.topt_core_result_read c
+    -- #1235: the P/GP columns live on the table; the read view predates them.
+    join mart.topt_core_results t on t.result_id = c.result_id
     left join mart.entity_identity ei
       on ei.entity_id::text = c.listing_id
   ) r
@@ -110,6 +127,7 @@ const VALUED_LINES_SQL = `
 const FUND_CONSOLIDATION_SQL = `
   select fund_id,
          weighted_valuation_gap::text as weighted_gap,
+         valuation_basis,
          valued_weight_pct::text as valued_weight_pct,
          availability_status,
          source_evidence_status,
@@ -140,6 +158,7 @@ function pct(value: unknown): string {
 
 type ConsolidationRow = {
   weightedGap: string | null;
+  weightedGapBasis: ValuationBasis | null;
   valuedWeightPct: string;
   availabilityStatus: string | null;
   sourceEvidenceStatus: string | null;
@@ -179,6 +198,10 @@ export async function loadFundValuation(
     for (const row of consolidated.rows) {
       consolidations.set(String(row.fund_id), {
         weightedGap: typeof row.weighted_gap === "string" ? Number(row.weighted_gap).toFixed(2) : null,
+        weightedGapBasis:
+          row.valuation_basis === "price_to_gross_profit" || row.valuation_basis === "price_to_sales"
+            ? row.valuation_basis
+            : null,
         valuedWeightPct: pct(row.valued_weight_pct),
         availabilityStatus: row.availability_status === null ? null : String(row.availability_status),
         sourceEvidenceStatus: row.source_evidence_status === null ? null : String(row.source_evidence_status),
@@ -211,6 +234,7 @@ export async function loadFundValuation(
           resolvedWeightPct: coverage.get(fundId)?.resolvedWeightPct ?? "0.00",
           totalWeightPct: coverage.get(fundId)?.totalWeightPct ?? "0.00",
           weightedGap: consolidation?.weightedGap ?? null,
+          weightedGapBasis: consolidation?.weightedGapBasis ?? null,
           availabilityStatus: consolidation?.availabilityStatus ?? null,
           sourceEvidenceStatus: consolidation?.sourceEvidenceStatus ?? null,
           factorValidationStatus: consolidation?.factorValidationStatus ?? null,
@@ -225,6 +249,8 @@ export async function loadFundValuation(
         weightPct: row.weight_pct === null ? null : String(row.weight_pct),
         currentPs: row.current_ps === null ? null : String(row.current_ps),
         targetPsMidpoint: row.target_ps_midpoint === null ? null : String(row.target_ps_midpoint),
+        currentPgp: row.current_pgp === null ? null : String(row.current_pgp),
+        targetPgpMidpoint: row.target_pgp_midpoint === null ? null : String(row.target_pgp_midpoint),
         valuationGap: row.valuation_gap === null ? null : String(row.valuation_gap),
         tier: row.tier === null ? null : String(row.tier),
         availability: row.availability === null ? null : String(row.availability),

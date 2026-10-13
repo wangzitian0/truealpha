@@ -99,6 +99,9 @@ interface CanonDecision {
   tier: string | null;
   current_price_to_sales: string | null;
   target_price_to_sales: string | null;
+  // #1235: the P/GP pair of a definition 1.0.0 decision; null on a 0.1.0 decision.
+  current_price_to_gross_profit: string | null;
+  target_price_to_gross_profit: string | null;
   valuation_gap: string | null;
   eligible: boolean;
   outcome: string;
@@ -179,8 +182,8 @@ async function main() {
            (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
             capital_adjusted_labor_efficiency, tier, current_price_to_sales,
             target_price_to_sales, valuation_gap, eligible, outcome, exclusion_reason,
-            rank, target_weight)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            rank, target_weight, current_price_to_gross_profit, target_price_to_gross_profit)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          on conflict (strategy_decision_id) do nothing`,
         [
           decision.strategy_decision_id,
@@ -198,6 +201,8 @@ async function main() {
           decision.exclusion_reason,
           decision.rank,
           decision.target_weight,
+          decision.current_price_to_gross_profit,
+          decision.target_price_to_gross_profit,
         ],
       );
     }

@@ -71,8 +71,9 @@ const RUN_SQL = `insert into mart.strategy_runs
 const DECISION_SQL = `insert into mart.strategy_decisions
  (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
   capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
-  valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight)
- values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+  valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight,
+  current_price_to_gross_profit, target_price_to_gross_profit)
+ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
  `;
 
 /** Stable stringify (sorted keys) so a mismatch prints one comparable line. */
@@ -131,6 +132,8 @@ if (admin !== null) {
           d.exclusion_reason,
           d.rank,
           d.target_weight,
+          d.current_price_to_gross_profit,
+          d.target_price_to_gross_profit,
         ]);
       }
     }

@@ -137,43 +137,36 @@ def _operating_efficiency_section(decision: StrategyRunDecision, source: str, co
 def _valuation_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     status = _decision_availability(decision)
     tier_value = decision.tier.value if decision.tier is not None else None
-    results = (
+    # #1235: the gap divides the multiple of the decision's definition. A 1.0.0 decision
+    # reports its P/GP pair and still records P/S; a 0.1.0 decision reports its P/S pair.
+    by_gross_profit = decision.valuation_basis == "price_to_gross_profit"
+    labeled: tuple[tuple[str, str | None], ...] = (("tier", tier_value),)
+    if by_gross_profit:
+        labeled += (
+            ("current_price_to_gross_profit", _decimal_str(decision.current_price_to_gross_profit)),
+            ("target_price_to_gross_profit", _decimal_str(decision.target_price_to_gross_profit)),
+            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales)),
+        )
+    else:
+        labeled += (
+            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales)),
+            ("target_price_to_sales", _decimal_str(decision.target_price_to_sales)),
+        )
+    labeled += (("valuation_gap", _decimal_str(decision.valuation_gap)),)
+    results = tuple(
         _result(
-            label="tier",
-            value=tier_value,
+            label=label,
+            value=value,
             decision=decision,
             section_status=status,
             source=source,
             corpus_sha256=corpus_sha256,
-        ),
-        _result(
-            label="current_price_to_sales",
-            value=_decimal_str(decision.current_price_to_sales),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
-        _result(
-            label="target_price_to_sales",
-            value=_decimal_str(decision.target_price_to_sales),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
-        _result(
-            label="valuation_gap",
-            value=_decimal_str(decision.valuation_gap),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
+        )
+        for label, value in labeled
     )
     return ReportSection(
         section_kind=ReportSectionKind.VALUATION,
-        title="Valuation (three-tier P/S)",
+        title="Valuation (three-tier P/GP)" if by_gross_profit else "Valuation (three-tier P/S)",
         availability=status,
         validation_status=FactorValidationStatus.NOT_EVALUATED,
         results=results,

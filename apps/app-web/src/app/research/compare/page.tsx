@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
+import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadComparison } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -22,6 +23,10 @@ export default async function ComparePage({
   const params = await searchParams;
   const state = await loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
   const names = await loadEntityDisplayMap();
+  // #1235: under definition 1.0.0 the gap divides P/GP; the column says which multiple.
+  const basisLabel = valuationBasisLabel(
+    state.kind === "ready" ? (state.data.rows.find((row) => row.valuationBasis)?.valuationBasis ?? null) : null,
+  );
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">
@@ -50,8 +55,9 @@ export default async function ComparePage({
                   <th scope="col" className="px-4 py-3">Issuer</th>
                   <th scope="col" className="px-4 py-3">Capital-adjusted labor efficiency</th>
                   <th scope="col" className="px-4 py-3">Current P/S</th>
+                  <th scope="col" className="px-4 py-3">Current {basisLabel}</th>
                   <th scope="col" className="px-4 py-3">Tier</th>
-                  <th scope="col" className="px-4 py-3">Valuation gap</th>
+                  <th scope="col" className="px-4 py-3">Valuation gap ({basisLabel})</th>
                   <th scope="col" className="px-4 py-3">Confidence</th>
                   <th scope="col" className="px-4 py-3">Availability</th>
                 </tr>
@@ -75,6 +81,7 @@ export default async function ComparePage({
                       )}
                     </td>
                     <td className="px-4 py-3">{cell(row.currentPriceToSales)}</td>
+                    <td className="px-4 py-3">{cell(row.currentMultiple ?? null)}</td>
                     <td className="px-4 py-3">{cell(row.tier)}</td>
                     <td className="px-4 py-3">{cell(row.valuationGap)}</td>
                     <td className="px-4 py-3">{cell(row.confidence)}</td>

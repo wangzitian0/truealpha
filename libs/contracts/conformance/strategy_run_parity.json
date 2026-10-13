@@ -17,7 +17,9 @@
         "target_price_to_sales": "18.75",
         "target_weight": "1.0",
         "tier": "tech",
-        "valuation_gap": "0.5"
+        "valuation_gap": "0.5",
+        "current_price_to_gross_profit": null,
+        "target_price_to_gross_profit": null
       }
     ],
     "expected_reason": "schema_mismatch",
@@ -51,7 +53,9 @@
         "target_price_to_sales": "18.75",
         "target_weight": "1.0",
         "tier": "tech",
-        "valuation_gap": "0.5"
+        "valuation_gap": "0.5",
+        "current_price_to_gross_profit": null,
+        "target_price_to_gross_profit": null
       },
       {
         "capital_adjusted_labor_efficiency": null,
@@ -69,7 +73,29 @@
         "target_price_to_sales": null,
         "target_weight": null,
         "tier": null,
-        "valuation_gap": null
+        "valuation_gap": null,
+        "current_price_to_gross_profit": null,
+        "target_price_to_gross_profit": null
+      },
+      {
+        "capital_adjusted_labor_efficiency": "74439",
+        "content_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "current_price_to_gross_profit": "5.1302",
+        "current_price_to_sales": "1.242",
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "eligible": true,
+        "exclusion_reason": null,
+        "issuer_id": "issuer:wmt",
+        "outcome": "selected",
+        "peg": null,
+        "peg_rank": null,
+        "rank": 1,
+        "strategy_decision_id": "strategy-decision:9999999999999999999999999999999999999999999999999999999999999999",
+        "target_price_to_gross_profit": "8.75",
+        "target_price_to_sales": null,
+        "target_weight": "0.5",
+        "tier": "traditional",
+        "valuation_gap": "0.7056"
       }
     ],
     "expected_report": {
@@ -91,7 +117,9 @@
           "target_weight": "1.0",
           "tier": "tech",
           "valuation_gap": "0.5",
-          "labor_efficiency_metric": null
+          "labor_efficiency_metric": null,
+          "current_price_to_gross_profit": null,
+          "target_price_to_gross_profit": null
         },
         {
           "capital_adjusted_labor_efficiency": null,
@@ -109,6 +137,28 @@
           "target_weight": null,
           "tier": null,
           "valuation_gap": null,
+          "labor_efficiency_metric": null,
+          "current_price_to_gross_profit": null,
+          "target_price_to_gross_profit": null
+        },
+        {
+          "capital_adjusted_labor_efficiency": "74439",
+          "confidence": null,
+          "current_price_to_gross_profit": "5.1302",
+          "current_price_to_sales": "1.242",
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "eligible": true,
+          "exclusion_reason": null,
+          "issuer_id": "issuer:wmt",
+          "outcome": "selected",
+          "peg": null,
+          "peg_rank": null,
+          "rank": 1,
+          "target_price_to_gross_profit": "8.75",
+          "target_price_to_sales": null,
+          "target_weight": "0.5",
+          "tier": "traditional",
+          "valuation_gap": "0.7056",
           "labor_efficiency_metric": null
         }
       ],
@@ -148,7 +198,9 @@
         "target_price_to_sales": "18.75",
         "target_weight": "1.5",
         "tier": "tech",
-        "valuation_gap": "0.5"
+        "valuation_gap": "0.5",
+        "current_price_to_gross_profit": null,
+        "target_price_to_gross_profit": null
       }
     ],
     "expected_reason": "schema_mismatch",

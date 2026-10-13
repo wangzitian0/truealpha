@@ -137,8 +137,10 @@ def write_strategy_decision(
             capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
             valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank,
             peg_reason_codes, availability_status, source_evidence_status, factor_validation_status,
-            labor_efficiency_metric
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            labor_efficiency_metric, current_price_to_gross_profit, target_price_to_gross_profit
+        ) values (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
         on conflict (strategy_decision_id) do nothing
         returning strategy_decision_id
         """,
@@ -165,6 +167,8 @@ def write_strategy_decision(
             source_evidence_status.value,
             factor_validation_status.value,
             decision.labor_efficiency_metric,
+            decision.current_price_to_gross_profit,
+            decision.target_price_to_gross_profit,
         ),
     ).fetchone()
     if inserted is not None:

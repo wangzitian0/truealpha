@@ -9,14 +9,14 @@ Two steps the deployed tick runs after a capture materializes:
   the ``StrategyBacktestGateway`` for that cutoff and persists ``mart.strategy_runs`` /
   ``mart.strategy_decisions``.
 
-The only fixture-derived object read here is the frozen strategy DEFINITION (#21) —
-versioned strategy configuration, not input data. Golden inputs, decisions and rates are
-never read (#429 invariant I2).
+The only packaged object read here is the strategy DEFINITION — versioned strategy
+configuration, not input data. Golden inputs, decisions and rates are never read (#429
+invariant I2). Since #1235 it is the live definition 1.0.0 (P/GP bands), the same one the
+TOPT core engine reads.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -28,9 +28,9 @@ from factors.composite.strategy_evaluator import evaluate_cutoff
 from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
-from truealpha_contracts.strategy import LargeModelValueV0Definition
+from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 
-from data_engine.core_strategy_replay import _load_corpus, _to_decision
+from data_engine.core_strategy_replay import _to_decision
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
@@ -57,11 +57,11 @@ _STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.i
 
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
-    """The frozen large_model_value_v0 strategy definition (#21). Versioned strategy
+    """The live large_model_value_v0 strategy definition (1.0.0, #1235). Versioned strategy
     CONFIGURATION (formula constants and bands) — the deployed job never reads the
-    corpus's golden inputs, decisions, or rates (#429 invariant I2)."""
-    corpus = _load_corpus()
-    return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+    golden inputs, decisions, or rates (#429 invariant I2). One reader serves both engines:
+    the TOPT core materialization takes its bands from the same function."""
+    return load_live_strategy_definition()
 
 
 def financial_input_rows(

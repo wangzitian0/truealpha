@@ -24,9 +24,9 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts.access import AccessContext
 from truealpha_contracts.models import _require_aware
@@ -57,6 +57,11 @@ class StrategyRunDecision(_StrictFrozenModel):
     capital_adjusted_labor_efficiency: Decimal | None = None
     current_price_to_sales: Decimal | None = None
     target_price_to_sales: Decimal | None = None
+    # #1235: the P/GP valuation of strategy definition 1.0.0. When the P/GP target is set,
+    # `valuation_gap` is target P/GP / current P/GP - 1 and `target_price_to_sales` is None.
+    # None on a decision of definition 0.1.0, whose gap divides P/S.
+    current_price_to_gross_profit: Decimal | None = None
+    target_price_to_gross_profit: Decimal | None = None
     valuation_gap: Decimal | None = None
     # Module 1 PEG (#284). Recorded but not selecting; None when any input is absent or
     # growth is non-positive, so the absence is meaningful rather than a default.
@@ -82,6 +87,21 @@ class StrategyRunDecision(_StrictFrozenModel):
     @classmethod
     def validate_cutoff_at(cls, value: datetime) -> datetime:
         return _require_aware(value, "cutoff_at")
+
+    @model_validator(mode="after")
+    def validate_one_valuation_basis(self) -> Self:
+        if self.target_price_to_sales is not None and self.target_price_to_gross_profit is not None:
+            raise ValueError("a decision targets the multiple of one valuation basis, not two")
+        return self
+
+    @property
+    def valuation_basis(self) -> Literal["price_to_sales", "price_to_gross_profit"] | None:
+        """The multiple the valuation gap divides; None when the decision has no target."""
+        if self.target_price_to_gross_profit is not None:
+            return "price_to_gross_profit"
+        if self.target_price_to_sales is not None:
+            return "price_to_sales"
+        return None
 
 
 class StrategyRunReport(_StrictFrozenModel):

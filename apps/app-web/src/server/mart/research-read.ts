@@ -17,12 +17,16 @@
  * Server-only; never import into a client component.
  */
 
-import type {
-	AccessContext,
-	StrategyRunDecision,
-	StrategyRunOutcome,
-	StrategyRunReport,
-	StrategyRunUnavailable,
+import {
+	type AccessContext,
+	currentMultipleOf,
+	type StrategyRunDecision,
+	type StrategyRunOutcome,
+	type StrategyRunReport,
+	type StrategyRunUnavailable,
+	targetMultipleOf,
+	type ValuationBasis,
+	valuationBasisOf,
 } from "@/contracts/strategyRun";
 import {
 	type DecisionProvenance,
@@ -112,6 +116,12 @@ export interface RankingRow {
 	tier: string | null;
 	currentPriceToSales: string | null;
 	targetPriceToSales: string | null;
+	// #1235: the P/GP pair of definition 1.0.0, and the multiple the gap divides.
+	currentPriceToGrossProfit: string | null;
+	targetPriceToGrossProfit: string | null;
+	valuationBasis: ValuationBasis | null;
+	currentMultiple: string | null;
+	targetMultiple: string | null;
 	valuationGap: string | null;
 	targetWeight: string | null;
 	// Module 1 (#284). `pegRank` is PEG's own ordering, deliberately separate from `rank`:
@@ -169,6 +179,12 @@ export interface ComparisonRow {
 	laborEfficiencyMetric?: string | null;
 	currentPriceToSales: string | null;
 	targetPriceToSales?: string | null;
+	// #1235: the P/GP pair of definition 1.0.0, and the multiple the gap divides.
+	currentPriceToGrossProfit?: string | null;
+	targetPriceToGrossProfit?: string | null;
+	valuationBasis?: ValuationBasis | null;
+	currentMultiple?: string | null;
+	targetMultiple?: string | null;
 	tier: string | null;
 	valuationGap: string | null;
 	peg?: string | null;
@@ -782,6 +798,11 @@ export class StrategyRunReadAdapter {
 			tier: decision.tier,
 			currentPriceToSales: decision.current_price_to_sales,
 			targetPriceToSales: decision.target_price_to_sales,
+			currentPriceToGrossProfit: decision.current_price_to_gross_profit ?? null,
+			targetPriceToGrossProfit: decision.target_price_to_gross_profit ?? null,
+			valuationBasis: valuationBasisOf(decision),
+			currentMultiple: currentMultipleOf(decision),
+			targetMultiple: targetMultipleOf(decision),
 			valuationGap: decision.valuation_gap,
 			targetWeight: decision.target_weight,
 			peg: decision.peg ?? null,
@@ -817,6 +838,11 @@ export class StrategyRunReadAdapter {
 			laborEfficiencyMetric: decision.labor_efficiency_metric ?? null,
 			currentPriceToSales: decision.current_price_to_sales,
 			targetPriceToSales: decision.target_price_to_sales,
+			currentPriceToGrossProfit: decision.current_price_to_gross_profit ?? null,
+			targetPriceToGrossProfit: decision.target_price_to_gross_profit ?? null,
+			valuationBasis: valuationBasisOf(decision),
+			currentMultiple: currentMultipleOf(decision),
+			targetMultiple: targetMultipleOf(decision),
 			tier: decision.tier,
 			valuationGap: decision.valuation_gap,
 			peg: decision.peg ?? null,

@@ -12,7 +12,6 @@ from factors.production_topt import (
     MetricAvailability,
     MetricFreshness,
     OperatingBranch,
-    ThreeTierV0Definition,
     ToptCellQualityInput,
     ToptCoreResult,
     ToptCoreSnapshotInput,
@@ -27,6 +26,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import InputEvidenceStatus
+from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.production_topt.status_dimensions import (
@@ -320,6 +320,15 @@ class ToptCoreIdentity:
 
 @dataclass(frozen=True)
 class ToptCoreReadResult:
+    """One `mart.topt_core_results` row as `results()` reads it.
+
+    #1235: a row tiered by strategy definition 1.0.0 values by P/GP. Its `current_pgp` and
+    `target_pgp_*` are set, its gap divides P/GP, and its `target_ps_*` are IMPLIED: the P/S
+    that the P/GP band gives at the issuer's own gross margin (migration 0030 keeps them NOT
+    NULL). A row of the former P/S bands has no P/GP values and its `target_ps_*` are the band.
+    `target_ps_is_implied` says which.
+    """
+
     result_id: str
     invocation_id: str
     snapshot_id: str
@@ -343,6 +352,10 @@ class ToptCoreReadResult:
     target_ps_upper: Decimal | None
     target_ps_midpoint: Decimal | None
     current_ps: Decimal | None
+    current_pgp: Decimal | None
+    target_pgp_lower: Decimal | None
+    target_pgp_upper: Decimal | None
+    target_pgp_midpoint: Decimal | None
     valuation_gap: Decimal | None
     confidence: Decimal
     freshness: str
@@ -354,6 +367,11 @@ class ToptCoreReadResult:
     tier_definition_id: str
     tier_definition_sha256: str
     created_at: datetime
+
+    @property
+    def target_ps_is_implied(self) -> bool:
+        """True on a P/GP row: its target_ps_* are implied by the P/GP band, not a P/S band."""
+        return self.target_pgp_midpoint is not None
 
 
 @dataclass(frozen=True)
@@ -736,9 +754,11 @@ class PostgresToptCoreRepository:
         snapshot: ToptCoreSnapshot,
         *,
         gppe_definition: GppeV0Definition,
-        tier_definition: ThreeTierV0Definition | None = None,
+        definition: LargeModelValueV0Definition | None = None,
     ) -> tuple[ToptCoreResult, ...]:
-        tier_definition = tier_definition or ThreeTierV0Definition()
+        # #1235: one band set. The default is the live strategy definition, the same one the
+        # strategy tick evaluates, so the deployed path cannot tier with a second band set.
+        definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
         gppe_invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
@@ -757,7 +777,7 @@ class PostgresToptCoreRepository:
         invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
             "gppe_invocation_id": gppe_invocation_id,
-            "tier_definition": tier_definition.model_dump(mode="json"),
+            "tier_definition": definition.model_dump(mode="json"),
         }
         invocation_sha256 = canonical_sha256(invocation_payload)
         invocation_id = f"topt-core-invocation:{invocation_sha256}"
@@ -820,7 +840,7 @@ class PostgresToptCoreRepository:
                     factor_input,
                     gppe_result,
                     invocation_id=invocation_id,
-                    tier_definition=tier_definition,
+                    definition=definition,
                 )
                 for factor_input, gppe_result in zip(factor_inputs, materialized_gppe_results, strict=True)
             )
@@ -843,8 +863,8 @@ class PostgresToptCoreRepository:
                     gppe_invocation_id,
                     gppe_definition.definition_id,
                     gppe_definition.content_sha256,
-                    tier_definition.definition_id,
-                    tier_definition.content_sha256,
+                    definition.strategy_definition_id,
+                    definition.content_sha256,
                     Jsonb(invocation_payload),
                 ),
             ).fetchone()
@@ -875,7 +895,7 @@ class PostgresToptCoreRepository:
                         ),
                         source_evidence_status=evidence_by_listing[result.listing_id],
                         factor_validation_status=factor_validation_status_for(
-                            (gppe_definition.definition_id, tier_definition.definition_id)
+                            (gppe_definition.definition_id, definition.strategy_definition_id)
                         ),
                     ),
                 )
@@ -1043,6 +1063,7 @@ class PostgresToptCoreRepository:
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
                 operating_period_end, revenue_period_end, shares_period_end,
                 confidence, freshness, reason_codes, input_observation_ids,
                 gppe_invocation_id, gppe_result_id,
@@ -1053,7 +1074,7 @@ class PostgresToptCoreRepository:
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -1082,6 +1103,10 @@ class PostgresToptCoreRepository:
                 result.target_ps_midpoint,
                 result.current_ps,
                 result.valuation_gap,
+                result.current_pgp,
+                result.target_pgp_lower,
+                result.target_pgp_upper,
+                result.target_pgp_midpoint,
                 periods[0],
                 periods[1],
                 periods[2],
@@ -1122,20 +1147,25 @@ class PostgresToptCoreRepository:
         self._validate_page(limit, offset)
         rows = self._connection.execute(
             """
-            select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
-                   universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                   instrument_id, listing_id, operating_branch, operating_metric,
-                   availability, operating_efficiency, capital_adjusted_gross_profit,
-                   gppe, tier, target_ps_lower, target_ps_upper, target_ps_midpoint,
-                   current_ps, valuation_gap, confidence, freshness, reason_codes,
-                   gppe_invocation_id, gppe_result_id,
-                   gppe_definition_id, gppe_definition_sha256,
-                   tier_definition_id, tier_definition_sha256, created_at
-            from mart.topt_core_result_read
-            where run_id = %s and release_manifest_id = %s and universe_id = %s
-              and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-              and invocation_id = %s
-            order by issuer_id limit %s offset %s
+            select r.result_id, r.invocation_id, r.snapshot_id, r.run_id, r.release_manifest_id,
+                   r.universe_id, r.universe_version, r.universe_sha256, r.cutoff, r.issuer_id,
+                   r.instrument_id, r.listing_id, r.operating_branch, r.operating_metric,
+                   r.availability, r.operating_efficiency, r.capital_adjusted_gross_profit,
+                   r.gppe, r.tier, r.target_ps_lower, r.target_ps_upper, r.target_ps_midpoint,
+                   r.current_ps, r.valuation_gap, r.confidence, r.freshness, r.reason_codes,
+                   r.gppe_invocation_id, r.gppe_result_id,
+                   r.gppe_definition_id, r.gppe_definition_sha256,
+                   r.tier_definition_id, r.tier_definition_sha256, r.created_at,
+                   t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
+            from mart.topt_core_result_read r
+            -- #1235: the P/GP columns are read from the table. The read view keeps 0026's
+            -- columns: 0026 re-creates it at every boot with `create or replace view`, which
+            -- cannot drop a column, so a later migration that widened it would fail every boot.
+            join mart.topt_core_results t on t.result_id = r.result_id
+            where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
+              and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
+              and r.invocation_id = %s
+            order by r.issuer_id limit %s offset %s
             """,
             (
                 identity.run_id,
@@ -1174,6 +1204,10 @@ class PostgresToptCoreRepository:
                 target_ps_upper=row[20],
                 target_ps_midpoint=row[21],
                 current_ps=row[22],
+                current_pgp=row[34],
+                target_pgp_lower=row[35],
+                target_pgp_upper=row[36],
+                target_pgp_midpoint=row[37],
                 valuation_gap=row[23],
                 confidence=row[24],
                 freshness=row[25],

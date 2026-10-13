@@ -89,9 +89,14 @@ class Decision:
     # same reason as peg_reason_codes: the name annotates the value, and adding it to the identity would
     # make every run already persisted raise `strategy decision identity conflict` on replay.
     labor_efficiency_metric: str | None = None
+    # #1235: the P/GP valuation of definition 1.0.0. Part of the content hash when present,
+    # because it is what the decision asserts; omitted when absent, so a 0.1.0 decision keeps
+    # the identity it was persisted with and a replay never raises an identity conflict.
+    current_price_to_gross_profit: Decimal | None = None
+    target_price_to_gross_profit: Decimal | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        payload = {
             "issuer_id": self.issuer_id,
             "cutoff_at": self.cutoff_at,
             "capital_adjusted_labor_efficiency": str(self.capital_adjusted_labor_efficiency)
@@ -114,6 +119,11 @@ class Decision:
             "peg": str(self.peg) if self.peg is not None else None,
             "peg_rank": self.peg_rank,
         }
+        for name in ("current_price_to_gross_profit", "target_price_to_gross_profit"):
+            value = getattr(self, name)
+            if value is not None:
+                payload[name] = str(value)
+        return payload
 
 
 def _load_corpus() -> dict[str, Any]:
@@ -153,6 +163,8 @@ def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
         peg_rank=evaluated.peg_rank,
         peg_reason_codes=evaluated.peg_reason_codes,
         labor_efficiency_metric=evaluated.labor_efficiency_metric,
+        current_price_to_gross_profit=evaluated.current_price_to_gross_profit,
+        target_price_to_gross_profit=evaluated.target_price_to_gross_profit,
     )
 
 

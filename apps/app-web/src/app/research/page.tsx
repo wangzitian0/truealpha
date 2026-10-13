@@ -2,9 +2,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
 	formatPercentFromFraction,
+	formatRatio,
 	formatSignedRatio,
 	signColor,
 } from "@/client/format";
+import {
+	currentMultipleOf,
+	reportValuationBasis,
+	targetMultipleOf,
+	valuationBasisLabel,
+} from "@/contracts/strategyRun";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -32,6 +39,8 @@ export default async function ResearchOverviewPage() {
 			: [];
 	const evaluated =
 		strategy.kind === "ready" ? strategy.report.decisions.length : 0;
+	// #1235: the gap divides the multiple of the run's definition — P/GP under 1.0.0.
+	const basisLabel = valuationBasisLabel(reportValuationBasis(selections));
 	const latestCutoff = selections[0]?.cutoff_at ?? null;
 	// #575: say which run this is. The mart repository ranks the run the governed capture
 	// head resolves to first and falls back to the newest recorded run; the sentence must
@@ -94,7 +103,13 @@ export default async function ResearchOverviewPage() {
 										Tier
 									</th>
 									<th scope="col" className="px-4 py-3">
-										Valuation gap
+										Current {basisLabel}
+									</th>
+									<th scope="col" className="px-4 py-3">
+										Target {basisLabel}
+									</th>
+									<th scope="col" className="px-4 py-3">
+										Valuation gap ({basisLabel})
 									</th>
 									<th scope="col" className="px-4 py-3">
 										Weight
@@ -118,6 +133,18 @@ export default async function ResearchOverviewPage() {
 											{entityLabel(decision.issuer_id, names)}
 										</th>
 										<td className="px-4 py-3">{decision.tier ?? "—"}</td>
+										<td
+											className="px-4 py-3 tabular-nums"
+											title={currentMultipleOf(decision) ?? undefined}
+										>
+											{formatRatio(currentMultipleOf(decision)) ?? "—"}
+										</td>
+										<td
+											className="px-4 py-3 tabular-nums"
+											title={targetMultipleOf(decision) ?? undefined}
+										>
+											{formatRatio(targetMultipleOf(decision)) ?? "—"}
+										</td>
 										<td
 											className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
 											title={decision.valuation_gap ?? undefined}

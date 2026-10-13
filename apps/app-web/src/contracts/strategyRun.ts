@@ -62,6 +62,11 @@ export interface StrategyRunDecision {
 	capital_adjusted_labor_efficiency: string | null;
 	current_price_to_sales: string | null;
 	target_price_to_sales: string | null;
+	// #1235: the P/GP pair of strategy definition 1.0.0. When the P/GP target is set,
+	// `valuation_gap` is target P/GP / current P/GP - 1 and `target_price_to_sales` is
+	// null. Optional so a report produced before definition 1.0.0 still validates.
+	current_price_to_gross_profit?: string | null;
+	target_price_to_gross_profit?: string | null;
 	valuation_gap: string | null;
 	confidence: string | null;
 	exclusion_reason: string | null;
@@ -75,6 +80,68 @@ export interface StrategyRunDecision {
 	// #1176: the metric name the strategy used for `capital_adjusted_labor_efficiency`, e.g.
 	// gppe_banking_tce_v1 for a FINANCIAL issuer. Null when no metric was recorded.
 	labor_efficiency_metric?: string | null;
+}
+
+/** The multiple a decision's valuation gap divides (#1235). A definition 1.0.0
+ * decision carries a P/GP target; a definition 0.1.0 decision carries a P/S target. */
+export type ValuationBasis = "price_to_sales" | "price_to_gross_profit";
+
+export function valuationBasisOf(
+	decision: Pick<
+		StrategyRunDecision,
+		"target_price_to_sales" | "target_price_to_gross_profit"
+	>,
+): ValuationBasis | null {
+	if (decision.target_price_to_gross_profit != null) return "price_to_gross_profit";
+	if (decision.target_price_to_sales != null) return "price_to_sales";
+	return null;
+}
+
+/** The display label of each basis, one place for every page and card. */
+export const VALUATION_BASIS_LABEL: Record<ValuationBasis, string> = {
+	price_to_sales: "P/S",
+	price_to_gross_profit: "P/GP",
+};
+
+type MultipleFields = Pick<
+	StrategyRunDecision,
+	| "current_price_to_sales"
+	| "target_price_to_sales"
+	| "current_price_to_gross_profit"
+	| "target_price_to_gross_profit"
+>;
+
+/** The current multiple the decision's gap divides: P/GP under 1.0.0, P/S under 0.1.0. */
+export function currentMultipleOf(decision: MultipleFields): string | null {
+	const basis = valuationBasisOf(decision);
+	if (basis === "price_to_gross_profit") return decision.current_price_to_gross_profit ?? null;
+	if (basis === "price_to_sales") return decision.current_price_to_sales;
+	return null;
+}
+
+/** The band-midpoint target of the decision's own basis. */
+export function targetMultipleOf(decision: MultipleFields): string | null {
+	const basis = valuationBasisOf(decision);
+	if (basis === "price_to_gross_profit") return decision.target_price_to_gross_profit ?? null;
+	if (basis === "price_to_sales") return decision.target_price_to_sales;
+	return null;
+}
+
+/** One run evaluates one definition, so its decisions share one basis. Null when no
+ * decision carries a target (every issuer excluded). */
+export function reportValuationBasis(
+	decisions: readonly MultipleFields[],
+): ValuationBasis | null {
+	for (const decision of decisions) {
+		const basis = valuationBasisOf(decision);
+		if (basis !== null) return basis;
+	}
+	return null;
+}
+
+/** "P/GP", "P/S", or a neutral word when no decision names a basis. */
+export function valuationBasisLabel(basis: ValuationBasis | null): string {
+	return basis === null ? "multiple" : VALUATION_BASIS_LABEL[basis];
 }
 
 export interface StrategyRunReport {
@@ -222,6 +289,8 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 			"capital_adjusted_labor_efficiency",
 			"current_price_to_sales",
 			"target_price_to_sales",
+			"current_price_to_gross_profit",
+			"target_price_to_gross_profit",
 			"valuation_gap",
 			"confidence",
 			"exclusion_reason",
@@ -233,9 +302,16 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 		],
 		path,
 		// Optional exactly where the interface says optional: PEG (#284), the input
-		// provenance joined from mart.topt_core_results, and the labor-efficiency metric
-		// name (#1176). A report produced before any of them existed still validates.
-		["peg", "peg_rank", "labor_efficiency_metric"],
+		// provenance joined from mart.topt_core_results, the labor-efficiency metric
+		// name (#1176) and the P/GP pair (#1235). A report produced before any of them
+		// existed still validates.
+		[
+			"peg",
+			"peg_rank",
+			"labor_efficiency_metric",
+			"current_price_to_gross_profit",
+			"target_price_to_gross_profit",
+		],
 	);
 
 	const issuerId = object.issuer_id;
@@ -320,6 +396,20 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 			object.target_price_to_sales,
 			`${path}.target_price_to_sales`,
 		),
+		current_price_to_gross_profit:
+			object.current_price_to_gross_profit === undefined
+				? null
+				: asDecimalString(
+						object.current_price_to_gross_profit,
+						`${path}.current_price_to_gross_profit`,
+					),
+		target_price_to_gross_profit:
+			object.target_price_to_gross_profit === undefined
+				? null
+				: asDecimalString(
+						object.target_price_to_gross_profit,
+						`${path}.target_price_to_gross_profit`,
+					),
 		valuation_gap: asDecimalString(
 			object.valuation_gap,
 			`${path}.valuation_gap`,
