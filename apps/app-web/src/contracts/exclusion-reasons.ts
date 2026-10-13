@@ -26,6 +26,8 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   nonpositive_headcount: "Reported headcount is zero or negative",
   nonpositive_labor_cost: "Reported labor cost is zero or negative",
   nonpositive_revenue: "Reported revenue is zero or negative",
+  // #1235: definition 1.0.0 divides market value by gross profit.
+  nonpositive_gross_profit: "Reported gross profit is zero or negative, so P/GP has no value",
 };
 
 export function exclusionLabel(reason: string | null): string | null {
