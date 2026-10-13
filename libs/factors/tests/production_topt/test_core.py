@@ -10,7 +10,6 @@ from factors.production_topt import (
     MetricFreshness,
     OperatingBranch,
     OperatingEfficiencyMetric,
-    ThreeTierV0Definition,
     ToptCellQualityInput,
     ToptCoreAvailability,
     ToptCoreReasonCode,
@@ -22,6 +21,11 @@ from factors.production_topt import (
 )
 from pydantic import ValidationError
 from truealpha_contracts.research import ValuationTier
+from truealpha_contracts.strategy import (
+    HISTORICAL_V0_DEFINITION_RESOURCE,
+    load_live_strategy_definition,
+    load_strategy_definition,
+)
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBSERVATION_IDS = tuple(f"normalized-observation:{character * 64}" for character in "1234")
@@ -118,7 +122,7 @@ def _compute(snapshot: ToptCoreSnapshotInput):
         snapshot,
         gppe_result,
         invocation_id=f"topt-core-invocation:{'e' * 64}",
-        tier_definition=ThreeTierV0Definition(),
+        definition=load_live_strategy_definition(),
     )
 
 
@@ -136,14 +140,27 @@ def test_available_result_uses_owner_selected_formula_and_all_cell_confidence() 
     assert result.operating_efficiency == Decimal("2000000")
     assert result.capital_adjusted_gross_profit == Decimal("200000000")
     assert result.gppe == Decimal("2000000")
+    # #1235: the tech band of the live strategy definition, P/GP 11.43-14.29, midpoint 12.86.
     assert result.tier is ValuationTier.TECH
-    assert (result.target_ps_lower, result.target_ps_upper, result.target_ps_midpoint) == (
-        Decimal("8"),
-        Decimal("10"),
-        Decimal("9"),
+    assert (result.target_pgp_lower, result.target_pgp_upper, result.target_pgp_midpoint) == (
+        Decimal("11.43"),
+        Decimal("14.29"),
+        Decimal("12.86"),
     )
+    # Market value 40 x 10M = 400M; P/S = 400M / 100M = 4; P/GP = 400M / 210M = 1.9047...
     assert result.current_ps == Decimal("4")
-    assert result.valuation_gap == Decimal("1.25")
+    assert result.current_pgp is not None and result.current_pgp.quantize(Decimal("0.0001")) == Decimal("1.9048")
+    # Gap = 12.86 / (400 / 210) - 1 = 12.86 x 0.525 - 1 = 5.7515.
+    assert result.valuation_gap is not None and result.valuation_gap.quantize(Decimal("0.0001")) == Decimal("5.7515")
+    # The P/S targets are the band at this issuer's margin, 210M / 100M = 2.1: never a P/GP value.
+    assert (result.target_ps_lower, result.target_ps_upper, result.target_ps_midpoint) == (
+        Decimal("24.003"),
+        Decimal("30.009"),
+        Decimal("27.006"),
+    )
+    assert result.target_ps_midpoint is not None and result.current_ps is not None
+    ps_gap = result.target_ps_midpoint / result.current_ps - 1
+    assert abs(ps_gap - result.valuation_gap) < Decimal("1e-30")
     assert result.confidence == Decimal("0.6")
     assert result.reason_codes == ()
     assert result.gppe_result_id.startswith("topt-gppe-result:")
@@ -307,7 +324,7 @@ def test_tier_composite_rejects_gppe_from_another_snapshot_member() -> None:
             snapshot,
             gppe_result,
             invocation_id=f"topt-core-invocation:{'e' * 64}",
-            tier_definition=ThreeTierV0Definition(),
+            definition=load_live_strategy_definition(),
         )
 
 
@@ -317,7 +334,6 @@ def test_definitions_are_content_addressed_and_reject_binary_floats() -> None:
 
     assert first == repeated
     assert first.definition_id.endswith(first.content_sha256)
-    assert ThreeTierV0Definition().definition_id.startswith("three-tier-definition:")
     with pytest.raises(ValidationError, match="binary float"):
         GppeV0Definition(risk_free_rate=0.05)
 
@@ -397,3 +413,53 @@ def test_topt_gppe_equals_the_base_factor_for_identical_inputs() -> None:
         )
     ).gppe
     assert financial == base_gppe("80000000", "200000000", "100") == Decimal("700000")
+
+
+def test_rows_stamp_the_strategy_definition_that_supplied_the_bands() -> None:
+    """#1235: one band set. The core row names the same definition the strategy tick runs."""
+    definition = load_live_strategy_definition()
+    result = _compute(_snapshot())
+    assert result.tier_definition_id == definition.strategy_definition_id
+    assert result.tier_definition_sha256 == definition.content_sha256
+    unavailable = _compute(_snapshot(headcount=_metric("headcount", None)))
+    assert unavailable.tier_definition_sha256 == definition.content_sha256
+
+
+def test_the_core_engine_refuses_a_ps_basis_definition() -> None:
+    snapshot = _snapshot()
+    gppe_result = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+    )
+    with pytest.raises(ValueError, match="values by P/GP"):
+        compute_topt_core(
+            snapshot,
+            gppe_result,
+            invocation_id=f"topt-core-invocation:{'e' * 64}",
+            definition=load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE),
+        )
+
+
+def test_pgp_divides_by_the_numerator_gppe_reads_for_the_class() -> None:
+    """A bank's P/GP divides by its pre-provision profit, the GPPE tree's financial numerator."""
+    result = _compute(
+        _snapshot(
+            operating_branch=OperatingBranch.FINANCIAL,
+            gross_profit=None,
+            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
+        )
+    )
+    # (80M - 200M x 0.05) / 100 = 700,000 -> traditional, P/GP 7.50-10.00; 400M / 80M = 5.
+    assert result.tier is ValuationTier.TRADITIONAL
+    assert result.current_pgp == Decimal("5")
+    assert result.target_pgp_midpoint == Decimal("8.75")
+    assert result.valuation_gap == Decimal("0.75")
+
+
+def test_nonpositive_gross_profit_is_unavailable_not_divided() -> None:
+    # Adjusted GPPE is negative (charge 10M > gross profit 0), so GPPE exists; P/GP does not.
+    result = _compute(_snapshot(gross_profit=_metric("gross_profit", "0")))
+    assert result.availability is ToptCoreAvailability.UNAVAILABLE
+    assert result.reason_codes == (ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT,)
+    assert result.current_pgp is None and result.valuation_gap is None

@@ -12,16 +12,21 @@ from the definition. This module is the one implementation both consume, so the
 algorithm can no longer be re-derived per consumer.
 
 The factor arithmetic itself stays in the base factors (`gross_profit_per_employee`,
-`price_to_sales`, `three_tier_valuation`); this evaluator orchestrates them and
-owns only the portfolio-decision rules, reading every parameter (quantization,
-thresholds, bands, selection count) from the versioned
+`price_to_sales`, `price_to_gross_profit`, `three_tier_valuation`); this evaluator
+orchestrates them and owns only the portfolio-decision rules, reading every parameter
+(quantization, thresholds, bands, selection count, valuation basis) from the versioned
 `LargeModelValueV0Definition` — no implicit defaults.
+
+The valuation basis comes from the definition (#1235). Definition 0.1.0 compares P/S
+with P/S bands. Definition 1.0.0 compares P/GP with P/GP bands and still records P/S.
+No other rule changes between them: the tier, the above-band rejection, the ranking,
+the selection count and the weights read the same definition fields.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 from types import MappingProxyType
@@ -32,6 +37,7 @@ from truealpha_contracts.strategy import (
     ExclusionReason,
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
+    ValuationBasis,
 )
 
 from factors.base.gross_profit_per_employee import (
@@ -40,6 +46,7 @@ from factors.base.gross_profit_per_employee import (
     gross_profit_per_employee_banking_tce,
 )
 from factors.base.peg import peg
+from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
 from factors.forest import IssuerClass
@@ -126,6 +133,15 @@ _BANKING_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     (_MISSING_PREFERRED_FLAG, ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
     (_MISSING_TCE_FLAG, ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
 )
+#: Refusal flags of the valuation multiples that have an exact exclusion reason (#1235).
+_MULTIPLE_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
+    ("nonpositive_gross_profit", ExclusionReason.NONPOSITIVE_GROSS_PROFIT),
+)
+#: The feeder that computes each valuation basis. The basis is the factor's registered name.
+_MULTIPLE_FACTOR = {
+    ValuationBasis.PRICE_TO_SALES: price_to_sales,
+    ValuationBasis.PRICE_TO_GROSS_PROFIT: price_to_gross_profit,
+}
 
 
 @dataclass(frozen=True)
@@ -184,6 +200,10 @@ class EvaluatedDecision:
     # #1176: the labor-efficiency metric this decision was computed with, from the binding that selected it.
     # None when no metric was selected (no class, or excluded before the selection).
     labor_efficiency_metric: str | None = None
+    # #1235: the P/GP multiple and its band midpoint, set only under a P/GP definition. Under it
+    # `target_price_to_sales` is None (no P/S band exists) and `current_price_to_sales` is still recorded.
+    current_price_to_gross_profit: Decimal | None = None
+    target_price_to_gross_profit: Decimal | None = None
 
 
 def peg_reason_codes(result: FactorResult) -> tuple[str, ...]:
@@ -256,8 +276,10 @@ def _evaluate_issuer(
 
     labor_q = definition.labor_efficiency.quantization
     ps_q = definition.price_to_sales.quantization
+    multiple_q = definition.valuation_quantization
     tier_q = definition.tier_valuation.quantization
     gap_q = definition.valuation_gap.quantization
+    basis = definition.valuation_basis
 
     present = set(issuer.records)
     missing = next((reason for key, reason in _REQUIRED_INPUT_REASONS if key not in present), None)
@@ -283,9 +305,20 @@ def _evaluate_issuer(
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
     )
-    if gppe_result.value is None or ps_result.value is None:
+    multiple_result = (
+        ps_result
+        if basis is ValuationBasis.PRICE_TO_SALES
+        else _MULTIPLE_FACTOR[basis](
+            _facts_for(issuer, _input_keys(basis.value), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
+        )
+    )
+    if gppe_result.value is None or ps_result.value is None or multiple_result.value is None:
         reason = next(
-            (reason for flag, reason in _BANKING_FLAG_REASONS if flag in gppe_result.flags),
+            (
+                reason
+                for flag, reason in (*_BANKING_FLAG_REASONS, *_MULTIPLE_FLAG_REASONS)
+                if flag in (*gppe_result.flags, *multiple_result.flags)
+            ),
             ExclusionReason.STALE_REQUIRED_INPUT,
         )
         return (
@@ -306,26 +339,20 @@ def _evaluate_issuer(
     peg_value = peg_result.value
     peg_reasons = peg_reason_codes(peg_result)
 
-    gross_margin = None
-    gp_record = issuer.records.get("gross_profit")
-    rev_record = issuer.records.get("revenue")
-    if gp_record is not None and rev_record is not None and rev_record[0] > Decimal("0"):
-        gross_margin = gp_record[0] / rev_record[0]
-
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
+    current_multiple = _quantize(multiple_result.value, multiple_q)
     tier_result = three_tier_valuation(
         [
             gppe_result.model_copy(update={"value": labor_efficiency}),
-            ps_result.model_copy(update={"value": current_ps}),
+            multiple_result.model_copy(update={"value": current_multiple}),
         ],
         entity_id=issuer.issuer_id,
         as_of=as_of,
         definition=definition.tier_valuation,
-        gross_margin=gross_margin,
     )
-    band = definition.tier_valuation.band_for(labor_efficiency, gross_margin=gross_margin)
-    target_ps = _quantize((band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2), tier_q)
+    band = definition.tier_valuation.band_for(labor_efficiency)
+    target_multiple = _quantize((band.target_lower_bound + band.target_upper_bound) / Decimal(2), tier_q)
     if tier_result.value is None:
         return (
             _excluded(
@@ -338,46 +365,29 @@ def _evaluate_issuer(
         )
 
     valuation_gap = _quantize(tier_result.value, gap_q)
-    confidence = tier_result.confidence
-
-    # "Above tier band" == P/S above the band's upper bound (#21 spec / #393 L0).
-    if current_ps > band.target_ps_upper_bound:
-        return (
-            EvaluatedDecision(
-                issuer_id=issuer.issuer_id,
-                capital_adjusted_labor_efficiency=labor_efficiency,
-                tier=band.tier.value,
-                current_price_to_sales=current_ps,
-                target_price_to_sales=target_ps,
-                valuation_gap=valuation_gap,
-                peg=peg_value,
-                peg_reason_codes=peg_reasons,
-                eligible=True,
-                outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND,
-                exclusion_reason=None,
-                confidence=confidence,
-                labor_efficiency_metric=labor.metric,
-            ),
-            None,
-        )
-    return (
-        EvaluatedDecision(
-            issuer_id=issuer.issuer_id,
-            capital_adjusted_labor_efficiency=labor_efficiency,
-            tier=band.tier.value,
-            current_price_to_sales=current_ps,
-            target_price_to_sales=target_ps,
-            valuation_gap=valuation_gap,
-            peg=peg_value,
-            peg_reason_codes=peg_reasons,
-            eligible=True,
-            outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
-            exclusion_reason=None,
-            confidence=confidence,
-            labor_efficiency_metric=labor.metric,
-        ),
-        valuation_gap,
+    by_gross_profit = basis is ValuationBasis.PRICE_TO_GROSS_PROFIT
+    decision = EvaluatedDecision(
+        issuer_id=issuer.issuer_id,
+        capital_adjusted_labor_efficiency=labor_efficiency,
+        tier=band.tier.value,
+        current_price_to_sales=current_ps,
+        target_price_to_sales=None if by_gross_profit else target_multiple,
+        current_price_to_gross_profit=current_multiple if by_gross_profit else None,
+        target_price_to_gross_profit=target_multiple if by_gross_profit else None,
+        valuation_gap=valuation_gap,
+        peg=peg_value,
+        peg_reason_codes=peg_reasons,
+        eligible=True,
+        outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
+        exclusion_reason=None,
+        confidence=tier_result.confidence,
+        labor_efficiency_metric=labor.metric,
     )
+    # "Above tier band" == the current multiple above the band's upper bound (#21 spec / #393 L0),
+    # in the definition's valuation basis.
+    if current_multiple > band.target_upper_bound:
+        return replace(decision, outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND), None
+    return decision, valuation_gap
 
 
 def _excluded(
@@ -439,7 +449,7 @@ def rank_and_select(
                     }
                 )
             )
-        else:  # pragma: no cover - the frozen corpus selects every ranked issuer
+        else:
             resolved.append(EvaluatedDecision(**{**decision.__dict__, "rank": position}))
     return sorted(resolved, key=lambda d: d.issuer_id)
 

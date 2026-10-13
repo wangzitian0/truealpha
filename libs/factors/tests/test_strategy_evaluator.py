@@ -22,9 +22,12 @@ from factors.composite.strategy_evaluator import (
 )
 from factors.forest import IssuerClass
 from truealpha_contracts.strategy import (
+    LIVE_STRATEGY_DEFINITION_RESOURCE,
     ExclusionReason,
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
+    load_live_strategy_definition,
+    load_strategy_definition_corpus,
 )
 
 _CORPUS_RESOURCE = resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json")
@@ -424,9 +427,11 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
     assert decisions[0].exclusion_reason == ExclusionReason.MISSING_MARKET_VALUE_INPUT
 
 
-def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
-    # High GPPE (gross_profit / headcount - assets * rf / headcount = (35B - 3.5B)/200k = 157.5k > 100k tech threshold)
-    # but low gross margin (35B / 250B = 14% < 35% anti-fraud gate).
+def test_a_low_margin_issuer_takes_the_tier_of_its_labor_efficiency() -> None:
+    """#1235: the hidden 0.35 gross-margin gate is deleted. It was not in the definition or
+    its hash. GPPE = (35B - 70B * 0.05) / 200k = 157,500, which is the tech band of 0.1.0
+    (100,000 <= x < 300,000). The gross margin is 35B / 250B = 0.14, which the deleted gate
+    forced to traditional. The tier now follows labor efficiency only."""
     records = {
         "gross_profit": (Decimal("35000000000"), Decimal("0.9")),
         "revenue": (Decimal("250000000000"), Decimal("0.9")),
@@ -444,7 +449,8 @@ def test_evaluator_restricts_low_margin_high_gppe_to_traditional_tier() -> None:
         risk_free_rate=Decimal("0.05"),
     )
     assert len(decisions) == 1
-    assert decisions[0].tier == "traditional"
+    assert decisions[0].capital_adjusted_labor_efficiency == Decimal("157500.00")
+    assert decisions[0].tier == "tech"
 
 
 _TCE_KEYS = (
@@ -617,3 +623,156 @@ def test_an_exclusion_after_the_metric_is_chosen_still_names_it() -> None:
     )
     assert decision.exclusion_reason == "missing_preferred_stock_value"
     assert decision.labor_efficiency_metric == "gppe_banking_tce_v1"
+
+
+# -- definition 1.0.0: the P/GP valuation basis (#1235) ---------------------------------
+
+
+_V1_CORPUS = load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
+_V1_CUTOFF = datetime.fromisoformat("2026-10-08T00:00:00+00:00")
+
+
+def test_evaluator_reproduces_every_v1_golden_decision_exactly() -> None:
+    """The evaluator half of the agreement. The other half, the file against an independent
+    Decimal oracle written from the owner's values, is libs/contracts/tests/test_strategy_v1.py."""
+    definition = load_live_strategy_definition()
+    golden = _V1_CORPUS["golden_decision_set"]
+    rates = {rate["cutoff_at"]: Decimal(rate["annualized_rate"]) for rate in golden["risk_free_rates"]}
+    by_cutoff: dict[str, list[dict]] = {}
+    for decision in golden["decisions"]:
+        by_cutoff.setdefault(decision["cutoff_at"], []).append(decision)
+
+    verified = 0
+    for cutoff, decisions in by_cutoff.items():
+        issuers = [
+            IssuerInput(
+                issuer_id=decision["issuer"]["id"],
+                records={
+                    record["input_key"]: (Decimal(record["value"]), Decimal(record["confidence"]))
+                    for record in decision["inputs"]
+                },
+            )
+            for decision in decisions
+        ]
+        evaluated = {
+            item.issuer_id: item
+            for item in evaluate_cutoff(
+                issuers,
+                labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+                definition=definition,
+                cutoff_at=datetime.fromisoformat(cutoff.replace("Z", "+00:00")),
+                risk_free_rate=rates[cutoff],
+            )
+        }
+        for decision in decisions:
+            expected = decision["expected"]
+            got = evaluated[decision["issuer"]["id"]]
+            assert _s(got.capital_adjusted_labor_efficiency) == expected["capital_adjusted_labor_efficiency"]
+            assert got.tier == expected["tier"]
+            assert _s(got.current_price_to_sales) == expected["current_price_to_sales"]
+            assert got.target_price_to_sales is None
+            assert _s(got.current_price_to_gross_profit) == expected.get("current_price_to_gross_profit")
+            assert _s(got.target_price_to_gross_profit) == expected.get("target_price_to_gross_profit")
+            assert _s(got.valuation_gap) == expected["valuation_gap"]
+            assert got.outcome.value == expected["outcome"]
+            assert (None if got.exclusion_reason is None else got.exclusion_reason.value) == expected[
+                "exclusion_reason"
+            ]
+            assert got.rank == expected["rank"]
+            assert _s(got.target_weight) == expected["target_weight"]
+            verified += 1
+    assert verified == 10
+
+
+def _v1_issuer(
+    issuer_id: str, *, labor_efficiency: str, market_value: str, gross_profit: str | None = None
+) -> IssuerInput:
+    """With no assets and one employee, labor efficiency equals gross profit exactly; a
+    separate gross profit (for a nonpositive case) breaks that on purpose."""
+    profit = labor_efficiency if gross_profit is None else gross_profit
+    return IssuerInput(
+        issuer_id=issuer_id,
+        records={
+            "gross_profit": (Decimal(profit), Decimal("0.9")),
+            "total_assets": (Decimal("0"), Decimal("0.9")),
+            "headcount": (Decimal("1"), Decimal("0.9")),
+            "revenue": (Decimal(market_value) * 2, Decimal("0.9")),
+            "shares_outstanding": (Decimal(market_value), Decimal("0.9")),
+            "last_close": (Decimal("1"), Decimal("0.9")),
+        },
+    )
+
+
+def _evaluate_v1(*issuers: IssuerInput) -> dict[str, EvaluatedDecision]:
+    return {
+        item.issuer_id: item
+        for item in evaluate_cutoff(
+            list(issuers),
+            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+            definition=load_live_strategy_definition(),
+            cutoff_at=_V1_CUTOFF,
+            risk_free_rate=Decimal("0"),
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    ("labor_efficiency", "tier", "target"),
+    [
+        ("999999.99", "traditional", "8.7500"),
+        ("1000000", "tech", "12.8600"),
+        ("2999999.99", "tech", "12.8600"),
+        ("3000000", "large_model_native", "33.3350"),
+    ],
+)
+def test_v1_tier_cuts_are_lower_inclusive_upper_exclusive(labor_efficiency: str, tier: str, target: str) -> None:
+    # Market value = 5 x gross profit -> current P/GP 5, inside every band, so each is a candidate.
+    market_value = str(Decimal(labor_efficiency) * 5)
+    decision = _evaluate_v1(_v1_issuer("issuer:x", labor_efficiency=labor_efficiency, market_value=market_value))[
+        "issuer:x"
+    ]
+    assert decision.tier == tier
+    assert decision.current_price_to_gross_profit == Decimal("5.0000")
+    assert decision.target_price_to_gross_profit == Decimal(target)
+    assert decision.target_price_to_sales is None
+    # P/S is still recorded: revenue = 2 x market value -> 0.5.
+    assert decision.current_price_to_sales == Decimal("0.5000")
+    assert decision.outcome is GoldenDecisionOutcome.SELECTED
+
+
+def test_v1_rejects_only_above_the_pgp_upper_bound() -> None:
+    decisions = _evaluate_v1(
+        # traditional band 7.50-10.00: P/GP 10.00 is at the bound, 10.0001 is above it.
+        _v1_issuer("issuer:at", labor_efficiency="1000", market_value="10000"),
+        _v1_issuer("issuer:above", labor_efficiency="10000", market_value="100001"),
+        # P/GP 2 is below the lower bound: it is the cheapest, so it ranks first.
+        _v1_issuer("issuer:below", labor_efficiency="1000", market_value="2000"),
+    )
+    assert decisions["issuer:above"].outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
+    assert decisions["issuer:above"].current_price_to_gross_profit == Decimal("10.0001")
+    assert decisions["issuer:above"].rank is None
+    assert decisions["issuer:at"].outcome is GoldenDecisionOutcome.SELECTED
+    assert decisions["issuer:below"].rank == 1
+    assert decisions["issuer:below"].valuation_gap == Decimal("3.3750")  # 8.75 / 2 - 1
+
+
+def test_v1_excludes_nonpositive_gross_profit_with_its_own_reason() -> None:
+    decision = _evaluate_v1(_v1_issuer("issuer:loss", labor_efficiency="0", market_value="1000", gross_profit="-5"))[
+        "issuer:loss"
+    ]
+    assert decision.outcome is GoldenDecisionOutcome.EXCLUDED
+    assert decision.exclusion_reason is ExclusionReason.NONPOSITIVE_GROSS_PROFIT
+    assert decision.current_price_to_gross_profit is None
+
+
+def test_v0_decisions_carry_no_pgp_value() -> None:
+    [decision] = evaluate_cutoff(
+        [_peg_inputs()],
+        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )
+    assert decision.target_price_to_sales is not None
+    assert decision.current_price_to_gross_profit is None
+    assert decision.target_price_to_gross_profit is None

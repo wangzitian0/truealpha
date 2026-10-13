@@ -1,5 +1,13 @@
 """Pure, versioned GPPE v0 and three-tier computation for Production TOPT.
 
+**One band set (#1235).** The tier bands are not written here. `compute_topt_core` reads
+them from the strategy definition that the deployed strategy tick also evaluates
+(`truealpha_contracts.strategy.load_live_strategy_definition`, definition 1.0.0). The
+engine tiers by capital-adjusted GPPE and values by P/GP = market value / the operating
+numerator that GPPE consumes. Each row stamps that definition's id and content hash as
+`tier_definition_id` / `tier_definition_sha256`, the same hash that
+`mart.strategy_runs.definition_content_sha256` carries.
+
 **Converged onto the base `large_model_value_v0` semantics (#394, `production-topt-v0.2.0`).**
 GPPE is one uniform capital-adjusted formula for every issuer —
 `(numerator - total_assets*risk_free_rate)/headcount`, where the numerator is the
@@ -11,11 +19,9 @@ v0.1.0 financial short-circuit (`pre_provision_profit/headcount` with no capital
 charge, then `FINANCIAL_VALUATION_NOT_COMPARABLE`) is retired; financial issuers now
 flow through the same tier / P-S valuation path as every other issuer.
 
-The tier-band parameters here remain TOPT's own calibration and are versioned with
-the `production-topt-*` coordinates; aligning them to the base bands, if desired, is
-a separate parameter change. This module still writes the `mart.topt_*` namespace
-(disjoint from the base replay's `mart.strategy_*`); the v0.1.0 rows stay as an
-append-only prior vintage.
+Rows written under the former TOPT-own bands (P/S 3-4, 8-10, 20-30, stamped with a
+`three-tier-definition:` id) stay as an append-only prior vintage. This module still
+writes the `mart.topt_*` namespace (disjoint from the base replay's `mart.strategy_*`).
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.research import ValuationTier
+from truealpha_contracts.strategy import LargeModelValueV0Definition, ValuationBasis
 
 from factors.forest import FOREST, GPPE_V0_TREE, AliasKind, IssuerClass, evaluate, required_inputs
 
@@ -104,6 +111,8 @@ class ToptCoreReasonCode(StrEnum):
     NONPOSITIVE_MARKET_PRICE = "nonpositive_market_price"
     STALE_INPUT = "stale_input"
     UNKNOWN_FRESHNESS = "unknown_freshness"
+    #: #1235: P/GP divides by the operating numerator; zero or negative gives no multiple.
+    NONPOSITIVE_GROSS_PROFIT = "nonpositive_gross_profit"
 
 
 class ToptMetricInput(_FrozenModel):
@@ -209,80 +218,6 @@ class GppeV0Definition(_FrozenModel):
     @model_validator(mode="after")
     def identify(self) -> Self:
         _identify(self, id_field="definition_id", prefix="gppe-definition")
-        return self
-
-
-class TierBandDefinition(_FrozenModel):
-    tier: ValuationTier
-    gppe_lower: Decimal | None = None
-    gppe_upper: Decimal | None = None
-    target_ps_lower: Decimal = Field(gt=0)
-    target_ps_upper: Decimal = Field(gt=0)
-
-    @field_validator("gppe_lower", "gppe_upper", "target_ps_lower", "target_ps_upper", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
-
-    @field_validator("gppe_lower", "gppe_upper", "target_ps_lower", "target_ps_upper")
-    @classmethod
-    def normalize_bounds(cls, value: Decimal | None) -> Decimal | None:
-        return None if value is None else _normalize_decimal(value)
-
-    @model_validator(mode="after")
-    def validate_bounds(self) -> Self:
-        if self.gppe_lower is not None and self.gppe_upper is not None and self.gppe_lower >= self.gppe_upper:
-            raise ValueError("GPPE tier lower bound must be below its upper bound")
-        if self.target_ps_lower >= self.target_ps_upper:
-            raise ValueError("target P/S lower bound must be below its upper bound")
-        return self
-
-
-class ThreeTierV0Definition(_FrozenModel):
-    definition_id: str = Field(default="", pattern=r"^(?:|three-tier-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    factor_id: Literal["three_tier_valuation"] = "three_tier_valuation"
-    factor_version: Literal["production-topt-v0.2.0"] = "production-topt-v0.2.0"
-    boundary_rule: Literal["lower_inclusive_upper_exclusive"] = "lower_inclusive_upper_exclusive"
-    valuation_gap_formula: Literal["target_ps_midpoint/current_ps-1"] = "target_ps_midpoint/current_ps-1"
-    bands: tuple[TierBandDefinition, TierBandDefinition, TierBandDefinition] = (
-        TierBandDefinition(
-            tier=ValuationTier.TRADITIONAL,
-            gppe_upper=Decimal("1000000"),
-            target_ps_lower=Decimal("3"),
-            target_ps_upper=Decimal("4"),
-        ),
-        TierBandDefinition(
-            tier=ValuationTier.TECH,
-            gppe_lower=Decimal("1000000"),
-            gppe_upper=Decimal("3000000"),
-            target_ps_lower=Decimal("8"),
-            target_ps_upper=Decimal("10"),
-        ),
-        TierBandDefinition(
-            tier=ValuationTier.LARGE_MODEL_NATIVE,
-            gppe_lower=Decimal("3000000"),
-            target_ps_lower=Decimal("20"),
-            target_ps_upper=Decimal("30"),
-        ),
-    )
-    confidence_rule: Literal["minimum_consumed_confidence"] = "minimum_consumed_confidence"
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        expected_tiers = (
-            ValuationTier.TRADITIONAL,
-            ValuationTier.TECH,
-            ValuationTier.LARGE_MODEL_NATIVE,
-        )
-        if tuple(band.tier for band in self.bands) != expected_tiers:
-            raise ValueError("three-tier definition must use canonical tier order")
-        if self.bands[0].gppe_lower is not None or self.bands[-1].gppe_upper is not None:
-            raise ValueError("three-tier definition must cover the complete GPPE domain")
-        for left, right in zip(self.bands, self.bands[1:]):
-            if left.gppe_upper != right.gppe_lower:
-                raise ValueError("three-tier definition must be contiguous")
-        _identify(self, id_field="definition_id", prefix="three-tier-definition")
         return self
 
 
@@ -463,6 +398,11 @@ class ToptCoreResult(_FrozenModel):
     target_ps_upper: Decimal | None = None
     target_ps_midpoint: Decimal | None = None
     current_ps: Decimal | None = None
+    #: #1235: the P/GP valuation. The band is a P/GP band; the gap divides P/GP.
+    current_pgp: Decimal | None = None
+    target_pgp_lower: Decimal | None = None
+    target_pgp_upper: Decimal | None = None
+    target_pgp_midpoint: Decimal | None = None
     valuation_gap: Decimal | None = None
     confidence: Decimal = Field(ge=0, le=1)
     freshness: MetricFreshness
@@ -472,7 +412,8 @@ class ToptCoreResult(_FrozenModel):
     gppe_result_id: str = Field(pattern=r"^topt-gppe-result:[0-9a-f]{64}$")
     gppe_definition_id: str = Field(pattern=r"^gppe-definition:[0-9a-f]{64}$")
     gppe_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
-    tier_definition_id: str = Field(pattern=r"^three-tier-definition:[0-9a-f]{64}$")
+    #: The strategy definition whose bands tiered this row (#1235): one id for both engines.
+    tier_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
     tier_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @field_validator("cutoff")
@@ -488,6 +429,10 @@ class ToptCoreResult(_FrozenModel):
         "target_ps_upper",
         "target_ps_midpoint",
         "current_ps",
+        "current_pgp",
+        "target_pgp_lower",
+        "target_pgp_upper",
+        "target_pgp_midpoint",
         "valuation_gap",
         "confidence",
         mode="before",
@@ -505,6 +450,10 @@ class ToptCoreResult(_FrozenModel):
             self.target_ps_upper,
             self.target_ps_midpoint,
             self.current_ps,
+            self.current_pgp,
+            self.target_pgp_lower,
+            self.target_pgp_upper,
+            self.target_pgp_midpoint,
             self.valuation_gap,
         )
         if self.availability is ToptCoreAvailability.AVAILABLE:
@@ -532,6 +481,10 @@ class ToptCoreResult(_FrozenModel):
             "target_ps_upper",
             "target_ps_midpoint",
             "current_ps",
+            "current_pgp",
+            "target_pgp_lower",
+            "target_pgp_upper",
+            "target_pgp_midpoint",
             "valuation_gap",
         ):
             value = getattr(self, field_name)
@@ -544,13 +497,24 @@ class ToptCoreResult(_FrozenModel):
         return self
 
 
-def _tier_band(value: Decimal, definition: ThreeTierV0Definition) -> TierBandDefinition:
-    for band in definition.bands:
-        if (band.gppe_lower is None or value >= band.gppe_lower) and (
-            band.gppe_upper is None or value < band.gppe_upper
-        ):
-            return band
-    raise AssertionError("validated tier definition does not cover GPPE")
+#: The GPPE tree node whose per-class binding names the operating numerator (#528).
+_OPERATING_NUMERATOR = "operating_gross_profit"
+
+
+def _operating_numerator(snapshot: ToptCoreSnapshotInput) -> tuple[str, ToptMetricInput | None]:
+    """The snapshot field and input that GPPE's numerator reads for this issuer's class.
+
+    P/GP divides market value by the same figure: gross profit, or a bank's pre-provision
+    profit. The tree declares which one per class, so this reads the binding instead of
+    branching on the class here.
+    """
+    decomposition = GPPE_V0_TREE.decomposition_of(_OPERATING_NUMERATOR)
+    assert decomposition is not None, "the GPPE tree declares no operating numerator"
+    (node_key,) = decomposition.operands[IssuerClass(snapshot.operating_branch.value)]
+    field = FOREST.node(node_key).alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+    if field is None:
+        raise AssertionError(f"GPPE numerator {node_key} names no snapshot field")
+    return field, getattr(snapshot, field)
 
 
 def _snapshot_freshness(snapshot: ToptCoreSnapshotInput) -> MetricFreshness:
@@ -725,7 +689,7 @@ def _unavailable_core(
     gppe_result: ToptGppeResult,
     *,
     invocation_id: str,
-    tier_definition: ThreeTierV0Definition,
+    definition: LargeModelValueV0Definition,
     reasons: tuple[ToptCoreReasonCode, ...],
     operating_efficiency: Decimal | None = None,
 ) -> ToptCoreResult:
@@ -753,8 +717,8 @@ def _unavailable_core(
         gppe_result_id=gppe_result.result_id,
         gppe_definition_id=gppe_result.gppe_definition_id,
         gppe_definition_sha256=gppe_result.gppe_definition_sha256,
-        tier_definition_id=tier_definition.definition_id,
-        tier_definition_sha256=tier_definition.content_sha256,
+        tier_definition_id=definition.strategy_definition_id,
+        tier_definition_sha256=definition.content_sha256,
     )
 
 
@@ -763,19 +727,33 @@ def compute_topt_core(
     gppe_result: ToptGppeResult,
     *,
     invocation_id: str,
-    tier_definition: ThreeTierV0Definition,
+    definition: LargeModelValueV0Definition,
 ) -> ToptCoreResult:
-    """Compute module 7 from an exact materialized module-2 result."""
+    """Compute module 7 from an exact materialized module-2 result.
+
+    The tier bands, the valuation basis and the gap rule come from ``definition``, the
+    strategy definition the deployed strategy tick evaluates (#1235). The engine values by
+    P/GP. It still writes P/S: ``current_ps`` is market value / revenue, and
+    ``target_ps_*`` hold the P/S that the P/GP band implies at this issuer's own gross
+    margin (target P/GP x numerator / revenue). So ``target_ps_midpoint / current_ps - 1``
+    equals the P/GP gap to the 34-digit context precision, and a P/S column never holds a
+    P/GP value.
+    """
 
     if not invocation_id.startswith("topt-core-invocation:"):
         raise ValueError("invocation_id must be a content-addressed TOPT core invocation")
+    if definition.valuation_basis is not ValuationBasis.PRICE_TO_GROSS_PROFIT:
+        raise ValueError(
+            f"the TOPT core engine values by P/GP; definition {definition.definition_version} "
+            f"values by {definition.valuation_basis.value}"
+        )
     _validate_gppe_lineage(snapshot, gppe_result)
     if gppe_result.availability is ToptCoreAvailability.UNAVAILABLE:
         return _unavailable_core(
             snapshot,
             gppe_result,
             invocation_id=invocation_id,
-            tier_definition=tier_definition,
+            definition=definition,
             reasons=gppe_result.reason_codes,
         )
     reasons: list[ToptCoreReasonCode] = []
@@ -783,6 +761,11 @@ def compute_topt_core(
         reasons.append(ToptCoreReasonCode.MISSING_REVENUE)
     elif snapshot.revenue.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_REVENUE)
+    numerator_field, numerator = _operating_numerator(snapshot)
+    if numerator is None or numerator.value is None:
+        reasons.append(ToptCoreReasonCode(f"missing_{numerator_field}"))
+    elif numerator.value <= 0:
+        reasons.append(ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT)
     share_values = tuple(component.shares_outstanding.value for component in snapshot.market_value_components)
     if any(value is None for value in share_values):
         reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
@@ -798,12 +781,13 @@ def compute_topt_core(
             snapshot,
             gppe_result,
             invocation_id=invocation_id,
-            tier_definition=tier_definition,
+            definition=definition,
             reasons=tuple(reasons),
         )
 
     assert gppe_result.gppe is not None and gppe_result.capital_adjusted_gross_profit is not None
     assert snapshot.revenue is not None and snapshot.revenue.value is not None
+    assert numerator is not None and numerator.value is not None
     with localcontext(_DECIMAL_CONTEXT):
         # Every listing's financial payload carries dei:EntityCommonStockShares-
         # Outstanding, which is the COMPANY total — identical on every class.
@@ -834,9 +818,17 @@ def compute_topt_core(
                 start=Decimal("0"),
             )
         current_ps = market_cap / snapshot.revenue.value
-        band = _tier_band(gppe_result.gppe, tier_definition)
-        midpoint = (band.target_ps_lower + band.target_ps_upper) / Decimal("2")
-        valuation_gap = midpoint / current_ps - Decimal("1")
+        current_pgp = market_cap / numerator.value
+        band = definition.tier_valuation.band_for(gppe_result.gppe)
+        target_pgp_lower = band.target_lower_bound
+        target_pgp_upper = band.target_upper_bound
+        target_pgp_midpoint = (target_pgp_lower + target_pgp_upper) / Decimal("2")
+        valuation_gap = target_pgp_midpoint / current_pgp - Decimal("1")
+        # The P/S the band implies at this issuer's gross margin (numerator / revenue).
+        margin = numerator.value / snapshot.revenue.value
+        target_ps_lower = target_pgp_lower * margin
+        target_ps_upper = target_pgp_upper * margin
+        target_ps_midpoint = target_pgp_midpoint * margin
     return ToptCoreResult(
         invocation_id=invocation_id,
         snapshot_id=snapshot.snapshot_id,
@@ -856,10 +848,14 @@ def compute_topt_core(
         capital_adjusted_gross_profit=gppe_result.capital_adjusted_gross_profit,
         gppe=gppe_result.gppe,
         tier=band.tier,
-        target_ps_lower=band.target_ps_lower,
-        target_ps_upper=band.target_ps_upper,
-        target_ps_midpoint=midpoint,
+        target_ps_lower=target_ps_lower,
+        target_ps_upper=target_ps_upper,
+        target_ps_midpoint=target_ps_midpoint,
         current_ps=current_ps,
+        current_pgp=current_pgp,
+        target_pgp_lower=target_pgp_lower,
+        target_pgp_upper=target_pgp_upper,
+        target_pgp_midpoint=target_pgp_midpoint,
         valuation_gap=valuation_gap,
         confidence=min(gppe_result.confidence, *(cell.confidence for cell in snapshot.cell_inputs)),
         freshness=gppe_result.freshness,
@@ -868,6 +864,6 @@ def compute_topt_core(
         gppe_result_id=gppe_result.result_id,
         gppe_definition_id=gppe_result.gppe_definition_id,
         gppe_definition_sha256=gppe_result.gppe_definition_sha256,
-        tier_definition_id=tier_definition.definition_id,
-        tier_definition_sha256=tier_definition.content_sha256,
+        tier_definition_id=definition.strategy_definition_id,
+        tier_definition_sha256=definition.content_sha256,
     )

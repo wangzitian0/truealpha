@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -198,22 +199,16 @@ def test_duplicate_factor_for_same_entity_fails_closed() -> None:
         three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
 
 
-def test_gross_margin_gate_restricts_low_margin_to_traditional() -> None:
+def test_band_lookup_takes_no_gross_margin() -> None:
+    """#1235: the hidden 0.35 gross-margin gate is deleted. GPPE 100,946 is in the 0.1.0 tech
+    band (>= 100,000), so the target is the tech midpoint (2.50 + 6.00) / 2 = 4.25 whatever the
+    issuer's gross margin. The composite and the band lookup no longer accept a margin."""
     definition = _v0_definition()
-    # Costco scenario: GPPE is 100,946 (which without gate reaches Tech tier >= 100,000),
-    # but gross_margin is 0.128 (< 0.35 anti-fraud gate).
-    # It must be restricted to traditional band (target P/S 0.30 - 2.00, midpoint 1.15).
     inputs = [
         _factor_result("gross_profit_per_employee", "100946", "0.9"),
         _factor_result("price_to_sales", "1.377", "0.9"),
     ]
-    result = three_tier_valuation(
-        inputs,
-        entity_id="e1",
-        as_of=_AS_OF,
-        definition=definition,
-        gross_margin=Decimal("0.128"),
-    )
-    # Target P/S is midpoint 1.15 of traditional band, NOT 4.25 of tech band
-    expected_gap = Decimal("1.15") / Decimal("1.377") - Decimal("1")
-    assert result.value == expected_gap
+    result = three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
+    assert result.value == Decimal("4.25") / Decimal("1.377") - Decimal("1")
+    assert "gross_margin" not in inspect.signature(three_tier_valuation).parameters
+    assert "gross_margin" not in inspect.signature(type(definition).band_for).parameters

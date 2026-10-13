@@ -12,7 +12,6 @@ from factors.production_topt import (
     MetricAvailability,
     MetricFreshness,
     OperatingBranch,
-    ThreeTierV0Definition,
     ToptCellQualityInput,
     ToptCoreResult,
     ToptCoreSnapshotInput,
@@ -27,6 +26,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import InputEvidenceStatus
+from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.production_topt.status_dimensions import (
@@ -736,9 +736,11 @@ class PostgresToptCoreRepository:
         snapshot: ToptCoreSnapshot,
         *,
         gppe_definition: GppeV0Definition,
-        tier_definition: ThreeTierV0Definition | None = None,
+        definition: LargeModelValueV0Definition | None = None,
     ) -> tuple[ToptCoreResult, ...]:
-        tier_definition = tier_definition or ThreeTierV0Definition()
+        # #1235: one band set. The default is the live strategy definition, the same one the
+        # strategy tick evaluates, so the deployed path cannot tier with a second band set.
+        definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
         gppe_invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
@@ -757,7 +759,7 @@ class PostgresToptCoreRepository:
         invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
             "gppe_invocation_id": gppe_invocation_id,
-            "tier_definition": tier_definition.model_dump(mode="json"),
+            "tier_definition": definition.model_dump(mode="json"),
         }
         invocation_sha256 = canonical_sha256(invocation_payload)
         invocation_id = f"topt-core-invocation:{invocation_sha256}"
@@ -820,7 +822,7 @@ class PostgresToptCoreRepository:
                     factor_input,
                     gppe_result,
                     invocation_id=invocation_id,
-                    tier_definition=tier_definition,
+                    definition=definition,
                 )
                 for factor_input, gppe_result in zip(factor_inputs, materialized_gppe_results, strict=True)
             )
@@ -843,8 +845,8 @@ class PostgresToptCoreRepository:
                     gppe_invocation_id,
                     gppe_definition.definition_id,
                     gppe_definition.content_sha256,
-                    tier_definition.definition_id,
-                    tier_definition.content_sha256,
+                    definition.strategy_definition_id,
+                    definition.content_sha256,
                     Jsonb(invocation_payload),
                 ),
             ).fetchone()
@@ -875,7 +877,7 @@ class PostgresToptCoreRepository:
                         ),
                         source_evidence_status=evidence_by_listing[result.listing_id],
                         factor_validation_status=factor_validation_status_for(
-                            (gppe_definition.definition_id, tier_definition.definition_id)
+                            (gppe_definition.definition_id, definition.strategy_definition_id)
                         ),
                     ),
                 )
@@ -1043,6 +1045,7 @@ class PostgresToptCoreRepository:
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
                 operating_period_end, revenue_period_end, shares_period_end,
                 confidence, freshness, reason_codes, input_observation_ids,
                 gppe_invocation_id, gppe_result_id,
@@ -1053,7 +1056,7 @@ class PostgresToptCoreRepository:
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -1082,6 +1085,10 @@ class PostgresToptCoreRepository:
                 result.target_ps_midpoint,
                 result.current_ps,
                 result.valuation_gap,
+                result.current_pgp,
+                result.target_pgp_lower,
+                result.target_pgp_upper,
+                result.target_pgp_midpoint,
                 periods[0],
                 periods[1],
                 periods[2],

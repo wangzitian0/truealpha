@@ -1,28 +1,30 @@
-"""Module 7: three-tier valuation (traditional / tech / large-model-native P/S tier).
+"""Module 7: three-tier valuation (traditional / tech / large-model-native tier).
 
 Composes one issuer's already-materialized `gross_profit_per_employee` (module
-2) and `price_to_sales` (a base factor that itself registers module 7, since it exists
-only to feed this composite -- see `factors.base.price_to_sales`) `FactorResult`s into a
-valuation gap:
-``target_ps_midpoint / current_price_to_sales - 1`` (#21's `ValuationGapRule`
+2) and one valuation multiple (a feeder that itself registers module 7, since it
+exists only to feed this composite) `FactorResult`s into a valuation gap:
+``target_multiple_midpoint / current_multiple - 1`` (#21's `ValuationGapRule`
 ranks candidates by descending valuation gap). Confidence is the minimum of
 the two consumed inputs, per the composite-factor rule (CLAUDE.md: "composite
 factors... confidence = min() of inputs").
 
-Tier band thresholds and target P/S ranges are **not** hardcoded here — the
-caller supplies an explicit, versioned
-`truealpha_contracts.strategy.ThreeTierValuationDefinition` (the locked v0
-bands from #21/#335's golden fixture, or any later versioned revision),
-matching #21's "no implicit defaults" rule. Band lookup and target-midpoint
-arithmetic port the logic proven by the S6 tiny kernel of the retired batch
-machine (#169, closed; the kernel itself was removed with that machine in #791,
-and git history holds it).
+The multiple is the definition's valuation basis: `price_to_sales` for strategy
+definition 0.1.0, `price_to_gross_profit` for definition 1.0.0 (#1235). The basis
+names the feeder whose result this function reads, so a P/GP band is never
+compared with a P/S value.
+
+Tier band thresholds and target multiple ranges are **not** hardcoded here — the
+caller supplies an explicit, versioned tier-valuation definition from
+`truealpha_contracts.strategy`, matching #21's "no implicit defaults" rule. Band
+lookup and target-midpoint arithmetic port the logic proven by the S6 tiny
+kernel of the retired batch machine (#169, closed; the kernel itself was removed
+with that machine in #791, and git history holds it).
 
 `FactorResult` carries one scalar `value`; it cannot also carry the tier
-label, target P/S bounds, or current P/S. Callers that need those for
-reporting (e.g. the #26 preview replay) call `definition.band_for(gppe.value)`
-directly — the same cheap, deterministic lookup this function already uses —
-rather than this module inventing a richer, one-off return shape.
+label, target bounds, or current multiple. Callers that need those for
+reporting call `definition.band_for(gppe.value)` directly — the same cheap,
+deterministic lookup this function already uses — rather than this module
+inventing a richer, one-off return shape.
 
 `data_availability` is "verified" only when both consumed inputs are
 "verified" -- a composite cannot claim stronger verification than what it was
@@ -33,7 +35,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.strategy import ThreeTierValuationDefinition
+from truealpha_contracts.strategy import ThreeTierPgpValuationDefinition, ThreeTierValuationDefinition
 
 from factors.registry import factor
 from factors.types import DataAvailability, FactorResult, UnitFamily
@@ -64,11 +66,11 @@ def three_tier_valuation(
     *,
     entity_id: str,
     as_of: datetime,
-    definition: ThreeTierValuationDefinition,
-    gross_margin: Decimal | None = None,
+    definition: ThreeTierValuationDefinition | ThreeTierPgpValuationDefinition,
 ) -> FactorResult:
     gppe = _labor_efficiency(inputs, entity_id)
-    price_to_sales = _result("price_to_sales", inputs, entity_id)
+    basis = definition.valuation_basis.value
+    multiple = _result(basis, inputs, entity_id)
 
     if gppe is None or gppe.value is None:
         return FactorResult(
@@ -81,7 +83,7 @@ def three_tier_valuation(
             data_availability="unverified",
             flags=["missing_gross_profit_per_employee"],
         )
-    if price_to_sales is None or price_to_sales.value is None:
+    if multiple is None or multiple.value is None:
         return FactorResult(
             factor="three_tier_valuation",
             entity_id=entity_id,
@@ -90,11 +92,11 @@ def three_tier_valuation(
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
-            flags=["missing_price_to_sales"],
+            flags=[f"missing_{basis}"],
         )
 
-    current_ps = price_to_sales.value
-    if current_ps <= 0:
+    current_multiple = multiple.value
+    if current_multiple <= 0:
         return FactorResult(
             factor="three_tier_valuation",
             entity_id=entity_id,
@@ -103,16 +105,16 @@ def three_tier_valuation(
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
-            flags=["nonpositive_price_to_sales"],
+            flags=[f"nonpositive_{basis}"],
         )
 
-    band = definition.band_for(gppe.value, gross_margin=gross_margin)
-    midpoint = (band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2)
-    valuation_gap = midpoint / current_ps - Decimal(1)
-    confidence = min(gppe.confidence, price_to_sales.confidence)
+    band = definition.band_for(gppe.value)
+    midpoint = (band.target_lower_bound + band.target_upper_bound) / Decimal(2)
+    valuation_gap = midpoint / current_multiple - Decimal(1)
+    confidence = min(gppe.confidence, multiple.confidence)
     data_availability: DataAvailability = (
         "verified"
-        if gppe.data_availability == "verified" and price_to_sales.data_availability == "verified"
+        if gppe.data_availability == "verified" and multiple.data_availability == "verified"
         else "unverified"
     )
 
