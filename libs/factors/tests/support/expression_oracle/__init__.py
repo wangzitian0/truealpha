@@ -1,7 +1,11 @@
-"""Polars Factor Expression DSL and Compiler module."""
+"""Test-time reproducibility oracle: the Polars AST compiler and its DSL (init.md rule 25).
 
-from factors.expressions.compiler import compile_expression, compile_to_polars, evaluate_factor
-from factors.expressions.dsl import (
+Tests compile a factor's versioned `truealpha_contracts.ast` definition through this package and
+check that it reproduces the native Decimal result. No deployed path imports it.
+"""
+
+from .compiler import compile_expression, compile_to_polars, evaluate_factor
+from .dsl import (
     Add,
     Div,
     FactorASTNode,

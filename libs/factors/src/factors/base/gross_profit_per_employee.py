@@ -45,11 +45,10 @@ looks up itself — the caller supplies the frozen v0 value, exactly like
 The arithmetic is also expressed as a matrix-compatible AST expression
 (`GPPE_EXPRESSION_DEFINITION`), built only from shared
 `truealpha_contracts.ast` node types — no factor-specific node — so a
-compiled Polars execution through `factors.expressions.compiler` reproduces
-this function's Decimal output — proven by the cross-check test, not invoked
-on every call (the Decimal path above is the fast, exact source of truth;
-the vectorised execution is the reproducibility proof, and the compiler it
-runs through is meant to carry future base factors expressible the same way).
+compiled Polars execution reproduces this function's Decimal output. The
+compiler is a test-time oracle (`libs/factors/tests/support/expression_oracle`, #758): the cross-check test
+runs it, and no deployed path does. The Decimal path above is the computation
+and the source of truth; the vectorised execution is the reproducibility proof.
 Because the formula is now uniform, this single expression covers every issuer.
 
 Input metric names match the canonical registry

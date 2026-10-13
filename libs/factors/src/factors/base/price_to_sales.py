@@ -32,8 +32,8 @@ The formula is also expressed as a matrix-compatible AST expression
 `truealpha_contracts.ast`, no new node types needed — closes #21 criterion 3's
 remaining gap for this factor. Unlike `three_tier_valuation` (module 7), whose
 band lookup is genuinely branching logic and stays native Decimal Python by
-`factors.expressions.compiler`'s own documented design, this factor was always
-pure arithmetic.
+the test-time Polars oracle's own documented design (`libs/factors/tests/support/expression_oracle`), this factor
+was always pure arithmetic.
 """
 
 from collections.abc import Sequence

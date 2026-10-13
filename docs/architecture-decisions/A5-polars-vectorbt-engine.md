@@ -1,9 +1,12 @@
-# A5 — The Polars AST is the factor-expression engine; VectorBT is the selected backtest engine
+# A5 — The Polars AST replaces Qlib as the factor-expression oracle; VectorBT was selected and never adopted
 
 Status: Accepted. Owner decision 2026-09-23, carried out by #969. Supersedes `init.md` rule 25's
 selection of Qlib, which had been in force since 2026-07-17.
 Date: 2026-09-23
-Correction 2026-10-12 (#1239): the repository does not use VectorBT. The backtest engine is a numpy simulation. See Decision 2.
+Correction 2026-10-12 (#1239): the repository does not use VectorBT. See Decision 2.
+Amended 2026-10-13 (#758): the Polars AST compiler is a test-time oracle in
+`libs/factors/tests/support/expression_oracle`. No deployed path imports it. The backtest engine is
+`factors.backtest.engine`. See Decisions 1 and 2.
 
 ## Context
 
@@ -35,13 +38,18 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 ## Decision
 
-1. **The Polars AST is the factor-expression engine.** Factor expressions are versioned
-   `truealpha_contracts.ast` definitions compiled to `polars.Expr` through `factors.expressions`.
-2. **VectorBT is the selected backtest/portfolio-simulation engine**, invoked only through adapters in
-   `libs/factors`. Correction 2026-10-12: the repository does not use VectorBT yet. The `vectorbt`
-   package is absent from `uv.lock`. Since #758 the engine is `factors.backtest.engine.simulate`, a
-   Decimal simulation that reads its execution rules from the strategy definition. Each run pins it
-   by `ENGINE_ID` in its `run_id` (ADR A6, status update 2026-10-13).
+1. **The Polars AST replaces Qlib as the factor-expression engine.** Factor expressions are versioned
+   `truealpha_contracts.ast` definitions compiled to `polars.Expr`. Amended 2026-10-13 (#758): the
+   native Decimal implementations in `libs/factors` are the computation. The compiler is a test-time
+   reproducibility oracle in `libs/factors/tests/support/expression_oracle`. The cross-check tests of
+   `gross_profit_per_employee`, `price_to_sales` and `peg` compile each expression through it and check
+   that it reproduces the Decimal value. After #758 deleted the top-k adapter, no deployed path called
+   the compiler, so it moved out of `libs/factors/src`.
+2. **VectorBT was selected as the backtest/portfolio-simulation engine and never adopted.** The
+   `vectorbt` package was never in `uv.lock`. The backtest engine is `factors.backtest.engine` (#758).
+   It is a Decimal simulation that reads its execution, transaction-cost, total-return and sizing rules
+   from the strategy definition. Each run pins it by `ENGINE_ID` in its `run_id` (ADR A6, status update
+   2026-10-13).
 3. **Every engine-independent constraint from the old rule 25 carries over unchanged.** Neither
    engine is a data or semantic authority. Only `libs/factors` adapters may invoke them. They
    receive provenance-neutral inputs projected from durable PIT snapshots and the explicit
@@ -94,9 +102,7 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 ## What this ADR does not decide
 
-It does not build the multi-cutoff backtest runner, and it does not claim the backtest engine is
-production-ready. Since 2026-10-12 (#1239), `factors.backtest` is reachable from `dagster_defs.py`
-through `data_engine.lanes.backtest`. #938's three inter-layer contracts remain the standing
-acceptance bar for it. This ADR settles which engine the
-repository is building on, so that work stops being done against a contract that names a different
-one.
+It does not build the multi-cutoff backtest runner. #758 builds it: `data_engine.lanes.backtest`
+evaluates `large_model_value_v0` at each quarter-end cutoff and simulates it with
+`factors.backtest.engine`. This ADR does not claim that engine is production-ready. #938's three
+inter-layer contracts remain the standing acceptance bar for it.

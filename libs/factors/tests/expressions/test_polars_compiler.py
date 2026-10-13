@@ -1,9 +1,15 @@
 """Unit tests for Polars Factor Expression compiler and DSL."""
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import polars as pl
-from factors.expressions.compiler import compile_to_polars, evaluate_factor
-from factors.expressions.dsl import (
+
+# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from expression_oracle.compiler import compile_to_polars, evaluate_factor  # noqa: E402
+from expression_oracle.dsl import (  # noqa: E402
     Add,
     Div,
     Feature,
