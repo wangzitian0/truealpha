@@ -88,6 +88,9 @@ jobs:
               - 'db/**'
               - '.github/workflows/ci-db.yml'
               - '.github/workflows/ci-required.yml'
+              # The setup-uv action installs uv in this lane (#1248). A PR that edits only
+              # the action must re-run every lane that calls it: `required` reads a skip as success.
+              - '.github/actions/**'
             python:
               # tools/*.py are the deploy gates themselves; their tests live in
               # libs/runtime/tests via load_tool, which only ci-python runs. A
@@ -112,6 +115,7 @@ jobs:
               - '.python-version'
               - '.github/workflows/ci-python.yml'
               - '.github/workflows/ci-required.yml'
+              - '.github/actions/**'
               # dagster_liveness below must stay a SUBSET of this list (pinned in
               # test_ci_workflows.py): otherwise a docker-compose-only change can set
               # dagster_liveness true while ci-python.yml — and the liveness job
@@ -157,6 +161,7 @@ jobs:
               - '.python-version'
               - '.github/workflows/ci-python.yml'
               - '.github/workflows/ci-required.yml'
+              - '.github/actions/**'
               - 'docker-compose.yml'
               - 'tools/**'
             runtime:
@@ -174,6 +179,7 @@ jobs:
               - 'uv.lock'
               - '.github/workflows/ci-runtime.yml'
               - '.github/workflows/ci-required.yml'
+              - '.github/actions/**'
             web:
               # ci-web runs the app-web half of tools/check_route_manifest.py
               # and the walk seeds read tools/route_manifest.json.

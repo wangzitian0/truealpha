@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
       - run: uv sync --all-packages
       - working-directory: apps/app-web
         run: bun install --frozen-lockfile

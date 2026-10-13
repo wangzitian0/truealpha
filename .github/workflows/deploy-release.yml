@@ -79,7 +79,7 @@ jobs:
             exit 1
           fi
           echo "owner approval covers ${release_sha}"
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
       - name: Install the pinned SDK contract and the workspace
         # --all-packages, not --no-install-workspace: three later steps run
         # tools/*.py that import `truealpha_runtime`, and #585 moved the shared

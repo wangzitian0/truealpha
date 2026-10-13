@@ -1919,6 +1919,25 @@ def _covered_by(path: str, patterns: set[str]) -> bool:
     return False
 
 
+def test_the_changes_filter_reaches_the_shared_uv_action() -> None:
+    """#1248: a PR that edits only the shared setup-uv action must re-run each lane that calls it.
+
+    `required` reads a skipped job as success (#673). A filter that misses the action lets a
+    broken install step merge while no lane runs it. The tests of the action are in
+    `test_setup_uv_retry.py`.
+    """
+    action_path = ".github/actions/setup-uv/action.yml"
+    lanes = {"db": DB, "python": PYTHON, "data_engine": PYTHON, "runtime": RUNTIME}
+    for lane, workflow in lanes.items():
+        assert any(spec.get("uses") == "./.github/actions/setup-uv" for spec in steps(workflow)), (
+            f"{workflow} no longer calls the shared setup-uv action; update the lane map of this test"
+        )
+        assert _covered_by(action_path, _paths_filter(lane)), (
+            f"the {lane} filter in ci-required.yml misses {action_path}: a PR that edits only "
+            f"the action skips {workflow} and `required` reads the skip as success"
+        )
+
+
 def test_the_polars_cross_check_proofs_are_armed_in_ci_python() -> None:
     """#956's failure class, carried across #969's engine migration.
 
@@ -2871,7 +2890,7 @@ def test_the_owner_gate_runs_first_cannot_be_skipped_and_reads_the_input() -> No
     names = [spec.get("name") or spec.get("uses") for spec in job(RELEASE, "request")["steps"]]
     gate_at = names.index(OWNER_GATE_STEP)
     for later in (
-        "astral-sh/setup-uv@v5",
+        "./.github/actions/setup-uv",
         "Install the pinned SDK contract and the workspace",
         "Verify release evidence and render request",
         "Dispatch the validated request to infra2",
