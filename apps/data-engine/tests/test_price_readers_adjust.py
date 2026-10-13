@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,7 +18,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, insert_market_prices_monthly
+from data_engine.datahub.backtest import load_daily_series
+from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
 from data_engine.datahub.strategy_history import postgres_last_close
 from data_engine.datahub.universe_mask import UniverseMaskReason, compute_and_persist_universe_mask_from_db
 from data_engine.lanes.market_data import _distinct_trading_dates
@@ -59,15 +59,6 @@ def _bar(symbol: str, d: date, close: int, resolution: str = "1D") -> PriceBarRe
     )
 
 
-def _load_prices_reader():
-    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    from run_vectorbt_backtest import _load_prices
-
-    return _load_prices
-
-
 def _write_both_series(connection, symbol: str, trading_date: date, *, unadjusted_last: bool) -> None:
     order = ["splits", "none"] if unadjusted_last else ["none", "splits"]
     for adjust in order:
@@ -77,28 +68,27 @@ def _write_both_series(connection, symbol: str, trading_date: date, *, unadjuste
 
 @pytest.mark.parametrize("unadjusted_last", [True, False], ids=["none-written-last", "splits-written-last"])
 @pytest.mark.parametrize("adjust", ["splits", "none"])
-def test_load_prices_returns_only_the_series_it_asked_for(connection, adjust: str, unadjusted_last: bool) -> None:
-    """The backtest script reads one close per (symbol, date). Insertion order must not pick the series."""
+def test_load_daily_series_returns_only_the_series_it_asked_for(connection, adjust: str, unadjusted_last: bool) -> None:
+    """The backtest reads one bar per (symbol, date) and series. Insertion order must not pick the series."""
     symbol = f"T1131LOAD{adjust.upper()}{int(unadjusted_last)}"
     trading_date = date(2026, 9, 21)
     _write_both_series(connection, symbol, trading_date, unadjusted_last=unadjusted_last)
 
-    prices = _load_prices_reader()(connection, "staging.market_prices_daily", [symbol], adjust=adjust)
+    series = load_daily_series(connection, [symbol], adjust=adjust)
 
-    assert prices.to_dicts() == [{"symbol": symbol, "date": trading_date, "close": float(SERIES[adjust])}]
+    price = Decimal(SERIES[adjust])
+    assert series == {symbol: {trading_date: (price, price)}}
 
 
-def test_load_prices_reads_the_monthly_table_by_adjust(connection) -> None:
-    symbol = "T1131LOADMONTHLY"
-    month_end = date(2026, 8, 31)
-    insert_market_prices_monthly(connection, [_bar(symbol, month_end, 60, "1M")], adjust="splits")
-    insert_market_prices_monthly(connection, [_bar(symbol, month_end, 600, "1M")], adjust="none")
+def test_load_daily_series_takes_the_latest_vintage_of_a_session(connection) -> None:
+    symbol = "T758VINTAGE"
+    trading_date = date(2026, 9, 21)
+    insert_market_prices_daily(connection, [_bar(symbol, trading_date, 100)], adjust="none")
+    insert_market_prices_daily(connection, [_bar(symbol, trading_date, 101)], adjust="none")
 
-    split = _load_prices_reader()(connection, "staging.market_prices_monthly", [symbol], adjust="splits")
-    unadjusted = _load_prices_reader()(connection, "staging.market_prices_monthly", [symbol], adjust="none")
-
-    assert split["close"].to_list() == [60.0]
-    assert unadjusted["close"].to_list() == [600.0]
+    assert load_daily_series(connection, [symbol], adjust="none") == {
+        symbol: {trading_date: (Decimal(101), Decimal(101))}
+    }
 
 
 def test_distinct_trading_dates_lists_only_the_dates_of_the_asked_series(connection) -> None:
@@ -155,24 +145,10 @@ def test_the_last_close_reader_returns_the_unadjusted_bar_only(connection) -> No
     assert last.close == Decimal(UNADJUSTED_CLOSE)
 
 
-def _datahub_backtest_load_prices():
-    from data_engine.datahub.backtest import _load_prices
-
-    return _load_prices
-
-
-def _gateway_price_bars():
-    from truealpha_runtime.backtest_gateway import PostgresBacktestDataGateway
-
-    return PostgresBacktestDataGateway.load
-
-
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
     "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
-    "backtest-script": _load_prices_reader,
-    "backtest-datahub": _datahub_backtest_load_prices,
-    "gateway-price-bars": _gateway_price_bars,
+    "backtest-datahub": lambda: load_daily_series,
 }
 
 
@@ -191,13 +167,11 @@ def test_a_reader_cannot_omit_the_adjust_filter(name: str) -> None:
 #: Every file that names a price table, with what it does there. A new file in this scan
 #: needs a row here AND a test above that fails when its query drops the `adjust` filter.
 REVIEWED_PRICE_TABLE_FILES = {
-    "apps/data-engine/src/data_engine/datahub/backtest.py": "reader, tested by test_load_prices_*",
+    "apps/data-engine/src/data_engine/datahub/backtest.py": "reader, tested by test_load_daily_series_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
-    "apps/data-engine/src/data_engine/lanes/backtest.py": "lane op, checks price presence via adjust filter",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
-    "libs/runtime/src/truealpha_runtime/backtest_gateway.py": "gateway reader, tested by test_a_reader_cannot_omit_the_adjust_filter",
     "tools/schema_drift.py": "prose in a docstring, no query",
 }
 SCANNED_ROOTS = ("apps", "libs", "tools")

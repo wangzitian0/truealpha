@@ -45,6 +45,15 @@ class NightlyBacktestConfig(dg.Config):
     executed_at: str
 
 
+def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
+    """RUNNING in production and staging, STOPPED in any other environment."""
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if app_env.strip().lower() in SCHEDULED_ENVIRONMENTS
+        else dg.DefaultScheduleStatus.STOPPED
+    )
+
+
 @dg.op
 def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBacktestConfig) -> None:
     """Backtest large_model_value_v0 over the quarter-end history and persist the run."""
@@ -87,11 +96,7 @@ def nightly_backtest_pipeline_job() -> None:
     job=nightly_backtest_pipeline_job,
     cron_schedule=BACKTEST_CRON,
     execution_timezone="UTC",
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if settings.app_env.strip().lower() in SCHEDULED_ENVIRONMENTS
-        else dg.DefaultScheduleStatus.STOPPED
-    ),
+    default_status=schedule_status(settings.app_env),
 )
 def nightly_backtest_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()

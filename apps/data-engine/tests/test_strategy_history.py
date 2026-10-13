@@ -29,6 +29,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
     build_bundle,
 )
+from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     DEFAULT_MONTHS,
     UNADJUSTED_BARS,
@@ -38,12 +39,15 @@ from data_engine.datahub.strategy_history import (
     LookAheadError,
     admit_input,
     end_of_day,
+    history_cutoffs,
+    is_schedule_cutoff,
     issuer_from_observation,
     load_stored_company_facts,
     monthly_cutoffs,
     postgres_last_close,
     project_deployed_history,
     project_issuer_rows,
+    quarter_end_cutoffs,
     run_strategy_history,
     stored_history_issuers,
 )
@@ -209,6 +213,66 @@ def test_monthly_cutoffs_reject_a_naive_tick_and_a_month_count_below_one() -> No
         monthly_cutoffs(datetime(2026, 10, 9, 6, 15))
     with pytest.raises(ValueError, match="months"):
         monthly_cutoffs(TICK, 0)
+
+
+def _quarter_end(year: int, month: int, day: int) -> datetime:
+    return datetime(year, month, day, 23, 59, 59, tzinfo=UTC)
+
+
+def test_quarter_end_cutoffs_close_each_quarter_at_the_schedule_time() -> None:
+    """#758: the backtest evaluates the definition's schedule, calendar quarter ends at 23:59:59Z."""
+    schedule = load_strategy_definition().schedule
+    cutoffs = quarter_end_cutoffs(schedule, start=monthly_cutoffs(TICK)[0], end=TICK)
+
+    assert cutoffs[0] == _quarter_end(2023, 12, 31)
+    assert cutoffs[-1] == _quarter_end(2026, 9, 30)
+    assert len(cutoffs) == 12
+    assert all((cutoff + timedelta(seconds=1)).day == 1 for cutoff in cutoffs), "the last second of a quarter"
+    assert all(cutoff.month in (3, 6, 9, 12) for cutoff in cutoffs)
+    assert schedule.first_cutoff_at > cutoffs[0], "first_cutoff_at anchors the live schedule, not this window"
+
+
+def test_a_quarter_end_after_the_tick_is_not_a_cutoff_yet() -> None:
+    schedule = load_strategy_definition().schedule
+    tick = datetime(2026, 9, 30, 21, 0, tzinfo=UTC)
+
+    assert quarter_end_cutoffs(schedule, start=_utc(2026, 6, 1), end=tick) == [_quarter_end(2026, 6, 30)]
+
+
+def test_history_cutoffs_hold_the_monthly_and_the_quarter_end_cutoffs() -> None:
+    schedule = load_strategy_definition().schedule
+    cutoffs = history_cutoffs(TICK, DEFAULT_MONTHS, schedule)
+
+    assert len(cutoffs) == 36 + 12
+    assert set(monthly_cutoffs(TICK)) <= set(cutoffs)
+    assert cutoffs == sorted(set(cutoffs))
+    assert max(cutoffs) <= TICK
+
+
+def test_only_a_quarter_end_at_the_schedule_time_is_a_schedule_cutoff() -> None:
+    schedule = load_strategy_definition().schedule
+    assert is_schedule_cutoff(_quarter_end(2024, 3, 31), schedule)
+    assert is_schedule_cutoff(datetime(2024, 4, 1, 1, 59, 59, tzinfo=timezone(timedelta(hours=2))), schedule)
+    for other in (
+        _utc(2024, 4, 1),
+        datetime(2024, 3, 31, 23, 59, 58, tzinfo=UTC),
+        _quarter_end(2024, 2, 29),
+        _quarter_end(2024, 3, 30),
+    ):
+        assert not is_schedule_cutoff(other, schedule), other
+
+
+def test_a_fact_filed_on_the_quarter_end_day_waits_for_the_next_cutoff() -> None:
+    """The strict date rule holds at a 23:59:59Z cutoff: the filing day itself is not admitted."""
+    late = _doc(range(2018, 2025))
+    late["facts"]["us-gaap"]["Revenues"]["units"]["USD"].append(_flow("2025-12-31", "2025-01-01", 515151, "2026-03-31"))
+    rows = _rows(_issuer(1), late, [_quarter_end(2026, 3, 31), _utc(2026, 4, 1)])
+
+    for row in rows:
+        assert row.knowable_at.date() < row.cutoff_at.date(), row
+        assert row.knowable_at <= row.cutoff_at, row
+    assert _at(rows, _quarter_end(2026, 3, 31))[("revenue", None)].value == Decimal(1000 + 2024)
+    assert _at(rows, _utc(2026, 4, 1))[("revenue", None)].value == Decimal(515151)
 
 
 # -- strict point in time ---------------------------------------------------------------
@@ -858,5 +922,6 @@ def test_the_deployed_run_projects_the_issuers_the_strategy_consumes(connection,
     summary = project_deployed_history(connection, tick=TICK, months=6)
 
     assert seen["issuer_ids"] == [issuer.issuer_id]
-    assert (summary.issuers, summary.cutoffs) == (1, 6)
+    # Six monthly cutoffs (2026-05-01 .. 2026-10-01) and the quarter ends 2026-06-30 and 2026-09-30.
+    assert (summary.issuers, summary.cutoffs) == (1, 8)
     assert summary.inserted > 0

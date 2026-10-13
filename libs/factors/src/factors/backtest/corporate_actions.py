@@ -1,6 +1,6 @@
 """Split events derived from two stored price series (#758, M3).
 
-No corporate-action source exists. ``staging.market_prices_daily`` holds two series for each
+No corporate-action source exists. The daily price store holds two series for each
 symbol: unadjusted bars (``adjust = 'none'``) and split-adjusted bars (``adjust = 'splits'``).
 The split-adjusted series is expressed on the share basis of its fetch. So on each session,
 the ratio ``unadjusted close / split-adjusted close`` is the product of the factors of every
