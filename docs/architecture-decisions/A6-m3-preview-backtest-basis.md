@@ -59,11 +59,12 @@ each decision:
   filing date, because the filing restates it for an earlier split. Without this rule, NVDA at
   2024-06-30 and NFLX at 2025-12-31 had a market value ten times too small and were selected. The
   backtest reads each price series by its `adjust` value.
-- The corrected share row wins by `knowable_at`: it is appended with the close's knowable time,
-  later than the filed row, and the reader takes the latest `knowable_at` first. A later
-  correction with an earlier `knowable_at` would lose to the row it corrects. So a spurious split
-  must stop the run before it writes a row, and it does: a ratio step that is not a simple split
-  ratio, or that the unadjusted price does not confirm, raises `SplitDerivationError`.
+- The corrected share row wins by `knowable_at`. It is appended with the knowable time of the
+  close, which is later than the filed row. The reader takes the latest `knowable_at` first. A
+  later correction with an earlier `knowable_at` would lose to the row it corrects. So a spurious
+  split must stop the run before it writes a row. The split derivation does this. A ratio step
+  that is not a simple split ratio raises `SplitDerivationError`. A ratio step that the unadjusted
+  price does not confirm also raises it.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
