@@ -38,7 +38,7 @@ Reviewer: the owner (wangzitian0), 2026-10-12, in session. The decision is recor
 - P/GP = shares outstanding × last unadjusted close ÷ the latest-complete-fiscal-year gross profit that the labor-efficiency numerator uses.
 - Gap = target P/GP midpoint ÷ current P/GP − 1 (4 dp half-even). A current P/GP above the band upper bound is `rejected_valuation_above_tier_band`.
 - Every tier is eligible. Rank by descending gap, tie-break ascending issuer id, select the top 2, equal weight. These rules and the 0.70 confidence floor are unchanged from 0.1.0.
-- The hidden 0.35 gross-margin gate is deleted. It was not in the 0.1.0 definition or its hash. P/GP removes the margin effect.
+- Definition 1.0.0 has no gross-margin gate. P/GP removes the margin effect. The hidden 0.35 gate of 0.1.0 was not in the 0.1.0 definition or its hash; it stays for 0.1.0 only, as the named legacy rule `LEGACY_V0_MARGIN_GATE` (`libs/factors/src/factors/composite/three_tier_valuation.py`), so that 0.1.0 history replays exactly.
 - P/S is still computed and stored (`current_price_to_sales`). A 1.0.0 decision has no target P/S.
 
 ## Replay on the 2026-10-08 production TOPT head
@@ -72,7 +72,7 @@ Tier census under 1.0.0: traditional 11, tech 5, large_model_native 1 (NVDA).
 | TSLA | 68,823 | traditional | 15.6190 | 86.6676 | 8.7500 | -0.8990 | rejected_valuation_above_tier_band | — |
 | JPM | -514,726 | traditional | 4.8290 | 10.1492 | 8.7500 | -0.1379 | rejected_valuation_above_tier_band | — |
 
-Note on 0.1.0 history: the margin gate lived in code, not in the 0.1.0 definition. With the gate deleted, a replay of 0.1.0 on the same inputs tiers COST as tech (100,946 ≥ 100,000) and selects COST then JNJ. The rows already in `mart` keep what they recorded.
+Note on 0.1.0 history: the margin gate lived in code, not in the 0.1.0 definition. The legacy rule keeps it for 0.1.0, so a 0.1.0 replay of the same inputs selects the published JNJ (+0.3715) then NFLX (+0.3645). The same test file holds that check. The rows already in `mart` keep what they recorded.
 
 ## State
 

@@ -455,8 +455,9 @@ class ThreeTierValuationDefinition(_StrictFrozenModel):
         return ValuationBasis.PRICE_TO_SALES
 
     def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
-        # #1235: the former 0.35 gross-margin gate lived here. It was not in the definition
-        # or its hash, so the hash did not describe the evaluated semantics. It is deleted.
+        # #1235: the band lookup is data only. The 0.35 gross-margin gate that 0.1.0 was
+        # published with is a named legacy rule of that one definition version, in
+        # factors.composite.three_tier_valuation (LEGACY_V0_MARGIN_GATE), not part of this lookup.
         return _band_for(self.bands, labor_efficiency)
 
 
