@@ -158,11 +158,17 @@ def test_the_bands_follow_the_recorded_derivation() -> None:
         assert _q(ps_upper / margin, 2) == target_upper
 
 
-def test_only_the_valuation_changed_from_definition_0_1_0() -> None:
-    """The tier formula, P/S, the universe, the schedule, eligibility, selection, sizing,
-    execution, cost and return are 0.1.0's, so each keeps its exact value or identity."""
+def test_definition_1_0_0_moves_the_tier_cuts_and_the_valuation_and_keeps_the_rest() -> None:
+    """Two things change from 0.1.0: the labor-efficiency cuts move up by a factor of ten
+    (100,000 / 300,000 to 1,000,000 / 3,000,000), and the valuation basis moves from P/S to
+    P/GP with new bands. The tier formula, P/S, the universe, the schedule, eligibility,
+    selection, sizing, execution, cost and return are 0.1.0's, with their exact value or identity."""
     v1 = load_live_strategy_definition()
     v0 = load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE)
+    v0_cuts = [band.labor_efficiency_upper_bound for band in v0.tier_valuation.bands[:2]]
+    v1_cuts = [band.labor_efficiency_upper_bound for band in v1.tier_valuation.bands[:2]]
+    assert v0_cuts == [Decimal("100000"), Decimal("300000")]
+    assert v1_cuts == [cut * 10 for cut in v0_cuts if cut is not None]
     assert v0.content_sha256 == _V0_SHA256
     assert v1.labor_efficiency.factor_definition_id == v0.labor_efficiency.factor_definition_id
     assert v1.price_to_sales.factor_definition_id == v0.price_to_sales.factor_definition_id

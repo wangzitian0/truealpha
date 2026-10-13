@@ -35,6 +35,7 @@ Reviewer: the owner (wangzitian0), 2026-10-12, in session. The decision is recor
 | large_model_native | ≥ 3,000,000 | 26.67 – 40.00 | vision P/S 20–30 ÷ 0.75 (26.6667, 2 dp half-even) |
 
 - Boundary rule: lower bound inclusive, upper bound exclusive.
+- The labor-efficiency cuts move up by a factor of ten from 0.1.0: 100,000 / 300,000 become 1,000,000 / 3,000,000. These are the cuts the TOPT core engine already used; with both changes, 0.1.0 put 11 of the 17 issuers on 2026-10-08 in large_model_native and 1.0.0 puts 1 there.
 - P/GP = shares outstanding × last unadjusted close ÷ the latest-complete-fiscal-year gross profit that the labor-efficiency numerator uses.
 - Gap = target P/GP midpoint ÷ current P/GP − 1 (4 dp half-even). A current P/GP above the band upper bound is `rejected_valuation_above_tier_band`.
 - Every tier is eligible. Rank by descending gap, tie-break ascending issuer id, select the top 2, equal weight. These rules and the 0.70 confidence floor are unchanged from 0.1.0.
