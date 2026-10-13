@@ -2910,15 +2910,32 @@ def test_gates_runs_complexity_gate() -> None:
     )
 
 
-def test_ci_python_caches_and_verifies_infra2_wheel() -> None:
-    """#1248: Every ci-python job that syncs dependencies must verify and cache the
-    infra2-sdk wheel before running uv sync, setting UV_FIND_LINKS to prevent 504 flakes."""
-    workflow = yaml.safe_load(source(PYTHON))
-    for job_name, job_spec in workflow["jobs"].items():
-        runs = [str(s.get("run", "")) for s in job_spec.get("steps", [])]
-        assert any("tools/infra2_wheel_cache.py" in r for r in runs), (
-            f"ci-python.yml job {job_name} must run tools/infra2_wheel_cache.py before uv sync"
+def test_ci_python_survives_a_github_504_on_the_infra2_wheel() -> None:
+    """#1248: each ci-python job that runs uv sync gets uv from the retrying shared action first.
+
+    uv.lock pins the infra2-sdk wheel by URL. uv ignores UV_FIND_LINKS for such a wheel, so a
+    cache of the wheel did not stop the 504 failure, and its pre-step added a second download.
+    The retry now lives in .github/actions/setup-uv, which is the only place that sets it.
+    """
+    synced = []
+    for job_name, job_spec in yaml.safe_load(source(PYTHON))["jobs"].items():
+        job_steps = job_spec.get("steps", [])
+        sync_at = next((i for i, s in enumerate(job_steps) if "uv sync" in str(s.get("run", ""))), None)
+        if sync_at is None:
+            continue
+        synced.append(job_name)
+        assert any(s.get("uses") == "./.github/actions/setup-uv" for s in job_steps[:sync_at]), (
+            f"ci-python.yml job {job_name} runs uv sync without ./.github/actions/setup-uv before it: "
+            f"the wheel download then has only the 3 default retries of uv"
         )
-        assert any("UV_FIND_LINKS=" in r for r in runs), (
-            f"ci-python.yml job {job_name} must export UV_FIND_LINKS for uv sync"
+        removed = [
+            s.get("name") or s.get("uses") or s.get("run")
+            for s in job_steps
+            if any(mark in spec_text(s) for mark in ("infra2_wheel_cache", "UV_FIND_LINKS", ".cache/infra2-sdk"))
+        ]
+        assert not removed, (
+            f"ci-python.yml job {job_name} has the wheel cache steps {removed} again. uv ignores "
+            f"UV_FIND_LINKS for a wheel that uv.lock pins by URL, so these steps do not stop a 504"
         )
+    # GREEN-WHILE-EMPTY guard: four ci-python jobs ran uv sync when #1248 was fixed.
+    assert len(synced) >= 4, f"only {synced} run uv sync; four jobs did when #1248 was fixed"

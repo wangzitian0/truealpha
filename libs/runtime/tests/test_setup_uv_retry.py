@@ -12,8 +12,8 @@ the infra2-sdk wheel that `uv sync` fetches, and the uv archive that astral-sh/s
 
 Each rule has a checker that returns one message for each break. The tests run each checker on
 the real files, and on broken copies of them. A checker that never failed is not evidence of
-protection. The test that the ci-required path filters reach the action is in
-`test_ci_workflows.py`, beside the other path filter tests.
+protection. Two tests are in `test_ci_workflows.py`, beside the tests they extend: the ci-required
+path filters reach the action, and each ci-python job that runs uv sync calls the action first.
 """
 
 from __future__ import annotations
