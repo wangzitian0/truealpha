@@ -13,9 +13,10 @@ This is explicitly a **preview**, not #26's full acceptance evidence:
 - Facts come from the hand-verified golden corpus, not a live capture/
   snapshot pipeline (that's #171/#205/#271's DataHub chain, a separate,
   unrelated dependency -- see the #24/#25/#26 coordination notes).
-- Governed backtest simulation runs under Dagster with `factors.backtest.engine`,
-  and materializes `mart.backtest_runs`, `mart.backtest_valuations`, and
-  `mart.backtest_trades`. Full continuous replay gateway remains tracked under #26.
+- The nightly backtest (`data_engine.lanes.backtest`, #758) runs the same evaluator at each
+  quarter-end cutoff over the projected staging inputs, simulates the selections with
+  `factors.backtest.engine`, and writes `mart.backtest_runs`, `mart.backtest_valuations` and
+  `mart.backtest_trades`.
 
 `run()` is the pure, side-effect-free entry point the CLI script
 (`apps/data-engine/scripts/run_strategy_smoke.py`) calls (the retired Dagster

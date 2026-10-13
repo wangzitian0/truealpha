@@ -39,9 +39,9 @@ The mandated reproducibility proof was nominally required and effectively dorman
    `truealpha_contracts.ast` definitions compiled to `polars.Expr` through `factors.expressions`.
 2. **VectorBT is the selected backtest/portfolio-simulation engine**, invoked only through adapters in
    `libs/factors`. Correction 2026-10-12: the repository does not use VectorBT yet. The `vectorbt`
-   package is absent from `uv.lock`. The engine is `NumpySimulationEngine` in
-   `libs/factors/src/factors/backtest/engine.py`. The name `VectorBTBacktestEngine` is an alias for it.
-   ADR A6 records that the engine pin is open.
+   package is absent from `uv.lock`. Since #758 the engine is `factors.backtest.engine.simulate`, a
+   Decimal simulation that reads its execution rules from the strategy definition. Each run pins it
+   by `ENGINE_ID` in its `run_id` (ADR A6, status update 2026-10-13).
 3. **Every engine-independent constraint from the old rule 25 carries over unchanged.** Neither
    engine is a data or semantic authority. Only `libs/factors` adapters may invoke them. They
    receive provenance-neutral inputs projected from durable PIT snapshots and the explicit
