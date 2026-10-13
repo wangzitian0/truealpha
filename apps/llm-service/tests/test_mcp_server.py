@@ -760,3 +760,29 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
     assert profile["current_price_to_sales"] == "1.2420"
     assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"
     assert profile["strategy_decision"]["valuation_gap"] == "0.7056"
+
+
+def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None:
+    """#1235 audit: the fund-level gap averages core gaps of one run, so it divides that run's
+    multiple. The profile carries the producer's recorded basis next to the gap."""
+    from llm_service.mcp_server import PostgresEtfProfileReader
+
+    theme_database.execute(
+        """
+        insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time,
+            cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+            reason_codes, availability_status, source_evidence_status, factor_validation_status)
+        values ('capture-run:mcp-1235', 'etf:series:ZZPGP1235', 'PGP Test Fund', '2026-06-30', %s, %s, 'v0',
+            %s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available',
+            'verified', 'not_evaluated')
+        """,
+        (_NEW_CUTOFF, _NEW_CUTOFF, "c" * 64),
+    )
+
+    profile = PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(
+        fund_id="etf:series:ZZPGP1235"
+    )
+
+    assert profile["weighted_valuation_gap"] == "0.4200"
+    assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"

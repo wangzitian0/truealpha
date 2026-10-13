@@ -116,6 +116,42 @@ begin
 end
 $$;
 
+-- The fund-level weighted gap averages the gaps of one run's core rows, so it divides the
+-- multiple those rows divide. The producer records it; NULL on a row written before #1235
+-- (all of which divided P/S) and on a refused aggregate, which has no gap.
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_attribute
+        where attrelid = 'mart.fund_virtual_company'::regclass
+          and attname = 'valuation_basis'
+          and not attisdropped
+    ) then
+        alter table mart.fund_virtual_company
+            add column if not exists valuation_basis text;
+    end if;
+end
+$$;
+
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid = 'mart.fund_virtual_company'::regclass
+          and conname = 'fund_virtual_company_valuation_basis_check'
+    ) then
+        alter table mart.fund_virtual_company
+            add constraint fund_virtual_company_valuation_basis_check
+                check (
+                    valuation_basis in ('price_to_sales', 'price_to_gross_profit')
+                    and weighted_valuation_gap is not null
+                    or valuation_basis is null
+                ) not valid;
+    end if;
+end
+$$;
+
 -- A strategy decision names the target of at most one basis, and a P/GP target comes
 -- with its current P/GP.
 do $$
@@ -137,22 +173,31 @@ end
 $$;
 
 -- A TOPT core row carries all four P/GP values or none, and only an available row carries them.
+-- num_nonnulls makes "some but not all" a refusal: a comparison on a NULL member is NULL, and a
+-- CHECK passes on NULL, so a conjunction of comparisons alone would admit a half-filled row.
+-- The guard reads the stored definition, so a database that holds an earlier text of this
+-- constraint gets this one; a replay of an identical definition changes nothing.
 do $$
 begin
     if not exists (
         select 1 from pg_constraint
         where conrelid = 'mart.topt_core_results'::regclass
           and conname = 'topt_core_results_pgp_values_check'
+          and pg_get_constraintdef(oid) like '%num_nonnulls%'
     ) then
+        alter table mart.topt_core_results
+            drop constraint if exists topt_core_results_pgp_values_check;
         alter table mart.topt_core_results
             add constraint topt_core_results_pgp_values_check
                 check (
-                    (current_pgp is null and target_pgp_lower is null and target_pgp_upper is null
-                        and target_pgp_midpoint is null)
-                    or
-                    (availability = 'available' and current_pgp > 0
-                        and target_pgp_lower > 0 and target_pgp_lower < target_pgp_upper
-                        and target_pgp_midpoint is not null)
+                    num_nonnulls(current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint) = 0
+                    or (
+                        num_nonnulls(current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint) = 4
+                        and availability = 'available'
+                        and current_pgp > 0
+                        and target_pgp_lower > 0
+                        and target_pgp_lower < target_pgp_upper
+                    )
                 ) not valid;
     end if;
 end
@@ -310,5 +355,7 @@ comment on column mart.topt_core_results.current_pgp is
     '#1235: issuer market value / the GPPE operating numerator (gross profit, or a bank''s pre-provision profit).';
 comment on column mart.topt_core_results.target_pgp_midpoint is
     '#1235: the P/GP band midpoint of the strategy definition named by tier_definition_id. valuation_gap = target_pgp_midpoint / current_pgp - 1.';
+comment on column mart.fund_virtual_company.valuation_basis is
+    '#1235: the multiple the weighted gap divides: price_to_gross_profit (strategy definition 1.0.0) or price_to_sales. NULL before #1235 and on a refused aggregate.';
 comment on column mart.topt_core_results.target_ps_midpoint is
     'Before #1235: the P/S band midpoint. From #1235: the P/S that the P/GP band implies at the issuer''s gross margin (target_pgp_midpoint x numerator / revenue).';

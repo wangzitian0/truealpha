@@ -320,6 +320,15 @@ class ToptCoreIdentity:
 
 @dataclass(frozen=True)
 class ToptCoreReadResult:
+    """One `mart.topt_core_results` row as `results()` reads it.
+
+    #1235: a row tiered by strategy definition 1.0.0 values by P/GP. Its `current_pgp` and
+    `target_pgp_*` are set, its gap divides P/GP, and its `target_ps_*` are IMPLIED: the P/S
+    that the P/GP band gives at the issuer's own gross margin (migration 0030 keeps them NOT
+    NULL). A row of the former P/S bands has no P/GP values and its `target_ps_*` are the band.
+    `target_ps_is_implied` says which.
+    """
+
     result_id: str
     invocation_id: str
     snapshot_id: str
@@ -343,6 +352,10 @@ class ToptCoreReadResult:
     target_ps_upper: Decimal | None
     target_ps_midpoint: Decimal | None
     current_ps: Decimal | None
+    current_pgp: Decimal | None
+    target_pgp_lower: Decimal | None
+    target_pgp_upper: Decimal | None
+    target_pgp_midpoint: Decimal | None
     valuation_gap: Decimal | None
     confidence: Decimal
     freshness: str
@@ -354,6 +367,11 @@ class ToptCoreReadResult:
     tier_definition_id: str
     tier_definition_sha256: str
     created_at: datetime
+
+    @property
+    def target_ps_is_implied(self) -> bool:
+        """True on a P/GP row: its target_ps_* are implied by the P/GP band, not a P/S band."""
+        return self.target_pgp_midpoint is not None
 
 
 @dataclass(frozen=True)
@@ -1129,20 +1147,25 @@ class PostgresToptCoreRepository:
         self._validate_page(limit, offset)
         rows = self._connection.execute(
             """
-            select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
-                   universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                   instrument_id, listing_id, operating_branch, operating_metric,
-                   availability, operating_efficiency, capital_adjusted_gross_profit,
-                   gppe, tier, target_ps_lower, target_ps_upper, target_ps_midpoint,
-                   current_ps, valuation_gap, confidence, freshness, reason_codes,
-                   gppe_invocation_id, gppe_result_id,
-                   gppe_definition_id, gppe_definition_sha256,
-                   tier_definition_id, tier_definition_sha256, created_at
-            from mart.topt_core_result_read
-            where run_id = %s and release_manifest_id = %s and universe_id = %s
-              and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-              and invocation_id = %s
-            order by issuer_id limit %s offset %s
+            select r.result_id, r.invocation_id, r.snapshot_id, r.run_id, r.release_manifest_id,
+                   r.universe_id, r.universe_version, r.universe_sha256, r.cutoff, r.issuer_id,
+                   r.instrument_id, r.listing_id, r.operating_branch, r.operating_metric,
+                   r.availability, r.operating_efficiency, r.capital_adjusted_gross_profit,
+                   r.gppe, r.tier, r.target_ps_lower, r.target_ps_upper, r.target_ps_midpoint,
+                   r.current_ps, r.valuation_gap, r.confidence, r.freshness, r.reason_codes,
+                   r.gppe_invocation_id, r.gppe_result_id,
+                   r.gppe_definition_id, r.gppe_definition_sha256,
+                   r.tier_definition_id, r.tier_definition_sha256, r.created_at,
+                   t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
+            from mart.topt_core_result_read r
+            -- #1235: the P/GP columns are read from the table. The read view keeps 0026's
+            -- columns: 0026 re-creates it at every boot with `create or replace view`, which
+            -- cannot drop a column, so a later migration that widened it would fail every boot.
+            join mart.topt_core_results t on t.result_id = r.result_id
+            where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
+              and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
+              and r.invocation_id = %s
+            order by r.issuer_id limit %s offset %s
             """,
             (
                 identity.run_id,
@@ -1181,6 +1204,10 @@ class PostgresToptCoreRepository:
                 target_ps_upper=row[20],
                 target_ps_midpoint=row[21],
                 current_ps=row[22],
+                current_pgp=row[34],
+                target_pgp_lower=row[35],
+                target_pgp_upper=row[36],
+                target_pgp_midpoint=row[37],
                 valuation_gap=row[23],
                 confidence=row[24],
                 freshness=row[25],

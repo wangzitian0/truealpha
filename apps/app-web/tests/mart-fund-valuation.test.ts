@@ -60,6 +60,7 @@ const LINES = [
 const CONSOLIDATION = {
   fund_id: "etf:series:S1",
   weighted_gap: "0.14",
+  valuation_basis: "price_to_gross_profit",
   valued_weight_pct: "60.0",
   availability_status: "available",
   source_evidence_status: "degraded",
@@ -122,6 +123,8 @@ function fakeRunner(
   assert(fund.resolvedWeightPct === "90.00", `resolved mass excludes null tickers, got ${fund.resolvedWeightPct}`);
   assert(fund.valuedWeightPct === "60.00", `valued mass counts only 'available', got ${fund.valuedWeightPct}`);
   assert(fund.weightedGap === "0.14", `weighted gap is read from the factor row, got ${fund.weightedGap}`);
+  // #1235: the gap's basis travels with it, so a P/GP run and a P/S run never read the same.
+  assert(fund.weightedGapBasis === "price_to_gross_profit", `the gap names its basis, got ${fund.weightedGapBasis}`);
   assert(fund.availabilityStatus === "available", "the consolidation's §8 availability is surfaced");
   assert(fund.sourceEvidenceStatus === "degraded", "partial valued mass reads as degraded evidence");
   assert(fund.factorValidationStatus === "not_evaluated", "module 5 has no sealed holdout verdict (#65)");
@@ -138,6 +141,7 @@ function fakeRunner(
       {
         ...CONSOLIDATION,
         weighted_gap: null,
+        valuation_basis: null,
         valued_weight_pct: "3.0",
         availability_status: "unavailable",
         reason_codes: ["valued_weight_below_minimum"],
@@ -145,6 +149,7 @@ function fakeRunner(
     ]),
   );
   assert(funds[0].weightedGap === null, "a refused aggregate is absent, never 0.00");
+  assert(funds[0].weightedGapBasis === null, "a refused aggregate names no basis");
   assert(funds[0].availabilityStatus === "unavailable", "the refusal is visible as unavailable");
   assert(funds[0].reasonCodes[0] === "valued_weight_below_minimum", "the refusing floor is named");
   assert(funds[0].valuedWeightPct === "3.00", "the coverage that caused the refusal is still reported");

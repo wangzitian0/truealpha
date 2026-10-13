@@ -553,6 +553,13 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     reads = repository.results(identity)
     meta_info = repository.meta_info(identity)
     assert len(reads) == len(meta_info) == 20
+    # #1235 audit: the read DTO carries the P/GP valuation and marks the P/S target implied.
+    by_result = {item.result_id: item for item in results}
+    for read in reads:
+        written = by_result[read.result_id]
+        assert (read.current_pgp, read.target_pgp_midpoint) == (written.current_pgp, written.target_pgp_midpoint)
+        assert read.target_ps_is_implied is (written.target_pgp_midpoint is not None)
+    assert all(read.target_ps_is_implied for read in reads if read.availability == "available")
     assert all(item.gppe_invocation_id == results[0].gppe_invocation_id for item in reads)
     assert {item.gppe_result_id for item in reads} == {item.gppe_result_id for item in results}
     assert sorted(len(item.lineage) for item in meta_info) == [4] * 19 + [8]
@@ -665,6 +672,53 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
                 f"topt-core-result:{pgp_sha256}",
                 pgp_sha256,
                 psycopg.types.json.Jsonb(pgp_payload),
+                results[0].result_id,
+            ),
+        )
+
+    # #1235 audit: a P/GP valuation is all four values or none. A half-filled available row
+    # (here target_pgp_lower absent, consistently in payload and column) must be refused.
+    half_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
+    half_payload["target_pgp_lower"] = None
+    half_sha256 = canonical_sha256(half_payload)
+    with (
+        pytest.raises(psycopg.errors.CheckViolation, match="topt_core_results_pgp_values_check"),
+        connection.transaction(),
+    ):
+        connection.execute(
+            """
+            insert into mart.topt_core_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload
+            )
+            select
+                %s, %s, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                current_pgp, null, target_pgp_upper, target_pgp_midpoint,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, %s
+            from mart.topt_core_results where result_id = %s
+            on conflict (result_id) do nothing
+            """,
+            (
+                f"topt-core-result:{half_sha256}",
+                half_sha256,
+                psycopg.types.json.Jsonb(half_payload),
                 results[0].result_id,
             ),
         )

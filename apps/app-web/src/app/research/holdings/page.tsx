@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadFundValuation } from "@/server/mart/fund-valuation";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -45,7 +46,9 @@ export default async function HoldingsPage() {
                 period {fund.reportPeriod} · filed weight {fund.totalWeightPct}% · resolved {fund.resolvedWeightPct}% ·
                 valued {fund.valuedWeightPct}%
                 {fund.weightedGap !== null
-                  ? ` · weighted gap (valued mass) ${fund.weightedGap}`
+                  ? ` · weighted gap (valued mass, ${
+                      fund.weightedGapBasis !== null ? valuationBasisLabel(fund.weightedGapBasis) : "basis not recorded"
+                    }) ${fund.weightedGap}`
                   : fund.reasonCodes.length > 0
                     ? ` · weighted gap refused (${fund.reasonCodes.join(", ")})`
                     : " · no weighted gap for this run"}

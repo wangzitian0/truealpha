@@ -47,7 +47,8 @@ select h.fund_id,
        core.valuation_gap,
        core.availability,
        core.confidence,
-       core.availability_status
+       core.availability_status,
+       core.valuation_basis
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
 left join (
@@ -55,7 +56,13 @@ left join (
            c.valuation_gap,
            c.availability,
            c.confidence,
-           status.availability_status
+           status.availability_status,
+           -- #1235: the multiple this row's gap divides. A row with a P/GP valuation stored it;
+           -- a valued row without one is of the former P/S bands.
+           case
+               when status.current_pgp is not null then 'price_to_gross_profit'
+               when c.valuation_gap is not null then 'price_to_sales'
+           end as valuation_basis
     from mart.topt_core_result_read c
     -- The read view exposes the factor column `availability` only. The section 8 status
     -- lives on the table. A low-confidence row keeps `availability = 'available'` (#1114).
@@ -77,6 +84,9 @@ class FundVintage:
     report_period: Any
     transaction_time: datetime
     lines: tuple[HoldingLine, ...]
+    #: #1235: the multiple the valued lines' gaps divide, read from the core rows; None when no
+    #: line is valued. One run tiers with one definition, so the lines share one basis.
+    valuation_basis: str | None = None
 
 
 def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: datetime) -> tuple[FundVintage, ...]:
@@ -90,6 +100,9 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
     vintages = []
     for fund_id, line_rows in by_fund.items():
         fund_name, report_period, transaction_time = meta[fund_id]
+        bases = {str(row[-1]) for row in line_rows if row[-1] is not None}
+        if len(bases) > 1:
+            raise ValueError(f"{fund_id}: valued lines of run {run_id} mix valuation bases {sorted(bases)}")
         lines = tuple(
             HoldingLine(
                 holding_name=str(holding_name),
@@ -108,6 +121,7 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
                 availability,
                 confidence,
                 availability_status,
+                _valuation_basis,
             ) in line_rows
         )
         vintages.append(
@@ -117,6 +131,7 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
                 report_period=report_period,
                 transaction_time=transaction_time,
                 lines=lines,
+                valuation_basis=next(iter(bases), None),
             )
         )
     return tuple(vintages)
@@ -173,8 +188,8 @@ def materialize_fund_consolidation(
                  definition_version, definition_sha256, weighted_valuation_gap,
                  total_weight_pct, resolved_weight_pct, valued_weight_pct,
                  lines, valued_lines, confidence, reason_codes,
-                 availability_status, source_evidence_status, factor_validation_status)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 availability_status, source_evidence_status, factor_validation_status, valuation_basis)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (run_id, fund_id) do update set
                 fund_name = excluded.fund_name,
                 report_period = excluded.report_period,
@@ -192,7 +207,8 @@ def materialize_fund_consolidation(
                 reason_codes = excluded.reason_codes,
                 availability_status = excluded.availability_status,
                 source_evidence_status = excluded.source_evidence_status,
-                factor_validation_status = excluded.factor_validation_status
+                factor_validation_status = excluded.factor_validation_status,
+                valuation_basis = excluded.valuation_basis
             """,
             (
                 run_id,
@@ -214,6 +230,8 @@ def materialize_fund_consolidation(
                 availability.value,
                 evidence.value,
                 validation.value,
+                # A refused aggregate has no gap, so it names no basis.
+                None if consolidation.result.value is None else vintage.valuation_basis,
             ),
         )
         written.append(consolidation)

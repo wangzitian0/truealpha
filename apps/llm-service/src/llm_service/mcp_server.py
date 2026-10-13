@@ -553,6 +553,7 @@ class PostgresEtfProfileReader:
                                to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
                                to_char(report_period, 'YYYY-MM-DD') as report_period,
                                weighted_valuation_gap::text as weighted_valuation_gap,
+                               valuation_basis,
                                total_weight_pct::text as total_weight_pct,
                                resolved_weight_pct::text as resolved_weight_pct,
                                valued_weight_pct::text as valued_weight_pct,
@@ -685,6 +686,11 @@ class PostgresEtfProfileReader:
             if fund_row and fund_row.get("weighted_valuation_gap") is not None
             else None
         )
+        # #1235: the multiple the weighted gap divides, as the producer recorded it. None before
+        # #1235 and on a refused aggregate; a P/GP run and a P/S run never read the same.
+        weighted_gap_basis = (
+            str(fund_row["valuation_basis"]) if fund_row and fund_row.get("valuation_basis") is not None else None
+        )
         total_weight = (
             str(fund_row["total_weight_pct"]) if fund_row and fund_row.get("total_weight_pct") is not None else "0.00"
         )
@@ -718,6 +724,7 @@ class PostgresEtfProfileReader:
             "cutoff": cutoff,
             "report_period": report_period,
             "weighted_valuation_gap": weighted_gap,
+            "weighted_valuation_gap_basis": weighted_gap_basis,
             "total_weight_pct": total_weight,
             "resolved_weight_pct": resolved_weight,
             "valued_weight_pct": valued_weight,

@@ -20,6 +20,7 @@ const FUND: FundValuation = {
   resolvedWeightPct: "99.70",
   totalWeightPct: "99.93",
   weightedGap: "-0.31",
+  weightedGapBasis: "price_to_gross_profit",
   availabilityStatus: "available",
   sourceEvidenceStatus: "degraded",
   factorValidationStatus: "not_evaluated",

@@ -136,6 +136,81 @@ def test_a_row_is_written_with_masses_the_database_accepts(connection) -> None:
     assert evidence == "degraded"
     assert list(reasons) == ["valued_weight_below_minimum"]
     assert ver == "v0" and len(sha) == 64
+    # #1235: a refused aggregate has no gap, so it names no valuation basis.
+    basis = connection.execute(
+        "select valuation_basis from mart.fund_virtual_company where run_id = %s and fund_id = %s", (RUN, FUND)
+    ).fetchone()[0]
+    assert basis is None
+
+
+class _LinesRows:
+    def __init__(self, rows: list[tuple]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+class _LinesConnection:
+    """Returns `_LINES_SQL`'s row shape, so the basis logic runs without a database."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        self._rows = rows
+
+    def execute(self, *_args: object) -> _LinesRows:
+        return _LinesRows(self._rows)
+
+
+def _line(name: str, gap: str | None, basis: str | None) -> tuple:
+    return (
+        FUND,
+        "Test fund",
+        "2026-06-30",
+        KNOWABLE_FILING,
+        name,
+        Decimal("50"),
+        "listing:" + name,
+        None if gap is None else Decimal(gap),
+        "available" if gap is not None else None,
+        Decimal("0.9") if gap is not None else None,
+        "available" if gap is not None else None,
+        basis,
+    )
+
+
+def test_the_fund_gap_takes_the_basis_of_its_valued_core_rows() -> None:
+    """#1235 audit: the weighted gap averages core gaps, so it divides their multiple. The
+    loader reads each valued row's basis; an unvalued line carries none."""
+    rows = [
+        _line("A", "0.20", "price_to_gross_profit"),
+        _line("B", "0.10", "price_to_gross_profit"),
+        _line("C", None, None),
+    ]
+    [vintage] = load_fund_vintages(_LinesConnection(rows), run_id=RUN, cutoff=CUTOFF)  # type: ignore[arg-type]
+    assert vintage.valuation_basis == "price_to_gross_profit"
+    [unvalued] = load_fund_vintages(_LinesConnection([_line("C", None, None)]), run_id=RUN, cutoff=CUTOFF)  # type: ignore[arg-type]
+    assert unvalued.valuation_basis is None
+
+
+def test_a_fund_whose_lines_mix_bases_fails_closed() -> None:
+    rows = [_line("A", "0.20", "price_to_gross_profit"), _line("B", "0.10", "price_to_sales")]
+    with pytest.raises(ValueError, match="mix valuation bases"):
+        load_fund_vintages(_LinesConnection(rows), run_id=RUN, cutoff=CUTOFF)  # type: ignore[arg-type]
+
+
+def test_the_table_refuses_a_basis_without_a_gap(connection) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation, match="fund_virtual_company_valuation_basis_check"):
+        connection.execute(
+            """
+            insert into mart.fund_virtual_company (run_id, fund_id, report_period, transaction_time, cutoff,
+                definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+                total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+                availability_status, source_evidence_status, factor_validation_status)
+            values (%s, %s, '2026-06-30', %s, %s, 'v0', %s, null, 'price_to_gross_profit',
+                99, 99, 0, 1, 0, 0, 'unavailable', 'degraded', 'not_evaluated')
+            """,
+            (RUN, FUND, KNOWABLE_FILING, CUTOFF, "a" * 64),
+        )
 
 
 def test_the_write_is_idempotent_per_run_and_fund(connection) -> None:
