@@ -74,11 +74,18 @@ each decision:
 - Decision 6 no longer holds. No frozen universe list exists. The universe is the issuers that hold
   strategy inputs today, resolved through today's stored lineage. That is a survivorship bias, and
   each run stores it in `metrics_payload.limitations`. The page and the MCP response show it.
-- Decision 7 is done. `run_id` hashes the engine label, the deployed code identity
-  (`GIT_COMMIT_SHA`, the value `/api/health` reports), the definition hash, the input snapshot,
-  the issuer mapping, the benchmark universe, the price snapshot and the run parameters. The input
-  snapshot comes from the same read as the decisions' inputs. A same `run_id` with a different
-  result stops the run.
+- Decision 7 is done. `run_id` hashes eight values:
+  - the engine label;
+  - the deployed code identity (`GIT_COMMIT_SHA`, the value `/api/health` reports);
+  - the definition hash;
+  - the input snapshot;
+  - the issuer mapping;
+  - the benchmark universe;
+  - the price snapshot;
+  - the run parameters.
+
+  The input snapshot comes from the same read as the decisions' inputs. A same `run_id` with a
+  different result stops the run.
 - Decision 8 holds. No holdout record exists, so no run is `validated`.
 - Decision 9 is done in part. #758 removed the split-adjusted returns basis without #1121: the
   split events come from the two stored series, not from a corporate-action source. Dividends
