@@ -597,18 +597,20 @@ def _violations(connection, prefix: str) -> int:
     ).fetchone()[0]
 
 
-def test_h1_query_over_20_issuers_and_36_cutoffs_lists_every_input_before_its_cutoff(connection) -> None:
+def test_h1_query_over_20_issuers_and_every_history_cutoff_lists_every_input_before_its_cutoff(connection) -> None:
+    """36 monthly cutoffs and the 12 quarter ends in their window (#758): 48 cutoffs."""
     issuers = [_issuer(number) for number in range(1, 21)]
     documents = {issuer.cik: _doc(base=2000 + issuer.cik) for issuer in issuers}
+    cutoffs = history_cutoffs(TICK, DEFAULT_MONTHS, load_strategy_definition().schedule)
+    assert len(cutoffs) == 48
     for issuer in issuers:
-        for cutoff in monthly_cutoffs(TICK):
-            month_end = cutoff.date() - timedelta(days=1)
-            _insert_bar(connection, issuer.ticker, month_end, "50")
+        for cutoff in cutoffs:
+            _insert_bar(connection, issuer.ticker, cutoff.date() - timedelta(days=1), "50")
 
     summary = run_strategy_history(connection, tick=TICK, issuers=issuers, load_facts=_loader(documents))
 
-    assert (summary.issuers, summary.cutoffs) == (20, 36)
-    assert summary.inserted > 20 * 36 * 6
+    assert (summary.issuers, summary.cutoffs) == (20, 48)
+    assert summary.inserted > 20 * 48 * 6
     assert summary.already_present == 0
     prefix = "issuer:h1139:"
     assert _violations(connection, prefix) == 0
@@ -617,7 +619,7 @@ def test_h1_query_over_20_issuers_and_36_cutoffs_lists_every_input_before_its_cu
         "where issuer_id like %s) pair",
         (prefix + "%",),
     ).fetchone()[0]
-    assert pairs == 20 * 36
+    assert pairs == 20 * 48
     assert (
         connection.execute(
             "select count(*) from staging.strategy_backtest_inputs "
@@ -641,7 +643,7 @@ def test_h1_query_over_20_issuers_and_36_cutoffs_lists_every_input_before_its_cu
         "select count(*) from staging.strategy_backtest_inputs where issuer_id like %s and input_key = 'last_close'",
         (prefix + "%",),
     ).fetchone()[0]
-    assert closes == 20 * 36
+    assert closes == 20 * 48
 
 
 def test_the_check_rejects_a_row_filed_on_the_cutoff_date(connection) -> None:
@@ -689,11 +691,14 @@ def test_a_restated_value_lands_as_a_new_row_only_for_the_cutoffs_after_its_fili
         """,
         (issuer.issuer_id,),
     ).fetchall()
-    # The FY2025 10-K is filed on 2026-02-20 and then supersedes FY2024 revenue.
+    # The FY2025 10-K is filed on 2026-02-20 and then supersedes FY2024 revenue. The quarter
+    # ends 2025-09-30 and 2025-12-31 (#758) take the restatement like the monthly cutoffs.
     expected_cutoffs = [
+        _quarter_end(2025, 9, 30),
         _utc(2025, 10, 1),
         _utc(2025, 11, 1),
         _utc(2025, 12, 1),
+        _quarter_end(2025, 12, 31),
         _utc(2026, 1, 1),
         _utc(2026, 2, 1),
     ]
