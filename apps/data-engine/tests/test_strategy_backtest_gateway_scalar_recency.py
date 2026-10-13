@@ -16,7 +16,7 @@ def test_strategy_backtest_gateway_scalar_recency_latest_period() -> None:
         ("issuer:aapl", "net_income", 200, 0.9, "FY2022"),
         ("issuer:aapl", "net_income", 300, 0.9, "FY2023"),
     ]
-    gateway._rows_for_cutoff = MagicMock(return_value=rows)
+    gateway.rows_at = MagicMock(return_value=rows)
 
     inputs = gateway.issuer_inputs("2023-12-31")
     assert len(inputs) == 1
@@ -34,7 +34,7 @@ def test_strategy_backtest_gateway_scalar_recency_with_restatement_tag() -> None
         ("issuer:aapl", "net_income", 400, 0.9, "FY2024:FY:2024-01-01:2024-12-31"),
         ("issuer:aapl", "net_income", 250, 0.9, "FY2026:FY:2022-01-01:2022-12-31"),
     ]
-    gateway._rows_for_cutoff = MagicMock(return_value=rows)
+    gateway.rows_at = MagicMock(return_value=rows)
 
     inputs = gateway.issuer_inputs("2024-12-31")
     assert len(inputs) == 1
@@ -53,7 +53,7 @@ def test_strategy_backtest_gateway_scalar_recency_with_mixed_and_malformed_tags(
         ("issuer:aapl", "net_income", 100, 0.9, "MALFORMED_TAG_9999"),
         ("issuer:aapl", "net_income", 200, 0.9, "FY2025:FY:invalid-date:not-a-date"),
     ]
-    gateway._rows_for_cutoff = MagicMock(return_value=rows)
+    gateway.rows_at = MagicMock(return_value=rows)
 
     inputs = gateway.issuer_inputs("2024-12-31")
     assert len(inputs) == 1

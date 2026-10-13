@@ -1,10 +1,12 @@
-"""#758: the deployed Dagster op backtests large_model_value_v0 on a real database.
+"""#758, #1257: the deployed Dagster op backtests large_model_value_v0 on a real database.
 
 The op runs unchanged against a migrated database: real `staging.strategy_backtest_inputs`
 rows at three quarter ends, real unadjusted and split-adjusted daily bars (one held symbol
 splits 10-for-1), the real strategy definition, `evaluate_cutoff`, the simulation and the mart
-writes. One seam is replaced: `stored_history_issuers`, the issuer-to-ticker lineage, which needs
-a full capture chain and has its own tests in `test_strategy_history.py`.
+writes. The issuer-to-ticker lineage is real too (#1257): each issuer is minted as an entity,
+and a financial-fact observation exists under each of its two id generations, the legacy
+`issuer:lei:` id and the canonical entity UUID. The inputs hold both generations at the same
+cutoffs, as staging does. Nothing in the resolution path is stubbed.
 
 The op's connection is the test's connection with `commit` disabled, so every row rolls back.
 """
@@ -12,8 +14,10 @@ The op's connection is the test's connection with `commit` disabled, so every ro
 from __future__ import annotations
 
 import os
+import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import dagster as dg
@@ -22,10 +26,17 @@ import pytest
 from data_engine.datahub import backtest as datahub_backtest
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, is_xnys_trading_day
 from data_engine.datahub.strategy_bridge import load_strategy_definition
-from data_engine.datahub.strategy_history import HistoryIssuer
 from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
-from factors.production_topt import OperatingBranch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from financial_lineage_seed import (  # noqa: E402
+    MemoryStore,
+    Observed,
+    SeededIssuer,
+    mint_issuer,
+    seed_financial_lineage,
+)
 
 Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
 Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
@@ -33,18 +44,10 @@ Q3 = datetime(2024, 9, 30, 23, 59, 59, tzinfo=UTC)
 SPLIT_DAY = date(2024, 6, 10)
 FIRST_SESSION, LAST_SESSION = date(2024, 3, 25), date(2024, 10, 11)
 TICK = "2024-10-14T21:30:00+00:00"
-ISSUERS = {
-    name: HistoryIssuer(
-        issuer_id=f"issuer:t758:{name}",
-        instrument_id=f"security:t758:{name}",
-        listing_id=f"listing:xnas:t758{name}",
-        ticker=f"T758{name.upper()}",
-        cik=758_000 + ord(name),
-        operating_branch=OperatingBranch.NON_FINANCIAL,
-    )
-    # Issuer f holds no seeded inputs: only the writer in the issuer-list test lands one.
-    for name in ("a", "b", "c", "d", "e", "f")
-}
+#: The entities exist before every cutoff and before the tick.
+MINTED_AT = datetime(2024, 1, 1, tzinfo=UTC)
+#: Issuer f holds no seeded inputs: only the writer in the issuer-list test lands one.
+NAMES = ("a", "b", "c", "d", "e", "f")
 #: The last close each issuer reports at each cutoff: 1 or 2 is cheap (selected), 1000 is above its band.
 LAST_CLOSE = {
     # Issuer e holds inputs at Q1 only, and its ticker T758E never has a bar.
@@ -53,8 +56,18 @@ LAST_CLOSE = {
     Q2: {"a": "1", "b": "2", "c": "1000", "d": "1000"},
     Q3: {"a": "1000", "b": "2", "c": "1", "d": "1000"},
 }
+#: The legacy generation reports other closes at the same cutoffs. A reader that mixes legacy
+#: rows into the canonical inputs changes the decisions, so every decision assertion catches it.
+LEGACY_LAST_CLOSE = {
+    cutoff: {name: "1000" if close != "1000" else "1" for name, close in closes.items()}
+    for cutoff, closes in LAST_CLOSE.items()
+}
 #: T758C has no bar on the first fill session: the benchmark buys it at its next open.
 NO_BAR = {("T758C", date(2024, 4, 1))}
+
+
+def _lei(name: str) -> str:
+    return f"T758{name.upper()}".ljust(18, "X") + "00"
 
 
 @pytest.fixture
@@ -118,9 +131,16 @@ def _seed_prices(connection: psycopg.Connection, *, shock: Decimal = Decimal(1))
         insert_market_prices_daily(connection, adjusted, adjust="splits")
 
 
-def _seed_inputs(connection: psycopg.Connection, last_close: dict[datetime, dict[str, str]]) -> None:
+def _seed_inputs(
+    connection: psycopg.Connection,
+    issuers: dict[str, SeededIssuer],
+    last_close: dict[datetime, dict[str, str]],
+    *,
+    legacy: bool = False,
+) -> None:
     for cutoff, closes in last_close.items():
         for name, close in closes.items():
+            issuer_id = issuers[name].legacy_issuer_id if legacy else issuers[name].canonical_issuer_id
             values = {
                 "gross_profit": "10000000000",
                 "total_assets": "10000000000",
@@ -136,30 +156,74 @@ def _seed_inputs(connection: psycopg.Connection, last_close: dict[datetime, dict
                         (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
                     values (%s, %s, %s, %s, '0.90', %s, clock_timestamp())
                     """,
-                    (ISSUERS[name].issuer_id, cutoff, key, value, cutoff - timedelta(days=2)),
+                    (issuer_id, cutoff, key, value, cutoff - timedelta(days=2)),
                 )
+
+
+def _mint_and_seed_lineage(connection: psycopg.Connection) -> dict[str, SeededIssuer]:
+    """Each issuer as an entity, with one financial-fact observation per id generation.
+
+    The legacy observation is older; the canonical one landed after the identity unification.
+    """
+    issuers = {
+        name: mint_issuer(
+            connection,
+            lei=_lei(name),
+            mic="XNAS",
+            ticker=f"T758{name.upper()}",
+            cik=758_000 + ord(name),
+            known_at=MINTED_AT,
+        )
+        for name in NAMES
+    }
+    observed = []
+    for issuer in issuers.values():
+        observed.append(
+            Observed(
+                issuer.legacy_issuer_id,
+                issuer.legacy_listing_id,
+                issuer.cik,
+                "non_financial",
+                datetime(2024, 1, 5, tzinfo=UTC),
+            )
+        )
+        observed.append(
+            Observed(
+                issuer.canonical_issuer_id,
+                issuer.canonical_listing_id,
+                issuer.cik,
+                "non_financial",
+                datetime(2024, 2, 1, tzinfo=UTC),
+            )
+        )
+    seed_financial_lineage(
+        connection,
+        observed,
+        company_facts={issuer.cik: {"facts": {}} for issuer in issuers.values()},
+        store=MemoryStore(),
+        cutoff=datetime(2024, 2, 1, tzinfo=UTC),
+    )
+    return issuers
 
 
 @pytest.fixture
 def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     connection.execute("delete from staging.strategy_backtest_inputs")
-    _seed_inputs(connection, LAST_CLOSE)
+    issuers = _mint_and_seed_lineage(connection)
+    _seed_inputs(connection, issuers, LAST_CLOSE)
+    # The old generation at the same cutoffs, as staging holds it (#1257).
+    _seed_inputs(connection, issuers, LEGACY_LAST_CLOSE, legacy=True)
     # A monthly and a live cutoff: the backtest evaluates schedule cutoffs only.
-    _seed_inputs(connection, {datetime(2024, 4, 1, tzinfo=UTC): LAST_CLOSE[Q1]})
+    _seed_inputs(connection, issuers, {datetime(2024, 4, 1, tzinfo=UTC): LAST_CLOSE[Q1]})
     _seed_prices(connection)
     monkeypatch.setattr(connection, "commit", lambda: None)
     monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
-    monkeypatch.setattr(
-        datahub_backtest,
-        "stored_history_issuers",
-        lambda _connection, ids, **_kwargs: [i for i in ISSUERS.values() if i.issuer_id in ids],
-    )
     verdicts: list[tuple[bool | None, str]] = []
     monkeypatch.setattr(
         "data_engine.quality.nightly_verdicts.record",
         lambda name, *, ran_at, ok, summary, run_id: verdicts.append((ok, summary)),
     )
-    return {"connection": connection, "verdicts": verdicts}
+    return {"connection": connection, "verdicts": verdicts, "issuers": issuers}
 
 
 def _run_op() -> dict[str, Any]:
@@ -284,7 +348,7 @@ def test_a_later_cutoff_input_changes_no_earlier_decision(seeded) -> None:
     connection = seeded["connection"]
     first = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["cutoffs"]
 
-    _seed_inputs(connection, {Q3: {"b": "1000"}})
+    _seed_inputs(connection, seeded["issuers"], {Q3: {"b": "1000"}})
     second = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["cutoffs"]
 
     assert second[:2] == first[:2], "a Q3 input changed a Q1 or Q2 decision"
@@ -342,24 +406,35 @@ def test_the_input_snapshot_describes_the_rows_the_decisions_read(seeded, monkey
 
     Red when the snapshot is read after the decisions: it then hashes a row no decision used.
     """
-    from data_engine.strategy_backtest_gateway import StrategyBacktestGateway, combine_snapshot_ids
+    from data_engine.strategy_backtest_gateway import (
+        StrategyBacktestGateway,
+        combine_snapshot_ids,
+        snapshot_id_from_rows,
+    )
 
     connection = seeded["connection"]
     gateway = StrategyBacktestGateway(connection)
+    canonical = {issuer.canonical_issuer_id for issuer in seeded["issuers"].values()}
+
+    def canonical_snapshot() -> str:
+        return combine_snapshot_ids(
+            [snapshot_id_from_rows([row for row in gateway.rows_at(c) if row[0] in canonical]) for c in (Q1, Q2, Q3)]
+        )
+
     seen: dict[str, str] = {}
     real_decide = datahub_backtest.decide
 
     def decide_then_a_writer_lands(*args, **kwargs):
         decisions = real_decide(*args, **kwargs)
-        seen["used"] = combine_snapshot_ids([gateway.snapshot_id(cutoff) for cutoff in (Q1, Q2, Q3)])
-        _seed_inputs(connection, {Q3: {"b": "3"}})
+        seen["used"] = canonical_snapshot()
+        _seed_inputs(connection, seeded["issuers"], {Q3: {"b": "3"}})
         return decisions
 
     monkeypatch.setattr(datahub_backtest, "decide", decide_then_a_writer_lands)
     binding = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["binding"]
 
     assert binding["input_snapshot_id"] == seen["used"]
-    assert binding["input_snapshot_id"] != combine_snapshot_ids([gateway.snapshot_id(c) for c in (Q1, Q2, Q3)]), (
+    assert binding["input_snapshot_id"] != canonical_snapshot(), (
         "the writer must change the stored inputs, or this test proves nothing"
     )
 
@@ -422,25 +497,78 @@ def test_the_issuer_list_comes_from_the_same_read_as_the_inputs(seeded, monkeypa
     in the issuer list, so lineage is never asked for it.
     """
     connection = seeded["connection"]
+    issuers = seeded["issuers"]
     gateway_type = datahub_backtest.StrategyBacktestGateway
-    real_read = gateway_type.issuer_inputs_with_snapshot
+    real_read = gateway_type.rows_at
     landed: list[bool] = []
 
     def writer_lands_first(self, cutoff_at):
         if not landed:
-            _seed_inputs(connection, {Q1: {"f": "1000"}})
+            _seed_inputs(connection, issuers, {Q1: {"f": "1000"}})
             landed.append(True)
         return real_read(self, cutoff_at)
 
     asked: list[str] = []
+    real_lineage = datahub_backtest.canonical_history_issuers
 
-    def lineage(_connection, ids, **_kwargs):
+    def lineage_spy(connection_, ids, **kwargs):
         asked.extend(ids)
-        return [issuer for issuer in ISSUERS.values() if issuer.issuer_id in ids]
+        return real_lineage(connection_, ids, **kwargs)
 
-    monkeypatch.setattr(gateway_type, "issuer_inputs_with_snapshot", writer_lands_first)
-    monkeypatch.setattr(datahub_backtest, "stored_history_issuers", lineage)
+    monkeypatch.setattr(gateway_type, "rows_at", writer_lands_first)
+    monkeypatch.setattr(datahub_backtest, "canonical_history_issuers", lineage_spy)
     payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
 
-    assert ISSUERS["f"].issuer_id in asked
+    assert issuers["f"].canonical_issuer_id in asked
     assert "T758F" in payload["benchmark"]["universe"], "f holds inputs at Q1 in the read the run used"
+
+
+# -- #1257: two id generations, resolved through the real lineage ---------------------------
+
+
+def test_both_id_generations_at_the_same_cutoffs_run_on_the_canonical_issuers(seeded) -> None:
+    """#1257 (a): staging holds every issuer under `issuer:lei:` and under its entity UUID, at the
+    same cutoffs. Red on the code before the fix: both generations resolve to one ticker and the
+    run stops with "two issuers resolve to one ticker". The run must read the canonical rows only.
+    """
+    connection = seeded["connection"]
+    issuers = seeded["issuers"]
+
+    payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
+
+    canonical = {issuer.canonical_issuer_id for issuer in issuers.values()}
+    assert {row[0] for row in payload["binding"]["issuers"]} <= canonical
+    assert {row[1] for row in payload["binding"]["issuers"]} == {"T758A", "T758B", "T758C", "T758D", "T758E"}
+    first = payload["cutoffs"][0]
+    # The canonical inputs select a and b at Q1. The legacy rows (closes swapped) would select c and e.
+    assert first["weights"] == {"T758A": "0.500000", "T758B": "0.500000"}
+    assert sum(first["outcomes"].values()) == 4, "Q1 evaluates the 4 canonical issuers, never their legacy twins"
+    assert sorted(payload["ignored_legacy_issuer_ids"]) == sorted(
+        issuer.legacy_issuer_id for name, issuer in issuers.items() if name != "f"
+    )
+
+
+def test_two_canonical_issuers_on_one_ticker_still_stop_the_run(seeded) -> None:
+    """The guard stays after canonicalization: two distinct entities that resolve to one ticker
+    are a lineage defect, and the run refuses them."""
+    connection = seeded["connection"]
+    twin = mint_issuer(connection, lei=_lei("z"), mic="XNYS", ticker="T758A", cik=758_999, known_at=MINTED_AT)
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                twin.canonical_issuer_id,
+                twin.canonical_listing_id,
+                twin.cik,
+                "non_financial",
+                datetime(2024, 2, 2, tzinfo=UTC),
+            )
+        ],
+        company_facts={twin.cik: {"facts": {}}},
+        store=MemoryStore(),
+        cutoff=datetime(2024, 2, 2, tzinfo=UTC),
+    )
+    _seed_inputs(connection, {"z": twin}, {Q1: {"z": "1000"}})
+
+    with pytest.raises(RuntimeError, match="two issuers resolve to one ticker"):
+        _run_op()

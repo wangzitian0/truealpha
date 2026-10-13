@@ -13,6 +13,7 @@ exact snapshot it was computed from.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -82,6 +83,10 @@ def _period_end_key(tag: str) -> tuple[date, str]:
     return date.min, tag
 
 
+#: One row of ``rows_at``: (issuer_id, input_key, value, confidence, fiscal_period).
+InputRow = tuple[str, str, Any, Any, str | None]
+
+
 class StrategyBacktestGateway:
     """The strategy's data boundary: it reads captured factor inputs from
     staging.strategy_backtest_inputs and never sees the fixture or any provenance."""
@@ -89,7 +94,8 @@ class StrategyBacktestGateway:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
-    def _rows_for_cutoff(self, cutoff_at: str | datetime) -> list[tuple[str, str, Any, Any, str | None]]:
+    def rows_at(self, cutoff_at: str | datetime) -> list[InputRow]:
+        """The latest vintage of each input at one cutoff, in ONE read. Every other read derives from it."""
         # Latest vintage per (issuer, input_key, fiscal_period) at the cutoff -- a
         # restatement lands a new row and supersedes, never overwriting the prior one. The
         # period is part of the identity since 0043: a metric legitimately appears once per
@@ -117,22 +123,10 @@ class StrategyBacktestGateway:
         ).fetchall()
 
     def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
-        return _issuer_inputs_from_rows(self._rows_for_cutoff(cutoff_at))
+        return issuer_inputs_from_rows(self.rows_at(cutoff_at))
 
     def snapshot_id(self, cutoff_at: str | datetime) -> str:
-        # The period is part of the snapshot identity: two runs that consumed different
-        # years of the same series are not the same snapshot, and before 0043 there was no
-        # way to say so.
-        return _snapshot_id_from_rows(self._rows_for_cutoff(cutoff_at))
-
-    def issuer_inputs_with_snapshot(self, cutoff_at: str | datetime) -> tuple[list[IssuerInput], str]:
-        """The inputs of one cutoff and their snapshot id, from ONE read (#758).
-
-        Two separate reads under READ COMMITTED can see different rows, so a snapshot read
-        after the decisions could describe inputs the decisions never used.
-        """
-        rows = self._rows_for_cutoff(cutoff_at)
-        return _issuer_inputs_from_rows(rows), _snapshot_id_from_rows(rows)
+        return snapshot_id_from_rows(self.rows_at(cutoff_at))
 
     def run_snapshot_id(self, cutoff_ats: list[str]) -> str:
         """One PIT identity for a multi-cutoff run: the content hash of the per-cutoff
@@ -145,7 +139,8 @@ def combine_snapshot_ids(snapshot_ids: list[str]) -> str:
     return f"strategy-snapshot:{canonical_sha256(snapshot_ids)}"
 
 
-def _issuer_inputs_from_rows(rows: list[tuple[str, str, Any, Any, str | None]]) -> list[IssuerInput]:
+def issuer_inputs_from_rows(rows: Sequence[InputRow]) -> list[IssuerInput]:
+    """The evaluator inputs of the given rows of one cutoff."""
     by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
     periodic: dict[str, dict[str, dict[str, tuple[Decimal, Decimal]]]] = {}
     for issuer_id, input_key, value, confidence, fiscal_period in rows:
@@ -169,7 +164,12 @@ def _issuer_inputs_from_rows(rows: list[tuple[str, str, Any, Any, str | None]]) 
     ]
 
 
-def _snapshot_id_from_rows(rows: list[tuple[str, str, Any, Any, str | None]]) -> str:
+def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
+    """The content identity of the given rows of one cutoff.
+
+    The period is part of the snapshot identity: two runs that consumed different years of the
+    same series are not the same snapshot, and before 0043 there was no way to say so.
+    """
     payload = sorted(
         (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
         for issuer_id, input_key, value, confidence, fiscal_period in rows

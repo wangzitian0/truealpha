@@ -22,6 +22,9 @@ Rules this module enforces:
   writer does. There is no blended value.
 * ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
   before the cutoff date. Shares are as filed (A6 decision 4).
+* Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
+  and under its entity UUID. The universe is the set of entities those ids name, and each history
+  is written under the entity UUID. No row is written under a legacy id.
 * The run is idempotent. The unique index of the table includes ``recorded_at``, so a second
   insert of the same fact would duplicate the row. The projector skips a row that exists for
   the same issuer, cutoff, input key and fiscal period with the same value and ``knowable_at``.
@@ -64,7 +67,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     company_facts_record_id,
     predecessor_ciks,
 )
-from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity, parse_alias
 from data_engine.datahub.strategy_bridge import financial_input_rows, load_strategy_definition
 
 DEFAULT_MONTHS = 36
@@ -148,6 +151,8 @@ class HistorySummary:
     undated: int
     #: Issuers of the strategy universe that stored lineage could not resolve.
     unresolved_issuers: tuple[str, ...] = ()
+    #: Old-generation ids that name a projected entity. Their history is written under the entity UUID.
+    merged_ids: int = 0
 
 
 # -- cutoffs and the strict date rule ---------------------------------------------------
@@ -308,23 +313,31 @@ def load_stored_company_facts(
 # -- stored issuer lineage --------------------------------------------------------------
 
 _LATEST_FINANCIAL_SQL = """
-select distinct on (p.normalized_payload ->> 'issuer_id') p.normalized_payload, v.source_record_id
-from staging.capture_normalized_observations o
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+select distinct on (named.entity_id) named.entity_id, p.normalized_payload, v.source_record_id
+from unnest(%s::text[], %s::text[]) as named (issuer_id, entity_id)
+join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = named.issuer_id
+join staging.capture_normalized_observations o on o.observation_id = p.observation_id
 join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
 where o.semantic_type = 'financial-fact'
   and o.parser_version = %s
-  and p.normalized_payload ->> 'issuer_id' = any(%s)
-order by p.normalized_payload ->> 'issuer_id', o.recorded_at desc, o.knowable_at desc, o.observation_id desc
+order by named.entity_id, o.recorded_at desc, o.knowable_at desc, o.observation_id desc
 """
 
 
 def latest_financial_observations(
-    connection: psycopg.Connection[Any], issuer_ids: Sequence[str], *, parser_version: str = PARSER_VERSION
-) -> list[tuple[dict[str, Any], str]]:
-    """Per issuer, the payload and the source record id of its newest financial-fact observation."""
-    rows = connection.execute(_LATEST_FINANCIAL_SQL, (parser_version, list(issuer_ids))).fetchall()
-    return [(dict(payload), str(record_id)) for payload, record_id in rows]
+    connection: psycopg.Connection[Any],
+    ids_by_entity: Mapping[str, Sequence[str]],
+    *,
+    parser_version: str = PARSER_VERSION,
+) -> dict[str, tuple[dict[str, Any], str]]:
+    """Per entity, the payload and source record id of the newest financial-fact observation
+    recorded under any of the entity's ids (#1257: a legacy id and the entity UUID name one issuer)."""
+    pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
+    rows = connection.execute(
+        _LATEST_FINANCIAL_SQL,
+        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], parser_version),
+    ).fetchall()
+    return {str(entity_id): (dict(payload), str(record_id)) for entity_id, payload, record_id in rows}
 
 
 def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, known_at: datetime | None) -> str | None:
@@ -395,29 +408,96 @@ def issuer_from_observation(
     )
 
 
-def stored_history_issuers(
+@dataclass(frozen=True)
+class CanonicalIssuers:
+    """Issuer ids resolved to their canonical entity (#1257).
+
+    ``staging.strategy_backtest_inputs`` holds each issuer under two id generations: the legacy
+    ``issuer:lei:`` id of the old live seeds and the entity UUID of the seeds since the identity
+    unification. Old rows never leave the append-only table. Readers use the canonical ids only.
+    """
+
+    #: One projection target per canonical entity, keyed by the entity UUID.
+    issuers: tuple[HistoryIssuer, ...]
+    #: Every id that is itself a canonical entity id, with or without resolved lineage.
+    canonical_ids: frozenset[str]
+    #: Each other id and the entity it names. Readers ignore its rows; the projector never writes it.
+    merged: Mapping[str, str]
+    #: Ids that name no entity, and the ids of an entity whose lineage names no CIK, ticker or branch.
+    unresolved: tuple[str, ...]
+
+
+def canonical_history_issuers(
     connection: psycopg.Connection[Any],
     issuer_ids: Sequence[str],
     *,
+    known_at: datetime,
     parser_version: str = PARSER_VERSION,
-    known_at: datetime | None = None,
+) -> CanonicalIssuers:
+    """The canonical projection targets of the given ids, resolved from stored lineage only.
+
+    Each id resolves to its entity through ``lookup_entity``, which reads the aliases and never
+    mints. The lineage of an entity is the newest financial-fact observation recorded under any
+    of its ids, so an issuer captured only under its legacy id still resolves, under its UUID.
+    """
+    if known_at.tzinfo is None or known_at.utcoffset() is None:
+        raise ValueError("known_at must carry a time zone")
+    as_of = known_at.astimezone(UTC).date()
+    ids_by_entity: dict[str, list[str]] = {}
+    unresolved: list[str] = []
+    for issuer_id in sorted(set(issuer_ids)):
+        named = lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
+        if named is None:
+            unresolved.append(issuer_id)
+        else:
+            ids_by_entity.setdefault(str(named), []).append(issuer_id)
+    observations = latest_financial_observations(
+        connection,
+        {entity: sorted({entity, *ids}) for entity, ids in ids_by_entity.items()},
+        parser_version=parser_version,
+    )
+    issuers: list[HistoryIssuer] = []
+    for entity, ids in sorted(ids_by_entity.items()):
+        found = observations.get(entity)
+        issuer = None if found is None else issuer_from_observation(*found, connection=connection, known_at=known_at)
+        if issuer is None:
+            unresolved.extend(ids)
+        else:
+            issuers.append(dataclasses.replace(issuer, issuer_id=entity))
+    resolved = {issuer.issuer_id for issuer in issuers}
+    return CanonicalIssuers(
+        issuers=tuple(_with_predecessors(connection, issuers, ids_by_entity)),
+        canonical_ids=frozenset(entity for entity, ids in ids_by_entity.items() if entity in ids),
+        merged={issuer_id: entity for entity in resolved for issuer_id in ids_by_entity[entity] if issuer_id != entity},
+        unresolved=tuple(sorted(unresolved)),
+    )
+
+
+def _with_predecessors(
+    connection: psycopg.Connection[Any], issuers: Sequence[HistoryIssuer], ids_by_entity: Mapping[str, Sequence[str]]
 ) -> list[HistoryIssuer]:
-    """The projection targets of the given issuers, resolved from stored capture lineage only."""
-    issuers = [
-        issuer
-        for payload, record_id in latest_financial_observations(connection, issuer_ids, parser_version=parser_version)
-        if (issuer := issuer_from_observation(payload, record_id, connection=connection, known_at=known_at))
-    ]
+    """Each issuer with the predecessor CIK that ``predecessor_ciks`` resolves for its listing.
+
+    The signed registry (``staging.issuer_cik_predecessors``) is keyed by the id it was written
+    under, and its rows predate the entity UUIDs: ExxonMobil's row names ``issuer:lei:``. So each
+    of the entity's ids is presented in turn, and a signed resolution under any of them wins.
+    """
     if not issuers:
         return []
-    predecessors = predecessor_ciks(
-        connection,
-        [issuer.listing_id for issuer in issuers],
-        {issuer.listing_id: issuer.issuer_id for issuer in issuers},
-    )
+    listings = [issuer.listing_id for issuer in issuers]
+    candidates = {
+        issuer.listing_id: sorted({issuer.issuer_id, *ids_by_entity.get(issuer.issuer_id, ())}) for issuer in issuers
+    }
+    found: dict[str, Any] = {}
+    for index in range(max(len(ids) for ids in candidates.values())):
+        presented = {listing: ids[index] for listing, ids in candidates.items() if index < len(ids)}
+        for listing, resolution in predecessor_ciks(connection, listings, presented).items():
+            current = found.get(listing)
+            if current is None or (resolution.signed and not current.signed):
+                found[listing] = resolution
     resolved: list[HistoryIssuer] = []
     for issuer in issuers:
-        predecessor = predecessors.get(issuer.listing_id)
+        predecessor = found.get(issuer.listing_id)
         if predecessor is None or int(predecessor) == issuer.cik:
             resolved.append(issuer)
         else:
@@ -639,23 +719,25 @@ def project_deployed_history(
 ) -> HistorySummary:
     """The deployed run: extend the history of every issuer the strategy already consumes.
 
-    The universe is the set of issuers that hold a row in ``staging.strategy_backtest_inputs``.
-    The run fails when it resolves no issuer or projects no row, so an empty run cannot report
-    success.
+    The universe is the canonical entities of the ids that hold a row in
+    ``staging.strategy_backtest_inputs`` (#1257). The table holds each issuer under a legacy id
+    and under its entity UUID, so the run resolves every id to its entity and projects one
+    history per entity, under the UUID. It never writes a row under a legacy id. The run fails
+    when it resolves no issuer or projects no row, so an empty run cannot report success.
     """
     issuer_ids = [
         row[0]
         for row in connection.execute("select distinct issuer_id from staging.strategy_backtest_inputs order by 1")
     ]
-    issuers = stored_history_issuers(connection, issuer_ids, known_at=tick)
-    if not issuers:
+    canonical = canonical_history_issuers(connection, issuer_ids, known_at=tick)
+    if not canonical.issuers:
         raise RuntimeError(
             f"no issuer to project: {len(issuer_ids)} issuers hold strategy inputs, none resolves from stored lineage"
         )
     summary = run_strategy_history(
         connection,
         tick=tick,
-        issuers=issuers,
+        issuers=list(canonical.issuers),
         months=months,
         load_facts=lambda cik: load_stored_company_facts(connection, cik, store=store),
     )
@@ -663,7 +745,4 @@ def project_deployed_history(
         raise RuntimeError(
             f"the projector produced no row for {summary.issuers} issuers over {summary.cutoffs} cutoffs"
         )
-    resolved = {issuer.issuer_id for issuer in issuers}
-    return dataclasses.replace(
-        summary, unresolved_issuers=tuple(issuer_id for issuer_id in issuer_ids if issuer_id not in resolved)
-    )
+    return dataclasses.replace(summary, unresolved_issuers=canonical.unresolved, merged_ids=len(canonical.merged))

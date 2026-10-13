@@ -381,8 +381,9 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
 - **History rows (#1139, #758).** `datahub/strategy_history.py` writes the rows of past cutoffs
   from stored bytes only. The cutoffs are the first day of each of the last 36 months (00:00:00Z)
   and each calendar quarter end of the strategy schedule in that window (23:59:59Z). The nightly
-  backtest evaluates the quarter-end cutoffs. A fact is admitted when its filed date is before
-  the cutoff date. Its `knowable_at` is the end of the
+  backtest evaluates the quarter-end cutoffs. Both write and read canonical issuer ids only: the
+  table also holds each issuer under its legacy `issuer:lei:` id, and those rows are never read or
+  written again (#1257). A fact is admitted when its filed date is before the cutoff date. Its `knowable_at` is the end of the
   filed day. Each input keeps its own filed date and its own `fiscal_period`. `last_close` is the
   unadjusted close of the last session before the cutoff date. A re-run skips a row that exists
   with the same value and `knowable_at`. The lane is `strategy_history_projection_pipeline`.

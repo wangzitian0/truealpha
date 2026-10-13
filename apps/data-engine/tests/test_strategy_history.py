@@ -33,11 +33,13 @@ from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     DEFAULT_MONTHS,
     UNADJUSTED_BARS,
+    CanonicalIssuers,
     HistoryIssuer,
     HistoryRow,
     LastClose,
     LookAheadError,
     admit_input,
+    canonical_history_issuers,
     end_of_day,
     history_cutoffs,
     is_schedule_cutoff,
@@ -49,7 +51,6 @@ from data_engine.datahub.strategy_history import (
     project_issuer_rows,
     quarter_end_cutoffs,
     run_strategy_history,
-    stored_history_issuers,
 )
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from factors.production_topt import OperatingBranch
@@ -873,20 +874,36 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     issuer_ids = sorted(row[0] for row in seeded)
     assert len(issuer_ids) >= 20
 
+    one_id_each = {issuer_id: [issuer_id] for issuer_id in issuer_ids}
     found = latest_financial_observations(
-        connection, issuer_ids, parser_version="production-topt-integration-parser:v1"
+        connection, one_id_each, parser_version="production-topt-integration-parser:v1"
     )
 
-    assert sorted(payload["issuer_id"] for payload, _record in found) == issuer_ids
-    assert all(record.startswith("production-topt-integration:") for _payload, record in found)
-    assert latest_financial_observations(connection, issuer_ids, parser_version="no-such-parser:v0") == []
-    assert stored_history_issuers(connection, issuer_ids, parser_version="production-topt-integration-parser:v1") == []
+    assert sorted(found) == issuer_ids
+    assert all(payload["issuer_id"] == entity for entity, (payload, _record) in found.items())
+    assert all(record.startswith("production-topt-integration:") for _payload, record in found.values())
+    assert latest_financial_observations(connection, one_id_each, parser_version="no-such-parser:v0") == {}
+    # #1257: two ids of one entity yield ONE observation, the newest of both.
+    paired = latest_financial_observations(
+        connection, {"entity:both": issuer_ids[:2]}, parser_version="production-topt-integration-parser:v1"
+    )
+    assert list(paired) == ["entity:both"]
+    found_none = canonical_history_issuers(
+        connection, issuer_ids, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert found_none.issuers == ()
 
 
 def test_the_deployed_run_fails_when_no_issuer_resolves(connection, monkeypatch) -> None:
     import data_engine.datahub.strategy_history as history
 
-    monkeypatch.setattr(history, "stored_history_issuers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        history,
+        "canonical_history_issuers",
+        lambda _c, ids, **_kwargs: CanonicalIssuers(
+            issuers=(), canonical_ids=frozenset(), merged={}, unresolved=tuple(ids)
+        ),
+    )
     with pytest.raises(RuntimeError, match="no issuer"):
         project_deployed_history(connection, tick=TICK)
 
@@ -894,7 +911,13 @@ def test_the_deployed_run_fails_when_no_issuer_resolves(connection, monkeypatch)
 def test_the_deployed_run_fails_when_the_projector_writes_and_finds_no_row(connection, monkeypatch) -> None:
     import data_engine.datahub.strategy_history as history
 
-    monkeypatch.setattr(history, "stored_history_issuers", lambda *_args, **_kwargs: [_issuer(9)])
+    monkeypatch.setattr(
+        history,
+        "canonical_history_issuers",
+        lambda *_args, **_kwargs: CanonicalIssuers(
+            issuers=(_issuer(9),), canonical_ids=frozenset(), merged={}, unresolved=()
+        ),
+    )
     monkeypatch.setattr(history, "load_stored_company_facts", lambda *_args, **_kwargs: None)
     with pytest.raises(RuntimeError, match="no row"):
         project_deployed_history(connection, tick=TICK, months=3)
@@ -917,9 +940,9 @@ def test_the_deployed_run_projects_the_issuers_the_strategy_consumes(connection,
 
     def fake_issuers(_connection, issuer_ids, **_kwargs):
         seen["issuer_ids"] = list(issuer_ids)
-        return [issuer]
+        return CanonicalIssuers(issuers=(issuer,), canonical_ids=frozenset(), merged={}, unresolved=())
 
-    monkeypatch.setattr(history, "stored_history_issuers", fake_issuers)
+    monkeypatch.setattr(history, "canonical_history_issuers", fake_issuers)
     monkeypatch.setattr(
         history, "load_stored_company_facts", lambda _c, cik, store=None: _loader({issuer.cik: _doc()})(cik)
     )
