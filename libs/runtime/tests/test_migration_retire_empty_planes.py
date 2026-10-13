@@ -74,11 +74,11 @@ RETIRED_FUNCTIONS = (
 
 #: Tables that look dead and are not. The migration must leave every one of them.
 #: Seven app access tables left this list in #1240. test_migration_retire_app_access_tables.py covers them.
+#: staging.financial_facts left this list in #1258.
 LIVE_TABLES = (
     "app.tenants",
     "app.principals",
     "app.entitlement_grants",
-    "staging.financial_facts",
     "staging.market_prices",
     "staging.analyst_rating_events",
     "raw.capture_runs",

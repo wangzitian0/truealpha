@@ -164,21 +164,7 @@ begin
 end
 $$;
 
-do $$
-begin
-    if to_regclass('staging.uq_financial_facts_vintage') is null then
-        create unique index if not exists uq_financial_facts_vintage
-            on staging.financial_facts (
-                unified_id,
-                metric,
-                fiscal_period,
-                transaction_time,
-                source,
-                coalesce(raw_ref, '')
-            );
-    end if;
-end
-$$;
+-- #1258: staging.financial_facts is retired; uq_financial_facts_vintage removed.
 
 do $$
 begin
@@ -198,34 +184,7 @@ $$;
 
 -- Source facts must name when they became knowable. Ingestion time remains a
 -- separate audit field and must never stand in for transaction time.
-do $$
-begin
-    if exists (
-        select 1
-        from pg_attrdef as default_row
-        join pg_attribute as column_row
-          on column_row.attrelid = default_row.adrelid
-         and column_row.attnum = default_row.adnum
-        where default_row.adrelid = 'staging.financial_facts'::regclass
-          and column_row.attname = 'transaction_time'
-    ) then
-        alter table staging.financial_facts
-            alter column transaction_time drop default;
-    end if;
-end
-$$;
-do $$
-begin
-    if not exists (
-        select 1 from pg_attribute
-        where attrelid = 'staging.financial_facts'::regclass
-          and attname = 'recorded_at' and not attisdropped
-    ) then
-        alter table staging.financial_facts
-            add column if not exists recorded_at timestamptz not null default now();
-    end if;
-end
-$$;
+-- #1258: staging.financial_facts is retired; transaction_time / recorded_at alters removed.
 
 do $$
 begin
@@ -263,21 +222,7 @@ begin
 end;
 $$;
 
-do $$
-begin
-    if not exists (
-        select 1
-        from pg_trigger
-        where tgrelid = 'staging.financial_facts'::regclass
-          and not tgisinternal
-          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_financial_facts_append_only BEFORE DELETE OR UPDATE ON staging.financial_facts FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
-    ) then
-        drop trigger if exists trg_financial_facts_append_only on staging.financial_facts;
-        create trigger trg_financial_facts_append_only before update or delete on staging.financial_facts
-        for each row execute function staging.reject_point_in_time_mutation();
-    end if;
-end
-$$;
+-- #1258: staging.financial_facts is retired; trg_financial_facts_append_only removed.
 
 do $$
 begin

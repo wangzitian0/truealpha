@@ -68,7 +68,7 @@ begin
     end if;
 
     if has_table_privilege('app_runtime', 'raw.fetches', 'select')
-       or has_table_privilege('app_runtime', 'staging.financial_facts', 'select') then
+       or has_table_privilege('app_runtime', 'staging.capture_normalized_observations', 'select') then
         raise exception 'app runtime must not read raw or staging data';
     end if;
     if has_table_privilege('app_runtime', 'app.conversation_audit_metadata', 'select')
