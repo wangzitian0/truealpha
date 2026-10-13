@@ -896,10 +896,36 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
         connection, {"entity:both": issuer_ids[:2]}, parser_version="production-topt-integration-parser:v1"
     )
     assert list(paired) == ["entity:both"]
-    found_none = canonical_history_issuers(
-        connection, issuer_ids, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    # #1257: these ids name no stored entity, and their lineage names no company-facts CIK, so
+    # none resolves. A positive control proves that the resolver still resolves: one issuer with
+    # an entity and a company-facts lineage under the same parser resolves, under its UUID.
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+    import financial_lineage_seed as seed  # noqa: PLC0415
+
+    control = seed.mint_issuer(
+        connection, lei="H1257CONTROLXXXXXX00", mic="XNAS", ticker="H1257K", cik=1_257_601, known_at=_utc(2026, 1, 1)
     )
-    assert found_none.issuers == ()
+    seed.seed_financial_lineage(
+        connection,
+        [
+            seed.Observed(
+                control.legacy_issuer_id, control.legacy_listing_id, control.cik, "non_financial", _utc(2026, 4, 1)
+            )
+        ],
+        company_facts={control.cik: _doc()},
+        store=seed.MemoryStore(),
+        cutoff=_utc(2026, 4, 1),
+        parser_version="production-topt-integration-parser:v1",
+    )
+    found = canonical_history_issuers(
+        connection,
+        [*issuer_ids, control.legacy_issuer_id],
+        known_at=TICK,
+        parser_version="production-topt-integration-parser:v1",
+    )
+    assert [(issuer.issuer_id, issuer.ticker) for issuer in found.issuers] == [(control.canonical_issuer_id, "H1257K")]
+    assert found.merged == {control.legacy_issuer_id: control.canonical_issuer_id}
+    assert found.unresolved == tuple(issuer_ids)
 
 
 def test_the_deployed_run_fails_when_no_issuer_resolves(connection, monkeypatch) -> None:

@@ -39,7 +39,6 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
-from factors.backtest.corporate_actions import SplitEvent
 from factors.backtest.engine import (
     BENCHMARK_RULE,
     CLAIM_CEILING,
@@ -68,7 +67,7 @@ from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
-from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_of
+from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
@@ -146,8 +145,9 @@ def require_contiguous_quarters(cutoffs: Sequence[datetime], schedule: Quarterly
     missing = sorted(set(quarter_end_cutoffs(schedule, start=found[0], end=found[-1])) - set(found))
     if missing:
         raise ValueError(
-            "the quarter-end input history has gaps: no canonical inputs at "
-            f"{[cutoff.isoformat() for cutoff in missing]}; run strategy_history_projection_pipeline"
+            f"the quarter-end cutoffs are not contiguous: {[cutoff.isoformat() for cutoff in missing]} are "
+            f"missing between {found[0].isoformat()} and {found[-1].isoformat()}; "
+            "run strategy_history_projection_pipeline"
         )
     return found
 
@@ -224,12 +224,12 @@ def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
 
 def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
     """Unadjusted bars and the split events the two series show. Raise on an ambiguous split."""
-    bars: dict[str, dict[date, Bar]] = {}
-    splits: list[SplitEvent] = []
-    for symbol in sorted(unadjusted):
-        bars[symbol] = {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
-        splits.extend(split_events_of(symbol, unadjusted, split_adjusted))
-    return PriceBook(bars=bars, splits=tuple(splits))
+    bars = {
+        symbol: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
+        for symbol in sorted(unadjusted)
+    }
+    events = split_events_by_symbol(sorted(unadjusted), unadjusted, split_adjusted)
+    return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
 
 
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:

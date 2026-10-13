@@ -112,7 +112,10 @@ def test_schedule_cutoffs_keep_the_quarter_ends_and_drop_monthly_and_live_cutoff
 def test_a_missing_quarter_between_the_first_and_the_latest_stops_the_run() -> None:
     schedule = load_strategy_definition().schedule
 
-    with pytest.raises(ValueError, match="2024-06-30T23:59:59"):
+    # The message holds at both call sites, before and after canonicalization (review on #1266).
+    with pytest.raises(
+        ValueError, match=r"quarter-end cutoffs are not contiguous: \['2024-06-30T23:59:59\+00:00'\] are missing"
+    ):
         schedule_cutoffs(_Connection([Q1, Q3]), schedule)  # type: ignore[arg-type]
 
 

@@ -44,6 +44,7 @@ __all__ = (
     "is_canonical_issuer_id",
     "reason_counts",
     "require_canonical_issuer_id",
+    "stored_entity_of",
 )
 
 #: Why an issuer got no row: the store holds no entity for its legacy id.
@@ -152,10 +153,14 @@ def require_canonical_issuer_id(value: str) -> str:
     return value
 
 
-def _entity_of(
+def stored_entity_of(
     connection: psycopg.Connection[Any], legacy_id: str, *, as_of: date, known_at: datetime
 ) -> uuid.UUID | None:
-    """The entity `legacy_id` names, or None. A UUID-form id must also be an entity of the store."""
+    """The entity `legacy_id` names, or None. A UUID-form id must also be an entity of the store.
+
+    `lookup_entity` answers a UUID with the UUID itself when the store holds no such entity. This
+    guard is the one place that refuses it, for every resolver of issuer ids (#1079, #1257).
+    """
     entity = lookup_entity(connection, legacy_id, "issuer", as_of=as_of, known_at=known_at)
     if entity is not None and is_uuid(legacy_id):
         held = connection.execute("select 1 from staging.entities where entity_id = %s", (entity,)).fetchone()
@@ -184,7 +189,7 @@ def canonicalize_universe(
     issuers: dict[str, CanonicalIssuer] = {}
     unmapped: list[UnmappedIssuer] = []
     for legacy_id, ticker in pairs:
-        entity = _entity_of(connection, legacy_id, as_of=as_of, known_at=cutoff)
+        entity = stored_entity_of(connection, legacy_id, as_of=as_of, known_at=cutoff)
         if entity is None:
             unmapped.append(UnmappedIssuer(legacy_id=legacy_id, ticker=ticker))
         elif str(entity) not in wide_row_ids:

@@ -54,13 +54,14 @@ import psycopg
 from factors.backtest.corporate_actions import SplitEvent, split_factor_between
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
-from data_engine.datahub.price_series import load_daily_series, split_events_of
+from data_engine.datahub.canonical_issuer import stored_entity_of
+from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
@@ -73,7 +74,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     company_facts_record_id,
     predecessor_ciks,
 )
-from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity, parse_alias
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
 from data_engine.datahub.strategy_bridge import financial_input_rows, load_strategy_definition
 
 DEFAULT_MONTHS = 36
@@ -302,19 +303,16 @@ def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
     return last_close
 
 
-def postgres_split_events(connection: psycopg.Connection[Any]) -> SplitReader:
-    """The split events of a symbol, derived from its two stored daily series.
+def postgres_split_events(connection: psycopg.Connection[Any], symbols: Sequence[str]) -> SplitReader:
+    """The split events of each symbol, derived from its two stored daily series, before any projection.
 
-    Raise ``SplitDerivationError`` when the two series disagree: a share count cannot be put on
-    the basis of a close when the splits between them are unknown.
+    Raise ONE ``SplitDerivationError`` that names every symbol whose series disagree: a share count
+    cannot be put on the basis of a close when the splits between them are unknown.
     """
-
-    def split_events(symbol: str) -> tuple[SplitEvent, ...]:
-        unadjusted = load_daily_series(connection, [symbol], adjust=UNADJUSTED_BARS)
-        split_adjusted = load_daily_series(connection, [symbol], adjust=SPLIT_ADJUSTED_BARS)
-        return split_events_of(symbol, unadjusted, split_adjusted)
-
-    return split_events
+    unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED_BARS)
+    split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED_BARS)
+    events = split_events_by_symbol(symbols, unadjusted, split_adjusted)
+    return lambda symbol: events.get(symbol, ())
 
 
 def load_stored_company_facts(
@@ -467,8 +465,8 @@ def canonical_history_issuers(
 ) -> CanonicalIssuers:
     """The canonical projection targets of the given ids, resolved from stored lineage only.
 
-    Each id resolves to its entity through ``lookup_entity``, which reads the aliases and never
-    mints. The lineage of an entity is the newest financial-fact observation recorded under any
+    Each id resolves to its entity through ``stored_entity_of``: it reads the aliases, never
+    mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the newest financial-fact observation recorded under any
     of its ids, so an issuer captured only under its legacy id still resolves, under its UUID.
     """
     if known_at.tzinfo is None or known_at.utcoffset() is None:
@@ -477,7 +475,7 @@ def canonical_history_issuers(
     ids_by_entity: dict[str, list[str]] = {}
     unresolved: list[str] = []
     for issuer_id in sorted(set(issuer_ids)):
-        named = lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
+        named = stored_entity_of(connection, issuer_id, as_of=as_of, known_at=known_at)
         if named is None:
             unresolved.append(issuer_id)
         else:
@@ -504,6 +502,10 @@ def canonical_history_issuers(
     )
 
 
+class ConflictingPredecessorError(ValueError):
+    """Two signed registry rows name different predecessor CIKs for one issuer."""
+
+
 def _with_predecessors(
     connection: psycopg.Connection[Any], issuers: Sequence[HistoryIssuer], ids_by_entity: Mapping[str, Sequence[str]]
 ) -> list[HistoryIssuer]:
@@ -520,12 +522,25 @@ def _with_predecessors(
         issuer.listing_id: sorted({issuer.issuer_id, *ids_by_entity.get(issuer.issuer_id, ())}) for issuer in issuers
     }
     found: dict[str, Any] = {}
+    signed: dict[str, dict[int, str]] = {}
     for index in range(max(len(ids) for ids in candidates.values())):
         presented = {listing: ids[index] for listing, ids in candidates.items() if index < len(ids)}
         for listing, resolution in predecessor_ciks(connection, listings, presented).items():
+            if resolution.signed:
+                signed.setdefault(listing, {}).setdefault(int(resolution), presented[listing])
             current = found.get(listing)
             if current is None or (resolution.signed and not current.signed):
                 found[listing] = resolution
+    conflicts = {listing: named for listing, named in signed.items() if len(named) > 1}
+    if conflicts:
+        issuer_of = {issuer.listing_id: issuer.issuer_id for issuer in issuers}
+        raise ConflictingPredecessorError(
+            "signed predecessor rows disagree: "
+            + "; ".join(
+                f"{issuer_of[listing]}: " + ", ".join(f"CIK {cik} under {named[cik]}" for cik in sorted(named))
+                for listing, named in sorted(conflicts.items())
+            )
+        )
     resolved: list[HistoryIssuer] = []
     for issuer in issuers:
         predecessor = found.get(issuer.listing_id)
@@ -622,7 +637,14 @@ def project_issuer_rows(
             if input_key == _SHARES_KEY and fiscal_period is None and bar is not None:
                 if splits is None:
                     splits = split_events(issuer.ticker)
-                on_basis = _on_close_basis(row, bar, splits)
+                count_as_of = share_count_as_of(
+                    (payload.get("vintage") or {}).get(_SHARES_KEY),
+                    [stored[1] for stored in documents.values() if stored is not None],
+                    cover_concepts=_cover_concepts(ruleset),
+                )
+                on_basis = _on_close_basis(
+                    row, bar, splits, as_of=count_as_of or row.knowable_at.astimezone(UTC).date()
+                )
                 split_adjusted += on_basis is not row
                 row = on_basis
             rows.append(_checked(row))
@@ -637,16 +659,47 @@ def project_issuer_rows(
     return Projection(tuple(rows), no_outcome=no_outcome, undated=undated, split_adjusted=split_adjusted)
 
 
-def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent]) -> HistoryRow:
+def _cover_concepts(ruleset: ConceptMappingRuleset) -> tuple[ConceptRef, ...]:
+    """The cover-page concepts of the share count: the ``dei`` (Document and Entity Information) ones."""
+    mapping = ruleset.mapping_for(_SHARES_KEY)
+    return () if mapping is None else tuple(concept for concept in mapping.concepts if concept.taxonomy == "dei")
+
+
+def share_count_as_of(
+    entry: object, documents: Sequence[Mapping[str, Any]], *, cover_concepts: Sequence[ConceptRef]
+) -> date | None:
+    """The date whose share basis a filed share count is on, or None when the vintage names no filing.
+
+    A cover-page count is a count as of its own date, its ``period_end``. A statement count (a
+    balance-sheet count or a weighted average) is restated for a split before its filing is
+    issued (SAB Topic 4C), so it is on the basis of the filing date. The vintage names the filing
+    and the period end, not the concept, so the stored document decides: a cover entry with the
+    same accession and period end makes it a cover count.
+    """
+    if not isinstance(entry, Mapping) or not entry.get("filed"):
+        return None
+    filed = date.fromisoformat(str(entry["filed"]))
+    accession, period_end = entry.get("accession"), entry.get("period_end")
+    if not accession or not period_end:
+        return filed
+    for facts in documents:
+        for concept in cover_concepts:
+            units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
+            for entries in units.values():
+                if any(item.get("accn") == accession and item.get("end") == period_end for item in entries):
+                    return date.fromisoformat(str(period_end))
+    return filed
+
+
+def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent], *, as_of: date) -> HistoryRow:
     """The share row on the share basis of ``bar``, or the row itself when no split lies between.
 
-    The filed count is on the basis of its filing date. A split with an ex-date after that date
-    and on or before the close's session multiplies it. The product is knowable once the close
-    is: the close's session is on or after the ex-date, and before the cutoff date.
+    The filed count is on the basis of ``as_of`` (``share_count_as_of``). A split with an ex-date
+    after that date and on or before the close's session multiplies it. The product is knowable
+    once both the filing and the close are: the close's session is on or after the ex-date, and
+    before the cutoff date.
     """
-    factor = split_factor_between(
-        splits, after=shares.knowable_at.astimezone(UTC).date(), through=bar.knowable_at.astimezone(UTC).date()
-    )
+    factor = split_factor_between(splits, after=as_of, through=bar.knowable_at.astimezone(UTC).date())
     if factor == 1:
         return shares
     value = shares.value * Decimal(factor.numerator) / Decimal(factor.denominator)
@@ -736,7 +789,11 @@ def run_strategy_history(
     cutoffs = history_cutoffs(tick, months, schedule if schedule is not None else load_strategy_definition().schedule)
     extractor = headcount_extractor if headcount_extractor is not None else PostgresHeadcountExtractor(connection)
     reader = last_close if last_close is not None else postgres_last_close(connection)
-    splits = split_events if split_events is not None else postgres_split_events(connection)
+    splits = (
+        split_events
+        if split_events is not None
+        else postgres_split_events(connection, [issuer.ticker for issuer in issuers])
+    )
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
     inserted = already_present = no_outcome = undated = split_adjusted = 0
     for issuer in issuers:

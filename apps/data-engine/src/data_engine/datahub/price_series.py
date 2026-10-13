@@ -57,4 +57,23 @@ def split_events_of(symbol: str, unadjusted: DailySeries, split_adjusted: DailyS
     )
 
 
-__all__ = ["DailySeries", "load_daily_series", "split_events_of"]
+def split_events_by_symbol(
+    symbols: Sequence[str], unadjusted: DailySeries, split_adjusted: DailySeries
+) -> dict[str, tuple[SplitEvent, ...]]:
+    """The splits of every symbol. Raise ONE ``SplitDerivationError`` that names every symbol that fails.
+
+    A run that stops on the first bad symbol hides the others until the next run; this one lists them all.
+    """
+    events: dict[str, tuple[SplitEvent, ...]] = {}
+    failures: list[str] = []
+    for symbol in sorted(set(symbols)):
+        try:
+            events[symbol] = split_events_of(symbol, unadjusted, split_adjusted)
+        except SplitDerivationError as error:
+            failures.append(str(error))
+    if failures:
+        raise SplitDerivationError(f"{len(failures)} symbols have no derivable split events: " + "; ".join(failures))
+    return events
+
+
+__all__ = ["DailySeries", "load_daily_series", "split_events_by_symbol", "split_events_of"]

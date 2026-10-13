@@ -113,6 +113,7 @@ def seed_financial_lineage(
     company_facts: Mapping[int, dict[str, Any]],
     store: MemoryStore,
     cutoff: datetime,
+    parser_version: str = PARSER_VERSION,
 ) -> None:
     """Seed one capture run with one financial-fact observation per entry, through the repositories.
 
@@ -209,7 +210,7 @@ def seed_financial_lineage(
             valid_to=None,
             knowable_at=item.knowable_at,
             source_vintage_id=vintage.source_vintage_id,
-            parser_version=PARSER_VERSION,
+            parser_version=parser_version,
             mapping_version="issue1257-map:v1",
             normalized_payload_sha256=canonical_sha256(payload),
         )
