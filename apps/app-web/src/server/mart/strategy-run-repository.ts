@@ -89,7 +89,8 @@ export const DECISIONS_SQL = `
               else to_char(d.cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
          end as cutoff_at,
          d.capital_adjusted_labor_efficiency, d.tier,
-         d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
+         d.current_price_to_sales, d.target_price_to_sales,
+         d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,
          d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
          d.labor_efficiency_metric,
          -- #615-adjacent, and init.md's reason for point-in-time in the first
@@ -241,6 +242,10 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 	if (typeof rank === "number" && (!Number.isInteger(rank) || rank < 1)) {
 		throw new SchemaMismatchError("rank is not an integer >= 1");
 	}
+	// #1235: mirrors the Python twin, which refuses a decision with two target bases.
+	if (row.target_price_to_sales != null && row.target_price_to_gross_profit != null) {
+		throw new SchemaMismatchError("a decision targets the multiple of one valuation basis, not two");
+	}
 	return {
 		issuer_id: row.issuer_id,
 		cutoff_at: cutoffIso(row.cutoff_at),
@@ -258,6 +263,15 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 		target_price_to_sales: decimalString(
 			row.target_price_to_sales,
 			"target_price_to_sales",
+		),
+		// #1235: the P/GP pair of definition 1.0.0, mirrored from the Python twin.
+		current_price_to_gross_profit: decimalString(
+			row.current_price_to_gross_profit,
+			"current_price_to_gross_profit",
+		),
+		target_price_to_gross_profit: decimalString(
+			row.target_price_to_gross_profit,
+			"target_price_to_gross_profit",
 		),
 		valuation_gap: decimalString(row.valuation_gap, "valuation_gap"),
 		// Joined from mart.topt_core_results, because mart.strategy_decisions

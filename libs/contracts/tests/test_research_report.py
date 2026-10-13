@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from truealpha_contracts import research_report
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.execution import AvailabilityStatus
+from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.research_report import (
     ReportSection,
     ReportSectionKind,
@@ -27,6 +28,7 @@ from truealpha_contracts.research_report_fixture import (
     FixtureResearchReadRepository,
     _operating_efficiency_section,
     _strategy_summary_section,
+    _valuation_section,
 )
 from truealpha_contracts.strategy_run import StrategyRunDecision, StrategyRunOutcome
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
@@ -187,6 +189,42 @@ def test_operating_efficiency_section_preserves_low_confidence_when_value_is_nul
     assert section.availability is AvailabilityStatus.LOW_CONFIDENCE
     # The individual result's own value-availability still correctly reflects the null field.
     assert section.results[0].availability is AvailabilityStatus.UNAVAILABLE
+
+
+def test_valuation_section_reports_the_basis_of_the_decision() -> None:
+    """#1235: a definition 1.0.0 decision divides P/GP. The section names P/GP, reports the
+    P/GP pair, still records P/S, and shows no P/S target, because none exists."""
+    decision = StrategyRunDecision(
+        issuer_id="issuer:wmt",
+        cutoff_at=CUTOFF,
+        outcome=StrategyRunOutcome.SELECTED,
+        eligible=True,
+        tier=ValuationTier.TRADITIONAL,
+        current_price_to_sales=Decimal("1.2420"),
+        current_price_to_gross_profit=Decimal("5.1302"),
+        target_price_to_gross_profit=Decimal("8.7500"),
+        valuation_gap=Decimal("0.7056"),
+        rank=1,
+        target_weight=Decimal("0.5"),
+    )
+    section = _valuation_section(decision, source="mart", corpus_sha256="0" * 64)
+    assert section.title == "Valuation (three-tier P/GP)"
+    assert [(item.label, item.value) for item in section.results] == [
+        ("tier", "traditional"),
+        ("current_price_to_gross_profit", "5.1302"),
+        ("target_price_to_gross_profit", "8.7500"),
+        ("current_price_to_sales", "1.2420"),
+        ("valuation_gap", "0.7056"),
+    ]
+    with pytest.raises(ValidationError, match="one valuation basis"):
+        StrategyRunDecision(
+            issuer_id="issuer:wmt",
+            cutoff_at=CUTOFF,
+            outcome=StrategyRunOutcome.SELECTED,
+            eligible=True,
+            target_price_to_sales=Decimal("1.15"),
+            target_price_to_gross_profit=Decimal("8.75"),
+        )
 
 
 def test_ranking_is_ordered_and_reproduces_ranks() -> None:

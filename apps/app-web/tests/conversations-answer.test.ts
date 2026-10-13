@@ -25,8 +25,8 @@ const FUND: FundValuation = {
   factorValidationStatus: "not_evaluated",
   reasonCodes: ["partial_valued_mass"],
   lines: [
-    { holdingName: "NVIDIA Corp.", ticker: "NVDA", weightPct: "7.60", currentPs: "20.1", targetPsMidpoint: "18.0", valuationGap: "-0.10", tier: "tier-1", availability: "available" },
-    { holdingName: "Apple Inc.", ticker: "AAPL", weightPct: "6.67", currentPs: null, targetPsMidpoint: null, valuationGap: null, tier: null, availability: "unavailable" },
+    { holdingName: "NVIDIA Corp.", ticker: "NVDA", weightPct: "7.60", currentPs: "20.1", targetPsMidpoint: "18.0", currentPgp: null, targetPgpMidpoint: null, valuationGap: "-0.10", tier: "tier-1", availability: "available" },
+    { holdingName: "Apple Inc.", ticker: "AAPL", weightPct: "6.67", currentPs: null, targetPsMidpoint: null, currentPgp: null, targetPgpMidpoint: null, valuationGap: null, tier: null, availability: "unavailable" },
   ],
 };
 

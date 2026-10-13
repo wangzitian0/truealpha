@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { CardExportButton } from "@/components/card-export-button";
 import { laborEfficiencyLabels, UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
+import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadEntityDetail } from "@/server/dashboard";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -65,6 +66,8 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
     strategyValue: latestRow?.capitalAdjustedLaborEfficiency ?? null,
     strategyMetric: latestRow?.laborEfficiencyMetric ?? null,
   });
+  // #1235: the gap divides the multiple of the row's definition — P/GP under 1.0.0.
+  const basisLabel = valuationBasisLabel(latestRow?.valuationBasis ?? null);
   const operatingBranch = gppeDetail?.operatingBranch ?? null;
   const capitalAdjustedGrossProfit = gppeDetail?.capitalAdjustedGrossProfit ?? null;
 
@@ -86,7 +89,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
             )}
             {latestRow?.valuationGap && (
               <span className={`font-mono text-sm font-semibold ${signColor(latestRow.valuationGap)}`}>
-                Valuation Gap: {formatSignedRatio(latestRow.valuationGap)}
+                Valuation Gap ({basisLabel}): {formatSignedRatio(latestRow.valuationGap)}
               </span>
             )}
           </div>
@@ -116,21 +119,26 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
               </div>
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-xs text-gray-400">Current P/S</div>
+                  <div className="text-xs text-gray-400">Current {basisLabel}</div>
                   <div className="mt-1 font-mono text-2xl font-bold text-white">
-                    {formatRatio(latestRow?.currentPriceToSales) ?? "—"}
+                    {formatRatio(latestRow?.currentMultiple ?? null) ?? "—"}
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-400">Target P/S</div>
+                  <div className="text-xs text-gray-400">Target {basisLabel}</div>
                   <div className="mt-1 font-mono text-2xl font-bold text-gray-300">
-                    {formatRatio(latestRow?.targetPriceToSales ?? null) ?? "—"}
+                    {formatRatio(latestRow?.targetMultiple ?? null) ?? "—"}
                   </div>
                 </div>
               </div>
+              {latestRow?.valuationBasis === "price_to_gross_profit" && (
+                <div className="mt-2 text-xs text-gray-500" data-testid="recorded-price-to-sales">
+                  Current P/S {formatRatio(latestRow.currentPriceToSales) ?? "—"} (recorded; the tier band targets P/GP)
+                </div>
+              )}
               <div className="mt-4 border-t border-border/60 pt-3">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-400">Valuation Gap</span>
+                  <span className="text-gray-400">Valuation Gap ({basisLabel})</span>
                   <span className={`font-mono font-bold ${signColor(latestRow?.valuationGap ?? null)}`}>
                     {formatSignedRatio(latestRow?.valuationGap ?? null) ?? "—"}
                   </span>
@@ -279,6 +287,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                     <th scope="col" className="px-4 py-3">Cutoff</th>
                     <th scope="col" className="px-4 py-3">Efficiency</th>
                     <th scope="col" className="px-4 py-3">P/S</th>
+                    <th scope="col" className="px-4 py-3">Valuation multiple</th>
                     <th scope="col" className="px-4 py-3">Tier</th>
                     <th scope="col" className="px-4 py-3">Valuation Gap</th>
                     <th scope="col" className="px-4 py-3">PEG</th>
@@ -302,6 +311,11 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                       </td>
                       <td className="px-4 py-3 font-mono">
                         {formatRatio(row.currentPriceToSales) ?? cell(row.currentPriceToSales)}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {row.currentMultiple
+                          ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
+                          : "—"}
                       </td>
                       <td className="px-4 py-3">{tierLabel(row.tier)}</td>
                       <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}>

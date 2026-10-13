@@ -8,6 +8,7 @@ import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
+import { valuationBasisLabel } from "@/contracts/strategyRun";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,12 @@ export default async function RankingsPage({
   const params = await searchParams;
   const state = await loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
   const names = await loadEntityDisplayMap();
+  // #1235: one run, one definition, one basis. Under definition 1.0.0 the gap divides P/GP.
+  const basisLabel = valuationBasisLabel(
+    state.kind === "ready"
+      ? (state.data.rows.find((row) => row.valuationBasis !== null)?.valuationBasis ?? null)
+      : null,
+  );
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
@@ -68,7 +75,9 @@ export default async function RankingsPage({
                   <th scope="col" className="px-4 py-3">Issuer</th>
                   <th scope="col" className="px-4 py-3">Tier</th>
                   <th scope="col" className="px-4 py-3">Current P/S</th>
-                  <th scope="col" className="px-4 py-3">Valuation gap</th>
+                  <th scope="col" className="px-4 py-3">Current {basisLabel}</th>
+                  <th scope="col" className="px-4 py-3">Target {basisLabel}</th>
+                  <th scope="col" className="px-4 py-3">Valuation gap ({basisLabel})</th>
                   {/* Module 1 (#284). Headed "PEG rank" rather than "Rank" because it is a
                       SEPARATE ordering: PEG does not participate in selection, and showing
                       the two under one heading would imply it does. */}
@@ -95,6 +104,12 @@ export default async function RankingsPage({
                     <td className="px-4 py-3">{cell(row.tier)}</td>
                     <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
                       {cell(formatRatio(row.currentPriceToSales))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
+                      {cell(formatRatio(row.currentMultiple))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
+                      {cell(formatRatio(row.targetMultiple))}
                     </td>
                     <td
                       className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}

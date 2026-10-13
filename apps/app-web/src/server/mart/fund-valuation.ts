@@ -28,6 +28,10 @@ export type ValuedHoldingRow = {
   weightPct: string | null;
   currentPs: string | null;
   targetPsMidpoint: string | null;
+  /** #1235: the P/GP valuation of a core row tiered by strategy definition 1.0.0. Null on a
+   * row of the former P/S bands; then the gap divides P/S and targetPsMidpoint is its band. */
+  currentPgp: string | null;
+  targetPgpMidpoint: string | null;
   valuationGap: string | null;
   tier: string | null;
   availability: string | null;
@@ -83,6 +87,8 @@ const VALUED_LINES_SQL = `
          v.percent_of_net_assets::text as weight_pct,
          r.current_ps::text as current_ps,
          r.target_ps_midpoint::text as target_ps_midpoint,
+         r.current_pgp::text as current_pgp,
+         r.target_pgp_midpoint::text as target_pgp_midpoint,
          r.valuation_gap::text as valuation_gap,
          r.tier,
          r.availability
@@ -92,10 +98,14 @@ const VALUED_LINES_SQL = `
            c.run_id,
            c.current_ps,
            c.target_ps_midpoint,
+           t.current_pgp,
+           t.target_pgp_midpoint,
            c.valuation_gap,
            c.tier,
            c.availability
     from mart.topt_core_result_read c
+    -- #1235: the P/GP columns live on the table; the read view predates them.
+    join mart.topt_core_results t on t.result_id = c.result_id
     left join mart.entity_identity ei
       on ei.entity_id::text = c.listing_id
   ) r
@@ -225,6 +235,8 @@ export async function loadFundValuation(
         weightPct: row.weight_pct === null ? null : String(row.weight_pct),
         currentPs: row.current_ps === null ? null : String(row.current_ps),
         targetPsMidpoint: row.target_ps_midpoint === null ? null : String(row.target_ps_midpoint),
+        currentPgp: row.current_pgp === null ? null : String(row.current_pgp),
+        targetPgpMidpoint: row.target_pgp_midpoint === null ? null : String(row.target_pgp_midpoint),
         valuationGap: row.valuation_gap === null ? null : String(row.valuation_gap),
         tier: row.tier === null ? null : String(row.tier),
         availability: row.availability === null ? null : String(row.availability),

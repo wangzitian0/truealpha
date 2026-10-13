@@ -63,6 +63,7 @@ export default async function HoldingsPage() {
                     <th className="px-3 py-2">Ticker</th>
                     <th className="px-3 py-2 text-right">Weight</th>
                     <th className="px-3 py-2 text-right">P/S</th>
+                    <th className="px-3 py-2 text-right">P/GP</th>
                     <th className="px-3 py-2 text-right">Target mid</th>
                     <th className="px-3 py-2 text-right">Gap</th>
                     <th className="px-3 py-2">GPPE tier</th>
@@ -75,8 +76,20 @@ export default async function HoldingsPage() {
                       <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{line.ticker ?? "—"}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{formatPct(line.weightPct)}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.currentPs)}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.targetPsMidpoint)}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.valuationGap)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.currentPgp) ?? "—"}</td>
+                      {/* #1235: a P/GP row's band and gap are P/GP; a former-band row's are P/S. */}
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {line.targetPgpMidpoint !== null
+                          ? `${formatRatio(line.targetPgpMidpoint)} P/GP`
+                          : line.targetPsMidpoint !== null
+                            ? `${formatRatio(line.targetPsMidpoint)} P/S`
+                            : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {line.valuationGap === null
+                          ? "—"
+                          : `${formatRatio(line.valuationGap)} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
+                      </td>
                       <td className="px-3 py-1.5 text-xs">{line.tier ?? "—"}</td>
                     </tr>
                   ))}

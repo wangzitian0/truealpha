@@ -722,3 +722,41 @@ def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_is
     assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill])
     assert board["count"] == 2
     assert all(i["theme_share"] == "0.5" and i["cik"] == 4242 for i in board["issuers"])
+
+
+def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(theme_database: Any) -> None:
+    """#1235: a 1.0.0 decision's gap divides P/GP. The profile carries the P/GP pair and names
+    the basis, so a caller never reads that gap against the P/S figure beside it."""
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    run_id = "strategy-run:" + "7" * 64
+    theme_database.execute(
+        """
+        insert into mart.strategy_runs (strategy_run_id, content_sha256, strategy_key, strategy_version,
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
+        values (%s, %s, 'large_model_value_v0', '1.0.0', %s, %s, 'preview', %s)
+        """,
+        (run_id, "7" * 64, "a" * 64, "b" * 64, _NEW_CUTOFF),
+    )
+    theme_database.execute(
+        """
+        insert into mart.strategy_decisions (strategy_decision_id, content_sha256, strategy_run_id, issuer_id,
+            cutoff_at, capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
+            current_price_to_gross_profit, target_price_to_gross_profit, valuation_gap, eligible, outcome, rank,
+            target_weight)
+        values (%s, %s, %s, %s, %s, '74439', 'traditional', '1.2420', null, '5.1302', '8.7500', '0.7056', true,
+            'selected', 1, '0.5')
+        """,
+        ("strategy-decision:" + "6" * 64, "6" * 64, run_id, issuer, _NEW_CUTOFF),
+    )
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    assert profile["valuation_basis"] == "price_to_gross_profit"
+    assert profile["current_price_to_gross_profit"] == "5.1302"
+    assert profile["target_price_to_gross_profit"] == "8.7500"
+    assert profile["target_price_to_sales"] is None
+    assert profile["current_price_to_sales"] == "1.2420"
+    assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"
+    assert profile["strategy_decision"]["valuation_gap"] == "0.7056"

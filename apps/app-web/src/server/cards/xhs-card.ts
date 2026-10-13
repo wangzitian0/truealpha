@@ -11,6 +11,7 @@ import {
   formatSignedRatio,
   formatUsdMagnitude,
 } from "@/client/format";
+import { type ValuationBasis, valuationBasisLabel } from "@/contracts/strategyRun";
 
 export const XHS_CARD_WIDTH = 1080;
 export const XHS_CARD_HEIGHT = 1440;
@@ -23,6 +24,10 @@ export interface RankingCardItem {
   displayName: string;
   tier: string | null;
   currentPriceToSales: string | null;
+  /** #1235: the multiple the gap divides (P/GP under definition 1.0.0) and its basis.
+   * Null basis: the decision carries no target, so the card names no multiple. */
+  currentMultiple: string | null;
+  valuationBasis: ValuationBasis | null;
   valuationGap: string | null;
   peg: string | null;
   confidence: string | null;
@@ -60,8 +65,13 @@ export function buildRankingCardJson(data: RankingCardData) {
       display_name: item.displayName,
       rank: item.rank,
       tier: item.tier ?? "—",
+      valuation_basis: item.valuationBasis,
       metrics: [
         { key: "current_price_to_sales", value: item.currentPriceToSales },
+        {
+          key: "current_price_to_gross_profit",
+          value: item.valuationBasis === "price_to_gross_profit" ? item.currentMultiple : null,
+        },
         { key: "valuation_gap", value: item.valuationGap },
         { key: "peg", value: item.peg },
         { key: "confidence", value: item.confidence },
@@ -72,6 +82,8 @@ export function buildRankingCardJson(data: RankingCardData) {
 
 export function renderRankingCardSvg(data: RankingCardData): string {
   const displayItems = data.items.slice(0, 7); // Best fit for 1080x1440 layout
+  // #1235: one run, one basis. The column and the gap name the multiple the gap divides.
+  const basisLabel = valuationBasisLabel(data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null);
   const startY = 360;
   const rowHeight = 110;
 
@@ -83,7 +95,7 @@ export function renderRankingCardSvg(data: RankingCardData): string {
       const gapColor =
         isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
       const formattedGap = formatSignedRatio(item.valuationGap) ?? "—";
-      const formattedPs = formatRatio(item.currentPriceToSales) ?? "—";
+      const formattedPs = formatRatio(item.currentMultiple) ?? "—";
       const formattedPeg = formatRatio(item.peg) ?? "—";
       const formattedConf = formatRatio(item.confidence) ?? "—";
 
@@ -103,7 +115,7 @@ export function renderRankingCardSvg(data: RankingCardData): string {
       <rect x="360" y="32" width="70" height="32" rx="8" fill="#1E293B" />
       <text x="395" y="53" font-size="14" font-weight="500" fill="#38BDF8" text-anchor="middle">${escapeXml(item.tier ?? "—")}</text>
 
-      <!-- P/S -->
+      <!-- Current multiple of the valuation basis -->
       <text x="500" y="55" font-size="20" font-family="monospace" fill="#E2E8F0" text-anchor="middle">${escapeXml(formattedPs)}</text>
 
       <!-- Valuation Gap -->
@@ -168,8 +180,8 @@ export function renderRankingCardSvg(data: RankingCardData): string {
     <text x="56" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">RANK</text>
     <text x="110" y="0" font-size="14" font-weight="600" fill="#64748B">ISSUER</text>
     <text x="395" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">TIER</text>
-    <text x="500" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">P/S</text>
-    <text x="660" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">VALUATION GAP</text>
+    <text x="500" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">${escapeXml(basisLabel)}</text>
+    <text x="660" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">VALUATION GAP (${escapeXml(basisLabel)})</text>
     <text x="800" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">PEG</text>
     <text x="900" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">CONF</text>
   </g>
@@ -199,6 +211,9 @@ export interface EntityCardData {
   cutoffAt: string;
   tier: string | null;
   currentPriceToSales: string | null;
+  /** #1235: the multiple the gap divides (P/GP under definition 1.0.0) and its basis. */
+  currentMultiple: string | null;
+  valuationBasis: ValuationBasis | null;
   valuationGap: string | null;
   peg: string | null;
   gppe: string | null;
@@ -244,6 +259,8 @@ export function buildEntityCardJson(data: EntityCardData) {
     metrics: {
       tier: data.tier ?? "—",
       current_price_to_sales: data.currentPriceToSales,
+      current_price_to_gross_profit: data.valuationBasis === "price_to_gross_profit" ? data.currentMultiple : null,
+      valuation_basis: data.valuationBasis,
       valuation_gap: data.valuationGap,
       peg: data.peg,
       gppe: data.gppe,
@@ -262,7 +279,8 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
   const gapColor =
     isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
   const formattedGap = formatSignedRatio(data.valuationGap) ?? "—";
-  const formattedPs = formatRatio(data.currentPriceToSales) ?? "—";
+  const formattedPs = formatRatio(data.currentMultiple) ?? "—";
+  const basisLabel = valuationBasisLabel(data.valuationBasis);
   const formattedPeg = formatRatio(data.peg) ?? "—";
   const formattedGppe = formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : "—");
   const formattedConf = formatRatio(data.confidence) ?? "—";
@@ -357,10 +375,10 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
       <rect width="465" height="155" rx="16" fill="#131B2E" stroke="#1E293B"/>
       <text x="24" y="32" font-size="13" font-weight="700" fill="#64748B" letter-spacing="1">VALUATION · MODULE 7</text>
       
-      <text x="24" y="70" font-size="15" fill="#94A3B8">Current P/S</text>
+      <text x="24" y="70" font-size="15" fill="#94A3B8">Current ${escapeXml(basisLabel)}</text>
       <text x="24" y="105" font-size="28" font-family="monospace" font-weight="700" fill="#E2E8F0">${escapeXml(formattedPs)}</text>
 
-      <text x="250" y="70" font-size="15" fill="#94A3B8">Valuation Gap</text>
+      <text x="250" y="70" font-size="15" fill="#94A3B8">Valuation Gap (${escapeXml(basisLabel)})</text>
       <text x="250" y="105" font-size="28" font-family="monospace" font-weight="700" fill="${gapColor}">${escapeXml(formattedGap)}</text>
     </g>
 
