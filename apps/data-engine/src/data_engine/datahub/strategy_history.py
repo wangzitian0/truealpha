@@ -154,8 +154,14 @@ class Projection:
     no_outcome: int = 0
     #: Inputs dropped because the payload names no filing for them.
     undated: int = 0
-    #: Share rows put on the share basis of their close by a split after the filing (#1257).
+    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
     split_adjusted: int = 0
+    #: Share counts classed as cover-page counts: their basis date is their own date.
+    share_basis_cover: int = 0
+    #: Share counts classed as statement figures: their basis date is their filing date.
+    share_basis_statement: int = 0
+    #: Share counts that match no stored entry: they fall back to their filing date, which can under-adjust.
+    share_basis_unrecognised: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,8 +176,14 @@ class HistorySummary:
     unresolved_issuers: tuple[str, ...] = ()
     #: Old-generation ids that name a projected entity. Their history is written under the entity UUID.
     merged_ids: int = 0
-    #: Share rows put on the share basis of their close by a split after the filing (#1257).
+    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
     split_adjusted: int = 0
+    #: Share counts classed as cover-page counts (basis date: their own date).
+    share_basis_cover: int = 0
+    #: Share counts classed as statement figures (basis date: their filing date).
+    share_basis_statement: int = 0
+    #: Share counts that match no stored entry (basis date: their filing date, which can under-adjust).
+    share_basis_unrecognised: int = 0
 
 
 # -- cutoffs and the strict date rule ---------------------------------------------------
@@ -468,8 +480,9 @@ def canonical_history_issuers(
     """The canonical projection targets of the given ids, resolved from stored lineage only.
 
     Each id resolves to its entity through ``stored_entity_of``: it reads the aliases, never
-    mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the newest financial-fact observation recorded under any
-    of its ids, so an issuer captured only under its legacy id still resolves, under its UUID.
+    mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the
+    newest financial-fact observation recorded under any of its ids, so an issuer captured only
+    under its legacy id still resolves, under its UUID.
     """
     if known_at.tzinfo is None or known_at.utcoffset() is None:
         raise ValueError("known_at must carry a time zone")
@@ -598,6 +611,8 @@ def project_issuer_rows(
     rows: list[HistoryRow] = []
     no_outcome = undated = split_adjusted = 0
     splits: tuple[SplitEvent, ...] | None = None
+    cover_concepts, statement_concepts = _share_count_concepts(ruleset)
+    bases = {COVER: 0, STATEMENT: 0, UNRECOGNISED: 0}
     for cutoff_at in cutoffs:
         as_of = cutoff_at.astimezone(UTC).date() - timedelta(days=1)
         item = _work_item(issuer, cutoff_at)
@@ -639,14 +654,16 @@ def project_issuer_rows(
             if input_key == _SHARES_KEY and fiscal_period is None and bar is not None:
                 if splits is None:
                     splits = split_events(issuer.ticker)
-                count_as_of = share_count_as_of(
+                basis = share_count_as_of(
                     (payload.get("vintage") or {}).get(_SHARES_KEY),
+                    row.value,
                     [stored[1] for stored in documents.values() if stored is not None],
-                    cover_concepts=_cover_concepts(ruleset),
+                    cover_concepts=cover_concepts,
+                    statement_concepts=statement_concepts,
+                    filed_fallback=row.knowable_at.astimezone(UTC).date(),
                 )
-                on_basis = _on_close_basis(
-                    row, bar, splits, as_of=count_as_of or row.knowable_at.astimezone(UTC).date()
-                )
+                bases[basis.kind] += 1
+                on_basis = _on_close_basis(row, bar, splits, as_of=basis.as_of)
                 split_adjusted += on_basis is not row
                 row = on_basis
             rows.append(_checked(row))
@@ -658,39 +675,101 @@ def project_issuer_rows(
                     )
                 )
             )
-    return Projection(tuple(rows), no_outcome=no_outcome, undated=undated, split_adjusted=split_adjusted)
+    return Projection(
+        tuple(rows),
+        no_outcome=no_outcome,
+        undated=undated,
+        split_adjusted=split_adjusted,
+        share_basis_cover=bases[COVER],
+        share_basis_statement=bases[STATEMENT],
+        share_basis_unrecognised=bases[UNRECOGNISED],
+    )
 
 
-def _cover_concepts(ruleset: ConceptMappingRuleset) -> tuple[ConceptRef, ...]:
-    """The cover-page concepts of the share count: the ``dei`` (Document and Entity Information) ones."""
-    mapping = ruleset.mapping_for(_SHARES_KEY)
-    return () if mapping is None else tuple(concept for concept in mapping.concepts if concept.taxonomy == "dei")
+#: The ruleset fields whose concepts can produce the share count (``build_bundle``).
+_SHARE_COUNT_FIELDS = (_SHARES_KEY, "shares_outstanding_last_resort")
+#: How a share count was classed (``ShareBasis.kind``).
+COVER, STATEMENT, UNRECOGNISED = "cover", "statement", "unrecognised"
+
+
+class ShareBasis(NamedTuple):
+    """The date whose share basis a filed share count is on, and how the count was classed."""
+
+    as_of: date
+    kind: str
+
+
+def _share_count_concepts(ruleset: ConceptMappingRuleset) -> tuple[tuple[ConceptRef, ...], tuple[ConceptRef, ...]]:
+    """(cover concepts, statement concepts) of the share count. Cover is the ``dei`` (Document and
+    Entity Information) taxonomy; every other concept of the share-count fields is a statement figure."""
+    concepts = [
+        concept
+        for field in _SHARE_COUNT_FIELDS
+        if (mapping := ruleset.mapping_for(field)) is not None
+        for concept in mapping.concepts
+    ]
+    return (
+        tuple(concept for concept in concepts if concept.taxonomy == "dei"),
+        tuple(concept for concept in concepts if concept.taxonomy != "dei"),
+    )
+
+
+def _carries(
+    documents: Sequence[Mapping[str, Any]],
+    concepts: Sequence[ConceptRef],
+    *,
+    accession: str,
+    period_end: str,
+    value: Decimal,
+) -> bool:
+    """True when a stored entry of one of ``concepts`` has this accession, this period end and this value."""
+    for facts in documents:
+        for concept in concepts:
+            units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
+            for entries in units.values():
+                for item in entries:
+                    if item.get("accn") != accession or item.get("end") != period_end or item.get("val") is None:
+                        continue
+                    try:
+                        if Decimal(str(item["val"])) == value:
+                            return True
+                    except InvalidOperation:
+                        continue
+    return False
 
 
 def share_count_as_of(
-    entry: object, documents: Sequence[Mapping[str, Any]], *, cover_concepts: Sequence[ConceptRef]
-) -> date | None:
-    """The date whose share basis a filed share count is on, or None when the vintage names no filing.
+    entry: object,
+    value: Decimal,
+    documents: Sequence[Mapping[str, Any]],
+    *,
+    cover_concepts: Sequence[ConceptRef],
+    statement_concepts: Sequence[ConceptRef],
+    filed_fallback: date,
+) -> ShareBasis:
+    """The share basis of a filed share count, from the stored entry that carries it.
 
     A cover-page count is a count as of its own date, its ``period_end``. A statement count (a
     balance-sheet count or a weighted average) is restated for a split before its filing is
     issued (SAB Topic 4C), so it is on the basis of the filing date. The vintage names the filing
-    and the period end, not the concept, so the stored document decides: a cover entry with the
-    same accession and period end makes it a cover count.
+    and the period end, not the concept, so the stored document decides. Only an entry with the
+    same accession, the same period end AND the same value classifies the count: a 20-F can hold
+    a cover count and a restated balance-sheet count of one date under one accession.
+
+    A count that no stored entry carries is UNRECOGNISED. It falls back to its filing date, which
+    under-adjusts a cover count; the projector counts each case, so the summary shows how often.
     """
     if not isinstance(entry, Mapping) or not entry.get("filed"):
-        return None
+        return ShareBasis(filed_fallback, UNRECOGNISED)
     filed = date.fromisoformat(str(entry["filed"]))
     accession, period_end = entry.get("accession"), entry.get("period_end")
     if not accession or not period_end:
-        return filed
-    for facts in documents:
-        for concept in cover_concepts:
-            units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
-            for entries in units.values():
-                if any(item.get("accn") == accession and item.get("end") == period_end for item in entries):
-                    return date.fromisoformat(str(period_end))
-    return filed
+        return ShareBasis(filed, UNRECOGNISED)
+    if _carries(documents, cover_concepts, accession=str(accession), period_end=str(period_end), value=value):
+        return ShareBasis(date.fromisoformat(str(period_end)), COVER)
+    if _carries(documents, statement_concepts, accession=str(accession), period_end=str(period_end), value=value):
+        return ShareBasis(filed, STATEMENT)
+    return ShareBasis(filed, UNRECOGNISED)
 
 
 def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent], *, as_of: date) -> HistoryRow:
@@ -798,6 +877,7 @@ def run_strategy_history(
     )
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
     inserted = already_present = no_outcome = undated = split_adjusted = 0
+    basis_cover = basis_statement = basis_unrecognised = 0
     for issuer in issuers:
         projection = project_issuer_rows(
             issuer,
@@ -814,6 +894,9 @@ def run_strategy_history(
         no_outcome += projection.no_outcome
         undated += projection.undated
         split_adjusted += projection.split_adjusted
+        basis_cover += projection.share_basis_cover
+        basis_statement += projection.share_basis_statement
+        basis_unrecognised += projection.share_basis_unrecognised
     return HistorySummary(
         issuers=len(issuers),
         cutoffs=len(cutoffs),
@@ -822,6 +905,9 @@ def run_strategy_history(
         no_outcome=no_outcome,
         undated=undated,
         split_adjusted=split_adjusted,
+        share_basis_cover=basis_cover,
+        share_basis_statement=basis_statement,
+        share_basis_unrecognised=basis_unrecognised,
     )
 
 

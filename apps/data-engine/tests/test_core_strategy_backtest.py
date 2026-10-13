@@ -176,3 +176,22 @@ def test_unadjusted_bars_without_a_split_adjusted_series_stop_split_derivation()
     with pytest.raises(SplitDerivationError, match="without split-adjusted bars"):
         split_events_of("ONE", unadjusted, {})
     assert split_events_of("NONE", {}, {}) == (), "a symbol with no bar has no split"
+
+
+def test_the_price_book_names_every_symbol_without_derivable_splits() -> None:
+    """Review round 3, item 3c: two symbols fail split derivation in one book. The error names both;
+    a book that stops at the first symbol hides the second until the next run."""
+    day, next_day = date(2024, 6, 7), date(2024, 6, 10)
+    flat = {day: (Decimal("100"), Decimal("100")), next_day: (Decimal("100"), Decimal("100"))}
+    unadjusted = {"ALFA": flat, "BRAV": flat, "GOOD": flat}
+    split_adjusted = {
+        "ALFA": {day: (Decimal("10"), Decimal("10")), next_day: (Decimal("100"), Decimal("100"))},
+        "GOOD": flat,
+    }
+
+    with pytest.raises(SplitDerivationError) as raised:
+        price_book(unadjusted, split_adjusted)
+
+    message = str(raised.value)
+    assert "ALFA" in message and "BRAV" in message
+    assert "GOOD" not in message

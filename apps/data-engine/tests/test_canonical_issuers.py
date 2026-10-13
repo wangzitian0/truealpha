@@ -279,6 +279,9 @@ def test_a_share_count_filed_before_a_split_is_put_on_the_basis_of_the_close(con
     assert after[1] == datetime(2024, 6, 28, 20, 0, tzinfo=UTC), "the product is knowable at the close's session close"
     assert refiled[0] == (5_000_000 + 2024) * 10, "a count filed after the split is already on the new basis"
     assert summary.split_adjusted > 0
+    # Review round 3, item 2: every count here is a us-gaap balance-sheet count, so each is a statement count.
+    assert summary.share_basis_statement > 0
+    assert (summary.share_basis_cover, summary.share_basis_unrecognised) == (0, 0)
 
 
 def test_a_second_projection_with_a_split_in_the_window_adds_and_changes_nothing(connection) -> None:
@@ -525,3 +528,220 @@ def test_every_symbol_without_its_split_adjusted_series_is_named(connection) -> 
 
     assert "H1257X" in str(raised.value) and "H1257Y" in str(raised.value)
     assert "H1257Z" not in str(raised.value)
+
+
+# -- review round 3: which concept a share count came from, and how often each rule fires ------
+
+
+def _project_shares(document: dict, *, ruleset=None):
+    """Project one issuer at the 2024-06-30 quarter end with a 10:1 split on 2024-06-10. No database.
+
+    Returns (the shares row's value, the projection). The close is the 2024-06-28 session.
+    """
+    from datetime import date
+
+    from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+    from data_engine.datahub.strategy_history import HistoryIssuer, LastClose, project_issuer_rows
+    from factors.backtest.corporate_actions import SplitEvent
+    from factors.production_topt import OperatingBranch
+
+    issuer = HistoryIssuer(
+        "issuer:h1257:basis", "", "listing:xnas:h1257v", "H1257V", 1_257_701, OperatingBranch.NON_FINANCIAL
+    )
+    close = LastClose(Decimal("120"), Decimal("0.9"), datetime(2024, 6, 28, 20, 0, tzinfo=UTC))
+    projection = project_issuer_rows(
+        issuer,
+        [datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)],
+        load_facts=lambda _cik: (json.dumps(document).encode(), document),
+        headcount_extractor=lambda _cik, _as_of: None,
+        last_close=lambda _symbol, _cutoff: close,
+        split_events=lambda _symbol: (SplitEvent("H1257V", date(2024, 6, 10), 10, 1),),
+        ruleset=ruleset if ruleset is not None else DEFAULT_RULESET,
+    )
+    (shares,) = [row.value for row in projection.rows if row.input_key == "shares_outstanding"]
+    return shares, projection
+
+
+def _annual_report_document(*, cover_val: int, balance_val: int) -> dict:
+    """A 20-F for the year to 2024-03-31, filed 2024-06-14, after the 2024-06-10 split.
+
+    Its cover count and its balance-sheet count share one date and one accession (NICE's shape).
+    The cover count is as of 2024-03-31, so pre-split; the balance-sheet count is restated.
+    """
+    document = annual_company_facts(base=5000, years=range(2018, 2024))
+    del document["facts"]["us-gaap"]["CommonStockSharesOutstanding"]
+    common = {
+        "end": "2024-03-31",
+        "filed": "2024-06-14",
+        "form": "20-F",
+        "fy": 2024,
+        "fp": "FY",
+        "accn": "0001-nice-20f",
+    }
+    document["facts"]["us-gaap"]["CommonStockSharesOutstanding"] = {
+        "units": {"shares": [{**common, "val": balance_val}]}
+    }
+    document["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {"units": {"shares": [{**common, "val": cover_val}]}}
+    }
+    return document
+
+
+def _statement_first_ruleset():
+    """The governed ruleset with the share-count synonyms in the other order: us-gaap before dei.
+
+    A pointer advance can publish such a ruleset with no deploy, so the code must not rely on the order.
+    """
+    from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+    from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+
+    data = DEFAULT_RULESET.model_dump(mode="json")
+    for mapping in data["mappings"]:
+        if mapping["field"] == "shares_outstanding":
+            mapping["concepts"] = list(reversed(mapping["concepts"]))
+    data["ruleset_id"] = ""
+    data.pop("content_sha256", None)
+    return ConceptMappingRuleset.model_validate(data)
+
+
+def test_a_restated_balance_count_beside_a_cover_count_of_one_date_is_not_classed_as_cover() -> None:
+    """Review round 3, item 1: with us-gaap listed first, the restated balance-sheet count (70,000,000)
+    wins the shared date. Matching on accession and period end alone finds the cover entry beside it
+    and classes the count as a cover count: 700,000,000. Red until the match also needs the value."""
+    shares, projection = _project_shares(
+        _annual_report_document(cover_val=7_000_000, balance_val=70_000_000), ruleset=_statement_first_ruleset()
+    )
+
+    assert shares == 70_000_000
+    assert (projection.share_basis_cover, projection.share_basis_statement) == (0, 1)
+
+
+def test_a_cover_count_beside_a_balance_count_of_one_date_is_put_on_the_basis_of_the_close() -> None:
+    """The same 20-F under the deployed order (dei first): the pre-split cover count wins the date
+    and is put on the basis of the post-split close."""
+    shares, projection = _project_shares(_annual_report_document(cover_val=7_000_000, balance_val=70_000_000))
+
+    assert shares == 70_000_000
+    assert (projection.share_basis_cover, projection.share_basis_statement) == (1, 0)
+
+
+def test_a_weighted_average_fallback_count_is_on_the_basis_of_its_filing() -> None:
+    """Review round 3, item 3a: no point-in-time count at all, so the weighted average answers. It is a
+    statement figure, restated for the split before its 2024-06-14 filing: it is not adjusted again."""
+    document = annual_company_facts(base=5000, years=range(2018, 2024))
+    del document["facts"]["us-gaap"]["CommonStockSharesOutstanding"]
+    document["facts"]["us-gaap"]["WeightedAverageNumberOfSharesOutstandingBasic"] = {
+        "units": {
+            "shares": [
+                {
+                    "start": "2023-04-01",
+                    "end": "2024-03-31",
+                    "filed": "2024-06-14",
+                    "form": "10-K",
+                    "fy": 2024,
+                    "fp": "FY",
+                    "accn": "0001-wavg",
+                    "val": 70_000_000,
+                }
+            ]
+        }
+    }
+
+    shares, projection = _project_shares(document)
+
+    assert shares == 70_000_000
+    assert (projection.share_basis_cover, projection.share_basis_statement, projection.share_basis_unrecognised) == (
+        0,
+        1,
+        0,
+    )
+
+
+def test_a_cover_count_dated_on_the_ex_date_already_holds_the_split() -> None:
+    """Review round 3, item 3b: a cover count as of 2024-06-10, the ex-date, counts the post-split
+    shares. The window starts after the count's date, so the split is not applied a second time."""
+    document = annual_company_facts(base=5000, years=range(2018, 2024))
+    document["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {
+            "units": {
+                "shares": [
+                    {
+                        "end": "2024-06-10",
+                        "filed": "2024-06-14",
+                        "form": "10-Q",
+                        "fy": 2024,
+                        "fp": "Q2",
+                        "accn": "0001-exdate",
+                        "val": 70_000_000,
+                    }
+                ]
+            }
+        }
+    }
+
+    shares, projection = _project_shares(document)
+
+    assert shares == 70_000_000
+    assert projection.share_basis_cover == 1
+
+
+def test_a_count_that_matches_no_stored_entry_falls_back_to_its_filing_date_and_is_counted() -> None:
+    """Review round 3, item 2: a vintage whose accession names no stored entry cannot be classed. It
+    falls back to the filing date, the rule that can under-adjust, and the summary counts it."""
+    document = _annual_report_document(cover_val=7_000_000, balance_val=70_000_000)
+    for concept in (
+        document["facts"]["dei"]["EntityCommonStockSharesOutstanding"],
+        document["facts"]["us-gaap"]["CommonStockSharesOutstanding"],
+    ):
+        concept["units"]["shares"][0]["accn"] = None
+
+    _shares, projection = _project_shares(document)
+
+    assert (projection.share_basis_cover, projection.share_basis_statement, projection.share_basis_unrecognised) == (
+        0,
+        0,
+        1,
+    )
+
+
+def test_the_history_lane_reports_how_each_share_count_was_classed(monkeypatch) -> None:
+    """Review round 3, item 2: the lane's reported summary carries the three counts, so a run shows
+    how often the filing-date fallback, which can under-adjust, fires."""
+    import dagster as dg
+    from data_engine.datahub.strategy_history import HistorySummary
+    from data_engine.lanes import strategy_history as lane
+
+    summary = HistorySummary(
+        issuers=20,
+        cutoffs=48,
+        inserted=0,
+        already_present=0,
+        no_outcome=0,
+        undated=0,
+        share_basis_cover=31,
+        share_basis_statement=12,
+        share_basis_unrecognised=5,
+    )
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def commit(self) -> None:
+            return None
+
+    monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Connection())
+    monkeypatch.setattr(lane, "project_deployed_history", lambda *_args, **_kwargs: summary)
+    context = dg.build_op_context()
+
+    lane.project_strategy_history_op(context, lane.StrategyHistoryConfig(executed_at="2026-10-11T10:07:00+00:00"))
+
+    metadata = context.get_output_metadata("result")
+    assert (metadata["share_basis_cover"], metadata["share_basis_statement"], metadata["share_basis_unrecognised"]) == (
+        31,
+        12,
+        5,
+    )

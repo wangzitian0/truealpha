@@ -53,7 +53,9 @@ def project_strategy_history_op(context: dg.OpExecutionContext, config: Strategy
         f"{summary.inserted} rows inserted, {summary.already_present} already present, "
         f"{summary.no_outcome} cutoffs without a financial outcome, {summary.undated} inputs without a filing date, "
         f"{summary.merged_ids} old-generation ids merged into their canonical issuers, "
-        f"{summary.split_adjusted} share counts put on the share basis of their close"
+        f"{summary.split_adjusted} share counts put on the share basis of their close; share counts classed as "
+        f"cover {summary.share_basis_cover}, statement {summary.share_basis_statement}, "
+        f"unrecognised (filing-date fallback) {summary.share_basis_unrecognised}"
     )
     if summary.unresolved_issuers:
         context.log.warning(f"strategy_history: no stored lineage for {list(summary.unresolved_issuers)}")
@@ -68,6 +70,9 @@ def project_strategy_history_op(context: dg.OpExecutionContext, config: Strategy
             "unresolved_issuers": list(summary.unresolved_issuers),
             "merged_ids": summary.merged_ids,
             "split_adjusted": summary.split_adjusted,
+            "share_basis_cover": summary.share_basis_cover,
+            "share_basis_statement": summary.share_basis_statement,
+            "share_basis_unrecognised": summary.share_basis_unrecognised,
         }
     )
 
