@@ -795,3 +795,46 @@ def test_v0_decisions_carry_no_pgp_value() -> None:
     assert decision.target_price_to_sales is not None
     assert decision.current_price_to_gross_profit is None
     assert decision.target_price_to_gross_profit is None
+
+
+def _recorded_ps_issuer(**revenue: str) -> IssuerInput:
+    """Labor efficiency 1,000 (traditional), P/GP 5 (inside 7.50-10.00 is not needed: below it ranks)."""
+    records = {
+        "gross_profit": (Decimal("1000"), Decimal("0.9")),
+        "total_assets": (Decimal("0"), Decimal("0.9")),
+        "headcount": (Decimal("1"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("5000"), Decimal("0.9")),
+        "last_close": (Decimal("1"), Decimal("0.9")),
+    }
+    if "value" in revenue:
+        records["revenue"] = (Decimal(revenue["value"]), Decimal(revenue.get("confidence", "0.9")))
+    return IssuerInput(issuer_id="issuer:ps", records=records)
+
+
+@pytest.mark.parametrize(
+    "revenue",
+    [{"value": "0"}, {"value": "-1"}, {}, {"value": "100", "confidence": "0.10"}],
+    ids=["zero", "negative", "absent", "low-confidence"],
+)
+def test_v1_records_ps_and_never_gates_on_it(revenue: dict[str, str]) -> None:
+    """#1235 audit: under 1.0.0, P/S is recorded only. A revenue that gives no P/S (zero,
+    negative, absent) or a low-confidence revenue leaves the issuer eligible on P/GP, with
+    P/S recorded as unavailable (None) when it cannot be computed."""
+    decision = _evaluate_v1(_recorded_ps_issuer(**revenue))["issuer:ps"]
+    assert decision.eligible is True
+    assert decision.exclusion_reason is None
+    assert decision.current_price_to_gross_profit == Decimal("5.0000")
+    expected_ps = Decimal("50.0000") if revenue.get("value") == "100" else None
+    assert decision.current_price_to_sales == expected_ps
+
+
+def test_v0_still_gates_on_its_ps_inputs() -> None:
+    """Definition 0.1.0 values by P/S, so a revenue that gives no P/S still excludes there."""
+    [decision] = evaluate_cutoff(
+        [_recorded_ps_issuer(value="0")],
+        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )
+    assert decision.eligible is False

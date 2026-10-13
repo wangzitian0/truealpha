@@ -85,6 +85,18 @@ _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
 )
 
 
+def _recorded_only_input_keys(basis: ValuationBasis) -> frozenset[str]:
+    """Input keys that only P/S consumes when P/S is not the valuation basis (#1235 audit).
+
+    Under definition 1.0.0, P/S is recorded and decides nothing, so its own inputs (revenue)
+    cannot exclude an issuer, by absence or by confidence. Derived from the registry, so the
+    set follows the factors' declared inputs.
+    """
+    if basis is ValuationBasis.PRICE_TO_SALES:
+        return frozenset()
+    return frozenset(_input_keys("price_to_sales")) - frozenset(_input_keys(basis.value))
+
+
 @dataclass(frozen=True)
 class LaborEfficiencyMetric:
     """One named GPPE metric the strategy can rank an issuer on (#1176)."""
@@ -281,12 +293,17 @@ def _evaluate_issuer(
     gap_q = definition.valuation_gap.quantization
     basis = definition.valuation_basis
 
+    recorded_only = _recorded_only_input_keys(basis)
     present = set(issuer.records)
-    missing = next((reason for key, reason in _REQUIRED_INPUT_REASONS if key not in present), None)
+    missing = next(
+        (reason for key, reason in _REQUIRED_INPUT_REASONS if key not in present and key not in recorded_only), None
+    )
     if missing is not None:
         return _excluded(issuer.issuer_id, missing, confidence=None), None
 
-    consumed_confidence = min(confidence for _value, confidence in issuer.records.values())
+    consumed_confidence = min(
+        confidence for key, (_value, confidence) in issuer.records.items() if key not in recorded_only
+    )
     if consumed_confidence < definition.eligibility.minimum_confidence:
         return (
             _excluded(issuer.issuer_id, ExclusionReason.BELOW_CONFIDENCE_FLOOR, confidence=consumed_confidence),
@@ -312,7 +329,9 @@ def _evaluate_issuer(
             _facts_for(issuer, _input_keys(basis.value), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
         )
     )
-    if gppe_result.value is None or ps_result.value is None or multiple_result.value is None:
+    # P/S gates only when it is the valuation basis (then it IS `multiple_result`). Under a P/GP
+    # definition a P/S that cannot be computed is recorded as None and decides nothing.
+    if gppe_result.value is None or multiple_result.value is None:
         reason = next(
             (
                 reason
@@ -340,12 +359,12 @@ def _evaluate_issuer(
     peg_reasons = peg_reason_codes(peg_result)
 
     labor_efficiency = _quantize(gppe_result.value, labor_q)
-    current_ps = _quantize(ps_result.value, ps_q)
+    current_ps = None if ps_result.value is None else _quantize(ps_result.value, ps_q)
     current_multiple = _quantize(multiple_result.value, multiple_q)
     # Read by the 0.1.0 legacy margin gate only (`LEGACY_V0_MARGIN_GATE`, #1235); None when
-    # revenue is not positive, which leaves the band unchanged.
-    revenue = issuer.records["revenue"][0]
-    gross_margin = issuer.records["gross_profit"][0] / revenue if revenue > 0 else None
+    # revenue is absent or not positive, which leaves the band unchanged.
+    revenue = issuer.records.get("revenue")
+    gross_margin = issuer.records["gross_profit"][0] / revenue[0] if revenue is not None and revenue[0] > 0 else None
     tier_result = three_tier_valuation(
         [
             gppe_result.model_copy(update={"value": labor_efficiency}),

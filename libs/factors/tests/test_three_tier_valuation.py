@@ -248,3 +248,23 @@ def test_the_legacy_gate_is_keyed_on_definition_0_1_0_only() -> None:
     assert "gross_margin" not in inspect.signature(ThreeTierValuationDefinition.band_for).parameters
     # Required, so no caller skips the gate by omission (#284's default-parameter defect shape).
     assert inspect.signature(three_tier_valuation).parameters["gross_margin"].default is inspect.Parameter.empty
+
+
+def test_a_relabelled_0_1_0_definition_does_not_pick_up_the_legacy_gate() -> None:
+    """The gate is keyed on the published 0.1.0 content, not on a version label alone: a
+    definition that calls itself 0.1.0 with other content (here a 10 bp cost) has another
+    sha256, so it tiers on labor efficiency only."""
+    corpus = json.loads(_CORPUS_RESOURCE.read_bytes())
+    payload = corpus["strategy_definition"]
+    payload["transaction_cost"]["basis_points"] = "10"
+    relabelled = LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
+    assert relabelled.definition_version == "0.1.0"
+    assert relabelled.content_sha256 != LEGACY_V0_MARGIN_GATE.definition_sha256
+    inputs = [
+        _factor_result("gross_profit_per_employee", "100946", "0.9"),
+        _factor_result("price_to_sales", "1.377", "0.9"),
+    ]
+    result = three_tier_valuation(
+        inputs, entity_id="e1", as_of=_AS_OF, definition=relabelled, gross_margin=Decimal("0.128")
+    )
+    assert result.value == Decimal("4.25") / Decimal("1.377") - Decimal("1")

@@ -90,8 +90,9 @@ class LegacyMarginGate:
 #: #1235: the 0.35 gross-margin gate of strategy definition 0.1.0 (content sha256
 #: e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d). It decided published
 #: runs (production 2026-10-08 selected JNJ then NFLX with it), but it was code, not data, so
-#: the 0.1.0 hash never described it. It applies to definition version 0.1.0 and to no other
-#: version; definition 1.0.0 values by P/GP and has no gate. This is its one definition.
+#: the 0.1.0 hash never described it. It applies only to the definition whose version is 0.1.0
+#: AND whose content sha256 is the published one, so a relabelled definition cannot pick it up;
+#: definition 1.0.0 values by P/GP and has no gate. This is its one definition.
 LEGACY_V0_MARGIN_GATE = LegacyMarginGate(
     definition_version="0.1.0",
     definition_sha256="e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
@@ -113,6 +114,7 @@ def tier_band(
     gate = LEGACY_V0_MARGIN_GATE
     if (
         definition.definition_version != gate.definition_version
+        or definition.content_sha256 != gate.definition_sha256
         or gross_margin is None
         or gross_margin >= gate.minimum_gross_margin
         or band.tier not in gate.gated_tiers
