@@ -66,14 +66,6 @@
       "live": true
     },
     {
-      "path": "/research/conversations",
-      "live": true
-    },
-    {
-      "path": "/research/conversations/[id]",
-      "live": true
-    },
-    {
       "path": "/research/trace",
       "live": true
     },
