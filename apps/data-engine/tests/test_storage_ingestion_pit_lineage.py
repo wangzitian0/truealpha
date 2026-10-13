@@ -30,6 +30,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -54,6 +55,7 @@ from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import CaptureCampaign, CaptureRun, CaptureSchedulePolicy
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
+from truealpha_runtime.testing import skip_or_fail
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_ENGINE_DIR = REPO_ROOT / "apps" / "data-engine"
@@ -321,17 +323,98 @@ def test_status_dimensions_validation_status_honesty() -> None:
 
 @pytest.fixture
 def db_conn() -> Iterator[psycopg.Connection[Any]]:
-    """Yield a connection inside a transaction rolled back after test execution."""
-    if "DATABASE_URL" not in os.environ:
-        pytest.skip("DATABASE_URL not set; skipping live Postgres integration test")
+    """Yield a connection inside a transaction rolled back after test execution.
 
-    url = os.environ["DATABASE_URL"]
+    A bare machine skips. A set DATABASE_URL with Postgres down fails. CI sets DATABASE_URL.
+    A skip there would run none of the PIT and lineage checks (#1268).
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        skip_or_fail("DATABASE_URL not set; skipping live Postgres integration test")
     try:
-        with psycopg.connect(url, autocommit=False) as conn:
-            yield conn
-            conn.rollback()
+        conn = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
-        pytest.skip(f"Live Postgres connection unavailable: {error}")
+        pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+    with conn:
+        yield conn
+        conn.rollback()
+
+
+# Loopback port 1 refuses every connection. The tests below need no database.
+# They never connect to port 5432.
+_CLOSED_PORT_URL = "postgresql://postgres:x@127.0.0.1:1/x"
+
+
+def _bare_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the two variables that CI exports, so a test starts from a bare machine."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TRUEALPHA_REQUIRE_RUNTIME", raising=False)
+
+
+def _db_conn_outcome(request: pytest.FixtureRequest) -> tuple[str, str]:
+    """Run the real `db_conn` fixture. Return the pytest outcome and the reason."""
+    try:
+        request.getfixturevalue("db_conn")
+    except pytest.fail.Exception as error:
+        return "failed", str(error)
+    except pytest.skip.Exception as error:
+        return "skipped", str(error)
+    return "yielded", ""
+
+
+@pytest.mark.parametrize(
+    "runtime_flag",
+    [{}, {"TRUEALPHA_REQUIRE_RUNTIME": "1"}],
+    ids=["flag-unset", "flag-set"],
+)
+def test_db_conn_fails_when_configured_postgres_is_unreachable(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, runtime_flag: dict[str, str]
+) -> None:
+    """A set DATABASE_URL with Postgres down must fail, never skip (#1268).
+
+    A skip turns the standing PIT and lineage checks into a green run that executes nothing.
+    """
+    _bare_machine(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", _CLOSED_PORT_URL)
+    for name, value in runtime_flag.items():
+        monkeypatch.setenv(name, value)
+
+    outcome, reason = _db_conn_outcome(request)
+
+    assert outcome == "failed", f"db_conn {outcome} with an unreachable DATABASE_URL: {reason}"
+    assert reason.startswith("configured Postgres is unreachable: "), reason
+
+
+@pytest.mark.parametrize(
+    ("runtime_flag", "expected_outcome", "expected_reason"),
+    [
+        pytest.param({}, "skipped", "DATABASE_URL not set", id="bare-machine-skips"),
+        pytest.param(
+            {"TRUEALPHA_REQUIRE_RUNTIME": "1"},
+            "failed",
+            "TRUEALPHA_REQUIRE_RUNTIME is set",
+            id="required-runtime-fails",
+        ),
+    ],
+)
+def test_db_conn_without_database_url_skips_only_on_a_bare_machine(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_flag: dict[str, str],
+    expected_outcome: str,
+    expected_reason: str,
+) -> None:
+    """Without DATABASE_URL, a bare machine skips. A required runtime fails. Neither case connects to a server."""
+    _bare_machine(monkeypatch)
+    for name, value in runtime_flag.items():
+        monkeypatch.setenv(name, value)
+
+    with patch("psycopg.connect") as connect:
+        outcome, reason = _db_conn_outcome(request)
+
+    connect.assert_not_called()
+    assert outcome == expected_outcome, f"db_conn {outcome}: {reason}"
+    assert expected_reason in reason, reason
 
 
 def test_pit_schema_ssot_no_clock_defaults_on_knowable_at(db_conn: psycopg.Connection[Any]) -> None:
