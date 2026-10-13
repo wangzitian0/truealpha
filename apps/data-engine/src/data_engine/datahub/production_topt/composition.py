@@ -116,7 +116,9 @@ from data_engine.release_identity import measure as measure_release_identity
 SEMANTIC_TYPES = registered_semantic_types()
 _RELEASE_SEMANTICS = RELEASE_SEMANTICS
 _MAX_ATTEMPTS = 3
-_RISK_FREE_RATE = Decimal("0.05")
+#: The one risk-free rate of the deployed path: the GPPE materialization, the live strategy
+#: replay and the nightly backtest read it here. A6 decision 3 records it as a constant.
+RISK_FREE_RATE = Decimal("0.05")
 
 
 def live_version_for(cutoff: datetime) -> str:
@@ -992,7 +994,7 @@ def run_topt_pipeline(
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=_RISK_FREE_RATE))
+    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=RISK_FREE_RATE))
 
     graded = quality_report.build_report(connection, plan.run_id)
     return ToptPipelineResult(

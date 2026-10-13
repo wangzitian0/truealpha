@@ -7,13 +7,17 @@ fact table and the daily unadjusted bars. It makes zero vendor calls.
 
 Rules this module enforces:
 
-* Cutoffs are the first calendar day of each of the last N months at 00:00:00Z. The tick time
-  of the run derives them. The decision happens at the cutoff. The trade fills at the open of
-  the first trading day of that month (A6).
+* Cutoffs are the first calendar day of each of the last N months at 00:00:00Z, plus each
+  calendar quarter end of the strategy schedule inside that window (#758). The tick time of the
+  run derives them. A quarter-end cutoff is the schedule cutoff the nightly backtest evaluates:
+  it closes its day at the schedule's time (23:59:59Z), and the trade fills at the open of the
+  next session.
 * Strict point in time. A fact is admitted only when its filed date is before the calendar date
   of the cutoff. The row's ``knowable_at`` is the end of the filed day. A fact filed on the
   cutoff date therefore has ``knowable_at > cutoff_at``, and the table CHECK
-  ``knowable_at <= cutoff_at`` rejects it.
+  ``knowable_at <= cutoff_at`` rejects it. The same rule applies to a quarter-end cutoff at
+  23:59:59Z: the close of the quarter-end session itself is not admitted. That is one session
+  earlier than the definition's price rule permits. The deviation only removes information.
 * Each input carries its own filed date and its own fiscal period, exactly where the live
   writer does. There is no blended value.
 * ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
@@ -30,6 +34,7 @@ rows come from ``strategy_bridge.financial_input_rows``, the function the live w
 
 from __future__ import annotations
 
+import calendar
 import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence
@@ -44,6 +49,7 @@ from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.metrics import is_registered_input_key
+from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
@@ -59,7 +65,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     predecessor_ciks,
 )
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
-from data_engine.datahub.strategy_bridge import financial_input_rows
+from data_engine.datahub.strategy_bridge import financial_input_rows, load_strategy_definition
 
 DEFAULT_MONTHS = 36
 
@@ -159,6 +165,46 @@ def monthly_cutoffs(tick: datetime, months: int = DEFAULT_MONTHS) -> list[dateti
     utc_tick = tick.astimezone(UTC)
     newest = utc_tick.year * 12 + utc_tick.month - 1
     return [datetime(index // 12, index % 12 + 1, 1, tzinfo=UTC) for index in range(newest - months + 1, newest + 1)]
+
+
+def history_cutoffs(tick: datetime, months: int, schedule: QuarterlyCutoffSchedule) -> list[datetime]:
+    """The monthly cutoffs of the tick and the schedule's quarter ends from the oldest of them to the tick."""
+    monthly = monthly_cutoffs(tick, months)
+    return sorted(set(monthly) | set(quarter_end_cutoffs(schedule, start=monthly[0], end=tick)))
+
+
+_QUARTER_END_MONTHS = (3, 6, 9, 12)
+
+
+def quarter_end_cutoffs(schedule: QuarterlyCutoffSchedule, *, start: datetime, end: datetime) -> list[datetime]:
+    """The calendar quarter ends of the schedule in ``[start, end]``, oldest first.
+
+    Each cutoff is the last day of a quarter at the schedule's time of day (23:59:59Z, enforced
+    by ``QuarterlyCutoffSchedule``). ``first_cutoff_at`` anchors the LIVE schedule only: it says
+    when live quarterly decisions begin. It does not bound a historical window, so a backtest
+    can evaluate quarter ends before it.
+    """
+    for name, value in (("start", start), ("end", end)):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{name} must carry a time zone")
+    clock = schedule.first_cutoff_at.astimezone(UTC).timetz()
+    first, last = start.astimezone(UTC), end.astimezone(UTC)
+    cutoffs: list[datetime] = []
+    for year in range(first.year, last.year + 1):
+        for month in _QUARTER_END_MONTHS:
+            day = date(year, month, calendar.monthrange(year, month)[1])
+            cutoff = datetime.combine(day, clock)
+            if first <= cutoff <= last:
+                cutoffs.append(cutoff)
+    return cutoffs
+
+
+def is_schedule_cutoff(value: datetime, schedule: QuarterlyCutoffSchedule) -> bool:
+    """True when ``value`` is a calendar quarter end at the schedule's time of day."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return False
+    utc = value.astimezone(UTC)
+    return quarter_end_cutoffs(schedule, start=utc, end=utc) == [utc]
 
 
 def end_of_day(day: date) -> datetime:
@@ -551,13 +597,16 @@ def run_strategy_history(
     headcount_extractor: HeadcountExtractor | None = None,
     last_close: PriceReader | None = None,
     ruleset: ConceptMappingRuleset | None = None,
+    schedule: QuarterlyCutoffSchedule | None = None,
 ) -> HistorySummary:
-    """Project every issuer over the monthly cutoffs of the tick and insert the new rows.
+    """Project every issuer over the cutoffs of the tick and insert the new rows.
 
-    The caller owns the transaction. ``tick`` is the run's tick time, never the wall clock, so
-    a replay of one tick builds the same cutoffs.
+    The cutoffs are the monthly cutoffs of the tick plus the quarter ends of the strategy
+    schedule from the oldest monthly cutoff to the tick. The caller owns the transaction.
+    ``tick`` is the run's tick time, never the wall clock, so a replay of one tick builds the
+    same cutoffs.
     """
-    cutoffs = monthly_cutoffs(tick, months)
+    cutoffs = history_cutoffs(tick, months, schedule if schedule is not None else load_strategy_definition().schedule)
     extractor = headcount_extractor if headcount_extractor is not None else PostgresHeadcountExtractor(connection)
     reader = last_close if last_close is not None else postgres_last_close(connection)
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)

@@ -1,8 +1,10 @@
-"""The strategy history lane (#1139, M3 track H1): historical monthly strategy inputs.
+"""The strategy history lane (#1139, M3 track H1): historical strategy inputs.
 
 One op reads stored SEC company-facts bytes, the headcount fact table and the unadjusted
-daily bars. It writes the inputs of the last 36 monthly cutoffs into
-`staging.strategy_backtest_inputs`. It makes zero vendor calls, so it binds no gateway scope.
+daily bars. It writes the inputs of the last 36 monthly cutoffs, and of each calendar quarter
+end of the strategy schedule in that window (#758), into `staging.strategy_backtest_inputs`.
+The nightly backtest (`lanes.backtest`) evaluates the quarter-end cutoffs. It makes zero vendor
+calls, so it binds no gateway scope.
 
 The tick time of the run derives the cutoffs (`executed_at`), never the wall clock. A replay of
 one tick builds the same cutoffs. The projector is idempotent, so a repeated run adds no row
@@ -41,7 +43,7 @@ class StrategyHistoryConfig(dg.Config):
 
 @dg.op
 def project_strategy_history_op(context: dg.OpExecutionContext, config: StrategyHistoryConfig) -> None:
-    """Project the point-in-time strategy inputs of every consumed issuer over the monthly cutoffs."""
+    """Project the point-in-time strategy inputs of every consumed issuer over the history cutoffs."""
     tick = datetime.fromisoformat(config.executed_at)
     with psycopg.connect(settings.database_url) as connection:
         summary = project_deployed_history(connection, tick=tick, months=config.months)
