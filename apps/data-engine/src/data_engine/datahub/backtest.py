@@ -48,7 +48,9 @@ from factors.backtest.engine import (
     Simulation,
     TargetPortfolio,
     Valuation,
+    benchmark_rules,
     equal_weight_target,
+    equal_weights,
     execution_rules,
     month_end_valuations,
     monthly_turnover,
@@ -60,6 +62,7 @@ from factors.forest import IssuerClass
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
 
+from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
@@ -69,7 +72,7 @@ from data_engine.datahub.strategy_history import (
     quarter_end_cutoffs,
     stored_history_issuers,
 )
-from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
+from data_engine.strategy_backtest_gateway import StrategyBacktestGateway, combine_snapshot_ids
 
 #: The notional scale of a run. Shares are fractional, so no result depends on it.
 NOTIONAL_CAPITAL = Decimal("1000000")
@@ -78,12 +81,13 @@ SHARPE_RISK_FREE_RATE = Decimal(0)
 
 #: What a reader of a run must know about its limits. Stored on every run.
 LIMITATIONS = (
-    "price return only: no dividend source exists",
-    "constant risk-free rate in the labor-efficiency factor (A6 decision 3)",
-    "the universe is the issuers that hold strategy inputs today: survivorship bias",
-    "issuer class and ticker come from today's stored lineage",
-    "each session uses the latest stored vintage of its bar",
-    "an input is admitted only when knowable before the cutoff's calendar date",
+    "Price return only. No dividend source exists, so dividends are not included.",
+    "The labor-efficiency factor uses one constant risk-free rate (A6 decision 3).",
+    "The universe is the issuers that hold strategy inputs today. Issuers that left earlier are absent: survivorship bias.",
+    "Issuer class and ticker come from today's stored lineage, not from each cutoff.",
+    "Each bar and each input uses its latest stored vintage. A later vendor restatement can change history.",
+    "A session is any date with a bar of any universe symbol. No exchange calendar is applied.",
+    "An input is admitted only when it is knowable before the cutoff's calendar date.",
 )
 
 
@@ -139,8 +143,9 @@ def decide(
     for cutoff in cutoffs:
         inputs = [replace(item, issuer_class=_issuer_class(issuers.get(item.issuer_id))) for item in inputs_at(cutoff)]
         evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=risk_free_rate)
-        weights: dict[str, Decimal] = {}
         selected: list[str] = []
+        tickers: list[str] = []
+        evaluator_weights: set[Decimal | None] = set()
         outcomes: dict[str, int] = {}
         for decision in evaluated:
             key = decision.exclusion_reason.value if decision.exclusion_reason else decision.outcome.value
@@ -148,10 +153,17 @@ def decide(
             if decision.outcome is not GoldenDecisionOutcome.SELECTED:
                 continue
             issuer = issuers.get(decision.issuer_id)
-            if issuer is None or decision.target_weight is None:
+            if issuer is None:
                 raise ValueError(f"{decision.issuer_id} is selected at {cutoff.isoformat()} without a listing")
-            weights[issuer.ticker] = decision.target_weight
+            tickers.append(issuer.ticker)
             selected.append(decision.issuer_id)
+            evaluator_weights.add(decision.target_weight)
+        # The evaluator gives each selected issuer 1/N at the sizing quantization, and N such
+        # weights can sum above 1 (6 at six places sum to 1.000002). The engine's equal_weights
+        # gives the same weight to all but the last symbol, which takes the remainder.
+        weights = equal_weights(tickers, definition.sizing.quantization)
+        if tickers and evaluator_weights != {weights[sorted(tickers)[0]]}:
+            raise ValueError(f"the evaluator weights {evaluator_weights} at {cutoff.isoformat()} are not 1/N")
         decisions.append(
             CutoffDecision(
                 cutoff_at=cutoff,
@@ -280,8 +292,15 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     if len(set(tickers)) != len(tickers):
         raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
 
+    # Each cutoff's inputs and their snapshot id come from ONE read, before any decision, so
+    # run_id describes exactly the inputs the decisions used.
     gateway = StrategyBacktestGateway(connection)
-    decisions = decide(cutoffs, gateway.issuer_inputs, issuers, definition, risk_free_rate=RISK_FREE_RATE)
+    inputs_by_cutoff: dict[datetime, list[IssuerInput]] = {}
+    snapshot_ids: list[str] = []
+    for cutoff in cutoffs:
+        inputs_by_cutoff[cutoff], snapshot_id = gateway.issuer_inputs_with_snapshot(cutoff)
+        snapshot_ids.append(snapshot_id)
+    decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, risk_free_rate=RISK_FREE_RATE)
     if not any(decision.weights for decision in decisions):
         outcomes: dict[str, int] = {}
         for decision in decisions:
@@ -309,14 +328,29 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         raise BacktestPending(f"no session after the first cutoff {cutoffs[0].isoformat()} in the daily bars")
     if not strategy.trades:
         raise RuntimeError("the strategy selected issuers but no order filled: no open on any fill session")
-    benchmark = simulate(book, [equal_weight_target(sorted(unadjusted), cutoffs[0])], rules, capital=NOTIONAL_CAPITAL)
+    # The benchmark universe: the issuers with inputs at the first cutoff, as the strategy saw them.
+    first_universe = sorted(
+        issuers[item.issuer_id].ticker for item in inputs_by_cutoff[cutoffs[0]] if item.issuer_id in issuers
+    )
+    if not first_universe:
+        raise RuntimeError(f"no resolved issuer holds inputs at the first cutoff {cutoffs[0].isoformat()}")
+    benchmark = simulate(
+        book,
+        [equal_weight_target(first_universe, cutoffs[0], definition.sizing.quantization)],
+        benchmark_rules(rules),
+        capital=NOTIONAL_CAPITAL,
+    )
 
     binding = {
         "engine_id": ENGINE_ID,
+        # The deployed code identity: the release ref the deployment injects (GIT_COMMIT_SHA),
+        # the value /api/health reports as data_engine_git_sha. ENGINE_ID is only a label.
+        "code_git_commit_sha": settings.git_commit_sha,
         "strategy_key": definition.strategy_id,
         "definition_content_sha256": definition.content_sha256,
         "cutoffs": [cutoff.isoformat() for cutoff in cutoffs],
-        "input_snapshot_id": gateway.run_snapshot_id([cutoff.isoformat() for cutoff in cutoffs]),
+        "input_snapshot_id": combine_snapshot_ids(snapshot_ids),
+        "benchmark_universe": first_universe,
         "issuers": sorted([issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in resolved),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
         "risk_free_rate": str(RISK_FREE_RATE),
@@ -334,6 +368,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         benchmark=benchmark,
         book=book,
         unresolved=sorted(set(issuer_ids) - set(issuers)),
+        benchmark_universe=first_universe,
         cost_basis_points=definition.transaction_cost.basis_points,
     )
     inserted = persist_backtest_run(connection, record)
@@ -422,6 +457,7 @@ def _record(
     benchmark: Simulation,
     book: PriceBook,
     unresolved: Sequence[str],
+    benchmark_universe: Sequence[str],
     cost_basis_points: Decimal,
 ) -> BacktestRecord:
     benchmark_by_session = {item.session: item for item in benchmark.valuations}
@@ -468,7 +504,25 @@ def _record(
             "transaction_cost_basis_points_per_side": str(cost_basis_points),
         },
         "strategy": _decimal_map(strategy_performance),
-        "benchmark": {"rule": BENCHMARK_RULE, **_decimal_map(benchmark_performance)},
+        "benchmark": {
+            "rule": BENCHMARK_RULE,
+            "universe": list(benchmark_universe),
+            "unfilled_order_behavior": "next_session_open",
+            "deferred_fills": [
+                {
+                    "symbol": item.symbol,
+                    "ordered_session": item.ordered_session.isoformat(),
+                    "filled_session": item.filled_session.isoformat(),
+                }
+                for item in benchmark.deferred_fills
+            ],
+            "never_filled": sorted(
+                set(benchmark.fills[0].unfilled_symbols) - {item.symbol for item in benchmark.deferred_fills}
+            )
+            if benchmark.fills
+            else [],
+            **_decimal_map(benchmark_performance),
+        },
         "turnover_monthly": str(turnover_monthly),
         "sharpe_risk_free_rate": str(SHARPE_RISK_FREE_RATE),
         "cutoffs": [_cutoff_entry(decision, fills.get(decision.cutoff_at)) for decision in decisions],
@@ -539,7 +593,7 @@ def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRe
         if existing[0] != record.result_sha256:
             raise RuntimeError(
                 f"{record.run_id} exists with result {existing[0]}, this run computed {record.result_sha256}: "
-                "the same inputs gave a different result; change ENGINE_ID with the engine"
+                "the same code, definition and data gave a different result, so the run is not deterministic"
             )
         return False
     strategy, benchmark = record.strategy_performance, record.benchmark_performance

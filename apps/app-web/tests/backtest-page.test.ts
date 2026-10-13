@@ -34,6 +34,10 @@ process.env.DATABASE_URL = DATABASE_URL;
 const hex64 = () => randomBytes(32).toString("hex");
 const runId = `backtest-run:${hex64()}`;
 const definitionSha = hex64();
+const LIMITATIONS = [
+  "Price return only. No dividend source exists, so dividends are not included.",
+  "Each bar and each input uses its latest stored vintage. A later vendor restatement can change history.",
+];
 
 const admin = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
 await admin.connect();
@@ -47,10 +51,10 @@ try {
      ) values (
        $1, 'large_model_value_v0', '0.1.0', 'strategy-backtest-inputs:2-symbols:0123456789abcdef',
        '2024-04-01', '2024-10-11', 'succeeded', 0.1234, 1.1, 0.2, 0.25, 0.05, 0.6,
-       '{}'::jsonb, now(), $2, 'unadjusted_open_explicit_splits', 'price_return_no_dividends',
-       'equal_weight_buy_and_hold_same_universe', 0.0987, 0.15
+       $3::jsonb, now(), $2, 'unadjusted_open_explicit_splits', 'price_return_no_dividends',
+       'equal_weight_buy_and_hold_first_cutoff_issuers', 0.0987, 0.15
      )`,
-    [runId, definitionSha],
+    [runId, definitionSha, JSON.stringify({ limitations: LIMITATIONS })],
   );
   await admin.query(
     `insert into mart.backtest_valuations (
@@ -75,15 +79,25 @@ try {
   assert(detail.includes("Dividends are not included"), "the detail page must state the claim ceiling in words");
   assert(detail.includes('data-claim-ceiling="price_return_no_dividends"'), "the detail page lost the claim ceiling");
   assert(detail.includes(definitionSha), "the detail page lost the definition hash");
-  assert(detail.includes('data-benchmark-rule="equal_weight_buy_and_hold_same_universe"'), "the detail page lost the benchmark");
+  assert(detail.includes('data-benchmark-rule="equal_weight_buy_and_hold_first_cutoff_issuers"'), "the detail page lost the benchmark");
   assert(detail.includes("CAGR 9.9%"), "the detail page must show the benchmark CAGR");
+  assert(
+    detail.includes("Equal weight over the issuers with inputs at the first cutoff") &&
+      detail.includes("bought at its next open"),
+    "the detail page must say which universe the benchmark holds and how a late symbol fills",
+  );
   assert(!/vectorbt/i.test(detail), "the detail page names VectorBT");
+  for (const item of LIMITATIONS) {
+    assert(detail.includes(item), `the detail page lost the limitation: ${item}`);
+  }
 
   // The list page shows the basis and the ceiling for each run, and no VectorBT claim.
   const list = renderToStaticMarkup(await BacktestListPage());
   assert(list.includes(runId), "the list page lost the inserted run");
   assert(list.includes('data-claim-ceiling="price_return_no_dividends"'), "the list page lost the claim ceiling");
   assert(!/vectorbt/i.test(list), "the list page names VectorBT");
+  assert(list.includes("Limitations (2)"), "the list page lost the count of limitations");
+  assert(list.includes(LIMITATIONS[1]), "the list page lost a limitation");
   console.log("backtest-page: basis, ceiling, definition and benchmark render on both pages — OK");
 } finally {
   await admin.query("delete from mart.backtest_runs where run_id = $1", [runId]).catch(() => {});

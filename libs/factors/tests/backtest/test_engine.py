@@ -18,7 +18,9 @@ from factors.backtest.engine import (
     PriceBook,
     TargetPortfolio,
     UnsupportedRuleError,
+    benchmark_rules,
     equal_weight_target,
+    equal_weights,
     execution_rules,
     fill_session,
     performance,
@@ -36,6 +38,12 @@ def _definition() -> LargeModelValueV0Definition:
         resources.files("truealpha_contracts.data").joinpath("large_model_value_v0_strategy.v1.json").read_bytes()
     )
     return LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
+
+
+def _cost_of(trade, rate: str) -> bool:
+    """The fee is the per-side rate of the notional. A full-spend buy carries the Decimal rounding
+    residual of its last digit in the fee (so cash ends at exactly zero): allow 1e-20 of the notional."""
+    return abs(trade.fee - trade.notional * Decimal(rate)) <= trade.notional * Decimal("1e-20")
 
 
 def _with_cost(definition: LargeModelValueV0Definition, basis_points: str) -> LargeModelValueV0Definition:
@@ -73,7 +81,7 @@ def test_an_order_fills_at_the_open_of_the_next_session_after_the_cutoff_day() -
 
     (trade,) = run.trades
     assert (trade.session, trade.side, trade.price) == (date(2024, 10, 1), "BUY", Decimal("100"))
-    assert trade.fee == trade.notional * Decimal("0.0005")
+    assert _cost_of(trade, "0.0005")
     assert trade.notional + trade.fee == CAPITAL, "the buy and its cost spend all cash, no more"
     assert trade.shares == trade.notional / Decimal("100")
     assert [item.session for item in run.valuations][0] == date(2024, 10, 1), "no valuation before the first fill"
@@ -107,7 +115,8 @@ def test_the_cost_is_read_from_the_definition_not_written_in_the_engine() -> Non
 
     (trade,) = run.trades
     assert rules.cost_rate == Decimal("0.0012")
-    assert trade.fee == trade.notional * Decimal("0.0012")
+    assert _cost_of(trade, "0.0012")
+    assert not _cost_of(trade, "0.0005")
 
 
 def test_an_empty_selection_sells_everything_at_the_next_open_and_keeps_cash() -> None:
@@ -238,10 +247,100 @@ def test_the_benchmark_buys_each_symbol_once_with_equal_weight() -> None:
             "BBB": {day: Bar(Decimal("10"), Decimal("10")) for day in BOOK.bars["AAA"]},
         }
     )
-    run = simulate(book, [equal_weight_target(["BBB", "AAA"], CUTOFF)], execution_rules(_definition()), capital=CAPITAL)
+    sizing = _definition().sizing.quantization
+    run = simulate(
+        book, [equal_weight_target(["BBB", "AAA"], CUTOFF, sizing)], execution_rules(_definition()), capital=CAPITAL
+    )
 
     assert [(trade.symbol, trade.side) for trade in run.trades] == [("AAA", "BUY"), ("BBB", "BUY")]
     assert run.trades[0].notional == run.trades[1].notional
+
+
+@pytest.mark.parametrize("count", range(1, 41))
+def test_equal_weights_sum_to_exactly_one_for_any_universe_size(count: int) -> None:
+    """Audit finding 1: 1/N at 28 digits summed above 1 for N = 18, 19, 24, 26, 35, 36, 38."""
+    sizing = _definition().sizing.quantization
+    symbols = [f"S{index:02d}" for index in range(count)]
+
+    weights = equal_weights(symbols, sizing)
+
+    assert sum(weights.values()) == 1
+    assert len(set(list(weights.values())[:-1])) <= 1, "every weight but the remainder is the same"
+    assert all(abs(weight - Decimal(1) / count) <= Decimal("0.000001") * count for weight in weights.values())
+    simulate(BOOK, [equal_weight_target(symbols, CUTOFF, sizing)], execution_rules(_definition()), capital=CAPITAL)
+
+
+@pytest.mark.parametrize("count", [7, 9, 11, 13, 21, 37])
+def test_cash_never_goes_below_zero_after_a_full_buy(count: int) -> None:
+    """Audit finding 6: scaled buys, paid one by one from cash, left about -3e-22 of cash for 7
+    weights of 1/7. The last buy now spends exactly what remains, so cash ends at zero."""
+    weight = Decimal(1) / Decimal(count)
+    bars = {
+        f"S{index:02d}": {day: Bar(Decimal("97.13") + index, Decimal("98.71") + index) for day in BOOK.bars["AAA"]}
+        for index in range(count)
+    }
+    run = simulate(
+        PriceBook(bars=bars),
+        [TargetPortfolio(CUTOFF, {symbol: weight for symbol in bars})],
+        execution_rules(_definition()),
+        capital=CAPITAL,
+    )
+
+    assert all(item.cash_weight >= 0 for item in run.valuations)
+    assert run.valuations[0].cash_weight == 0, "a full buy spends all cash"
+    assert sum((trade.notional + trade.fee for trade in run.trades), Decimal(0)) == CAPITAL
+
+
+def test_a_loss_on_the_first_session_is_a_drawdown() -> None:
+    """Audit finding 7: the drawdown peak starts at the capital, not at the first close."""
+    falling = PriceBook(
+        bars={
+            "AAA": {
+                date(2024, 10, 1): Bar(Decimal("100"), Decimal("90")),
+                date(2024, 10, 2): Bar(Decimal("90"), Decimal("95")),
+            }
+        }
+    )
+    run = simulate(
+        falling, [TargetPortfolio(CUTOFF, {"AAA": Decimal(1)})], execution_rules(_definition()), capital=CAPITAL
+    )
+
+    first = run.valuations[0]
+    assert first.drawdown == (CAPITAL - first.value) / CAPITAL
+    assert first.drawdown > Decimal("0.09")
+
+
+def test_the_benchmark_buys_a_symbol_without_an_open_at_its_next_open() -> None:
+    """Audit finding 2: a benchmark symbol without an open on the first fill session waits, then fills."""
+    book = PriceBook(
+        bars={
+            "AAA": BOOK.bars["AAA"],
+            "BBB": {
+                date(2024, 10, 2): Bar(Decimal("50"), Decimal("51")),
+                date(2024, 10, 3): Bar(Decimal("52"), Decimal("53")),
+            },
+        }
+    )
+    sizing = _definition().sizing.quantization
+    target = equal_weight_target(["AAA", "BBB"], CUTOFF, sizing)
+    rules = execution_rules(_definition())
+
+    benchmark = simulate(book, [target], benchmark_rules(rules), capital=CAPITAL)
+    strategy_rule = simulate(book, [target], rules, capital=CAPITAL)
+
+    (late,) = benchmark.deferred_fills
+    assert (late.symbol, late.ordered_session, late.filled_session) == ("BBB", date(2024, 10, 1), date(2024, 10, 2))
+    bought = [trade for trade in benchmark.trades if trade.symbol == "BBB"]
+    assert [(trade.session, trade.price) for trade in bought] == [(date(2024, 10, 2), Decimal("50"))]
+    (first_buy,) = [trade for trade in benchmark.trades if trade.symbol == "AAA"]
+    assert bought[0].notional + bought[0].fee == CAPITAL - first_buy.notional - first_buy.fee, (
+        "the cash left after the first fill buys BBB"
+    )
+    assert benchmark.valuations[-1].cash_weight == 0
+    assert strategy_rule.deferred_fills == ()
+    assert [trade.symbol for trade in strategy_rule.trades] == ["AAA"], (
+        "the strategy's own rule, remain_cash, never buys BBB after the fill session"
+    )
 
 
 def test_statistics_use_the_measured_session_count() -> None:

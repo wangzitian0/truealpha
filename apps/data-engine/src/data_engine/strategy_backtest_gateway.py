@@ -117,42 +117,64 @@ class StrategyBacktestGateway:
         ).fetchall()
 
     def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
-        by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
-        periodic: dict[str, dict[str, dict[str, tuple[Decimal, Decimal]]]] = {}
-        for issuer_id, input_key, value, confidence, fiscal_period in self._rows_for_cutoff(cutoff_at):
-            entry = (Decimal(str(value)), Decimal(str(confidence)))
-            if fiscal_period is None:
-                by_issuer.setdefault(issuer_id, {})[input_key] = entry
-                continue
-            periodic.setdefault(issuer_id, {}).setdefault(input_key, {})[fiscal_period] = entry
-            # The latest period also answers as the scalar, so `net_income` stays a
-            # required-input the coverage check and the multiple can both see.
-            scalars = by_issuer.setdefault(issuer_id, {})
-            latest_period = max(periodic[issuer_id][input_key], key=_period_end_key)
-            scalars[input_key] = periodic[issuer_id][input_key][latest_period]
-        return [
-            IssuerInput(
-                issuer_id=issuer_id,
-                records=records,
-                periodic_records=periodic.get(issuer_id, {}),
-            )
-            for issuer_id, records in sorted(by_issuer.items())
-        ]
+        return _issuer_inputs_from_rows(self._rows_for_cutoff(cutoff_at))
 
     def snapshot_id(self, cutoff_at: str | datetime) -> str:
         # The period is part of the snapshot identity: two runs that consumed different
         # years of the same series are not the same snapshot, and before 0043 there was no
         # way to say so.
-        payload = sorted(
-            (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
-            for issuer_id, input_key, value, confidence, fiscal_period in self._rows_for_cutoff(cutoff_at)
-        )
-        return f"strategy-snapshot:{canonical_sha256(payload)}"
+        return _snapshot_id_from_rows(self._rows_for_cutoff(cutoff_at))
+
+    def issuer_inputs_with_snapshot(self, cutoff_at: str | datetime) -> tuple[list[IssuerInput], str]:
+        """The inputs of one cutoff and their snapshot id, from ONE read (#758).
+
+        Two separate reads under READ COMMITTED can see different rows, so a snapshot read
+        after the decisions could describe inputs the decisions never used.
+        """
+        rows = self._rows_for_cutoff(cutoff_at)
+        return _issuer_inputs_from_rows(rows), _snapshot_id_from_rows(rows)
 
     def run_snapshot_id(self, cutoff_ats: list[str]) -> str:
         """One PIT identity for a multi-cutoff run: the content hash of the per-cutoff
         snapshot ids."""
-        return f"strategy-snapshot:{canonical_sha256([self.snapshot_id(cutoff) for cutoff in sorted(cutoff_ats)])}"
+        return combine_snapshot_ids([self.snapshot_id(cutoff) for cutoff in sorted(cutoff_ats)])
+
+
+def combine_snapshot_ids(snapshot_ids: list[str]) -> str:
+    """The run-level snapshot id of per-cutoff snapshot ids given in cutoff order."""
+    return f"strategy-snapshot:{canonical_sha256(snapshot_ids)}"
+
+
+def _issuer_inputs_from_rows(rows: list[tuple[str, str, Any, Any, str | None]]) -> list[IssuerInput]:
+    by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
+    periodic: dict[str, dict[str, dict[str, tuple[Decimal, Decimal]]]] = {}
+    for issuer_id, input_key, value, confidence, fiscal_period in rows:
+        entry = (Decimal(str(value)), Decimal(str(confidence)))
+        if fiscal_period is None:
+            by_issuer.setdefault(issuer_id, {})[input_key] = entry
+            continue
+        periodic.setdefault(issuer_id, {}).setdefault(input_key, {})[fiscal_period] = entry
+        # The latest period also answers as the scalar, so `net_income` stays a
+        # required-input the coverage check and the multiple can both see.
+        scalars = by_issuer.setdefault(issuer_id, {})
+        latest_period = max(periodic[issuer_id][input_key], key=_period_end_key)
+        scalars[input_key] = periodic[issuer_id][input_key][latest_period]
+    return [
+        IssuerInput(
+            issuer_id=issuer_id,
+            records=records,
+            periodic_records=periodic.get(issuer_id, {}),
+        )
+        for issuer_id, records in sorted(by_issuer.items())
+    ]
+
+
+def _snapshot_id_from_rows(rows: list[tuple[str, str, Any, Any, str | None]]) -> str:
+    payload = sorted(
+        (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
+        for issuer_id, input_key, value, confidence, fiscal_period in rows
+    )
+    return f"strategy-snapshot:{canonical_sha256(payload)}"
 
 
 def run_backtest_from_staging(

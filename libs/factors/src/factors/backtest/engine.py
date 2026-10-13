@@ -14,10 +14,16 @@ Rules this module enforces:
   Adjusted prices never enter a return.
 * Each side of a trade pays ``basis_points / 10000`` of its notional.
 * Sells execute before buys. When the cash after the sells cannot pay every buy and its cost,
-  every buy shrinks by one factor, so cash never goes below zero.
+  every buy shrinks by one factor and the last buy spends exactly the cash that remains. Cash
+  never goes below zero, by construction.
 * A target symbol with no open on the fill session stays cash until the next fill
   (``unfilled_order_behavior = remain_cash``). A held symbol with no open on the fill session
   stays held. An empty target sells every holding (``empty_selection_behavior = retain_all_cash``).
+  The benchmark alone uses ``next_session_open``: such a symbol is bought at its next open, and
+  the run records the delay.
+* Equal weights sum to exactly 1. Each weight is ``1/N`` at the definition's sizing quantization,
+  and the last symbol takes the remainder.
+* The drawdown peak starts at the capital, so a loss on the first session is a drawdown.
 * Shares are fractional, so every result is independent of the notional capital.
 
 All arithmetic is ``Decimal``. A rerun on the same inputs gives the same digits.
@@ -25,13 +31,14 @@ All arithmetic is ``Decimal``. A rerun on the same inputs gives the same digits.
 
 from __future__ import annotations
 
+import dataclasses
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 
-from truealpha_contracts.strategy import LargeModelValueV0Definition
+from truealpha_contracts.strategy import DecimalQuantization, LargeModelValueV0Definition
 
 from factors.backtest.corporate_actions import SplitEvent
 
@@ -41,8 +48,12 @@ ENGINE_ID = "factors.backtest.engine:unadjusted-open-explicit-splits:v1"
 PRICE_BASIS = "unadjusted_open_explicit_splits"
 #: What a result can claim. No dividend source exists, so the return omits dividends.
 CLAIM_CEILING = "price_return_no_dividends"
-#: The benchmark of each run: equal weight over the same universe, bought once, then held.
-BENCHMARK_RULE = "equal_weight_buy_and_hold_same_universe"
+#: The benchmark of each run: equal weight over the issuers with inputs at the first cutoff,
+#: bought at the first fill (a symbol without an open there is bought at its next open), then held.
+BENCHMARK_RULE = "equal_weight_buy_and_hold_first_cutoff_issuers"
+#: The unfilled-order behaviors this engine implements. The definition names the first.
+REMAIN_CASH = "remain_cash"
+NEXT_SESSION_OPEN = "next_session_open"
 
 _BASIS_POINTS_PER_UNIT = Decimal(10_000)
 #: Days in a Julian year: converts a calendar span into years.
@@ -61,6 +72,13 @@ class ExecutionRules:
 
     lag_sessions: int
     cost_rate: Decimal
+    #: The definition's sizing quantization: the precision of every target weight.
+    weight_quantization: DecimalQuantization
+    unfilled_order_behavior: str = REMAIN_CASH
+
+    def __post_init__(self) -> None:
+        if self.unfilled_order_behavior not in (REMAIN_CASH, NEXT_SESSION_OPEN):
+            raise UnsupportedRuleError(f"unfilled_order_behavior {self.unfilled_order_behavior!r} is not implemented")
 
 
 def _require(actual: object, expected: object, name: str) -> None:
@@ -90,10 +108,37 @@ def execution_rules(definition: LargeModelValueV0Definition) -> ExecutionRules:
     sizing = definition.sizing
     _require(sizing.rule_id, "equal_weight_selected", "sizing.rule_id")
     _require(sizing.empty_selection_behavior, "retain_all_cash", "sizing.empty_selection_behavior")
+    _require(sizing.quantization.rounding, "half_even", "sizing.quantization.rounding")
     return ExecutionRules(
         lag_sessions=execution.lag_sessions,
         cost_rate=Decimal(cost.basis_points) / _BASIS_POINTS_PER_UNIT,
+        weight_quantization=sizing.quantization,
+        unfilled_order_behavior=execution.unfilled_order_behavior,
     )
+
+
+def benchmark_rules(rules: ExecutionRules) -> ExecutionRules:
+    """The strategy's rules, except that an order without an open fills at the symbol's next open."""
+    return dataclasses.replace(rules, unfilled_order_behavior=NEXT_SESSION_OPEN)
+
+
+def equal_weights(symbols: Sequence[str], quantization: DecimalQuantization) -> dict[str, Decimal]:
+    """Equal weights that sum to exactly 1.
+
+    Each weight is ``1/N`` at ``quantization`` (half-even). The last symbol, in sorted order,
+    takes ``1`` minus the sum of the others, so rounding never makes the sum differ from 1.
+    """
+    unique = sorted(set(symbols))
+    if not unique:
+        return {}
+    quantum = Decimal(1).scaleb(-quantization.decimal_places)
+    weight = (_ONE / Decimal(len(unique))).quantize(quantum, ROUND_HALF_EVEN)
+    weights = {symbol: weight for symbol in unique[:-1]}
+    remainder = _ONE - weight * Decimal(len(unique) - 1)
+    if remainder < 0:
+        raise ValueError(f"{len(unique)} equal weights at {quantization.decimal_places} places exceed 1")
+    weights[unique[-1]] = remainder
+    return weights
 
 
 # -- inputs -----------------------------------------------------------------------------
@@ -186,6 +231,16 @@ class Fill:
 
 
 @dataclass(frozen=True)
+class DeferredFill:
+    """A buy without an open on its fill session, filled at a later open (benchmark only)."""
+
+    symbol: str
+    cutoff_at: datetime
+    ordered_session: date
+    filled_session: date
+
+
+@dataclass(frozen=True)
 class AppliedSplit:
     symbol: str
     ex_date: date
@@ -213,6 +268,7 @@ class Simulation:
     trades: tuple[Trade, ...]
     fills: tuple[Fill, ...]
     splits_applied: tuple[AppliedSplit, ...]
+    deferred_fills: tuple[DeferredFill, ...] = ()
 
 
 # -- simulation -------------------------------------------------------------------------
@@ -241,14 +297,89 @@ def _apply_split(book: _Book, event: SplitEvent) -> AppliedSplit | None:
     return AppliedSplit(event.symbol, event.ex_date, event.numerator, event.denominator, held, after)
 
 
+@dataclass(frozen=True)
+class _Order:
+    """One buy: ``amount`` of value to add to ``symbol`` at ``price``."""
+
+    symbol: str
+    price: Decimal
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class _Pending:
+    """A benchmark buy that waits for the symbol's next open."""
+
+    cutoff_at: datetime
+    ordered_session: date
+    amount: Decimal
+
+
+def _spend(
+    book: _Book, orders: Sequence[_Order], rules: ExecutionRules, cutoff_at: datetime, session: date, value: Decimal
+) -> list[Trade]:
+    """Buy each order and pay its cost. Cash never goes below zero, by construction.
+
+    When cash pays every order and its cost, cash falls by that exact total. Otherwise every
+    order shrinks by one factor, and the last order spends exactly the cash that remains:
+    its cost is that cash less its notional, and cash is then zero.
+    """
+    if not orders:
+        return []
+    rate = rules.cost_rate
+    full = [(order, order.amount, order.amount * rate) for order in orders]
+    need = sum((notional + fee for _order, notional, fee in full), _ZERO)
+    if need < book.cash:
+        legs = full
+        book.cash -= need
+    else:
+        scale = book.cash / need
+        legs = []
+        spent = _ZERO
+        for order, amount, _fee in full[:-1]:
+            notional = amount * scale
+            fee = notional * rate
+            spent += notional + fee
+            legs.append((order, notional, fee))
+        remaining = book.cash - spent
+        if remaining < 0:
+            raise ValueError(f"the scaled buys on {session.isoformat()} spend more than the cash")
+        last = full[-1][0]
+        notional = remaining / (_ONE + rate)
+        legs.append((last, notional, remaining - notional))
+        book.cash = _ZERO
+    trades: list[Trade] = []
+    for order, notional, fee in legs:
+        before = book.shares.get(order.symbol, _ZERO)
+        bought = notional / order.price
+        book.shares[order.symbol] = before + bought
+        trades.append(
+            Trade(
+                cutoff_at,
+                session,
+                order.symbol,
+                "BUY",
+                bought,
+                order.price,
+                notional,
+                fee,
+                before * order.price / value,
+                (before + bought) * order.price / value,
+            )
+        )
+    return trades
+
+
 def _rebalance(
     book: _Book,
     target: TargetPortfolio,
     session: date,
     opens: Mapping[str, Decimal],
     rules: ExecutionRules,
+    pending: dict[str, _Pending],
 ) -> tuple[list[Trade], Fill]:
     book.last.update(opens)
+    pending.clear()
     value = book.cash + book.market_value()
     if value <= 0:
         raise ValueError(f"portfolio value {value} on {session.isoformat()} is not positive")
@@ -292,45 +423,43 @@ def _rebalance(
             )
         )
 
-    wanted: dict[str, Decimal] = {}
+    orders: list[_Order] = []
     for symbol in sorted(target.weights):
         weight = target.weights[symbol]
         if weight <= 0:
+            continue
+        current = book.shares.get(symbol, _ZERO) * book.last.get(symbol, _ZERO)
+        if weight * value <= current:
             continue
         price = opens.get(symbol)
         if price is None:
             if symbol not in unfilled:
                 unfilled.append(symbol)
+            if rules.unfilled_order_behavior == NEXT_SESSION_OPEN:
+                pending[symbol] = _Pending(target.cutoff_at, session, weight * value - current)
             continue
-        current = book.shares.get(symbol, _ZERO) * price
-        if weight * value > current:
-            wanted[symbol] = weight * value - current
-    need = sum(wanted.values(), _ZERO) * (_ONE + rules.cost_rate)
-    scale = _ONE if need <= book.cash else book.cash / need
-    for symbol, amount in wanted.items():
-        price = opens[symbol]
-        notional = amount * scale
-        fee = notional * rules.cost_rate
-        before = book.shares.get(symbol, _ZERO)
-        bought = notional / price
-        book.shares[symbol] = before + bought
-        book.cash -= notional + fee
-        traded += notional
-        trades.append(
-            Trade(
-                target.cutoff_at,
-                session,
-                symbol,
-                "BUY",
-                bought,
-                price,
-                notional,
-                fee,
-                before * price / value,
-                (before + bought) * price / value,
-            )
-        )
+        orders.append(_Order(symbol, price, weight * value - current))
+    bought = _spend(book, orders, rules, target.cutoff_at, session, value)
+    trades.extend(bought)
+    traded += sum((trade.notional for trade in bought), _ZERO)
     return trades, Fill(target.cutoff_at, session, tuple(sorted(unfilled)), traded / (2 * value))
+
+
+def _fill_pending(
+    book: _Book, pending: dict[str, _Pending], session: date, opens: Mapping[str, Decimal], rules: ExecutionRules
+) -> tuple[list[Trade], list[DeferredFill]]:
+    """Buy each waiting benchmark order whose symbol opens on this session."""
+    trades: list[Trade] = []
+    deferred: list[DeferredFill] = []
+    for symbol in sorted(pending):
+        price = opens.get(symbol)
+        if price is None:
+            continue
+        order = pending.pop(symbol)
+        value = book.cash + book.market_value()
+        trades.extend(_spend(book, [_Order(symbol, price, order.amount)], rules, order.cutoff_at, session, value))
+        deferred.append(DeferredFill(symbol, order.cutoff_at, order.ordered_session, session))
+    return trades, deferred
 
 
 def simulate(
@@ -367,8 +496,10 @@ def simulate(
     state = _Book(cash=capital)
     trades: list[Trade] = []
     applied: list[AppliedSplit] = []
+    deferred: list[DeferredFill] = []
+    pending: dict[str, _Pending] = {}
     valuations: list[Valuation] = []
-    peak = _ZERO
+    peak = capital
     for session in book.sessions:
         for event in sorted(splits_on.get(session, ()), key=lambda item: item.symbol):
             record = _apply_split(state, event)
@@ -381,11 +512,14 @@ def simulate(
         }
         due = schedule.get(session)
         if due is not None:
-            made, fill = _rebalance(state, due, session, opens, rules)
+            made, fill = _rebalance(state, due, session, opens, rules, pending)
             trades.extend(made)
             fills.append(fill)
         else:
             state.last.update(opens)
+            made, late = _fill_pending(state, pending, session, opens, rules)
+            trades.extend(made)
+            deferred.extend(late)
         for symbol, series in book.bars.items():
             bar = series.get(session)
             if bar is not None and (close := _price(bar.close)) is not None:
@@ -406,16 +540,16 @@ def simulate(
             )
         )
     fills.sort(key=lambda item: item.cutoff_at)
-    return Simulation(tuple(valuations), tuple(trades), tuple(fills), tuple(applied))
+    return Simulation(tuple(valuations), tuple(trades), tuple(fills), tuple(applied), tuple(deferred))
 
 
-def equal_weight_target(symbols: Sequence[str], cutoff_at: datetime) -> TargetPortfolio:
-    """The benchmark target: the same weight for each symbol of the universe."""
-    unique = sorted(set(symbols))
-    if not unique:
+def equal_weight_target(
+    symbols: Sequence[str], cutoff_at: datetime, quantization: DecimalQuantization
+) -> TargetPortfolio:
+    """The benchmark target: equal weights over the universe that sum to exactly 1."""
+    if not symbols:
         raise ValueError("the benchmark universe is empty")
-    weight = _ONE / Decimal(len(unique))
-    return TargetPortfolio(cutoff_at, {symbol: weight for symbol in unique})
+    return TargetPortfolio(cutoff_at, equal_weights(symbols, quantization))
 
 
 # -- performance ------------------------------------------------------------------------
@@ -484,8 +618,11 @@ __all__ = [
     "CLAIM_CEILING",
     "ENGINE_ID",
     "PRICE_BASIS",
+    "NEXT_SESSION_OPEN",
+    "REMAIN_CASH",
     "AppliedSplit",
     "Bar",
+    "DeferredFill",
     "ExecutionRules",
     "Fill",
     "Performance",
@@ -495,7 +632,9 @@ __all__ = [
     "Trade",
     "UnsupportedRuleError",
     "Valuation",
+    "benchmark_rules",
     "equal_weight_target",
+    "equal_weights",
     "execution_rules",
     "fill_session",
     "month_end_valuations",

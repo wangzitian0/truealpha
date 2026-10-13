@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listBacktestRuns } from "@/server/mart/backtest-repository";
 import { formatPercentFromFraction } from "@/client/format";
+import { BacktestLimitations, runLimitations } from "@/components/backtest-basis";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,10 @@ export default async function BacktestListPage() {
                     <div className="text-amber-400" data-claim-ceiling={r.claim_ceiling ?? ""}>
                       {r.claim_ceiling ?? "not recorded"}
                     </div>
+                    <details className="mt-1 font-sans text-gray-400">
+                      <summary>Limitations ({runLimitations(r).length})</summary>
+                      <BacktestLimitations run={r} />
+                    </details>
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-emerald-400">
                     {r.cagr_monthly !== null ? formatPercentFromFraction(String(r.cagr_monthly)) : "—"}

@@ -42,14 +42,17 @@ ISSUERS = {
         cik=758_000 + ord(name),
         operating_branch=OperatingBranch.NON_FINANCIAL,
     )
-    for name in ("a", "b", "c")
+    for name in ("a", "b", "c", "d")
 }
 #: The last close each issuer reports at each cutoff: 1 or 2 is cheap (selected), 1000 is above its band.
 LAST_CLOSE = {
     Q1: {"a": "1", "b": "2", "c": "1000"},
-    Q2: {"a": "1", "b": "2", "c": "1000"},
-    Q3: {"a": "1000", "b": "2", "c": "1"},
+    # Issuer d holds inputs from Q2 only: it is in the strategy's universe, not in the benchmark's.
+    Q2: {"a": "1", "b": "2", "c": "1000", "d": "1000"},
+    Q3: {"a": "1000", "b": "2", "c": "1", "d": "1000"},
 }
+#: T758C has no bar on the first fill session: the benchmark buys it at its next open.
+NO_BAR = {("T758C", date(2024, 4, 1))}
 
 
 @pytest.fixture
@@ -89,15 +92,17 @@ def _sessions() -> list[date]:
 
 
 def _unadjusted(symbol: str, index: int, day: date) -> Decimal:
-    base = {"T758A": Decimal(1000), "T758B": Decimal(50), "T758C": Decimal(20)}[symbol]
+    base = {"T758A": Decimal(1000), "T758B": Decimal(50), "T758C": Decimal(20), "T758D": Decimal(30)}[symbol]
     price = base * (1 + Decimal("0.002") * index)
     return price / 10 if symbol == "T758A" and day >= SPLIT_DAY else price
 
 
 def _seed_prices(connection: psycopg.Connection, *, shock: Decimal = Decimal(1)) -> None:
-    for symbol in ("T758A", "T758B", "T758C"):
+    for symbol in ("T758A", "T758B", "T758C", "T758D"):
         unadjusted, adjusted = [], []
         for index, day in enumerate(_sessions()):
+            if (symbol, day) in NO_BAR:
+                continue
             close = _unadjusted(symbol, index, day) * (shock if day == LAST_SESSION else 1)
             open_ = close * Decimal("0.995")
             unadjusted.append(PriceBarRecord(symbol, day, open_, close, open_, close, Decimal(1000)))
@@ -190,7 +195,7 @@ def test_the_deployed_op_writes_a_large_model_value_v0_run_with_basis_ceiling_an
     assert run["definition_content_sha256"] == definition.content_sha256
     assert run["price_basis"] == "unadjusted_open_explicit_splits"
     assert run["claim_ceiling"] == "price_return_no_dividends"
-    assert run["benchmark_rule"] == "equal_weight_buy_and_hold_same_universe"
+    assert run["benchmark_rule"] == "equal_weight_buy_and_hold_first_cutoff_issuers"
     assert run["benchmark_cagr"] is not None and run["benchmark_max_dd"] is not None
     assert (run["start_date"], run["end_date"]) == (date(2024, 4, 1), LAST_SESSION)
     payload = run["metrics_payload"]
@@ -227,7 +232,8 @@ def test_orders_fill_at_the_next_session_open_with_the_definition_cost(seeded) -
     assert not [row for row in trades if row[0] == date(2024, 9, 30)], "the cutoff day's own session is not eligible"
     for trade_date, symbol, _side, _shares, price, value, fee in trades:
         assert price == opens[(symbol, trade_date)], "every fill uses the unadjusted open of its session"
-        assert fee == value * Decimal("0.0005")
+        # A full-spend buy carries the last-digit Decimal residual in its fee (cash ends at zero).
+        assert abs(fee - value * Decimal("0.0005")) <= value * Decimal("1e-20")
 
 
 def test_the_held_split_applies_once_and_keeps_the_nav_continuous(seeded) -> None:
@@ -297,3 +303,71 @@ def test_the_same_run_id_with_a_different_result_stops_the_run(seeded) -> None:
     with pytest.raises(RuntimeError, match="different result"):
         _run_op()
     assert seeded["verdicts"][-1][0] is False
+
+
+def test_the_benchmark_holds_the_first_cutoff_issuers_and_records_a_late_fill(seeded) -> None:
+    """Audit finding 2: issuer d enters the inputs at Q2, so it is not in the benchmark. T758C has
+    no bar on 2024-04-01, so the benchmark buys it at its next open and records the delay."""
+    connection = seeded["connection"]
+    payload = _run_row(connection, _run_op()["run_id"])["metrics_payload"]
+
+    benchmark = payload["benchmark"]
+    assert benchmark["universe"] == ["T758A", "T758B", "T758C"]
+    assert benchmark["deferred_fills"] == [
+        {"symbol": "T758C", "ordered_session": "2024-04-01", "filled_session": "2024-04-02"}
+    ]
+    assert benchmark["never_filled"] == []
+    assert payload["binding"]["benchmark_universe"] == ["T758A", "T758B", "T758C"]
+
+
+def test_the_run_id_binds_the_deployed_code_identity(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit finding 3: the same data under another release is another run."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.9.1")
+    first = _run_op()
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.9.2")
+    second = _run_op()
+
+    assert first["run_id"] != second["run_id"]
+    binding = _run_row(seeded["connection"], second["run_id"])["metrics_payload"]["binding"]
+    assert binding["code_git_commit_sha"] == "v0.9.2"
+    assert binding["engine_id"].startswith("factors.backtest.engine:")
+
+
+def test_the_input_snapshot_describes_the_rows_the_decisions_read(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit finding 10: a writer that lands a Q3 row after the decisions must not change run_id.
+
+    Red when the snapshot is read after the decisions: it then hashes a row no decision used.
+    """
+    from data_engine.strategy_backtest_gateway import StrategyBacktestGateway, combine_snapshot_ids
+
+    connection = seeded["connection"]
+    gateway = StrategyBacktestGateway(connection)
+    seen: dict[str, str] = {}
+    real_decide = datahub_backtest.decide
+
+    def decide_then_a_writer_lands(*args, **kwargs):
+        decisions = real_decide(*args, **kwargs)
+        seen["used"] = combine_snapshot_ids([gateway.snapshot_id(cutoff) for cutoff in (Q1, Q2, Q3)])
+        _seed_inputs(connection, {Q3: {"b": "3"}})
+        return decisions
+
+    monkeypatch.setattr(datahub_backtest, "decide", decide_then_a_writer_lands)
+    binding = _run_row(connection, _run_op()["run_id"])["metrics_payload"]["binding"]
+
+    assert binding["input_snapshot_id"] == seen["used"]
+    assert binding["input_snapshot_id"] != combine_snapshot_ids([gateway.snapshot_id(c) for c in (Q1, Q2, Q3)]), (
+        "the writer must change the stored inputs, or this test proves nothing"
+    )
+
+
+def test_the_run_stores_its_limitations(seeded) -> None:
+    """Audit finding 4: the disclosed limitations travel with the run, including vintage and session rules."""
+    from data_engine.datahub.backtest import LIMITATIONS
+
+    payload = _run_row(seeded["connection"], _run_op()["run_id"])["metrics_payload"]
+
+    assert payload["limitations"] == list(LIMITATIONS)
+    assert any("vintage" in item for item in payload["limitations"])
+    assert any("exchange calendar" in item for item in payload["limitations"])

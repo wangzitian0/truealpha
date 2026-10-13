@@ -17,13 +17,32 @@ const CLAIM_CEILING_LABELS: Record<string, string> = {
 };
 
 const BENCHMARK_LABELS: Record<string, string> = {
-  equal_weight_buy_and_hold_same_universe:
-    "Equal weight over the same universe, bought at the first fill and held, on the same prices and costs.",
+  equal_weight_buy_and_hold_first_cutoff_issuers:
+    "Equal weight over the issuers with inputs at the first cutoff. Each is bought at the first fill session open. A symbol without an open on that session is bought at its next open. Then all are held, on the same prices and costs.",
 };
 
 export function describe(labels: Record<string, string>, value: string | null): string {
   if (value === null) return "Not recorded for this run.";
   return labels[value] ?? value;
+}
+
+/** The limitations the nightly lane stored with the run (#758). A run before #758 has none. */
+export function runLimitations(run: BacktestRunRecord): string[] {
+  const stored = (run.metrics_payload ?? {})["limitations"];
+  return Array.isArray(stored) ? stored.map((item) => String(item)) : [];
+}
+
+export function BacktestLimitations({ run }: { run: BacktestRunRecord }) {
+  const limitations = runLimitations(run);
+  return (
+    <ul className="list-disc space-y-1 pl-4" data-backtest-limitations={limitations.length}>
+      {limitations.length === 0 ? (
+        <li>No limitations were recorded for this run.</li>
+      ) : (
+        limitations.map((item) => <li key={item}>{item}</li>)
+      )}
+    </ul>
+  );
 }
 
 function percent(value: number | null): string {
@@ -62,6 +81,10 @@ export function BacktestBasis({ run }: { run: BacktestRunRecord }) {
           </dd>
         </div>
       </dl>
+      <div className="mt-3">
+        <div className="font-semibold uppercase tracking-wider text-gray-400">Limitations</div>
+        <BacktestLimitations run={run} />
+      </div>
     </div>
   );
 }

@@ -719,6 +719,16 @@ def _default_etf_profile_reader() -> EtfProfileReader:
     return PostgresEtfProfileReader(database_url=settings.database_url)
 
 
+def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
+    """The limitations the nightly lane stored with a run (#758), as their own response field.
+
+    A run written before #758 stores none, and the field is then an empty list.
+    """
+    payload = run.get("metrics_payload")
+    stored = payload.get("limitations") if isinstance(payload, dict) else None
+    return [str(item) for item in stored] if isinstance(stored, list) else []
+
+
 class PostgresBacktestReader:
     """Reads backtest runs, valuations, and trades from mart for MCP consumers."""
 
@@ -832,6 +842,8 @@ class PostgresBacktestReader:
                 "error": str(e),
             }
 
+        for run in runs:
+            run["limitations"] = backtest_run_limitations(run)
         return {
             "runs": runs,
             "valuations": valuations,

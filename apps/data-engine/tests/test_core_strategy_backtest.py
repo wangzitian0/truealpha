@@ -138,3 +138,27 @@ def test_the_price_book_refuses_a_split_it_cannot_confirm() -> None:
 
     with pytest.raises(SplitDerivationError):
         price_book(unadjusted, split_adjusted)
+
+
+def test_strategy_weights_sum_to_exactly_one_when_six_are_selected() -> None:
+    """Audit finding 1 on the strategy side: six weights of 0.166667 sum to 1.000002, and the engine
+    refuses a target above 1. The decision step gives the remainder to the last symbol instead."""
+    from factors.backtest.engine import TargetPortfolio
+
+    definition = load_strategy_definition()
+    wider = definition.model_copy(update={"selection": definition.selection.model_copy(update={"selection_count": 6})})
+    names = ["a", "b", "c", "d", "e", "f"]
+    issuers = {issuer.issuer_id: issuer for issuer in (_issuer(name) for name in names)}
+
+    (decision,) = decide(
+        [Q1],
+        lambda _cutoff: [_inputs(name, str(index + 1)) for index, name in enumerate(names)],
+        issuers,
+        wider,
+        risk_free_rate=RISK_FREE_RATE,
+    )
+
+    assert len(decision.weights) == 6
+    assert sum(decision.weights.values()) == 1
+    assert sorted(decision.weights.values())[-1] == Decimal("0.166667")
+    TargetPortfolio(Q1, decision.weights)
