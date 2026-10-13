@@ -94,3 +94,29 @@ def test_complexity_gate_allows_functions_within_threshold(tmp_path: Path) -> No
             baseline_path=baseline_file,
         )
         assert code == 0
+
+
+def test_complexity_visitor_qualnames_prevent_same_name_collisions(tmp_path: Path) -> None:
+    """Methods sharing a name across classes or nested scopes receive distinct qualname keys."""
+    code = """
+class ClassA:
+    def process(self, x):
+        if x > 0:
+            return 1
+        return 0
+
+class ClassB:
+    def process(self, x):
+        if x > 0:
+            for _ in range(5):
+                while x > 1:
+                    x -= 1
+        return x
+"""
+    py_file = tmp_path / "module.py"
+    py_file.write_text(code, encoding="utf-8")
+    results = complexity_gate.scan_functions(root=tmp_path, scan_dirs=(tmp_path,))
+    assert "module.py:ClassA.process" in results
+    assert "module.py:ClassB.process" in results
+    assert results["module.py:ClassA.process"] == 2
+    assert results["module.py:ClassB.process"] == 4

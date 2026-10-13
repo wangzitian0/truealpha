@@ -40,11 +40,17 @@ def measure_ast_complexity(fn_node: ast.FunctionDef | ast.AsyncFunctionDef) -> i
     - With, AsyncWith
     - BoolOp (and/or adds len(values) - 1)
     - MatchValue, MatchCase
+
+    Nested function definitions are not descended into; they are measured separately.
     """
     complexity = 1
-    for node in ast.walk(fn_node):
+    stack = list(fn_node.body)
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
         if isinstance(
-            node,
+            current,
             (
                 ast.If,
                 ast.IfExp,
@@ -57,18 +63,56 @@ def measure_ast_complexity(fn_node: ast.FunctionDef | ast.AsyncFunctionDef) -> i
             ),
         ):
             complexity += 1
-        elif isinstance(node, ast.BoolOp):
-            complexity += len(node.values) - 1
-        elif isinstance(node, (ast.MatchValue, getattr(ast, "match_case", ()))):
+        elif isinstance(current, ast.BoolOp):
+            complexity += len(current.values) - 1
+        elif isinstance(current, (ast.MatchValue, getattr(ast, "match_case", ()))):
             complexity += 1
+
+        for _, value in ast.iter_fields(current):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        stack.append(item)
+            elif isinstance(value, ast.AST):
+                stack.append(value)
     return complexity
+
+
+class ComplexityVisitor(ast.NodeVisitor):
+    """AST visitor that tracks enclosing class/function scopes for distinct qualnames."""
+
+    def __init__(self, rel_path: str) -> None:
+        self.rel_path = rel_path
+        self.scope: list[str] = []
+        self.results: dict[str, int] = {}
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        qualname = ".".join(self.scope + [node.name])
+        key = f"{self.rel_path}:{qualname}"
+        self.results[key] = measure_ast_complexity(node)
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        qualname = ".".join(self.scope + [node.name])
+        key = f"{self.rel_path}:{qualname}"
+        self.results[key] = measure_ast_complexity(node)
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
 
 
 def scan_functions(
     root: Path = ROOT,
     scan_dirs: tuple[Path, ...] = SCAN_DIRS,
 ) -> dict[str, int]:
-    """Scan all non-test python files under scan_dirs and return {rel_path:fn_name -> complexity}."""
+    """Scan all non-test python files under scan_dirs and return {rel_path:qualname -> complexity}."""
     results: dict[str, int] = {}
     for d in scan_dirs:
         for py_file in sorted(d.rglob("*.py")):
@@ -80,10 +124,9 @@ def scan_functions(
                 tree = ast.parse(py_file.read_text(encoding="utf-8"), str(py_file))
             except Exception:
                 continue
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    key = f"{rel_path}:{node.name}"
-                    results[key] = measure_ast_complexity(node)
+            visitor = ComplexityVisitor(rel_path)
+            visitor.visit(tree)
+            results.update(visitor.results)
     return results
 
 
