@@ -123,7 +123,7 @@ jobs:
       # An empty schema means most invariants examine zero rows; the tool prints
       # that rather than reporting ok over an empty set, and `--require-coverage`
       # is deliberately not passed here. It IS passed where the data is real.
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
         with:
           enable-cache: true
       - name: Output invariants (migrated schema)

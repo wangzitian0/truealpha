@@ -53,17 +53,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
-      - uses: actions/cache@v4
-        id: infra2-sdk-cache
-        with:
-          path: ~/.cache/infra2-sdk
-          key: infra2-sdk-${{ hashFiles('uv.lock') }}
-      - name: Cache and verify infra2-sdk wheel
-        run: |
-          python3 tools/infra2_wheel_cache.py
-          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
@@ -110,17 +100,7 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
-      - uses: actions/cache@v4
-        id: infra2-sdk-cache
-        with:
-          path: ~/.cache/infra2-sdk
-          key: infra2-sdk-${{ hashFiles('uv.lock') }}
-      - name: Cache and verify infra2-sdk wheel
-        run: |
-          python3 tools/infra2_wheel_cache.py
-          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
@@ -212,17 +192,7 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
-      - uses: actions/cache@v4
-        id: infra2-sdk-cache
-        with:
-          path: ~/.cache/infra2-sdk
-          key: infra2-sdk-${{ hashFiles('uv.lock') }}
-      - name: Cache and verify infra2-sdk wheel
-        run: |
-          python3 tools/infra2_wheel_cache.py
-          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
@@ -317,17 +287,7 @@ jobs:
       DAGSTER_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/truealpha?options=-csearch_path%3Ddagster
     steps:
       - uses: actions/checkout@v4
-      # #1248: cache and verify infra2-sdk wheel before uv sync to eliminate GitHub 504 flakes.
-      - uses: actions/cache@v4
-        id: infra2-sdk-cache
-        with:
-          path: ~/.cache/infra2-sdk
-          key: infra2-sdk-${{ hashFiles('uv.lock') }}
-      - name: Cache and verify infra2-sdk wheel
-        run: |
-          python3 tools/infra2_wheel_cache.py
-          echo "UV_FIND_LINKS=$HOME/.cache/infra2-sdk" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
         with:
           enable-cache: true
       - run: uv sync --package truealpha-data-engine --frozen

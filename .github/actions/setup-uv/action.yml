@@ -1,0 +1,65 @@
+name: setup-uv with network retries
+description: >-
+  Install uv with astral-sh/setup-uv, and retry the uv download and the uv HTTP
+  requests when GitHub answers with a transient error (#1248).
+  This file is the only place that holds the retry numbers.
+
+# Why this file exists. On 2026-10-12 GitHub Releases answered 504 for about
+# 2 minutes (11:59:41 to 12:01:44 UTC). Four CI jobs failed with every test
+# green, and a red main blocked the staging release (#1248). Two downloads failed:
+#   1. `uv sync` fetched the infra2-sdk wheel from a GitHub release URL.
+#      uv gave up after 3 retries in 10.8 s, 13.5 s and 21.1 s
+#      (runs 38246170467, 38246259896 and 38246154031).
+#   2. astral-sh/setup-uv fetched the uv archive from GitHub Releases.
+#      It gave up after 3 tries in 64 s with "Unexpected HTTP response: 504"
+#      (run 38246259896, job python / gates).
+# Each workflow that installs uv calls this action, so the numbers below
+# exist once. libs/runtime/tests/test_setup_uv_retry.py states the rules and runs them.
+
+inputs:
+  enable-cache:
+    description: Passed to astral-sh/setup-uv without change. The default is the default of that action.
+    required: false
+    default: auto
+
+runs:
+  using: composite
+  steps:
+    # Download 1. uv 0.7.21 and later read UV_HTTP_RETRIES. The default is 3.
+    # uv 0.13.0 waits 1 to 30 s before each retry (base_client.rs, retry_policy).
+    # So 12 retries wait 141 s on average and 270 s at most.
+    # The outage of 2026-10-12 lasted about 123 s.
+    # uv retries only transient errors. A wrong sha256 in uv.lock still fails at once.
+    # The variable covers every later uv request, to PyPI too.
+    - name: Raise the uv HTTP retry count
+      shell: bash
+      run: echo "UV_HTTP_RETRIES=12" >> "$GITHUB_ENV"
+
+    # Download 2. setup-uv downloads uv with 3 tries, 10 to 20 s apart, and has
+    # no input to change that. So this action runs the step up to 3 times.
+    # The first two tries use continue-on-error. The last try does not,
+    # so a failure that lasts still fails the job.
+    - id: uv_try_1
+      uses: astral-sh/setup-uv@v5
+      continue-on-error: true
+      with:
+        enable-cache: ${{ inputs.enable-cache }}
+    - name: Wait before uv try 2
+      if: steps.uv_try_1.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - id: uv_try_2
+      if: steps.uv_try_1.outcome == 'failure'
+      uses: astral-sh/setup-uv@v5
+      continue-on-error: true
+      with:
+        enable-cache: ${{ inputs.enable-cache }}
+    - name: Wait before uv try 3
+      if: steps.uv_try_2.outcome == 'failure'
+      shell: bash
+      run: sleep 60
+    - id: uv_try_3
+      if: steps.uv_try_2.outcome == 'failure'
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: ${{ inputs.enable-cache }}

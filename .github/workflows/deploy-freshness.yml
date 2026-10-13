@@ -94,7 +94,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: git fetch --tags --force origin
-      - uses: astral-sh/setup-uv@v5
+      - uses: ./.github/actions/setup-uv
       - run: uv sync --all-packages
       - name: Check ${{ matrix.environment }} freshness
         run: |
