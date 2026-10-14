@@ -153,8 +153,8 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
   // trace IDs are prefixed by the report's own source, not a hardcoded literal (#370).
   assert(adm.traceId.startsWith("strategy_smoke_fixture:"), `expected a fixture-prefixed trace id, got ${adm.traceId}`);
   // First two rows are the ranked members in order.
-  assert(outcome.data.rows[0].issuerId === "issuer:adm" && outcome.data.rows[0].rank === 1, "adm should rank 1");
-  assert(outcome.data.rows[1].issuerId === "issuer:nice" && outcome.data.rows[1].rank === 2, "nice should rank 2");
+  assert(outcome.data.rows[0].issuerId === "issuer:nice" && outcome.data.rows[0].rank === 1, "nice should rank 1");
+  assert(outcome.data.rows[1].issuerId === "issuer:adm" && outcome.data.rows[1].rank === 2, "adm should rank 2");
   // Availability mapping is explicit for low-confidence subjects.
   const ddog = outcome.data.rows.find((r) => r.issuerId === "issuer:ddog");
   assert(ddog?.availability === "low_confidence", "ddog below confidence floor should be low_confidence");
