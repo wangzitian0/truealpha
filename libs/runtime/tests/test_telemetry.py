@@ -180,13 +180,10 @@ def test_a_missing_service_name_refuses_telemetry() -> None:
     assert _exporters_created() == 0
 
 
-def test_the_sdk_service_name_alias_is_accepted() -> None:
-    providers = init_telemetry(_environ(OTEL_SERVICE_NAME=None, SERVICE_NAME="truealpha-dagster"), set_global=False)
-    assert providers is not None
-    try:
-        assert providers.tracer_provider.resource.attributes["service.name"] == "truealpha-dagster"
-    finally:
-        providers.shutdown()
+def test_the_removed_service_name_alias_does_not_stand_in_for_the_standard_one() -> None:
+    """infra2-sdk 3.4.0 and later read only `OTEL_SERVICE_NAME`; the `SERVICE_NAME` alias is gone."""
+    with pytest.raises(TelemetryConfigError, match="OTEL_SERVICE_NAME"):
+        init_telemetry(_environ(OTEL_SERVICE_NAME=None, SERVICE_NAME="truealpha-dagster"), set_global=False)
 
 
 def test_a_legacy_deployment_environment_key_does_not_stand_in_for_the_standard_one() -> None:

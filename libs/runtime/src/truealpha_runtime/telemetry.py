@@ -28,39 +28,18 @@ a Python service and is not covered here.
 from __future__ import annotations
 
 import os
-import warnings
 from collections.abc import Mapping
 
-from infra2_sdk.runtime.environment import RuntimeEnvKey, resolve_runtime_env, runtime_env_spec
-from infra2_sdk.runtime.otel import OtelSettings, TelemetryProviders, configure_telemetry
-
-#: The `OTEL_RESOURCE_ATTRIBUTES` keys infra2's deploy issues (`ServiceIdentity`) and every alert
-#: filters on. `deployment.environment.name` is the standard key (the legacy `deployment.environment`
-#: is dual-written by infra2 during migration and is not accepted in its place).
-REQUIRED_IDENTITY_ATTRIBUTES: tuple[str, ...] = (
-    "deployment.environment.name",
-    "infra.service.id",
-    "service.version",
-    "infra.iac.ref",
+from infra2_sdk.runtime.otel import (
+    REQUIRED_IDENTITY_ATTRIBUTES,  # noqa: F401  (re-exported: the identity keys the SDK requires)
+    OtelSettings,
+    TelemetryProviders,
+    configure_telemetry,
 )
 
 
 class TelemetryConfigError(RuntimeError):
     """Telemetry is switched on and its configuration is incomplete or contradictory."""
-
-
-def _without_the_behavioural_tier(values: Mapping[str, str]) -> dict[str, str]:
-    """`values` minus `ENVIRONMENT` and its aliases (`ENV`, `APP_ENV`), as the SDK names them.
-
-    `APP_ENV` is the application's *behavioural* tier: infra2 runs a preview stack with
-    `APP_ENV=staging` (staging behaviour, staging dependencies) while the same deploy issues
-    `deployment.environment.name=pr-12` as its *telemetry* identity. Feeding both to the SDK makes it
-    reconcile them, and it refuses the pair ("deployment_environment disagrees with environment
-    tier"), so every preview boot died. The telemetry tier is whatever the issued name says.
-    """
-    spec = runtime_env_spec(RuntimeEnvKey.ENVIRONMENT)
-    hidden = {spec.key.value, *spec.aliases}
-    return {name: value for name, value in values.items() if name not in hidden}
 
 
 def load_telemetry_settings(environ: Mapping[str, str] | None = None) -> OtelSettings | None:
@@ -70,38 +49,18 @@ def load_telemetry_settings(environ: Mapping[str, str] | None = None) -> OtelSet
     on, and on is strict: a missing service name or identity attribute, a malformed
     `OTEL_RESOURCE_ATTRIBUTES`, an invalid sampler or `OTEL_SDK_DISABLED`, or an issued
     `deployment.environment.name` the SDK cannot classify is an error rather than a default.
-    `APP_ENV` takes no part in it (see `_without_the_behavioural_tier`).
+    `APP_ENV` takes no part in it: the SDK reads the telemetry tier from the issued name when
+    `require_issued_identity=True`.
     """
     values = os.environ if environ is None else environ
-    if not resolve_runtime_env(values, RuntimeEnvKey.OTEL_EXPORTER_OTLP_ENDPOINT).value:
-        return None
-    disabled = resolve_runtime_env(values, RuntimeEnvKey.OTEL_SDK_DISABLED).value
-    if disabled is not None and disabled.strip().lower() == "true":
-        return None
-
-    # The SDK's `strict=True` demands an explicit ENVIRONMENT, which is exactly what this view hides, so
-    # it is not used. Non-strict parsing downgrades the same faults to a RuntimeWarning and carries on
-    # with the offending value discarded; turning that warning back into an error keeps them fatal.
-    # (`catch_warnings` is process-global, which is fine at the single-threaded point of startup.)
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", RuntimeWarning)
-            settings = OtelSettings.from_env(_without_the_behavioural_tier(values))
-    except (ValueError, RuntimeWarning) as exc:
-        raise TelemetryConfigError(f"telemetry is enabled but its configuration is invalid: {exc}") from exc
-
-    missing = [key for key in REQUIRED_IDENTITY_ATTRIBUTES if not settings.resource_attributes.get(key, "").strip()]
-    if not resolve_runtime_env(values, RuntimeEnvKey.SERVICE_NAME).value:
-        # The SDK would fall back to `unknown_service`; a service nobody can name is not a service
-        # an alert can be written against.
-        missing.insert(0, RuntimeEnvKey.SERVICE_NAME.value)
-    if missing:
+        settings = OtelSettings.from_env(values, strict=True, require_issued_identity=True)
+    except ValueError as exc:
         raise TelemetryConfigError(
-            f"telemetry is enabled (OTEL_EXPORTER_OTLP_ENDPOINT is set) but the deployment did not "
-            f"supply its identity: {', '.join(missing)} -- names only; infra2's deploy renders "
-            f"OTEL_SERVICE_NAME and these keys of OTEL_RESOURCE_ATTRIBUTES"
-        )
-    return settings
+            f"telemetry is enabled (OTEL_EXPORTER_OTLP_ENDPOINT is set) but its configuration is invalid: {exc} "
+            f"-- names only; infra2's deploy renders OTEL_SERVICE_NAME and these keys of OTEL_RESOURCE_ATTRIBUTES"
+        ) from exc
+    return settings if settings.enabled else None
 
 
 def init_telemetry(environ: Mapping[str, str] | None = None, *, set_global: bool = True) -> TelemetryProviders | None:
