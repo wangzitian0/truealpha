@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""init.md §1 rule 2, armed: the App layer must not compute a metric across rows (#727).
+"""init.md §1 rule 2, armed: the App layer must not compute a metric across rows (#727, #1272).
 
 Rule 2 confines `apps/app-web` to deterministic reformatting — "simple within-row
 arithmetic that doesn't span tables"; anything that "jointly computes a new metric across
@@ -8,9 +8,9 @@ init.md §10 recorded that no code-level check enforced this, and #723 is what t
 `fund-valuation.ts` grew a window-function weighted mean that contradicted its own file
 header, and nothing went red. This is that check.
 
-Scope: the SQL the App's mart readers send. An aggregate in a *database view* is fine —
-that is the database's own read model, not the App layer — so this only reads
-`apps/app-web/src/server/mart/*.ts`.
+Scope: `apps/app-web/src/server/mart`, `apps/app-web/src/app/research`, and
+`apps/app-web/src/components`. An aggregate in a *database view* is fine —
+that is the database's own read model, not the App layer.
 
 Allow-list: a reader that genuinely needs an aggregate names itself in ALLOWED with the
 issue that decided it. Adding a name is the reviewable act; the default is refusal.
@@ -27,7 +27,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MART_READERS = REPO_ROOT / "apps" / "app-web" / "src" / "server" / "mart"
 RESEARCH_ROUTES = REPO_ROOT / "apps" / "app-web" / "src" / "app" / "research"
-SCAN_ROOTS = (MART_READERS, RESEARCH_ROUTES)
+COMPONENTS = REPO_ROOT / "apps" / "app-web" / "src" / "components"
+SCAN_ROOTS = (MART_READERS, RESEARCH_ROUTES, COMPONENTS)
 
 #: Aggregation the App may not perform. `count(` is deliberately absent: counting rows a
 #: reader already holds is presentation, not a new metric.
@@ -39,9 +40,37 @@ FORBIDDEN = (
     re.compile(r"\bover\s*\(", re.IGNORECASE),
 )
 
-#: file name -> the issue that authorized the aggregate. Empty on purpose: every
-#: fund-level aggregate moved to `factors.base.etf_virtual_company` in #727.
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_INLINE_COMMENT_RE = re.compile(r"(?<!:)//.*$")
+
+#: file name or repo-relative path -> the issue that authorized the aggregate.
+#: Empty on purpose: every fund-level aggregate moved to `factors.base.etf_virtual_company` in #727.
 ALLOWED: dict[str, str] = {}
+
+
+def _strip_comments(source: str) -> str:
+    without_blocks = _BLOCK_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), source)
+    return "\n".join(_INLINE_COMMENT_RE.sub("", line) for line in without_blocks.splitlines())
+
+
+def _is_allowed(path: Path) -> bool:
+    if path.name in ALLOWED:
+        return True
+    try:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return False
+    return rel in ALLOWED
+
+
+def _scan_file(path: Path) -> list[tuple[Path, int, str]]:
+    raw = path.read_text(encoding="utf-8")
+    raw_lines = raw.splitlines()
+    cleaned = _strip_comments(raw)
+    hit_lines = {
+        cleaned.count("\n", 0, match.start()) + 1 for pattern in FORBIDDEN for match in pattern.finditer(cleaned)
+    }
+    return [(path, line_no, raw_lines[line_no - 1].strip()) for line_no in sorted(hit_lines)]
 
 
 def offenders(roots: tuple[Path, ...] = SCAN_ROOTS) -> list[tuple[Path, int, str]]:
@@ -51,15 +80,8 @@ def offenders(roots: tuple[Path, ...] = SCAN_ROOTS) -> list[tuple[Path, int, str
             continue
         for ext in ("*.ts", "*.tsx"):
             for path in sorted(root.rglob(ext)):
-                if path.name in ALLOWED:
-                    continue
-                for number, line in enumerate(path.read_text().splitlines(), start=1):
-                    # A comment explaining the rule is not a violation of it.
-                    stripped = line.strip()
-                    if stripped.startswith(("*", "//", "/*")):
-                        continue
-                    if any(pattern.search(line) for pattern in FORBIDDEN):
-                        found.append((path, number, stripped))
+                if not _is_allowed(path):
+                    found.extend(_scan_file(path))
     return found
 
 

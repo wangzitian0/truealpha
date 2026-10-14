@@ -187,6 +187,7 @@
     "libs/factors/tests/test_three_tier_valuation.py": 0.0,
     "libs/runtime/tests/test_app_deploy_request.py": 0.22,
     "libs/runtime/tests/test_app_deploy_transport.py": 0.06,
+    "libs/runtime/tests/test_app_layer_aggregation.py": 0.1,
     "libs/runtime/tests/test_auto_release.py": 1.33,
     "libs/runtime/tests/test_boot.py": 0.0,
     "libs/runtime/tests/test_check_pr_ready.py": 0.0,
