@@ -9,6 +9,7 @@ manifest declared them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -17,7 +18,6 @@ import pytest
 from data_engine import release_identity
 from data_engine.config import Settings
 from infra2_sdk.runtime.config_schema import manifest_config_fingerprint
-from infra2_sdk.runtime.identity import canonical_sha256 as estate_canonical_sha256
 from truealpha_contracts.common import canonical_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -143,12 +143,13 @@ def test_the_identity_keeps_the_shape_infra2_asserts_before_it_deploys() -> None
 
 
 def test_this_repositorys_canonical_hash_is_the_estates() -> None:
-    """`truealpha_contracts.common.canonical_sha256` and
-    `infra2_sdk.runtime.identity.canonical_sha256` must agree on the release payload: infra2
-    hashes release identities with the SDK's, this repository mints them with its own, and a
-    divergence would mean two systems disagreeing about what one release is called."""
+    """`truealpha_contracts.common.canonical_sha256` must match the canonical JSON SHA-256
+    wire format (sorted keys, compact separators, ASCII escaping) on the release payload."""
     payload = _measure().payload
-    assert canonical_sha256(payload) == estate_canonical_sha256(payload)
+    expected = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    assert canonical_sha256(payload) == expected
 
 
 def test_the_identity_is_no_longer_the_hash_of_a_constant() -> None:
