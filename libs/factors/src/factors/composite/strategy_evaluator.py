@@ -361,10 +361,6 @@ def _evaluate_issuer(
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = None if ps_result.value is None else _quantize(ps_result.value, ps_q)
     current_multiple = _quantize(multiple_result.value, multiple_q)
-    # Read by the 0.1.0 legacy margin gate only (`LEGACY_V0_MARGIN_GATE`, #1235); None when
-    # revenue is absent or not positive, which leaves the band unchanged.
-    revenue = issuer.records.get("revenue")
-    gross_margin = issuer.records["gross_profit"][0] / revenue[0] if revenue is not None and revenue[0] > 0 else None
     tier_result = three_tier_valuation(
         [
             gppe_result.model_copy(update={"value": labor_efficiency}),
@@ -373,9 +369,8 @@ def _evaluate_issuer(
         entity_id=issuer.issuer_id,
         as_of=as_of,
         definition=definition,
-        gross_margin=gross_margin,
     )
-    band = tier_band(definition, labor_efficiency, gross_margin=gross_margin)
+    band = tier_band(definition, labor_efficiency)
     target_multiple = _quantize((band.target_lower_bound + band.target_upper_bound) / Decimal(2), tier_q)
     if tier_result.value is None:
         return (

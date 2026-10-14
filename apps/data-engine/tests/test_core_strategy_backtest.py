@@ -17,7 +17,6 @@ from data_engine.datahub.backtest import (
     require_current_share_basis,
     schedule_cutoffs,
 )
-from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import HistoryIssuer
 from data_engine.strategy_backtest_gateway import MarketValueVintage
@@ -72,9 +71,9 @@ def test_a_change_to_a_later_cutoff_changes_no_earlier_decision() -> None:
         Q1: [_inputs("a", "1"), _inputs("b", "2"), _inputs("c", "1000")],
         Q2: [_inputs("a", "1"), _inputs("b", "2"), _inputs("c", "1000")],
     }
-    base = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, risk_free_rate=RISK_FREE_RATE)
+    base = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition)
     inputs[Q2] = [_inputs("a", "1000"), _inputs("b", "2"), _inputs("c", "1")]
-    after = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, risk_free_rate=RISK_FREE_RATE)
+    after = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition)
 
     assert base[0].weights == {"T758A": Decimal("0.5"), "T758B": Decimal("0.5")}
     assert after[0] == base[0], "a Q2 input changed the Q1 decision"
@@ -85,9 +84,7 @@ def test_an_issuer_without_lineage_is_excluded_and_never_traded() -> None:
     definition = load_strategy_definition()
     unknown = IssuerInput(issuer_id="issuer:t758:z", records=_inputs("a", "1").records)
 
-    (decision,) = decide(
-        [Q1], lambda _cutoff: [unknown, _inputs("b", "2")], ISSUERS, definition, risk_free_rate=RISK_FREE_RATE
-    )
+    (decision,) = decide([Q1], lambda _cutoff: [unknown, _inputs("b", "2")], ISSUERS, definition)
 
     assert decision.weights == {"T758B": Decimal("1")}
     assert decision.outcomes["missing_issuer_class"] == 1
@@ -165,7 +162,6 @@ def test_strategy_weights_sum_to_exactly_one_when_six_are_selected() -> None:
         lambda _cutoff: [_inputs(name, str(index + 1)) for index, name in enumerate(names)],
         issuers,
         wider,
-        risk_free_rate=RISK_FREE_RATE,
     )
 
     assert len(decision.weights) == 6

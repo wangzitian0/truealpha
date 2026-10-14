@@ -30,11 +30,9 @@ from data_engine.datahub.strategy_bridge import load_strategy_definition
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.forest import IssuerClass
 from truealpha_contracts.strategy import (
-    HISTORICAL_V0_DEFINITION_RESOURCE,
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
 )
-from truealpha_contracts.strategy import load_strategy_definition as load_packaged_definition
 
 _CUTOFF = datetime(2026, 10, 8, tzinfo=UTC)
 _RATE = Decimal("0.05")
@@ -130,24 +128,3 @@ def test_the_tick_definition_selects_wmt_then_meta_on_the_2026_10_08_head() -> N
     # P/GP above the band's upper bound is rejected: AAPL 25.45 > tech 14.29, JPM 10.15 > 10.00.
     assert by_ticker["AAPL"].outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
     assert by_ticker["JPM"].outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
-
-
-def test_definition_0_1_0_replays_its_published_selection_on_the_same_head() -> None:
-    """History replays exactly: 0.1.0 on the same inputs selects what production published on
-    2026-10-08, JNJ (+0.3715) then NFLX (+0.3645). That run used the 0.35 gross-margin gate,
-    which lived in code and not in the 0.1.0 definition or its hash, so 0.1.0 keeps it as a
-    named legacy rule. The gate keeps COST (100,946 >= 100,000, margin 0.128) in the traditional
-    band, where its P/S 1.386 gives a gap of 1.1500 / 1.3860 - 1 = -0.1703.
-
-    It is also the reason the 1.0.0 acceptance above can fail: these inputs under 0.1.0 do
-    not select WMT and META."""
-    decisions, selected = _replay(load_packaged_definition(HISTORICAL_V0_DEFINITION_RESOURCE))
-    assert [(item.issuer_id, item.rank, item.valuation_gap) for item in selected] == [
-        ("JNJ", 1, Decimal("0.3715")),
-        ("NFLX", 2, Decimal("0.3645")),
-    ]
-    by_ticker = {item.issuer_id: item for item in decisions}
-    assert by_ticker["COST"].tier == "traditional"
-    assert by_ticker["COST"].valuation_gap == Decimal("-0.1703")
-    # 0.1.0 tiers on 100,000 / 300,000: 11 issuers are large_model_native, as recorded on #1235.
-    assert Counter(item.tier for item in decisions)["large_model_native"] == 11

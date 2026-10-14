@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import psycopg
 from data_engine.config import settings
@@ -55,10 +54,7 @@ from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
-
-# The GPPE materialization's own risk-free rate (production_topt/composition.py) -- the
-# tick's strategy replay pins the same constant, supplied explicitly by the caller.
-_RISK_FREE_RATE = Decimal("0.05")
+from truealpha_contracts.strategy import live_risk_free_rate
 
 
 def main() -> int:
@@ -83,7 +79,7 @@ def main() -> int:
             connection,
             cutoff=cutoff,
             executed_at=cutoff,
-            risk_free_rate=_RISK_FREE_RATE,
+            risk_free_rate=live_risk_free_rate(cutoff),
             capture_run_id=result.run_id,
         )
         # #378/truealpha#271: bind the run to its release manifest on the A1 evidence

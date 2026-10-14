@@ -74,9 +74,9 @@ const selected = report.decisions.find((d) => d.issuer_id === "issuer:adm" && d.
 assert(selected !== undefined, "expected issuer:adm at the March cutoff");
 assert(selected.outcome === "selected", "expected issuer:adm to be selected");
 assert(selected.tier === "traditional", "expected traditional tier");
-assert(selected.valuation_gap === "1.6388", `unexpected valuation_gap ${selected.valuation_gap}`);
+assert(selected.valuation_gap === "0.2590", `unexpected valuation_gap ${selected.valuation_gap}`);
 assert(selected.confidence === "0.90", `unexpected confidence ${selected.confidence}`);
-assert(selected.rank === 1, "expected rank 1");
+assert(selected.rank === 2, "expected rank 2");
 assert(selected.target_weight === "0.500000", `unexpected target_weight ${selected.target_weight}`);
 
 const excluded = report.decisions.find((d) => d.exclusion_reason === "below_confidence_floor");

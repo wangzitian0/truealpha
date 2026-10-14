@@ -1,8 +1,8 @@
 {
-  "card_id": "card:433155ec5d20ead6c24264816ee144463b949488af88279c4c99989d5a6244ee",
+  "card_id": "card:e733b96da5dbf997a9d00cba35691c2483f53a7b18a47465a1c02627f1475e87",
   "card_kind": "comparison",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:6b96a63bf410da71b263e6114e3258e367e63186e69df99c06b45f382aeec39f",
+  "generated_from_report_id": "report:04aa63cce874792cb635f0dfc44ad04c2d9814549636ae4dd878b8033fa44b75",
   "research_risk_note": "Side-by-side comparison of independently materialized results at one cutoff; no cross-issuer metric is computed for this card.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
@@ -24,11 +24,45 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:adm:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
           "value": "traditional"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_gross_profit",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "7.3046"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "target_price_to_gross_profit",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "8.7500"
         },
         {
           "availability": "available",
@@ -41,28 +75,11 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:adm:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
           "value": "0.4580"
-        },
-        {
-          "availability": "available",
-          "confidence": "0.90",
-          "currency": null,
-          "cutoff_at": "2026-06-30T23:59:59Z",
-          "factor_version": "large_model_value_v0",
-          "label": "target_price_to_sales",
-          "period": "2026-06-30",
-          "trace": {
-            "factor_execution_id": null,
-            "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:adm:2026-06-30T23:59:59Z",
-            "snapshot_id": null
-          },
-          "unit": null,
-          "value": "1.1500"
         },
         {
           "availability": "available",
@@ -75,11 +92,11 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:adm:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
-          "value": "1.5109"
+          "value": "0.1979"
         }
       ],
       "rank": null,
@@ -102,11 +119,45 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:nice:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:nice:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
-          "value": "tech"
+          "value": "traditional"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_gross_profit",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "2.8065"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "target_price_to_gross_profit",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "8.7500"
         },
         {
           "availability": "available",
@@ -119,28 +170,11 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:nice:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:nice:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
           "value": "1.8639"
-        },
-        {
-          "availability": "available",
-          "confidence": "0.90",
-          "currency": null,
-          "cutoff_at": "2026-06-30T23:59:59Z",
-          "factor_version": "large_model_value_v0",
-          "label": "target_price_to_sales",
-          "period": "2026-06-30",
-          "trace": {
-            "factor_execution_id": null,
-            "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:nice:2026-06-30T23:59:59Z",
-            "snapshot_id": null
-          },
-          "unit": null,
-          "value": "4.2500"
         },
         {
           "availability": "available",
@@ -153,11 +187,11 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:16f5e0b8839e:issuer:nice:2026-06-30T23:59:59Z",
+            "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:nice:2026-06-30T23:59:59Z",
             "snapshot_id": null
           },
           "unit": null,
-          "value": "1.2802"
+          "value": "2.1178"
         }
       ],
       "rank": null,

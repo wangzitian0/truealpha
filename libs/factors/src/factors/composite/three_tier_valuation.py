@@ -17,11 +17,7 @@ Tier band thresholds and target multiple ranges are **not** hardcoded here — t
 caller supplies the explicit, versioned strategy definition from
 `truealpha_contracts.strategy`, matching #21's "no implicit defaults" rule.
 
-One legacy rule lives here, and only here: `LEGACY_V0_MARGIN_GATE`. Strategy definition
-0.1.0 was published with a gross-margin gate that was code, not definition data. It stays
-for that one definition version so that its history replays exactly (#1235). Definition
-1.0.0 values by P/GP, which removes the margin effect, and has no gate. Band
-lookup and target-midpoint arithmetic port the logic proven by the S6 tiny
+Band lookup and target-midpoint arithmetic port the logic proven by the S6 tiny
 kernel of the retired batch machine (#169, closed; the kernel itself was removed
 with that machine in #791, and git history holds it).
 
@@ -37,11 +33,9 @@ built from, mirroring how confidence is bounded by min() of inputs.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
     PriceToGrossProfitTierBand,
@@ -71,56 +65,13 @@ def _labor_efficiency(inputs: Sequence[FactorResult], entity_id: str) -> FactorR
     return matches[0] if matches else None
 
 
-@dataclass(frozen=True)
-class LegacyMarginGate:
-    """A tier rule that a published definition applied in code, outside its content hash.
-
-    An issuer whose gross margin (gross profit / revenue) is below `minimum_gross_margin` cannot
-    take a band in `gated_tiers`; it takes the `fallback_tier` band. An unknown margin (no
-    positive revenue) leaves the band unchanged, as the published code did.
-    """
-
-    definition_version: str
-    definition_sha256: str
-    minimum_gross_margin: Decimal
-    gated_tiers: frozenset[ValuationTier]
-    fallback_tier: ValuationTier
-
-
-#: #1235: the 0.35 gross-margin gate of strategy definition 0.1.0 (content sha256
-#: e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d). It decided published
-#: runs (production 2026-10-08 selected JNJ then NFLX with it), but it was code, not data, so
-#: the 0.1.0 hash never described it. It applies only to the definition whose version is 0.1.0
-#: AND whose content sha256 is the published one, so a relabelled definition cannot pick it up;
-#: definition 1.0.0 values by P/GP and has no gate. This is its one definition.
-LEGACY_V0_MARGIN_GATE = LegacyMarginGate(
-    definition_version="0.1.0",
-    definition_sha256="e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
-    minimum_gross_margin=Decimal("0.35"),
-    gated_tiers=frozenset({ValuationTier.TECH, ValuationTier.LARGE_MODEL_NATIVE}),
-    fallback_tier=ValuationTier.TRADITIONAL,
-)
-
-
 def tier_band(
     definition: LargeModelValueV0Definition,
     labor_efficiency: Decimal,
-    *,
-    gross_margin: Decimal | None,
 ) -> ProvisionalTierBand | PriceToGrossProfitTierBand:
-    """The band an issuer takes: the definition's band lookup, then the legacy gate of 0.1.0 only."""
+    """The band an issuer takes from the definition's band lookup."""
 
-    band = definition.tier_valuation.band_for(labor_efficiency)
-    gate = LEGACY_V0_MARGIN_GATE
-    if (
-        definition.definition_version != gate.definition_version
-        or definition.content_sha256 != gate.definition_sha256
-        or gross_margin is None
-        or gross_margin >= gate.minimum_gross_margin
-        or band.tier not in gate.gated_tiers
-    ):
-        return band
-    return next(item for item in definition.tier_valuation.bands if item.tier is gate.fallback_tier)
+    return definition.tier_valuation.band_for(labor_efficiency)
 
 
 @factor("three_tier_valuation", kind="composite", module=7)
@@ -130,10 +81,8 @@ def three_tier_valuation(
     entity_id: str,
     as_of: datetime,
     definition: LargeModelValueV0Definition,
-    gross_margin: Decimal | None,
 ) -> FactorResult:
-    """`gross_margin` is required so that no caller can skip the 0.1.0 legacy gate by omission:
-    pass the issuer's gross profit / revenue, or None when revenue is not positive."""
+    """Evaluate three-tier valuation against the single-source strategy definition."""
     gppe = _labor_efficiency(inputs, entity_id)
     basis = definition.valuation_basis.value
     multiple = _result(basis, inputs, entity_id)
@@ -174,7 +123,7 @@ def three_tier_valuation(
             flags=[f"nonpositive_{basis}"],
         )
 
-    band = tier_band(definition, gppe.value, gross_margin=gross_margin)
+    band = tier_band(definition, gppe.value)
     midpoint = (band.target_lower_bound + band.target_upper_bound) / Decimal(2)
     valuation_gap = midpoint / current_multiple - Decimal(1)
     confidence = min(gppe.confidence, multiple.confidence)

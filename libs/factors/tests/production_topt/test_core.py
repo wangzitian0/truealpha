@@ -22,9 +22,8 @@ from factors.production_topt import (
 from pydantic import ValidationError
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import (
-    HISTORICAL_V0_DEFINITION_RESOURCE,
+    ValuationBasis,
     load_live_strategy_definition,
-    load_strategy_definition,
 )
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -426,18 +425,24 @@ def test_rows_stamp_the_strategy_definition_that_supplied_the_bands() -> None:
 
 
 def test_the_core_engine_refuses_a_ps_basis_definition() -> None:
+    from unittest.mock import MagicMock
+
     snapshot = _snapshot()
     gppe_result = compute_topt_gppe(
         snapshot,
         invocation_id=f"topt-gppe-invocation:{'f' * 64}",
         gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
     )
+    ps_definition = MagicMock(
+        valuation_basis=ValuationBasis.PRICE_TO_SALES,
+        definition_version="0.1.0",
+    )
     with pytest.raises(ValueError, match="values by P/GP"):
         compute_topt_core(
             snapshot,
             gppe_result,
             invocation_id=f"topt-core-invocation:{'e' * 64}",
-            definition=load_strategy_definition(HISTORICAL_V0_DEFINITION_RESOURCE),
+            definition=ps_definition,
         )
 
 

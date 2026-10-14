@@ -215,7 +215,7 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
     assert report.governed is False
     selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
     assert selected.outcome.value == "selected"
-    assert str(selected.valuation_gap) == "1.6388"
+    assert str(selected.valuation_gap) == "0.2590"
     assert selected.confidence is not None
 
 
