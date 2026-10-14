@@ -722,6 +722,81 @@ def test_a_projector_commit_between_the_two_reads_stops_the_run_instead_of_passi
     assert _run_backtest(connection).inserted is True
 
 
+# -- #1255: the input age limit of the definition -----------------------------------------------------
+
+#: The limit that the live definition declares. The first test of this block proves the fixture uses it.
+INPUT_AGE_LIMIT_DAYS = 455
+
+
+def _age_the_input(connection: psycopg.Connection, issuer_id: str, cutoff: datetime, input_key: str, days: int) -> None:
+    """The winning row of one input becomes knowable `days` days before the cutoff."""
+    updated = connection.execute(
+        "update staging.strategy_backtest_inputs set knowable_at = %s "
+        "where issuer_id = %s and cutoff_at = %s and input_key = %s",
+        (cutoff - timedelta(days=days), issuer_id, cutoff, input_key),
+    ).rowcount
+    assert updated == 1, f"the fixture holds one {input_key} of this issuer at {cutoff.isoformat()}"
+
+
+def _first_cutoff(connection: psycopg.Connection) -> dict[str, Any]:
+    return _run_row(connection, _run_op()["run_id"])["metrics_payload"]["cutoffs"][0]
+
+
+def test_the_fixture_uses_the_input_age_limit_of_the_live_definition() -> None:
+    assert load_strategy_definition().eligibility.maximum_input_age_days == INPUT_AGE_LIMIT_DAYS
+
+
+@pytest.mark.parametrize("input_key", ["gross_profit", "total_assets", "headcount", "shares_outstanding", "last_close"])
+def test_a_required_input_older_than_the_limit_excludes_the_issuer_at_that_cutoff(seeded, input_key: str) -> None:
+    """Issuer b holds the input 456 days before Q1. Issuer a holds the same input 455 days before Q1.
+
+    The nightly op reads the stored rows through the gateway, so the limit must act on them. Red on main:
+    b was selected beside a, because no code read `maximum_input_age_days`.
+    """
+    connection, issuers = seeded["connection"], seeded["issuers"]
+    _age_the_input(connection, issuers["a"].canonical_issuer_id, Q1, input_key, INPUT_AGE_LIMIT_DAYS)
+    _age_the_input(connection, issuers["b"].canonical_issuer_id, Q1, input_key, INPUT_AGE_LIMIT_DAYS + 1)
+
+    first = _first_cutoff(connection)
+
+    assert first["outcomes"] == {
+        "selected": 1,
+        "rejected_valuation_above_tier_band": 2,
+        "stale_required_input": 1,
+    }, "b is stale; c and e are above their band; a is selected"
+    assert {symbol: Decimal(weight) for symbol, weight in first["weights"].items()} == {"T758A": Decimal(1)}, (
+        "the stale issuer takes no weight"
+    )
+    assert first["selected_issuers"] == [issuers["a"].canonical_issuer_id]
+
+
+def test_a_stale_periodic_series_and_a_stale_recorded_only_input_do_not_exclude(seeded) -> None:
+    """Issuer b holds net_income as a series of annual periods, all older than the limit, and revenue 700 days old.
+
+    The limit tests the latest observation of each required input. Under definition 1.0.0, revenue is recorded
+    only (P/S decides nothing), and net_income is no required input. Red when the limit tests every period
+    of every key: b is then excluded, and every real issuer is excluded with it.
+    """
+    connection, issuers = seeded["connection"], seeded["issuers"]
+    b = issuers["b"].canonical_issuer_id
+    base = _first_cutoff(connection)
+    for year in range(2005, 2012):
+        connection.execute(
+            """
+            insert into staging.strategy_backtest_inputs
+                (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at, fiscal_period)
+            values (%s, %s, 'net_income', %s, '0.90', %s, clock_timestamp(), %s)
+            """,
+            (b, Q1, 1000 + year, datetime(year + 1, 3, 1, tzinfo=UTC), f"FY{year}:FY:{year}-01-01:{year}-12-31"),
+        )
+    _age_the_input(connection, b, Q1, "revenue", 700)
+
+    first = _first_cutoff(connection)
+
+    assert first["outcomes"] == base["outcomes"], "an old series or an old recorded-only input excluded an issuer"
+    assert first["weights"] == base["weights"]
+
+
 # -- #1265: a selected symbol without an open ---------------------------------------------------
 
 #: The lineage of issuer g lands in its own capture run, after the lineage of the fixture.
