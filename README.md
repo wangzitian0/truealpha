@@ -56,7 +56,7 @@ deleted in #1239, because no deployed path called them.
 ### Production TOPT orchestration
 
 Dagster (`apps/data-engine/src/data_engine/dagster_defs.py`) is the single orchestration authority for Production TOPT runs.
-The scheduled job (`production_topt_tick_job`) and the manual trigger sensor (`pipeline_trigger_sensor`) execute capture, core materialization, plausibility checks, and pointer advancement.
+The scheduled job (`topt_live_pipeline`, driven by `topt_live_schedule`) and the manual trigger sensor (`pipeline_trigger_sensor`) execute capture, core materialization, plausibility checks, and pointer advancement.
 Downstream consumers read the governed head (`mart.current_pointer`) through `mart_readonly`.
 The manual TOPT CLI scripts were deleted in #1272 because Dagster owns all TOPT execution.
 
