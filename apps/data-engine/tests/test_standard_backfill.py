@@ -832,3 +832,80 @@ def test_candidate_records_are_frozen_values() -> None:
     candidate = FilingCandidate(1, None, "s", False)
     with pytest.raises(Exception):
         candidate.value = 2  # type: ignore[misc]
+
+
+def test_latest_annual_filing_consults_submissions_overflow_files_when_recent_has_only_424b2() -> None:
+    """#1264: high-volume filers like JPM fill `filings.recent` (~1,000 rows) with 424B2
+    structured-note prospectuses within weeks, pushing historical 10-Ks into
+    `filings.files` (`CIK0000019617-submissions-001.json`)."""
+
+    class OverflowHttp:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def get(self, url: str) -> _Response:
+            self.urls.append(url)
+            if url.endswith("/submissions/CIK0000019617.json"):
+                return _Response(
+                    json_body={
+                        "filings": {
+                            "recent": {
+                                "form": ["424B2", "424B2"],
+                                "filingDate": ["2026-08-10", "2026-08-01"],
+                                "accessionNumber": ["0000019617-26-099999", "0000019617-26-099998"],
+                                "primaryDocument": ["note1.htm", "note2.htm"],
+                            },
+                            "files": [
+                                {"name": "CIK0000019617-submissions-001.json"},
+                            ],
+                        }
+                    }
+                )
+            if url.endswith("/submissions/CIK0000019617-submissions-001.json"):
+                return _Response(
+                    json_body={
+                        "form": ["424B2", "10-K"],
+                        "filingDate": ["2025-03-01", "2025-02-14"],
+                        "accessionNumber": ["0000019617-25-001000", "0000019617-25-000270"],
+                        "primaryDocument": ["note0.htm", "jpm-20241231.htm"],
+                    }
+                )
+            if "000001961725000270/jpm-20241231.htm" in url:
+                return _Response(content=_html("As of December 31, 2024, JPMorgan Chase had 317,233 employees."))
+            raise AssertionError(f"unexpected url: {url}")
+
+    connection = FakeConnection()
+    http = OverflowHttp()
+    outcome = extract_headcount(
+        19617,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=datetime(2025, 6, 30, 22, 15, tzinfo=UTC),
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "resolved"
+    assert outcome.value == 317233
+    assert outcome.accession == "000001961725000270"
+    assert outcome.filing_date == date(2025, 2, 14)
+    assert any("CIK0000019617-submissions-001.json" in u for u in http.urls)
+
+
+def test_tesla_post_positioned_employee_headcount_phrasing_is_recalled_and_selected() -> None:
+    """#1264: Tesla's 10-Ks state the number after the noun ('employee headcount worldwide
+    was 125,665' / 'full-time count for Tesla's employees worldwide was 99,290')."""
+    tsla_2024 = _html("As of December 31, 2024, our employee headcount worldwide was 125,665.")
+    found_2024 = candidates(filing_plain_text(tsla_2024))
+    status_2024, chosen_2024 = select_total(found_2024)
+    assert status_2024 == "resolved" and chosen_2024 is not None
+    assert chosen_2024.value == 125665
+    assert parse_as_of(chosen_2024.as_of) == date(2024, 12, 31)
+
+    tsla_2021 = _html("As of December 31, 2021, the full-time count for Tesla's employees worldwide was 99,290.")
+    found_2021 = candidates(filing_plain_text(tsla_2021))
+    status_2021, chosen_2021 = select_total(found_2021)
+    assert status_2021 == "resolved" and chosen_2021 is not None
+    assert chosen_2021.value == 99290
+    assert parse_as_of(chosen_2021.as_of) == date(2021, 12, 31)

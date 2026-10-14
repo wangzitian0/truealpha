@@ -1925,3 +1925,92 @@ def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_v
     # Hand computation: TCE = 362,438M - 20,045M - 52,731M - 2,600M = 287,062M. Value = (86,807M - 287,062M x 0.05) / 318,512.
     assert result.value is not None
     assert abs(result.value - Decimal("227476.20")) <= Decimal("0.01")
+
+
+def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_exists() -> None:
+    """#1265: multi-class issuers like Visa report CommonStockSharesOutstanding per share class
+    under `segment` (`CommonClassAMember`, `CommonClassB1Member`, `CommonClassB2Member`,
+    `CommonClassCMember`) with no unsegmented total. Distinct segments at the same
+    `(end, filed, accn)` sum into the total share count; if an unsegmented total is also
+    present in the same filing, the unsegmented total wins without double-counting."""
+    segmented_facts = {
+        "facts": {
+            "us-gaap": {
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": "2025-09-30",
+                                "val": 1682000000,
+                                "accn": "0001403161-25-000089",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-11-06",
+                                "segment": "us-gaap:CommonClassAMember",
+                            },
+                            {
+                                "end": "2025-09-30",
+                                "val": 4830000,
+                                "accn": "0001403161-25-000089",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-11-06",
+                                "segment": "v:CommonClassB1Member",
+                            },
+                            {
+                                "end": "2025-09-30",
+                                "val": 120000000,
+                                "accn": "0001403161-25-000089",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-11-06",
+                                "segment": "v:CommonClassB2Member",
+                            },
+                            {
+                                "end": "2025-09-30",
+                                "val": 9370000,
+                                "accn": "0001403161-25-000089",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-11-06",
+                                "segment": "us-gaap:CommonClassCMember",
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    bundle = build_bundle(segmented_facts, date(2026, 1, 15), OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1816200000")
+    assert bundle.shares_period_end == date(2025, 9, 30)
+
+    # When an unsegmented total is also reported in the same filing, it wins without adding segments.
+    with_unsegmented = {
+        "facts": {
+            "us-gaap": {
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            *segmented_facts["facts"]["us-gaap"]["CommonStockSharesOutstanding"]["units"]["shares"],
+                            {
+                                "end": "2025-09-30",
+                                "val": 1800000000,
+                                "accn": "0001403161-25-000089",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-11-06",
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    bundle_unsegmented = build_bundle(with_unsegmented, date(2026, 1, 15), OperatingBranch.NON_FINANCIAL)
+    assert bundle_unsegmented.shares_outstanding == Decimal("1800000000")

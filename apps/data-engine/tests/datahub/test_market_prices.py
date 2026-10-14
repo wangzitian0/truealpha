@@ -530,3 +530,11 @@ def test_both_twelve_data_paths_send_the_same_vendor_symbol(symbol: str, monkeyp
     assert capture_urls, "the TOPT capture made no request"
     assert {symbol_of(url) for url in capture_urls} == {symbol}
     assert symbol_of(refresh_urls[0]) == symbol
+
+
+def test_xnys_2025_01_09_national_day_of_mourning_is_a_market_holiday() -> None:
+    """#1265: XNYS closed on Thursday 2025-01-09 for President Jimmy Carter's state funeral."""
+    from data_engine.datahub.market_prices import is_xnys_trading_day, xnys_holidays
+
+    assert date(2025, 1, 9) in xnys_holidays(2025)
+    assert not is_xnys_trading_day(date(2025, 1, 9))

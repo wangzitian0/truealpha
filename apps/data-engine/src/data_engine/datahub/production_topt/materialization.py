@@ -257,7 +257,9 @@ class ToptCoreSnapshot(_FrozenModel):
         return tuple(self._issuer_factor_input(grouped[issuer_id]) for issuer_id in sorted(grouped))
 
     def _issuer_factor_input(self, members: list[SnapshotMember]) -> ToptCoreSnapshotInput:
-        ordered = sorted(members, key=lambda member: member.instrument_id)
+        from data_engine.datahub.canonical_issuer import instrument_sort_key
+
+        ordered = sorted(members, key=lambda member: instrument_sort_key(member.instrument_id, member.listing_id))
         execution = ordered[0]
         if len({member.operating_branch for member in ordered}) != 1:
             raise ValueError(f"issuer {execution.issuer_id} has inconsistent operating branches")
