@@ -5,7 +5,7 @@
  * rule 6); `ci-web.yml` is its single caller, against that workflow's own
  * throwaway Postgres service container.
  *
- * Seeds two things, both required:
+ * Seeds three things, all required:
  *
  * 1. **Two principals with credentials.** `scripts/seed-principal-credential.ts`
  *    only ever adds a credential to a principal that already exists, and
@@ -29,6 +29,21 @@
  *    rendered entity to scan and every assertion the stacked issues add walks
  *    empty pages.
  *
+ * 3. **One capture run with a lineage** (#1241). The parity canon holds no capture
+ *    run, so no seeded decision has a core result. The trace page of every seeded
+ *    decision reads "Core result: not recorded". The walk would never reach the
+ *    filled "Decision inputs" table. This seed binds one capture run to the seeded
+ *    strategy run. It adds one core result with its lineage for the decision that
+ *    `/research` lists first. The walk opens that first trace link.
+ *
+ *    The rows are synthetic and live only in the throwaway CI database. The walk
+ *    checks how the page renders a lineage, not whether a capture is real. So this
+ *    is the one capture chain that the seed fabricates, and the limitation below
+ *    still holds for assertion (a). The seed uses `session_replication_role =
+ *    replica`, as `tests/trace-lineage-mart.test.ts` does. It holds the rows that
+ *    `mart.topt_core_meta_info` reads and not the capture pipeline.
+ *    `scripts/lineage-seed.ts` owns the rows.
+ *
  * KNOWN LIMITATION, recorded rather than papered over: this does not make
  * assertion (a) ("no visible raw entity id on a research first screen") a real
  * check. That needs an issuer whose id is LEI-shaped AND a row in
@@ -43,6 +58,8 @@
  * Rerun semantics differ by table, deliberately:
  *   - `mart.*` is ON CONFLICT DO NOTHING. Those tables carry append-only
  *     triggers, so DO UPDATE is not an option and a rerun must be a no-op.
+ *   - The lineage chain of item 3 is seeded once. Its ids are random, so a rerun
+ *     finds the binding of the strategy run and skips the chain.
  *   - `app.principal_credentials` UPSERTS, matching
  *     `seed-principal-credential.ts`. E2E_PASSWORD is generated per CI run, so
  *     DO NOTHING would leave a stale hash on any database that already has the
@@ -63,8 +80,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { hashPassword } from "../src/server/auth/security";
+import { hex, seedResult } from "./lineage-seed";
 
 export const E2E_TENANT_ID = "tenant:e2e";
 export const E2E_PRINCIPALS = [
@@ -110,6 +128,50 @@ interface CanonDecision {
   target_weight: string | null;
 }
 
+/** The selected decision that `/research` lists first. The page lists selections by cutoff, then issuer id. */
+function firstListedSelection(decisions: CanonDecision[]): CanonDecision {
+  const selected = decisions
+    .filter((decision) => decision.outcome === "selected")
+    .sort(
+      (a, b) =>
+        Date.parse(a.cutoff_at) - Date.parse(b.cutoff_at) ||
+        (a.issuer_id < b.issuer_id ? -1 : a.issuer_id > b.issuer_id ? 1 : 0),
+    );
+  if (selected.length === 0) throw new Error("the parity canon holds no selected decision");
+  return selected[0];
+}
+
+/**
+ * #1241: binds one capture run to the seeded strategy run and gives `decision` one core result with a
+ * lineage. The inputs are synthetic. Returns false when the strategy run is bound already.
+ * The connection must be a superuser connection, because only a superuser can set the replica role.
+ */
+async function seedTraceLineage(client: PoolClient, run: CanonRun, decision: CanonDecision): Promise<boolean> {
+  const bound = await client.query(
+    "select 1 from mart.strategy_run_capture_bindings where strategy_run_id = $1",
+    [run.strategy_run_id],
+  );
+  if (bound.rows.length > 0) return false;
+  // Transaction-local: the foreign keys and insert triggers come back at the commit.
+  await client.query("set local session_replication_role = replica");
+  const captureRunId = `capture-run:${hex()}`;
+  const symbol = decision.issuer_id.split(":").pop() ?? "e2e";
+  await seedResult(client, {
+    captureRunId,
+    entityId: decision.issuer_id,
+    cutoff: decision.cutoff_at,
+    resultHashPrefix: "",
+    createdAt: run.executed_at,
+    grossProfit: "210000000",
+    listings: [{ listingId: `listing:xnas:${symbol}`, instrumentId: `instrument:${symbol}`, shares: "10000000", close: "40" }],
+  });
+  await client.query(
+    "insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by) values ($1, $2, 'tick')",
+    [captureRunId, run.strategy_run_id],
+  );
+  return true;
+}
+
 async function main() {
   const principalsOnly = process.argv.includes("--principals-only");
   const connectionString = process.env.DATABASE_URL;
@@ -130,6 +192,7 @@ async function main() {
 
   const pool = new Pool({ connectionString });
   const client = await pool.connect();
+  let lineageSeeded = false;
   try {
     await client.query("begin");
 
@@ -207,6 +270,8 @@ async function main() {
       );
     }
 
+    lineageSeeded = await seedTraceLineage(client, run, firstListedSelection(decisions));
+
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
@@ -218,7 +283,10 @@ async function main() {
 
   console.log(
     `Seeded ${E2E_PRINCIPALS.length} principals (${E2E_PRINCIPALS.map((p) => p.kind).join(", ")}) ` +
-      `and the frozen parity canon: run ${run.strategy_run_id.slice(0, 24)}… with ${decisions.length} decisions.`,
+      `and the frozen parity canon: run ${run.strategy_run_id.slice(0, 24)}… with ${decisions.length} decisions. ` +
+      (lineageSeeded
+        ? `One core result with a lineage, for the first listed selection (#1241).`
+        : `The lineage chain was seeded before.`),
   );
 }
 

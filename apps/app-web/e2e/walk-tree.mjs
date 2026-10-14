@@ -6,6 +6,7 @@
  *   (b) the claim-ceiling banner is present on rankings + strategy (+ the
  *       overview when selections render);
  *   (c) OPERATE chrome on every /admin page, absent on every /research page.
+ * #1241 adds a fourth: the trace page of a strategy decision renders its inputs.
  *
  * Runs against ANY environment:
  *   TA_BASE_URL=https://truealpha-staging.truealpha.club \
@@ -242,6 +243,133 @@ async function assertFunnelSaysSomething(page, path, problems, role) {
   }
 }
 
+// #1241. The text that NOT_RECORDED prints in src/server/mart/research-read.ts for a field that the
+// lineage does not carry. tests/walk-tree-trace-inputs.test.ts fails when the two texts differ.
+const NOT_RECORDED = "not recorded";
+// The five cells of one input row. TraceInputsTable marks each cell with data-field.
+const TRACE_FIELDS = ["value", "period", "knowable_at", "accession", "source"];
+// A loopback base URL means the CI walk. It walks the CI build over the database that
+// scripts/seed-e2e-fixture.ts seeds. That seed gives the first trace link a lineage.
+// A deployed walk cannot assume a lineage.
+const SEEDED_FIXTURE = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(BASE).hostname);
+
+/** #1241 acceptance 1: the trace page of a strategy decision renders its inputs.
+ *
+ * `/research/trace` without a query shows the empty state. So no walk reached the "Decision inputs"
+ * table, and a property that the page never reaches is not asserted. This check opens the first
+ * trace link of `/research`, as a person would, and checks the page that follows. It runs in the
+ * populated state only. The empty state has no decision to trace.
+ *
+ * Every environment: the page answers, names itself and prints no script leak. It reaches the ready
+ * state, because the link comes from the overview of the same run. Each input row has the five cells,
+ * and no cell is blank. When the page names a core result, one input has a value. That input also
+ * carries its knowable_at and its accession or source. When the page says "not recorded", no input
+ * carries a value.
+ *
+ * The CI walk only (SEEDED_FIXTURE): the seed gives this decision a lineage. So "Core result: not
+ * recorded" is a failure there, and one input must carry all five fields. Without this rule, a read
+ * that stopped returning the lineage would pass on the "not recorded" branch.
+ *
+ * Locators wait for their element. The code uses no fixed sleep. */
+async function assertTraceRendersDecisionInputs(page, path, problems) {
+  if (path !== "/research/trace" || DATA_STATE !== "populated") return;
+
+  await gotoStable(page, `${BASE}/research`);
+  const href = await page
+    .locator('a[href^="/research/trace?"]')
+    .first()
+    .getAttribute("href", { timeout: 15000 })
+    .catch(() => null);
+  if (href === null) {
+    problems.push("trace: /research offers no trace link in the populated state");
+    return;
+  }
+
+  const response = await gotoStable(page, `${BASE}${href}`);
+  const status = response ? response.status() : null;
+  if (status === null || status >= 400) problems.push(`trace: ${href} answered HTTP ${status}`);
+  const section = page.locator('section[aria-labelledby="trace-heading"]');
+  try {
+    await section.getByRole("heading", { name: "Output trace", exact: true }).waitFor({ state: "visible", timeout: 15000 });
+  } catch {
+    problems.push('trace: the heading "Output trace" is not visible');
+    return;
+  }
+  const leak = (await section.innerText()).match(/\bundefined\b|\[object Object\]|\bNaN\b/);
+  if (leak) problems.push(`trace: the page shows "${leak[0]}"`);
+
+  // The overview and this page read the same run, so the page must be ready.
+  try {
+    await section.getByText("Decision inputs", { exact: true }).first().waitFor({ state: "visible", timeout: 15000 });
+  } catch {
+    const shown = (await section.innerText()).replace(/\s+/g, " ").trim().slice(0, 200);
+    problems.push(`trace: no "Decision inputs" section, so the page is not ready: ${shown}`);
+    return;
+  }
+  const coreText = await section
+    .getByText(/^Core result:/)
+    .first()
+    .innerText({ timeout: 15000 })
+    .then((text) => text.trim(), () => null);
+  if (coreText === null) {
+    problems.push('trace: no "Core result:" line under "Decision inputs"');
+    return;
+  }
+  // A recorded id has the shape that the topt_core_results CHECK constraint enforces.
+  const coreResult = coreText.match(/^Core result: (topt-core-result:[0-9a-f]{64})\./)?.[1] ?? null;
+  if (coreResult === null && !coreText.startsWith(`Core result: ${NOT_RECORDED}.`)) {
+    problems.push(`trace: "Core result:" shows neither a result id nor "${NOT_RECORDED}": ${coreText.slice(0, 80)}`);
+    return;
+  }
+
+  const table = section.locator('table[data-testid="trace-inputs"]');
+  try {
+    await table.first().waitFor({ state: "attached", timeout: 15000 });
+  } catch {
+    problems.push("trace: no inputs table (data-testid=trace-inputs)");
+    return;
+  }
+  const rows = await table.locator("tr[data-input]").evaluateAll((trs) =>
+    trs.map((tr) => ({
+      input: tr.getAttribute("data-input"),
+      cells: Object.fromEntries(
+        Array.from(tr.querySelectorAll("td[data-field]")).map((td) => [td.getAttribute("data-field"), td.innerText.trim()]),
+      ),
+    })),
+  );
+  if (rows.length === 0) {
+    problems.push("trace: the inputs table has no input row");
+    return;
+  }
+  const incomplete = rows.filter((row) => TRACE_FIELDS.some((field) => !row.cells[field]));
+  if (incomplete.length > 0) {
+    problems.push(`trace: input row(s) with a missing or blank cell: ${incomplete.map((row) => row.input).join(", ")}`);
+    return;
+  }
+
+  const isRecorded = (row, field) => Boolean(row.cells[field]) && row.cells[field] !== NOT_RECORDED;
+  const valued = rows.filter((row) => isRecorded(row, "value"));
+  if (coreResult === null) {
+    if (SEEDED_FIXTURE) {
+      problems.push(`trace: the seed gives this decision a lineage, but the page says "Core result: ${NOT_RECORDED}"`);
+    }
+    if (valued.length > 0) {
+      problems.push(`trace: the page records no core result, yet these inputs carry a value: ${valued.map((row) => row.input).join(", ")}`);
+    }
+    return;
+  }
+  if (valued.length === 0) {
+    problems.push(`trace: the page names core result ${coreResult}, but no input carries a value`);
+    return;
+  }
+  if (!valued.some((row) => isRecorded(row, "knowable_at") && (isRecorded(row, "accession") || isRecorded(row, "source")))) {
+    problems.push("trace: no input with a value also carries its knowable_at and its accession or source");
+  }
+  if (SEEDED_FIXTURE && !rows.some((row) => TRACE_FIELDS.every((field) => isRecorded(row, field)))) {
+    problems.push(`trace: no input carries all of ${TRACE_FIELDS.join(", ")}; the seed gives gross_profit all five`);
+  }
+}
+
 /** Navigate deterministically, and survive a saturated host without hiding a real outage.
  *
  * `waitUntil: "networkidle"` was the previous wait everywhere here. Playwright's own docs
@@ -261,9 +389,10 @@ async function gotoStable(page, url) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 20000 });
-      return;
+      // The response of the navigation that succeeded, for a caller that checks the HTTP status (#1241).
+      return response;
     } catch (error) {
       lastError = error;
     }
@@ -285,6 +414,8 @@ async function checkRoute(page, path, role) {
   await assertSignedInIdentity(page, path, problems);
   await assertCurrentNavLink(page, path, problems);
   await assertFunnelSaysSomething(page, path, problems, role);
+  // Last, because it navigates away from this page.
+  await assertTraceRendersDecisionInputs(page, path, problems);
   return problems;
 }
 
