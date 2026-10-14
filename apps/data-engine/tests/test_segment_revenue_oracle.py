@@ -36,6 +36,9 @@ SOURCE_TREES = (
     REPO_ROOT / "libs" / "contracts" / "src",
     REPO_ROOT / "libs" / "factors" / "src",
     REPO_ROOT / "libs" / "runtime" / "src",
+    # Deployed host scripts and tools run against the migrated schema too (#1237).
+    REPO_ROOT / "apps" / "data-engine" / "scripts",
+    REPO_ROOT / "tools",
 )
 
 #: A SQL reference to the table, not a mention of its name. The keyword in front is what
@@ -44,6 +47,8 @@ RETIRED_TABLE_SQL = re.compile(
     r"\b(?:from|join|into|update)\s+staging\.financial_facts\b",
     re.IGNORECASE,
 )
+#: The name as a quoted string, as in a list of required tables. A comment in backticks does not match.
+RETIRED_TABLE_LITERAL = re.compile(r"""["']staging\.financial_facts["']""")
 
 FILING = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings" / "AVGO_10K_000173016825000121.html"
 _UNSET = object()
@@ -98,11 +103,20 @@ def test_no_deployed_module_reads_the_retired_financial_facts_table() -> None:
     offenders = []
     for tree in SOURCE_TREES:
         for path in tree.rglob("*.py"):
-            if RETIRED_TABLE_SQL.search(path.read_text(encoding="utf-8")):
+            text = path.read_text(encoding="utf-8")
+            if RETIRED_TABLE_SQL.search(text) or RETIRED_TABLE_LITERAL.search(text):
                 offenders.append(str(path.relative_to(REPO_ROOT)))
     assert offenders == [], (
         f"these modules query staging.financial_facts, which holds 0 rows in Production (init.md §3): {offenders}"
     )
+
+
+def test_the_retired_table_patterns_match_what_they_must_catch() -> None:
+    """Positive controls. A pattern that matches nothing would keep the scan above green for any input."""
+    assert RETIRED_TABLE_SQL.search("select 1 from staging.financial_facts where true")
+    assert RETIRED_TABLE_LITERAL.search('    "staging.financial_facts",')
+    assert RETIRED_TABLE_LITERAL.search("REQUIRED = ['staging.financial_facts']")
+    assert not RETIRED_TABLE_LITERAL.search("#: Not `staging.financial_facts`, which the first version read.")
 
 
 def test_the_capture_plane_is_addressed_with_a_zero_padded_cik() -> None:
