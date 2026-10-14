@@ -11,6 +11,9 @@ repositories, so a test resolves issuers through the real path and needs no stub
     raw.capture_campaigns ... raw.capture_obligations (one run, one obligation per listing)
     raw.fetches + raw.capture_source_vintages         (companyfacts:CIK<cik>, bytes in a store)
     staging.capture_normalized_observations + payloads (parser PARSER_VERSION)
+
+#1265: an issuer can have two listings, and the listing-identity cells name the ticker of each.
+`seed_listing_identity` seeds those cells through the same repositories.
 """
 
 from __future__ import annotations
@@ -106,6 +109,129 @@ class Observed:
     knowable_at: datetime
 
 
+@dataclass(frozen=True)
+class Listed:
+    """One listing-identity cell to seed (#1265): the issuer id it names, one listing and its ticker."""
+
+    issuer_id: str
+    listing_id: str
+    ticker: str
+    knowable_at: datetime
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """One observation of a seeded run: its raw bytes and its normalized payload."""
+
+    listing_id: str
+    source: DataSource
+    record_id: str
+    body: bytes
+    payload: dict[str, Any]
+    knowable_at: datetime
+
+
+def _seed_run(
+    connection: psycopg.Connection[Any],
+    cells: Sequence[_Cell],
+    *,
+    tag: str,
+    semantic_type: str,
+    store: MemoryStore,
+    cutoff: datetime,
+    parser_version: str,
+) -> None:
+    """Seed one capture run with one observation of `semantic_type` per cell, through the repositories."""
+    policy = CaptureSchedulePolicy(
+        policy_version=f"{tag}-lineage:v1",
+        demanded_cadence=timedelta(days=1),
+        provider_availability_cadence="manual-only:v1",
+        freshness_max_age=timedelta(days=2),
+        retry=replay_retry_policy(3),
+    )
+    universe = UniverseRef(
+        universe_id=f"universe:{tag}-lineage",
+        universe_version=f"{tag}-lineage-v1",
+        content_sha256=canonical_sha256(sorted(cell.listing_id for cell in cells)),
+    )
+    campaign = CaptureCampaign(
+        campaign_policy_id=f"capture-policy:{tag}-lineage-v1",
+        environment=CaptureEnvironment.STAGING,
+        cutoff=cutoff,
+        universe_refs=(universe,),
+    )
+    run = CaptureRun(
+        campaign_id=campaign.campaign_id,
+        run_sequence=1,
+        schedule_policy_id=policy.schedule_policy_id,
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': f'{tag}-lineage:v1'})}",
+    )
+    list_version = CaptureListVersion(
+        universe=universe,
+        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=cell.listing_id) for cell in cells),
+        effective_at=cutoff,
+    )
+    obligations = {
+        obligation.subject.id: obligation
+        for obligation in expand_obligations(
+            run_id=run.run_id, list_version=list_version, semantic_types=(semantic_type,), partition=tag
+        )
+    }
+    repository = PostgresCaptureControlRepository(connection)
+    repository.put_schedule_policy(policy)
+    repository.put_campaign(campaign)
+    repository.put_list_version(list_version)
+    repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
+    repository.put_run(run)
+
+    for ordinal, cell in enumerate(cells):
+        obligation = obligations[cell.listing_id]
+        repository.put_obligation(campaign.campaign_id, obligation)
+        request = SourceRequest(
+            source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': f'{tag}:v1'})}",
+            source_policy_id=f"source-policy:{tag}-v1",
+            request_fingerprint_version=f"{tag}:v1",
+            canonical_request_sha256=canonical_sha256({"ordinal": ordinal, "listing": cell.listing_id}),
+            subject_refs=(obligation.subject,),
+            capture_requirement_ids=(obligation.capture_requirement_id,),
+            partition=obligation.partition,
+        )
+        repository.put_source_request(request)
+        landed = cell.knowable_at - timedelta(minutes=5)
+        fetch_id = raw_store.insert_fetch(
+            connection,
+            source=cell.source,
+            source_record_id=cell.record_id,
+            body=cell.body,
+            content_type="application/json",
+            fetched_at=landed,
+            store=store,
+            recorded_at=landed,
+        )
+        vintage = SourceVintage(
+            source_request_id=request.source_request_id,
+            source_record_id=cell.record_id,
+            source_published_at=None,
+            raw_object_id=f"raw-object:{hashlib.sha256(cell.body).hexdigest()}",
+        )
+        repository.put_source_vintage(vintage, raw_fetch_id=fetch_id)
+        observation = NormalizedObservation(
+            semantic_type=semantic_type,
+            semantic_version=obligation.capture_requirement_id,
+            subject=obligation.subject,
+            valid_from=cell.knowable_at - timedelta(days=1),
+            valid_to=None,
+            knowable_at=cell.knowable_at,
+            source_vintage_id=vintage.source_vintage_id,
+            parser_version=parser_version,
+            mapping_version=f"{tag}-map:v1",
+            normalized_payload_sha256=canonical_sha256(cell.payload),
+        )
+        repository.put_observation(
+            obligation.obligation_id, observation, normalized_payload=cell.payload, confidence=Decimal("0.9")
+        )
+
+
 def seed_financial_lineage(
     connection: psycopg.Connection[Any],
     observations: Sequence[Observed],
@@ -120,103 +246,77 @@ def seed_financial_lineage(
     Each observation's vintage is the company-facts document of its CIK, so
     `load_stored_company_facts` can read the bytes back from `store`.
     """
-    policy = CaptureSchedulePolicy(
-        policy_version="issue1257-lineage:v1",
-        demanded_cadence=timedelta(days=1),
-        provider_availability_cadence="manual-only:v1",
-        freshness_max_age=timedelta(days=2),
-        retry=replay_retry_policy(3),
-    )
-    universe = UniverseRef(
-        universe_id="universe:issue1257-lineage",
-        universe_version="issue1257-lineage-v1",
-        content_sha256=canonical_sha256(sorted(item.listing_id for item in observations)),
-    )
-    campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:issue1257-lineage-v1",
-        environment=CaptureEnvironment.STAGING,
-        cutoff=cutoff,
-        universe_refs=(universe,),
-    )
-    run = CaptureRun(
-        campaign_id=campaign.campaign_id,
-        run_sequence=1,
-        schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'issue1257-lineage:v1'})}",
-    )
-    list_version = CaptureListVersion(
-        universe=universe,
-        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=item.listing_id) for item in observations),
-        effective_at=cutoff,
-    )
-    obligations = {
-        obligation.subject.id: obligation
-        for obligation in expand_obligations(
-            run_id=run.run_id, list_version=list_version, semantic_types=("financial-fact",), partition="issue1257"
-        )
-    }
-    repository = PostgresCaptureControlRepository(connection)
-    repository.put_schedule_policy(policy)
-    repository.put_campaign(campaign)
-    repository.put_list_version(list_version)
-    repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
-    repository.put_run(run)
-
-    for ordinal, item in enumerate(observations):
-        obligation = obligations[item.listing_id]
-        repository.put_obligation(campaign.campaign_id, obligation)
-        request = SourceRequest(
-            source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'issue1257:v1'})}",
-            source_policy_id="source-policy:issue1257-v1",
-            request_fingerprint_version="issue1257:v1",
-            canonical_request_sha256=canonical_sha256({"ordinal": ordinal, "listing": item.listing_id}),
-            subject_refs=(obligation.subject,),
-            capture_requirement_ids=(obligation.capture_requirement_id,),
-            partition=obligation.partition,
-        )
-        repository.put_source_request(request)
-        record_id = f"companyfacts:CIK{item.cik:010d}"
-        body = json.dumps(company_facts[item.cik]).encode()
-        landed = item.knowable_at - timedelta(minutes=5)
-        fetch_id = raw_store.insert_fetch(
-            connection,
+    cells = [
+        _Cell(
+            listing_id=item.listing_id,
             source=DataSource.SEC,
-            source_record_id=record_id,
-            body=body,
-            content_type="application/json",
-            fetched_at=landed,
-            store=store,
-            recorded_at=landed,
+            record_id=f"companyfacts:CIK{item.cik:010d}",
+            body=json.dumps(company_facts[item.cik]).encode(),
+            payload={
+                "issuer_id": item.issuer_id,
+                "instrument_id": f"security:issue1257:{item.cik}",
+                "listing_id": item.listing_id,
+                "operating_branch": item.operating_branch,
+                "currency": "USD",
+            },
+            knowable_at=item.knowable_at,
         )
-        vintage = SourceVintage(
-            source_request_id=request.source_request_id,
-            source_record_id=record_id,
-            source_published_at=None,
-            raw_object_id=f"raw-object:{hashlib.sha256(body).hexdigest()}",
-        )
-        repository.put_source_vintage(vintage, raw_fetch_id=fetch_id)
+        for item in observations
+    ]
+    _seed_run(
+        connection,
+        cells,
+        tag="issue1257",
+        semantic_type="financial-fact",
+        store=store,
+        cutoff=cutoff,
+        parser_version=parser_version,
+    )
+
+
+def seed_listing_identity(
+    connection: psycopg.Connection[Any],
+    listings: Sequence[Listed],
+    *,
+    store: MemoryStore,
+    cutoff: datetime,
+    parser_version: str = PARSER_VERSION,
+) -> None:
+    """Seed one capture run with one listing-identity cell per entry, through the repositories (#1265).
+
+    A deployed capture writes these cells from the release (`release_derived_adapter`). The payload
+    holds the four `IdentityPayload` fields, and the raw bytes hold the payload.
+    """
+    cells = []
+    for item in listings:
         payload = {
             "issuer_id": item.issuer_id,
-            "instrument_id": f"security:issue1257:{item.cik}",
+            "instrument_id": f"security:issue1265:{item.ticker.lower()}",
             "listing_id": item.listing_id,
-            "operating_branch": item.operating_branch,
-            "currency": "USD",
+            "ticker": item.ticker,
         }
-        observation = NormalizedObservation(
-            semantic_type="financial-fact",
-            semantic_version=obligation.capture_requirement_id,
-            subject=obligation.subject,
-            valid_from=item.knowable_at - timedelta(days=1),
-            valid_to=None,
-            knowable_at=item.knowable_at,
-            source_vintage_id=vintage.source_vintage_id,
-            parser_version=parser_version,
-            mapping_version="issue1257-map:v1",
-            normalized_payload_sha256=canonical_sha256(payload),
+        body = json.dumps(
+            {"semantic_type": "listing-identity", "subject_id": item.listing_id, "payload": payload}, sort_keys=True
+        ).encode()
+        cells.append(
+            _Cell(
+                listing_id=item.listing_id,
+                source=DataSource.RELEASE,
+                record_id=f"listing-identity:{item.listing_id}",
+                body=body,
+                payload=payload,
+                knowable_at=item.knowable_at,
+            )
         )
-        repository.put_observation(
-            obligation.obligation_id, observation, normalized_payload=payload, confidence=Decimal("0.9")
-        )
+    _seed_run(
+        connection,
+        cells,
+        tag="issue1265",
+        semantic_type="listing-identity",
+        store=store,
+        cutoff=cutoff,
+        parser_version=parser_version,
+    )
 
 
 def annual_company_facts(*, base: int, years: range = range(2018, 2026)) -> dict[str, Any]:

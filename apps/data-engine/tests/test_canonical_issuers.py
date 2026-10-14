@@ -22,12 +22,14 @@ from data_engine.datahub.strategy_history import project_deployed_history
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from financial_lineage_seed import (  # noqa: E402
+    Listed,
     MemoryStore,
     Observed,
     annual_company_facts,
     at,
     mint_issuer,
     seed_financial_lineage,
+    seed_listing_identity,
 )
 
 TICK = datetime(2026, 10, 9, 6, 15, tzinfo=UTC)
@@ -335,6 +337,93 @@ def test_the_split_adjusted_row_wins_over_an_earlier_as_filed_row_in_the_reader(
         if row[0] == issuer.canonical_issuer_id and row[1] == "shares_outstanding"
     }
     assert shares == {"shares_outstanding": filed * 10}
+
+
+# -- #1265: one price symbol per issuer -----------------------------------------------------------
+
+
+def test_the_projector_prices_by_the_listing_with_both_series_and_adds_no_row_to_the_stored_history(
+    connection,
+) -> None:
+    """#1265 (c). Staging: Alphabet is GOOG in lineage, and the store holds GOOGL bars only. Its
+    stored history carries GOOGL's closes, because the projector before #1266 named it GOOGL. A rerun
+    must compute those same rows and insert none. Red on the code before the fix: the rerun looks up
+    H1265G, finds no close and no split, and appends each post-split share count without the split."""
+    import dataclasses
+    from datetime import date
+
+    from data_engine.datahub.strategy_history import (
+        canonical_history_issuers,
+        load_stored_company_facts,
+        run_strategy_history,
+    )
+
+    tick, listed_at = at(2025, 4, 15), at(2024, 1, 2)
+    issuer = mint_issuer(
+        connection, lei="H1265GXXXXXXXXXXXX00", mic="XNAS", ticker="H1265G", cik=1_265_301, known_at=at(2023, 1, 1)
+    )
+    store = MemoryStore()
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                issuer.canonical_issuer_id, issuer.canonical_listing_id, issuer.cik, "non_financial", at(2024, 3, 1)
+            )
+        ],
+        company_facts={issuer.cik: _split_document()},
+        store=store,
+        cutoff=at(2024, 3, 1),
+    )
+    seed_listing_identity(
+        connection,
+        [
+            Listed(issuer.canonical_issuer_id, issuer.canonical_listing_id, "H1265G", listed_at),
+            Listed(issuer.canonical_issuer_id, "listing:xnas:h1265l", "H1265L", listed_at),
+        ],
+        store=store,
+        cutoff=listed_at,
+    )
+    connection.execute("delete from staging.strategy_backtest_inputs")
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
+        values (%s, '2024-03-02T00:00:00Z', 'revenue', '1', '0.9', '2024-03-01T00:00:00Z')
+        """,
+        (issuer.canonical_issuer_id,),
+    )
+    # Only the second listing holds the two series, with a 10:1 split inside the window.
+    _seed_split_series(
+        connection, "H1265L", ex_date=date(2024, 6, 10), sessions=_sessions(date(2024, 1, 2), date(2025, 3, 31))
+    )
+    # The history as the projector before #1266 stored it: the issuer named by its other listing.
+    (resolved,) = canonical_history_issuers(connection, [issuer.canonical_issuer_id], known_at=tick).issuers
+    stored = run_strategy_history(
+        connection,
+        tick=tick,
+        issuers=[dataclasses.replace(resolved, ticker="H1265L")],
+        months=16,
+        load_facts=lambda cik: load_stored_company_facts(connection, cik, store=store),
+    )
+
+    rerun = project_deployed_history(connection, tick=tick, months=16, store=store)
+
+    assert stored.split_adjusted > 0, "the window must hold a split-adjusted count, or this test proves nothing"
+    assert (rerun.inserted, rerun.already_present, rerun.split_adjusted) == (
+        0,
+        stored.inserted,
+        stored.split_adjusted,
+    ), "the rerun computes every stored row, the H1265L closes and the split-adjusted counts included"
+    close = connection.execute(
+        "select value from staging.strategy_backtest_inputs where issuer_id = %s and input_key = 'last_close' "
+        "and cutoff_at = '2024-06-30T23:59:59Z'",
+        (issuer.canonical_issuer_id,),
+    ).fetchall()
+    h1265l = connection.execute(
+        "select close from staging.market_prices_daily where symbol = 'H1265L' and adjust = 'none' "
+        "and trading_date = '2024-06-28'"
+    ).fetchall()
+    assert close == h1265l and len(close) == 1, "the one stored close is the H1265L close"
+    assert (resolved.ticker, resolved.price_symbol) == ("H1265G", "H1265L")
 
 
 def _share_counts_document(*, cover: tuple | None, balance: tuple | None) -> dict:

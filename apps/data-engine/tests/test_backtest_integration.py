@@ -31,11 +31,13 @@ from data_engine.quality.nightly_verdicts import TICK_TAG
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from financial_lineage_seed import (  # noqa: E402
+    Listed,
     MemoryStore,
     Observed,
     SeededIssuer,
     mint_issuer,
     seed_financial_lineage,
+    seed_listing_identity,
 )
 
 Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
@@ -720,3 +722,127 @@ def test_a_projector_commit_between_the_two_reads_stops_the_run_instead_of_passi
 
     racing[0] = False
     assert _run_backtest(connection).inserted is True
+
+
+# -- #1265: one price symbol per issuer ---------------------------------------------------------
+
+#: The financial lineage of a #1265 issuer lands after the fixture's lineage, in its own capture run.
+LISTED_LINEAGE_AT = datetime(2024, 2, 3, tzinfo=UTC)
+
+
+def _seed_listed_issuer(
+    connection: psycopg.Connection, name: str, *, lineage: str, listings: tuple[str, ...], close: str
+) -> SeededIssuer:
+    """One more issuer: its lineage ticker is `lineage`, and its listing-identity cells name `listings`.
+
+    It holds inputs at Q1, Q2 and Q3 with the close `close`. At 0.5 it is the cheapest issuer, so
+    each cutoff selects it.
+    """
+    issuer = mint_issuer(
+        connection, lei=_lei(name), mic="XNAS", ticker=lineage, cik=758_000 + ord(name), known_at=MINTED_AT
+    )
+    store = MemoryStore()
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                issuer.canonical_issuer_id, issuer.canonical_listing_id, issuer.cik, "non_financial", LISTED_LINEAGE_AT
+            )
+        ],
+        company_facts={issuer.cik: {"facts": {}}},
+        store=store,
+        cutoff=LISTED_LINEAGE_AT,
+    )
+    seed_listing_identity(
+        connection,
+        [
+            Listed(issuer.canonical_issuer_id, f"listing:xnas:{ticker.lower()}", ticker, MINTED_AT)
+            for ticker in listings
+        ],
+        store=store,
+        cutoff=MINTED_AT,
+    )
+    _seed_inputs(connection, {name: issuer}, {cutoff: {name: close} for cutoff in (Q1, Q2, Q3)})
+    return issuer
+
+
+def _store_both_series(connection: psycopg.Connection, symbol: str, *, base: Decimal) -> None:
+    """Both daily series of one symbol on every session of the fixture. The series show no split."""
+    bars = []
+    for index, day in enumerate(_sessions()):
+        close = base * (1 + Decimal("0.001") * index)
+        open_ = close * Decimal("0.99")
+        bars.append(PriceBarRecord(symbol, day, open_, close, open_, close, Decimal(1000)))
+    insert_market_prices_daily(connection, bars, adjust="none")
+    insert_market_prices_daily(connection, bars, adjust="splits")
+
+
+def _strategy_line(symbol: str, cutoffs: str) -> str:
+    return (
+        f"The strategy selected {symbol} at {cutoffs}, but no open existed on the fill session, "
+        "so the weight it could not buy stayed cash."
+    )
+
+
+def test_an_issuer_without_series_of_its_own_is_priced_by_its_other_listing(seeded) -> None:
+    """#1265 (a). Staging, v0.1.11: Alphabet is GOOG in lineage, and the store holds GOOGL bars only.
+    The run kept GOOG's weight in cash from 2025-04 to 2025-09. Red on the code before the fix: each
+    cutoff records T1265G as unfilled, and half of the portfolio stays cash."""
+    connection = seeded["connection"]
+    _seed_listed_issuer(connection, "g", lineage="T1265G", listings=("T1265G", "T1265L"), close="0.5")
+    _store_both_series(connection, "T1265L", base=Decimal(77))
+
+    run_id = _run_op()["run_id"]
+
+    payload = _run_row(connection, run_id)["metrics_payload"]
+    selected = [entry for entry in payload["cutoffs"] if "T1265G" in entry["weights"]]
+    assert len(selected) == 3, "each cutoff must select g, or this test proves nothing"
+    assert [entry["unfilled_symbols"] for entry in selected] == [[], [], []]
+    cash = connection.execute(
+        "select max(cash_weight) from mart.backtest_valuations where run_id = %s and resolution = '1D'", (run_id,)
+    ).fetchone()[0]
+    assert cash < Decimal("0.01"), f"the weight of g must be invested, not cash: {cash}"
+    open_ = connection.execute(
+        "select open from staging.market_prices_daily where symbol = 'T1265L' and adjust = 'none' "
+        "and trading_date = '2024-04-01'"
+    ).fetchone()[0]
+    buys = [row for row in _trades(connection, run_id) if row[1] == "T1265G" and row[2] == "BUY"]
+    assert buys[0][0] == date(2024, 4, 1) and buys[0][4] == open_, "the T1265L open fills the buy, under T1265G"
+    assert not [row for row in _trades(connection, run_id) if row[1] == "T1265L"], "every output names the lineage"
+    assert payload["binding"]["price_symbols"] == {"T1265G": "T1265L"}, "the run id binds the mapping"
+    assert payload["price_symbols"] == {"T1265G": "T1265L"}
+    assert "T1265G is priced by the bars of its T1265L listing." in payload["limitations"]
+    assert "T1265G" in payload["benchmark"]["universe"] and payload["benchmark"]["never_filled"] == ["T758E"]
+
+
+def test_an_issuer_without_series_on_any_listing_is_named_with_its_cutoffs(seeded) -> None:
+    """#1265 (b). No listing of g holds a stored series, so g has no price symbol. The run still
+    succeeds. Each cutoff that selects g records it as unfilled, and the limitations name g with
+    those cutoffs. Red on the code before the fix: the limitations name the benchmark side only."""
+    connection = seeded["connection"]
+    _seed_listed_issuer(connection, "g", lineage="T1265N", listings=("T1265M", "T1265N"), close="0.5")
+
+    metadata = _run_op()
+
+    assert metadata["inserted"] is True and seeded["verdicts"][-1][0] is True, "the run must not fail for it"
+    payload = _run_row(connection, metadata["run_id"])["metrics_payload"]
+    assert _strategy_line("T1265N", "2024-03-31, 2024-06-30, 2024-09-30") in payload["limitations"]
+    assert [entry["unfilled_symbols"] for entry in payload["cutoffs"]] == [["T1265N"], ["T1265N"], ["T1265N"]]
+    assert payload["binding"]["price_symbols"] == {}, "a listing without both series prices nothing"
+    assert not [item for item in payload["limitations"] if "is priced by the bars of" in item]
+
+
+def test_two_issuers_on_one_price_symbol_stop_the_run(seeded) -> None:
+    """#1265 (d). Issuer g is T1265G in lineage, and its other listing T1265L holds both series. A
+    second entity k is T1265L in lineage. Both read the T1265L series, so the run would trade one
+    series for two issuers. Red on the code before the fix: the run succeeds and g stays cash."""
+    connection = seeded["connection"]
+    _seed_listed_issuer(connection, "g", lineage="T1265G", listings=("T1265G", "T1265L"), close="0.5")
+    _seed_listed_issuer(connection, "k", lineage="T1265L", listings=("T1265L",), close="1000")
+    _store_both_series(connection, "T1265L", base=Decimal(77))
+    runs_before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
+
+    with pytest.raises(RuntimeError, match="two issuers resolve to one price symbol: T1265L prices T1265G, T1265L"):
+        _run_backtest(connection)
+
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone()[0] == runs_before
