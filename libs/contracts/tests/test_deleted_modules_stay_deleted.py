@@ -1,4 +1,4 @@
-"""#1238, #1239, #1272: modules deleted across truealpha packages must not come back.
+"""#1238, #1239, #1237, #1272: modules deleted across truealpha packages must not come back.
 
 Each module or script below had no importer outside its own tests or was dead code.
 Nothing deployed used it, so the code only added review and merge cost.
@@ -19,6 +19,7 @@ DATA_ENGINE_SRC = REPO_ROOT / "apps" / "data-engine" / "src" / "data_engine"
 FACTORS_SRC = REPO_ROOT / "libs" / "factors" / "src" / "factors"
 DATA_ENGINE_SCRIPTS = REPO_ROOT / "apps" / "data-engine" / "scripts"
 APP_WEB_ROOT = REPO_ROOT / "apps" / "app-web"
+TOOLS_ROOT = REPO_ROOT / "tools"
 
 DELETED_CONTRACT_MODULES = (
     "gates",
@@ -47,6 +48,9 @@ DELETED_SCRIPTS = (
     "materialize_production_topt_core.py",
     "query_production_topt_datahub.py",
 )
+
+#: No Makefile target, workflow, doc or tool called these (#1237). ADR A8 retired the gate they implemented.
+DELETED_TOOLS = ("check_pr_ready.py",)
 
 DELETED_APP_WEB_FILES = (
     "src/app/research/conversations/page.tsx",
@@ -102,6 +106,11 @@ def test_deleted_scripts_have_no_source_file(script_name: str) -> None:
     assert not (DATA_ENGINE_SCRIPTS / script_name).exists(), f"scripts/{script_name} was deleted and exists again"
 
 
+@pytest.mark.parametrize("tool_name", DELETED_TOOLS)
+def test_deleted_tools_have_no_source_file(tool_name: str) -> None:
+    assert not (TOOLS_ROOT / tool_name).exists(), f"tools/{tool_name} was deleted in #1237 and exists again"
+
+
 @pytest.mark.parametrize("rel_path", DELETED_APP_WEB_FILES)
 def test_deleted_app_web_files_have_no_source_file(rel_path: str) -> None:
     assert not (APP_WEB_ROOT / rel_path).exists(), f"apps/app-web/{rel_path} was deleted in #1272 and exists again"
@@ -126,3 +135,6 @@ def test_the_import_probe_finds_modules_that_exist() -> None:
 
     # App-web control
     assert (APP_WEB_ROOT / "src" / "app" / "research" / "page.tsx").exists()
+
+    # Tools control
+    assert (TOOLS_ROOT / "prepush.sh").exists()
