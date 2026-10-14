@@ -82,7 +82,7 @@ def test_a_different_executed_at_is_a_new_run(connection) -> None:
 def test_jpm_decision_persists_the_uniform_rejected_outcome(connection) -> None:
     decisions, definition = run()
     run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
-    jpm = next(d for d in decisions if d.issuer_id == "issuer:jpm")
+    jpm = next(d for d in decisions if d.issuer_id == "issuer:jpm" and d.cutoff_at.startswith("2026-06"))
 
     write_strategy_decision(connection, jpm, strategy_run_id=run_id)
 
@@ -94,7 +94,7 @@ def test_jpm_decision_persists_the_uniform_rejected_outcome(connection) -> None:
     assert row is not None
     efficiency, exclusion_reason, eligible, outcome = row
     # Uniform v0 (2026-07-18): JPM computes a (negative) capital-adjusted level,
-    # flows through the P/S tier, and is rejected for sitting above its band --
+    # flows through the P/GP tier, and at 2026-06 is rejected for sitting above its band --
     # eligible, with no sector exclusion reason.
     assert efficiency is not None
     assert exclusion_reason is None
