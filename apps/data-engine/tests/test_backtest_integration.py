@@ -25,6 +25,7 @@ import psycopg
 import pytest
 from data_engine.datahub import backtest as datahub_backtest
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, is_xnys_trading_day
+from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
@@ -813,6 +814,11 @@ def test_an_issuer_without_series_of_its_own_is_priced_by_its_other_listing(seed
     assert payload["price_symbols"] == {"T1265G": "T1265L"}
     assert "T1265G is priced by the bars of its T1265L listing." in payload["limitations"]
     assert "T1265G" in payload["benchmark"]["universe"] and payload["benchmark"]["never_filled"] == ["T758E"]
+    # The price snapshot hashes the stored series that priced the run: T1265L, under its own symbol.
+    used = sorted({row[1] for row in payload["binding"]["issuers"]} - {"T1265G"} | {"T1265L"})
+    assert payload["binding"]["price_snapshot_sha256"] == datahub_backtest.price_snapshot_sha256(
+        load_daily_series(connection, used, adjust="none"), load_daily_series(connection, used, adjust="splits")
+    )
 
 
 def test_an_issuer_without_series_on_any_listing_is_named_with_its_cutoffs(seeded) -> None:
