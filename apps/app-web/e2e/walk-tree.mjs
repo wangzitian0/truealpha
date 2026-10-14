@@ -349,6 +349,10 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
 
   const isRecorded = (row, field) => Boolean(row.cells[field]) && row.cells[field] !== NOT_RECORDED;
   const valued = rows.filter((row) => isRecorded(row, "value"));
+  // The walk prints the branch that it took. A log with only "ok" cannot tell a filled table from "not recorded".
+  console.log(
+    `  trace: core result ${coreResult === null ? NOT_RECORDED : "recorded"}, ${rows.length} input rows, ${valued.length} with a value`,
+  );
   if (coreResult === null) {
     if (SEEDED_FIXTURE) {
       problems.push(`trace: the seed gives this decision a lineage, but the page says "Core result: ${NOT_RECORDED}"`);
