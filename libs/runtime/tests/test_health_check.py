@@ -198,14 +198,25 @@ def test_the_data_engine_vintage_is_read_from_the_health_body() -> None:
     assert _data_engine_parser("not json") == "unknown"
 
 
-def test_llm_service_health_reports_the_data_engine_vintage() -> None:
+def test_llm_service_health_reports_the_data_engine_vintage(monkeypatch: pytest.MonkeyPatch) -> None:
     """The producing half of the same contract — the reader above is useless without it.
 
     Calls the handler rather than grepping its source: a text assertion passed when the
     line was merely COMMENTED OUT, because the string it looked for was still in the file.
     The mutation reproof caught that, which is what it is for.
+
+    The database is down by construction (#1284). The DB write gate (#1197) turns a real
+    `psycopg.connect` into a skip when no `DATABASE_URL` is set, and the reproof job has none.
+    A skipped test cannot notice a mutation. So the test makes the connection fail with the
+    error a real outage gives, and the handler answers from its own except branch.
     """
     llm = pytest.importorskip("llm_service.main")
+    psycopg = pytest.importorskip("psycopg")
+
+    def database_is_down(*args: object, **kwargs: object) -> None:
+        raise psycopg.OperationalError("no database in a unit test")
+
+    monkeypatch.setattr(psycopg, "connect", database_is_down)
 
     body = llm.health()
     assert "data_engine_parser" in body, "the deploy lane cannot verify what is not reported"
