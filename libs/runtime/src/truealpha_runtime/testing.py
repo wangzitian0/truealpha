@@ -277,7 +277,8 @@ def run_python_probe(
     CI job that sets `OTEL_*`) from deciding the outcome. The working directory is the repository
     root, where the services' relative manifest paths resolve.
     """
-    declared = {key for item in runtime_env_contract()["variables"] for key in (item["name"], *item["aliases"])}
+    variables: Any = runtime_env_contract()["variables"]
+    declared = {key for item in variables for key in (item["name"], *item["aliases"])}
     scrubbed = {
         name: value for name, value in os.environ.items() if not name.startswith("OTEL_") and name not in declared
     }
