@@ -14,6 +14,7 @@ from importlib import resources
 import pytest
 from factors.backtest.corporate_actions import SeriesBar, derive_split_events
 from factors.backtest.engine import (
+    MIN_ORDER_NOTIONAL,
     Bar,
     PriceBook,
     TargetPortfolio,
@@ -353,3 +354,121 @@ def test_statistics_use_the_measured_session_count() -> None:
     assert stats.max_drawdown == 0, "the price only rises after the fill"
     assert stats.sessions_per_year == Decimal(2) / (Decimal(2) / Decimal("365.25"))
     assert stats.cagr is not None and stats.cagr > 0
+
+
+# -- orders below one cent (#1270) -------------------------------------------------------
+
+#: The sessions of the book below: the first target fills on 2024-10-01, the second on 2024-10-02.
+SECOND_CUTOFF = datetime(2024, 10, 1, 23, 59, 59, tzinfo=UTC)
+HALF = Decimal("0.5")
+
+
+def _flat_book(price: str, *symbols: str) -> PriceBook:
+    """Each symbol opens and closes at one price on every session, so no price move changes a weight."""
+    days = [date(2024, 9, 30), date(2024, 10, 1), date(2024, 10, 2), date(2024, 10, 3)]
+    return PriceBook(bars={symbol: {day: Bar(Decimal(price), Decimal(price)) for day in days} for symbol in symbols})
+
+
+def _free_rules():
+    """The definition's rules at zero cost, so a fee never moves a weight away from its target."""
+    return execution_rules(_with_cost(_definition(), "0"))
+
+
+def _two_targets(first: Decimal, second: Decimal) -> list[TargetPortfolio]:
+    return [TargetPortfolio(CUTOFF, {"AAA": first}), TargetPortfolio(SECOND_CUTOFF, {"AAA": second})]
+
+
+@pytest.mark.parametrize(
+    ("price", "residue"),
+    [("1.18", "under target"), ("2.03", "over target"), ("1.11", "over target, then under it")],
+)
+def test_a_second_rebalance_to_the_held_weight_records_no_trade(price: str, residue: str) -> None:
+    """Staging run backtest-run:893147d2 recorded a BUY of about 4.5e-25 shares for AMZN and for META.
+    The weight before the order was 0.4999999999999999999999999999 against a target of 0.5.
+
+    At each price below, 28 digits cannot hold shares * price exactly. The held weight then differs
+    from the unchanged target by about 1e-28. Red when the engine turns that residue into an order.
+    """
+    notional = CAPITAL * HALF
+    assert notional / Decimal(price) * Decimal(price) != notional, f"{price} must leave a Decimal residue ({residue})"
+
+    run = simulate(_flat_book(price, "AAA"), _two_targets(HALF, HALF), _free_rules(), capital=CAPITAL)
+
+    assert [(trade.session, trade.side) for trade in run.trades] == [(date(2024, 10, 1), "BUY")]
+    assert run.fills[1].turnover == 0, "the second rebalance traded nothing"
+
+
+@pytest.mark.parametrize("weight", [HALF + Decimal("1e-27"), HALF - Decimal("1e-27")], ids=["above", "below"])
+def test_two_weights_that_differ_by_1e_27_record_no_trade(weight: Decimal) -> None:
+    """The held weight is exactly 0.5 at a price of 100. A target 1e-27 away asks for an order of 1e-21."""
+    run = simulate(_flat_book("100", "AAA"), _two_targets(HALF, weight), _free_rules(), capital=CAPITAL)
+
+    assert [trade.side for trade in run.trades] == ["BUY"], "only the opening buy is a trade"
+
+
+@pytest.mark.parametrize(
+    ("weight", "side"),
+    [
+        ("0.50000001", "BUY"),
+        ("0.5000000099", None),
+        ("0.49999999", "SELL"),
+        ("0.4999999901", None),
+    ],
+    ids=["buy-of-one-cent", "buy-below-one-cent", "sell-of-one-cent", "sell-below-one-cent"],
+)
+def test_an_order_of_exactly_one_cent_is_recorded_and_a_smaller_order_is_not(weight: str, side: str | None) -> None:
+    """Both sides of the boundary, on both sides of the book. At a value of 1,000,000 the target
+    0.50000001 is 500,000.01: the order is 0.01 = MIN_ORDER_NOTIONAL. The target 0.5000000099 is 0.0099."""
+    assert MIN_ORDER_NOTIONAL == Decimal("0.01")
+
+    run = simulate(_flat_book("100", "AAA"), _two_targets(HALF, Decimal(weight)), _free_rules(), capital=CAPITAL)
+
+    second = [trade for trade in run.trades if trade.session == date(2024, 10, 2)]
+    if side is None:
+        assert second == []
+        return
+    (trade,) = second
+    assert (trade.side, trade.notional) == (side, MIN_ORDER_NOTIONAL)
+    assert trade.shares == MIN_ORDER_NOTIONAL / Decimal(100)
+
+
+def test_an_order_below_one_cent_is_neither_unfilled_nor_deferred() -> None:
+    """AAA has no open on the second fill session. A residue order for it is no order. The fill does
+    not list it as unfilled. The benchmark rule (next session open) does not defer it."""
+    held_days = (date(2024, 9, 30), date(2024, 10, 1), date(2024, 10, 3))
+    book = PriceBook(
+        bars={
+            "AAA": {day: Bar(Decimal(100), Decimal(100)) for day in held_days},
+            "BBB": {day: Bar(Decimal(10), Decimal(10)) for day in (*held_days, date(2024, 10, 2))},
+        }
+    )
+    rules = benchmark_rules(_free_rules())
+
+    run = simulate(book, _two_targets(HALF, HALF + Decimal("1e-27")), rules, capital=CAPITAL)
+
+    assert [trade.side for trade in run.trades] == ["BUY"]
+    assert date(2024, 10, 2) not in book.bars["AAA"], "AAA has no bar on the second fill session"
+    assert run.fills[1].session == date(2024, 10, 2) and run.fills[1].unfilled_symbols == ()
+    assert run.deferred_fills == ()
+
+
+def test_a_buy_that_has_no_cash_records_no_trade() -> None:
+    """AAA fills the book. At the second target AAA has no open, so its sell cannot fill and no cash
+    exists for the buy of BBB. The buy used to record a trade of zero shares for zero value."""
+    book = PriceBook(
+        bars={
+            "AAA": {
+                date(2024, 9, 30): Bar(Decimal("90"), Decimal("95")),
+                date(2024, 10, 1): Bar(Decimal("100"), Decimal("110")),
+                date(2024, 10, 3): Bar(Decimal("121"), Decimal("130")),
+            },
+            "BBB": {day: Bar(Decimal("50"), Decimal("50")) for day in (date(2024, 10, 1), date(2024, 10, 2))},
+        }
+    )
+    targets = [TargetPortfolio(CUTOFF, {"AAA": Decimal(1)}), TargetPortfolio(SECOND_CUTOFF, {"BBB": Decimal(1)})]
+
+    run = simulate(book, targets, execution_rules(_definition()), capital=CAPITAL)
+
+    assert run.fills[1].unfilled_symbols == ("AAA",), "the sell of AAA cannot fill on 2024-10-02"
+    assert [(trade.symbol, trade.side) for trade in run.trades] == [("AAA", "BUY")]
+    assert all(trade.notional >= MIN_ORDER_NOTIONAL for trade in run.trades)

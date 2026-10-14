@@ -24,7 +24,10 @@ Rules this module enforces:
 * Equal weights sum to exactly 1. Each weight is ``1/N`` at the definition's sizing quantization,
   and the last symbol takes the remainder.
 * The drawdown peak starts at the capital, so a loss on the first session is a drawdown.
-* Shares are fractional, so every result is independent of the notional capital.
+* An order below ``MIN_ORDER_NOTIONAL`` (one cent) is Decimal rounding residue, not a decision. The
+  engine records no trade for it, and the cash or the shares stay in the book.
+* Shares are fractional, so a result does not depend on the notional capital. The one exception is the
+  order below ``MIN_ORDER_NOTIONAL``, which the engine drops.
 
 All arithmetic is ``Decimal``. A rerun on the same inputs gives the same digits.
 """
@@ -43,7 +46,7 @@ from truealpha_contracts.strategy import DecimalQuantization, LargeModelValueV0D
 from factors.backtest.corporate_actions import SplitEvent
 
 #: The identity of this simulation. A change to its semantics changes this id.
-ENGINE_ID = "factors.backtest.engine:unadjusted-open-explicit-splits:v1"
+ENGINE_ID = "factors.backtest.engine:unadjusted-open-explicit-splits:v2"
 #: How returns are priced. Recorded on each run (``mart.backtest_runs.price_basis``).
 PRICE_BASIS = "unadjusted_open_explicit_splits"
 #: What a result can claim. No dividend source exists, so the return omits dividends.
@@ -54,6 +57,10 @@ BENCHMARK_RULE = "equal_weight_buy_and_hold_first_cutoff_issuers"
 #: The unfilled-order behaviors this engine implements. The definition names the first.
 REMAIN_CASH = "remain_cash"
 NEXT_SESSION_OPEN = "next_session_open"
+
+#: The smallest order the engine records, in the currency of the capital: one cent. A smaller order
+#: is the Decimal residue between a held weight and the same target weight, not a decision (#1270).
+MIN_ORDER_NOTIONAL = Decimal("0.01")
 
 _BASIS_POINTS_PER_UNIT = Decimal(10_000)
 #: Days in a Julian year: converts a calendar span into years.
@@ -350,6 +357,10 @@ def _spend(
         book.cash = _ZERO
     trades: list[Trade] = []
     for order, notional, fee in legs:
+        if notional < MIN_ORDER_NOTIONAL:
+            # Too little cash was left for this order. The cash stays in the book.
+            book.cash += notional + fee
+            continue
         before = book.shares.get(order.symbol, _ZERO)
         bought = notional / order.price
         book.shares[order.symbol] = before + bought
@@ -392,7 +403,7 @@ def _rebalance(
         weight = target.weights.get(symbol, _ZERO)
         current = held * book.last[symbol]
         goal = weight * value
-        if current <= goal:
+        if current - goal < MIN_ORDER_NOTIONAL:
             continue
         price = opens.get(symbol)
         if price is None:
@@ -429,16 +440,17 @@ def _rebalance(
         if weight <= 0:
             continue
         current = book.shares.get(symbol, _ZERO) * book.last.get(symbol, _ZERO)
-        if weight * value <= current:
+        amount = weight * value - current
+        if amount < MIN_ORDER_NOTIONAL:
             continue
         price = opens.get(symbol)
         if price is None:
             if symbol not in unfilled:
                 unfilled.append(symbol)
             if rules.unfilled_order_behavior == NEXT_SESSION_OPEN:
-                pending[symbol] = _Pending(target.cutoff_at, session, weight * value - current)
+                pending[symbol] = _Pending(target.cutoff_at, session, amount)
             continue
-        orders.append(_Order(symbol, price, weight * value - current))
+        orders.append(_Order(symbol, price, amount))
     bought = _spend(book, orders, rules, target.cutoff_at, session, value)
     trades.extend(bought)
     traded += sum((trade.notional for trade in bought), _ZERO)
@@ -617,6 +629,7 @@ __all__ = [
     "BENCHMARK_RULE",
     "CLAIM_CEILING",
     "ENGINE_ID",
+    "MIN_ORDER_NOTIONAL",
     "PRICE_BASIS",
     "NEXT_SESSION_OPEN",
     "REMAIN_CASH",

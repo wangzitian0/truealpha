@@ -65,12 +65,28 @@ each decision:
   split must stop the run before it writes a row. The split derivation does this. A ratio step
   that is not a simple split ratio raises `SplitDerivationError`. A ratio step that the unadjusted
   price does not confirm also raises it.
+- The backtest checks the share basis of each count (#1270). History rows are append-only, so a
+  projector fix reaches the table only when the projector runs again. Before the simulation, the run
+  checks the winning `shares_outstanding` row of each canonical issuer. It raises `ShareBasisError`
+  when that row is knowable before a split and the winning `last_close` row is knowable on or after
+  the ex-date. The message names the symbol, the cutoff, the split with its factor, and the job
+  `strategy_history_projection_pipeline`. Nothing catches the error, so a failed Dagster run and a red
+  `nightly_backtest` verdict are the signal. The inputs table keeps no share basis date. The check
+  cannot see a cover count that is dated before a split and filed after it. The projector handles
+  that case.
+- The projector runs on every weekday at 20:07 UTC, 83 minutes before the backtest, in production and
+  in staging (#1270). It ran once a week before. A projector fix now reaches the next backtest with no
+  manual step. The job stays launchable by hand.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
   `mart.backtest_valuations.benchmark_cum_nav`). Its universe is the issuers with inputs at the
   first cutoff. A benchmark symbol without an open on the first fill session is bought at its next
   open, and the run records the delay.
+- The engine records no order below one cent (#1270). Such an order is the Decimal rounding residue
+  between a held weight and its unchanged target. Staging run `backtest-run:893147d2` recorded two BUY
+  orders of about 4.5e-25 shares. `MIN_ORDER_NOTIONAL` sets the limit. The rule changes the recorded
+  trades, so the engine id is now `factors.backtest.engine:unadjusted-open-explicit-splits:v2`.
 - Decision 6 no longer holds. No frozen universe list exists. The universe is the issuers that hold
   strategy inputs today, resolved through today's stored lineage. That is a survivorship bias, and
   each run stores it in `metrics_payload.limitations`. The page and the MCP response show it.

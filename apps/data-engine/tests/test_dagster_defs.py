@@ -661,7 +661,7 @@ def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick(
     assert lane.strategy_history_schedule.name in {schedule.name for schedule in defs.schedules or ()}
     assert lane.strategy_history_schedule.cron_schedule == lane.STRATEGY_HISTORY_CRON
 
-    tick = datetime(2026, 10, 11, 10, 7, tzinfo=UTC)
+    tick = datetime(2026, 10, 13, 20, 7, tzinfo=UTC)
     request = lane.strategy_history_schedule(dg.build_schedule_context(scheduled_execution_time=tick))
     assert request.run_key == tick.isoformat()
     config = request.run_config["ops"]["project_strategy_history_op"]["config"]

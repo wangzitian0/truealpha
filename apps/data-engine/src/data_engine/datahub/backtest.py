@@ -13,7 +13,10 @@ One path, from staging to mart:
    the risk-free rate are the ones the live replay uses.
 3. Prices. Unadjusted daily bars (``adjust = 'none'``) and split-adjusted daily bars
    (``adjust = 'splits'``), the latest vintage of each session. The ratio of the two closes
-   gives the split events (``factors.backtest.corporate_actions``).
+   gives the split events (``factors.backtest.corporate_actions``). Before the simulation, a
+   share-basis check (#1270) stops the run when a winning share count predates a split that the
+   close of its cutoff follows. History rows are append-only, so only a new run of
+   ``strategy_history_projection_pipeline`` corrects that count.
 4. Simulation. ``factors.backtest.engine`` with the definition's execution, transaction-cost,
    total-return and sizing rules as its only parameters. The benchmark is an equal weight of the
    issuers with inputs at the first cutoff, bought at the first fill session open and held, on the
@@ -39,6 +42,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
+from factors.backtest.corporate_actions import SplitEvent, split_factor_between
 from factors.backtest.engine import (
     BENCHMARK_RULE,
     CLAIM_CEILING,
@@ -77,13 +81,15 @@ from data_engine.datahub.strategy_history import (
     quarter_end_cutoffs,
 )
 from data_engine.strategy_backtest_gateway import (
+    MarketValueVintage,
     StrategyBacktestGateway,
     combine_snapshot_ids,
     issuer_inputs_from_rows,
     snapshot_id_from_rows,
 )
 
-#: The notional scale of a run. Shares are fractional, so no result depends on it.
+#: The notional scale of a run. Shares are fractional, so a result depends on it only through the
+#: orders below one cent (``factors.backtest.engine.MIN_ORDER_NOTIONAL``).
 NOTIONAL_CAPITAL = Decimal("1000000")
 #: The risk-free rate the Sharpe ratio subtracts. The page labels the ratio with it.
 SHARPE_RISK_FREE_RATE = Decimal(0)
@@ -125,6 +131,13 @@ def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
 
 class BacktestPending(RuntimeError):
     """The run cannot judge yet: data it needs is not in this environment."""
+
+
+class ShareBasisError(RuntimeError):
+    """A winning share count predates a split that its close follows, so the market value is wrong (#1270).
+
+    The run raises it and nothing catches it. A failed Dagster run is the visible signal.
+    """
 
 
 # -- cutoffs ----------------------------------------------------------------------------
@@ -243,6 +256,69 @@ def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) 
     return canonical_sha256(sorted(rows))
 
 
+# -- share basis ------------------------------------------------------------------------
+
+
+def _stale_share_basis(
+    symbol: str, cutoff: datetime, shares_known: date, close_known: date, between: Sequence[SplitEvent]
+) -> str:
+    splits = ", ".join(
+        f"{event.numerator}/{event.denominator} split on {event.ex_date.isoformat()}" for event in between
+    )
+    return (
+        f"{symbol} at {cutoff.isoformat()} (share count known {shares_known.isoformat()}, "
+        f"close known {close_known.isoformat()}, {splits})"
+    )
+
+
+def require_current_share_basis(
+    vintages: Mapping[datetime, Sequence[MarketValueVintage]],
+    tickers: Mapping[str, str],
+    splits: Sequence[SplitEvent],
+) -> None:
+    """Raise ``ShareBasisError`` when a winning share count predates a split that its close follows.
+
+    The projector puts a share count on the share basis of its close (A6 decision 4). It multiplies
+    the count by each split between the two. It appends that row with the ``knowable_at`` of the
+    close, so the row wins. A winning count may be knowable before a split while its close is
+    knowable after it. Then the projector has not corrected that row. The table is append-only, so
+    only a new projector run corrects it.
+
+    ``vintages`` holds the winning ``knowable_at`` pair of each issuer at each cutoff. ``tickers``
+    names the canonical issuers. Rows of any other id are ignored, because the projector never
+    corrects them. ``splits`` are the events of the price book. One error names every failing
+    symbol and cutoff.
+
+    Known limit: the inputs table keeps no share basis date. A cover count that is dated before a
+    split and filed after it is not visible here. The projector handles that case.
+    """
+    events: dict[str, list[SplitEvent]] = {}
+    for event in splits:
+        events.setdefault(event.symbol, []).append(event)
+    stale: list[str] = []
+    for cutoff, rows in sorted(vintages.items()):
+        for row in rows:
+            symbol = tickers.get(row.issuer_id)
+            if symbol is None:
+                continue
+            shares_known = row.shares_knowable_at.astimezone(UTC).date()
+            close_known = row.close_knowable_at.astimezone(UTC).date()
+            if split_factor_between(events.get(symbol, ()), after=shares_known, through=close_known) == 1:
+                continue
+            between = [
+                event
+                for event in events.get(symbol, ())
+                if split_factor_between([event], after=shares_known, through=close_known) != 1
+            ]
+            stale.append(_stale_share_basis(symbol, cutoff, shares_known, close_known, between))
+    if stale:
+        raise ShareBasisError(
+            "A share count predates a split that its close follows, so the market value mixes two share "
+            f"bases ({len(stale)} found): {'; '.join(stale)}. Run strategy_history_projection_pipeline, "
+            "then run the backtest again."
+        )
+
+
 # -- the run ----------------------------------------------------------------------------
 
 
@@ -285,9 +361,13 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
-    # ONE read per cutoff, before any decision. The issuer list, the inputs and the snapshot id
-    # all derive from it, so run_id describes exactly the inputs the decisions used.
+    # ONE read of the values per cutoff, before any decision. The issuer list, the inputs and the
+    # snapshot id all derive from it. So run_id describes exactly the inputs the decisions used.
+    # The vintages carry dates only, for the share-basis check. They are read BEFORE the values.
+    # A projector commit between the two reads then gives the decisions rows at least as new as the
+    # vintages. So the check never passes on a row that the decisions did not use.
     gateway = StrategyBacktestGateway(connection)
+    vintages_by_cutoff = {cutoff: gateway.market_value_vintages_at(cutoff) for cutoff in cutoffs}
     rows_by_cutoff = {cutoff: gateway.rows_at(cutoff) for cutoff in cutoffs}
     issuer_ids = sorted({row[0] for rows in rows_by_cutoff.values() for row in rows})
     # #1257: the table holds each issuer under a legacy id and under its entity UUID. The run
@@ -330,6 +410,13 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     if missing_adjusted:
         raise RuntimeError(f"no split-adjusted daily bars, so no split events, for {missing_adjusted}")
     book = price_book(unadjusted, split_adjusted)
+    # History rows are append-only, so a projector fix reaches a stale share count only through a new
+    # projector run (#1270). Stop before the simulation: a green run on that count has wrong picks.
+    require_current_share_basis(
+        {cutoff: vintages_by_cutoff[cutoff] for cutoff in cutoffs},
+        {issuer.issuer_id: issuer.ticker for issuer in canonical.issuers},
+        book.splits,
+    )
 
     strategy = simulate(
         book,

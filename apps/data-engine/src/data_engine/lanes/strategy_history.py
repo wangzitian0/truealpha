@@ -10,13 +10,17 @@ The tick time of the run derives the cutoffs (`executed_at`), never the wall clo
 one tick builds the same cutoffs. The projector is idempotent, so a repeated run adds no row
 until a new filing, a new bar or a new headcount fact changes an input.
 
+The schedule runs on every weekday, 83 minutes before the nightly backtest, in each environment
+where the backtest runs (#1270). History rows are append-only, so a projector fix reaches the
+backtest only through a projector run. The next backtest then reads the fix with no manual step.
+
 Manual replay: launch the job from the Dagster UI launchpad, or through GraphQL, with the run
 config below. `months` is optional.
 
     ops:
       project_strategy_history_op:
         config:
-          executed_at: "2026-10-11T10:07:00+00:00"
+          executed_at: "2026-10-13T20:07:00+00:00"
 """
 
 from datetime import datetime
@@ -26,12 +30,16 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.strategy_history import DEFAULT_MONTHS, project_deployed_history
+from data_engine.lanes.backtest import schedule_status
 
 STRATEGY_HISTORY_JOB_NAME = "strategy_history_projection_pipeline"
-# Sunday 10:07 UTC: after the standards backfill (09:07), so a headcount fact the backfill
-# landed enters the same week. Weekly is enough: the history of a past month changes only when
-# a filing, a bar or a headcount fact arrives late.
-STRATEGY_HISTORY_CRON = "7 10 * * 0"
+# Weekdays 20:07 UTC: 83 minutes before the nightly backtest (21:30 UTC, `lanes.backtest`). A fix of
+# the projector then reaches the next backtest with no manual step (#1270). No other lane runs at this
+# time. The weekly lanes run from Saturday 08:07 to Monday 09:07 UTC. The daily quality lanes end by
+# 06:15 UTC. The market data refresh starts at 21:15 UTC. The projector writes only to the database
+# and takes about 100 seconds, so it ends over an hour before that refresh writes new bars.
+# A headcount fact that the Sunday or Monday standards lane lands enters the Monday projection.
+STRATEGY_HISTORY_CRON = "7 20 * * 1-5"
 
 
 class StrategyHistoryConfig(dg.Config):
@@ -86,12 +94,8 @@ def strategy_history_pipeline_job() -> None:
     job=strategy_history_pipeline_job,
     cron_schedule=STRATEGY_HISTORY_CRON,
     execution_timezone="UTC",
-    # Production-only, like the other scheduled lanes; staging and development replay it by hand.
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if settings.app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    ),
+    # Where the nightly backtest runs (production and staging). Elsewhere the job runs by hand.
+    default_status=schedule_status(settings.app_env),
 )
 def strategy_history_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()
