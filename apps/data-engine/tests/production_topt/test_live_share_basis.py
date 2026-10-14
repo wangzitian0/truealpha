@@ -14,21 +14,17 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+import sys
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
-    PriceBarRecord,
-    insert_market_prices_daily,
-    is_xnys_trading_day,
-)
+from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import PlannedRun
 from data_engine.datahub.production_topt.executor import SourceFetchPort
@@ -47,6 +43,9 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
 from factors.production_topt import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import SeriesShape, share_count_vintage, store_daily_series  # noqa: E402
+
 #: The settled session every listing closes on. The corpus partition starts on it.
 SESSION = date(2026, 3, 31)
 #: The live tick of the fixture: 22:15 UTC on the next day, like the production schedule.
@@ -62,10 +61,6 @@ SERIES_START = date(2025, 12, 1)
 _BANK_TICKER = "JPM"
 
 
-#: The (unadjusted close, split-adjusted close) of one symbol on one session. None stores no bar.
-SeriesShape = Callable[[date], tuple[Decimal | None, Decimal | None]]
-
-
 def _flat(_day: date) -> tuple[Decimal | None, Decimal | None]:
     return CLOSE, CLOSE
 
@@ -77,30 +72,6 @@ def _split(ex_date: date, factor: int) -> SeriesShape:
     session. The unadjusted close before the ex-date is on the pre-split basis.
     """
     return lambda day: (CLOSE * factor if day < ex_date else CLOSE, CLOSE)
-
-
-def _sessions(first: date, last: date) -> list[date]:
-    return [
-        first + timedelta(days=n)
-        for n in range((last - first).days + 1)
-        if is_xnys_trading_day(first + timedelta(days=n))
-    ]
-
-
-def _store_series(connection, shapes: dict[str, SeriesShape], *, last: date = SESSION) -> None:
-    """Both daily series of every TOPT symbol the market-data lane stores, SERIES_START to `last`.
-
-    A symbol that `shapes` omits closes at 40 in both series on every session.
-    """
-    for symbol in DEFAULT_TOPT_SYMBOLS:
-        shape = shapes.get(symbol, _flat)
-        bars: dict[str, list[PriceBarRecord]] = {"none": [], "splits": []}
-        for day in _sessions(SERIES_START, last):
-            for adjust, close in zip(("none", "splits"), shape(day), strict=True):
-                if close is not None:
-                    bars[adjust].append(PriceBarRecord(symbol, day, close, close, close, close, Decimal(1000)))
-        for adjust, records in bars.items():
-            insert_market_prices_daily(connection, records, adjust=adjust)
 
 
 def _company_facts(shares: Decimal, *, accession: str) -> bytes:
@@ -131,18 +102,7 @@ def _bundle(branch: OperatingBranch, *, cik: int) -> FinancialFactsBundle:
         raw_bytes=_company_facts(FILED_SHARES, accession=accession),
         knowable_at=datetime.combine(FILED, datetime.min.time(), tzinfo=UTC),
         shares_period_end=COVER_DATE,
-        vintages={
-            "shares_outstanding": {
-                "accession": accession,
-                "document": None,
-                "filed": FILED.isoformat(),
-                "form": "10-K",
-                "fp": "FY",
-                "fy": 2025,
-                "period_end": COVER_DATE.isoformat(),
-                "statement_form": "10-K",
-            }
-        },
+        vintages={"shares_outstanding": share_count_vintage(filed=FILED, own_date=COVER_DATE, accession=accession)},
     )
 
 
@@ -243,8 +203,13 @@ def tick_database_url(monkeypatch):
 
 
 def _with_series(url: str, shapes: dict[str, SeriesShape]) -> None:
+    """Both daily series of every TOPT symbol the market-data lane stores, SERIES_START to SESSION.
+
+    A symbol that `shapes` omits closes at 40 in both series on every session.
+    """
     with psycopg.connect(url) as connection:
-        _store_series(connection, shapes)
+        for symbol in DEFAULT_TOPT_SYMBOLS:
+            store_daily_series(connection, symbol, shapes.get(symbol, _flat), first=SERIES_START, last=SESSION)
         connection.commit()
 
 

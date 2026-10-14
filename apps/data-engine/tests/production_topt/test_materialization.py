@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,7 @@ from data_engine.datahub.a1_evidence import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
+from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
@@ -46,6 +48,9 @@ from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.strategy_run import StrategyRunReport
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import share_count_vintage, store_flat_daily_series  # noqa: E402
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -1530,6 +1535,22 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     assert served.requested_count == 84
 
 
+def _seed_strategy_capture(connection):
+    """A complete run that the strategy seed can value (#1262).
+
+    Each financial fact dates its share count, and both stored daily series of every symbol
+    reach the close's session. The series show no split, so each count stays as filed.
+    """
+    seeded = _seed_complete_production_run(
+        connection,
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20))
+        },
+    )
+    store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=date(2026, 1, 2), last=CUTOFF.date())
+    return seeded
+
+
 def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connection, monkeypatch) -> None:
     """#395's missing weld, driven end to end in one transaction: the captured
     corpus run's observation payloads cross the capture→strategy bridge
@@ -1549,7 +1570,7 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     connection.execute("set session_replication_role = replica")
     connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
     connection.execute("set session_replication_role = origin")
-    _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
+    _repository, run, _list_version, _release_manifest_id, *_ = _seed_strategy_capture(connection)
 
     written = seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
@@ -1615,7 +1636,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
     connection.execute("set session_replication_role = replica")
     connection.execute("delete from mart.strategy_runs where strategy_key = 'large_model_value_v0'")
     connection.execute("set session_replication_role = origin")
-    _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
+    _repository, run, _list_version, _release_manifest_id, *_ = _seed_strategy_capture(connection)
     seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
     )

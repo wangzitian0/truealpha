@@ -16,8 +16,8 @@ use this module, so the two cannot disagree on what a basis date is or how a spl
 The projector reads its close from the stored unadjusted series, so the series always hold its
 session. The live close comes from the capture. ``live_on_close_basis`` therefore checks what
 the stored series can prove, and it fails closed. An issuer whose splits are unknown between
-the basis date and the close's session gets no market value, with a named reason. It never
-falls back to the filed count.
+the basis date and the close's session gets no market value, with a named reason. The live
+path never falls back to the filed count.
 """
 
 from __future__ import annotations

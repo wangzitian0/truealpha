@@ -316,7 +316,7 @@ def _counts_on_close_basis(
         )
         if isinstance(outcome, Unavailable):
             log.warning(
-                "share basis: %s (%s) has no market value at %s: %s: %s",
+                "share basis: %s (%s) gets no share row beside the close %s: %s: %s",
                 issuer_id,
                 ", ".join(names) or "no listing ticker",
                 close_payload.get("close"),

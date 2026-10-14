@@ -7,10 +7,12 @@ and run-scoped readers across twins, gate rows, and pointer advances.
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -45,6 +47,9 @@ from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import share_count_vintage, store_topt_series  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
@@ -107,6 +112,8 @@ _MAIN_PEG_RUN_SQL = """
 @pytest.fixture(scope="module")
 def tick_database_url():
     with isolated_test_database("forced") as target_url:
+        # The strategy seed takes each issuer's splits from the stored daily series (#1262).
+        store_topt_series(target_url)
         yield target_url
 
 
@@ -149,6 +156,7 @@ def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
         pre_provision_profit=Decimal("80000000") if financial else None,
         raw_bytes=b'{"facts":{}}',
         knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+        vintages={"shares_outstanding": share_count_vintage(filed=date(2026, 2, 1), own_date=date(2026, 1, 20))},
     )
 
 
