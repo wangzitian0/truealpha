@@ -181,7 +181,7 @@ def test_a_missing_service_name_refuses_telemetry() -> None:
 
 
 def test_the_removed_service_name_alias_does_not_stand_in_for_the_standard_one() -> None:
-    """infra2-sdk 3.4.0 reads only `OTEL_SERVICE_NAME`; the `SERVICE_NAME` alias is gone."""
+    """infra2-sdk 3.4.0 and later read only `OTEL_SERVICE_NAME`; the `SERVICE_NAME` alias is gone."""
     with pytest.raises(TelemetryConfigError, match="OTEL_SERVICE_NAME"):
         init_telemetry(_environ(OTEL_SERVICE_NAME=None, SERVICE_NAME="truealpha-dagster"), set_global=False)
 
