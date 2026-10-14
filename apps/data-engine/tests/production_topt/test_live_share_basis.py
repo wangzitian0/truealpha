@@ -1,10 +1,10 @@
 """The live tick puts a filed share count on the share basis of the close it multiplies (#1262).
 
 The history projector fixed this shape in #1257. These tests drive the deployed Dagster op
-`run_topt_live_tick` end to end: offline vendor answers through the deployed adapters, the
-real capture, freeze, materialization, strategy seed, strategy replay and plausibility gate.
-The stored daily series (`adjust = 'none'` and `adjust = 'splits'`) carry the splits, as the
-market-data lane stores them in production.
+`run_topt_live_tick` end to end. The vendor answers are offline and pass through the deployed
+adapters. The capture, freeze, materialization, strategy seed, replay and plausibility gate are
+real. The stored daily series (`adjust = 'none'` and `adjust = 'splits'`) carry the splits, as
+the market-data lane stores them in production.
 
 The fixture universe is the 21-listing TOPT corpus. Every issuer files 10,000,000 shares on
 2026-02-01 (a cover count dated 2026-01-20), and every listing closes at 40 on 2026-03-31.
@@ -305,9 +305,9 @@ def test_a_symbol_without_its_split_adjusted_series_makes_the_issuer_unavailable
     """#1262 acceptance b. NVDA split 10:1 on 2026-03-02, and only its unadjusted series is stored.
 
     Without the split-adjusted series its splits are unknown. The tick writes no share row for
-    NVDA, so the filed count never meets the post-split close, and the evaluator excludes NVDA
-    with `missing_market_value_input`. The log names the reason. Red on main: the tick wrote
-    the filed 10,000,000 beside the post-split close.
+    NVDA, so the filed count never meets the post-split close. The evaluator excludes NVDA with
+    `missing_market_value_input`, and the log names the reason. Red on main: the tick wrote the
+    filed 10,000,000 beside the post-split close.
     """
     ex_date = date(2026, 3, 2)
     _with_series(tick_database_url, {"NVDA": lambda day: (CLOSE * 10 if day < ex_date else CLOSE, None)})

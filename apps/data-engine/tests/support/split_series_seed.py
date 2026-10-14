@@ -1,8 +1,8 @@
 """Test support: the stored daily series that a live tick reads its splits from (#1262).
 
 The live strategy seed puts a filed share count on the share basis of the captured close. It
-takes the splits from `staging.market_prices_daily`: the market-data lane stores an unadjusted
-series (`adjust = 'none'`) and a split-adjusted series (`adjust = 'splits'`) for each symbol.
+takes the splits from `staging.market_prices_daily`. For each symbol, the market-data lane stores
+an unadjusted series (`adjust = 'none'`) and a split-adjusted series (`adjust = 'splits'`).
 A tick whose symbols have no stored series makes each issuer unavailable, by design. So a test
 that runs the strategy seed on a capture stores both series first, through the production writer.
 """

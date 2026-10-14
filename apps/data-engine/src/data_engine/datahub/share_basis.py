@@ -99,12 +99,12 @@ def share_count_as_of(
 ) -> ShareBasis:
     """The share basis of a filed share count, from the stored entry that carries it.
 
-    A cover-page count is a count as of its own date, its ``period_end``. A statement count (a
-    balance-sheet count or a weighted average) is restated for a split before its filing is
-    issued (SAB Topic 4C), so it is on the basis of the filing date. The vintage names the filing
-    and the period end, not the concept, so the stored document decides. Only an entry with the
-    same accession, the same period end AND the same value classifies the count: a 20-F can hold
-    a cover count and a restated balance-sheet count of one date under one accession.
+    A cover-page count is a count as of its own date, its ``period_end``. A statement count is a
+    balance-sheet count or a weighted average. Its filing restates it for an earlier split (SAB
+    Topic 4C), so it is on the basis of the filing date. The vintage names the filing and the
+    period end, not the concept, so the stored document decides. Only an entry with the same
+    accession, the same period end AND the same value classifies the count. A 20-F can hold a
+    cover count and a restated balance-sheet count of one date under one accession.
 
     A count that no stored entry carries is UNRECOGNISED. It falls back to its filing date, which
     under-adjusts a cover count; the projector counts each case, so the summary shows how often.
@@ -177,8 +177,8 @@ class Unavailable(NamedTuple):
 class SplitHistory:
     """The splits that one symbol's two stored daily series show.
 
-    A split with an ex-date in ``(after, through]`` shows as a step of the price ratio only when
-    both series hold a session at or before ``after`` and a session at or after ``through``.
+    A split with an ex-date in ``(after, through]`` shows as a step of the price ratio. It shows
+    only when both series hold a session at or before ``after`` and one at or after ``through``.
     """
 
     symbol: str
