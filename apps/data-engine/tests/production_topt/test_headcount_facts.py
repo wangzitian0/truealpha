@@ -37,13 +37,15 @@ def connection():
 
 
 def _land(connection, cik: int, value: str, knowable: datetime, source: str = "test") -> int:
+    filed_iso = knowable.astimezone(UTC).date().isoformat()
     return record_headcount(
         connection,
         cik=cik,
         headcount=Decimal(value),
         knowable_at=knowable,
+        period_end=knowable.astimezone(UTC).date(),
         source=source,
-        evidence_ref="test-evidence",
+        evidence_ref=f"accession=000099900026000001 form=10-K filed={filed_iso}",
         confidence=Decimal("0.7"),
     )
 
@@ -115,6 +117,16 @@ def test_validate_cited_headcount_fact_rejects_legacy_2026_01_01_and_uncited_row
             knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
             period_end=None,
             evidence_ref=legacy_evidence,
+        )
+    with pytest.raises(ValueError, match="18-digit SEC accession"):
+        record_headcount(
+            None,  # type: ignore[arg-type]
+            cik=_CIK,
+            headcount=Decimal("1000"),
+            knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+            source="manual-review",
+            evidence_ref=legacy_evidence,
+            confidence=Decimal("0.50"),
         )
 
     with pytest.raises(ValueError, match="precedes cited filing date"):

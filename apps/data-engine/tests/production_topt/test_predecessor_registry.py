@@ -125,3 +125,40 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     assert target.cik == 2115436
     assert target.predecessor_cik == 34088
     assert target.predecessor_signed is True
+
+
+def test_alphabet_uuid_constants_match_migrated_entity_aliases(connection) -> None:
+    """#1265: verify the Alphabet listing/instrument UUIDs in `canonical_issuer.py` match
+    `resolve_entity` (`staging.entity_mint`) in the migrated schema so UUID-plane
+    preference ordering never silently drifts."""
+    from datetime import UTC, date, datetime
+
+    from data_engine.datahub.canonical_issuer import (
+        PRIMARY_INSTRUMENT_IDS,
+        PRIMARY_LISTING_IDS,
+        SECONDARY_INSTRUMENT_IDS,
+        SECONDARY_LISTING_IDS,
+        instrument_sort_key,
+        listing_sort_key,
+    )
+    from data_engine.datahub.resolve_coordinates import resolve_entity
+
+    as_of = date(2026, 9, 2)
+    known_at = datetime(2026, 9, 2, tzinfo=UTC)
+    googl_listing_uuid = str(
+        resolve_entity(connection, "listing:xnas:googl", "listing", as_of=as_of, known_at=known_at)
+    )
+    goog_listing_uuid = str(resolve_entity(connection, "listing:xnas:goog", "listing", as_of=as_of, known_at=known_at))
+    googl_inst_uuid = str(
+        resolve_entity(connection, "security:cusip:02079K305", "instrument", as_of=as_of, known_at=known_at)
+    )
+    goog_inst_uuid = str(
+        resolve_entity(connection, "security:cusip:02079K107", "instrument", as_of=as_of, known_at=known_at)
+    )
+
+    assert googl_listing_uuid in PRIMARY_LISTING_IDS
+    assert goog_listing_uuid in SECONDARY_LISTING_IDS
+    assert googl_inst_uuid in PRIMARY_INSTRUMENT_IDS
+    assert goog_inst_uuid in SECONDARY_INSTRUMENT_IDS
+    assert min([goog_listing_uuid, goog_listing_uuid, googl_listing_uuid], key=listing_sort_key) == googl_listing_uuid
+    assert min([goog_inst_uuid, googl_inst_uuid], key=instrument_sort_key) == googl_inst_uuid

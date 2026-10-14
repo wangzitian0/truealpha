@@ -40,6 +40,7 @@ def validate_cited_headcount_fact(
     knowable_at: datetime,
     period_end: date | None,
     evidence_ref: str,
+    require_period_end: bool = True,
 ) -> None:
     """Reject uncited or misdated headcount facts (#1264).
 
@@ -64,9 +65,9 @@ def validate_cited_headcount_fact(
         raise ValueError(
             f"headcount knowable_at ({knowable_date.isoformat()}) does not match cited filing date ({filed_date.isoformat()})"
         )
-    if period_end is None:
+    if require_period_end and period_end is None:
         raise ValueError("headcount period_end must be set to the fiscal period end of the cited filing")
-    if period_end > filed_date:
+    if period_end is not None and period_end > filed_date:
         raise ValueError(
             f"headcount period_end ({period_end.isoformat()}) is after cited filing date ({filed_date.isoformat()})"
         )
@@ -132,6 +133,13 @@ def record_headcount(
     Deliberately not an upsert: a corrected figure is a NEW row with a later
     `knowable_at`, so history stays readable and a replay of an older cutoff is unaffected.
     """
+    if source in (*HEADCOUNT_SOURCE_PRIORITY, "manual-reviewed"):
+        validate_cited_headcount_fact(
+            knowable_at=knowable_at,
+            period_end=period_end,
+            evidence_ref=evidence_ref,
+            require_period_end=(source != "10k-extraction"),
+        )
     row = connection.execute(
         """
         insert into staging.issuer_headcount_facts
