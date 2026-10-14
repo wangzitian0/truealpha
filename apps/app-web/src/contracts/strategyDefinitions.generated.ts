@@ -15,6 +15,5 @@ export interface RegisteredStrategyDefinition {
 }
 
 export const STRATEGY_DEFINITION_REGISTRY: readonly RegisteredStrategyDefinition[] = [
-  { version: "0.1.0", content_sha256: "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d", provisional_semantics: true },
   { version: "1.0.0", content_sha256: "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803", provisional_semantics: false },
 ];

@@ -22,10 +22,14 @@ import psycopg
 import pytest
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.research import ValuationTier
-from truealpha_contracts.strategy import StrategyDefinitionIdentity, strategy_definition_registry
+from truealpha_contracts.strategy import (
+    StrategyDefinitionIdentity,
+    registered_strategy_definition,
+    strategy_definition_registry,
+)
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
-from truealpha_runtime.testing import guard_db_write
+from truealpha_runtime.testing import guard_db_write, synthetic_provisional_strategy_definition
 
 _HASH64 = "c" * 64
 # The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
@@ -383,7 +387,8 @@ def test_an_issuer_the_identity_store_does_not_know_keeps_its_raw_id(connection)
 
 _REGISTRY = strategy_definition_registry()
 _REVIEWED = next(entry for entry in _REGISTRY if not entry.provisional_semantics)
-_PROVISIONAL = next(entry for entry in _REGISTRY if entry.provisional_semantics)
+#: Definition 0.1.0. The owner deleted its file (#1274); production and staging still hold its runs.
+_DELETED_V0 = ("0.1.0", "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d")
 
 
 def _served_report(connection, *, strategy_version: str, definition_sha256: str) -> StrategyRunReport:
@@ -418,7 +423,7 @@ def test_the_report_names_the_definition_and_review_state_of_the_served_run(
     connection, registered: StrategyDefinitionIdentity
 ) -> None:
     """Parametrized over the registry: a future definition file is covered with no edit here.
-    On 2026-10-14 production served 0.1.0 (provisional) and staging served 1.0.0 (reviewed)."""
+    The registry holds 1.0.0 (reviewed) only; the provisional case below adds one."""
     result = _served_report(
         connection, strategy_version=registered.version, definition_sha256=registered.content_sha256
     )
@@ -432,18 +437,36 @@ def test_the_report_names_the_definition_and_review_state_of_the_served_run(
     )
 
 
+def test_a_provisional_definition_reads_provisional_in_the_report(connection) -> None:
+    """No packaged definition is provisional, so the synthetic one keeps the marker armed: a
+    future provisional definition file gets this state with no code change."""
+    synthetic = synthetic_provisional_strategy_definition()
+    with registered_strategy_definition(synthetic):
+        result = _served_report(
+            connection, strategy_version=synthetic.definition_version, definition_sha256=synthetic.content_sha256
+        )
+
+    assert result.definition is not None, "the report does not name the definition of the served run"
+    assert (result.definition.version, result.definition.content_sha256, result.definition.review_state) == (
+        synthetic.definition_version,
+        synthetic.content_sha256,
+        "provisional",
+    )
+
+
 @pytest.mark.parametrize(
     ("strategy_version", "definition_sha256"),
     [
+        pytest.param(*_DELETED_V0, id="deleted-0.1.0"),
         pytest.param(_REVIEWED.version, "f" * 64, id="hash-outside-registry"),
-        pytest.param(_PROVISIONAL.version, _REVIEWED.content_sha256, id="version-disagrees-with-hash"),
+        pytest.param(_DELETED_V0[0], _REVIEWED.content_sha256, id="version-disagrees-with-hash"),
     ],
 )
 def test_a_definition_outside_the_registry_is_unknown_and_never_reviewed(
     connection, strategy_version: str, definition_sha256: str
 ) -> None:
-    """The registry decides from the content hash. A reviewed version string with another hash,
-    or a reviewed hash with another version, is not a definition the registry knows."""
+    """The registry decides from the content hash. The deleted 0.1.0, a reviewed version string
+    with another hash, or a reviewed hash with another version is not a definition it holds."""
     result = _served_report(connection, strategy_version=strategy_version, definition_sha256=definition_sha256)
 
     assert result.definition is not None, "the report does not name the definition of the served run"

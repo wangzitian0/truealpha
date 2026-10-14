@@ -37,6 +37,10 @@ import {
 	type ValuationTier,
 } from "@/contracts/strategyRun";
 import { strategyRunDefinitionOf } from "@/contracts/strategyDefinition";
+import {
+	type RegisteredStrategyDefinition,
+	STRATEGY_DEFINITION_REGISTRY,
+} from "@/contracts/strategyDefinitions.generated";
 
 import { withMartReadonly } from "./db";
 
@@ -336,6 +340,12 @@ export function provenanceFromRow(
 }
 
 export class MartStrategyRunRepository {
+	/** `registry` gives each run its review state (#1235). The App uses the generated
+	 * registry; tests pass another one to add a synthetic provisional definition. */
+	constructor(
+		private readonly registry: readonly RegisteredStrategyDefinition[] = STRATEGY_DEFINITION_REGISTRY,
+	) {}
+
 	async getLatest(
 		strategyId: string,
 		_context: AccessContext,
@@ -386,6 +396,7 @@ export class MartStrategyRunRepository {
 		const definition = strategyRunDefinitionOf(
 			runRow.strategy_version,
 			runRow.definition_content_sha256,
+			this.registry,
 		);
 		if (definition === null) {
 			return { strategy_id: strategyId, reason: "schema_mismatch" };

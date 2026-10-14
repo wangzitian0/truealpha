@@ -4,18 +4,20 @@
  * Production served definition 0.1.0, whose bands no one reviewed, and staging served the
  * reviewed 1.0.0. Before this line, a reader could not tell them apart.
  *
- * A report without a definition shows the unknown line. The page never claims a review that
- * the report does not carry.
+ * A run whose definition the registry does not hold (the deleted 0.1.0, for example) shows
+ * its version and "not reviewed". A report without a definition shows "Definition unknown".
+ * The page never claims a review that the report does not carry.
  */
 
 import type { StrategyRunDefinition } from "@/contracts/strategyDefinition";
 
 function lineText(definition: StrategyRunDefinition | undefined): string {
-  if (definition?.review_state === "reviewed") return `Definition ${definition.version} · reviewed`;
-  if (definition?.review_state === "provisional") {
+  if (definition === undefined) return "Definition unknown · not reviewed";
+  if (definition.review_state === "reviewed") return `Definition ${definition.version} · reviewed`;
+  if (definition.review_state === "provisional") {
     return `Definition ${definition.version} · PROVISIONAL: bands not reviewed`;
   }
-  return "Definition unknown · not reviewed";
+  return `Definition ${definition.version} · not reviewed (not in the registry)`;
 }
 
 export function StrategyDefinitionLine({ definition }: { definition: StrategyRunDefinition | undefined }) {

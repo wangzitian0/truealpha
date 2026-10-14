@@ -4,14 +4,19 @@
  *
  * On 2026-10-14 production served runs of definition 0.1.0, whose tier bands no one reviewed,
  * and staging served the reviewed 1.0.0. Before this marker the two pages looked the same.
+ * The owner deleted the 0.1.0 file (#1274), so a stored 0.1.0 run reads "not in the registry".
  *
  * Each case records the newest run inside one transaction on the test's own client. The
  * client goes to the repository through db.ts `__setTestClient`, and the test rolls it back.
- * The read goes through `loadStrategyRunPage` with its default repository: the call that
- * both pages make. The test then renders `StrategyDefinitionLine`, the component that both
- * pages render, with the exact `definition` prop that the pages pass. It does not render the
- * whole page: the pages read the session cookie through next/headers, which works only in a
- * Next.js request.
+ * The read goes through `loadStrategyRunPage`: the call that both pages make. The test then
+ * renders `StrategyDefinitionLine`, the component that both pages render, with the exact
+ * `definition` prop that the pages pass. It does not render the whole page: the pages read
+ * the session cookie through next/headers, which works only in a Next.js request.
+ *
+ * No packaged definition is provisional. The provisional case injects the generated
+ * synthetic definition (tests/helpers/synthetic-provisional-definition.generated.ts, built
+ * through the Python model validation) into the repository's registry, so the marker stays
+ * armed for a future provisional definition.
  *
  * Run standalone: `bun run tests/strategy-definition-marker.test.ts`.
  */
@@ -23,11 +28,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { StrategyDefinitionLine } from "../src/components/strategy-definition";
+import type { StrategyRunDefinition } from "../src/contracts/strategyDefinition";
+import { STRATEGY_DEFINITION_REGISTRY } from "../src/contracts/strategyDefinitions.generated";
 import type { AccessContext } from "../src/contracts/strategyRun";
 import { __setTestClient } from "../src/server/mart/db";
+import { MartStrategyRunRepository } from "../src/server/mart/strategy-run-repository";
 import { loadStrategyRunPage, type StrategyRunPrincipal } from "../src/server/strategy-page";
 
 import { requireDb } from "./helpers/db-guard";
+import { SYNTHETIC_PROVISIONAL_DEFINITION } from "./helpers/synthetic-provisional-definition.generated";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -53,33 +62,56 @@ const MEMBER: StrategyRunPrincipal = { context: CONTEXT, principalKind: "member"
 
 const hex64 = () => randomBytes(32).toString("hex");
 
-/** The two definitions as the review record states them
+/** The App's repository, and one whose registry also holds the synthetic provisional definition. */
+const DEPLOYED = new MartStrategyRunRepository();
+const WITH_SYNTHETIC = new MartStrategyRunRepository([...STRATEGY_DEFINITION_REGISTRY, SYNTHETIC_PROVISIONAL_DEFINITION]);
+
+/** Definition 1.0.0 as the review record states it, and the deleted 0.1.0
  * (governance/reviews/large_model_value_v0-definition-1.0.0.md). Written out here as an
  * oracle; the generated registry under test does not supply them. */
+const V1_SHA256 = "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803";
+const DELETED_V0_SHA256 = "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d";
+
 const CASES = [
   {
-    name: "definition 0.1.0 (provisional)",
-    version: "0.1.0",
-    sha256: "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
-    state: "provisional",
-    text: "Definition 0.1.0 · PROVISIONAL: bands not reviewed",
-    provisional: true,
-  },
-  {
     name: "definition 1.0.0 (reviewed)",
+    repository: DEPLOYED,
     version: "1.0.0",
-    sha256: "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803",
+    sha256: V1_SHA256,
     state: "reviewed",
     text: "Definition 1.0.0 · reviewed",
-    provisional: false,
+  },
+  {
+    name: "the deleted definition 0.1.0",
+    repository: DEPLOYED,
+    version: "0.1.0",
+    sha256: DELETED_V0_SHA256,
+    state: "unknown",
+    text: "Definition 0.1.0 · not reviewed (not in the registry)",
   },
   {
     name: "a reviewed version string with a hash outside the registry",
+    repository: DEPLOYED,
     version: "1.0.0",
     sha256: "f".repeat(64),
     state: "unknown",
-    text: "Definition unknown · not reviewed",
-    provisional: false,
+    text: "Definition 1.0.0 · not reviewed (not in the registry)",
+  },
+  {
+    name: "the synthetic provisional definition in an injected registry",
+    repository: WITH_SYNTHETIC,
+    version: SYNTHETIC_PROVISIONAL_DEFINITION.version,
+    sha256: SYNTHETIC_PROVISIONAL_DEFINITION.content_sha256,
+    state: "provisional",
+    text: `Definition ${SYNTHETIC_PROVISIONAL_DEFINITION.version} · PROVISIONAL: bands not reviewed`,
+  },
+  {
+    name: "the synthetic provisional definition in the App's registry",
+    repository: DEPLOYED,
+    version: SYNTHETIC_PROVISIONAL_DEFINITION.version,
+    sha256: SYNTHETIC_PROVISIONAL_DEFINITION.content_sha256,
+    state: "unknown",
+    text: `Definition ${SYNTHETIC_PROVISIONAL_DEFINITION.version} · not reviewed (not in the registry)`,
   },
 ] as const;
 
@@ -87,6 +119,19 @@ const CASES = [
 function visibleText(html: string): string {
   return html.replace(/<[^>]*>/g, "");
 }
+
+function renderLine(definition: StrategyRunDefinition | undefined): { html: string; text: string } {
+  const html = renderToStaticMarkup(createElement(StrategyDefinitionLine, { definition }));
+  return { html, text: visibleText(html) };
+}
+
+assert(
+  SYNTHETIC_PROVISIONAL_DEFINITION.provisional_semantics &&
+    !STRATEGY_DEFINITION_REGISTRY.some(
+      (entry) => entry.content_sha256 === SYNTHETIC_PROVISIONAL_DEFINITION.content_sha256,
+    ),
+  "the synthetic definition must be provisional and absent from the App's registry",
+);
 
 const admin = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
 await admin.connect();
@@ -112,7 +157,7 @@ try {
       [`strategy-decision:${hex64()}`, hex64(), runId],
     );
 
-    const outcome = await loadStrategyRunPage(MEMBER, "large_model_value_v0");
+    const outcome = await loadStrategyRunPage(MEMBER, "large_model_value_v0", testCase.repository);
     assert(outcome.kind === "ready", `${testCase.name}: expected a ready page, got ${JSON.stringify(outcome)}`);
     assert(
       outcome.report.strategy_run_id === runId,
@@ -126,25 +171,21 @@ try {
       `${testCase.name}: the served report carries ${JSON.stringify(definition)}`,
     );
 
-    const html = renderToStaticMarkup(createElement(StrategyDefinitionLine, { definition }));
-    const text = visibleText(html);
+    const { html, text } = renderLine(definition);
     assert(text === testCase.text, `${testCase.name}: the page line reads "${text}", not "${testCase.text}"`);
     assert(
       html.includes(`data-review-state="${testCase.state}"`),
       `${testCase.name}: the line does not state data-review-state="${testCase.state}": ${html}`,
     );
     assert(
-      text.includes("PROVISIONAL") === testCase.provisional,
+      text.includes("PROVISIONAL") === (testCase.state === "provisional"),
       `${testCase.name}: PROVISIONAL must appear exactly when the bands are provisional: "${text}"`,
     );
   }
 
   // A report without a marker never shows a review that it does not carry.
-  const withoutMarker = visibleText(renderToStaticMarkup(createElement(StrategyDefinitionLine, { definition: undefined })));
-  assert(
-    withoutMarker === "Definition unknown · not reviewed",
-    `a report without a definition reads "${withoutMarker}"`,
-  );
+  const withoutMarker = renderLine(undefined).text;
+  assert(withoutMarker === "Definition unknown · not reviewed", `a report without a definition reads "${withoutMarker}"`);
 
   console.log(`#1235 strategy definition marker: ${CASES.length} served runs and the absent marker passed`);
 } finally {

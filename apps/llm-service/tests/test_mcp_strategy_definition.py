@@ -2,11 +2,13 @@
 
 On 2026-10-14 production served runs of definition 0.1.0, whose tier bands no one reviewed,
 and staging served the reviewed 1.0.0. The tool response must say which one a caller reads.
+The owner deleted the 0.1.0 file (#1274), so a stored 0.1.0 run reads `unknown`.
 
 The test drives the deployed server (`build_mcp_server()` with its default Postgres
 repository) against a real Postgres. It seeds inside one transaction that it rolls back, and
 redirects `psycopg.connect` onto that transaction: the seam of test_mcp_identity_leak.py.
 The cases come from the definition registry, so a future definition file is covered with no edit.
+No packaged definition is provisional, so the synthetic one keeps the provisional case armed.
 """
 
 from __future__ import annotations
@@ -19,11 +21,18 @@ from typing import Any
 import psycopg
 import pytest
 from llm_service.mcp_server import build_mcp_server
-from truealpha_contracts.strategy import StrategyDefinitionIdentity, strategy_definition_registry
+from truealpha_contracts.strategy import (
+    StrategyDefinitionIdentity,
+    registered_strategy_definition,
+    strategy_definition_registry,
+)
 from truealpha_contracts.strategy_run import StrategyRunReport
+from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 
 _REGISTRY = strategy_definition_registry()
 _REVIEWED = next(entry for entry in _REGISTRY if not entry.provisional_semantics)
+#: Definition 0.1.0. The owner deleted its file (#1274); production and staging still hold its runs.
+_DELETED_V0 = ("0.1.0", "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d")
 #: Later than every run that another test commits, so the seeded run is the newest one.
 _EXECUTED_AT = "2028-01-01T00:00:00Z"
 
@@ -117,13 +126,40 @@ async def test_the_strategy_run_tool_names_the_definition_and_its_review_state(
 
 
 @pytest.mark.anyio
-async def test_the_strategy_run_tool_calls_a_definition_outside_the_registry_unknown(
+async def test_the_strategy_run_tool_calls_a_provisional_definition_provisional(
     database: psycopg.Connection[Any],
 ) -> None:
-    result = await _served_result(database, version=_REVIEWED.version, content_sha256="f" * 64)
+    synthetic = synthetic_provisional_strategy_definition()
+    with registered_strategy_definition(synthetic):
+        result = await _served_result(
+            database, version=synthetic.definition_version, content_sha256=synthetic.content_sha256
+        )
+        report = StrategyRunReport.model_validate_json(json.dumps(result))
 
     assert result.get("definition") == {
-        "version": _REVIEWED.version,
-        "content_sha256": "f" * 64,
+        "version": synthetic.definition_version,
+        "content_sha256": synthetic.content_sha256,
+        "review_state": "provisional",
+    }
+    assert report.definition is not None
+    assert report.definition.review_state == "provisional"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("version", "content_sha256"),
+    [
+        pytest.param(*_DELETED_V0, id="deleted-0.1.0"),
+        pytest.param(_REVIEWED.version, "f" * 64, id="hash-outside-registry"),
+    ],
+)
+async def test_the_strategy_run_tool_calls_a_definition_outside_the_registry_unknown(
+    database: psycopg.Connection[Any], version: str, content_sha256: str
+) -> None:
+    result = await _served_result(database, version=version, content_sha256=content_sha256)
+
+    assert result.get("definition") == {
+        "version": version,
+        "content_sha256": content_sha256,
         "review_state": "unknown",
     }
