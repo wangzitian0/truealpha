@@ -1,5 +1,7 @@
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -34,7 +36,9 @@ def connection():
 def test_write_replay_persists_the_run_and_all_ten_decisions(connection) -> None:
     decisions, definition = run()
 
-    run_id, decision_ids = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT)
+    run_id, decision_ids = write_replay(
+        connection, decisions, definition, executed_at=_EXECUTED_AT, risk_free_rate=None
+    )
 
     assert run_id.startswith("strategy-run:")
     assert len(decision_ids) == 10
@@ -55,8 +59,12 @@ def test_write_replay_persists_the_run_and_all_ten_decisions(connection) -> None
 def test_replaying_the_same_run_is_idempotent(connection) -> None:
     decisions, definition = run()
 
-    first_run_id, first_decision_ids = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT)
-    second_run_id, second_decision_ids = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT)
+    first_run_id, first_decision_ids = write_replay(
+        connection, decisions, definition, executed_at=_EXECUTED_AT, risk_free_rate=None
+    )
+    second_run_id, second_decision_ids = write_replay(
+        connection, decisions, definition, executed_at=_EXECUTED_AT, risk_free_rate=None
+    )
 
     assert first_run_id == second_run_id
     assert first_decision_ids == second_decision_ids
@@ -69,8 +77,10 @@ def test_replaying_the_same_run_is_idempotent(connection) -> None:
 def test_a_different_executed_at_is_a_new_run(connection) -> None:
     decisions, definition = run()
 
-    first_run_id, _ = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT)
-    second_run_id, _ = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT.replace(hour=13))
+    first_run_id, _ = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
+    second_run_id, _ = write_replay(
+        connection, decisions, definition, executed_at=_EXECUTED_AT.replace(hour=13), risk_free_rate=None
+    )
 
     assert first_run_id != second_run_id
     count = connection.execute(
@@ -81,7 +91,7 @@ def test_a_different_executed_at_is_a_new_run(connection) -> None:
 
 def test_jpm_decision_persists_the_uniform_rejected_outcome(connection) -> None:
     decisions, definition = run()
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     jpm = next(d for d in decisions if d.issuer_id == "issuer:jpm" and d.cutoff_at.startswith("2026-06"))
 
     write_strategy_decision(connection, jpm, strategy_run_id=run_id)
@@ -109,7 +119,7 @@ def test_a_forged_row_under_the_computed_id_raises_on_replay(connection) -> None
     must raise rather than silently trusting the mismatched row."""
 
     decisions, definition = run()
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     jpm = next(d for d in decisions if d.issuer_id == "issuer:jpm")
 
     payload = {"strategy_run_id": run_id, **jpm.to_json()}
@@ -133,8 +143,10 @@ def test_snapshot_id_is_persisted_and_distinguishes_the_run(connection) -> None:
     _, definition = run()
     snapshot_id = f"strategy-snapshot:{'a' * 64}"
 
-    with_snapshot = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id)
-    without_snapshot = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    with_snapshot = write_strategy_run(
+        connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id, risk_free_rate=None
+    )
+    without_snapshot = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
 
     assert with_snapshot != without_snapshot
     assert connection.execute(
@@ -150,7 +162,7 @@ def test_a_decision_row_carries_the_three_status_dimensions(connection) -> None:
     evidence is `degraded` until the replay reads from the vintage plane (#530 items 5–6);
     validation is `not_evaluated` until a sealed holdout record exists (#65)."""
     decisions, definition = run()
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     for decision in decisions:
         write_strategy_decision(connection, decision, strategy_run_id=run_id, definition=definition)
     rows = connection.execute(
@@ -178,14 +190,14 @@ def test_the_peg_reason_is_persisted_outside_the_decisions_identity(connection) 
     from dataclasses import replace
 
     decisions, definition = run()
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     evaluated = next(d for d in decisions if d.eligible)
     unannotated_id = write_strategy_decision(
         connection, replace(evaluated, peg=None, peg_reason_codes=()), strategy_run_id=run_id
     )
     connection.rollback()
 
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     annotated = replace(evaluated, peg=None, peg_reason_codes=("non_positive_growth",))
     annotated_id = write_strategy_decision(connection, annotated, strategy_run_id=run_id)
     assert annotated_id == unannotated_id, "the reason is not part of the decision's identity"
@@ -205,13 +217,13 @@ def test_corpus_sha256_derives_from_snapshot_id_when_provided() -> None:
     snapshot_1 = "strategy-snapshot:" + "1" * 64
     snapshot_2 = "strategy-snapshot:" + "2" * 64
 
-    payload_fixture = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=None)
+    payload_fixture = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=None, risk_free_rate=None)
     assert payload_fixture["corpus_sha256"] == CORPUS_SHA256
 
-    payload_1 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_1)
+    payload_1 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_1, risk_free_rate=None)
     assert payload_1["corpus_sha256"] == "1" * 64
 
-    payload_2 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_2)
+    payload_2 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_2, risk_free_rate=None)
     assert payload_2["corpus_sha256"] == "2" * 64
 
     assert payload_1["corpus_sha256"] != payload_2["corpus_sha256"]
@@ -222,7 +234,9 @@ def test_write_strategy_run_persists_computed_corpus_sha256(connection) -> None:
     """#955: mart.strategy_runs persists the real input facts hash from snapshot_id."""
     _, definition = run()
     snapshot_id = "strategy-snapshot:" + "a" * 64
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id)
+    run_id = write_strategy_run(
+        connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id, risk_free_rate=None
+    )
     (persisted_corpus_sha,) = connection.execute(
         "select corpus_sha256 from mart.strategy_runs where strategy_run_id = %s", (run_id,)
     ).fetchone()
@@ -235,14 +249,14 @@ def test_the_labor_efficiency_metric_is_persisted_outside_the_decisions_identity
     from dataclasses import replace
 
     decisions, definition = run()
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     evaluated = next(d for d in decisions if d.eligible)
     unnamed_id = write_strategy_decision(
         connection, replace(evaluated, labor_efficiency_metric=None), strategy_run_id=run_id
     )
     connection.rollback()
 
-    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=None)
     named = replace(evaluated, labor_efficiency_metric="gppe_banking_tce_v1")
     named_id = write_strategy_decision(connection, named, strategy_run_id=run_id)
     assert named_id == unnamed_id, "the metric name is not part of the decision's identity"
@@ -250,3 +264,76 @@ def test_the_labor_efficiency_metric_is_persisted_outside_the_decisions_identity
         "select labor_efficiency_metric from mart.strategy_decisions where strategy_decision_id = %s", (named_id,)
     ).fetchone()
     assert name == "gppe_banking_tce_v1"
+
+
+# -- #1255: the rate that the decisions used is part of the run ----------------------------------
+
+
+def test_a_run_without_a_rate_keeps_the_identity_it_always_had(connection) -> None:
+    """The fixture and preview runs pass no rate. Their payload gains no member, so no stored id moves."""
+    _, definition = run()
+    snapshot_id = "strategy-snapshot:" + "7" * 64
+
+    run_id = write_strategy_run(
+        connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id, risk_free_rate=None
+    )
+
+    assert run_id == "strategy-run:" + canonical_sha256(
+        {
+            "strategy_key": definition.strategy_id,
+            "strategy_version": definition.definition_version,
+            "definition_content_sha256": definition.content_sha256,
+            "corpus_sha256": "7" * 64,
+            "claim_ceiling": CLAIM_CEILING,
+            "executed_at": _EXECUTED_AT.isoformat(),
+            "snapshot_id": snapshot_id,
+        }
+    )
+
+
+def test_two_rates_for_one_tick_are_two_runs_and_a_rate_in_another_scale_is_one(connection) -> None:
+    _, definition = run()
+    snapshot_id = "strategy-snapshot:" + "7" * 64
+
+    def run_with(rate: str | None) -> str:
+        return write_strategy_run(
+            connection,
+            definition,
+            executed_at=_EXECUTED_AT,
+            snapshot_id=snapshot_id,
+            risk_free_rate=None if rate is None else Decimal(rate),
+        )
+
+    assert run_with("0.0426") != run_with("0.0431")
+    assert run_with("0.0426") != run_with(None)
+    assert run_with("0.0426") == run_with("0.04260") == run_with("0.042600"), "the scale of the numeric is no identity"
+    assert run_with("0") != run_with(None)
+
+
+def test_a_forced_tick_that_sees_a_newer_rate_writes_its_own_run_and_meets_no_unique_key(connection) -> None:
+    """Both ticks share the cutoff and the inputs. The second sees a newer Treasury observation, so its
+    decisions differ. Under one run id the second write would meet `unique (strategy_run_id, issuer_id,
+    cutoff_at)`. With the rate in the run, it writes its own run."""
+    decisions, definition = run()
+    shifted = [
+        replace(item, capital_adjusted_labor_efficiency=item.capital_adjusted_labor_efficiency + Decimal(1))
+        if item.capital_adjusted_labor_efficiency is not None
+        else item
+        for item in decisions
+    ]
+    snapshot_id = "strategy-snapshot:" + "7" * 64
+    kwargs = {"executed_at": _EXECUTED_AT, "snapshot_id": snapshot_id}
+
+    first, _ = write_replay(connection, decisions, definition, risk_free_rate=Decimal("0.0426"), **kwargs)
+    second, _ = write_replay(connection, shifted, definition, risk_free_rate=Decimal("0.0431"), **kwargs)
+
+    assert first != second
+    counts = [
+        connection.execute(
+            "select count(*) from mart.strategy_decisions where strategy_run_id = %s", (run_id,)
+        ).fetchone()[0]
+        for run_id in (first, second)
+    ]
+    assert counts == [10, 10]
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        write_replay(connection, shifted, definition, risk_free_rate=Decimal("0.0426"), **kwargs)

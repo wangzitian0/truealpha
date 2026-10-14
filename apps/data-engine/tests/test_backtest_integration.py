@@ -14,6 +14,7 @@ The op's connection is the test's connection with `commit` disabled, so every ro
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -25,6 +26,7 @@ import psycopg
 import pytest
 from data_engine.datahub import backtest as datahub_backtest
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily, is_xnys_trading_day
+from data_engine.datahub.risk_free import MissingRiskFreeRate
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
@@ -37,6 +39,7 @@ from financial_lineage_seed import (  # noqa: E402
     mint_issuer,
     seed_financial_lineage,
 )
+from risk_free_seed import seed_risk_free_rate  # noqa: E402
 
 Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
 Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
@@ -64,6 +67,21 @@ LEGACY_LAST_CLOSE = {
 }
 #: T758C has no bar on the first fill session: the benchmark buys it at its next open.
 NO_BAR = {("T758C", date(2024, 4, 1))}
+#: The Treasury observation that each cutoff sees (#1255): its day and its rate. Every cutoff is the
+#: end of a quarter at 23:59:59, so it sees the last observation before its own calendar day.
+RATE_SEEN = {
+    Q1: (date(2024, 3, 28), Decimal("0.0525")),  # Q1 is a Sunday. The Friday before is Good Friday.
+    Q2: (date(2024, 6, 28), Decimal("0.0530")),  # Q2 is a Sunday.
+    Q3: (date(2024, 9, 27), Decimal("0.0495")),  # Q3 is a Monday. Its own day is no candidate.
+}
+#: Rows that no cutoff may use. A row of a cutoff's own day is not knowable at the cutoff. A row after
+#: a cutoff is not knowable at it either, and a later cutoff may take it.
+RATE_TRAPS = {
+    date(2024, 3, 31): Decimal("0.0999"),
+    date(2024, 6, 30): Decimal("0.0999"),
+    date(2024, 9, 30): Decimal("0.0999"),
+    date(2024, 4, 2): Decimal("0.0888"),
+}
 
 
 def _lei(name: str) -> str:
@@ -160,6 +178,14 @@ def _seed_inputs(
                 )
 
 
+def _seed_rates(connection: psycopg.Connection, *, skip: tuple[datetime, ...] = ()) -> None:
+    for cutoff, (day, rate) in RATE_SEEN.items():
+        if cutoff not in skip:
+            seed_risk_free_rate(connection, day, rate)
+    for day, rate in RATE_TRAPS.items():
+        seed_risk_free_rate(connection, day, rate)
+
+
 def _mint_and_seed_lineage(connection: psycopg.Connection) -> dict[str, SeededIssuer]:
     """Each issuer as an entity, with one financial-fact observation per id generation.
 
@@ -206,8 +232,9 @@ def _mint_and_seed_lineage(connection: psycopg.Connection) -> dict[str, SeededIs
     return issuers
 
 
-@pytest.fixture
-def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def _seeded(
+    connection: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, *, skip_rates: tuple[datetime, ...] = ()
+) -> dict[str, Any]:
     connection.execute("delete from staging.strategy_backtest_inputs")
     issuers = _mint_and_seed_lineage(connection)
     _seed_inputs(connection, issuers, LAST_CLOSE)
@@ -216,6 +243,7 @@ def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     # A monthly and a live cutoff: the backtest evaluates schedule cutoffs only.
     _seed_inputs(connection, issuers, {datetime(2024, 4, 1, tzinfo=UTC): LAST_CLOSE[Q1]})
     _seed_prices(connection)
+    _seed_rates(connection, skip=skip_rates)
     monkeypatch.setattr(connection, "commit", lambda: None)
     monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
     verdicts: list[tuple[bool | None, str]] = []
@@ -224,6 +252,21 @@ def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         lambda name, *, ran_at, ok, summary, run_id: verdicts.append((ok, summary)),
     )
     return {"connection": connection, "verdicts": verdicts, "issuers": issuers}
+
+
+@pytest.fixture
+def seeded(connection, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    return _seeded(connection, monkeypatch)
+
+
+@pytest.fixture
+def seeded_without(connection, monkeypatch: pytest.MonkeyPatch):
+    """`seeded`, but without the rate observation of the given cutoffs."""
+
+    def build(*cutoffs: datetime) -> dict[str, Any]:
+        return _seeded(connection, monkeypatch, skip_rates=cutoffs)
+
+    return build
 
 
 def _run_op() -> dict[str, Any]:
@@ -455,6 +498,75 @@ def test_the_run_stores_its_limitations(seeded) -> None:
     )
     assert any("vintage" in item for item in payload["limitations"])
     assert any("exchange calendar" in item for item in payload["limitations"])
+
+
+# -- #1255: the risk-free rate is a measurement ----------------------------------------------------
+
+
+def test_the_binding_lists_the_rate_of_each_cutoff_with_its_observation_date(seeded) -> None:
+    """Two headline numbers can be compared by their binding. The trap rows carry rates that no cutoff
+    may take: the own day of a cutoff, and a day after it. So a wrong read shows in the list."""
+    binding = _run_row(seeded["connection"], _run_op()["run_id"])["metrics_payload"]["binding"]
+
+    assert binding["risk_free_rates"] == [
+        {"cutoff_at": cutoff.isoformat(), "observation_date": day.isoformat(), "annualized_rate": str(rate)}
+        for cutoff, (day, rate) in RATE_SEEN.items()
+    ]
+    assert "risk_free_rate" not in binding, "the single constant of the old binding is gone"
+
+
+def test_the_evaluator_gets_the_measured_rate_of_each_cutoff(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through the deployed op: `evaluate_cutoff` receives, at each cutoff, the rate that the series gave."""
+    seen: list[tuple[datetime, Decimal]] = []
+    real = datahub_backtest.evaluate_cutoff
+
+    def spy(inputs, *, definition, cutoff_at, risk_free_rate, **kwargs):
+        seen.append((cutoff_at, risk_free_rate))
+        return real(inputs, definition=definition, cutoff_at=cutoff_at, risk_free_rate=risk_free_rate, **kwargs)
+
+    monkeypatch.setattr(datahub_backtest, "evaluate_cutoff", spy)
+
+    _run_op()
+
+    assert seen == [(cutoff, rate) for cutoff, (_day, rate) in RATE_SEEN.items()]
+    assert all(isinstance(rate, Decimal) for _cutoff, rate in seen)
+
+
+@pytest.mark.parametrize(
+    ("without", "newest"),
+    [(Q2, "2024-04-02"), (Q1, "none stored")],
+    ids=["too-old-at-q2", "none-at-q1"],
+)
+def test_a_cutoff_without_a_usable_rate_fails_the_run_and_writes_nothing(seeded_without, without, newest) -> None:
+    """Without the Q2 observation, Q2 sees the newest older row, of 2024-04-02, 89 days old. Without the Q1
+    observation, Q1 sees nothing (the row of 2024-04-02 is not knowable at Q1). The run fails with the
+    named error.
+
+    Red when the backtest falls back to an older rate, or skips the cutoff and reports the rest.
+    """
+    seeded = seeded_without(without)
+    connection = seeded["connection"]
+
+    with pytest.raises(
+        MissingRiskFreeRate, match=rf"missing_risk_free_rate_parameter: .*{re.escape(without.isoformat())}.*{newest}"
+    ):
+        _run_op()
+
+    assert seeded["verdicts"][-1][0] is False, "the nightly verdict is red"
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone() == (0,)
+    assert connection.execute("select count(*) from mart.backtest_trades").fetchone() == (0,)
+
+
+def test_another_rate_series_is_another_run(seeded) -> None:
+    connection = seeded["connection"]
+    first = _run_op()
+
+    seed_risk_free_rate(connection, RATE_SEEN[Q3][0], "0.0496")  # a newer vintage of the Q3 observation
+    second = _run_op()
+
+    assert second["run_id"] != first["run_id"] and second["inserted"] is True
+    rates = _run_row(connection, second["run_id"])["metrics_payload"]["binding"]["risk_free_rates"]
+    assert rates[-1]["annualized_rate"] == "0.0496" and rates[0]["annualized_rate"] == "0.0525"
 
 
 @pytest.mark.parametrize("app_env", ["staging", "production", "prod"])

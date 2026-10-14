@@ -765,25 +765,6 @@ def load_live_strategy_corpus() -> dict[str, Any]:
     return load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
 
 
-@functools.lru_cache(maxsize=4)
-def _load_golden_decision_set_cached(resource: str) -> GoldenDecisionSet:
-    corpus = load_strategy_definition_corpus(resource)
-    return GoldenDecisionSet.model_validate_json(json.dumps(corpus["golden_decision_set"]))
-
-
-def live_risk_free_rate(cutoff_at: datetime | str | None = None) -> Decimal:
-    """The risk-free rate declared in the single-source strategy definition."""
-
-    golden = _load_golden_decision_set_cached(LIVE_STRATEGY_DEFINITION_RESOURCE)
-    if cutoff_at is None:
-        return golden.risk_free_rates[-1].annualized_rate
-    if isinstance(cutoff_at, str):
-        cutoff_dt = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
-    else:
-        cutoff_dt = cutoff_at
-    return golden.rate_for(cutoff_dt).annualized_rate
-
-
 class StrategyDefinitionIdentity(NamedTuple):
     """One packaged definition, by the identity that a strategy run records (#1235).
 
@@ -1153,15 +1134,6 @@ class GoldenDecisionSet(_StrictFrozenModel):
         _identify(self, id_field="golden_decision_set_id", prefix="golden-decision-set")
         return self
 
-    def rate_for(self, cutoff_at: datetime) -> CutoffRiskFreeRate:
-        for rate in self.risk_free_rates:
-            if rate.cutoff_at == cutoff_at:
-                return rate
-        candidates = [rate for rate in self.risk_free_rates if rate.cutoff_at <= cutoff_at]
-        if candidates:
-            return max(candidates, key=lambda r: r.cutoff_at)
-        return self.risk_free_rates[0]
-
 
 class EvaluationSplitRule(StrEnum):
     """#71: how history is partitioned into train / validation / reserved.
@@ -1330,7 +1302,6 @@ __all__ = [
     "ValuationGapRule",
     "WalkForwardWindow",
     "definition_review_state",
-    "live_risk_free_rate",
     "load_live_strategy_corpus",
     "load_live_strategy_definition",
     "load_strategy_definition",

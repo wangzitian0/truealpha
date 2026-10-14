@@ -9,8 +9,11 @@ One path, from staging to mart:
    ``first_cutoff_at`` anchors the LIVE schedule only. It does not bound this historical window.
 2. Decisions. At each cutoff, ``factors.composite.strategy_evaluator.evaluate_cutoff`` evaluates
    the inputs of that cutoff only. The gateway reads ``where cutoff_at = <cutoff>``, and the
-   table CHECK holds ``knowable_at <= cutoff_at`` for each row. The labor-efficiency binding and
-   the risk-free rate are the ones the live replay uses.
+   table CHECK holds ``knowable_at <= cutoff_at`` for each row. The labor-efficiency binding is the
+   one the live replay uses. The risk-free rate of each cutoff is the Treasury observation that was
+   knowable at that cutoff (``datahub.risk_free``, #1255). The run resolves all of them before it
+   decides anything. A cutoff without a rate stops the run with ``MissingRiskFreeRate``, so no
+   headline rests on a cutoff that was approximated.
 3. Prices. Unadjusted daily bars (``adjust = 'none'``) and split-adjusted daily bars
    (``adjust = 'splits'``), the latest vintage of each session. The ratio of the two closes
    gives the split events (``factors.backtest.corporate_actions``). Before the simulation, a
@@ -73,12 +76,12 @@ from truealpha_contracts.strategy import (
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
     QuarterlyCutoffSchedule,
-    live_risk_free_rate,
 )
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_by_symbol
+from data_engine.datahub.risk_free import RiskFreeRate, risk_free_rate_at
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     HistoryIssuer,
@@ -103,7 +106,7 @@ SHARPE_RISK_FREE_RATE = Decimal(0)
 #: What a reader of a run must know about its limits. Stored on every run.
 LIMITATIONS = (
     "Price return only. No dividend source exists, so dividends are not included.",
-    "The labor-efficiency factor uses one constant risk-free rate (A6 decision 3).",
+    "The labor-efficiency factor uses the 3-month U.S. Treasury par yield of the last business day before each cutoff date.",
     "The universe is the issuers that hold strategy inputs today. Issuers that left earlier are absent: survivorship bias.",
     "Issuer class and ticker come from today's stored lineage, not from each cutoff.",
     "Each bar and each input uses its latest stored vintage. A later vendor restatement can change history.",
@@ -186,6 +189,8 @@ class CutoffDecision:
 
 
 InputsAt = Callable[[datetime], Sequence[IssuerInput]]
+#: The risk-free rate of one cutoff, as a decimal fraction. The caller measured it (#1255).
+RateAt = Callable[[datetime], Decimal]
 
 
 def decide(
@@ -194,12 +199,12 @@ def decide(
     issuers: Mapping[str, HistoryIssuer],
     definition: LargeModelValueV0Definition,
     *,
-    risk_free_rate: Decimal | None = None,
+    rate_at: RateAt,
 ) -> list[CutoffDecision]:
-    """Evaluate the strategy at each cutoff over the inputs of that cutoff only."""
+    """Evaluate the strategy at each cutoff over the inputs and the rate of that cutoff only."""
     decisions: list[CutoffDecision] = []
     for cutoff in cutoffs:
-        rate = live_risk_free_rate(cutoff) if risk_free_rate is None else risk_free_rate
+        rate = rate_at(cutoff)
         inputs = [replace(item, issuer_class=_issuer_class(issuers.get(item.issuer_id))) for item in inputs_at(cutoff)]
         evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=rate)
         selected: list[str] = []
@@ -400,7 +405,13 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs}
     snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
 
-    decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition)
+    # #1255: one measured rate per cutoff, resolved before any decision. A cutoff with no usable rate
+    # raises `MissingRiskFreeRate` and the run writes nothing. The rates enter the binding below.
+    rates: dict[datetime, RiskFreeRate] = {cutoff: risk_free_rate_at(connection, cutoff) for cutoff in cutoffs}
+
+    decisions = decide(
+        cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, rate_at=lambda cutoff: rates[cutoff].value
+    )
     if not any(decision.weights for decision in decisions):
         outcomes: dict[str, int] = {}
         for decision in decisions:
@@ -462,7 +473,16 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
             [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
         ),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
-        "risk_free_rate": str(live_risk_free_rate(cutoffs[-1])) if cutoffs else str(live_risk_free_rate()),
+        # Each rate with the day it was observed. Two headline numbers differ by their rates when
+        # these lists differ (#1255).
+        "risk_free_rates": [
+            {
+                "cutoff_at": cutoff.isoformat(),
+                "observation_date": rates[cutoff].observation_date.isoformat(),
+                "annualized_rate": str(rates[cutoff].value),
+            }
+            for cutoff in cutoffs
+        ],
         "capital": str(NOTIONAL_CAPITAL),
         "benchmark_rule": BENCHMARK_RULE,
     }

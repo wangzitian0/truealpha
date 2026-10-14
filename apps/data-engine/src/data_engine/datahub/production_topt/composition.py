@@ -74,7 +74,6 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
-from truealpha_contracts.strategy import live_risk_free_rate
 
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
@@ -109,6 +108,7 @@ from data_engine.datahub.production_topt.universe_corpus import (
     frozen_topt_list_version,
 )
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
+from data_engine.datahub.risk_free import RiskFreeRate, risk_free_rate_at
 from data_engine.release_identity import measure as measure_release_identity
 
 # The four semantics, their owners, freshness windows and routes are declared once in
@@ -149,6 +149,9 @@ class ToptPipelineResult:
     core_result_count: int
     quality_report_id: str
     quality: dict[str, Any]
+    #: The risk-free rate that the core materialization used (#1255). The tick hands the same
+    #: rate to the strategy replay, so one tick reads one rate.
+    risk_free_rate: RiskFreeRate
     #: Whether this run skipped #635 reuse and fetched every obligation (#874).
     forced_fetch: bool = False
 
@@ -989,11 +992,14 @@ def run_topt_pipeline(
         # pointer, which only advances in the caller's publish transaction.
         connection.commit()
 
+    # #1255: the risk-free rate of this cutoff is read from the stored Treasury series. The capture
+    # is durable by now, and the run plan carries the build identity. A cutoff with no usable rate
+    # raises `MissingRiskFreeRate` here: after the evidence is kept, and before anything is frozen,
+    # materialized or published. The retry of the same tick resumes at this line.
+    rate = risk_free_rate_at(connection, cutoff)
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    results = core.materialize(
-        snapshot, gppe_definition=GppeV0Definition(risk_free_rate=live_risk_free_rate(snapshot.cutoff))
-    )
+    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=rate.value))
 
     graded = quality_report.build_report(connection, plan.run_id)
     return ToptPipelineResult(
@@ -1002,6 +1008,7 @@ def run_topt_pipeline(
         core_result_count=len(results),
         quality_report_id=quality_report.persist(connection, graded),
         quality=graded,
+        risk_free_rate=rate,
         forced_fetch=plan.forced_fetch,
     )
 

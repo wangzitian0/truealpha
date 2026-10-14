@@ -163,8 +163,9 @@ def fixture_canary_definitions() -> dg.Definitions:
         with psycopg.connect(settings.database_url) as connection:
             seed_strategy_backtest_inputs(connection, corpus)
             decisions, snapshot_id = run_backtest_from_staging(connection, corpus, definition)
+            # The golden corpus carries its own explicit rates. The run binds no measured rate.
             run_id, decision_ids = write_replay(
-                connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
+                connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id, risk_free_rate=None
             )
             connection.commit()
         context.log.info(f"fixture canary: run {run_id}, {len(decision_ids)} decisions")

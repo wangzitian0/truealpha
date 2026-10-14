@@ -2,8 +2,8 @@
 
 The live tick, the TOPT core engine and the nightly backtest read the rate of a cutoff from
 `staging.risk_free_rates_daily`. A test that drives one of them stores the observation first.
-The helpers here write a row with the column rules of the production writer, without a network
-call and without an object store: the raw bytes go to an in-memory store.
+The helpers here write a row with the column rules of the production writer. They make no network
+call and use no object store. The raw bytes go to an in-memory store.
 """
 
 from __future__ import annotations
@@ -76,3 +76,39 @@ def stub_rate(rate: Decimal | str = DEFAULT_RATE, observation_date: date = date(
         knowable_at=knowable_at_of(observation_date),
         fetch_id=1,
     )
+
+
+def store_risk_free_series(
+    database_url: str,
+    *,
+    first: date = date(2026, 3, 1),
+    last: date = date(2026, 9, 30),
+    rate: Decimal | str = DEFAULT_RATE,
+) -> None:
+    """One observation per calendar day from `first` to `last`, committed to one test database.
+
+    A test world has no business-day calendar. Any day of the span, weekend or not, can be the day
+    before a cutoff. So every cutoff of the span finds a rate that is one day old. The default span
+    holds every cutoff that the tick tests use.
+    """
+    import psycopg
+
+    days = [first + timedelta(days=n) for n in range((last - first).days + 1)]
+    with psycopg.connect(database_url) as connection:
+        fetch_id = raw_store.insert_fetch(
+            connection,
+            source=DataSource.US_TREASURY,
+            source_record_id=f"test-series:{first.isoformat()}:{last.isoformat()}",
+            body=f"{first.isoformat()}..{last.isoformat()},{rate}".encode(),
+            content_type="text/csv",
+            fetched_at=datetime.now(UTC),
+            store=InMemoryRawObjectStore(),
+        )
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                "insert into staging.risk_free_rates_daily "
+                "(instrument, observation_date, annualized_rate, knowable_at, fetch_id, confidence) "
+                "values (%s, %s, %s, %s, %s, %s)",
+                [(INSTRUMENT, day, Decimal(str(rate)), knowable_at_of(day), fetch_id, CONFIDENCE) for day in days],
+            )
+        connection.commit()

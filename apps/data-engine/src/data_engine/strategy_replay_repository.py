@@ -28,6 +28,7 @@ their own `claim_ceiling` so this writer persists the exact ceiling claimed.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
@@ -50,6 +51,7 @@ def _run_payload(
     executed_at: datetime,
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
+    risk_free_rate: Decimal | None,
 ) -> dict[str, Any]:
     # #955: when bound to a PIT snapshot, corpus_sha256 reflects the actual inputs
     # consumed by that cutoff's replay rather than the static fixture constant.
@@ -66,6 +68,14 @@ def _run_payload(
     # a run bound to a PIT snapshot gets a distinct run id (#395).
     if snapshot_id is not None:
         payload["snapshot_id"] = snapshot_id
+    # The rate of the cutoff is a measurement. It can differ between two runs of one tick, because a
+    # forced tick can see a newer Treasury observation than the scheduled tick did (#1255). Two rates
+    # must be two runs. Otherwise the second run meets the unique key of the first run's decisions.
+    # The caller names the rate, or None for a run whose corpus carries its own explicit rates (the
+    # golden, fixture and preview replays). The member is included only when set, so those runs keep
+    # their identity.
+    if risk_free_rate is not None:
+        payload["risk_free_rate"] = format(risk_free_rate.normalize(), "f")
     return payload
 
 
@@ -76,12 +86,14 @@ def write_strategy_run(
     executed_at: datetime,
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
+    risk_free_rate: Decimal | None,
 ) -> str:
     payload = _run_payload(
         definition,
         executed_at=executed_at,
         snapshot_id=snapshot_id,
         claim_ceiling=claim_ceiling,
+        risk_free_rate=risk_free_rate,
     )
     content_sha256 = canonical_sha256(payload)
     run_id = f"strategy-run:{content_sha256}"
@@ -216,11 +228,13 @@ def write_replay(
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
     source_evidence_status: InputEvidenceStatus | None = None,
+    risk_free_rate: Decimal | None,
 ) -> tuple[str, tuple[str, ...]]:
     """Persist one full replay: one `strategy_runs` row, one `strategy_decisions`
     row per decision. Idempotent -- replaying identical decisions against the
     same definition and executed_at reproduces the same run/decision IDs.
-    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395)."""
+    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395).
+    ``risk_free_rate`` binds the run to the rate that its decisions used (#1255)."""
 
     run_id = write_strategy_run(
         connection,
@@ -228,6 +242,7 @@ def write_replay(
         executed_at=executed_at,
         snapshot_id=snapshot_id,
         claim_ceiling=claim_ceiling,
+        risk_free_rate=risk_free_rate,
     )
     decision_ids = tuple(
         write_strategy_decision(

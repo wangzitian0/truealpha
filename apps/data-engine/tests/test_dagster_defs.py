@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -37,6 +38,9 @@ from data_engine.dagster_defs import (
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
 from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from risk_free_seed import stub_rate  # noqa: E402
 
 
 def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
@@ -205,6 +209,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
             core_result_count=20,
             quality_report_id="datahub-quality-report:" + "c" * 64,
             quality=dict(_QUALITY),
+            risk_free_rate=stub_rate(),
         ),
     )
     monkeypatch.setattr(capture, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
@@ -277,6 +282,44 @@ def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
     assert metadata["pointer_sequence"] == 10
     assert metadata["is_degraded"] is False
     assert metadata["unmet_service_objectives"] == "every objective met"
+
+
+def test_the_strategy_replay_gets_the_rate_the_core_engine_used_and_the_op_reports_its_lineage(monkeypatch) -> None:
+    """#1255: one tick reads one rate. The pipeline resolves it. The strategy replay takes it from the
+    pipeline result. The op metadata names the day it was observed and the raw row behind it."""
+    registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=11, unmet=())
+    _fake_tick(monkeypatch, registration)
+    rate = stub_rate("0.0431", observation_date=datetime(2026, 7, 29, tzinfo=UTC).date())
+    monkeypatch.setattr(
+        capture,
+        "run_topt_pipeline",
+        lambda *args, **kwargs: ToptPipelineResult(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            core_result_count=20,
+            quality_report_id="datahub-quality-report:" + "c" * 64,
+            quality=dict(_QUALITY),
+            risk_free_rate=rate,
+        ),
+    )
+    passed: dict[str, object] = {}
+
+    def replay(*args, **kwargs):
+        passed.update(kwargs)
+        return "strategy-run:" + "d" * 64, 20, "snapshot:" + "e" * 64
+
+    monkeypatch.setattr(capture, "run_strategy_replay_for_cutoff", replay)
+    context = dg.build_op_context()
+
+    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+
+    assert passed["risk_free_rate"] == Decimal("0.0431")
+    metadata = context.get_output_metadata("result")
+    assert (metadata["risk_free_rate"], metadata["risk_free_observation_date"], metadata["risk_free_fetch_id"]) == (
+        "0.0431",
+        "2026-07-29",
+        rate.fetch_id,
+    )
 
 
 def _logged_tick(monkeypatch, op, registration: PointerRegistration) -> tuple[list[str], dict]:
@@ -354,6 +397,7 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         core_result_count=20,
         quality_report_id="datahub-quality-report:" + "c" * 64,
         quality=dict(_QUALITY),
+        risk_free_rate=stub_rate(),
     )
 
     def capture_through_the_adapter(*args, **kwargs) -> ToptPipelineResult:
@@ -407,6 +451,7 @@ def test_a_tick_names_the_cells_served_by_failover(monkeypatch) -> None:
             core_result_count=20,
             quality_report_id="datahub-quality-report:" + "c" * 64,
             quality={**_QUALITY, "served_by_failover_count": 2},
+            risk_free_rate=stub_rate(),
         ),
     )
     lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
@@ -499,6 +544,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
             core_result_count=20,
             quality_report_id="datahub-quality-report:" + "c" * 64,
             quality=dict(_QUALITY),
+            risk_free_rate=stub_rate(),
         )
 
     monkeypatch.setattr(capture, "run_topt_pipeline", capture_under_the_gate)
@@ -601,6 +647,7 @@ def _capturing_tick(monkeypatch, calls: list[dict]) -> None:
             core_result_count=20,
             quality_report_id="datahub-quality-report:" + "c" * 64,
             quality=dict(_QUALITY),
+            risk_free_rate=stub_rate(),
             forced_fetch=kwargs.get("force_fetch", False),
         )
 

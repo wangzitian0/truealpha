@@ -7,8 +7,8 @@ day, newest first. The column "3 Mo" holds the 3-month rate in percent, for exam
     Date,"1 Mo","1.5 Month","2 Mo","3 Mo","4 Mo",...
     10/13/2026,4.10,4.15,4.15,4.26,4.32,...
 
-The column set changes between years (the 2023 file has no "1.5 Month"), so the parser finds each
-column by its name and never by its position.
+The column set changes between years. The 2023 file has no "1.5 Month". So the parser finds each
+column by its name, never by its position.
 
 What this module does:
 
@@ -116,11 +116,14 @@ def fetch_year(year: int) -> bytes:
 def parse_par_yield_csv(body: bytes, *, year: int) -> tuple[Observation, ...]:
     """The observations of one yearly file, oldest first.
 
-    A row without a "3 Mo" value is skipped. A file or a row that breaks the format raises
-    ``TreasuryFormatError``: a missing header column, a row of another length than the header,
-    a date that is not ``MM/DD/YYYY`` or that lies outside ``year``, a date that appears twice, a
-    value that is not a finite decimal, and a value outside 0 to 100 percent. The parser trusts no
-    column position.
+    A row without a "3 Mo" value is skipped. The parser trusts no column position.
+    A file or a row that breaks the format raises ``TreasuryFormatError``. These cases break it:
+
+    * a header without "Date" or "3 Mo";
+    * a row with another number of fields than the header;
+    * a date that is not ``MM/DD/YYYY``, or that lies outside ``year``;
+    * a date that appears twice;
+    * a value that is not a finite decimal, or that lies outside 0 to 100 percent.
     """
     try:
         text = body.decode("utf-8-sig")

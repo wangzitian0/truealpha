@@ -1,10 +1,10 @@
 """#1255: the Treasury source of the risk-free rate.
 
-The fixtures are real bytes. On 2026-10-14 the 2026 file (196 rows, 15,986 bytes, sha256
-366158ae...2b2a9d) and the 2023 file (250 rows, 19,098 bytes, sha256 edb7f390...1249d4) were
-fetched from the URL that `year_url` builds. Each fixture keeps the real header and the first rows
-of the real file, byte for byte. The 2026 sample holds ten rows and spans a weekend (10/03-10/04)
-and a holiday weekend (Columbus Day, 10/10-10/12). No test here calls the Treasury.
+The fixtures are real bytes. On 2026-10-14 two files were fetched from the URL that `year_url`
+builds. The 2026 file has 196 rows and 15,986 bytes (sha256 366158ae...2b2a9d). The 2023 file has
+250 rows and 19,098 bytes (sha256 edb7f390...1249d4). Each fixture keeps the real header and the
+first rows of the real file, byte for byte. The 2026 sample holds ten rows. It spans a weekend
+(10/03-10/04) and a holiday weekend (Columbus Day, 10/10-10/12). No test here calls the Treasury.
 
 The two headers differ: the 2026 file has the column "1.5 Month" and the 2023 file does not. So the
 column "3 Mo" sits at index 4 in one file and at index 3 in the other. A parser that reads a
