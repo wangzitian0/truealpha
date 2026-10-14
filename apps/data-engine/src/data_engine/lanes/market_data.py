@@ -57,6 +57,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
 
@@ -322,13 +323,9 @@ def market_data_refresh_pipeline_job() -> None:
     job=market_data_refresh_pipeline_job,
     cron_schedule=MARKET_DATA_REFRESH_CRON,
     execution_timezone="UTC",
-    # Production-only, like the other scheduled lanes; staging/dev exercise this
-    # via an operator script when needed.
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if settings.app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    ),
+    # Where the nightly backtest runs (production and staging), because the backtest, the
+    # history projection and the live tick all read these bars (#1281). Elsewhere by hand.
+    default_status=schedule_status(settings.app_env),
 )
 def market_data_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()

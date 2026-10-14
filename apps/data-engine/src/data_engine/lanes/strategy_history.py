@@ -10,7 +10,7 @@ The tick time of the run derives the cutoffs (`executed_at`), never the wall clo
 one tick builds the same cutoffs. The projector is idempotent, so a repeated run adds no row
 until a new filing, a new bar or a new headcount fact changes an input.
 
-The schedule runs on every weekday, 83 minutes before the nightly backtest, in each environment
+The schedule runs on every weekday, 98 minutes before the nightly backtest, in each environment
 where the backtest runs (#1270). History rows are append-only, so a projector fix reaches the
 backtest only through a projector run. The next backtest then reads the fix with no manual step.
 
@@ -33,7 +33,7 @@ from data_engine.datahub.strategy_history import DEFAULT_MONTHS, project_deploye
 from data_engine.lanes.backtest import schedule_status
 
 STRATEGY_HISTORY_JOB_NAME = "strategy_history_projection_pipeline"
-# Weekdays 20:07 UTC: 83 minutes before the nightly backtest (21:30 UTC, `lanes.backtest`). A fix of
+# Weekdays 20:07 UTC: 98 minutes before the nightly backtest (21:45 UTC, `lanes.backtest`). A fix of
 # the projector then reaches the next backtest with no manual step (#1270). No other lane runs at this
 # time. The weekly lanes run from Saturday 08:07 to Monday 09:07 UTC. The daily quality lanes end by
 # 06:15 UTC. The market data refresh starts at 21:15 UTC. The projector writes only to the database

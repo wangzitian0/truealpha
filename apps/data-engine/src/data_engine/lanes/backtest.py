@@ -9,9 +9,9 @@ run is written or already exists, pending when this environment holds no quarter
 no bars yet, red on any failure.
 
 The schedule runs in production and in staging, so staging evidence exists before production.
-21:30 UTC on weekdays is after the strategy history projection (20:07 UTC, ``lanes.strategy_history``),
-after the production market data refresh (21:15 UTC) and before the staging TOPT tick (22:45 UTC,
-``lanes.capture.live_topt_cron``).
+21:45 UTC on weekdays is after the strategy history projection (20:07 UTC, ``lanes.strategy_history``),
+after the market data refresh of both environments (21:15 UTC; 15 minutes in production, 20 minutes in
+staging, #1281) and before the staging TOPT tick (22:45 UTC, ``lanes.capture.live_topt_cron``).
 
 Manual replay: launch the job from the Dagster UI launchpad, or through GraphQL, with the run
 config below. A rerun of one release on the same data writes nothing. A new release on the same
@@ -21,7 +21,7 @@ and production a run without that identity fails before it writes.
     ops:
       run_nightly_backtest_op:
         config:
-          executed_at: "2026-10-12T21:30:00+00:00"
+          executed_at: "2026-10-12T21:45:00+00:00"
 """
 
 import dagster as dg
@@ -32,9 +32,11 @@ from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending,
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
-# Weekdays 21:30 UTC: 83 minutes after strategy_history_projection_pipeline (20:07 UTC), 15 minutes
-# after market_data_refresh_pipeline (21:15 UTC), 75 minutes before the staging TOPT tick (22:45 UTC).
-BACKTEST_CRON = "30 21 * * 1-5"
+# Weekdays 21:45 UTC: 98 minutes after strategy_history_projection_pipeline (20:07 UTC), 30 minutes
+# after market_data_refresh_pipeline starts (21:15 UTC), 60 minutes before the staging TOPT tick (22:45 UTC).
+# The refresh makes 60 calls at the per-minute share of its environment, so it ends at 21:30 UTC in
+# production and at 21:35 UTC in staging (#1281). The backtest waits at least 5 more minutes.
+BACKTEST_CRON = "45 21 * * 1-5"
 #: The environments whose schedule runs by default. Elsewhere the job runs only by hand. The same
 #: tuple decides where a run must carry a code identity (`datahub.backtest.deployed_code_identity`).
 SCHEDULED_ENVIRONMENTS = DEPLOYED_ENVIRONMENTS

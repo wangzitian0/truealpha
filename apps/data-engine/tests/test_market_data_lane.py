@@ -43,7 +43,9 @@ version of this file avoided it outright rather than ever exercising it.
 
 from __future__ import annotations
 
+import importlib
 import json
+import math
 import os
 import urllib.parse
 from collections import Counter
@@ -65,9 +67,11 @@ from data_engine.datahub.market_prices import (
 )
 from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, environment_share
 from data_engine.datahub.universe_mask import UniverseMaskReason
+from data_engine.lanes import backtest as backtest_lane
 from data_engine.lanes import market_data
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 from data_engine.quality import nightly_verdicts
+from truealpha_runtime.testing import load_tool
 
 
 @pytest.fixture
@@ -568,6 +572,48 @@ def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
     )
 
 
+#: The gap that absorbs one slow vendor call between the last refresh call and the backtest.
+BACKTEST_MARGIN = timedelta(minutes=5)
+
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_the_backtest_starts_after_the_refresh_has_ended_in_each_environment(connection, environment: str) -> None:
+    """#1281: the refresh makes N calls at its environment's per-minute share, and the backtest reads the bars.
+
+    Staging's share is 3 calls a minute, so 60 calls take 20 minutes. Production's share is 4 a minute,
+    so 60 calls take 15 minutes. The backtest must start after the last call, with a margin. The test
+    measures N, reads the shares from the capacity declaration and reads both crons from the lanes.
+    It is red on a backtest at 21:30 UTC in both environments.
+    """
+    requests: list[tuple[str, str, str]] = []
+    _refresh_market_data(
+        dg.build_op_context(),
+        connection,
+        symbols=DEFAULT_TOPT_SYMBOLS,
+        now=LANE_NOW,
+        client=_adjust_aware_client(requests, []),
+    )
+    twelve = LEDGER_CAPACITIES["twelvedata"]
+    calls_per_window = environment_share(twelve.calls_per_window, twelve.environment_shares, environment)
+    assert calls_per_window, f"{environment} has no Twelve Data share"
+    refresh_duration = timedelta(seconds=math.ceil(len(requests) / calls_per_window) * twelve.window_seconds)
+
+    cron = load_tool("scheduler_liveness").Cron
+    refresh, backtest = cron.parse(market_data.MARKET_DATA_REFRESH_CRON), cron.parse(backtest_lane.BACKTEST_CRON)
+    monday = datetime(2026, 10, 12, tzinfo=UTC)
+    refreshes = refresh.fires_between(monday, monday + timedelta(days=7))
+    assert refreshes, "the refresh must fire in the sampled week, or this test proves nothing"
+    for started in refreshes:
+        day_end = started.replace(hour=23, minute=59)
+        backtests = backtest.fires_between(started, day_end)
+        assert backtests, f"no backtest follows the refresh of {started.date().isoformat()}"
+        assert backtests[0] >= started + refresh_duration + BACKTEST_MARGIN, (
+            f"{environment}: the refresh of {len(requests)} calls ends at "
+            f"{(started + refresh_duration).strftime('%H:%M')} UTC, but the backtest starts at "
+            f"{backtests[0].strftime('%H:%M')} UTC"
+        )
+
+
 # --- #1131: the freshness verdict --------------------------------------------------------
 
 
@@ -775,3 +821,28 @@ def test_the_schedule_stamps_its_tick_so_the_verdict_is_dated_by_it() -> None:
 
     ((request),) = result.run_requests
     assert request.tags[nightly_verdicts.TICK_TAG] == tick.isoformat()
+
+
+@pytest.mark.parametrize(
+    ("app_env", "expected"),
+    [
+        ("production", dg.DefaultScheduleStatus.RUNNING),
+        ("staging", dg.DefaultScheduleStatus.RUNNING),
+        ("development", dg.DefaultScheduleStatus.STOPPED),
+    ],
+)
+def test_the_refresh_schedule_runs_where_the_backtest_runs(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, expected: dg.DefaultScheduleStatus
+) -> None:
+    """#1281: staging's tick, projection and backtest read these bars, so staging refreshes them.
+
+    The decorator reads `settings.app_env` when the module loads. The test loads the module again
+    under each environment and restores it afterwards. It is red on the production-only rule.
+    """
+    monkeypatch.setattr(settings, "app_env", app_env)
+    try:
+        reloaded = importlib.reload(market_data)
+        assert reloaded.market_data_refresh_schedule.default_status == expected
+    finally:
+        monkeypatch.undo()
+        importlib.reload(market_data)
