@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
+from infra2_sdk.runtime.environment import runtime_env_contract
 from psycopg import sql
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_corpus
@@ -276,10 +277,9 @@ def run_python_probe(
     CI job that sets `OTEL_*`) from deciding the outcome. The working directory is the repository
     root, where the services' relative manifest paths resolve.
     """
+    declared = {key for item in runtime_env_contract()["variables"] for key in (item["name"], *item["aliases"])}
     scrubbed = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith("OTEL_") and name not in {"SERVICE_NAME", "SERVICE_VERSION", "ENVIRONMENT", "ENV"}
+        name: value for name, value in os.environ.items() if not name.startswith("OTEL_") and name not in declared
     }
     return subprocess.run(
         [sys.executable, "-c", code],

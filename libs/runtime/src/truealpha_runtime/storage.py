@@ -36,13 +36,9 @@ class S3RawObjectStore:
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or runtime_settings
         self.bucket = self.settings.s3_bucket
-        # Built from RuntimeSettings' already-resolved values, NOT S3Settings.from_env()
-        # — from_env() re-reads os.environ with the SDK's own defaults/required-ness
-        # (S3_BUCKET is required there), which differ from RuntimeSettings' Pydantic
-        # local-dev defaults (e.g. s3_bucket="truealpha-raw" when unset) and would
-        # break local dev. addressing_style="path" stays forced (MinIO doesn't support
-        # virtual-hosted-style routing) rather than left to S3Settings' env-driven
-        # default of None.
+        # Construct S3Settings from resolved RuntimeSettings fields. Force
+        # addressing_style="path" because MinIO requires path-style routing
+        # and S3Settings defaults addressing_style to None.
         self.s3_settings = S3Settings(
             bucket=self.settings.s3_bucket,
             endpoint_url=self._require_endpoint(),
