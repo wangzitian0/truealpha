@@ -67,16 +67,18 @@ export type MartStrategyRunReport = StrategyRunReport & {
 // head resolves a run for this strategy does the newest recorded run stand in. The
 // join lives in mart.served_head and mart.strategy_run_capture; this statement
 // is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and libs/contracts pins the two texts.
+// Python consumers read a row by position (is_governed is column 3), so a new column goes
+// at the end of the select list (#1235).
 export const LATEST_RUN_SQL = `
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
-           r.strategy_version, r.definition_content_sha256,
            exists (
                select 1 from mart.served_head h
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
                  and h.universe_id like 'universe:topt-%'
-           ) as is_governed
+           ) as is_governed,
+           r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
     where r.strategy_key = $1
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc

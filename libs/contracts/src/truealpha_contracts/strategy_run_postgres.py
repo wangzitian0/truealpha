@@ -52,17 +52,19 @@ _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, InvalidOperation, Val
 # head withheld past 30 days — does the newest recorded run stand in. The join lives in
 # mart.served_head and mart.strategy_run_capture; the twins only rank by it. The
 # TypeScript twin carries the same statement modulo placeholder syntax, and
-# test_strategy_run_selection_parity pins the two texts.
+# test_strategy_run_selection_parity pins the two texts. Some consumers read a row by
+# position (`is_governed` is column 3 in apps/data-engine/tests/production_topt), so a new
+# column goes at the end of the select list (#1235).
 LATEST_RUN_SQL = """
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
-           r.strategy_version, r.definition_content_sha256,
            exists (
                select 1 from mart.served_head h
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
                  and h.universe_id like 'universe:topt-%%'
-           ) as is_governed
+           ) as is_governed,
+           r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
     where r.strategy_key = %s
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
