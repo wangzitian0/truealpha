@@ -101,11 +101,9 @@ def test_deployment_environment_is_typed_separately_from_app_config():
 
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
-    """S3RawObjectStore.__init__ builds its client via infra2_sdk.runtime.s3, from
-    RuntimeSettings' already-resolved values (not S3Settings.from_env(), which has
-    different defaults/required-ness and would break local dev — see storage.py).
-    addressing_style stays forced to "path": MinIO doesn't support virtual-hosted
-    -style routing, and S3Settings only defaults it when S3_ADDRESSING_STYLE is set."""
+    """S3RawObjectStore.__init__ builds its client through infra2_sdk.runtime.s3 from
+    resolved RuntimeSettings values. It forces addressing_style="path" because MinIO
+    requires path-style routing and S3Settings defaults addressing_style to None."""
     settings = RuntimeSettings(_env_file=None, app_env="test")
 
     store = S3RawObjectStore(settings)
@@ -113,6 +111,34 @@ def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing
     assert store.client.meta.config.s3["addressing_style"] == "path"
     assert store.client.meta.endpoint_url == settings.s3_endpoint
     assert store.client.meta.region_name == settings.s3_region
+
+
+def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
+    from infra2_sdk.runtime.environment import runtime_env_contract
+    from truealpha_runtime.testing import run_python_probe
+
+    contract_keys = sorted(
+        {key for item in runtime_env_contract()["variables"] for key in (item["name"], *item["aliases"])}
+    )
+    for key in contract_keys:
+        monkeypatch.setenv(key, f"ambient-{key}")
+    monkeypatch.setenv("OTEL_CUSTOM_AMBIENT", "ambient-otel")
+    monkeypatch.setenv("UNRELATED_AMBIENT_VAR", "kept")
+
+    proc = run_python_probe(
+        "import json, os; print(json.dumps({k: os.environ.get(k) for k in "
+        f"{contract_keys + ['OTEL_CUSTOM_AMBIENT', 'UNRELATED_AMBIENT_VAR']!r}"
+        "}))",
+        {},
+    )
+    assert proc.returncode == 0, proc.stderr
+    import json
+
+    observed = json.loads(proc.stdout)
+    for key in contract_keys:
+        assert observed[key] is None, f"{key} leaked from ambient environment into probe"
+    assert observed["OTEL_CUSTOM_AMBIENT"] is None
+    assert observed["UNRELATED_AMBIENT_VAR"] == "kept"
 
 
 def test_raw_storage_is_content_addressed_and_idempotent():
