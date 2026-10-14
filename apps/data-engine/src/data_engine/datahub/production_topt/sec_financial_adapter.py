@@ -427,9 +427,6 @@ def annual_values_by_period_end(
     if not entries:
         return {}
     values: dict[date, _Datum] = {}
-    segmented_shares: dict[
-        tuple[date, date, str | None, str | None, str | None], dict[str, tuple[Decimal, _Datum]]
-    ] = {}
     for entry in entries:
         filed_raw, end_raw, start_raw, val = (
             entry.get("filed"),
@@ -463,52 +460,10 @@ def annual_values_by_period_end(
             statement_form=_statement_form(form),
             document=_text_or_none(entry.get(_DOCUMENT_KEY)),
         )
-        seg_key = _segment_key(unit, entry)
-        if seg_key is not None:
-            group_key = (end, filed, datum.accession, form, _text_or_none(start_raw))
-            segmented_shares.setdefault(group_key, {})[seg_key] = (value, datum)
-            continue
-        _record_better_datum(values, datum)
-    _fold_segmented_shares(values, segmented_shares)
+        existing = values.get(end)
+        if existing is None or (datum.rank, -filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
+            values[end] = datum
     return values
-
-
-def _segment_key(unit: str, entry: Mapping[str, Any]) -> str | None:
-    if unit != "shares":
-        return None
-    segment = entry.get("segment")
-    if segment is None:
-        return None
-    text = json.dumps(segment, sort_keys=True) if not isinstance(segment, str) else segment.strip()
-    return text or None
-
-
-def _record_better_datum(values: dict[date, _Datum], datum: _Datum) -> None:
-    existing = values.get(datum.period_end)
-    if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
-        values[datum.period_end] = datum
-
-
-def _fold_segmented_shares(
-    values: dict[date, _Datum],
-    segmented_shares: Mapping[
-        tuple[date, date, str | None, str | None, str | None], Mapping[str, tuple[Decimal, _Datum]]
-    ],
-) -> None:
-    for by_segment in segmented_shares.values():
-        first_datum = next(iter(by_segment.values()))[1]
-        summed = _Datum(
-            value=sum((val for val, _ in by_segment.values()), Decimal(0)),
-            filed=first_datum.filed,
-            period_end=first_datum.period_end,
-            accession=first_datum.accession,
-            form=first_datum.form,
-            fy=first_datum.fy,
-            fp=first_datum.fp,
-            statement_form=first_datum.statement_form,
-            document=first_datum.document,
-        )
-        _record_better_datum(values, summed)
 
 
 def _text_or_none(value: object) -> str | None:

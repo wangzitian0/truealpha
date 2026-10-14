@@ -125,6 +125,110 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     assert target.cik == 2115436
     assert target.predecessor_cik == 34088
     assert target.predecessor_signed is True
+    assert target.revenue_proxy_allowed is False
+
+    from data_engine.datahub.production_topt.executor import FetchSuccess
+    from data_engine.sources import sec
+    from truealpha_contracts.datahub import CaptureWorkItem
+
+    holdco_doc = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 464482000000,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 4111911960,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {
+                                "start": "2025-01-01",
+                                "end": "2025-12-31",
+                                "val": 332238000000,
+                                "accn": "0000034088-26-000017",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2026-02-18",
+                            }
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            {
+                                "start": "2025-01-01",
+                                "end": "2025-12-31",
+                                "val": 28844000000,
+                                "accn": "0000034088-26-000017",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2026-02-18",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(
+        sec,
+        "fetch_company_facts_response",
+        lambda cik: (b'{"cik":2115436}', holdco_doc) if cik == 2115436 else (b'{"cik":34088}', pred_doc),
+    )
+    work_item = CaptureWorkItem(
+        work_item_id=cell.work_item_id,
+        run_id="run:xom:test",
+        obligation_id="ob:xom:test",
+        source="sec_edgar",
+        semantic_type="financial-fact",
+        subject_id=xom_listing_uuid,
+        partition_start=datetime(2026, 9, 1, tzinfo=UTC),
+        partition_end=cutoff,
+        idempotency_key="a" * 64,
+        contract_version="datahub.work_item.v1",
+    )
+    outcome = adapter.fetch(work_item)
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.record.payload["revenue"] == "332238000000"
+    assert outcome.record.payload["net_income"] == "28844000000"
+    assert outcome.record.payload["total_assets"] == "464482000000"
+    assert outcome.record.payload["shares_outstanding"] == "4111911960"
+    assert outcome.record.payload["gross_profit"] is None
 
 
 def test_alphabet_uuid_constants_match_migrated_entity_aliases(connection) -> None:
