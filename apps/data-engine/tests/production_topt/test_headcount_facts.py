@@ -37,13 +37,15 @@ def connection():
 
 
 def _land(connection, cik: int, value: str, knowable: datetime, source: str = "test") -> int:
+    filed_iso = knowable.astimezone(UTC).date().isoformat()
     return record_headcount(
         connection,
         cik=cik,
         headcount=Decimal(value),
         knowable_at=knowable,
+        period_end=knowable.astimezone(UTC).date(),
         source=source,
-        evidence_ref="test-evidence",
+        evidence_ref=f"accession=000099900026000001 form=10-K filed={filed_iso}",
         confidence=Decimal("0.7"),
     )
 
@@ -102,3 +104,86 @@ def test_a_nonpositive_headcount_is_rejected_at_the_boundary(connection) -> None
     """A zero denominator is not a small company, it is a parse failure."""
     with pytest.raises(psycopg.errors.CheckViolation):
         _land(connection, _CIK, "0", datetime(2026, 1, 1, tzinfo=UTC))
+
+
+def test_validate_cited_headcount_fact_rejects_legacy_2026_01_01_and_uncited_rows() -> None:
+    """#1264 acceptance check: fails against the 21 legacy `2026-01-01` uncited rows and
+    any row whose `knowable_at` does not match its cited filing date."""
+    from data_engine.datahub.production_topt.headcount import validate_cited_headcount_fact
+
+    legacy_evidence = "10-K human capital disclosure; manual entry, no verified accession (#70 supersedes)"
+    with pytest.raises(ValueError, match="18-digit SEC accession"):
+        validate_cited_headcount_fact(
+            knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+            period_end=None,
+            evidence_ref=legacy_evidence,
+        )
+    with pytest.raises(ValueError, match="18-digit SEC accession"):
+        record_headcount(
+            None,  # type: ignore[arg-type]
+            cik=_CIK,
+            headcount=Decimal("1000"),
+            knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+            source="manual-review",
+            evidence_ref=legacy_evidence,
+            confidence=Decimal("0.50"),
+        )
+
+    with pytest.raises(ValueError, match="precedes cited filing date"):
+        validate_cited_headcount_fact(
+            knowable_at=datetime(2024, 1, 1, tzinfo=UTC),
+            period_end=date(2023, 12, 31),
+            evidence_ref="accession=000162828124002390 form=10-K filed=2024-01-29 source=manual-review",
+        )
+
+    with pytest.raises(ValueError, match="does not match cited filing date"):
+        validate_cited_headcount_fact(
+            knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+            period_end=date(2023, 12, 31),
+            evidence_ref="accession=000162828124002390 form=10-K filed=2024-01-29 source=manual-review",
+        )
+
+    with pytest.raises(ValueError, match="period_end must be set"):
+        validate_cited_headcount_fact(
+            knowable_at=datetime(2024, 1, 29, tzinfo=UTC),
+            period_end=None,
+            evidence_ref="accession=000162828124002390 form=10-K filed=2024-01-29 source=manual-review",
+        )
+
+
+def test_seed_issuer_headcounts_carries_real_sec_accessions_across_backtest_window() -> None:
+    """#1264: every row in `seed_issuer_headcounts.py` cites a real 10-K accession and
+    filing date, and covers every TOPT issuer across the 2023-2026 backtest window."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
+    from data_engine.datahub.production_topt.headcount import validate_cited_headcount_fact
+
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "seed_issuer_headcounts.py"
+    spec = importlib.util.spec_from_file_location("seed_issuer_headcounts", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["seed_issuer_headcounts"] = module
+    spec.loader.exec_module(module)
+
+    facts = module.REVIEWED_HEADCOUNT_FACTS
+    assert len(facts) >= 80
+    for fact in facts:
+        validate_cited_headcount_fact(
+            knowable_at=fact.knowable_at,
+            period_end=fact.period_end,
+            evidence_ref=fact.evidence_ref,
+        )
+        assert fact.knowable_at != datetime(2026, 1, 1, tzinfo=UTC)
+
+    by_ticker: dict[str, list] = {}
+    for fact in facts:
+        by_ticker.setdefault(fact.ticker, []).append(fact)
+
+    earliest_backtest_cutoff = datetime(2023, 4, 28, 23, 59, 59, tzinfo=UTC)
+    for symbol in DEFAULT_TOPT_SYMBOLS:
+        assert symbol in by_ticker, f"missing reviewed headcount facts for {symbol}"
+        eligible = [fact for fact in by_ticker[symbol] if fact.knowable_at <= earliest_backtest_cutoff]
+        assert eligible, f"{symbol} has no headcount fact knowable on or before {earliest_backtest_cutoff.date()}"

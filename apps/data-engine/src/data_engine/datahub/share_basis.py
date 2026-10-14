@@ -80,19 +80,32 @@ def _carries(
     period_end: str,
     value: Decimal,
 ) -> bool:
-    """True when a stored entry of one of ``concepts`` has this accession, this period end and this value."""
+    """True when a stored entry (or per-class segment sum) of one of ``concepts`` has this accession, period end and value."""
+    import json
+
     for facts in documents:
         for concept in concepts:
             units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
             for entries in units.values():
+                by_segment: dict[str, Decimal] = {}
                 for item in entries:
                     if item.get("accn") != accession or item.get("end") != period_end or item.get("val") is None:
                         continue
                     try:
-                        if Decimal(str(item["val"])) == value:
-                            return True
+                        parsed = Decimal(str(item["val"]))
                     except InvalidOperation:
                         continue
+                    if parsed == value:
+                        return True
+                    segment = item.get("segment")
+                    if segment is not None:
+                        seg_key = (
+                            json.dumps(segment, sort_keys=True) if not isinstance(segment, str) else segment.strip()
+                        )
+                        if seg_key:
+                            by_segment[seg_key] = parsed
+                if by_segment and sum(by_segment.values(), Decimal(0)) == value:
+                    return True
     return False
 
 

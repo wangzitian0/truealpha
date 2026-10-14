@@ -63,7 +63,14 @@ from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
-from data_engine.datahub.canonical_issuer import stored_entity_of
+from data_engine.datahub.canonical_issuer import (
+    PRIMARY_LISTING_IDS,
+    SECONDARY_LISTING_IDS,
+    stored_entity_of,
+)
+from data_engine.datahub.canonical_issuer import (
+    ConflictingPredecessorError as ConflictingPredecessorError,
+)
 from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
@@ -371,7 +378,10 @@ join staging.capture_normalized_observations o on o.observation_id = p.observati
 join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
 where o.semantic_type = 'financial-fact'
   and o.parser_version = %s
-order by named.entity_id, o.recorded_at desc, o.knowable_at desc, o.observation_id desc
+order by named.entity_id,
+         (p.normalized_payload ->> 'listing_id' = any(%s)) desc,
+         (p.normalized_payload ->> 'listing_id' = any(%s)) asc,
+         o.recorded_at desc, o.knowable_at desc, o.observation_id desc
 """
 
 
@@ -386,7 +396,13 @@ def latest_financial_observations(
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
     rows = connection.execute(
         _LATEST_FINANCIAL_SQL,
-        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], parser_version),
+        (
+            [issuer_id for issuer_id, _ in pairs],
+            [entity_id for _, entity_id in pairs],
+            parser_version,
+            sorted(PRIMARY_LISTING_IDS),
+            sorted(SECONDARY_LISTING_IDS),
+        ),
     ).fetchall()
     return {str(entity_id): (dict(payload), str(record_id)) for entity_id, payload, record_id in rows}
 
@@ -525,45 +541,23 @@ def canonical_history_issuers(
     )
 
 
-class ConflictingPredecessorError(ValueError):
-    """Two signed registry rows name different predecessor CIKs for one issuer."""
-
-
 def _with_predecessors(
     connection: psycopg.Connection[Any], issuers: Sequence[HistoryIssuer], ids_by_entity: Mapping[str, Sequence[str]]
 ) -> list[HistoryIssuer]:
-    """Each issuer with the predecessor CIK that ``predecessor_ciks`` resolves for its listing.
+    """Each issuer with the predecessor CIK that ``predecessor_ciks`` resolves for its listing (#1263).
 
     The signed registry (``staging.issuer_cik_predecessors``) is keyed by the id it was written
-    under, and its rows predate the entity UUIDs: ExxonMobil's row names ``issuer:lei:``. So each
-    of the entity's ids is presented in turn, and a signed resolution under any of them wins.
+    under, and its rows predate the entity UUIDs: ExxonMobil's row names ``issuer:lei:``.
+    ``predecessor_ciks`` resolves across all candidate ids and legacy aliases in one call.
     """
     if not issuers:
         return []
     listings = [issuer.listing_id for issuer in issuers]
+    issuer_by_listing = {issuer.listing_id: issuer.issuer_id for issuer in issuers}
     candidates = {
         issuer.listing_id: sorted({issuer.issuer_id, *ids_by_entity.get(issuer.issuer_id, ())}) for issuer in issuers
     }
-    found: dict[str, Any] = {}
-    signed: dict[str, dict[int, str]] = {}
-    for index in range(max(len(ids) for ids in candidates.values())):
-        presented = {listing: ids[index] for listing, ids in candidates.items() if index < len(ids)}
-        for listing, resolution in predecessor_ciks(connection, listings, presented).items():
-            if resolution.signed:
-                signed.setdefault(listing, {}).setdefault(int(resolution), presented[listing])
-            current = found.get(listing)
-            if current is None or (resolution.signed and not current.signed):
-                found[listing] = resolution
-    conflicts = {listing: named for listing, named in signed.items() if len(named) > 1}
-    if conflicts:
-        issuer_of = {issuer.listing_id: issuer.issuer_id for issuer in issuers}
-        raise ConflictingPredecessorError(
-            "signed predecessor rows disagree: "
-            + "; ".join(
-                f"{issuer_of[listing]}: " + ", ".join(f"CIK {cik} under {named[cik]}" for cik in sorted(named))
-                for listing, named in sorted(conflicts.items())
-            )
-        )
+    found = predecessor_ciks(connection, listings, issuer_by_listing, candidate_ids_by_listing=candidates)
     resolved: list[HistoryIssuer] = []
     for issuer in issuers:
         predecessor = found.get(issuer.listing_id)

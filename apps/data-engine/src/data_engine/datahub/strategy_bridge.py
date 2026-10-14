@@ -40,6 +40,7 @@ from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
+from data_engine.datahub.canonical_issuer import listing_sort_key
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
@@ -185,7 +186,7 @@ def seed_strategy_inputs_from_capture(
         issuer_id, listing_id = payload["issuer_id"], payload["listing_id"]
         bucket = financial if semantic_type == "financial-fact" else price
         current = bucket.get(issuer_id)
-        if current is None or listing_id < current[0]:  # canonical listing = lowest listing_id
+        if current is None or listing_sort_key(listing_id) < listing_sort_key(current[0]):
             bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
 
     on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)

@@ -427,6 +427,9 @@ def annual_values_by_period_end(
     if not entries:
         return {}
     values: dict[date, _Datum] = {}
+    segmented_shares: dict[
+        tuple[date, date, str | None, str | None, str | None], dict[str, tuple[Decimal, _Datum]]
+    ] = {}
     for entry in entries:
         filed_raw, end_raw, start_raw, val = (
             entry.get("filed"),
@@ -460,10 +463,52 @@ def annual_values_by_period_end(
             statement_form=_statement_form(form),
             document=_text_or_none(entry.get(_DOCUMENT_KEY)),
         )
-        existing = values.get(end)
-        if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
-            values[end] = datum
+        seg_key = _segment_key(unit, entry)
+        if seg_key is not None:
+            group_key = (end, filed, datum.accession, form, _text_or_none(start_raw))
+            segmented_shares.setdefault(group_key, {})[seg_key] = (value, datum)
+            continue
+        _record_better_datum(values, datum)
+    _fold_segmented_shares(values, segmented_shares)
     return values
+
+
+def _segment_key(unit: str, entry: Mapping[str, Any]) -> str | None:
+    if unit != "shares":
+        return None
+    segment = entry.get("segment")
+    if segment is None:
+        return None
+    text = json.dumps(segment, sort_keys=True) if not isinstance(segment, str) else segment.strip()
+    return text or None
+
+
+def _record_better_datum(values: dict[date, _Datum], datum: _Datum) -> None:
+    existing = values.get(datum.period_end)
+    if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
+        values[datum.period_end] = datum
+
+
+def _fold_segmented_shares(
+    values: dict[date, _Datum],
+    segmented_shares: Mapping[
+        tuple[date, date, str | None, str | None, str | None], Mapping[str, tuple[Decimal, _Datum]]
+    ],
+) -> None:
+    for by_segment in segmented_shares.values():
+        first_datum = next(iter(by_segment.values()))[1]
+        summed = _Datum(
+            value=sum((val for val, _ in by_segment.values()), Decimal(0)),
+            filed=first_datum.filed,
+            period_end=first_datum.period_end,
+            accession=first_datum.accession,
+            form=first_datum.form,
+            fy=first_datum.fy,
+            fp=first_datum.fp,
+            statement_form=first_datum.statement_form,
+            document=first_datum.document,
+        )
+        _record_better_datum(values, summed)
 
 
 def _text_or_none(value: object) -> str | None:
@@ -1236,17 +1281,10 @@ class SecFinancialFactAdapter:
             gross_profit_value = None
             pre_provision_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
-        headcount: Decimal | None = None
-        headcount_evidence: dict[str, Any] | None = None
         # A payload that resolved nothing is knowable exactly at the cutoff: what it
         # asserts is "this source has no such fact yet", not a dated figure.
         knowable_at = bundle.knowable_at or datetime.combine(target.cutoff, datetime.min.time(), tzinfo=UTC)
-        if self._headcount_extractor is not None:
-            fact = self._headcount_extractor(target.cik, target.cutoff)
-            if fact is not None and fact.knowable_at.date() <= target.cutoff:
-                headcount = fact.value
-                headcount_evidence = headcount_vintage(fact)
-                knowable_at = max(knowable_at, fact.knowable_at)
+        headcount, headcount_evidence, knowable_at = self._resolve_headcount_fact(target, knowable_at)
         vintage = {
             key: bundle.vintages[key]
             for key in sorted(bundle.vintages)
@@ -1322,6 +1360,18 @@ class SecFinancialFactAdapter:
             ),
             corroborations=self._corroborate(target),
         )
+
+    def _resolve_headcount_fact(
+        self, target: SecTarget, knowable_at: datetime
+    ) -> tuple[Decimal | None, dict[str, Any] | None, datetime]:
+        if self._headcount_extractor is None:
+            return None, None, knowable_at
+        fact = self._headcount_extractor(target.cik, target.cutoff)
+        if fact is None and target.predecessor_cik is not None:
+            fact = self._headcount_extractor(target.predecessor_cik, target.cutoff)
+        if fact is None or fact.knowable_at.date() > target.cutoff:
+            return None, None, knowable_at
+        return fact.value, headcount_vintage(fact), max(knowable_at, fact.knowable_at)
 
 
 def _confidence(payload: Mapping[str, Any]) -> Decimal:
@@ -1403,48 +1453,60 @@ def predecessor_ciks(
     connection: psycopg.Connection[Any],
     listing_ids: Sequence[str],
     issuer_by_listing: dict[str, str] | None = None,
+    *,
+    candidate_ids_by_listing: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, PredecessorResolution]:
-    """#496: each listing's predecessor company-facts CIK, consulted only when
+    """#496 / #1263: each listing's predecessor company-facts CIK, consulted only when
     the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
 
     Two registry sources, both our own versioned data, owner-signed rows first:
     1. `staging.issuer_cik_predecessors` — the explicit registry (migration
-       0037; every row carries reason + approved_by);
+       0037; every row carries reason + approved_by), resolved across canonical
+       UUIDs and their legacy aliases via `canonical_issuer.signed_predecessor_ciks`;
     2. the capture lineage — the most recent vintage whose observation carried
        a revenue value (generic, self-maintaining once the A1 spine has seen
        an issuer parse successfully; empty for issuers that never did).
     """
+    from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
+
     resolved: dict[str, PredecessorResolution] = {}
     if issuer_by_listing:
-        registry = dict(
-            connection.execute(
-                "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
-                (sorted(set(issuer_by_listing.values())),),
-            ).fetchall()
-        )
-        for listing_id, issuer_id in issuer_by_listing.items():
-            if issuer_id in registry:
-                resolved[listing_id] = PredecessorResolution(int(registry[issuer_id]), signed=True)
+        for listing_id, cik in signed_predecessor_ciks(
+            connection, issuer_by_listing, candidate_ids_by_key=candidate_ids_by_listing
+        ).items():
+            resolved[listing_id] = PredecessorResolution(int(cik), signed=True)
 
-    rows = connection.execute(
-        """
-        select distinct on (o.subject_id) o.subject_id, v.source_record_id
-        from staging.capture_normalized_observations o
-        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        where o.subject_id = any(%s)
-          and o.semantic_type = 'financial-fact'
-          and p.normalized_payload->>'revenue' is not null
-          and v.source_record_id like 'companyfacts:CIK%%'
-        order by o.subject_id, o.knowable_at desc
-        """,
-        (list(listing_ids),),
-    ).fetchall()
-    for subject_id, record_id in rows:
-        digits = record_id.removeprefix("companyfacts:CIK")
-        if digits.isdigit():
-            resolved.setdefault(subject_id, PredecessorResolution(int(digits), signed=False))
+    if listing_ids:
+        rows = connection.execute(
+            """
+            select distinct on (o.subject_id) o.subject_id, v.source_record_id
+            from staging.capture_normalized_observations o
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+            join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+            where o.subject_id = any(%s)
+              and o.semantic_type = 'financial-fact'
+              and p.normalized_payload->>'revenue' is not null
+              and v.source_record_id like 'companyfacts:CIK%%'
+            order by o.subject_id, o.knowable_at desc
+            """,
+            (list(listing_ids),),
+        ).fetchall()
+        for subject_id, record_id in rows:
+            digits = record_id.removeprefix("companyfacts:CIK")
+            if digits.isdigit():
+                resolved.setdefault(subject_id, PredecessorResolution(int(digits), signed=False))
     return resolved
+
+
+def _candidate_ids_by_listing(context: RouteContext) -> dict[str, list[str]]:
+    candidates: dict[str, list[str]] = {}
+    for subject_id, (issuer_id, _, listing_id, _) in context.coordinates.items():
+        cids = candidates.setdefault(listing_id, [issuer_id])
+        if context.raw_coordinates and subject_id in context.raw_coordinates:
+            raw_issuer_id = context.raw_coordinates[subject_id][0]
+            if raw_issuer_id not in cids:
+                cids.append(raw_issuer_id)
+    return candidates
 
 
 def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinancialFactAdapter:
@@ -1497,7 +1559,16 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     classifications = resolve_issuer_classifications(cik_by_ticker)
     listing_ids = [coordinate[2] for coordinate in context.coordinates.values()]
     issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in context.coordinates.values()}
-    predecessors = predecessor_ciks(connection, listing_ids, issuer_by_listing) if connection is not None else {}
+    predecessors = (
+        predecessor_ciks(
+            connection,
+            listing_ids,
+            issuer_by_listing,
+            candidate_ids_by_listing=_candidate_ids_by_listing(context),
+        )
+        if connection is not None
+        else {}
+    )
 
     targets: dict[str, SecTarget] = {}
     for cell in cells:
