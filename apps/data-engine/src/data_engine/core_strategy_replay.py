@@ -137,6 +137,11 @@ def _load_corpus() -> dict[str, Any]:
     return payload
 
 
+def _instant(text: str) -> datetime:
+    """The instant of a corpus timestamp such as ``2026-03-31T23:59:59Z``."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
 def _risk_free_rate(definition_rates: list[dict[str, Any]], cutoff_at: str) -> Decimal:
     for rate in definition_rates:
         if rate["cutoff_at"] == cutoff_at:
@@ -183,7 +188,7 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
     # Decision dataclass (#393).
     decisions: list[Decision] = []
     for cutoff_at, group in by_cutoff.items():
-        as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
+        as_of = _instant(cutoff_at)
         risk_free_rate = _risk_free_rate(rates, cutoff_at)
         issuers = [
             IssuerInput(
@@ -192,6 +197,7 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
                     record["input_key"]: (Decimal(str(record["value"])), Decimal(str(record["confidence"])))
                     for record in item["inputs"]
                 },
+                knowable_at={record["input_key"]: _instant(record["knowable_at"]) for record in item["inputs"]},
             )
             for item in group
         ]

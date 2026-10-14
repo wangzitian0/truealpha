@@ -83,8 +83,16 @@ def _period_end_key(tag: str) -> tuple[date, str]:
     return date.min, tag
 
 
-#: One row of ``rows_at``: (issuer_id, input_key, value, confidence, fiscal_period).
-InputRow = tuple[str, str, Any, Any, str | None]
+#: One row of ``rows_at``: (issuer_id, input_key, value, confidence, fiscal_period, knowable_at).
+InputRow = tuple[str, str, Any, Any, str | None, datetime]
+
+
+class _Observed(NamedTuple):
+    """The winning observation of one input: the value, its confidence and the instant it became knowable."""
+
+    value: Decimal
+    confidence: Decimal
+    knowable_at: datetime
 
 
 class MarketValueVintage(NamedTuple):
@@ -105,7 +113,10 @@ class StrategyBacktestGateway:
         self._connection = connection
 
     def rows_at(self, cutoff_at: str | datetime) -> list[InputRow]:
-        """The latest vintage of each input at one cutoff, in ONE read. Every other read derives from it."""
+        """The latest vintage of each input at one cutoff, in ONE read. Every other read derives from it.
+
+        Each row ends with the ``knowable_at`` of its winning vintage (#1255).
+        """
         # Latest vintage per (issuer, input_key, fiscal_period) at the cutoff -- a
         # restatement lands a new row and supersedes, never overwriting the prior one. The
         # period is part of the identity since 0043: a metric legitimately appears once per
@@ -124,7 +135,7 @@ class StrategyBacktestGateway:
         return self._connection.execute(
             """
             select distinct on (issuer_id, input_key, fiscal_period)
-                   issuer_id, input_key, value, confidence, fiscal_period
+                   issuer_id, input_key, value, confidence, fiscal_period, knowable_at
             from staging.strategy_backtest_inputs
             where cutoff_at = %s
             order by issuer_id, input_key, fiscal_period, knowable_at desc, recorded_at desc
@@ -175,27 +186,34 @@ def combine_snapshot_ids(snapshot_ids: list[str]) -> str:
 
 
 def issuer_inputs_from_rows(rows: Sequence[InputRow]) -> list[IssuerInput]:
-    """The evaluator inputs of the given rows of one cutoff."""
-    by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
-    periodic: dict[str, dict[str, dict[str, tuple[Decimal, Decimal]]]] = {}
-    for issuer_id, input_key, value, confidence, fiscal_period in rows:
-        entry = (Decimal(str(value)), Decimal(str(confidence)))
+    """The evaluator inputs of the given rows of one cutoff.
+
+    Each key also gets the ``knowable_at`` of the row that answers for it (#1255). A scalar row
+    answers for itself. For a periodic key, the row of the latest period answers.
+    """
+    scalars: dict[str, dict[str, _Observed]] = {}
+    periods: dict[str, dict[str, dict[str, _Observed]]] = {}
+    for issuer_id, input_key, value, confidence, fiscal_period, knowable_at in rows:
+        observed = _Observed(Decimal(str(value)), Decimal(str(confidence)), knowable_at)
         if fiscal_period is None:
-            by_issuer.setdefault(issuer_id, {})[input_key] = entry
+            scalars.setdefault(issuer_id, {})[input_key] = observed
             continue
-        periodic.setdefault(issuer_id, {}).setdefault(input_key, {})[fiscal_period] = entry
+        series = periods.setdefault(issuer_id, {}).setdefault(input_key, {})
+        series[fiscal_period] = observed
         # The latest period also answers as the scalar, so `net_income` stays a
         # required-input the coverage check and the multiple can both see.
-        scalars = by_issuer.setdefault(issuer_id, {})
-        latest_period = max(periodic[issuer_id][input_key], key=_period_end_key)
-        scalars[input_key] = periodic[issuer_id][input_key][latest_period]
+        scalars.setdefault(issuer_id, {})[input_key] = series[max(series, key=_period_end_key)]
     return [
         IssuerInput(
             issuer_id=issuer_id,
-            records=records,
-            periodic_records=periodic.get(issuer_id, {}),
+            records={key: (seen.value, seen.confidence) for key, seen in answers.items()},
+            knowable_at={key: seen.knowable_at for key, seen in answers.items()},
+            periodic_records={
+                key: {period: (seen.value, seen.confidence) for period, seen in by_period.items()}
+                for key, by_period in periods.get(issuer_id, {}).items()
+            },
         )
-        for issuer_id, records in sorted(by_issuer.items())
+        for issuer_id, answers in sorted(scalars.items())
     ]
 
 
@@ -204,10 +222,13 @@ def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
 
     The period is part of the snapshot identity: two runs that consumed different years of the
     same series are not the same snapshot, and before 0043 there was no way to say so.
+
+    The ``knowable_at`` of a row is not part of the identity. Stored runs bind this hash in its
+    earlier form, and a changed hash would break their identity (#1255).
     """
     payload = sorted(
         (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
-        for issuer_id, input_key, value, confidence, fiscal_period in rows
+        for issuer_id, input_key, value, confidence, fiscal_period, _knowable_at in rows
     )
     return f"strategy-snapshot:{canonical_sha256(payload)}"
 

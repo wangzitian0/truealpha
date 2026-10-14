@@ -28,6 +28,8 @@ Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
 Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
 Q3 = datetime(2024, 9, 30, 23, 59, 59, tzinfo=UTC)
 CONFIDENCE = Decimal("0.90")
+#: Every input of these issuers became knowable on this day. It is under 214 days before Q3, inside the age limit.
+KNOWN = datetime(2024, 3, 1, tzinfo=UTC)
 
 
 def _issuer(name: str) -> HistoryIssuer:
@@ -57,6 +59,7 @@ def _inputs(name: str, last_close: str) -> IssuerInput:
     return IssuerInput(
         issuer_id=f"issuer:t758:{name}",
         records={key: (Decimal(value), CONFIDENCE) for key, value in values.items()},
+        knowable_at=dict.fromkeys(values, KNOWN),
     )
 
 
@@ -82,7 +85,8 @@ def test_a_change_to_a_later_cutoff_changes_no_earlier_decision() -> None:
 
 def test_an_issuer_without_lineage_is_excluded_and_never_traded() -> None:
     definition = load_strategy_definition()
-    unknown = IssuerInput(issuer_id="issuer:t758:z", records=_inputs("a", "1").records)
+    known = _inputs("a", "1")
+    unknown = IssuerInput(issuer_id="issuer:t758:z", records=known.records, knowable_at=known.knowable_at)
 
     (decision,) = decide([Q1], lambda _cutoff: [unknown, _inputs("b", "2")], ISSUERS, definition)
 
