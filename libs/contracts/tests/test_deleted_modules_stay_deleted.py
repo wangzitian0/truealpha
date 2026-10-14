@@ -1,4 +1,4 @@
-"""#1238, #1239: modules deleted across truealpha packages must not come back.
+"""#1238, #1239, #1272: modules deleted across truealpha packages must not come back.
 
 Each module or script below had no importer outside its own tests or was dead code.
 Nothing deployed used it, so the code only added review and merge cost.
@@ -18,6 +18,7 @@ CONTRACTS_SRC = REPO_ROOT / "libs" / "contracts" / "src" / "truealpha_contracts"
 DATA_ENGINE_SRC = REPO_ROOT / "apps" / "data-engine" / "src" / "data_engine"
 FACTORS_SRC = REPO_ROOT / "libs" / "factors" / "src" / "factors"
 DATA_ENGINE_SCRIPTS = REPO_ROOT / "apps" / "data-engine" / "scripts"
+APP_WEB_ROOT = REPO_ROOT / "apps" / "app-web"
 
 DELETED_CONTRACT_MODULES = (
     "gates",
@@ -42,6 +43,19 @@ DELETED_FACTORS_MODULES = (
 DELETED_SCRIPTS = (
     "datahub_quality_report.py",
     "refresh_etf_universe.py",
+    "run_production_topt_capture.py",
+    "materialize_production_topt_core.py",
+    "query_production_topt_datahub.py",
+)
+
+DELETED_APP_WEB_FILES = (
+    "src/app/research/conversations/page.tsx",
+    "src/app/research/conversations/[id]/page.tsx",
+    "src/server/conversations-actions.ts",
+    "src/server/conversations-answer.ts",
+    "src/server/conversations.ts",
+    "tests/conversations-answer.test.ts",
+    "tests/conversations-validation.test.ts",
 )
 
 
@@ -88,6 +102,11 @@ def test_deleted_scripts_have_no_source_file(script_name: str) -> None:
     assert not (DATA_ENGINE_SCRIPTS / script_name).exists(), f"scripts/{script_name} was deleted and exists again"
 
 
+@pytest.mark.parametrize("rel_path", DELETED_APP_WEB_FILES)
+def test_deleted_app_web_files_have_no_source_file(rel_path: str) -> None:
+    assert not (APP_WEB_ROOT / rel_path).exists(), f"apps/app-web/{rel_path} was deleted in #1272 and exists again"
+
+
 def test_the_import_probe_finds_modules_that_exist() -> None:
     """Positive controls. Probes that find nothing for every name would pass the tests above for any input."""
     # Contracts control
@@ -104,3 +123,6 @@ def test_the_import_probe_finds_modules_that_exist() -> None:
 
     # Scripts control
     assert (DATA_ENGINE_SCRIPTS / "bootstrap_universe.py").exists()
+
+    # App-web control
+    assert (APP_WEB_ROOT / "src" / "app" / "research" / "page.tsx").exists()
