@@ -56,7 +56,7 @@ SOURCE = DataSource.US_TREASURY
 #: The ledger endpoint name, the ``raw.fetches`` record prefix and the query type of the Treasury URL.
 ENDPOINT = "daily_treasury_yield_curve"
 BASE_URL = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv"
-#: The agent text that the Twelve Data client sends.
+#: The User-Agent header that this module sends to the Treasury. It has the same text as the Twelve Data client.
 USER_AGENT = "TrueAlpha-DataEngine/1.0"
 REQUEST_TIMEOUT_SECONDS = 30
 
