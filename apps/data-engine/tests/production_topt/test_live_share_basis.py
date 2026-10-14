@@ -212,9 +212,17 @@ SHAPES: dict[str, SeriesShape] = {
     # WMT's split-adjusted series steps tenfold, and its unadjusted series does not drop.
     # That is two vintages of the split-adjusted series, not a split: SplitDerivationError.
     "WMT": lambda day: (CLOSE, CLOSE / 10 if day < _EX_DATE else CLOSE),
+    # JNJ's series end one session before the close, as after a winter refresh. The close holds still.
+    "JNJ": lambda day: (CLOSE, CLOSE) if day < SESSION else (None, None),
+    # LLY's series also end one session early, at 400. The close of 40 is a tenfold drop.
+    "LLY": lambda day: (CLOSE * 10, CLOSE * 10) if day < SESSION else (None, None),
 }
 #: The symbols with an unknown share basis, and the reason the tick names for each.
-UNAVAILABLE = {"MSFT": "no_split_adjusted_series", "WMT": "split_derivation_failed"}
+UNAVAILABLE = {
+    "MSFT": "no_split_adjusted_series",
+    "WMT": "split_derivation_failed",
+    "LLY": "close_jump_beyond_series",
+}
 
 
 class _Warnings(logging.Handler):
@@ -371,3 +379,31 @@ def test_an_ambiguous_ratio_step_of_one_symbol_makes_only_its_issuer_unavailable
     assert len(tick.warnings) == len(UNAVAILABLE), "each unavailable issuer is named once, and no other"
     assert all(any(symbol in m and reason in m for m in tick.warnings) for symbol, reason in UNAVAILABLE.items())
     assert {ticker: other.shares for ticker, other in others.items()} == dict.fromkeys(others, FILED_SHARES)
+
+
+# -- the series may trail the close by one session, with a cross-check -------------------
+
+
+def test_series_one_session_behind_the_close_value_the_issuer_when_the_close_holds_still(tick: Tick) -> None:
+    """JNJ's series end on 2026-03-30 and its close of 2026-03-31 equals the last stored close.
+
+    The market-data refresh can run before the vendor lists the day's bar (`MAX_BAR_LAG_SESSIONS`).
+    Red without the one-session tolerance: JNJ had no share row every winter night.
+    """
+    jnj = _served(tick, "JNJ")
+
+    assert jnj.shares == FILED_SHARES, jnj
+    assert jnj.market_value == CLOSE * FILED_SHARES, jnj
+
+
+def test_a_close_that_jumps_beyond_the_series_makes_the_issuer_unavailable_with_a_named_reason(tick: Tick) -> None:
+    """LLY's series end at 400 on 2026-03-30, and its close of 2026-03-31 is 40: a split or an event.
+
+    The stored series cannot tell which, so LLY gets no share row that night. Red without the
+    cross-check: the tick wrote the filed count beside the tenfold drop.
+    """
+    lly = _served(tick, "LLY")
+
+    assert lly.shares is None and lly.exclusion_reason == "missing_market_value_input", lly
+    named = [message for message in tick.warnings if "close_jump_beyond_series" in message]
+    assert len(named) == 1 and "LLY" in named[0] and "0.1000" in named[0], tick.warnings

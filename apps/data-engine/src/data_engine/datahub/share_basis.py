@@ -18,13 +18,20 @@ session. The live close comes from the capture. ``live_on_close_basis`` therefor
 the stored series can prove, and it fails closed. An issuer whose splits are unknown between
 the basis date and the close's session gets no market value, with a named reason. The live
 path never falls back to the filed count.
+
+The stored series may end one session before the close's session (``MAX_BAR_LAG_SESSIONS``):
+the market-data refresh can run before the vendor lists that day's bar. Then the live close must
+stay within a factor of ``CLOSE_JUMP_LIMIT`` (1.5) of the last stored unadjusted close. The
+smallest common split, 3-for-2, moves a close by 1.5. A one-day move to x1.5 or more, or to x0.667
+or less, is a split or an event, and the stored series cannot tell which. Then the seed excludes
+the issuer for that night.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any, NamedTuple
@@ -32,6 +39,7 @@ from typing import Any, NamedTuple
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent, split_factor_between
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 
+from data_engine.datahub.market_prices import MAX_BAR_LAG_SESSIONS, most_recent_xnys_session
 from data_engine.datahub.price_series import DailySeries, split_events_of
 
 #: The input key of the share count that multiplies a close into a market value.
@@ -164,6 +172,12 @@ SERIES_DO_NOT_COVER = "split_series_do_not_cover_the_window"
 LISTINGS_DISAGREE = "listings_disagree_on_splits"
 SHARE_COUNT_UNDATED = "share_count_undated"
 SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
+CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+
+#: The smallest common split, 3-for-2, moves a close by the factor 1.5. When the stored series end
+#: before the close's session, a close at x1.5 or more, or at x0.667 or less, of the last stored
+#: close can follow a split that the series do not show yet. Both limits exclude the issuer.
+CLOSE_JUMP_LIMIT = Decimal("1.5")
 
 
 class Unavailable(NamedTuple):
@@ -185,9 +199,8 @@ class SplitHistory:
     events: tuple[SplitEvent, ...]
     first_session: date
     last_session: date
-
-    def covers(self, *, after: date, through: date) -> bool:
-        return self.first_session <= after and self.last_session >= through
+    #: The unadjusted close of ``last_session``: the last close the stored series know.
+    last_unadjusted_close: Decimal
 
 
 def _positive_close(bar: tuple[Decimal | None, Decimal | None] | None) -> bool:
@@ -217,7 +230,9 @@ def split_history(
     paired = sorted(day for day in raw if _positive_close(raw[day]) and _positive_close(adjusted.get(day)))
     if not paired:
         return Unavailable(SPLIT_DERIVATION_FAILED, f"{symbol}: no session holds a close in both series")
-    return SplitHistory(symbol, events, paired[0], paired[-1])
+    last_close = raw[paired[-1]][1]
+    assert last_close is not None  # `_positive_close` admitted the session
+    return SplitHistory(symbol, events, paired[0], paired[-1], last_close)
 
 
 @dataclass(frozen=True)
@@ -230,6 +245,8 @@ class LiveShareCount:
     entry: object
     close_session: date
     close_knowable_at: datetime
+    #: The captured close the count multiplies.
+    close: Decimal
 
 
 def _entry_date(entry: object, key: str) -> date | None:
@@ -240,6 +257,42 @@ def _entry_date(entry: object, key: str) -> date | None:
         return date.fromisoformat(str(entry[key]))
     except ValueError:
         return None
+
+
+def _oldest_covered_session(close_session: date) -> date:
+    """The session ``MAX_BAR_LAG_SESSIONS`` XNYS sessions before the close's session."""
+    oldest = close_session
+    for _ in range(MAX_BAR_LAG_SESSIONS):
+        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
+    return oldest
+
+
+def _close_side_gap(history: SplitHistory, count: LiveShareCount) -> Unavailable | None:
+    """None when the series of one listing speak for the close's session, else the named reason.
+
+    Series that hold the close's session speak for it. Series that end at most
+    ``MAX_BAR_LAG_SESSIONS`` sessions before it speak for it only when the live close stayed
+    within a factor of ``CLOSE_JUMP_LIMIT`` of the last stored close. A close on either limit is
+    excluded: a 3-for-2 split lands on it exactly.
+    """
+    close = count.close_session
+    if history.last_session >= close:
+        return None
+    if history.last_session < _oldest_covered_session(close):
+        return Unavailable(
+            SERIES_DO_NOT_COVER,
+            f"{history.symbol}: both series hold {history.first_session}..{history.last_session}; "
+            f"the close is of {close}",
+        )
+    last = history.last_unadjusted_close
+    if count.close * CLOSE_JUMP_LIMIT > last and count.close < last * CLOSE_JUMP_LIMIT:
+        return None
+    return Unavailable(
+        CLOSE_JUMP_BEYOND_SERIES,
+        f"{history.symbol}: the close of {close} is {count.close} and the last stored close, of "
+        f"{history.last_session}, is {last}: ratio {count.close / last:.4f}, not inside the limit "
+        f"{CLOSE_JUMP_LIMIT}; a split or an event, and the stored series cannot tell which",
+    )
 
 
 def live_on_close_basis(
@@ -274,12 +327,14 @@ def live_on_close_basis(
     earliest, latest = min(own_date, filed), max(own_date, filed)
     close = count.close_session
     for history in known:
-        if not history.covers(after=earliest, through=close):
+        if history.first_session > earliest:
             return Unavailable(
                 SERIES_DO_NOT_COVER,
-                f"{history.symbol}: both series hold {history.first_session}..{history.last_session}; "
-                f"the count's basis can be {earliest} and the close is of {close}",
+                f"{history.symbol}: both series start on {history.first_session}; the count's basis can be {earliest}",
             )
+        gap = _close_side_gap(history, count)
+        if gap is not None:
+            return gap
     factors = {
         (
             split_factor_between(h.events, after=earliest, through=close),
@@ -319,6 +374,8 @@ def live_on_close_basis(
 
 
 __all__ = [
+    "CLOSE_JUMP_BEYOND_SERIES",
+    "CLOSE_JUMP_LIMIT",
     "COVER",
     "LISTINGS_DISAGREE",
     "NO_SPLIT_ADJUSTED_SERIES",

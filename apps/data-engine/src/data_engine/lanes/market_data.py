@@ -56,7 +56,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.market_prices import MAX_BAR_LAG_SESSIONS, SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
@@ -75,11 +75,6 @@ MARKET_DATA_VERDICT = "market_data_freshness"
 NIGHTLY_VERDICTS: tuple[str, ...] = (MARKET_DATA_VERDICT,)
 #: The daily series the verdict judges, one bar-age check each.
 FRESHNESS_SERIES: tuple[str, ...] = (UNADJUSTED, SPLIT_ADJUSTED)
-#: How many XNYS sessions the newest bar of a series may trail the latest closed session.
-#: One: in winter the tick runs 15 minutes after the 21:00 UTC close, and the vendor may not
-#: list that day's bar yet. Monday's tick then finds Friday's bar and stays green. A series
-#: two sessions behind has missed a whole night, and the verdict goes red.
-MAX_BAR_LAG_SESSIONS = 1
 
 
 def _prior_month(year: int, month: int) -> tuple[int, int]:

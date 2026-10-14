@@ -93,6 +93,13 @@ SPLIT_ADJUSTED = "splits"
 UNADJUSTED = "none"
 DEFAULT_ADJUST = SPLIT_ADJUSTED
 
+#: How many XNYS sessions the newest bar of a series may trail the latest closed session.
+#: One: in winter the market-data tick runs 15 minutes after the 21:00 UTC close, and the vendor
+#: may not list that day's bar yet. Monday's tick then finds Friday's bar and stays green. A series
+#: two sessions behind has missed a whole night, and the freshness verdict goes red. The live
+#: strategy seed accepts the same lag for its split series (`share_basis`, #1262).
+MAX_BAR_LAG_SESSIONS = 1
+
 # Declared single-source confidence grade: this pipeline fetches Twelve Data alone, with
 # no independent corroborating origin (unlike `production_topt.market_price_adapter`'s
 # multi-origin adapter). One `PRICE_GRADE_STEP` below that adapter's

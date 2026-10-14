@@ -309,6 +309,7 @@ def _counts_on_close_basis(
                 entry=(payload.get("vintage") or {}).get(SHARES_KEY),
                 close_session=close_observed_at.astimezone(UTC).date(),
                 close_knowable_at=close_observed_at,
+                close=Decimal(str(close_payload["close"])),
             ),
             [histories[symbol] for symbol in names],
             documents=partial(_company_facts_documents, connection, run_id, issuer_id, parser_version),

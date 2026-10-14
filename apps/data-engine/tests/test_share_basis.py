@@ -17,6 +17,7 @@ from data_engine.datahub.market_prices import is_xnys_trading_day
 from data_engine.datahub.price_series import DailySeries
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.share_basis import (
+    CLOSE_JUMP_BEYOND_SERIES,
     LISTINGS_DISAGREE,
     NO_SPLIT_ADJUSTED_SERIES,
     NO_UNADJUSTED_SERIES,
@@ -40,9 +41,13 @@ CLOSE = Decimal("40")
 OWN_DATE, FILED = date(2026, 2, 20), date(2026, 3, 5)
 EX_DATE = date(2026, 3, 2)
 SESSION = date(2026, 3, 31)
+#: The XNYS session before SESSION: series that end here trail the close by one session.
+PREVIOUS_SESSION = date(2026, 3, 30)
 ACCESSION = "0000123456-26-000007"
 COUNT_KNOWABLE = datetime(2026, 3, 5, tzinfo=UTC)
 CLOSE_KNOWABLE = datetime(2026, 3, 31, tzinfo=UTC)
+#: The outcome of a count the series value: on the filed basis, as no split is known.
+VALUED = OnCloseBasis(SHARES, COUNT_KNOWABLE, 1)
 
 
 def _sessions(first: date, last: date) -> list[date]:
@@ -82,7 +87,15 @@ def _history(symbol: str = "NVDA", *, ex_date: date | None = EX_DATE, **span: da
     return history
 
 
-def _count(entry: object | None = None) -> LiveShareCount:
+def _flat_history(level: Decimal, *, last: date) -> SplitHistory:
+    """The history of NVDA's two series at one close, with no split, from 2025-12-01 to `last`."""
+    unadjusted, split_adjusted = _series("NVDA", lambda _day: level, lambda _day: level, last=last)
+    history = split_history("NVDA", unadjusted, split_adjusted)
+    assert isinstance(history, SplitHistory), history
+    return history
+
+
+def _count(entry: object | None = None, *, close: Decimal = CLOSE) -> LiveShareCount:
     return LiveShareCount(
         shares=SHARES,
         knowable_at=COUNT_KNOWABLE,
@@ -91,6 +104,7 @@ def _count(entry: object | None = None) -> LiveShareCount:
         else entry,
         close_session=SESSION,
         close_knowable_at=CLOSE_KNOWABLE,
+        close=close,
     )
 
 
@@ -161,7 +175,7 @@ def test_the_stored_documents_are_not_read_when_the_split_follows_the_filing() -
 @pytest.mark.parametrize(
     ("span", "uncovered"),
     [
-        ({"last": date(2026, 3, 27)}, "the series end before the close's session"),
+        ({"last": date(2026, 3, 27)}, "the series end two sessions before the close's session"),
         ({"first": date(2026, 2, 23)}, "the series start after the count's own date"),
     ],
 )
@@ -171,6 +185,44 @@ def test_series_that_do_not_span_the_basis_date_to_the_close_make_the_issuer_una
     outcome = live_on_close_basis(_count(), [_history(ex_date=None, **span)], documents=_no_read, ruleset=_no_read)
 
     assert isinstance(outcome, Unavailable) and outcome.reason == SERIES_DO_NOT_COVER, uncovered
+
+
+def test_series_one_session_behind_the_close_value_the_issuer_when_the_close_holds_still() -> None:
+    """In winter the market-data refresh can run before the vendor lists the day's bar (#1262)."""
+    outcome = live_on_close_basis(
+        _count(), [_flat_history(CLOSE, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+    )
+
+    assert outcome == VALUED
+
+
+def test_a_close_at_one_tenth_of_the_last_stored_close_is_a_jump_beyond_the_series() -> None:
+    """A 10-for-1 split on the session the series do not hold yet: the issuer is excluded that night."""
+    outcome = live_on_close_basis(
+        _count(), [_flat_history(CLOSE * 10, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+    )
+
+    assert isinstance(outcome, Unavailable) and outcome.reason == CLOSE_JUMP_BEYOND_SERIES, outcome
+    assert "NVDA" in outcome.detail and "400" in outcome.detail and "0.1000" in outcome.detail, outcome.detail
+
+
+@pytest.mark.parametrize(
+    ("last_stored", "live", "expected"),
+    [
+        (Decimal("60"), Decimal("40"), CLOSE_JUMP_BEYOND_SERIES),  # x0.667: a 3-for-2 split, exactly
+        (Decimal("59.99"), Decimal("40"), VALUED),  # just inside the lower limit
+        (Decimal("40"), Decimal("60"), CLOSE_JUMP_BEYOND_SERIES),  # x1.5: the upper limit, exactly
+        (Decimal("40"), Decimal("59.99"), VALUED),  # just inside the upper limit
+    ],
+)
+def test_a_close_on_the_jump_limit_is_excluded_and_a_close_just_inside_is_valued(
+    last_stored: Decimal, live: Decimal, expected: object
+) -> None:
+    outcome = live_on_close_basis(
+        _count(close=live), [_flat_history(last_stored, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+    )
+
+    assert (outcome.reason if isinstance(outcome, Unavailable) else outcome) == expected, outcome
 
 
 def test_a_listing_without_stored_bars_takes_the_splits_of_the_issuers_other_listing() -> None:
