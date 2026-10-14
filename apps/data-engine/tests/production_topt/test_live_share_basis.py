@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -180,28 +181,6 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
     return routes
 
 
-@pytest.fixture
-def tick_database_url(monkeypatch):
-    """One isolated database per test, armed so the deployed tick runs offline against it."""
-    from data_engine.datahub import a1_evidence
-    from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
-
-    with isolated_test_database("sharebasis") as url:
-        monkeypatch.setattr(settings, "database_url", url)
-        monkeypatch.setattr(settings, "environment_tier", RuntimeEnvironmentTier.PRODUCTION)
-        for name, value in {
-            "twelve_data_api_key": "",
-            "moomoo_kline_origin_enabled": False,
-            "moomoo_financials_origin_enabled": False,
-        }.items():
-            monkeypatch.setattr(settings, name, value)
-        store = InMemoryRawObjectStore()
-        monkeypatch.setattr(raw_store, "object_store", lambda: store)
-        monkeypatch.setattr(composition, "build_routes", _routes)
-        monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: ())
-        yield url
-
-
 def _with_series(url: str, shapes: dict[str, SeriesShape]) -> None:
     """Both daily series of every TOPT symbol the market-data lane stores, SERIES_START to SESSION.
 
@@ -223,6 +202,69 @@ def _live_tick() -> dict:
     return context.get_output_metadata("result")
 
 
+#: The one fixture tick of this module. A symbol that this map omits closes at 40 in both series.
+_EX_DATE = date(2026, 3, 2)
+SHAPES: dict[str, SeriesShape] = {
+    # Acceptance a: NVDA splits 10:1 after its count was filed. Both series show the split.
+    "NVDA": _split(_EX_DATE, 10),
+    # Acceptance b: MSFT splits 10:1 too, and only its unadjusted series is stored.
+    "MSFT": lambda day: (CLOSE * 10 if day < _EX_DATE else CLOSE, None),
+    # WMT's split-adjusted series steps tenfold, and its unadjusted series does not drop.
+    # That is two vintages of the split-adjusted series, not a split: SplitDerivationError.
+    "WMT": lambda day: (CLOSE, CLOSE / 10 if day < _EX_DATE else CLOSE),
+}
+#: The symbols with an unknown share basis, and the reason the tick names for each.
+UNAVAILABLE = {"MSFT": "no_split_adjusted_series", "WMT": "split_derivation_failed"}
+
+
+class _Warnings(logging.Handler):
+    """The warning messages that the strategy seed logs during the tick."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@dataclass(frozen=True)
+class Tick:
+    url: str
+    metadata: dict
+    warnings: tuple[str, ...]
+
+
+@pytest.fixture(scope="module")
+def tick() -> Iterator[Tick]:
+    """One deployed tick over the fixture universe in an isolated database, offline, run once."""
+    from data_engine.datahub import a1_evidence
+    from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
+
+    with isolated_test_database("sharebasis") as url, pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(settings, "database_url", url)
+        monkeypatch.setattr(settings, "environment_tier", RuntimeEnvironmentTier.PRODUCTION)
+        for name, value in {
+            "twelve_data_api_key": "",
+            "moomoo_kline_origin_enabled": False,
+            "moomoo_financials_origin_enabled": False,
+        }.items():
+            monkeypatch.setattr(settings, name, value)
+        store = InMemoryRawObjectStore()
+        monkeypatch.setattr(raw_store, "object_store", lambda: store)
+        monkeypatch.setattr(composition, "build_routes", _routes)
+        monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: ())
+        _with_series(url, SHAPES)
+        seed_log = logging.getLogger("data_engine.datahub.strategy_bridge")
+        handler = _Warnings()
+        seed_log.addHandler(handler)
+        try:
+            metadata = _live_tick()
+        finally:
+            seed_log.removeHandler(handler)
+        yield Tick(url, metadata, tuple(handler.messages))
+
+
 @dataclass(frozen=True)
 class Served:
     """What the tick wrote for one issuer: its share row at the tick's cutoff and its decision."""
@@ -238,8 +280,8 @@ class Served:
         return None if self.price_to_sales is None else self.price_to_sales * REVENUE
 
 
-def _served(url: str, metadata: dict, ticker: str) -> Served:
-    with psycopg.connect(url) as reader:
+def _served(tick: Tick, ticker: str) -> Served:
+    with psycopg.connect(tick.url) as reader:
         issuer_id = reader.execute(
             """
             select distinct p.normalized_payload ->> 'issuer_id'
@@ -248,7 +290,7 @@ def _served(url: str, metadata: dict, ticker: str) -> Served:
             join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
             where ob.run_id = %s and p.normalized_payload ->> 'ticker' = %s
             """,
-            (metadata["capture_run_id"], ticker),
+            (tick.metadata["capture_run_id"], ticker),
         ).fetchone()[0]
         shares = reader.execute(
             """
@@ -262,7 +304,7 @@ def _served(url: str, metadata: dict, ticker: str) -> Served:
         decision = reader.execute(
             "select current_price_to_sales, exclusion_reason from mart.strategy_decisions "
             "where strategy_run_id = %s and issuer_id = %s",
-            (metadata["strategy_run_id"], issuer_id),
+            (tick.metadata["strategy_run_id"], issuer_id),
         ).fetchone()
     return Served(
         shares=None if shares is None else Decimal(shares[0]),
@@ -275,17 +317,14 @@ def _served(url: str, metadata: dict, ticker: str) -> Served:
 # -- acceptance a: a split between the filing and the cutoff -----------------------------
 
 
-def test_a_split_after_the_filing_gives_the_live_market_value_on_the_post_split_basis(tick_database_url) -> None:
+def test_a_split_after_the_filing_gives_the_live_market_value_on_the_post_split_basis(tick: Tick) -> None:
     """#1262 acceptance a. NVDA splits 10:1 on 2026-03-02, after its count was filed on 2026-02-01.
 
     The 2026-03-31 close is on the post-split basis. Red on main: the tick multiplied the
     pre-split count by the post-split close, and NVDA's market value was ten times too small.
     """
-    _with_series(tick_database_url, {"NVDA": _split(date(2026, 3, 2), 10)})
-
-    metadata = _live_tick()
-    nvda = _served(tick_database_url, metadata, "NVDA")
-    control = _served(tick_database_url, metadata, "AAPL")
+    nvda = _served(tick, "NVDA")
+    control = _served(tick, "AAPL")
 
     assert nvda.market_value == CLOSE * FILED_SHARES * 10, f"post-split market value expected, got {nvda}"
     assert nvda.shares == FILED_SHARES * 10
@@ -300,47 +339,35 @@ def test_a_split_after_the_filing_gives_the_live_market_value_on_the_post_split_
 
 
 def test_a_symbol_without_its_split_adjusted_series_makes_the_issuer_unavailable_with_a_named_reason(
-    tick_database_url, caplog
+    tick: Tick,
 ) -> None:
-    """#1262 acceptance b. NVDA split 10:1 on 2026-03-02, and only its unadjusted series is stored.
+    """#1262 acceptance b. MSFT split 10:1 on 2026-03-02, and only its unadjusted series is stored.
 
     Without the split-adjusted series its splits are unknown. The tick writes no share row for
-    NVDA, so the filed count never meets the post-split close. The evaluator excludes NVDA with
+    MSFT, so the filed count never meets the post-split close. The evaluator excludes MSFT with
     `missing_market_value_input`, and the log names the reason. Red on main: the tick wrote the
     filed 10,000,000 beside the post-split close.
     """
-    ex_date = date(2026, 3, 2)
-    _with_series(tick_database_url, {"NVDA": lambda day: (CLOSE * 10 if day < ex_date else CLOSE, None)})
+    msft = _served(tick, "MSFT")
 
-    with caplog.at_level(logging.WARNING, logger="data_engine.datahub.strategy_bridge"):
-        metadata = _live_tick()
-    nvda = _served(tick_database_url, metadata, "NVDA")
-    control = _served(tick_database_url, metadata, "AAPL")
-
-    assert nvda.shares is None, f"no share row may stand beside a close of an unknown basis, got {nvda}"
-    assert nvda.exclusion_reason == "missing_market_value_input"
-    assert nvda.market_value is None
-    named = [record.getMessage() for record in caplog.records if "no_split_adjusted_series" in record.getMessage()]
-    assert len(named) == 1 and "NVDA" in named[0], [record.getMessage() for record in caplog.records]
-    assert control.market_value == CLOSE * FILED_SHARES, "one issuer without series must not take down the others"
+    assert msft.shares is None, f"no share row may stand beside a close of an unknown basis, got {msft}"
+    assert msft.exclusion_reason == "missing_market_value_input"
+    assert msft.market_value is None
+    named = [message for message in tick.warnings if "no_split_adjusted_series" in message]
+    assert len(named) == 1 and "MSFT" in named[0], tick.warnings
 
 
-def test_an_ambiguous_ratio_step_of_one_symbol_makes_only_its_issuer_unavailable(tick_database_url, caplog) -> None:
+def test_an_ambiguous_ratio_step_of_one_symbol_makes_only_its_issuer_unavailable(tick: Tick) -> None:
     """A SplitDerivationError of one symbol names that symbol and leaves every other issuer alone.
 
-    NVDA's split-adjusted series steps tenfold on 2026-03-02, and its unadjusted series does not
-    drop: two vintages of the split-adjusted series, not a split. Red on main: the tick wrote the
-    filed count for NVDA as if no question existed.
+    Red on main: the tick wrote the filed count for WMT as if no question existed.
     """
-    ex_date = date(2026, 3, 2)
-    _with_series(tick_database_url, {"NVDA": lambda day: (CLOSE, CLOSE / 10 if day < ex_date else CLOSE)})
+    wmt = _served(tick, "WMT")
+    others = {ticker: _served(tick, ticker) for ticker in DEFAULT_TOPT_SYMBOLS if ticker not in {"NVDA", *UNAVAILABLE}}
 
-    with caplog.at_level(logging.WARNING, logger="data_engine.datahub.strategy_bridge"):
-        metadata = _live_tick()
-    nvda = _served(tick_database_url, metadata, "NVDA")
-
-    assert nvda.shares is None and nvda.exclusion_reason == "missing_market_value_input", nvda
-    named = [record.getMessage() for record in caplog.records if "split_derivation_failed" in record.getMessage()]
-    assert len(named) == 1 and "NVDA" in named[0], [record.getMessage() for record in caplog.records]
-    others = [_served(tick_database_url, metadata, ticker) for ticker in ("AAPL", "MSFT", "WMT", "GOOGL")]
-    assert all(other.market_value == CLOSE * FILED_SHARES for other in others), others
+    assert wmt.shares is None and wmt.exclusion_reason == "missing_market_value_input", wmt
+    named = [message for message in tick.warnings if "split_derivation_failed" in message]
+    assert len(named) == 1 and "WMT" in named[0], tick.warnings
+    assert len(tick.warnings) == len(UNAVAILABLE), "each unavailable issuer is named once, and no other"
+    assert all(any(symbol in m and reason in m for m in tick.warnings) for symbol, reason in UNAVAILABLE.items())
+    assert {ticker: other.shares for ticker, other in others.items()} == dict.fromkeys(others, FILED_SHARES)
