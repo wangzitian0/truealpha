@@ -9,12 +9,13 @@
 
 export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   missing_gross_profit_fact:
-    "Gross profit not in the warehouse yet (financial-sector SEC tags need their own mapping)",
+    "No PIT-valid operating profit fact in SEC XBRL companyfacts (cost of revenue or insurance claims not tagged on consolidated us-gaap concepts before cutoff)",
   missing_total_assets_fact: "Total assets fact not captured yet",
   missing_headcount_disclosure: "Headcount disclosure not captured yet",
   missing_labor_cost_disclosure: "Labor-cost disclosure not captured yet",
   missing_revenue_fact: "Revenue fact not captured yet",
-  missing_market_value_input: "Market-value inputs (shares × last close) incomplete",
+  missing_market_value_input:
+    "No PIT-valid consolidated common share count or close price before cutoff (for example, multi-class share counts reported only on dimensional XBRL axes)",
   missing_risk_free_rate_parameter: "Risk-free rate parameter missing for this cutoff",
   missing_tangible_common_equity:
     "Banks: measured tangible common equity not captured yet (stockholders' equity, goodwill, intangibles)",
@@ -33,4 +34,58 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
 export function exclusionLabel(reason: string | null): string | null {
   if (reason === null) return null;
   return EXCLUSION_REASON_LABEL[reason] ?? reason;
+}
+
+export interface DecisionUsabilityInput {
+  readonly issuer_id: string;
+  readonly outcome: string;
+  readonly eligible: boolean;
+  readonly exclusion_reason: string | null;
+}
+
+export interface ExcludedIssuerSummary {
+  readonly issuer_id: string;
+  readonly exclusion_reason: string | null;
+  readonly label: string;
+}
+
+export interface UniverseUsabilitySummary<
+  T extends DecisionUsabilityInput = DecisionUsabilityInput,
+> {
+  readonly evaluatedCount: number;
+  readonly usableCount: number;
+  readonly selectedCount: number;
+  readonly excludedCount: number;
+  readonly usable: readonly T[];
+  readonly selections: readonly T[];
+  readonly excluded: readonly ExcludedIssuerSummary[];
+}
+
+/**
+ * #1265 item 3: partition the strategy run's pre-materialized decisions into
+ * usable (complete core inputs, eligible=true) vs excluded (missing/stale/nonpositive
+ * core input) so the Today page states the usable denominator alongside the
+ * evaluated universe size and names each excluded issuer with its reason.
+ */
+export function summarizeUniverseUsability<T extends DecisionUsabilityInput>(
+  decisions: readonly T[],
+): UniverseUsabilitySummary<T> {
+  const selections = decisions.filter((d) => d.outcome === "selected");
+  const usable = decisions.filter((d) => d.eligible && d.exclusion_reason === null);
+  const excluded = decisions
+    .filter((d) => !d.eligible || d.exclusion_reason !== null || d.outcome === "excluded")
+    .map((d) => ({
+      issuer_id: d.issuer_id,
+      exclusion_reason: d.exclusion_reason,
+      label: exclusionLabel(d.exclusion_reason) ?? "Excluded from universe",
+    }));
+  return {
+    evaluatedCount: decisions.length,
+    usableCount: usable.length,
+    selectedCount: selections.length,
+    excludedCount: excluded.length,
+    usable,
+    selections,
+    excluded,
+  };
 }

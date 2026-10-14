@@ -111,8 +111,17 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
         },
         connection=connection,
     )
+    from data_engine.datahub.production_topt.executor import FetchSuccess
+    from data_engine.sources import sec
+    from truealpha_contracts.datahub import CaptureWorkItem
+
+    work_item = CaptureWorkItem(
+        campaign_id="capture-campaign:" + "1" * 64,
+        source_request_id="source-request:" + "a" * 64,
+        schedule_policy_id="schedule-policy:" + "2" * 64,
+    )
     cell = RouteCell(
-        work_item_id="wi:xom:financial-fact",
+        work_item_id=work_item.work_item_id,
         semantic_type="financial-fact",
         issuer_id=xom_uuid,
         instrument_id=xom_instrument_uuid,
@@ -125,6 +134,94 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     assert target.cik == 2115436
     assert target.predecessor_cik == 34088
     assert target.predecessor_signed is True
+    assert target.revenue_proxy_allowed is False
+
+    holdco_doc = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 464482000000,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 4111911960,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {
+                                "start": "2025-01-01",
+                                "end": "2025-12-31",
+                                "val": 332238000000,
+                                "accn": "0000034088-26-000017",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2026-02-18",
+                            }
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            {
+                                "start": "2025-01-01",
+                                "end": "2025-12-31",
+                                "val": 28844000000,
+                                "accn": "0000034088-26-000017",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2026-02-18",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(
+        sec,
+        "fetch_company_facts_response",
+        lambda cik: (b'{"cik":2115436}', holdco_doc) if cik == 2115436 else (b'{"cik":34088}', pred_doc),
+    )
+    outcome = adapter.fetch(work_item)
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.record.payload["revenue"] == "332238000000"
+    assert outcome.record.payload["net_income"] == "28844000000"
+    assert outcome.record.payload["total_assets"] == "464482000000"
+    assert outcome.record.payload["shares_outstanding"] == "4111911960"
+    assert outcome.record.payload["gross_profit"] is None
 
 
 def test_alphabet_uuid_constants_match_migrated_entity_aliases(connection) -> None:

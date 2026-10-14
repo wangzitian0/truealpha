@@ -6,6 +6,7 @@ import {
 	formatSignedRatio,
 	signColor,
 } from "@/client/format";
+import { summarizeUniverseUsability } from "@/contracts/exclusion-reasons";
 import {
 	currentMultipleOf,
 	reportValuationBasis,
@@ -32,17 +33,18 @@ export default async function ResearchOverviewPage() {
 	const state = await loadOverview(principal.context);
 	const strategy = await loadStrategyRunPage(principal, "large_model_value_v0");
 	const names = await loadEntityDisplayMap();
-	const selections =
-		strategy.kind === "ready"
-			? strategy.report.decisions.filter(
-					(decision) => decision.outcome === "selected",
-				)
-			: [];
-	const evaluated =
-		strategy.kind === "ready" ? strategy.report.decisions.length : 0;
+	const usability = summarizeUniverseUsability(
+		strategy.kind === "ready" ? strategy.report.decisions : [],
+	);
+	const selections = usability.selections;
+	const evaluated = usability.evaluatedCount;
 	// #1235: the gap divides the multiple of the run's definition — P/GP under 1.0.0.
 	const basisLabel = valuationBasisLabel(reportValuationBasis(selections));
-	const latestCutoff = selections[0]?.cutoff_at ?? null;
+	const latestCutoff =
+		selections[0]?.cutoff_at ??
+		(strategy.kind === "ready"
+			? (strategy.report.decisions[0]?.cutoff_at ?? null)
+			: null);
 	// #575: say which run this is. The mart repository ranks the run the governed capture
 	// head resolves to first and falls back to the newest recorded run; the sentence must
 	// not call the fallback "governed".
@@ -172,8 +174,16 @@ export default async function ResearchOverviewPage() {
 							</tbody>
 						</table>
 					</div>
-					<p className="text-sm text-gray-500">
-						{selections.length} selected of {evaluated} evaluated —{" "}
+					<p
+						className="text-sm text-gray-500"
+						data-testid="universe-usability-summary"
+					>
+						{selections.length} selected · {usability.usableCount} usable of{" "}
+						{evaluated} evaluated
+						{usability.excludedCount > 0
+							? ` (${usability.excludedCount} excluded)`
+							: ""}{" "}
+						—{" "}
 						<Link
 							href="/research/strategy"
 							className="text-accent hover:underline"
@@ -188,6 +198,32 @@ export default async function ResearchOverviewPage() {
 							why some companies are missing
 						</Link>
 					</p>
+					{usability.excluded.length > 0 && (
+						<div
+							className="rounded-lg border border-border bg-card/50 p-4 text-xs text-gray-400"
+							data-testid="excluded-issuers-disclosure"
+						>
+							<p className="font-medium text-gray-300">
+								Excluded from the {evaluated}-issuer universe (
+								{usability.usableCount} usable):
+							</p>
+							<ul className="mt-2 space-y-1">
+								{usability.excluded.map((item) => (
+									<li key={item.issuer_id}>
+										<span className="font-medium text-gray-200">
+											{entityLabel(item.issuer_id, names)}
+										</span>
+										{item.exclusion_reason && (
+											<code className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-[11px] text-gray-300">
+												{item.exclusion_reason}
+											</code>
+										)}{" "}
+										— {item.label}
+									</li>
+								))}
+							</ul>
+						</div>
+					)}
 					<ClaimCeilingBanner />
 				</>
 			)}
