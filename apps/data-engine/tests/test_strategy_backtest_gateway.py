@@ -179,8 +179,8 @@ def _insert(connection, issuer_id, cutoff_at, input_key, value, knowable_at, rec
 def test_market_value_vintages_date_the_rows_that_rows_at_selects(connection) -> None:
     """#1270: the share-basis check dates the winning share count and the winning last close.
 
-    Red when the read takes the latest `recorded_at` instead of the latest `knowable_at`, counts a
-    period series, reads another cutoff, or lists an issuer without a close.
+    Red when the read takes the latest `recorded_at` instead of the latest `knowable_at`. Red when it
+    counts a period series, reads another cutoff or lists an issuer without a close.
     """
     cutoff, other_cutoff = _at(7, 1), _at(8, 1)
     issuer, lonely = "issuer:t1270-vintage", "issuer:t1270-no-close"

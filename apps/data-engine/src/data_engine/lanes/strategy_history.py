@@ -35,9 +35,9 @@ from data_engine.lanes.backtest import schedule_status
 STRATEGY_HISTORY_JOB_NAME = "strategy_history_projection_pipeline"
 # Weekdays 20:07 UTC: 83 minutes before the nightly backtest (21:30 UTC, `lanes.backtest`). A fix of
 # the projector then reaches the next backtest with no manual step (#1270). No other lane runs at this
-# time. The weekly lanes run from Saturday 08:07 to Monday 09:07 UTC, the daily quality lanes end by
-# 06:15 UTC, and the market data refresh starts at 21:15 UTC. The projector writes only to the
-# database and takes about 100 seconds, so it ends over an hour before that refresh writes new bars.
+# time. The weekly lanes run from Saturday 08:07 to Monday 09:07 UTC. The daily quality lanes end by
+# 06:15 UTC. The market data refresh starts at 21:15 UTC. The projector writes only to the database
+# and takes about 100 seconds, so it ends over an hour before that refresh writes new bars.
 # A headcount fact that the Sunday or Monday standards lane lands enters the Monday projection.
 STRATEGY_HISTORY_CRON = "7 20 * * 1-5"
 

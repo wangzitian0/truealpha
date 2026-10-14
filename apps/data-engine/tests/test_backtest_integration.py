@@ -611,9 +611,9 @@ def _append_the_adjusted_share_count(connection: psycopg.Connection, issuer_id: 
 
 
 def test_a_share_count_from_before_a_split_stops_the_run_before_it_writes(seeded) -> None:
-    """Staging, 2024-06-30: NVDA held a count filed before its split beside a post-split close, and the
-    run succeeded with wrong picks. Red when the run does not raise, or names less than the symbol,
-    the cutoff, the split with its factor, and the job that corrects the row."""
+    """Staging, 2024-06-30: NVDA held a count filed before its split beside a post-split close.
+    The run succeeded with wrong picks. Red when the run does not raise. Red when the message omits
+    the symbol, the cutoff, the split with its factor or the job that corrects the row."""
     connection = seeded["connection"]
     _date_the_share_count_before_the_split(connection, seeded["issuers"]["a"].canonical_issuer_id)
     runs_before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
@@ -686,10 +686,10 @@ def test_a_stale_row_under_a_legacy_id_does_not_stop_the_run(seeded) -> None:
 def test_a_projector_commit_between_the_two_reads_stops_the_run_instead_of_passing_unchecked(
     seeded, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The run reads the dates before the values. If the projector commits its correction between the
-    two reads, the decisions read the corrected count while the dates are the stale ones: the run stops,
-    and the next run passes. Red when the values are read first: the run then checks dates that are
-    newer than the values the decisions used, and it passes on a stale count.
+    """The run reads the dates before the values. Suppose the projector commits its correction between
+    the two reads. The decisions then read the corrected count, but the dates are the stale ones. The
+    run stops, and the next run passes. Red when the values are read first. The run then checks dates
+    that are newer than the values the decisions used. It passes on a stale count.
     """
     connection = seeded["connection"]
     issuer_id = seeded["issuers"]["a"].canonical_issuer_id

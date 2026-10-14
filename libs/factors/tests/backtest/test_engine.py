@@ -383,8 +383,8 @@ def _two_targets(first: Decimal, second: Decimal) -> list[TargetPortfolio]:
     [("1.18", "under target"), ("2.03", "over target"), ("1.11", "over target, then under it")],
 )
 def test_a_second_rebalance_to_the_held_weight_records_no_trade(price: str, residue: str) -> None:
-    """Staging run backtest-run:893147d2: AMZN and META each recorded a BUY of about 4.5e-25 shares,
-    because the weight before the order was 0.4999999999999999999999999999 against a target of 0.5.
+    """Staging run backtest-run:893147d2 recorded a BUY of about 4.5e-25 shares for AMZN and for META.
+    The weight before the order was 0.4999999999999999999999999999 against a target of 0.5.
 
     At each price below, 28 digits cannot hold shares * price exactly. The held weight then differs
     from the unchanged target by about 1e-28. Red when the engine turns that residue into an order.
@@ -433,8 +433,8 @@ def test_an_order_of_exactly_one_cent_is_recorded_and_a_smaller_order_is_not(wei
 
 
 def test_an_order_below_one_cent_is_neither_unfilled_nor_deferred() -> None:
-    """AAA has no open on the second fill session. A residue order for it is no order: the fill does
-    not list it as unfilled, and the benchmark rule (next session open) does not defer it."""
+    """AAA has no open on the second fill session. A residue order for it is no order. The fill does
+    not list it as unfilled. The benchmark rule (next session open) does not defer it."""
     held_days = (date(2024, 9, 30), date(2024, 10, 1), date(2024, 10, 3))
     book = PriceBook(
         bars={

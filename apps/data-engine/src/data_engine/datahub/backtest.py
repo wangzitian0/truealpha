@@ -280,8 +280,8 @@ def require_current_share_basis(
 
     The projector puts a share count on the share basis of its close (A6 decision 4). It multiplies
     the count by each split between the two. It appends that row with the ``knowable_at`` of the
-    close, so the row wins. A winning count that is knowable before a split, beside a close that is
-    knowable after it, is a row that the projector has not corrected. The table is append-only, so
+    close, so the row wins. A winning count may be knowable before a split while its close is
+    knowable after it. Then the projector has not corrected that row. The table is append-only, so
     only a new projector run corrects it.
 
     ``vintages`` holds the winning ``knowable_at`` pair of each issuer at each cutoff. ``tickers``
@@ -362,10 +362,10 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
     # ONE read of the values per cutoff, before any decision. The issuer list, the inputs and the
-    # snapshot id all derive from it, so run_id describes exactly the inputs the decisions used.
-    # The vintages carry dates only, for the share-basis check. They are read BEFORE the values: a
-    # projector commit between the two reads gives the decisions rows at least as new as the
-    # vintages, so the check never passes on a row that the decisions did not use.
+    # snapshot id all derive from it. So run_id describes exactly the inputs the decisions used.
+    # The vintages carry dates only, for the share-basis check. They are read BEFORE the values.
+    # A projector commit between the two reads then gives the decisions rows at least as new as the
+    # vintages. So the check never passes on a row that the decisions did not use.
     gateway = StrategyBacktestGateway(connection)
     vintages_by_cutoff = {cutoff: gateway.market_value_vintages_at(cutoff) for cutoff in cutoffs}
     rows_by_cutoff = {cutoff: gateway.rows_at(cutoff) for cutoff in cutoffs}
