@@ -575,3 +575,148 @@ def test_two_canonical_issuers_on_one_ticker_still_stop_the_run(seeded) -> None:
 
     with pytest.raises(RuntimeError, match="two issuers resolve to one ticker"):
         _run_op()
+
+
+# -- #1270: a share count from before a split -----------------------------------------------------
+
+#: The instant an NVDA-shaped share count became knowable: filed on 2024-05-29, before the 10-for-1
+#: split of T758A on 2024-06-10. The last close of Q2 is knowable on 2024-06-28, after the split.
+FILED_BEFORE_THE_SPLIT = datetime(2024, 5, 29, 23, 59, 59, tzinfo=UTC)
+
+
+def _run_backtest(connection: psycopg.Connection):
+    return datahub_backtest.run_core_strategy_backtest(connection, tick=datetime.fromisoformat(TICK))
+
+
+def _date_the_share_count_before_the_split(connection: psycopg.Connection, issuer_id: str) -> None:
+    """The winning share count of the issuer at Q2 becomes an unadjusted row filed before the split."""
+    updated = connection.execute(
+        "update staging.strategy_backtest_inputs set knowable_at = %s "
+        "where issuer_id = %s and cutoff_at = %s and input_key = 'shares_outstanding'",
+        (FILED_BEFORE_THE_SPLIT, issuer_id, Q2),
+    ).rowcount
+    assert updated == 1, "the fixture holds one share count of this issuer at Q2"
+
+
+def _append_the_adjusted_share_count(connection: psycopg.Connection, issuer_id: str) -> None:
+    """What the projector appends after the split: the count times 10, knowable at the close."""
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
+        values (%s, %s, 'shares_outstanding', %s, '0.90', %s, clock_timestamp())
+        """,
+        (issuer_id, Q2, Decimal("1000000000") * 10, Q2 - timedelta(days=2)),
+    )
+
+
+def test_a_share_count_from_before_a_split_stops_the_run_before_it_writes(seeded) -> None:
+    """Staging, 2024-06-30: NVDA held a count filed before its split beside a post-split close, and the
+    run succeeded with wrong picks. Red when the run does not raise, or names less than the symbol,
+    the cutoff, the split with its factor, and the job that corrects the row."""
+    connection = seeded["connection"]
+    _date_the_share_count_before_the_split(connection, seeded["issuers"]["a"].canonical_issuer_id)
+    runs_before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
+
+    with pytest.raises(datahub_backtest.ShareBasisError) as raised:
+        _run_backtest(connection)
+
+    message = str(raised.value)
+    assert "T758A at 2024-06-30T23:59:59+00:00" in message
+    assert "10/1 split on 2024-06-10" in message
+    assert "strategy_history_projection_pipeline" in message
+    assert "T758B" not in message, "only the stale issuer is named"
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone()[0] == runs_before
+
+
+def test_the_nightly_op_goes_red_on_a_share_count_from_before_a_split(seeded) -> None:
+    """The error is not caught: a failed Dagster run and a red verdict are the visible signal. A pending
+    or a green verdict would hide it."""
+    _date_the_share_count_before_the_split(seeded["connection"], seeded["issuers"]["a"].canonical_issuer_id)
+
+    with pytest.raises(datahub_backtest.ShareBasisError):
+        _run_op()
+
+    assert seeded["verdicts"][-1][0] is False
+
+
+def test_the_adjusted_share_row_that_the_projector_appends_lets_the_run_through(seeded) -> None:
+    """The table is append-only: the stale row stays and loses by `knowable_at` to the adjusted row."""
+    connection = seeded["connection"]
+    issuer_id = seeded["issuers"]["a"].canonical_issuer_id
+    _date_the_share_count_before_the_split(connection, issuer_id)
+    with pytest.raises(datahub_backtest.ShareBasisError):
+        _run_backtest(connection)
+
+    _append_the_adjusted_share_count(connection, issuer_id)
+    outcome = _run_backtest(connection)
+
+    assert outcome.inserted is True
+    held = [
+        row[2]
+        for row in datahub_backtest.StrategyBacktestGateway(connection).rows_at(Q2)
+        if row[0] == issuer_id and row[1] == "shares_outstanding"
+    ]
+    assert held == [Decimal("10000000000")], "the decisions read the adjusted count"
+    stored = connection.execute(
+        "select count(*) from staging.strategy_backtest_inputs "
+        "where issuer_id = %s and cutoff_at = %s and input_key = 'shares_outstanding'",
+        (issuer_id, Q2),
+    ).fetchone()[0]
+    assert stored == 2, "the stale row is still in the table"
+
+
+def test_an_old_share_count_with_no_split_after_it_does_not_stop_the_run(seeded) -> None:
+    """The check keys on a split, not on the age of the count: T758B never splits."""
+    connection = seeded["connection"]
+    _date_the_share_count_before_the_split(connection, seeded["issuers"]["b"].canonical_issuer_id)
+
+    assert _run_backtest(connection).inserted is True
+
+
+def test_a_stale_row_under_a_legacy_id_does_not_stop_the_run(seeded) -> None:
+    """The projector writes canonical ids only, so nothing can ever correct a legacy row. The check
+    reads canonical ids only; otherwise every later run would stop for good."""
+    connection = seeded["connection"]
+    _date_the_share_count_before_the_split(connection, seeded["issuers"]["a"].legacy_issuer_id)
+
+    assert _run_backtest(connection).inserted is True
+
+
+def test_a_projector_commit_between_the_two_reads_stops_the_run_instead_of_passing_unchecked(
+    seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run reads the dates before the values. If the projector commits its correction between the
+    two reads, the decisions read the corrected count while the dates are the stale ones: the run stops,
+    and the next run passes. Red when the values are read first: the run then checks dates that are
+    newer than the values the decisions used, and it passes on a stale count.
+    """
+    connection = seeded["connection"]
+    issuer_id = seeded["issuers"]["a"].canonical_issuer_id
+    _date_the_share_count_before_the_split(connection, issuer_id)
+    gateway_type = datahub_backtest.StrategyBacktestGateway
+    reads: list[str] = []
+    landed: list[bool] = []
+    racing = [True]
+
+    def landing_before_the_second_kind(kind: str, real_read):
+        def read(self, cutoff_at):
+            if racing[0]:
+                reads.append(kind)
+                if len(set(reads)) == 2 and not landed:
+                    _append_the_adjusted_share_count(connection, issuer_id)
+                    landed.append(True)
+            return real_read(self, cutoff_at)
+
+        return read
+
+    for kind, name in (("dates", "market_value_vintages_at"), ("values", "rows_at")):
+        monkeypatch.setattr(gateway_type, name, landing_before_the_second_kind(kind, getattr(gateway_type, name)))
+
+    with pytest.raises(datahub_backtest.ShareBasisError):
+        _run_backtest(connection)
+    assert landed == [True], "the correction must land between the two reads, or this test proves nothing"
+    assert reads[0] == "dates", "the dates are read first"
+
+    racing[0] = False
+    assert _run_backtest(connection).inserted is True

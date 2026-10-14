@@ -6,14 +6,21 @@ real strategy definition. The database path is in ``test_backtest_integration.py
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 import pytest
-from data_engine.datahub.backtest import decide, price_book, schedule_cutoffs
+from data_engine.datahub.backtest import (
+    ShareBasisError,
+    decide,
+    price_book,
+    require_current_share_basis,
+    schedule_cutoffs,
+)
 from data_engine.datahub.production_topt.composition import RISK_FREE_RATE
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import HistoryIssuer
+from data_engine.strategy_backtest_gateway import MarketValueVintage
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent
 from factors.composite.strategy_evaluator import IssuerInput
 from factors.production_topt import OperatingBranch
@@ -195,3 +202,101 @@ def test_the_price_book_names_every_symbol_without_derivable_splits() -> None:
     message = str(raised.value)
     assert "ALFA" in message and "BRAV" in message
     assert "GOOD" not in message
+
+
+# -- the share-basis check (#1270) -------------------------------------------------------------
+
+NVDA = "issuer:t1270:nvda"
+NFLX = "issuer:t1270:nflx"
+NVDA_SPLIT = SplitEvent("NVDA", date(2024, 6, 10), 10, 1)
+Q4_2025 = datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC)
+
+
+def _vintage(shares_known: date, close_known: date, issuer_id: str = NVDA) -> MarketValueVintage:
+    """A filing is knowable at the end of its filed day, as the projector stamps it."""
+    return MarketValueVintage(
+        issuer_id,
+        datetime.combine(shares_known, time.max, tzinfo=UTC),
+        datetime.combine(close_known, time.max, tzinfo=UTC),
+    )
+
+
+def test_a_share_count_known_before_a_split_that_its_close_follows_stops_the_run() -> None:
+    """Staging, 2024-06-30: NVDA held 2,460,000,000 shares (filed 2024-05-29) beside a post-split close.
+    Red when the check does not raise, or when its message omits the symbol, the cutoff, the split
+    or the job that corrects the row."""
+    vintages = {Q2: [_vintage(date(2024, 5, 29), date(2024, 6, 28))]}
+
+    with pytest.raises(ShareBasisError) as raised:
+        require_current_share_basis(vintages, {NVDA: "NVDA"}, [NVDA_SPLIT])
+
+    message = str(raised.value)
+    assert "NVDA at 2024-06-30T23:59:59+00:00" in message
+    assert "10/1 split on 2024-06-10" in message
+    assert "share count known 2024-05-29, close known 2024-06-28" in message
+    assert "strategy_history_projection_pipeline" in message
+
+
+@pytest.mark.parametrize(
+    ("shares_known", "close_known", "stale"),
+    [
+        (date(2024, 5, 29), date(2024, 6, 28), True),  # the count is older than the split, the close follows it
+        (date(2024, 6, 9), date(2024, 6, 10), True),  # the close is on the ex-date: the split is in
+        (date(2024, 6, 10), date(2024, 6, 28), False),  # a count known on the ex-date is taken as split-adjusted
+        (date(2024, 6, 11), date(2024, 6, 28), False),  # the filing follows the split
+        (date(2024, 6, 28), date(2024, 6, 28), False),  # the corrected row: knowable at the close
+        (date(2024, 5, 29), date(2024, 6, 7), False),  # the close precedes the split: one share basis
+    ],
+)
+def test_a_split_after_the_count_and_on_or_before_the_close_makes_the_count_stale(
+    shares_known: date, close_known: date, stale: bool
+) -> None:
+    vintages = {Q2: [_vintage(shares_known, close_known)]}
+
+    if stale:
+        with pytest.raises(ShareBasisError):
+            require_current_share_basis(vintages, {NVDA: "NVDA"}, [NVDA_SPLIT])
+    else:
+        require_current_share_basis(vintages, {NVDA: "NVDA"}, [NVDA_SPLIT])
+
+
+def test_only_the_splits_of_the_issuers_own_symbol_count() -> None:
+    """NVDA's split is no reason to stop a run on an issuer that trades as AMZN."""
+    vintages = {Q2: [_vintage(date(2024, 5, 29), date(2024, 6, 28))]}
+
+    require_current_share_basis(vintages, {NVDA: "AMZN"}, [NVDA_SPLIT])
+
+
+def test_a_row_under_an_id_that_is_not_a_canonical_issuer_is_ignored() -> None:
+    """The projector writes canonical ids only, so it never corrects a legacy row. Reading one would
+    stop every later run for good."""
+    vintages = {Q2: [_vintage(date(2024, 5, 29), date(2024, 6, 28), "issuer:lei:legacy")]}
+
+    require_current_share_basis(vintages, {NVDA: "NVDA"}, [NVDA_SPLIT])
+
+
+def test_one_error_names_every_failing_symbol_and_cutoff_and_every_split_between() -> None:
+    """Review of `split_events_by_symbol`: an error that stops at the first symbol hides the others
+    until the next run. Here NVDA fails at two cutoffs (the second with two splits) and NFLX at one."""
+    splits = [NVDA_SPLIT, SplitEvent("NVDA", date(2024, 8, 1), 3, 2), SplitEvent("NFLX", date(2025, 11, 17), 10, 1)]
+    vintages = {
+        Q2: [_vintage(date(2024, 5, 29), date(2024, 6, 28))],
+        Q3: [_vintage(date(2024, 5, 29), date(2024, 9, 27))],
+        Q4_2025: [
+            _vintage(date(2025, 10, 30), date(2025, 12, 30), NFLX),
+            _vintage(date(2025, 12, 30), date(2025, 12, 30)),
+        ],
+    }
+
+    with pytest.raises(ShareBasisError) as raised:
+        require_current_share_basis(vintages, {NVDA: "NVDA", NFLX: "NFLX"}, splits)
+
+    message = str(raised.value)
+    assert "(3 found)" in message
+    assert (
+        "NVDA at 2024-06-30T23:59:59+00:00 (share count known 2024-05-29, close known 2024-06-28, 10/1 split" in message
+    )
+    assert "NVDA at 2024-09-30T23:59:59+00:00" in message
+    assert "10/1 split on 2024-06-10, 3/2 split on 2024-08-01)" in message
+    assert "NFLX at 2025-12-31T23:59:59+00:00" in message
+    assert "NVDA at 2025-12-31" not in message, "the corrected NVDA row at the last cutoff passes"

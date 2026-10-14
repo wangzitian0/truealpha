@@ -9,6 +9,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.core_strategy_replay import _compare_against_golden, _load_corpus
 from data_engine.strategy_backtest_gateway import (
+    MarketValueVintage,
     StrategyBacktestGateway,
     run_backtest_from_staging,
     seed_strategy_backtest_inputs,
@@ -158,3 +159,47 @@ def test_rows_at_supersedes_by_knowable_at_not_insertion_order(connection) -> No
         f"expected the row with the LATER knowable_at (value 100) to win, got {matching[0]} -- "
         "a later-recorded but earlier-knowable row must never outrank it"
     )
+
+
+def _at(month: int, day: int) -> datetime:
+    return datetime(2026, month, day, tzinfo=UTC)
+
+
+def _insert(connection, issuer_id, cutoff_at, input_key, value, knowable_at, recorded_at, fiscal_period=None) -> None:
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at, fiscal_period)
+        values (%s, %s, %s, %s, 0.9, %s, %s, %s)
+        """,
+        (issuer_id, cutoff_at, input_key, value, knowable_at, recorded_at, fiscal_period),
+    )
+
+
+def test_market_value_vintages_date_the_rows_that_rows_at_selects(connection) -> None:
+    """#1270: the share-basis check dates the winning share count and the winning last close.
+
+    Red when the read takes the latest `recorded_at` instead of the latest `knowable_at`, counts a
+    period series, reads another cutoff, or lists an issuer without a close.
+    """
+    cutoff, other_cutoff = _at(7, 1), _at(8, 1)
+    issuer, lonely = "issuer:t1270-vintage", "issuer:t1270-no-close"
+    # The winner: knowable on 06-01, recorded first.
+    _insert(connection, issuer, cutoff, "shares_outstanding", 100, _at(6, 1), _at(6, 2))
+    # The loser: knowable earlier, recorded later (the #530 shape).
+    _insert(connection, issuer, cutoff, "shares_outstanding", 999, _at(1, 1), _at(6, 3))
+    _insert(connection, issuer, cutoff, "last_close", 5, _at(6, 10), _at(6, 11))
+    # A period series does not answer for the market value.
+    _insert(connection, issuer, cutoff, "shares_outstanding", 7, _at(6, 20), _at(6, 21), "FY2025")
+    # Another cutoff, and an issuer without a close.
+    _insert(connection, issuer, other_cutoff, "last_close", 5, _at(7, 20), _at(7, 21))
+    _insert(connection, lonely, cutoff, "shares_outstanding", 1, _at(6, 1), _at(6, 2))
+    gateway = StrategyBacktestGateway(connection)
+
+    vintages = [row for row in gateway.market_value_vintages_at(cutoff) if row.issuer_id in (issuer, lonely)]
+
+    assert vintages == [MarketValueVintage(issuer, _at(6, 1), _at(6, 10))]
+    winner = [
+        row for row in gateway.rows_at(cutoff) if row[0] == issuer and row[1] == "shares_outstanding" and row[4] is None
+    ]
+    assert [row[2] for row in winner] == [100], "the vintage dates the row that rows_at hands to the decisions"

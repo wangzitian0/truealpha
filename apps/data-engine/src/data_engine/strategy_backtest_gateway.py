@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING, IssuerInput, evaluate_cutoff
 from psycopg import Connection
@@ -87,6 +87,16 @@ def _period_end_key(tag: str) -> tuple[date, str]:
 InputRow = tuple[str, str, Any, Any, str | None]
 
 
+class MarketValueVintage(NamedTuple):
+    """When the two inputs of one issuer's market value became knowable at one cutoff (#1270)."""
+
+    issuer_id: str
+    #: The ``knowable_at`` of the winning ``shares_outstanding`` row.
+    shares_knowable_at: datetime
+    #: The ``knowable_at`` of the winning ``last_close`` row.
+    close_knowable_at: datetime
+
+
 class StrategyBacktestGateway:
     """The strategy's data boundary: it reads captured factor inputs from
     staging.strategy_backtest_inputs and never sees the fixture or any provenance."""
@@ -121,6 +131,31 @@ class StrategyBacktestGateway:
             """,
             (cutoff_at,),
         ).fetchall()
+
+    def market_value_vintages_at(self, cutoff_at: str | datetime) -> list[MarketValueVintage]:
+        """When the winning share count and the winning last close of each issuer became knowable.
+
+        The winner of ``rows_at`` has the latest ``knowable_at`` of its key. So that instant is the
+        maximum over the rows of the key, and ``recorded_at`` only breaks a tie between rows of one
+        instant. Only rows without a fiscal period count, as in the market value. An issuer that
+        lacks either row is absent. ``rows_at`` stays the only source of values and of the snapshot id.
+        """
+        rows = self._connection.execute(
+            """
+            select issuer_id,
+                   max(knowable_at) filter (where input_key = 'shares_outstanding'),
+                   max(knowable_at) filter (where input_key = 'last_close')
+            from staging.strategy_backtest_inputs
+            where cutoff_at = %s
+              and fiscal_period is null
+              and input_key in ('shares_outstanding', 'last_close')
+            group by issuer_id
+            having count(distinct input_key) = 2
+            order by issuer_id
+            """,
+            (cutoff_at,),
+        ).fetchall()
+        return [MarketValueVintage(*row) for row in rows]
 
     def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
         return issuer_inputs_from_rows(self.rows_at(cutoff_at))

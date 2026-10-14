@@ -65,6 +65,15 @@ each decision:
   split must stop the run before it writes a row. The split derivation does this. A ratio step
   that is not a simple split ratio raises `SplitDerivationError`. A ratio step that the unadjusted
   price does not confirm also raises it.
+- The backtest checks the share basis of each count (#1270). History rows are append-only, so a
+  projector fix reaches the table only when the projector runs again. Before the simulation, the run
+  raises `ShareBasisError` when the winning `shares_outstanding` row of a canonical issuer is
+  knowable before a split and the winning `last_close` row is knowable on or after the ex-date. The
+  message names the symbol, the cutoff, the split with its factor, and the job
+  `strategy_history_projection_pipeline`. Nothing catches the error, so a failed Dagster run and a red
+  `nightly_backtest` verdict are the signal. The inputs table keeps no share basis date. The check
+  cannot see a cover count that is dated before a split and filed after it. The projector handles
+  that case.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,
