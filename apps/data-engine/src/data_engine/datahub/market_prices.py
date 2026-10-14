@@ -236,6 +236,19 @@ def most_recent_xnys_session(d: date) -> date:
     return curr
 
 
+def oldest_session_within_lag(latest: date) -> date:
+    """The oldest session a series may end on: `MAX_BAR_LAG_SESSIONS` XNYS sessions before `latest`.
+
+    A weekend or a holiday holds no session, so a long weekend costs one session, not three
+    days. The freshness verdict of the market data lane and the split series check of the live
+    strategy seed (`share_basis`, #1262) both read this, so they cannot disagree on the lag.
+    """
+    oldest = latest
+    for _ in range(MAX_BAR_LAG_SESSIONS):
+        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
+    return oldest
+
+
 _XNYS_TZ = ZoneInfo("America/New_York")
 _XNYS_CLOSE_HOUR = 16
 _XNYS_EARLY_CLOSE_HOUR = 13

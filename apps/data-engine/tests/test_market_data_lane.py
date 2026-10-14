@@ -58,11 +58,13 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
     DEFAULT_TOPT_SYMBOLS,
+    MAX_BAR_LAG_SESSIONS,
     PriceBarRecord,
     TwelveDataApiError,
     TwelveDataClient,
     insert_market_prices_daily,
     last_xnys_session_of_month,
+    oldest_session_within_lag,
     xnys_session_close_utc,
 )
 from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, environment_share
@@ -671,8 +673,21 @@ def test_freshness_is_red_when_the_newest_bar_is_older_than_the_limit(connection
     verdict = market_data.judge_bar_freshness(connection, [symbol], now=datetime(2026, 10, 6, 21, 15, tzinfo=UTC))
 
     assert verdict.ok is False
-    assert market_data.MAX_BAR_LAG_SESSIONS == 1
+    assert MAX_BAR_LAG_SESSIONS == 1
     assert "newest bar 2026-10-02 is more than 1 session behind 2026-10-06" in verdict.summary, verdict.summary
+
+
+@pytest.mark.parametrize(
+    ("latest", "oldest"),
+    [
+        (date(2026, 10, 14), date(2026, 10, 13)),  # a Wednesday: Tuesday
+        (date(2026, 10, 5), date(2026, 10, 2)),  # a Monday: Friday, not Sunday
+        (date(2026, 11, 27), date(2026, 11, 25)),  # the Friday after Thanksgiving: Wednesday
+    ],
+)
+def test_the_oldest_session_within_the_lag_skips_weekends_and_holidays(latest: date, oldest: date) -> None:
+    """The lane's verdict and the live seed's split series check share this one definition (#1262)."""
+    assert oldest_session_within_lag(latest) == oldest
 
 
 def test_freshness_is_red_when_one_series_is_stale(connection) -> None:

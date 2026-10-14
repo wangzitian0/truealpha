@@ -56,7 +56,12 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.market_prices import MAX_BAR_LAG_SESSIONS, SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.market_prices import (
+    MAX_BAR_LAG_SESSIONS,
+    SPLIT_ADJUSTED,
+    UNADJUSTED,
+    oldest_session_within_lag,
+)
 from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
@@ -242,18 +247,6 @@ def _newest_trading_date(connection: psycopg.Connection, symbols: Sequence[str],
     return row[0] if row else None
 
 
-def _oldest_fresh_session(latest_closed: date) -> date:
-    """The oldest date a fresh series may end on: `MAX_BAR_LAG_SESSIONS` XNYS sessions before
-    the latest closed session. A weekend or a holiday holds no session, so a long weekend
-    costs one session, not three days."""
-    from data_engine.datahub.market_prices import most_recent_xnys_session
-
-    oldest = latest_closed
-    for _ in range(MAX_BAR_LAG_SESSIONS):
-        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
-    return oldest
-
-
 def judge_bar_freshness(connection: psycopg.Connection, symbols: Sequence[str], *, now: datetime) -> BarFreshness:
     """Is the newest daily bar of each series within `MAX_BAR_LAG_SESSIONS` of the latest closed session?
 
@@ -261,7 +254,7 @@ def judge_bar_freshness(connection: psycopg.Connection, symbols: Sequence[str], 
     vouch for the unadjusted series, which a failing second fetch would leave behind.
     """
     latest_closed = _daily_cutoff(now)
-    oldest_fresh = _oldest_fresh_session(latest_closed)
+    oldest_fresh = oldest_session_within_lag(latest_closed)
     problems: list[str] = []
     newest_by_series: list[str] = []
     for adjust in FRESHNESS_SERIES:

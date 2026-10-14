@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any, NamedTuple
@@ -39,7 +39,7 @@ from typing import Any, NamedTuple
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent, split_factor_between
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 
-from data_engine.datahub.market_prices import MAX_BAR_LAG_SESSIONS, most_recent_xnys_session
+from data_engine.datahub.market_prices import oldest_session_within_lag
 from data_engine.datahub.price_series import DailySeries, split_events_of
 
 #: The input key of the share count that multiplies a close into a market value.
@@ -259,14 +259,6 @@ def _entry_date(entry: object, key: str) -> date | None:
         return None
 
 
-def _oldest_covered_session(close_session: date) -> date:
-    """The session ``MAX_BAR_LAG_SESSIONS`` XNYS sessions before the close's session."""
-    oldest = close_session
-    for _ in range(MAX_BAR_LAG_SESSIONS):
-        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
-    return oldest
-
-
 def _close_side_gap(history: SplitHistory, count: LiveShareCount) -> Unavailable | None:
     """None when the series of one listing speak for the close's session, else the named reason.
 
@@ -278,7 +270,7 @@ def _close_side_gap(history: SplitHistory, count: LiveShareCount) -> Unavailable
     close = count.close_session
     if history.last_session >= close:
         return None
-    if history.last_session < _oldest_covered_session(close):
+    if history.last_session < oldest_session_within_lag(close):
         return Unavailable(
             SERIES_DO_NOT_COVER,
             f"{history.symbol}: both series hold {history.first_session}..{history.last_session}; "
