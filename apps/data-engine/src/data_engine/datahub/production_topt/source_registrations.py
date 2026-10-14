@@ -371,6 +371,18 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
             daily_budget=50,
             documented="none published",
         ),
+        # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): one public CSV per
+        # calendar year, no key. The lane makes one request per run, and four on the first
+        # run (the current year and three earlier years). 50 per day is our runaway
+        # backstop, per environment. Rule 19 (init.md): the rights and budget attestation of
+        # this source is `missing`, as it is for every source except the model provider
+        # (governance/gate0/issue-60.source-readiness.candidate-v1.json). It does not block.
+        "us-treasury": CapacityDeclaration(
+            calls_per_window=1,
+            window_seconds=1,
+            daily_budget=50,
+            documented="none published (public CSV on home.treasury.gov, no key)",
+        ),
         # The model and search seats are provider-agnostic placeholders sized for a QQQ
         # backfill; a provider's real limits replace them in the PR that provisions it
         # (#70, #732).

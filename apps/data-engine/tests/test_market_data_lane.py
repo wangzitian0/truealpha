@@ -756,6 +756,9 @@ def written(monkeypatch) -> list[dict[str, Any]]:
 def fake_connection(monkeypatch) -> _Connection:
     fake = _Connection()
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: fake)
+    # The job also holds the Treasury op (#1255). It reads the table through a real cursor, which
+    # this fake lacks. Its own tests are in test_risk_free_lane.py.
+    monkeypatch.setattr(market_data, "_refresh_risk_free", lambda *_a, **_k: [])
     return fake
 
 
