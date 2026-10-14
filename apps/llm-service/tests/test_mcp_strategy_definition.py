@@ -1,7 +1,7 @@
 """#1235 criterion 1, MCP half: the `strategy_run` tool names the definition of the served run.
 
-Production serves runs of definition 0.1.0, whose tier bands no one reviewed. Staging serves
-the reviewed 1.0.0. The tool response must say which one a caller reads.
+On 2026-10-14 production served runs of definition 0.1.0, whose tier bands no one reviewed,
+and staging served the reviewed 1.0.0. The tool response must say which one a caller reads.
 
 The test drives the deployed server (`build_mcp_server()` with its default Postgres
 repository) against a real Postgres. It seeds inside one transaction that it rolls back, and

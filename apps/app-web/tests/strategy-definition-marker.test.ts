@@ -2,8 +2,8 @@
  * #1235 criterion 1, App half: the Today page (/research) and /research/strategy name the
  * definition of the served run, and a provisional definition reads PROVISIONAL.
  *
- * Production serves runs of definition 0.1.0, whose tier bands no one reviewed. Staging serves
- * the reviewed 1.0.0. Before this marker the two pages looked the same.
+ * On 2026-10-14 production served runs of definition 0.1.0, whose tier bands no one reviewed,
+ * and staging served the reviewed 1.0.0. Before this marker the two pages looked the same.
  *
  * Each case records the newest run inside one transaction on the test's own client. The
  * client goes to the repository through db.ts `__setTestClient`, and the test rolls it back.
@@ -58,7 +58,7 @@ const hex64 = () => randomBytes(32).toString("hex");
  * oracle; the generated registry under test does not supply them. */
 const CASES = [
   {
-    name: "definition 0.1.0 (production today)",
+    name: "definition 0.1.0 (provisional)",
     version: "0.1.0",
     sha256: "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     state: "provisional",
@@ -66,7 +66,7 @@ const CASES = [
     provisional: true,
   },
   {
-    name: "definition 1.0.0 (staging today)",
+    name: "definition 1.0.0 (reviewed)",
     version: "1.0.0",
     sha256: "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803",
     state: "reviewed",

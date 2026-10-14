@@ -16,6 +16,8 @@
  *    capture run the strategy run was evaluated for (`mart.strategy_run_capture`,
  *    #877) — mart.strategy_decisions records the verdict and nothing about what it
  *    was reached from;
+ *  - `definition` names the strategy definition of the run (#1235). The generated
+ *    twin of the Python definition registry gives its review state;
  *  - a query error → `database_unavailable`; no run → `no_runs_recorded`;
  *    a row that no longer matches the DTO shape → `schema_mismatch`.
  *

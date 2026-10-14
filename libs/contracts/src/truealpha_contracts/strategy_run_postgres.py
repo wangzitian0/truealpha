@@ -14,6 +14,9 @@ TypeScript twin makes, so MCP and the web report one number.
 
 Which run is "latest" is decided by the governed capture head (#575), see
 `LATEST_RUN_SQL`; the newest recorded run is only a fallback.
+
+The report names the definition that the run evaluated (#1235): `strategy_version` and
+`definition_content_sha256` of the run row. The definition registry gives the review state.
 """
 
 from __future__ import annotations

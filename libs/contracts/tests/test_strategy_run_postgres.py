@@ -418,7 +418,7 @@ def test_the_report_names_the_definition_and_review_state_of_the_served_run(
     connection, registered: StrategyDefinitionIdentity
 ) -> None:
     """Parametrized over the registry: a future definition file is covered with no edit here.
-    Production serves definition 0.1.0 (provisional); staging serves 1.0.0 (reviewed)."""
+    On 2026-10-14 production served 0.1.0 (provisional) and staging served 1.0.0 (reviewed)."""
     result = _served_report(
         connection, strategy_version=registered.version, definition_sha256=registered.content_sha256
     )
