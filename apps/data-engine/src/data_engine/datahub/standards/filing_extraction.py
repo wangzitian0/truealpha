@@ -283,7 +283,7 @@ def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff:
             except ValueError:
                 pass
         overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
-        overflow = gateway.call("sec", "submissions", lambda url=overflow_url: _get_json(http, url))
+        overflow = gateway.call("sec", "submissions", lambda: _get_json(http, overflow_url))
         found = _annual_filing_from_index(cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway)
         if found is not None:
             return found
