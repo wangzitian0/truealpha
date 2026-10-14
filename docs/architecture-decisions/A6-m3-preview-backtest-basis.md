@@ -126,3 +126,8 @@ of the projector (`datahub/share_basis.py`).
 - A one-day move to x1.5 or more, or to x0.667 or less, is a split or an event. The stored series
   cannot tell which. So the seed excludes the issuer for that night (`close_jump_beyond_series`).
 - A lag of two sessions or more excludes the issuer (`split_series_do_not_cover_the_window`).
+
+## Status update 2026-10-14 (#1265)
+
+A strategy symbol without an open on its fill session stays cash, as `remain_cash` defines. Each run
+now names that symbol and the dates of its cutoffs in `metrics_payload.limitations`.

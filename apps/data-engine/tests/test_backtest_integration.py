@@ -720,3 +720,53 @@ def test_a_projector_commit_between_the_two_reads_stops_the_run_instead_of_passi
 
     racing[0] = False
     assert _run_backtest(connection).inserted is True
+
+
+# -- #1265: a selected symbol without an open ---------------------------------------------------
+
+#: The lineage of issuer g lands in its own capture run, after the lineage of the fixture.
+UNPRICED_LINEAGE_AT = datetime(2024, 2, 3, tzinfo=UTC)
+
+
+def test_a_selected_symbol_without_stored_bars_stays_cash_and_the_limitations_name_its_cutoffs(seeded) -> None:
+    """#1265. Staging, v0.1.11: the strategy selected GOOG at two cutoffs, and the store held no GOOG bar.
+    Half of the portfolio stayed cash, and the stored limitations named only the benchmark side. Red
+    on the code before the fix: no limitation names T1265N or its cutoffs."""
+    connection = seeded["connection"]
+    issuer = mint_issuer(
+        connection, lei=_lei("g"), mic="XNAS", ticker="T1265N", cik=758_000 + ord("g"), known_at=MINTED_AT
+    )
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                issuer.canonical_issuer_id,
+                issuer.canonical_listing_id,
+                issuer.cik,
+                "non_financial",
+                UNPRICED_LINEAGE_AT,
+            )
+        ],
+        company_facts={issuer.cik: {"facts": {}}},
+        store=MemoryStore(),
+        cutoff=UNPRICED_LINEAGE_AT,
+    )
+    # The cheapest issuer at each cutoff, so each cutoff selects it. No bar of T1265N is stored.
+    _seed_inputs(connection, {"g": issuer}, {cutoff: {"g": "0.5"} for cutoff in (Q1, Q2, Q3)})
+
+    outcome = _run_backtest(connection)
+
+    assert outcome.inserted is True, "the run does not fail for an unfilled selection"
+    payload = _run_row(connection, outcome.run_id)["metrics_payload"]
+    assert all("T1265N" in entry["weights"] for entry in payload["cutoffs"]), "each cutoff must select g"
+    assert [entry["unfilled_symbols"] for entry in payload["cutoffs"]] == [["T1265N"], ["T1265N"], ["T1265N"]]
+    cash = connection.execute(
+        "select cash_weight from mart.backtest_valuations where run_id = %s and resolution = '1D' "
+        "and valuation_date = '2024-04-01'",
+        (outcome.run_id,),
+    ).fetchone()[0]
+    assert Decimal("0.45") < cash < Decimal("0.55"), f"the half weight of T1265N stays cash: {cash}"
+    assert (
+        "The strategy selected T1265N at 2024-03-31, 2024-06-30, 2024-09-30, but no open existed on the fill "
+        "session, so the weight it could not buy stayed cash."
+    ) in payload["limitations"]

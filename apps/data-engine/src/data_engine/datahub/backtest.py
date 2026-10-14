@@ -21,7 +21,9 @@ One path, from staging to mart:
    total-return and sizing rules as its only parameters. The benchmark is an equal weight of the
    issuers with inputs at the first cutoff, bought at the first fill session open and held, on the
    same prices and costs. A benchmark symbol without an open on that session is bought at its next
-   open. A symbol that never opens stays cash, and the run's limitations name it.
+   open. A symbol that never opens stays cash, and the run's limitations name it. A strategy
+   symbol without an open on its fill session also stays cash, and the limitations name it with
+   the dates of its cutoffs (#1265).
 5. Persistence. ``run_id`` is the content hash of the engine label, the deployed code identity
    (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the benchmark
    universe, the price snapshot and the run parameters. A rerun of one release on the same data
@@ -523,16 +525,38 @@ def benchmark_never_filled(benchmark: Simulation) -> tuple[str, ...]:
     return tuple(sorted(set(benchmark.fills[0].unfilled_symbols) - late))
 
 
-def run_limitations(never_filled: Sequence[str]) -> tuple[str, ...]:
-    """The limitations stored with one run: the standing ones and those of this run's data."""
-    if not never_filled:
-        return LIMITATIONS
-    return (
-        *LIMITATIONS,
-        "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole run: "
-        + ", ".join(never_filled)
-        + ".",
-    )
+def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulation) -> dict[str, tuple[date, ...]]:
+    """Each symbol that a cutoff selected and that had no open on its fill session, with those cutoff dates."""
+    fills = {fill.cutoff_at: fill for fill in strategy.fills}
+    found: dict[str, list[date]] = {}
+    for decision in decisions:
+        fill = fills.get(decision.cutoff_at)
+        if fill is None:
+            continue
+        for symbol in sorted(set(decision.weights) & set(fill.unfilled_symbols)):
+            found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
+    return {symbol: tuple(days) for symbol, days in sorted(found.items())}
+
+
+def run_limitations(never_filled: Sequence[str], unfilled_selections: Mapping[str, Sequence[date]]) -> tuple[str, ...]:
+    """The limitations stored with one run: the standing ones and those of this run's data.
+
+    An unfilled selection does not stop the run (#1265). The engine keeps the weight that it could
+    not buy in cash, and one line per symbol says so with the dates of its cutoffs.
+    """
+    lines = list(LIMITATIONS)
+    if never_filled:
+        lines.append(
+            "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole run: "
+            + ", ".join(never_filled)
+            + "."
+        )
+    for symbol, days in sorted(unfilled_selections.items()):
+        lines.append(
+            f"The strategy selected {symbol} at {', '.join(day.isoformat() for day in days)}, but no open existed "
+            "on the fill session, so the weight it could not buy stayed cash."
+        )
+    return tuple(lines)
 
 
 def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
@@ -604,6 +628,7 @@ def _record(
     cost_basis_points: Decimal,
 ) -> BacktestRecord:
     never_filled = benchmark_never_filled(benchmark)
+    unfilled_selections = selected_without_open(decisions, strategy)
     benchmark_by_session = {item.session: item for item in benchmark.valuations}
     valuations = _valuation_rows(month_end_valuations(strategy.valuations), benchmark_by_session, "1M")
     valuations += _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
@@ -674,7 +699,7 @@ def _record(
         "splits_applied": _splits_applied(strategy),
         "unresolved_issuers": list(unresolved),
         "ignored_legacy_issuer_ids": list(ignored_legacy_ids),
-        "limitations": list(run_limitations(never_filled)),
+        "limitations": list(run_limitations(never_filled, unfilled_selections)),
     }
     symbols = sorted(book.bars)
     return BacktestRecord(
@@ -794,4 +819,5 @@ __all__ = [
     "run_core_strategy_backtest",
     "run_limitations",
     "schedule_cutoffs",
+    "selected_without_open",
 ]

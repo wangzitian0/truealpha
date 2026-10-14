@@ -296,3 +296,61 @@ def test_one_error_names_every_failing_symbol_and_cutoff_and_every_split_between
     assert "10/1 split on 2024-06-10, 3/2 split on 2024-08-01)" in message
     assert "NFLX at 2025-12-31T23:59:59+00:00" in message
     assert "NVDA at 2025-12-31" not in message, "the corrected NVDA row at the last cutoff passes"
+
+
+# -- #1265: a selected symbol without an open -------------------------------------------------
+
+
+def _selected(cutoff: datetime, *symbols: str):
+    from data_engine.datahub.backtest import CutoffDecision
+
+    return CutoffDecision(cutoff, {symbol: Decimal("0.5") for symbol in symbols}, symbols, len(symbols), {})
+
+
+def test_two_cutoffs_of_one_unfilled_selection_give_one_line_with_both_dates() -> None:
+    """GOOG is selected at Q1 and Q2 and has no open on either fill session. HELD has no open at Q2,
+    but no cutoff selects it: a held symbol stays held, so no weight of it stayed cash."""
+    from data_engine.datahub.backtest import LIMITATIONS, run_limitations, selected_without_open
+    from factors.backtest.engine import Fill, Simulation
+
+    decisions = [_selected(Q1, "GOOG", "AMZN"), _selected(Q2, "GOOG", "AMZN"), _selected(Q3, "AMZN", "MSFT")]
+    fills = (
+        Fill(Q1, date(2024, 4, 1), ("GOOG",)),
+        Fill(Q2, date(2024, 7, 1), ("GOOG", "HELD")),
+        Fill(Q3, date(2024, 10, 1), ()),
+    )
+
+    unfilled = selected_without_open(decisions, Simulation((), (), fills, ()))
+
+    assert unfilled == {"GOOG": (date(2024, 3, 31), date(2024, 6, 30))}
+    assert run_limitations((), unfilled)[len(LIMITATIONS) :] == (
+        "The strategy selected GOOG at 2024-03-31, 2024-06-30, but no open existed on the fill session, "
+        "so the weight it could not buy stayed cash.",
+    )
+
+
+def test_a_run_whose_selections_all_open_adds_nothing_to_the_limitations() -> None:
+    from data_engine.datahub.backtest import LIMITATIONS, run_limitations, selected_without_open
+    from factors.backtest.engine import Fill, Simulation
+
+    fills = (Fill(Q1, date(2024, 4, 1), ()), Fill(Q2, None))
+
+    unfilled = selected_without_open([_selected(Q1, "GOOG"), _selected(Q2, "GOOG")], Simulation((), (), fills, ()))
+
+    assert unfilled == {}
+    assert run_limitations((), unfilled) == LIMITATIONS
+
+
+def test_the_benchmark_line_is_unchanged_and_the_strategy_lines_follow_it() -> None:
+    from data_engine.datahub.backtest import LIMITATIONS, run_limitations
+
+    limitations = run_limitations(("T758E", "T758F"), {"MSFT": (date(2024, 9, 30),), "GOOG": (date(2024, 3, 31),)})
+
+    assert limitations[len(LIMITATIONS) :] == (
+        "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole run: "
+        "T758E, T758F.",
+        "The strategy selected GOOG at 2024-03-31, but no open existed on the fill session, "
+        "so the weight it could not buy stayed cash.",
+        "The strategy selected MSFT at 2024-09-30, but no open existed on the fill session, "
+        "so the weight it could not buy stayed cash.",
+    )
