@@ -70,7 +70,7 @@ NO_BAR = {("T758C", date(2024, 4, 1))}
 #: The Treasury observation that each cutoff sees (#1255): its day and its rate. Every cutoff is the
 #: end of a quarter at 23:59:59, so it sees the last observation before its own calendar day.
 RATE_SEEN = {
-    Q1: (date(2024, 3, 28), Decimal("0.0525")),  # Q1 is a Sunday. The Friday before is Good Friday.
+    Q1: (date(2024, 3, 28), Decimal("0.0525")),  # Q1 is Easter Sunday. Good Friday has no row, so Thursday.
     Q2: (date(2024, 6, 28), Decimal("0.0530")),  # Q2 is a Sunday.
     Q3: (date(2024, 9, 27), Decimal("0.0495")),  # Q3 is a Monday. Its own day is no candidate.
 }

@@ -199,6 +199,11 @@ class World:
             connection.commit()
         return fetch_ids
 
+    def run_plans(self) -> set[str]:
+        """The ids of the runs that have a committed run plan, which carries the build identity."""
+        with psycopg.connect(self.url) as reader:
+            return {row[0] for row in reader.execute("select run_id from raw.production_topt_run_plans")}
+
     def scalar(self, query: str, *params: object) -> object:
         with psycopg.connect(self.url) as reader:
             return reader.execute(query, params).fetchone()[0]
@@ -326,15 +331,15 @@ def test_a_tick_without_a_rate_in_ten_days_fails_with_the_named_error_and_publis
         for table in ("mart.topt_core_results", "mart.strategy_runs", "mart.strategy_decisions")
     }
     heads_before = world.scalar("select count(*) from mart.current_pointer_head")
+    plans_before = world.run_plans()
 
     with pytest.raises(
         MissingRiskFreeRate, match=r"missing_risk_free_rate_parameter: .*newest knowable observation: 2026-03-15"
     ):
         world.tick()
 
-    assert world.scalar("select count(*) from raw.production_topt_run_plans") == 1, "the build identity is stamped"
+    (run_id,) = world.run_plans() - plans_before  # one new plan: the build identity is stamped
     with psycopg.connect(world.url) as reader:
-        (run_id,) = reader.execute("select run_id from raw.production_topt_run_plans").fetchone()
         status = PostgresCaptureControlRepository(reader).status(run_id)
     assert status.complete and status.success_count == status.obligation_count > 0, "the capture is kept"
     after = {table: world.scalar(f"select count(*) from {table}") for table in before}
