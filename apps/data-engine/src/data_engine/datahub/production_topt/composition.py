@@ -74,8 +74,6 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
-
-# The four semantics, their owners, freshness windows and routes are declared once in
 from truealpha_contracts.strategy import live_risk_free_rate
 
 from data_engine.datahub import quality_report
@@ -113,6 +111,7 @@ from data_engine.datahub.production_topt.universe_corpus import (
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
 from data_engine.release_identity import measure as measure_release_identity
 
+# The four semantics, their owners, freshness windows and routes are declared once in
 # source_registrations.py (#72); this module derives, never enumerates.
 SEMANTIC_TYPES = registered_semantic_types()
 _RELEASE_SEMANTICS = RELEASE_SEMANTICS

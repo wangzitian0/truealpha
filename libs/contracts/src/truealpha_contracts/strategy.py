@@ -32,6 +32,7 @@ Design invariants:
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -721,6 +722,7 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
 LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 
 
+@functools.lru_cache(maxsize=16)
 def load_strategy_definition_corpus(resource: str) -> dict[str, Any]:
     """Read one packaged definition file from ``truealpha_contracts.data``."""
 
@@ -730,6 +732,7 @@ def load_strategy_definition_corpus(resource: str) -> dict[str, Any]:
     return payload
 
 
+@functools.lru_cache(maxsize=16)
 def load_strategy_definition(resource: str) -> LargeModelValueV0Definition:
     """Validate the definition of one packaged file against the content id that the file pins."""
 
@@ -753,11 +756,16 @@ def load_live_strategy_corpus() -> dict[str, Any]:
     return load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
 
 
+@functools.lru_cache(maxsize=4)
+def _load_golden_decision_set_cached(resource: str) -> GoldenDecisionSet:
+    corpus = load_strategy_definition_corpus(resource)
+    return GoldenDecisionSet.model_validate_json(json.dumps(corpus["golden_decision_set"]))
+
+
 def live_risk_free_rate(cutoff_at: datetime | str | None = None) -> Decimal:
     """The risk-free rate declared in the single-source strategy definition."""
 
-    corpus = load_live_strategy_corpus()
-    golden = GoldenDecisionSet.model_validate_json(json.dumps(corpus["golden_decision_set"]))
+    golden = _load_golden_decision_set_cached(LIVE_STRATEGY_DEFINITION_RESOURCE)
     if cutoff_at is None:
         return golden.risk_free_rates[-1].annualized_rate
     if isinstance(cutoff_at, str):

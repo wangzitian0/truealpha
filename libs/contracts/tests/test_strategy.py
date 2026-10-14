@@ -15,6 +15,7 @@ from truealpha_contracts.strategy import (
     GoldenDecisionSet,
     GoldenInputRecord,
     LargeModelValueV0Definition,
+    live_risk_free_rate,
 )
 
 # The end-to-end recompute of these golden decisions now lives in
@@ -201,3 +202,30 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
     assert definition.tier_valuation.unit.dimension is FactorDimension.DIMENSIONLESS
     assert definition.price_to_gross_profit is not None
     assert definition.price_to_gross_profit.unit.dimension is FactorDimension.DIMENSIONLESS
+
+
+def test_live_risk_free_rate_resolution() -> None:
+    """Standing checks for all branches of live_risk_free_rate resolution."""
+    # None returns the latest rate
+    latest = live_risk_free_rate()
+    assert latest == Decimal("0.0365")
+
+    # Exact ISO string with Z
+    march_str = live_risk_free_rate("2026-03-31T23:59:59Z")
+    assert march_str == Decimal("0.0380")
+
+    # Exact ISO string with offset
+    june_str = live_risk_free_rate("2026-06-30T23:59:59+00:00")
+    assert june_str == Decimal("0.0365")
+
+    # Exact datetime
+    march_dt = live_risk_free_rate(datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC))
+    assert march_dt == Decimal("0.0380")
+
+    # Nearest prior: cutoff in May 2026 gets March rate
+    may_dt = live_risk_free_rate(datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC))
+    assert may_dt == Decimal("0.0380")
+
+    # Pre-earliest cutoff: earlier than all declared rates falls back to first declared rate
+    ancient_dt = live_risk_free_rate(datetime(2020, 1, 1, 0, 0, 0, tzinfo=UTC))
+    assert ancient_dt == Decimal("0.0380")
