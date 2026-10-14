@@ -232,8 +232,8 @@ def seed_strategy_inputs_from_capture(
     return written
 
 
-# One observation of the run per (issuer, listing): the listing-identity cells name each
-# listing's ticker, and the stored daily series are keyed by ticker.
+# The ticker of each listing of the given issuers in the run. The listing-identity cells name
+# it, and the stored daily series are keyed by ticker.
 _LISTING_TICKERS_SQL = """
 select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'ticker'
 from raw.capture_obligations ob
@@ -279,8 +279,8 @@ def _counts_on_close_basis(
     The close's session is the UTC date of its knowable time, the convention every captured price
     cell follows (``composition._is_settled_session``). The splits come from the two stored daily
     series of the issuer's listings in this run. A symbol whose series fail the derivation makes
-    its issuer unavailable and leaves the other issuers alone. Issues no query when no count meets
-    a close.
+    its issuer unavailable and leaves the other issuers alone. When no count meets a close, it sends
+    no query.
     """
     meeting = sorted(
         issuer_id
@@ -361,16 +361,13 @@ def _on_close_basis_rows(
     the share row. A factor of 1 keeps the row unchanged, so a run without a split seeds the
     same bytes as before.
     """
-    if outcome is None:
+    if outcome is None or (isinstance(outcome, OnCloseBasis) and outcome.factor == 1):
         return list(rows)
     kept: list[tuple[str, str, Decimal, datetime, str | None]] = []
-    for input_key, value, confidence, knowable_at, fiscal_period in rows:
-        if (
-            input_key != SHARES_KEY
-            or fiscal_period is not None
-            or (isinstance(outcome, OnCloseBasis) and outcome.factor == 1)
-        ):
-            kept.append((input_key, value, confidence, knowable_at, fiscal_period))
+    for row in rows:
+        input_key, _value, confidence, _knowable_at, fiscal_period = row
+        if input_key != SHARES_KEY or fiscal_period is not None:
+            kept.append(row)
         elif isinstance(outcome, OnCloseBasis):
             kept.append((input_key, str(outcome.value), confidence, outcome.knowable_at, fiscal_period))
     return kept
