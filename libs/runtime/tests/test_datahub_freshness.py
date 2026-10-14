@@ -107,3 +107,42 @@ def test_a_naive_timestamp_is_read_as_utc_not_a_crash() -> None:
         "advanced_at": (NOW - timedelta(hours=90)).replace(tzinfo=None).isoformat(),
     }
     assert check(URL, http_get=_health([stale]), now=NOW) == 1
+
+
+def test_a_manual_only_staging_head_is_reported_as_manual_and_passes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#1256: staging QQQ is manual-only; a 100 h old head is reported as manual and passes."""
+    heads = [_head("universe:topt-us-2026-03-31", 10.0), _head("universe:qqq-us-2026-09-30", 100.0)]
+    code = check(URL, environment="staging", http_get=_health(heads), now=NOW)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "manual" in out
+    assert "universe:qqq-us-2026-09-30 100.0 h (manual)" in out
+
+
+def test_a_scheduled_head_at_100h_fails_in_its_environment(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#1256: a head whose lane is scheduled in the environment fails when 100 h old."""
+    assert _module.is_head_scheduled("universe:qqq-us-2026-09-30", "production") is True
+    assert _module.is_head_scheduled("universe:topt-us-2026-03-31", "staging") is True
+    assert _module.is_head_scheduled("universe:qqq-us-2026-09-30", "staging") is False
+    assert _module.is_head_scheduled("universe:unknown-us-2026-09-30", "staging") is True
+    assert _module.is_head_scheduled("universe:qqq-us-2026-09-30", "unknown-env") is True
+    code_prod = check(
+        URL,
+        environment="production",
+        http_get=_health([_head("universe:qqq-us-2026-09-30", 100.0)]),
+        now=NOW,
+    )
+    assert code_prod == 1
+    assert "universe:qqq-us-2026-09-30" in capsys.readouterr().err
+    code_staging = check(
+        URL,
+        environment="staging",
+        http_get=_health([_head("universe:topt-us-2026-03-31", 100.0)]),
+        now=NOW,
+    )
+    assert code_staging == 1
+    assert "universe:topt-us-2026-03-31" in capsys.readouterr().err

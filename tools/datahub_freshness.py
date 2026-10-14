@@ -6,18 +6,20 @@ governed head froze for three days on a rate-limit collision while every deploy
 check stayed green, because nothing outside the admin funnel reads the pointer's
 age, and the funnel pages nobody. This check reads what `/api/health` now reports
 (`governed_pointers`: per universe, when the pointer last advanced) and fails when
-any universe's pointer is older than the bound, so deploy-freshness's scheduled
-escalation files the issue.
+any scheduled universe's pointer is older than the bound, so deploy-freshness's
+scheduled escalation files the issue. Manual-only lanes in an environment (#1256)
+are reported as `manual` with their age and do not fail the run.
 
 Bound: captures are daily, so a fresh pointer is at most ~24 h old and a weekend
 of ordinary operation ~72 h. The bound is 72 h: it cannot fire on a normal
 weekend and it cannot stay quiet through the three-day freeze it exists for.
 
 Exit codes:
-  0 - every universe's pointer advanced within the bound, or this release predates
-      the report (the deploy-freshness leg already bounds release lag; see below)
-  1 - a pointer is stale, no pointer has ever advanced, the report is unreadable,
-      or the endpoint is unreachable
+  0 - every scheduled universe's pointer advanced within the bound (manual-only
+      heads are reported as `manual`), or this release predates the report
+      (the deploy-freshness leg already bounds release lag; see below)
+  1 - a scheduled pointer is stale, no pointer has ever advanced, the report is
+      unreadable, or the endpoint is unreachable
 """
 
 from __future__ import annotations
@@ -29,11 +31,29 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from data_engine.lanes.capture import TICKS, is_universe_scheduled
 from infra2_sdk.deploy import HttpGet, default_http_get
 
 # Daily captures; a weekend is two missed days. Three days cannot fire on ordinary
 # operation and is exactly the freeze that went unpaged (2026-08-15/17).
 MAX_AGE_HOURS = 72
+_KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
+_KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
+
+
+def is_head_scheduled(universe_id: str, environment: str) -> bool:
+    """Whether `universe_id` has a running schedule in `environment` (#1256).
+
+    Fails closed (returns True) when `environment` is omitted or unrecognised, or when
+    `universe_id` does not map to a declared tick in `TICKS`.
+    """
+    env = environment.strip().lower()
+    if env not in _KNOWN_ENVIRONMENTS:
+        return True
+    key = universe_id.removeprefix("universe:").split("-", 1)[0]
+    if key not in _KNOWN_TICK_KEYS:
+        return True
+    return is_universe_scheduled(key, env)
 
 
 class PointerFreshnessFailure(RuntimeError):
@@ -111,10 +131,12 @@ def check_pointer_freshness(
     reference = now or datetime.now(UTC)
     # Age from the reported timestamp against OUR clock, not the service's own
     # `age_hours`: a service whose clock is wrong reports a wrong age with a straight face.
+    # Apply the 72 h limit only when the head's lane has a running schedule in this environment (#1256).
     stale = [
         (head, (reference - head.advanced_at).total_seconds() / 3600.0)
         for head in heads
-        if (reference - head.advanced_at).total_seconds() / 3600.0 > max_age_hours
+        if is_head_scheduled(head.universe_id, environment)
+        and (reference - head.advanced_at).total_seconds() / 3600.0 > max_age_hours
     ]
     if stale:
         for head, age in stale:
@@ -127,7 +149,9 @@ def check_pointer_freshness(
             )
         return 1
     summary = ", ".join(
-        f"{head.universe_id} {(reference - head.advanced_at).total_seconds() / 3600.0:.1f} h" for head in heads
+        f"{head.universe_id} {(reference - head.advanced_at).total_seconds() / 3600.0:.1f} h"
+        + ("" if is_head_scheduled(head.universe_id, environment) else " (manual)")
+        for head in heads
     )
     print(f"{name} pointers are advancing: {summary} (limit {max_age_hours:g} h)")
     return 0
