@@ -197,6 +197,10 @@ def xnys_holidays(year: int) -> set[date]:
     else:
         holidays.add(xmas)
 
+    # 11. Special NYSE closures (National Day of Mourning for President Jimmy Carter, #1265)
+    if year == 2025:
+        holidays.add(date(2025, 1, 9))
+
     return holidays
 
 

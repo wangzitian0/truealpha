@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
+from data_engine.datahub.canonical_issuer import is_preferred_issuer_ticker, signed_predecessor_ciks
 from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
@@ -56,7 +57,7 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
     )
     issuers: dict[str, UniverseIssuer] = {}
     for issuer_id, _security_id, listing_id, ticker in corpus["topt_denominator"]["instruments"]:
-        if issuer_id in issuers:
+        if issuer_id in issuers and not is_preferred_issuer_ticker(ticker, issuers[issuer_id].ticker):
             continue
         cik: int | None
         if issuer_id.startswith("issuer:cik:"):
@@ -70,12 +71,7 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
         else:
             cik = None
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)
-    predecessors = dict(
-        connection.execute(
-            "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
-            (sorted(issuers),),
-        ).fetchall()
-    )
+    predecessors = signed_predecessor_ciks(connection, {issuer_id: issuer_id for issuer_id in issuers})
     return [
         replace(issuer, predecessor_cik=int(predecessors[issuer.issuer_id]))
         if issuer.issuer_id in predecessors

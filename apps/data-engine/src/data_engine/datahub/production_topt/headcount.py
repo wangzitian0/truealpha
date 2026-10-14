@@ -18,6 +18,7 @@ longer decides what any company's headcount is.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -29,6 +30,46 @@ from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountF
 #: Fusion order for the headcount plane (rule 12). Sources absent from the list rank
 #: last, so an unknown producer can never outrank a cited one by being newer.
 HEADCOUNT_SOURCE_PRIORITY: tuple[str, ...] = ("10k-extraction", "manual-review")
+
+_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(\d{18})(?:\s|$)")
+_FILED_RE = re.compile(r"(?:^|\s)filed=(\d{4}-\d{2}-\d{2})(?:\s|$)")
+
+
+def validate_cited_headcount_fact(
+    *,
+    knowable_at: datetime,
+    period_end: date | None,
+    evidence_ref: str,
+) -> None:
+    """Reject uncited or misdated headcount facts (#1264).
+
+    Every headcount fact must cite an 18-digit SEC accession and filing date in
+    `evidence_ref`, carry a fiscal `period_end` on or before that filing date, and have
+    `knowable_at` anchored to the filing date (never earlier than the filing it cites, and
+    never stamped to a literal constant).
+    """
+    accession_match = _ACCESSION_RE.search(evidence_ref)
+    if accession_match is None:
+        raise ValueError(f"headcount evidence_ref does not cite an 18-digit SEC accession: {evidence_ref!r}")
+    filed_match = _FILED_RE.search(evidence_ref)
+    if filed_match is None:
+        raise ValueError(f"headcount evidence_ref does not cite a filing date (filed=YYYY-MM-DD): {evidence_ref!r}")
+    filed_date = date.fromisoformat(filed_match.group(1))
+    knowable_date = knowable_at.astimezone(UTC).date()
+    if knowable_date < filed_date:
+        raise ValueError(
+            f"headcount knowable_at ({knowable_date.isoformat()}) precedes cited filing date ({filed_date.isoformat()})"
+        )
+    if knowable_date != filed_date:
+        raise ValueError(
+            f"headcount knowable_at ({knowable_date.isoformat()}) does not match cited filing date ({filed_date.isoformat()})"
+        )
+    if period_end is None:
+        raise ValueError("headcount period_end must be set to the fiscal period end of the cited filing")
+    if period_end > filed_date:
+        raise ValueError(
+            f"headcount period_end ({period_end.isoformat()}) is after cited filing date ({filed_date.isoformat()})"
+        )
 
 
 class PostgresHeadcountExtractor:
@@ -50,10 +91,9 @@ class PostgresHeadcountExtractor:
     def __call__(self, cik: int, cutoff: date) -> HeadcountFact | None:
         boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
         # init.md rule 12: the winner is chosen by declared source priority, never by
-        # recency. A cited extraction outranks the reviewed seed even when the seed's
-        # declared knowable_at is later (the seed's 2026-01-01 is an as-of stamp, not
-        # a publication); among facts of one source the latest knowable one wins. The
-        # knowable_at <= cutoff filter keeps the read point-in-time either way.
+        # recency. A cited extraction outranks the reviewed seed; among facts of one
+        # source the latest knowable one wins. The knowable_at <= cutoff filter keeps the
+        # read point-in-time either way.
         row = self._connection.execute(
             """
             select headcount, knowable_at, source, evidence_ref, period_end, confidence

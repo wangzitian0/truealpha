@@ -44,6 +44,7 @@ from data_engine.sources.gateway import CapacityExceeded, SourceGateway
 ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+SUBMISSIONS_OVERFLOW_URL = "https://data.sec.gov/submissions/{name}"
 EXTRACTION_SOURCE = "10k-extraction"
 # Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
 # primitive (libs/factors/shared/extraction.py, #769) — this module owns only the
@@ -57,7 +58,8 @@ _PLAUSIBLE = (10, 5_000_000)
 # "we had approximately 33,000 employees", "employed 341,000 employees worldwide",
 # "approximately 166,000 full-time equivalent employees" (AAPL), "employed approximately
 # 36,500 regular full-time employees" (AMAT), "had approximately 28,000 staff members"
-# (AMGN), "employed approximately 1,556,000 full-time and part-time employees" (AMZN) —
+# (AMGN), "employed approximately 1,556,000 full-time and part-time employees" (AMZN),
+# "employee headcount worldwide was 125,665" (TSLA) —
 # all misses on the first real QQQ probe (2026-09-04), so the workforce qualifier may
 # stack up to three words joined by "and"/"or". Deliberately loose: a missed candidate
 # is unrecoverable downstream, whereas a spurious one is discarded by selection.
@@ -66,7 +68,9 @@ _HEADCOUNT = re.compile(
     r"(?:approximately\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
     r"([\d][\d,]{2,12})\s+"
     r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)(?:\s+(?:and|or)\s+|\s+)){0,3}"
-    r"(?:employees|persons|people|associates|team members|staff members|colleagues)",
+    r"(?:employees|persons|people|associates|team members|staff members|colleagues)"
+    r"|(?:employee headcount(?:\s+worldwide)?|full[- ]time count for [a-z' ]{1,35}employees(?:\s+worldwide)?)\s+was\s+"
+    r"(?:approximately\s+|about\s+)?([\d][\d,]{2,12})",
     re.I,
 )
 _AS_OF = re.compile(r"[Aa]s of ([A-Z][a-z]+ \d{1,2},? \d{4})")
@@ -170,7 +174,10 @@ def candidates(text: str) -> list[FilingCandidate]:
         sentence = _sentence(text, match.start(), match.end())
         if _TAG_SOUP.search(sentence):
             continue
-        value = int(match.group(1).replace(",", ""))
+        raw_digits = match.group(1) or match.group(2)
+        if not raw_digits:
+            continue
+        value = int(raw_digits.replace(",", ""))
         if not _PLAUSIBLE[0] <= value <= _PLAUSIBLE[1]:
             continue
         # The as-of date usually sits in the sentence; a cover-page figure may state it
@@ -230,22 +237,56 @@ def parse_as_of(text: str | None) -> date | None:
     return None
 
 
-def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime) -> FilingDocument | None:
-    """The newest 10-K/20-F filed at or before the cutoff, with its primary document."""
-    submissions = gateway.call("sec", "submissions", lambda: _get_json(http, SUBMISSIONS_URL.format(cik=cik)))
-    recent = submissions["filings"]["recent"]
-    cutoff_date = cutoff.astimezone(UTC).date()
-    for index, form in enumerate(recent["form"]):
+def _annual_filing_from_index(
+    cik: int, index_block: dict[str, Any], *, cutoff_date: date, http: Any, gateway: SourceGateway
+) -> FilingDocument | None:
+    """Return the first annual filing at or before cutoff_date from one submissions index block."""
+    forms = index_block.get("form") or ()
+    for index, form in enumerate(forms):
         if form not in ANNUAL_FORMS:
             continue
-        filing_date = date.fromisoformat(recent["filingDate"][index])
+        filing_date = date.fromisoformat(index_block["filingDate"][index])
         if filing_date > cutoff_date:
             continue
-        accession = recent["accessionNumber"][index].replace("-", "")
-        document = recent["primaryDocument"][index]
+        accession = index_block["accessionNumber"][index].replace("-", "")
+        document = index_block["primaryDocument"][index]
         url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
         body = gateway.call("sec", "archive", lambda: _get_bytes(http, url))
         return FilingDocument(cik, accession, form, filing_date, document, url, body)
+    return None
+
+
+def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime) -> FilingDocument | None:
+    """The newest 10-K/20-F filed at or before the cutoff, with its primary document (#1264).
+
+    High-volume filers (such as JPM, which files thousands of 424B2 notes per year) push
+    historical 10-K filings out of `filings.recent` into `filings.files` overflow JSONs.
+    When `recent` holds no eligible annual filing, overflow files whose `filingFrom` is on
+    or before `cutoff_date` are searched in order.
+    """
+    submissions = gateway.call("sec", "submissions", lambda: _get_json(http, SUBMISSIONS_URL.format(cik=cik)))
+    filings = submissions.get("filings") or {}
+    recent = filings.get("recent") or {}
+    cutoff_date = cutoff.astimezone(UTC).date()
+    found = _annual_filing_from_index(cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway)
+    if found is not None:
+        return found
+    for file_meta in filings.get("files") or ():
+        name = file_meta.get("name")
+        if not name:
+            continue
+        filing_from = file_meta.get("filingFrom")
+        if filing_from:
+            try:
+                if date.fromisoformat(str(filing_from)) > cutoff_date:
+                    continue
+            except ValueError:
+                pass
+        overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
+        overflow = gateway.call("sec", "submissions", lambda url=overflow_url: _get_json(http, url))
+        found = _annual_filing_from_index(cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway)
+        if found is not None:
+            return found
     return None
 
 

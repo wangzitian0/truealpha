@@ -287,3 +287,64 @@ def test_split_history_names_each_series_it_cannot_prove() -> None:
     assert isinstance(no_split_adjusted, Unavailable) and no_split_adjusted.reason == NO_SPLIT_ADJUSTED_SERIES
     assert isinstance(no_unadjusted, Unavailable) and no_unadjusted.reason == NO_UNADJUSTED_SERIES
     assert isinstance(failed, Unavailable) and failed.reason == SPLIT_DERIVATION_FAILED and "NVDA" in failed.detail
+
+
+def test_alphabet_canonical_ticker_and_listing_selection_agrees_with_default_topt_symbols() -> None:
+    """#1265: Alphabet has two listings in the TOPT denominator (`GOOG` and `GOOGL`), while
+    `DEFAULT_TOPT_SYMBOLS` ingests `GOOGL`. All planes must select `GOOGL`."""
+    from data_engine.datahub.canonical_issuer import (
+        instrument_sort_key,
+        is_preferred_issuer_ticker,
+        listing_sort_key,
+    )
+    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
+
+    assert "GOOGL" in DEFAULT_TOPT_SYMBOLS
+    assert "GOOG" not in DEFAULT_TOPT_SYMBOLS
+    assert is_preferred_issuer_ticker("GOOGL", "GOOG") is True
+    assert is_preferred_issuer_ticker("GOOG", "GOOGL") is False
+    assert min(["listing:xnas:goog", "listing:xnas:googl"], key=listing_sort_key) == "listing:xnas:googl"
+    assert (
+        min(["security:cusip:02079K107", "security:cusip:02079K305"], key=instrument_sort_key)
+        == "security:cusip:02079K305"
+    )
+
+
+def test_per_class_segmented_share_counts_in_company_facts_sum_and_reconcile_across_split() -> None:
+    """#1265 + #1262: `share_basis._carries` sums distinct per-class `segment` share counts
+    at the same `(end, filed, accn)` when classifying cover vs statement counts."""
+    segmented_statement_doc = {
+        "facts": {
+            "us-gaap": {
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": OWN_DATE.isoformat(),
+                                "filed": FILED.isoformat(),
+                                "accn": ACCESSION,
+                                "form": "10-K",
+                                "val": int(SHARES * 8 // 10),
+                                "segment": "us-gaap:CommonClassAMember",
+                            },
+                            {
+                                "end": OWN_DATE.isoformat(),
+                                "filed": FILED.isoformat(),
+                                "accn": ACCESSION,
+                                "form": "10-K",
+                                "val": int(SHARES * 2 // 10),
+                                "segment": "us-gaap:CommonClassBMember",
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    outcome = live_on_close_basis(
+        _count(),
+        [_history()],
+        documents=lambda: [segmented_statement_doc],
+        ruleset=lambda: DEFAULT_RULESET,
+    )
+    assert outcome == OnCloseBasis(SHARES, COUNT_KNOWABLE, 1)

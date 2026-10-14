@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
@@ -35,17 +35,113 @@ __all__ = (
     "MEMBER_RESOLVES_ELSEWHERE",
     "NOT_IN_WIDE_ROW",
     "NO_CANONICAL_ISSUER_ID",
+    "PRIMARY_INSTRUMENT_IDS",
+    "PRIMARY_ISSUER_TICKERS",
+    "PRIMARY_LISTING_IDS",
+    "SECONDARY_INSTRUMENT_IDS",
+    "SECONDARY_ISSUER_TICKERS",
+    "SECONDARY_LISTING_IDS",
     "CanonicalIssuer",
     "CanonicalUniverse",
+    "ConflictingPredecessorError",
     "UnmappedIssuer",
     "UnvisitedIssuer",
     "account_for_head_members",
     "canonicalize_universe",
+    "expand_issuer_alias_ids",
+    "instrument_preference_rank",
+    "instrument_sort_key",
     "is_canonical_issuer_id",
+    "is_preferred_issuer_ticker",
+    "listing_preference_rank",
+    "listing_sort_key",
     "reason_counts",
     "require_canonical_issuer_id",
+    "signed_predecessor_ciks",
     "stored_entity_of",
+    "ticker_preference_rank",
 )
+
+#: Primary share-class ticker, listing, and instrument identities for multi-class issuers (#1265).
+#: Alphabet Inc. (5493006MHB84DD0ZWV18) has Class A voting stock (GOOGL, 02079K305) and
+#: Class C non-voting stock (GOOG, 02079K107) in the universe corpus. All planes resolve to GOOGL.
+PRIMARY_ISSUER_TICKERS: frozenset[str] = frozenset({"GOOGL"})
+SECONDARY_ISSUER_TICKERS: frozenset[str] = frozenset({"GOOG"})
+
+PRIMARY_LISTING_IDS: frozenset[str] = frozenset(
+    {
+        "listing:xnas:googl",
+        "94c36c50-7427-582f-9072-30284eb79647",
+    }
+)
+SECONDARY_LISTING_IDS: frozenset[str] = frozenset(
+    {
+        "listing:xnas:goog",
+        "4b7e9abc-4c05-5b50-88f7-c31e8be0a2b6",
+    }
+)
+
+PRIMARY_INSTRUMENT_IDS: frozenset[str] = frozenset(
+    {
+        "security:cusip:02079K305",
+        "security:figi:bbg009s39jy5",
+        "729934dd-45ed-5de4-9b17-4f2df4a761e7",
+    }
+)
+SECONDARY_INSTRUMENT_IDS: frozenset[str] = frozenset(
+    {
+        "security:cusip:02079K107",
+        "security:figi:bbg009s3nb21",
+        "94186fc0-31be-5b53-bd7c-8bd1000509b6",
+    }
+)
+
+
+def ticker_preference_rank(ticker: str | None) -> int:
+    """Return 0 for a primary class ticker, 2 for a secondary class ticker, and 1 otherwise."""
+    if ticker in PRIMARY_ISSUER_TICKERS:
+        return 0
+    if ticker in SECONDARY_ISSUER_TICKERS:
+        return 2
+    return 1
+
+
+def is_preferred_issuer_ticker(candidate: str | None, current: str | None) -> bool:
+    """Return True when candidate outranks current for a multi-class issuer (#1265)."""
+    return ticker_preference_rank(candidate) < ticker_preference_rank(current)
+
+
+def listing_preference_rank(listing_id: str | None) -> int:
+    """Return 0 for a primary listing, 2 for a secondary listing, and 1 otherwise."""
+    if listing_id in PRIMARY_LISTING_IDS:
+        return 0
+    if listing_id in SECONDARY_LISTING_IDS:
+        return 2
+    return 1
+
+
+def instrument_preference_rank(instrument_id: str | None) -> int:
+    """Return 0 for a primary instrument, 2 for a secondary instrument, and 1 otherwise."""
+    if instrument_id in PRIMARY_INSTRUMENT_IDS:
+        return 0
+    if instrument_id in SECONDARY_INSTRUMENT_IDS:
+        return 2
+    return 1
+
+
+def listing_sort_key(listing_id: str) -> tuple[int, str]:
+    """Sort key that orders primary share-class listings ahead of secondary listings (#1265)."""
+    return (listing_preference_rank(listing_id), listing_id)
+
+
+def instrument_sort_key(instrument_id: str, listing_id: str = "") -> tuple[int, int, str]:
+    """Sort key that orders primary share-class instruments ahead of secondary instruments (#1265)."""
+    return (
+        listing_preference_rank(listing_id) if listing_id else 1,
+        instrument_preference_rank(instrument_id),
+        instrument_id,
+    )
+
 
 #: Why an issuer got no row: the store holds no entity for its legacy id.
 NO_CANONICAL_ISSUER_ID = "no_canonical_issuer_id"
@@ -195,10 +291,26 @@ def canonicalize_universe(
         elif str(entity) not in wide_row_ids:
             unmapped.append(UnmappedIssuer(legacy_id=legacy_id, ticker=ticker, reason=NOT_IN_WIDE_ROW))
         elif str(entity) in issuers:
-            kept = issuers[str(entity)].legacy_id
-            unmapped.append(
-                UnmappedIssuer(legacy_id, ticker, reason=DUPLICATE_CORPUS_ID, detail=f"same issuer as {kept}")
-            )
+            current = issuers[str(entity)]
+            if is_preferred_issuer_ticker(ticker, current.ticker):
+                issuers[str(entity)] = CanonicalIssuer(issuer_id=str(entity), legacy_id=legacy_id, ticker=ticker)
+                unmapped.append(
+                    UnmappedIssuer(
+                        current.legacy_id,
+                        current.ticker,
+                        reason=DUPLICATE_CORPUS_ID,
+                        detail=f"same issuer as {legacy_id}",
+                    )
+                )
+            else:
+                unmapped.append(
+                    UnmappedIssuer(
+                        legacy_id,
+                        ticker,
+                        reason=DUPLICATE_CORPUS_ID,
+                        detail=f"same issuer as {current.legacy_id}",
+                    )
+                )
         else:
             issuers[str(entity)] = CanonicalIssuer(issuer_id=str(entity), legacy_id=legacy_id, ticker=ticker)
     return CanonicalUniverse(issuers=tuple(issuers.values()), unmapped=tuple(unmapped))
@@ -281,3 +393,96 @@ def account_for_head_members(
         for issuer_id in missing
     )
     return replace(universe, unvisited=unvisited, wide_row_issuers=len(wide_row_ids))
+
+
+class ConflictingPredecessorError(ValueError):
+    """Two signed registry rows name different predecessor CIKs for one issuer (#1257, #1263)."""
+
+
+def expand_issuer_alias_ids(
+    connection: psycopg.Connection[Any],
+    issuer_by_key: Mapping[str, str],
+    *,
+    candidate_ids_by_key: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Return every candidate issuer identifier for each key, including legacy aliases of UUIDs (#1263).
+
+    `staging.issuer_cik_predecessors` stores legacy identifiers such as `issuer:lei:...`.
+    When a caller passes canonical entity UUIDs, this helper expands each UUID with its
+    `legacy-id` and `lei` aliases from `staging.entity_aliases`.
+    """
+    candidates: dict[str, set[str]] = {}
+    for key, issuer_id in issuer_by_key.items():
+        initial = set(candidate_ids_by_key.get(key, ()) if candidate_ids_by_key is not None else ())
+        initial.add(issuer_id)
+        candidates[key] = initial
+
+    uuid_ids = sorted({cid.lower() for cids in candidates.values() for cid in cids if is_uuid(cid)})
+    if uuid_ids:
+        alias_rows = connection.execute(
+            """
+            select entity_id::text, scheme, value
+            from staging.entity_aliases
+            where entity_id = any(%s::uuid[])
+              and scheme in ('legacy-id', 'lei')
+            """,
+            (uuid_ids,),
+        ).fetchall()
+        aliases_by_uuid: dict[str, set[str]] = {}
+        for entity_id, scheme, value in alias_rows:
+            if not value:
+                continue
+            legacy_id = str(value) if scheme == "legacy-id" else f"issuer:lei:{value}"
+            aliases_by_uuid.setdefault(str(entity_id).lower(), set()).add(legacy_id)
+        for key, cids in candidates.items():
+            expanded = set(cids)
+            for cid in list(cids):
+                if is_uuid(cid):
+                    expanded.update(aliases_by_uuid.get(cid.lower(), ()))
+            candidates[key] = expanded
+
+    return {key: tuple(sorted(cids)) for key, cids in candidates.items()}
+
+
+def signed_predecessor_ciks(
+    connection: psycopg.Connection[Any],
+    issuer_by_key: Mapping[str, str],
+    *,
+    candidate_ids_by_key: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, int]:
+    """Resolve owner-signed predecessor CIKs across canonical UUIDs and their legacy aliases (#1263).
+
+    Raises `ConflictingPredecessorError` when two signed rows for the same issuer disagree.
+    """
+    if not issuer_by_key:
+        return {}
+    candidates = expand_issuer_alias_ids(connection, issuer_by_key, candidate_ids_by_key=candidate_ids_by_key)
+    all_candidate_ids = sorted({cid for cids in candidates.values() for cid in cids})
+    if not all_candidate_ids:
+        return {}
+    registry = dict(
+        connection.execute(
+            "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
+            (all_candidate_ids,),
+        ).fetchall()
+    )
+    resolved: dict[str, int] = {}
+    conflicts: dict[str, dict[int, str]] = {}
+    for key, cids in candidates.items():
+        named: dict[int, str] = {}
+        for cid in cids:
+            if cid in registry:
+                named.setdefault(int(registry[cid]), cid)
+        if len(named) > 1:
+            conflicts[key] = named
+        elif len(named) == 1:
+            resolved[key] = next(iter(named))
+    if conflicts:
+        raise ConflictingPredecessorError(
+            "signed predecessor rows disagree: "
+            + "; ".join(
+                f"{issuer_by_key[key]}: " + ", ".join(f"CIK {cik} under {named[cik]}" for cik in sorted(named))
+                for key, named in sorted(conflicts.items())
+            )
+        )
+    return resolved
