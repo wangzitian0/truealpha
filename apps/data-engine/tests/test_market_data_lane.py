@@ -43,6 +43,7 @@ version of this file avoided it outright rather than ever exercising it.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import urllib.parse
@@ -775,3 +776,28 @@ def test_the_schedule_stamps_its_tick_so_the_verdict_is_dated_by_it() -> None:
 
     ((request),) = result.run_requests
     assert request.tags[nightly_verdicts.TICK_TAG] == tick.isoformat()
+
+
+@pytest.mark.parametrize(
+    ("app_env", "expected"),
+    [
+        ("production", dg.DefaultScheduleStatus.RUNNING),
+        ("staging", dg.DefaultScheduleStatus.RUNNING),
+        ("development", dg.DefaultScheduleStatus.STOPPED),
+    ],
+)
+def test_the_refresh_schedule_runs_where_the_backtest_runs(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, expected: dg.DefaultScheduleStatus
+) -> None:
+    """#1281: staging's tick, projection and backtest read these bars, so staging refreshes them.
+
+    The decorator reads `settings.app_env` when the module loads. The test loads the module again
+    under each environment and restores it afterwards. It is red on the production-only rule.
+    """
+    monkeypatch.setattr(settings, "app_env", app_env)
+    try:
+        reloaded = importlib.reload(market_data)
+        assert reloaded.market_data_refresh_schedule.default_status == expected
+    finally:
+        monkeypatch.undo()
+        importlib.reload(market_data)
