@@ -233,9 +233,13 @@ class LiveShareCount:
 
 
 def _entry_date(entry: object, key: str) -> date | None:
+    """The ISO date that one key of the vintage entry holds, or None when it holds no valid date."""
     if not isinstance(entry, Mapping) or not entry.get(key):
         return None
-    return date.fromisoformat(str(entry[key]))
+    try:
+        return date.fromisoformat(str(entry[key]))
+    except ValueError:
+        return None
 
 
 def live_on_close_basis(
@@ -261,7 +265,12 @@ def live_on_close_basis(
         return Unavailable(NO_SPLIT_ADJUSTED_SERIES, "no listing of the issuer holds stored daily series")
     own_date, filed = _entry_date(count.entry, "period_end"), _entry_date(count.entry, "filed")
     if own_date is None or filed is None:
-        return Unavailable(SHARE_COUNT_UNDATED, "the payload names no filing date or no date for the share count")
+        named = dict(count.entry) if isinstance(count.entry, Mapping) else {}
+        return Unavailable(
+            SHARE_COUNT_UNDATED,
+            f"the share count needs a valid own date and filing date; the payload names "
+            f"period_end {named.get('period_end')!r} and filed {named.get('filed')!r}",
+        )
     earliest, latest = min(own_date, filed), max(own_date, filed)
     close = count.close_session
     for history in known:

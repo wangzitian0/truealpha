@@ -199,7 +199,15 @@ def test_an_issuer_with_no_stored_bars_on_any_listing_is_unavailable() -> None:
     assert isinstance(outcome, Unavailable) and outcome.reason == NO_SPLIT_ADJUSTED_SERIES, outcome
 
 
-@pytest.mark.parametrize("entry", [{}, {"filed": FILED.isoformat()}, {"period_end": OWN_DATE.isoformat()}])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {},
+        {"filed": FILED.isoformat()},
+        {"period_end": OWN_DATE.isoformat()},
+        {"filed": "2026-13-45", "period_end": OWN_DATE.isoformat()},
+    ],
+)
 def test_a_count_without_its_own_date_or_its_filing_date_is_unavailable(entry: dict[str, str]) -> None:
     outcome = live_on_close_basis(_count(entry), [_history(ex_date=None)], documents=_no_read, ruleset=_no_read)
 

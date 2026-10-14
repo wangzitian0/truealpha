@@ -1,10 +1,11 @@
 """The two stored daily price series and the split events they show (#758, #1257).
 
 `staging.market_prices_daily` holds an unadjusted series (`adjust = 'none'`) and a split-adjusted
-series (`adjust = 'splits'`) for each symbol. Two readers need both: the backtest, to price
-returns on unadjusted bars with explicit splits, and the history projector, to put an as-filed
-share count on the share basis of the close it multiplies (#1257). Both read the series and derive
-the split events here, so the two cannot disagree on what a split is.
+series (`adjust = 'splits'`) for each symbol. Three readers need both: the backtest, to price
+returns on unadjusted bars with explicit splits, and the history projector and the live strategy
+seed, to put an as-filed share count on the share basis of the close it multiplies (#1257, #1262).
+All three read the series and derive the split events here, so they cannot disagree on what a
+split is.
 """
 
 from __future__ import annotations
