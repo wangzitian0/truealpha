@@ -28,7 +28,6 @@ REQUIRED_TABLES = [
     "staging.kg_identifiers",
     "staging.kg_edges",
     "staging.fund_holding_facts",
-    "staging.financial_facts",
     "staging.api_call_ledger",
 ]
 
