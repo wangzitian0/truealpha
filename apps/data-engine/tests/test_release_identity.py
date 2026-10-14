@@ -142,7 +142,7 @@ def test_the_identity_keeps_the_shape_infra2_asserts_before_it_deploys() -> None
     assert int(identity.content_sha256, 16) > 0
 
 
-def test_this_repositorys_canonical_hash_is_the_estates() -> None:
+def test_this_repositorys_canonical_hash_matches_wire_format() -> None:
     """`truealpha_contracts.common.canonical_sha256` must match the canonical JSON SHA-256
     wire format (sorted keys, compact separators, ASCII escaping) on the release payload."""
     payload = _measure().payload
