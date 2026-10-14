@@ -4,9 +4,9 @@ The definition declares `eligibility.maximum_input_age_days` (455). These tests 
 Dagster op `run_topt_live_tick` end to end. The vendor answers are offline and pass through the deployed
 adapters. The capture, freeze, materialization, strategy seed, replay and plausibility gate are real.
 
-Each of four issuers files its statements and its headcount a fixed number of days before the tick.
-Every other issuer files 59 days before the tick. A filing time sets the `knowable_at` of the five
-required inputs that come from the filing. The stored daily series are flat, so no split changes a share count.
+Four issuers file their statements a fixed number of days before the tick: 454, 455, 456 and 700 days.
+Every other issuer files 59 days before the tick. The filing time sets the `knowable_at` of each input
+that comes from the filing. The stored daily series are flat, so no split changes a share count.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
             connection,
             cik=cik,
             headcount=Decimal("164000"),
-            # The headcount is as old as the filing, so the filing alone sets the `knowable_at` of the facts.
+            # The headcount is one day older than the filing, so the filing alone sets the `knowable_at` of the facts.
             knowable_at=_filed_at(ticker) - timedelta(days=1),
             source="test-fixture",
             evidence_ref=f"test:{ticker}",
@@ -290,4 +290,6 @@ def test_the_other_issuers_stay_eligible(tick: Tick) -> None:
 
     served = {ticker: _served(tick, ticker) for ticker in others}
 
+    assert len(others) == 15
     assert {ticker: item.exclusion_reason for ticker, item in served.items()} == dict.fromkeys(others), served
+    assert all(item.outcome != "excluded" for item in served.values()), served

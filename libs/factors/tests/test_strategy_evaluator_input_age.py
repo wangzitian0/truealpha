@@ -2,8 +2,8 @@
 
 The rule tests the latest observation of each REQUIRED input, and nothing else. A periodic input
 such as `net_income` has old periods by nature, and a recorded-only input decides nothing. A rule
-that read every record or every period would exclude every issuer. Each test below changes one
-`knowable_at` and holds every other fact fixed, so the age is the only cause of a result.
+that read every record or every period would exclude every issuer. Each test changes one
+`knowable_at` and holds every other fact fixed. So the age is the only cause of a result.
 """
 
 from __future__ import annotations
@@ -108,8 +108,10 @@ def test_the_live_definition_declares_the_limit_these_tests_probe() -> None:
     ids=["454-days", "455-days-limit", "455-days-plus-1-second", "456-days"],
 )
 def test_a_required_input_is_stale_only_when_older_than_the_limit(key: str, age: timedelta, stale: bool) -> None:
-    """Red when the rule is absent (456 days stays eligible), when it uses `>=` (455 days is excluded)
-    or when it compares dates instead of instants (455 days and 1 second keeps the same date count)."""
+    """Red when the rule is absent: 456 days stays eligible. Red when the rule uses `>=`: 455 days is excluded.
+
+    Red when the rule compares dates, not instants: an age of 455 days and 1 second shows as 455 days.
+    """
     decision = _decide(_issuer({key: age}))
 
     assert _is_stale(decision) is stale, decision

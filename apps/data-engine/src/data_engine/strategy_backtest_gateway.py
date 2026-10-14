@@ -223,8 +223,8 @@ def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
     The period is part of the snapshot identity: two runs that consumed different years of the
     same series are not the same snapshot, and before 0043 there was no way to say so.
 
-    The ``knowable_at`` of a row is not part of the identity. Stored runs bind this hash in its
-    earlier form, and a changed hash would break their identity (#1255).
+    The ``knowable_at`` of a row is not part of the identity. Stored runs hold this hash.
+    A changed hash would break their identity (#1255).
     """
     payload = sorted(
         (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")

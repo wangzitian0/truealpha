@@ -1,8 +1,8 @@
 """The gateway hands the evaluator the instant each winning input became knowable (#1255).
 
-These tests need no database. `rows_at` ends each row with the `knowable_at` of its winning vintage,
-`issuer_inputs_from_rows` binds that instant to the value it came with, and `snapshot_id_from_rows`
-leaves the instant out of the content identity, so every stored snapshot id keeps its bytes.
+These tests need no database. `rows_at` ends each row with the `knowable_at` of its winning vintage.
+`issuer_inputs_from_rows` binds that instant to the value it came with. `snapshot_id_from_rows` leaves
+the instant out of the content identity, so every stored snapshot id keeps its bytes.
 """
 
 from __future__ import annotations
@@ -141,8 +141,8 @@ def _complete_rows(issuer_id: str, ages: dict[str, timedelta]) -> list[InputRow]
 def test_rows_with_a_stale_required_input_exclude_the_issuer_and_old_periods_do_not() -> None:
     """The producer and the evaluator together, with no database.
 
-    `issuer:old` holds gross profit 456 days old. `issuer:series` holds a net income series with periods
-    from 2008 on, which are the oldest periods that a real series holds. Both hold fresh values otherwise.
+    `issuer:old` holds gross profit 456 days old. `issuer:series` holds a net income series from 2008 on.
+    Its early periods are over 6,000 days old. Both issuers hold fresh values otherwise.
     """
     series = [
         (

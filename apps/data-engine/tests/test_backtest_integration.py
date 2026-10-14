@@ -775,7 +775,7 @@ def test_a_stale_periodic_series_and_a_stale_recorded_only_input_do_not_exclude(
 
     The limit tests the latest observation of each required input. Under definition 1.0.0, revenue is recorded
     only (P/S decides nothing), and net_income is no required input. Red when the limit tests every period
-    of every key: b is then excluded, and every real issuer is excluded with it.
+    of every key. Then b is excluded, and so is every real issuer.
     """
     connection, issuers = seeded["connection"], seeded["issuers"]
     b = issuers["b"].canonical_issuer_id
