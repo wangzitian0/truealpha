@@ -56,7 +56,10 @@ def load_telemetry_settings(environ: Mapping[str, str] | None = None) -> OtelSet
     try:
         settings = OtelSettings.from_env(values, strict=True, require_issued_identity=True)
     except ValueError as exc:
-        raise TelemetryConfigError(f"telemetry is enabled but its configuration is invalid: {exc}") from exc
+        raise TelemetryConfigError(
+            f"telemetry is enabled (OTEL_EXPORTER_OTLP_ENDPOINT is set) but its configuration is invalid: {exc} "
+            f"-- names only; infra2's deploy renders OTEL_SERVICE_NAME and these keys of OTEL_RESOURCE_ATTRIBUTES"
+        ) from exc
     return settings if settings.enabled else None
 
 
