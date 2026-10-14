@@ -93,6 +93,13 @@ SPLIT_ADJUSTED = "splits"
 UNADJUSTED = "none"
 DEFAULT_ADJUST = SPLIT_ADJUSTED
 
+#: How many XNYS sessions the newest bar of a series may trail the latest closed session.
+#: One: in winter the market-data tick runs 15 minutes after the 21:00 UTC close, and the vendor
+#: may not list that day's bar yet. Monday's tick then finds Friday's bar and stays green. A series
+#: two sessions behind has missed a whole night, and the freshness verdict goes red. The live
+#: strategy seed accepts the same lag for its split series (`share_basis`, #1262).
+MAX_BAR_LAG_SESSIONS = 1
+
 # Declared single-source confidence grade: this pipeline fetches Twelve Data alone, with
 # no independent corroborating origin (unlike `production_topt.market_price_adapter`'s
 # multi-origin adapter). One `PRICE_GRADE_STEP` below that adapter's
@@ -227,6 +234,19 @@ def most_recent_xnys_session(d: date) -> date:
     while not is_xnys_trading_day(curr):
         curr -= timedelta(days=1)
     return curr
+
+
+def oldest_session_within_lag(latest: date) -> date:
+    """The oldest session a series may end on: `MAX_BAR_LAG_SESSIONS` XNYS sessions before `latest`.
+
+    A weekend or a holiday holds no session, so a long weekend costs one session, not three
+    days. The freshness verdict of the market data lane and the split series check of the live
+    strategy seed (`share_basis`, #1262) both read this, so they cannot disagree on the lag.
+    """
+    oldest = latest
+    for _ in range(MAX_BAR_LAG_SESSIONS):
+        oldest = most_recent_xnys_session(oldest - timedelta(days=1))
+    return oldest
 
 
 _XNYS_TZ = ZoneInfo("America/New_York")

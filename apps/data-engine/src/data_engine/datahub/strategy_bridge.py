@@ -13,14 +13,21 @@ The only packaged object read here is the strategy DEFINITION — versioned stra
 configuration, not input data. Golden inputs, decisions and rates are never read (#429
 invariant I2). Since #1235 it is the live definition 1.0.0 (P/GP bands), the same one the
 TOPT core engine reads.
+
+The seed is where a filed share count meets the captured close that the evaluator multiplies
+it by. Since #1262 it puts the count on the share basis of that close first
+(``share_basis.live_on_close_basis``), with the rule the history projector applies.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import json
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from functools import cache, partial
 from typing import Any
 
 import psycopg
@@ -29,12 +36,27 @@ from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
+from truealpha_runtime.storage import StorageError
 
+from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
+from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
+from data_engine.datahub.share_basis import (
+    SHARES_KEY,
+    LiveShareCount,
+    OnCloseBasis,
+    Unavailable,
+    live_on_close_basis,
+    split_history,
+)
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import bind_strategy_run_to_capture, write_replay
+
+log = logging.getLogger(__name__)
 
 # Every registered metric except `price` surfaces here as the scalar half of its
 # financial-fact input -- one row with `fiscal_period` NULL, via the registry's own
@@ -132,6 +154,12 @@ def seed_strategy_inputs_from_capture(
     not serve crosses under the vintage of the origin that served it (#862): its payload
     declares ``served_by_failover``, which no corroboration ever carries, and it is the
     value the snapshot bound for that cell.
+
+    The evaluator multiplies the seeded share count by the seeded close. So the seed puts the
+    filed count on the share basis of that close first (#1262, ``_counts_on_close_basis``).
+    When the stored series cannot prove the splits between the two, the seed writes no share
+    row for the issuer and logs the named reason. The evaluator then excludes the issuer with
+    ``missing_market_value_input``. The filed count never stands beside a close of another basis.
     """
     rows = connection.execute(
         """
@@ -160,6 +188,7 @@ def seed_strategy_inputs_from_capture(
         if current is None or listing_id < current[0]:  # canonical listing = lowest listing_id
             bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
 
+    on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)
     written = 0
     for issuer_id in sorted(set(financial) | set(price)):
         # `knowable_at` is the observation's OWN knowable time, not a constant offset from
@@ -172,7 +201,9 @@ def seed_strategy_inputs_from_capture(
         inputs: list[tuple[str, str, Decimal, datetime, str | None]] = []
         if issuer_id in financial:
             _listing, payload, confidence, observed_at = financial[issuer_id]
-            inputs.extend(financial_input_rows(payload, confidence, observed_at))
+            inputs.extend(
+                _on_close_basis_rows(financial_input_rows(payload, confidence, observed_at), on_basis.get(issuer_id))
+            )
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]
             close = payload.get("close")
@@ -199,6 +230,148 @@ def seed_strategy_inputs_from_capture(
             )
             written += 1
     return written
+
+
+# The ticker of each listing of the given issuers in the run. The listing-identity cells name
+# it, and the stored daily series are keyed by ticker.
+_LISTING_TICKERS_SQL = """
+select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'ticker'
+from raw.capture_obligations ob
+join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+where ob.run_id = %s
+  and o.semantic_type = 'listing-identity'
+  and p.normalized_payload ->> 'issuer_id' = any(%s)
+  and p.normalized_payload ->> 'ticker' is not null
+"""
+
+# The stored company-facts bytes behind the issuer's financial-fact cells of the run.
+_FINANCIAL_SOURCES_SQL = """
+select distinct v.raw_fetch_id
+from raw.capture_obligations ob
+join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+where ob.run_id = %s
+  and o.semantic_type = 'financial-fact'
+  and o.parser_version = %s
+  and p.normalized_payload ->> 'issuer_id' = %s
+  and v.raw_fetch_id is not null
+order by 1
+"""
+
+#: One captured cell of the bridge: (canonical listing, payload, confidence, the observation's knowable_at).
+_Cell = tuple[str, dict, Decimal, datetime]
+
+
+def _counts_on_close_basis(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    financial: Mapping[str, _Cell],
+    price: Mapping[str, _Cell],
+    *,
+    parser_version: str,
+) -> dict[str, OnCloseBasis | Unavailable]:
+    """Each issuer whose filed share count meets a captured close: the count on that close's basis.
+
+    The close's session is the UTC date of its knowable time, the convention every captured price
+    cell follows (``composition._is_settled_session``). The splits come from the two stored daily
+    series of the issuer's listings in this run. A symbol whose series fail the derivation makes
+    its issuer unavailable and leaves the other issuers alone. When no count meets a close, it sends
+    no query.
+    """
+    meeting = sorted(
+        issuer_id
+        for issuer_id in financial.keys() & price.keys()
+        if financial[issuer_id][1].get(SHARES_KEY) is not None and price[issuer_id][1].get("close") is not None
+    )
+    if not meeting:
+        return {}
+    tickers: dict[str, list[str]] = {}
+    for issuer_id, ticker in connection.execute(_LISTING_TICKERS_SQL, (run_id, meeting)).fetchall():
+        tickers.setdefault(str(issuer_id), []).append(str(ticker))
+    symbols = sorted({ticker for names in tickers.values() for ticker in names})
+    unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
+    split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
+    histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
+    ruleset = cache(partial(resolve_ruleset, connection))
+    outcomes: dict[str, OnCloseBasis | Unavailable] = {}
+    for issuer_id in meeting:
+        _listing, payload, _confidence, observed_at = financial[issuer_id]
+        _price_listing, close_payload, _close_confidence, close_observed_at = price[issuer_id]
+        names = sorted(tickers.get(issuer_id, ()))
+        outcome = live_on_close_basis(
+            LiveShareCount(
+                shares=Decimal(str(payload[SHARES_KEY])),
+                knowable_at=observed_at,
+                entry=(payload.get("vintage") or {}).get(SHARES_KEY),
+                close_session=close_observed_at.astimezone(UTC).date(),
+                close_knowable_at=close_observed_at,
+                close=Decimal(str(close_payload["close"])),
+            ),
+            [histories[symbol] for symbol in names],
+            documents=partial(_company_facts_documents, connection, run_id, issuer_id, parser_version),
+            ruleset=ruleset,
+        )
+        if isinstance(outcome, Unavailable):
+            log.warning(
+                "share basis: %s (%s) gets no share row beside the close %s: %s: %s",
+                issuer_id,
+                ", ".join(names) or "no listing ticker",
+                close_payload.get("close"),
+                outcome.reason,
+                outcome.detail,
+            )
+        elif outcome.factor != 1:
+            log.info(
+                "share basis: %s (%s) filed count %s multiplied by %s for splits before the close",
+                issuer_id,
+                ", ".join(names),
+                payload[SHARES_KEY],
+                outcome.factor,
+            )
+        outcomes[issuer_id] = outcome
+    return outcomes
+
+
+def _company_facts_documents(
+    connection: psycopg.Connection[Any], run_id: str, issuer_id: str, parser_version: str
+) -> list[dict[str, Any]]:
+    """The stored company-facts documents behind one issuer's financial-fact cells of the run.
+
+    A document that cannot be read is left out and logged. The count then cannot be classed,
+    and ``live_on_close_basis`` makes the issuer unavailable.
+    """
+    documents: list[dict[str, Any]] = []
+    for (raw_fetch_id,) in connection.execute(_FINANCIAL_SOURCES_SQL, (run_id, parser_version, issuer_id)).fetchall():
+        try:
+            documents.append(json.loads(raw_store.get_payload(connection, raw_fetch_id)))
+        except (LookupError, StorageError, ValueError) as error:
+            log.warning("share basis: raw.fetches:%s of %s cannot be read: %s", raw_fetch_id, issuer_id, error)
+    return documents
+
+
+def _on_close_basis_rows(
+    rows: Sequence[tuple[str, str, Decimal, datetime, str | None]], outcome: OnCloseBasis | Unavailable | None
+) -> list[tuple[str, str, Decimal, datetime, str | None]]:
+    """The financial input rows with the scalar share count on the share basis of the close.
+
+    ``None`` means the count meets no close: the rows stay as they are. An ``Unavailable`` drops
+    the share row. A factor of 1 keeps the row unchanged, so a run without a split seeds the
+    same bytes as before.
+    """
+    if outcome is None or (isinstance(outcome, OnCloseBasis) and outcome.factor == 1):
+        return list(rows)
+    kept: list[tuple[str, str, Decimal, datetime, str | None]] = []
+    for row in rows:
+        input_key, _value, confidence, _knowable_at, fiscal_period = row
+        if input_key != SHARES_KEY or fiscal_period is not None:
+            kept.append(row)
+        elif isinstance(outcome, OnCloseBasis):
+            kept.append((input_key, str(outcome.value), confidence, outcome.knowable_at, fiscal_period))
+    return kept
 
 
 def run_strategy_replay_for_cutoff(

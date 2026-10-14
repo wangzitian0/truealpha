@@ -395,6 +395,16 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   `ShareBasisError` when a winning share count is knowable before a split that the close of its
   cutoff follows (#1270). Only a new projector run corrects such a row, so the lane runs on every
   weekday at 20:07 UTC, before the nightly backtest.
+- **Live rows (#429, #1262).** The deployed tick seeds the rows of its own cutoff from the
+  captured cells of its run (`datahub/strategy_bridge.py`). `last_close` is the captured close.
+  The share count is put on the share basis of that close by the rule of the history rows
+  (`datahub/share_basis.py`). The splits come from the two stored daily series of the issuer's
+  listings. When those series cannot prove the splits between the count's basis date and the
+  close's session, the tick writes no share row for the issuer. The strategy then excludes the
+  issuer with `missing_market_value_input`, and the tick log names the reason. The series may end
+  one session before the close's session. Then the close must stay strictly within a factor of 1.5
+  of the last stored close (ADR A6). The filed count never stands beside a close of another share
+  basis.
 - **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
   computation (rule 23): `staging.evidence_nodes` / `evidence_edges`.

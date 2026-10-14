@@ -108,3 +108,21 @@ each decision:
   still need a source, so the claim ceiling stays a price return.
 - The cutoffs are the definition's calendar quarter ends. The projector writes the inputs as of
   each quarter end. `first_cutoff_at` anchors the live schedule, not the historical window.
+
+## Status update 2026-10-14 (#1262)
+
+Decision 4 also governs the live strategy inputs. The deployed tick seeds the share count and the
+captured close of its own cutoff. It puts the count on the share basis of that close with the rule
+of the projector (`datahub/share_basis.py`).
+
+- The splits come from the two stored daily series of the issuer's listings. When the series cannot
+  prove the splits between the count's basis date and the close's session, the tick writes no share
+  row. The strategy excludes the issuer with `missing_market_value_input`, and the log names the
+  reason. The live path never falls back to the filed count.
+- The series may end one session before the close's session (`MAX_BAR_LAG_SESSIONS`). In winter the
+  market-data refresh runs 15 minutes after the close, and the vendor may not list that bar yet.
+- Then the seed compares the close with the last stored unadjusted close. The smallest common
+  split, 3-for-2, moves a close by the factor 1.5 (`CLOSE_JUMP_LIMIT`).
+- A one-day move to x1.5 or more, or to x0.667 or less, is a split or an event. The stored series
+  cannot tell which. So the seed excludes the issuer for that night (`close_jump_beyond_series`).
+- A lag of two sessions or more excludes the issuer (`split_series_do_not_cover_the_window`).

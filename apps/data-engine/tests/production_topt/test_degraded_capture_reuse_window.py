@@ -8,10 +8,12 @@ rules, whole-bound-set consistency, timezone independence, and multi-universe bo
 from __future__ import annotations
 
 import dataclasses
+import sys
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -43,6 +45,9 @@ from truealpha_contracts.models import DataSource
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import share_count_vintage, store_topt_series  # noqa: E402
+
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
 _RELEASE_OBLIGATIONS = 42
@@ -71,6 +76,8 @@ _MAIN_GATE_ROWS_SQL = """
 @pytest.fixture(scope="module")
 def tick_database_url():
     with isolated_test_database("reuse_window") as target_url:
+        # The strategy seed takes each issuer's splits from the stored daily series (#1262).
+        store_topt_series(target_url)
         yield target_url
 
 
@@ -96,6 +103,11 @@ def _bundle(branch: OperatingBranch, knowable_at: datetime = _FILING_KNOWABLE_AT
         pre_provision_profit=Decimal("80000000") if financial else None,
         raw_bytes=b'{"facts":{}}',
         knowable_at=knowable_at,
+        vintages={
+            "shares_outstanding": share_count_vintage(
+                filed=knowable_at.date(), own_date=knowable_at.date() - timedelta(days=12)
+            )
+        },
     )
 
 
