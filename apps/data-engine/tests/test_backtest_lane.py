@@ -21,16 +21,16 @@ from data_engine.quality.nightly_verdicts import TICK_TAG
 from factors.backtest.engine import Performance
 from truealpha_runtime.testing import load_tool
 
-TICK = "2026-10-12T21:30:00+00:00"
+TICK = "2026-10-12T21:45:00+00:00"
 
 
 def test_backtest_lane_definitions() -> None:
     """The schedule passes its tick both as the tag and as `executed_at`."""
     assert lane.BACKTEST_JOB_NAME in {job.name for job in lane.defs.jobs or ()}
-    assert lane.nightly_backtest_schedule.cron_schedule == lane.BACKTEST_CRON == "30 21 * * 1-5"
+    assert lane.nightly_backtest_schedule.cron_schedule == lane.BACKTEST_CRON == "45 21 * * 1-5"
     assert lane.nightly_backtest_schedule.execution_timezone == "UTC"
 
-    tick = datetime(2026, 10, 12, 21, 30, tzinfo=UTC)
+    tick = datetime(2026, 10, 12, 21, 45, tzinfo=UTC)
     request = lane.nightly_backtest_schedule(dg.build_schedule_context(scheduled_execution_time=tick))
     assert request.run_key == tick.isoformat()
     assert request.tags.get(TICK_TAG) == tick.isoformat()
@@ -57,7 +57,8 @@ def test_the_schedule_runs_in_staging_and_production(app_env: str, status: dg.De
 def test_the_schedule_stays_outside_the_staging_capture_tick() -> None:
     from data_engine.lanes.capture import live_topt_cron
 
-    backtest_minute = 21 * 60 + 30
+    backtest_minute_field, backtest_hour_field = lane.BACKTEST_CRON.split()[:2]
+    backtest_minute = int(backtest_hour_field) * 60 + int(backtest_minute_field)
     minute, hour = live_topt_cron("staging").split()[:2]
     assert int(hour) * 60 + int(minute) - backtest_minute >= 60, "the staging tick starts an hour or more later"
 
@@ -149,7 +150,7 @@ def test_a_written_run_is_green_and_reports_its_identity(monkeypatch: pytest.Mon
 
     lane.run_nightly_backtest_op(context, lane.NightlyBacktestConfig(executed_at=TICK))
 
-    assert seen["tick"] == datetime(2026, 10, 12, 21, 30, tzinfo=UTC), "the run is dated by its tick"
+    assert seen["tick"] == datetime(2026, 10, 12, 21, 45, tzinfo=UTC), "the run is dated by its tick"
     assert [(item["ok"], item["summary"].split(":")[0]) for item in verdicts] == [(True, "succeeded")]
     assert "large_model_value_v0 cutoffs=12 trades=30" in verdicts[0]["summary"]
     metadata = context.get_output_metadata("result")
