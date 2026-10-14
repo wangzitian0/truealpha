@@ -133,12 +133,11 @@ def record_headcount(
     Deliberately not an upsert: a corrected figure is a NEW row with a later
     `knowable_at`, so history stays readable and a replay of an older cutoff is unaffected.
     """
-    if source in (*HEADCOUNT_SOURCE_PRIORITY, "manual-reviewed"):
+    if source in ("manual-review", "manual-reviewed"):
         validate_cited_headcount_fact(
             knowable_at=knowable_at,
             period_end=period_end,
             evidence_ref=evidence_ref,
-            require_period_end=(source != "10k-extraction"),
         )
     row = connection.execute(
         """
