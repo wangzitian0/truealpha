@@ -13,10 +13,20 @@ from llm_service import main
 from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
 from psycopg import sql
-from truealpha_runtime.testing import isolated_test_database, load_tool
+from truealpha_runtime.testing import db_writes_allowed, isolated_test_database, load_tool
 
 
-def test_health():
+def _stub_no_db_when_unarmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    if not db_writes_allowed():
+
+        def _offline(*_a: object, **_k: object) -> object:
+            raise psycopg.OperationalError("no ambient database in unit test")
+
+        monkeypatch.setattr(psycopg, "connect", _offline)
+
+
+def test_health(monkeypatch: pytest.MonkeyPatch):
+    _stub_no_db_when_unarmed(monkeypatch)
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
     # data_engine_parser is asserted separately (libs/runtime test_health_check.py): it
@@ -44,6 +54,7 @@ def test_health_reports_the_deployed_git_sha(monkeypatch):
     Through `settings` since #784: the value this endpoint publishes is the one the manifest
     it boot-validates against declared, not whatever sits in the process environment beside
     it. The environment is set to a DIFFERENT value here, and must lose."""
+    _stub_no_db_when_unarmed(monkeypatch)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="abc1234"))
     monkeypatch.setenv("GIT_COMMIT_SHA", "def5678-from-the-environment")
     resp = TestClient(app).get("/health")
@@ -485,7 +496,7 @@ def test_a_database_that_holds_two_environments_lists_only_the_one_it_serves(mon
     assert {entry["freshness"] for entry in payload["governed_pointers"]} == {"fresh"}
 
 
-def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
+def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Three properties in one client, because they were traded for each other.
 
     On production `GET /api/mcp` answered
@@ -510,6 +521,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
     The request path is /mcp, not /api/mcp — Traefik strips the prefix before
     forwarding, and the redirect rebuilds it by hand.
     """
+    _stub_no_db_when_unarmed(monkeypatch)
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         # Absorbed from test_app_starts_with_the_mcp_mount_and_serves_health_under
         # _its_lifespan (#348): the MCP session manager is a module-level

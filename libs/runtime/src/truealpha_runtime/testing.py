@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import uuid
+import warnings
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -72,12 +73,39 @@ def skip_or_fail(reason: str) -> None:
     pytest.skip(reason)
 
 
-def can_write_test_database() -> bool:
+GATE_MARKER = "_truealpha_db_write_gate_installed"
+
+
+def can_write_test_database(environ: Mapping[str, str] = os.environ) -> bool:
     """True when tests are authorized to write or mutate databases (CI or explicit opt-in)."""
     return (
-        os.environ.get("CI", "").strip().lower() in {"1", "true", "yes", "on"}
-        or os.environ.get("ALLOW_CLEAR_TEST", "").strip() == "1"
+        environ.get("CI", "").strip().lower() in {"1", "true", "yes", "on"}
+        or environ.get("ALLOW_CLEAR_TEST", "").strip() == "1"
     )
+
+
+def db_writes_allowed(environ: Mapping[str, str] = os.environ) -> bool:
+    """True when CI=true or ALLOW_CLEAR_TEST=1 and DATABASE_URL is explicitly configured (#1197)."""
+    return can_write_test_database(environ) and bool(environ.get("DATABASE_URL", "").strip())
+
+
+def install_db_write_gate() -> None:
+    """Gate every in-process psycopg.connect call unless db_writes_allowed() is True (#1197)."""
+    if getattr(psycopg.connect, GATE_MARKER, False):
+        return
+    real_connect = psycopg.connect
+
+    def gated_connect(*args: Any, **kwargs: Any) -> Any:
+        if db_writes_allowed():
+            return real_connect(*args, **kwargs)
+        reason = "DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1 and DATABASE_URL to allow database access"
+        warnings.warn(reason, stacklevel=2)
+        skip_or_fail(reason)
+        raise AssertionError("unreachable: skip_or_fail always raises")
+
+    setattr(gated_connect, GATE_MARKER, True)
+    setattr(gated_connect, "_real_connect", real_connect)
+    psycopg.connect = gated_connect  # type: ignore[assignment]
 
 
 def guard_db_write(database_url: str | None = None) -> str:
@@ -89,11 +117,14 @@ def guard_db_write(database_url: str | None = None) -> str:
     2. A test never defaults DATABASE_URL to port 5432 for writes.
     """
     if not can_write_test_database():
-        skip_or_fail("DB write tests require CI=true or ALLOW_CLEAR_TEST=1 to protect ambient databases")
-    url = database_url or os.environ.get("DATABASE_URL")
+        reason = "DB write tests require CI=true or ALLOW_CLEAR_TEST=1 to protect ambient databases"
+        warnings.warn(reason, stacklevel=2)
+        skip_or_fail(reason)
+    url = (database_url or os.environ.get("DATABASE_URL") or "").strip()
     if not url:
-        skip_or_fail("DATABASE_URL must be explicitly provided for DB write tests (no default to port 5432)")
-    assert url is not None
+        reason = "DATABASE_URL must be explicitly provided for DB write tests (no default to port 5432)"
+        warnings.warn(reason, stacklevel=2)
+        skip_or_fail(reason)
     return url
 
 

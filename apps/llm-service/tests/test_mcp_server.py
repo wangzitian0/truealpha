@@ -483,9 +483,21 @@ async def test_etf_virtual_company_profile_tool_reads_through_injected_reader() 
     assert structured["holdings"][0]["ticker"] == "AAPL"
 
 
-def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug() -> None:
+def _stub_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    def _raise_operational_error(*_args: Any, **_kwargs: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(psycopg, "connect", _raise_operational_error)
+
+
+def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
 
+    _stub_connection_error(monkeypatch)
     # Disconnected DB should return empty list gracefully without unhandled exception
     reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
     result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
@@ -543,9 +555,12 @@ def test_resolve_issuer_resolution_candidates_falsifiable() -> None:
     assert cik["upper_token"] == "0001045810"
 
 
-def test_postgres_company_profile_reader_handles_connection_error() -> None:
+def test_postgres_company_profile_reader_handles_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from llm_service.mcp_server import PostgresCompanyProfileReader
 
+    _stub_connection_error(monkeypatch)
     reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
     result = reader.get_company_profile(issuer_id="NVDA")
     assert result["issuer_id"] == "NVDA"
@@ -553,9 +568,12 @@ def test_postgres_company_profile_reader_handles_connection_error() -> None:
     assert result["theme_purity"] == []
 
 
-def test_postgres_etf_profile_reader_handles_connection_error() -> None:
+def test_postgres_etf_profile_reader_handles_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from llm_service.mcp_server import PostgresEtfProfileReader
 
+    _stub_connection_error(monkeypatch)
     reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
     result = reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
     assert result["fund_id"] == "fund:nasdaq:qqq"

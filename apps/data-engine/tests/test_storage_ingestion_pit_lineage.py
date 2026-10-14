@@ -375,6 +375,7 @@ def test_db_conn_fails_when_configured_postgres_is_unreachable(
     A skip turns the standing PIT and lineage checks into a green run that executes nothing.
     """
     _bare_machine(monkeypatch)
+    monkeypatch.setenv("ALLOW_CLEAR_TEST", "1")
     monkeypatch.setenv("DATABASE_URL", _CLOSED_PORT_URL)
     for name, value in runtime_flag.items():
         monkeypatch.setenv(name, value)
