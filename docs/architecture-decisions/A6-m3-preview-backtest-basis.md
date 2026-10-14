@@ -126,3 +126,19 @@ of the projector (`datahub/share_basis.py`).
 - A one-day move to x1.5 or more, or to x0.667 or less, is a split or an event. The stored series
   cannot tell which. So the seed excludes the issuer for that night (`close_jump_beyond_series`).
 - A lag of two sessions or more excludes the issuer (`split_series_do_not_cover_the_window`).
+
+## Status update 2026-10-14 (#1265)
+
+Decision 7 gains a ninth value: `run_id` also hashes the price symbols.
+
+- Staging run `backtest-run:7b4accd0` selected GOOG at 2025-03-31 and 2025-06-30. Alphabet is GOOG in
+  lineage, and the store holds GOOGL bars only. The run found no open, so half of the portfolio
+  stayed cash for two quarters. The stored limitations named only the benchmark side.
+- An issuer is priced by its price symbol (`price_series.resolve_price_symbol`). That is the first
+  listing ticker that holds both stored daily series. The lineage ticker comes first, then the other
+  listing tickers in sorted order. The listing-identity cells name the listing tickers.
+- The projector, the backtest and the benchmark read the series of the price symbol. Each output
+  keeps the lineage ticker. `binding.price_symbols` records each ticker that another listing prices,
+  and the limitations name it. Two issuers on one price symbol stop the run.
+- An issuer without such a listing keeps its lineage ticker. A selected symbol without an open on its
+  fill session stays cash. The limitations name the symbol with its cutoffs, and the run continues.

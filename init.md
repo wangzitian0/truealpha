@@ -386,7 +386,10 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   the rows of both generations at a cutoff and evaluates the canonical rows only. A fact is
   admitted when its filed date is before the cutoff date. Its `knowable_at` is the end of the
   filed day. Each input keeps its own filed date and its own `fiscal_period`. `last_close` is the
-  unadjusted close of the last session before the cutoff date. The share count is put on the
+  unadjusted close of the last session before the cutoff date. The close and the splits come from
+  the issuer's price symbol (#1265): the first listing ticker that holds both stored daily series,
+  lineage ticker first. The backtest reads the same symbol, and each output names the lineage
+  ticker. The share count is put on the
   share basis of that close: a split after the count's basis date, and on or before the close's
   session, multiplies it. The basis date of a cover-page count is its own date. The basis date of
   a statement count is its filing date, because the filing restates it for an earlier split. The
