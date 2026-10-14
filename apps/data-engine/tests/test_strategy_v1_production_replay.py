@@ -23,7 +23,7 @@ tech 5, large_model_native 1. Definition 0.1.0 selected JNJ then NFLX on 2026-10
 from __future__ import annotations
 
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from data_engine.datahub.strategy_bridge import load_strategy_definition
@@ -88,6 +88,7 @@ def _issuers() -> tuple[list[IssuerInput], dict[str, Decimal]]:
             IssuerInput(
                 issuer_id=ticker,
                 records={key: (value, _CONFIDENCE) for key, value in records.items()},
+                knowable_at=dict.fromkeys(records, _CUTOFF - timedelta(days=3)),
                 issuer_class=IssuerClass.FINANCIAL if ticker in _FINANCIAL else IssuerClass.NON_FINANCIAL,
             )
         )

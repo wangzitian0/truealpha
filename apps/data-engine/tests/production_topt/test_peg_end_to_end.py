@@ -98,17 +98,20 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
     assert bundle.knowable_at is not None and bundle.knowable_at.date() >= date(2026, 2, 15)
 
     # 2. The evaluator assembles PEG from the inputs the bridge would have landed.
+    records = {
+        "gross_profit": (Decimal("40000"), Decimal("0.92")),
+        "total_assets": (Decimal("100000"), Decimal("0.92")),
+        "headcount": (Decimal("100"), Decimal("0.70")),
+        "revenue": (Decimal("50000"), Decimal("0.92")),
+        "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
+        "last_close": (Decimal("100"), Decimal("0.85")),
+        "net_income": (bundle.net_income, Decimal("0.92")),
+    }
     issuer = IssuerInput(
         issuer_id=_ISSUER,
-        records={
-            "gross_profit": (Decimal("40000"), Decimal("0.92")),
-            "total_assets": (Decimal("100000"), Decimal("0.92")),
-            "headcount": (Decimal("100"), Decimal("0.70")),
-            "revenue": (Decimal("50000"), Decimal("0.92")),
-            "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
-            "last_close": (Decimal("100"), Decimal("0.85")),
-            "net_income": (bundle.net_income, Decimal("0.92")),
-        },
+        records=records,
+        # The bridge stamps every row of a payload with the knowable_at of its observation.
+        knowable_at=dict.fromkeys(records, bundle.knowable_at),
         # The series crosses as periods since 0043, and the factor -- not this adapter --
         # reduces it. Tagged exactly as the bridge tags it.
         periodic_records={

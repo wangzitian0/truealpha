@@ -1,9 +1,9 @@
 """Single-source evaluator for the large_model_value_v0 decision algorithm (#393).
 
-The strategy DECISION algorithm — missing-input exclusion, the consumed-confidence
-floor, the capital-adjusted labor-efficiency / price-to-sales / three-tier factor
-computation, the tier-band valuation verdict, ranking, top-N selection and equal
-weighting — used to be hand-written twice: once in the #26 replay
+The strategy DECISION algorithm — missing-input exclusion, the input-age limit, the
+consumed-confidence floor, the capital-adjusted labor-efficiency / price-to-sales /
+three-tier factor computation, the tier-band valuation verdict, ranking, top-N selection
+and equal weighting — used to be hand-written twice: once in the #26 replay
 (`data_engine.core_strategy_replay`) and once in the #21 golden oracle
 (`truealpha_contracts` `test_strategy`). The two copies could (and did) diverge —
 the replay rejected at the band *midpoint* while the spec rejects at the band
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from types import MappingProxyType
 
@@ -97,6 +97,16 @@ def _recorded_only_input_keys(basis: ValuationBasis) -> frozenset[str]:
     return frozenset(_input_keys("price_to_sales")) - frozenset(_input_keys(basis.value))
 
 
+def _required_inputs(basis: ValuationBasis) -> tuple[tuple[str, ExclusionReason], ...]:
+    """The inputs whose absence excludes an issuer under ``basis``, with their exclusion reasons.
+
+    The missing-input rule and the input-age limit (#1255) both read this list. A key that
+    cannot exclude by absence cannot exclude by age.
+    """
+    recorded_only = _recorded_only_input_keys(basis)
+    return tuple((key, reason) for key, reason in _REQUIRED_INPUT_REASONS if key not in recorded_only)
+
+
 @dataclass(frozen=True)
 class LaborEfficiencyMetric:
     """One named GPPE metric the strategy can rank an issuer on (#1176)."""
@@ -163,6 +173,11 @@ class IssuerInput:
     ``records`` maps input key -> (value, confidence); a missing key means the
     input was unavailable at the cutoff.
 
+    ``knowable_at`` maps input key -> the instant when the winning observation of that key
+    became knowable (#1255). A periodic key uses the observation that answers as its scalar
+    in ``records``: the latest period. The field has no default. A default would let a
+    producer skip the input-age limit without an error.
+
     ``periodic_records`` maps input key -> fiscal period -> (value, confidence) for the
     inputs that describe a PERIOD rather than an instant. Additive and defaulted: the six
     point-in-time inputs never had periods and still do not. It exists so a multi-period
@@ -173,6 +188,7 @@ class IssuerInput:
 
     issuer_id: str
     records: Mapping[str, tuple[Decimal, Decimal]]
+    knowable_at: Mapping[str, datetime]
     periodic_records: Mapping[str, Mapping[str, tuple[Decimal, Decimal]]] = field(default_factory=dict)
     #: The issuer's operating class. It selects the labor-efficiency metric. None means no class.
     issuer_class: IssuerClass | None = None
@@ -275,6 +291,21 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
     return facts
 
 
+def _has_stale_required_input(
+    issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime, maximum_age: timedelta
+) -> bool:
+    """Whether the latest observation of any required input is older than ``maximum_age`` (#1255).
+
+    The test reads one instant per key. A periodic key answers with its latest period, so its older
+    periods never count. An age equal to the limit is not stale. A required key without a
+    ``knowable_at`` entry raises: a producer that skips the rule must fail, never pass.
+    """
+    unknown = [key for key in keys if key not in issuer.knowable_at]
+    if unknown:
+        raise ValueError(f"{issuer.issuer_id}: knowable_at lacks the required inputs {unknown}")
+    return any(as_of - issuer.knowable_at[key] > maximum_age for key in keys)
+
+
 def _evaluate_issuer(
     issuer: IssuerInput,
     *,
@@ -294,12 +325,19 @@ def _evaluate_issuer(
     basis = definition.valuation_basis
 
     recorded_only = _recorded_only_input_keys(basis)
-    present = set(issuer.records)
-    missing = next(
-        (reason for key, reason in _REQUIRED_INPUT_REASONS if key not in present and key not in recorded_only), None
-    )
+    required = _required_inputs(basis)
+    missing = next((reason for key, reason in required if key not in issuer.records), None)
     if missing is not None:
         return _excluded(issuer.issuer_id, missing, confidence=None), None
+
+    # The age limit comes after the missing-input rule and before the confidence floor (#1255).
+    if _has_stale_required_input(
+        issuer,
+        [key for key, _reason in required],
+        as_of=as_of,
+        maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
+    ):
+        return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, confidence=None), None
 
     consumed_confidence = min(
         confidence for key, (_value, confidence) in issuer.records.items() if key not in recorded_only
@@ -486,7 +524,10 @@ def evaluate_cutoff(
 
     `labor_efficiency_by_class` is the binding that selects each issuer's labor metric. An issuer
     whose class has no entry is excluded with `missing_issuer_class`. Replays of the frozen #21
-    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name."""
+    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name.
+
+    An issuer is excluded with `stale_required_input` when any required input became knowable more
+    than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255)."""
 
     decisions = [
         _evaluate_issuer(

@@ -8,7 +8,7 @@ implementation to drift from.
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from importlib import resources
 
@@ -37,6 +37,11 @@ def _s(value: object) -> str | None:
     return None if value is None else str(value)
 
 
+def _known_before(records: dict, cutoff: datetime, *, days: int = 3) -> dict[str, datetime]:
+    """The `knowable_at` of every input: `days` days before the cutoff, far inside the age limit."""
+    return dict.fromkeys(records, cutoff - timedelta(days=days))
+
+
 def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
     raw = resources.files("truealpha_contracts.data").joinpath(LIVE_STRATEGY_DEFINITION_RESOURCE).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
@@ -57,6 +62,10 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
                 issuer_id=decision["issuer"]["id"],
                 records={
                     record["input_key"]: (Decimal(record["value"]), Decimal(record["confidence"]))
+                    for record in decision["inputs"]
+                },
+                knowable_at={
+                    record["input_key"]: datetime.fromisoformat(record["knowable_at"].replace("Z", "+00:00"))
                     for record in decision["inputs"]
                 },
             )
@@ -149,18 +158,16 @@ def test_in_band_issuer_is_not_rejected_above_band() -> None:
     # Invariant guarding the #393 regression: an issuer whose P/GP sits between its
     # tier-band midpoint and upper bound must NOT be rejected — rejection is only
     # above the upper bound.
-    issuer = IssuerInput(
-        issuer_id="issuer:inband",
-        records={
-            "gross_profit": (Decimal("2000000"), Decimal("0.9")),  # -> tech-tier labor efficiency 2000000
-            "total_assets": (Decimal("0"), Decimal("0.9")),
-            "headcount": (Decimal("1"), Decimal("0.9")),
-            "revenue": (Decimal("1"), Decimal("0.9")),
-            "shares_outstanding": (Decimal("26000000"), Decimal("0.9")),  # -> current P/GP = 13.0
-            "last_close": (Decimal("1"), Decimal("0.9")),
-        },
-    )
+    records = {
+        "gross_profit": (Decimal("2000000"), Decimal("0.9")),  # -> tech-tier labor efficiency 2000000
+        "total_assets": (Decimal("0"), Decimal("0.9")),
+        "headcount": (Decimal("1"), Decimal("0.9")),
+        "revenue": (Decimal("1"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("26000000"), Decimal("0.9")),  # -> current P/GP = 13.0
+        "last_close": (Decimal("1"), Decimal("0.9")),
+    }
     cutoff = datetime.fromisoformat("2026-06-30T23:59:59+00:00")
+    issuer = IssuerInput(issuer_id="issuer:inband", records=records, knowable_at=_known_before(records, cutoff))
     [decision] = evaluate_cutoff(
         [issuer],
         labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
@@ -216,6 +223,7 @@ def _peg_inputs(*, series: dict | None = None, **overrides: str) -> IssuerInput:
     return IssuerInput(
         issuer_id="issuer:peg",
         records=records,
+        knowable_at=_known_before(records, _PEG_CUTOFF),
         periodic_records={"net_income": _PEG_SERIES if series is None else series},
     )
 
@@ -301,6 +309,7 @@ def test_peg_rank_orders_by_peg_without_touching_selection() -> None:
         IssuerInput(
             issuer_id="issuer:slow",
             records=_peg_inputs().records,
+            knowable_at=_peg_inputs().knowable_at,
             periodic_records={"net_income": _SLOW_SERIES},
         ),
     ]
@@ -429,18 +438,16 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
 
 def test_definition_1_0_0_tiers_a_low_margin_issuer_on_labor_efficiency_only() -> None:
     """1.0.0 has no margin gate: labor efficiency 1,500,000 is tech at a 0.10 margin."""
+    records = {
+        "gross_profit": (Decimal("1500000"), Decimal("0.9")),
+        "total_assets": (Decimal("0"), Decimal("0.9")),
+        "headcount": (Decimal("1"), Decimal("0.9")),
+        "revenue": (Decimal("15000000"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("18000000"), Decimal("0.9")),
+        "last_close": (Decimal("1"), Decimal("0.9")),
+    }
     decision = _evaluate_v1(
-        IssuerInput(
-            issuer_id="issuer:thin",
-            records={
-                "gross_profit": (Decimal("1500000"), Decimal("0.9")),
-                "total_assets": (Decimal("0"), Decimal("0.9")),
-                "headcount": (Decimal("1"), Decimal("0.9")),
-                "revenue": (Decimal("15000000"), Decimal("0.9")),
-                "shares_outstanding": (Decimal("18000000"), Decimal("0.9")),
-                "last_close": (Decimal("1"), Decimal("0.9")),
-            },
-        )
+        IssuerInput(issuer_id="issuer:thin", records=records, knowable_at=_known_before(records, _V1_CUTOFF))
     )["issuer:thin"]
     assert decision.tier == "tech"
     assert decision.current_price_to_gross_profit == Decimal("12.0000")
@@ -468,10 +475,19 @@ _BANK_RECORDS_WITH_TCE = {
 }
 
 
+def _bank(records: dict) -> IssuerInput:
+    return IssuerInput(
+        issuer_id="issuer:bank",
+        records=records,
+        knowable_at=_known_before(records, _PEG_CUTOFF),
+        issuer_class=IssuerClass.FINANCIAL,
+    )
+
+
 def test_evaluator_ranks_a_bank_on_measured_tangible_common_equity() -> None:
     # Banking v1 charges measured TCE: 340B equity - 10B preferred - 6B goodwill and intangibles = 324B.
     # (86.807B - 324B * 0.05) / 318,512 = about +$221.7k per employee on this base.
-    issuer = IssuerInput(issuer_id="issuer:bank", records=_BANK_RECORDS_WITH_TCE, issuer_class=IssuerClass.FINANCIAL)
+    issuer = _bank(_BANK_RECORDS_WITH_TCE)
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -483,7 +499,7 @@ def test_evaluator_ranks_a_bank_on_measured_tangible_common_equity() -> None:
 def test_evaluator_excludes_a_bank_without_tangible_common_equity() -> None:
     # No fallback value: the bank is excluded with the named reason, never ranked on total assets.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "goodwill"}
-    issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
+    issuer = _bank(records)
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -495,7 +511,12 @@ def test_evaluator_excludes_a_bank_without_tangible_common_equity() -> None:
 def test_evaluator_charges_the_uniform_base_to_a_non_financial_issuer_above_fifteen_times() -> None:
     # Assets / gross profit = 50.9 > 15. The uniform charge applies: no 8% base for a non-financial issuer.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key not in _TCE_KEYS}
-    issuer = IssuerInput(issuer_id="issuer:acme", records=records, issuer_class=IssuerClass.NON_FINANCIAL)
+    issuer = IssuerInput(
+        issuer_id="issuer:acme",
+        records=records,
+        knowable_at=_known_before(records, _PEG_CUTOFF),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -545,7 +566,10 @@ _CLASSLESS_SHAPES = {
 @pytest.mark.parametrize("shape", sorted(_CLASSLESS_SHAPES))
 def test_a_live_issuer_without_a_class_is_unavailable_for_labor_efficiency(shape: str) -> None:
     # No class, no labor-efficiency metric. The live path does not fall back to the uniform charge.
-    issuer = IssuerInput(issuer_id="issuer:unclassified", records=_CLASSLESS_SHAPES[shape])
+    records = _CLASSLESS_SHAPES[shape]
+    issuer = IssuerInput(
+        issuer_id="issuer:unclassified", records=records, knowable_at=_known_before(records, _PEG_CUTOFF)
+    )
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -564,7 +588,8 @@ def test_the_frozen_uniform_binding_ranks_a_classless_issuer_on_the_uniform_char
     # The #21 golden replay passes this binding by name. Its classless decisions stay uniform.
     from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING
 
-    issuer = IssuerInput(issuer_id="issuer:acme", records=_without(_TCE_KEYS))
+    records = _without(_TCE_KEYS)
+    issuer = IssuerInput(issuer_id="issuer:acme", records=records, knowable_at=_known_before(records, _PEG_CUTOFF))
     [decision] = evaluate_cutoff(
         [issuer],
         definition=_definition(),
@@ -579,7 +604,7 @@ def test_the_frozen_uniform_binding_ranks_a_classless_issuer_on_the_uniform_char
 def test_evaluator_excludes_a_bank_without_preferred_stock_value() -> None:
     # No zero stand-in: a bank without a measured preferred value is unavailable with its own reason.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "preferred_stock_value"}
-    issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
+    issuer = _bank(records)
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -591,9 +616,17 @@ def test_evaluator_excludes_a_bank_without_preferred_stock_value() -> None:
 def test_each_decision_names_the_labor_efficiency_metric_it_was_computed_with() -> None:
     # #1176: the name comes from the same binding that selected the metric. A FINANCIAL issuer is named
     # for banking v1, a non-financial issuer for uniform v0, and an issuer with no class carries no name.
-    bank = IssuerInput(issuer_id="issuer:bank", records=_BANK_RECORDS_WITH_TCE, issuer_class=IssuerClass.FINANCIAL)
-    acme = IssuerInput(issuer_id="issuer:acme", records=_without(_TCE_KEYS), issuer_class=IssuerClass.NON_FINANCIAL)
-    unclassified = IssuerInput(issuer_id="issuer:unclassified", records=_without(_TCE_KEYS))
+    bank = _bank(_BANK_RECORDS_WITH_TCE)
+    acme_records = _without(_TCE_KEYS)
+    acme = IssuerInput(
+        issuer_id="issuer:acme",
+        records=acme_records,
+        knowable_at=_known_before(acme_records, _PEG_CUTOFF),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    unclassified = IssuerInput(
+        issuer_id="issuer:unclassified", records=acme_records, knowable_at=_known_before(acme_records, _PEG_CUTOFF)
+    )
     decisions = {
         d.issuer_id: d
         for d in evaluate_cutoff(
@@ -611,7 +644,7 @@ def test_each_decision_names_the_labor_efficiency_metric_it_was_computed_with() 
 def test_an_exclusion_after_the_metric_is_chosen_still_names_it() -> None:
     # A bank with no preferred value is excluded after its metric was selected. The name is still recorded.
     records = {key: value for key, value in _BANK_RECORDS_WITH_TCE.items() if key != "preferred_stock_value"}
-    issuer = IssuerInput(issuer_id="issuer:bank", records=records, issuer_class=IssuerClass.FINANCIAL)
+    issuer = _bank(records)
     [decision] = evaluate_cutoff(
         [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
     )
@@ -643,6 +676,10 @@ def test_evaluator_reproduces_every_v1_golden_decision_exactly() -> None:
                 issuer_id=decision["issuer"]["id"],
                 records={
                     record["input_key"]: (Decimal(record["value"]), Decimal(record["confidence"]))
+                    for record in decision["inputs"]
+                },
+                knowable_at={
+                    record["input_key"]: datetime.fromisoformat(record["knowable_at"].replace("Z", "+00:00"))
                     for record in decision["inputs"]
                 },
             )
@@ -684,17 +721,15 @@ def _v1_issuer(
     """With no assets and one employee, labor efficiency equals gross profit exactly; a
     separate gross profit (for a nonpositive case) breaks that on purpose."""
     profit = labor_efficiency if gross_profit is None else gross_profit
-    return IssuerInput(
-        issuer_id=issuer_id,
-        records={
-            "gross_profit": (Decimal(profit), Decimal("0.9")),
-            "total_assets": (Decimal("0"), Decimal("0.9")),
-            "headcount": (Decimal("1"), Decimal("0.9")),
-            "revenue": (Decimal(market_value) * 2, Decimal("0.9")),
-            "shares_outstanding": (Decimal(market_value), Decimal("0.9")),
-            "last_close": (Decimal("1"), Decimal("0.9")),
-        },
-    )
+    records = {
+        "gross_profit": (Decimal(profit), Decimal("0.9")),
+        "total_assets": (Decimal("0"), Decimal("0.9")),
+        "headcount": (Decimal("1"), Decimal("0.9")),
+        "revenue": (Decimal(market_value) * 2, Decimal("0.9")),
+        "shares_outstanding": (Decimal(market_value), Decimal("0.9")),
+        "last_close": (Decimal("1"), Decimal("0.9")),
+    }
+    return IssuerInput(issuer_id=issuer_id, records=records, knowable_at=_known_before(records, _V1_CUTOFF))
 
 
 def _evaluate_v1(*issuers: IssuerInput) -> dict[str, EvaluatedDecision]:
@@ -770,7 +805,7 @@ def _recorded_ps_issuer(**revenue: str) -> IssuerInput:
     }
     if "value" in revenue:
         records["revenue"] = (Decimal(revenue["value"]), Decimal(revenue.get("confidence", "0.9")))
-    return IssuerInput(issuer_id="issuer:ps", records=records)
+    return IssuerInput(issuer_id="issuer:ps", records=records, knowable_at=_known_before(records, _V1_CUTOFF))
 
 
 @pytest.mark.parametrize(
