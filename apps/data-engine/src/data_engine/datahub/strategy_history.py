@@ -32,6 +32,11 @@ Rules this module enforces:
 * Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
   and under its entity UUID. The universe is the set of entities those ids name, and each history
   is written under the entity UUID. No row is written under a legacy id.
+* One price symbol per issuer (#1265). The close and the splits come from the first listing
+  ticker that holds both stored daily series: the lineage ticker first, then the other tickers
+  that the listing-identity cells name, in sorted order. Alphabet is GOOG in lineage, and the
+  store holds GOOGL only, so GOOGL prices it. An issuer without such a listing keeps its lineage
+  ticker and gets no close.
 * The run is idempotent. The unique index of the table includes ``recorded_at``, so a second
   insert of the same fact would duplicate the row. The projector skips a row that exists for
   the same issuer, cutoff, input key and fiscal period with the same value and ``knowable_at``.
@@ -64,7 +69,12 @@ from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
 from data_engine.datahub.canonical_issuer import stored_entity_of
-from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
+from data_engine.datahub.price_series import (
+    load_daily_series,
+    resolve_price_symbol,
+    split_events_by_symbol,
+    symbols_with_both_series,
+)
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
@@ -132,12 +142,21 @@ class HistoryIssuer:
     issuer_id: str
     instrument_id: str
     listing_id: str
+    #: The lineage ticker. Every output names the issuer by it.
     ticker: str
     cik: int
     operating_branch: OperatingBranch
     revenue_proxy_allowed: bool = False
     predecessor_cik: int | None = None
     predecessor_signed: bool = False
+    #: The listing ticker whose stored daily series price the issuer (#1265, ``resolve_price_symbol``).
+    #: None means that no listing holds both series.
+    price_symbol: str | None = None
+
+    @property
+    def series_symbol(self) -> str:
+        """The symbol that the price readers look up: the price symbol, else the lineage ticker."""
+        return self.price_symbol or self.ticker
 
 
 @dataclass(frozen=True)
@@ -391,6 +410,38 @@ def latest_financial_observations(
     return {str(entity_id): (dict(payload), str(record_id)) for entity_id, payload, record_id in rows}
 
 
+# The live seed reads the same cells for one capture run (strategy_bridge). This read spans every run.
+_ENTITY_LISTING_TICKERS_SQL = """
+select distinct named.entity_id, p.normalized_payload ->> 'ticker'
+from unnest(%s::text[], %s::text[]) as named (issuer_id, entity_id)
+join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = named.issuer_id
+join staging.capture_normalized_observations o on o.observation_id = p.observation_id
+where o.semantic_type = 'listing-identity'
+  and o.knowable_at <= %s
+  and p.normalized_payload ->> 'ticker' is not null
+"""
+
+
+def listing_tickers(
+    connection: psycopg.Connection[Any], ids_by_entity: Mapping[str, Sequence[str]], *, known_at: datetime
+) -> dict[str, tuple[str, ...]]:
+    """Per entity, the tickers of its listings that the stored listing-identity cells name (#1265).
+
+    A cell names the issuer id that its capture used: the entity UUID, or a legacy id before the
+    identity unification. So the read covers every id of the entity. A cell knowable after
+    ``known_at`` is not read. Alphabet's cells name GOOG and GOOGL.
+    """
+    pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
+    rows = connection.execute(
+        _ENTITY_LISTING_TICKERS_SQL,
+        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], known_at),
+    ).fetchall()
+    found: dict[str, set[str]] = {}
+    for entity_id, ticker in rows:
+        found.setdefault(str(entity_id), set()).add(str(ticker))
+    return {entity_id: tuple(sorted(tickers)) for entity_id, tickers in sorted(found.items())}
+
+
 def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, known_at: datetime | None) -> str | None:
     """The listing's ticker. A legacy id spells it. A canonical id resolves through its alias."""
     if is_uuid(listing_id):
@@ -490,7 +541,8 @@ def canonical_history_issuers(
     Each id resolves to its entity through ``stored_entity_of``: it reads the aliases, never
     mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the
     newest financial-fact observation recorded under any of its ids, so an issuer captured only
-    under its legacy id still resolves, under its UUID.
+    under its legacy id still resolves, under its UUID. Each issuer carries its price symbol
+    (#1265), so the projector and the backtest read the same series.
     """
     if known_at.tzinfo is None or known_at.utcoffset() is None:
         raise ValueError("known_at must carry a time zone")
@@ -517,8 +569,9 @@ def canonical_history_issuers(
         else:
             issuers.append(dataclasses.replace(issuer, issuer_id=entity))
     resolved = {issuer.issuer_id for issuer in issuers}
+    targets = _with_predecessors(connection, issuers, ids_by_entity)
     return CanonicalIssuers(
-        issuers=tuple(_with_predecessors(connection, issuers, ids_by_entity)),
+        issuers=tuple(_with_price_symbols(connection, targets, ids_by_entity, known_at=known_at)),
         canonical_ids=frozenset(entity for entity, ids in ids_by_entity.items() if entity in ids),
         merged={issuer_id: entity for entity in resolved for issuer_id in ids_by_entity[entity] if issuer_id != entity},
         unresolved=tuple(sorted(unresolved)),
@@ -576,6 +629,35 @@ def _with_predecessors(
     return resolved
 
 
+def _with_price_symbols(
+    connection: psycopg.Connection[Any],
+    issuers: Sequence[HistoryIssuer],
+    ids_by_entity: Mapping[str, Sequence[str]],
+    *,
+    known_at: datetime,
+) -> list[HistoryIssuer]:
+    """Each issuer with the price symbol that ``resolve_price_symbol`` gives for its listings (#1265).
+
+    The listing tickers come from the listing-identity cells under every id of the entity. The
+    priced symbols come from the stored series of the lineage tickers and those listing tickers.
+    """
+    if not issuers:
+        return []
+    tickers = listing_tickers(
+        connection,
+        {issuer.issuer_id: sorted({issuer.issuer_id, *ids_by_entity.get(issuer.issuer_id, ())}) for issuer in issuers},
+        known_at=known_at,
+    )
+    candidates = {issuer.ticker for issuer in issuers} | {ticker for names in tickers.values() for ticker in names}
+    priced = symbols_with_both_series(connection, sorted(candidates))
+    return [
+        dataclasses.replace(
+            issuer, price_symbol=resolve_price_symbol(issuer.ticker, tickers.get(issuer.issuer_id, ()), priced)
+        )
+        for issuer in issuers
+    ]
+
+
 # -- projection -------------------------------------------------------------------------
 
 
@@ -603,7 +685,8 @@ def project_issuer_rows(
 
     The adapter runs for the day before the cutoff date. ``build_bundle`` admits a fact filed on
     or before that day, which is the same set as a fact filed before the cutoff date. The
-    headcount extractor admits a fact knowable through the end of that same day.
+    headcount extractor admits a fact knowable through the end of that same day. The close and
+    the splits are those of the issuer's ``series_symbol`` (#1265).
     """
     documents: dict[int, tuple[bytes, dict[str, Any]] | None] = {}
 
@@ -654,14 +737,14 @@ def project_issuer_rows(
             undated += len(expected) - len(projected)
         else:
             no_outcome += 1
-        bar = last_close(issuer.ticker, cutoff_at)
+        bar = last_close(issuer.series_symbol, cutoff_at)
         for input_key, value, confidence, knowable_at, fiscal_period in projected:
             row = HistoryRow(
                 issuer.issuer_id, cutoff_at, input_key, Decimal(str(value)), confidence, knowable_at, fiscal_period
             )
             if input_key == SHARES_KEY and fiscal_period is None and bar is not None:
                 if splits is None:
-                    splits = split_events(issuer.ticker)
+                    splits = split_events(issuer.series_symbol)
                 basis = share_count_as_of(
                     (payload.get("vintage") or {}).get(SHARES_KEY),
                     row.value,
@@ -800,7 +883,7 @@ def run_strategy_history(
     splits = (
         split_events
         if split_events is not None
-        else postgres_split_events(connection, [issuer.ticker for issuer in issuers])
+        else postgres_split_events(connection, [issuer.series_symbol for issuer in issuers])
     )
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
     inserted = already_present = no_outcome = undated = split_adjusted = 0

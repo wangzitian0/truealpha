@@ -13,20 +13,25 @@ One path, from staging to mart:
    the risk-free rate are the ones the live replay uses.
 3. Prices. Unadjusted daily bars (``adjust = 'none'``) and split-adjusted daily bars
    (``adjust = 'splits'``), the latest vintage of each session. The ratio of the two closes
-   gives the split events (``factors.backtest.corporate_actions``). Before the simulation, a
-   share-basis check (#1270) stops the run when a winning share count predates a split that the
-   close of its cutoff follows. History rows are append-only, so only a new run of
+   gives the split events (``factors.backtest.corporate_actions``). Each issuer reads the series
+   of its price symbol (#1265, ``price_series.resolve_price_symbol``): Alphabet is GOOG in lineage
+   and reads GOOGL. The price book names those series by the lineage ticker, so every output
+   names the issuer as the decisions do. Two issuers on one price symbol stop the run. Before the
+   simulation, a share-basis check (#1270) stops the run when a winning share count predates a
+   split that the close of its cutoff follows. History rows are append-only, so only a new run of
    ``strategy_history_projection_pipeline`` corrects that count.
 4. Simulation. ``factors.backtest.engine`` with the definition's execution, transaction-cost,
    total-return and sizing rules as its only parameters. The benchmark is an equal weight of the
    issuers with inputs at the first cutoff, bought at the first fill session open and held, on the
    same prices and costs. A benchmark symbol without an open on that session is bought at its next
-   open. A symbol that never opens stays cash, and the run's limitations name it.
+   open. A symbol that never opens stays cash, and the run's limitations name it. A strategy
+   symbol without an open on its fill session also stays cash, and the limitations name it with
+   its cutoffs.
 5. Persistence. ``run_id`` is the content hash of the engine label, the deployed code identity
-   (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the benchmark
-   universe, the price snapshot and the run parameters. A rerun of one release on the same data
-   writes nothing. The same ``run_id`` with a different result stops the run. In staging and
-   production, a run without a code identity stops before it writes.
+   (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the price
+   symbols, the benchmark universe, the price snapshot and the run parameters. A rerun of one
+   release on the same data writes nothing. The same ``run_id`` with a different result stops the
+   run. In staging and production, a run without a code identity stops before it writes.
 
 No dividend source exists, so each run is a price return. The run records that on
 ``mart.backtest_runs.claim_ceiling``.
@@ -240,18 +245,32 @@ def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
 # -- prices -----------------------------------------------------------------------------
 
 
-def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
-    """Unadjusted bars and the split events the two series show. Raise on an ambiguous split."""
+def price_book(
+    unadjusted: DailySeries, split_adjusted: DailySeries, *, labels: Mapping[str, str] | None = None
+) -> PriceBook:
+    """Unadjusted bars and the split events the two series show. Raise on an ambiguous split.
+
+    ``labels`` maps a stored symbol to the name that the book gives its bars and splits (#1265):
+    the lineage ticker of the issuer that the symbol prices. A symbol without a label keeps its
+    stored name. A split derivation error names the stored symbol.
+    """
+    names = {symbol: (labels or {}).get(symbol, symbol) for symbol in sorted(unadjusted)}
+    if len(set(names.values())) != len(names):
+        raise ValueError(f"two stored symbols take one name in the price book: {names}")
     bars = {
-        symbol: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
+        names[symbol]: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
         for symbol in sorted(unadjusted)
     }
     events = split_events_by_symbol(sorted(unadjusted), unadjusted, split_adjusted)
-    return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
+    splits = sorted(
+        (replace(event, symbol=names[symbol]) for symbol, found in events.items() for event in found),
+        key=lambda event: (event.symbol, event.ex_date),
+    )
+    return PriceBook(bars=bars, splits=tuple(splits))
 
 
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:
-    """The content hash of every bar the run read."""
+    """The content hash of every bar the run read, under its stored symbol. The binding names its label."""
     rows = [
         [adjust, symbol, day.isoformat(), str(open_), str(close)]
         for adjust, series in ((UNADJUSTED, unadjusted), (SPLIT_ADJUSTED, split_adjusted))
@@ -324,6 +343,22 @@ def require_current_share_basis(
         )
 
 
+# -- price symbols ----------------------------------------------------------------------
+
+
+def _require_one_issuer_per_price_symbol(issuers: Sequence[HistoryIssuer]) -> None:
+    """Raise when two issuers read one stored series (#1265). The run would trade one series for both."""
+    priced: dict[str, list[str]] = {}
+    for issuer in issuers:
+        priced.setdefault(issuer.series_symbol, []).append(issuer.ticker)
+    shared = {symbol: sorted(tickers) for symbol, tickers in sorted(priced.items()) if len(tickers) > 1}
+    if shared:
+        raise RuntimeError(
+            "two issuers resolve to one price symbol: "
+            + "; ".join(f"{symbol} prices {', '.join(tickers)}" for symbol, tickers in shared.items())
+        )
+
+
 # -- the run ----------------------------------------------------------------------------
 
 
@@ -385,6 +420,11 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     tickers = [issuer.ticker for issuer in canonical.issuers]
     if len(set(tickers)) != len(tickers):
         raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
+    # #1265: the same holds for the stored series that price the issuers.
+    _require_one_issuer_per_price_symbol(canonical.issuers)
+    # Each stored series and the lineage ticker that the outputs name it by.
+    labels = {issuer.series_symbol: issuer.ticker for issuer in canonical.issuers}
+    price_symbols = {ticker: symbol for symbol, ticker in sorted(labels.items()) if symbol != ticker}
     canonical_rows = {
         cutoff: [row for row in rows if row[0] in canonical.canonical_ids] for cutoff, rows in rows_by_cutoff.items()
     }
@@ -406,7 +446,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
                 outcomes[key] = outcomes.get(key, 0) + count
         raise RuntimeError(f"no cutoff of {len(cutoffs)} selected an issuer; outcomes {dict(sorted(outcomes.items()))}")
 
-    symbols = sorted(tickers)
+    symbols = sorted(labels)
     unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
     if not unadjusted:
         raise BacktestPending(f"no unadjusted daily bars for {len(symbols)} symbols")
@@ -414,7 +454,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     missing_adjusted = sorted(set(unadjusted) - set(split_adjusted))
     if missing_adjusted:
         raise RuntimeError(f"no split-adjusted daily bars, so no split events, for {missing_adjusted}")
-    book = price_book(unadjusted, split_adjusted)
+    book = price_book(unadjusted, split_adjusted, labels=labels)
     # History rows are append-only, so a projector fix reaches a stale share count only through a new
     # projector run (#1270). Stop before the simulation: a green run on that count has wrong picks.
     require_current_share_basis(
@@ -459,6 +499,8 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         "issuers": sorted(
             [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
         ),
+        # #1265: each lineage ticker that the bars of another listing price, and that listing.
+        "price_symbols": price_symbols,
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
         "risk_free_rate": str(live_risk_free_rate(cutoffs[-1])) if cutoffs else str(live_risk_free_rate()),
         "capital": str(NOTIONAL_CAPITAL),
@@ -477,6 +519,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         unresolved=canonical.unresolved,
         ignored_legacy_ids=sorted(canonical.merged),
         benchmark_universe=first_universe,
+        price_symbols=price_symbols,
         cost_basis_points=definition.transaction_cost.basis_points,
     )
     inserted = persist_backtest_run(connection, record)
@@ -523,16 +566,49 @@ def benchmark_never_filled(benchmark: Simulation) -> tuple[str, ...]:
     return tuple(sorted(set(benchmark.fills[0].unfilled_symbols) - late))
 
 
-def run_limitations(never_filled: Sequence[str]) -> tuple[str, ...]:
-    """The limitations stored with one run: the standing ones and those of this run's data."""
-    if not never_filled:
-        return LIMITATIONS
-    return (
-        *LIMITATIONS,
-        "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole run: "
-        + ", ".join(never_filled)
-        + ".",
-    )
+def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulation) -> dict[str, tuple[date, ...]]:
+    """Each symbol that a cutoff selected and that had no open on its fill session, with those cutoff dates."""
+    fills = {fill.cutoff_at: fill for fill in strategy.fills}
+    found: dict[str, list[date]] = {}
+    for decision in decisions:
+        fill = fills.get(decision.cutoff_at)
+        if fill is None:
+            continue
+        selected = {symbol for symbol, weight in decision.weights.items() if weight > 0}
+        for symbol in sorted(selected & set(fill.unfilled_symbols)):
+            found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
+    return {symbol: tuple(days) for symbol, days in sorted(found.items())}
+
+
+def run_limitations(
+    never_filled: Sequence[str],
+    unfilled_selections: Mapping[str, Sequence[date]],
+    price_symbols: Mapping[str, str],
+) -> tuple[str, ...]:
+    """The limitations stored with one run: the standing ones and those of this run's data.
+
+    A run that re-prices no issuer and fills each order adds nothing to ``LIMITATIONS``. The run
+    does not fail on an unfilled selection: the engine keeps that weight in cash, and this text says so.
+    """
+    lines = list(LIMITATIONS)
+    if price_symbols:
+        lines.append(
+            " ".join(
+                f"{ticker} is priced by the bars of its {symbol} listing."
+                for ticker, symbol in sorted(price_symbols.items())
+            )
+        )
+    if never_filled:
+        lines.append(
+            "These benchmark symbols had no open after the first fill, so their weight stayed cash for the whole "
+            "run: " + ", ".join(never_filled) + "."
+        )
+    for symbol, days in sorted(unfilled_selections.items()):
+        lines.append(
+            f"The strategy selected {symbol} at {', '.join(day.isoformat() for day in days)}, but no open existed "
+            "on the fill session, so the weight it could not buy stayed cash."
+        )
+    return tuple(lines)
 
 
 def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
@@ -601,9 +677,11 @@ def _record(
     unresolved: Sequence[str],
     ignored_legacy_ids: Sequence[str],
     benchmark_universe: Sequence[str],
+    price_symbols: Mapping[str, str],
     cost_basis_points: Decimal,
 ) -> BacktestRecord:
     never_filled = benchmark_never_filled(benchmark)
+    unfilled_selections = selected_without_open(decisions, strategy)
     benchmark_by_session = {item.session: item for item in benchmark.valuations}
     valuations = _valuation_rows(month_end_valuations(strategy.valuations), benchmark_by_session, "1M")
     valuations += _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
@@ -674,7 +752,8 @@ def _record(
         "splits_applied": _splits_applied(strategy),
         "unresolved_issuers": list(unresolved),
         "ignored_legacy_issuer_ids": list(ignored_legacy_ids),
-        "limitations": list(run_limitations(never_filled)),
+        "price_symbols": dict(sorted(price_symbols.items())),
+        "limitations": list(run_limitations(never_filled, unfilled_selections, price_symbols)),
     }
     symbols = sorted(book.bars)
     return BacktestRecord(
@@ -794,4 +873,5 @@ __all__ = [
     "run_core_strategy_backtest",
     "run_limitations",
     "schedule_cutoffs",
+    "selected_without_open",
 ]
