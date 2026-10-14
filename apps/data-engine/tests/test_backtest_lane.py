@@ -7,7 +7,7 @@ environments where its schedule runs. `test_backtest_integration.py` runs the re
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -19,6 +19,7 @@ from data_engine.datahub.backtest import BacktestOutcome, BacktestPending
 from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
 from factors.backtest.engine import Performance
+from truealpha_runtime.testing import load_tool
 
 TICK = "2026-10-12T21:30:00+00:00"
 
@@ -59,6 +60,42 @@ def test_the_schedule_stays_outside_the_staging_capture_tick() -> None:
     backtest_minute = 21 * 60 + 30
     minute, hour = live_topt_cron("staging").split()[:2]
     assert int(hour) * 60 + int(minute) - backtest_minute >= 60, "the staging tick starts an hour or more later"
+
+
+#: The projection must end before the backtest reads its rows. The projector takes about 100 seconds.
+MIN_PROJECTION_LEAD = timedelta(minutes=15)
+
+
+def test_the_projection_fires_at_least_15_minutes_before_the_backtest_on_every_backtest_day() -> None:
+    """#1270: history rows are append-only, so a projector fix reaches a backtest only through a
+    projector run. A projection on Sunday alone left five backtests a week on rows up to six days old.
+
+    Both crons come from the deployed lanes. The estate's own cron reader (`tools/scheduler_liveness.py`)
+    parses them. Red on `7 10 * * 0`: no projection fires on a weekday.
+    """
+    from data_engine.lanes import strategy_history
+
+    cron = load_tool("scheduler_liveness").Cron
+    projection, backtest = cron.parse(strategy_history.STRATEGY_HISTORY_CRON), cron.parse(lane.BACKTEST_CRON)
+    monday = datetime(2026, 10, 12, tzinfo=UTC)
+    backtests = backtest.fires_between(monday, monday + timedelta(days=7))
+
+    assert backtests, "the backtest must fire in the sampled week, or this test proves nothing"
+    for fired in backtests:
+        day_start = datetime.combine(fired.date(), time.min, tzinfo=UTC)
+        assert projection.fires_between(day_start, fired - MIN_PROJECTION_LEAD), (
+            f"no projection fires on {fired.date().isoformat()} at least 15 minutes before the backtest at "
+            f"{fired.strftime('%H:%M')} UTC"
+        )
+
+
+def test_the_projection_schedule_runs_where_the_backtest_runs() -> None:
+    """The projection feeds the backtest, so the two schedules share one definition of their environments.
+    A projection that stays stopped in staging leaves the staging backtest on rows that no run refreshes."""
+    from data_engine.lanes import strategy_history
+
+    assert strategy_history.schedule_status is lane.schedule_status
+    assert strategy_history.strategy_history_schedule.default_status == lane.schedule_status(settings.app_env)
 
 
 @pytest.fixture

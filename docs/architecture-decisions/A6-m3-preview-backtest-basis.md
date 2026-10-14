@@ -74,6 +74,9 @@ each decision:
   `nightly_backtest` verdict are the signal. The inputs table keeps no share basis date. The check
   cannot see a cover count that is dated before a split and filed after it. The projector handles
   that case.
+- The projector runs on every weekday at 20:07 UTC, 83 minutes before the backtest, in production and
+  in staging (#1270). It ran once a week before. A projector fix now reaches the next backtest with no
+  manual step. The job stays launchable by hand.
 - Decision 5 is done. Orders fill at the open of the next session after the cutoff's calendar day,
   at the definition's per-side cost. Each run stores an equal-weight buy-and-hold benchmark
   (`benchmark_rule`, `benchmark_cagr`, `benchmark_max_dd`,

@@ -393,7 +393,8 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   product is knowable at the close (#1257). A re-run skips a row that exists with the same value
   and `knowable_at`. The lane is `strategy_history_projection_pipeline`. The backtest raises
   `ShareBasisError` when a winning share count is knowable before a split that the close of its
-  cutoff follows (#1270). Only a new projector run corrects such a row.
+  cutoff follows (#1270). Only a new projector run corrects such a row, so the lane runs on every
+  weekday at 20:07 UTC, before the nightly backtest.
 - **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
   computation (rule 23): `staging.evidence_nodes` / `evidence_edges`.

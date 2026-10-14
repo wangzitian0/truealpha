@@ -115,7 +115,7 @@ def test_the_projector_writes_history_under_canonical_ids_only(connection, two_g
 
 
 def test_a_rerun_of_the_projector_writes_no_legacy_row_either(connection, two_generations) -> None:
-    """The duplicate was self-renewing: each weekly run re-read the legacy ids. Two runs write none."""
+    """The duplicate was self-renewing: each run re-read the legacy ids. Two runs write none."""
     store = two_generations["store"]
     project_deployed_history(connection, tick=TICK, months=3, store=store)
     second = project_deployed_history(connection, tick=TICK, months=3, store=store)
