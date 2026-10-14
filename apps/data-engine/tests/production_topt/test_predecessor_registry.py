@@ -111,8 +111,17 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
         },
         connection=connection,
     )
+    from data_engine.datahub.production_topt.executor import FetchSuccess
+    from data_engine.sources import sec
+    from truealpha_contracts.datahub import CaptureWorkItem
+
+    work_item = CaptureWorkItem(
+        campaign_id="capture-campaign:" + "1" * 64,
+        source_request_id="source-request:" + "a" * 64,
+        schedule_policy_id="schedule-policy:" + "2" * 64,
+    )
     cell = RouteCell(
-        work_item_id="wi:xom:financial-fact",
+        work_item_id=work_item.work_item_id,
         semantic_type="financial-fact",
         issuer_id=xom_uuid,
         instrument_id=xom_instrument_uuid,
@@ -126,10 +135,6 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     assert target.predecessor_cik == 34088
     assert target.predecessor_signed is True
     assert target.revenue_proxy_allowed is False
-
-    from data_engine.datahub.production_topt.executor import FetchSuccess
-    from data_engine.sources import sec
-    from truealpha_contracts.datahub import CaptureWorkItem
 
     holdco_doc = {
         "facts": {
@@ -209,18 +214,6 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
         sec,
         "fetch_company_facts_response",
         lambda cik: (b'{"cik":2115436}', holdco_doc) if cik == 2115436 else (b'{"cik":34088}', pred_doc),
-    )
-    work_item = CaptureWorkItem(
-        work_item_id=cell.work_item_id,
-        run_id="run:xom:test",
-        obligation_id="ob:xom:test",
-        source="sec_edgar",
-        semantic_type="financial-fact",
-        subject_id=xom_listing_uuid,
-        partition_start=datetime(2026, 9, 1, tzinfo=UTC),
-        partition_end=cutoff,
-        idempotency_key="a" * 64,
-        contract_version="datahub.work_item.v1",
     )
     outcome = adapter.fetch(work_item)
     assert isinstance(outcome, FetchSuccess)
