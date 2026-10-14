@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from truealpha_contracts.access import AccessContext
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.research import ValuationTier
+from truealpha_contracts.strategy import DefinitionReviewState, definition_review_state
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -104,6 +105,33 @@ class StrategyRunDecision(_StrictFrozenModel):
         return None
 
 
+class StrategyRunDefinition(_StrictFrozenModel):
+    """The strategy definition that a run evaluated, and the review state of its bands (#1235).
+
+    ``review_state`` must equal ``definition_review_state`` of the version and the content
+    hash. The validator rejects any other value, so no report shows an unknown definition as reviewed.
+    """
+
+    version: str
+    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+    review_state: DefinitionReviewState
+
+    @classmethod
+    def resolve(cls, *, version: str, content_sha256: str) -> Self:
+        """The marker of a recorded run. The definition registry supplies the review state."""
+        return cls(
+            version=version,
+            content_sha256=content_sha256,
+            review_state=definition_review_state(version, content_sha256),
+        )
+
+    @model_validator(mode="after")
+    def validate_review_state(self) -> Self:
+        if self.review_state != definition_review_state(self.version, self.content_sha256):
+            raise ValueError("review_state must be the registry state of this version and content hash")
+        return self
+
+
 class StrategyRunReport(_StrictFrozenModel):
     """A provisional strategy-run result, sourced from a checked-in fixture or `mart` (#361)."""
 
@@ -114,6 +142,9 @@ class StrategyRunReport(_StrictFrozenModel):
     golden_mismatches: tuple[str, ...] = ()
     strategy_run_id: str | None = None
     governed: bool = False
+    # #1235: the definition the run evaluated. None on a report that records no definition:
+    # the preview fixture, or a report built before this field existed.
+    definition: StrategyRunDefinition | None = None
 
 
 class StrategyRunUnavailable(_StrictFrozenModel):

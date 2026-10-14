@@ -30,6 +30,7 @@ from truealpha_contracts.access import AccessContext
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy_run import (
     StrategyRunDecision,
+    StrategyRunDefinition,
     StrategyRunOutcome,
     StrategyRunReport,
     StrategyRunUnavailable,
@@ -51,6 +52,7 @@ _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, InvalidOperation, Val
 # test_strategy_run_selection_parity pins the two texts.
 LATEST_RUN_SQL = """
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
+           r.strategy_version, r.definition_content_sha256,
            exists (
                select 1 from mart.served_head h
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
@@ -187,6 +189,12 @@ class PostgresStrategyRunRepository:
                 decisions=tuple(_decision_from_row(row) for row in decision_rows),
                 strategy_run_id=run_row["strategy_run_id"],
                 governed=bool(run_row["is_governed"]),
+                # #1235: the definition the served run evaluated. The registry decides the
+                # review state from the content hash; the TypeScript twin does the same.
+                definition=StrategyRunDefinition.resolve(
+                    version=run_row["strategy_version"],
+                    content_sha256=run_row["definition_content_sha256"],
+                ),
             )
         except _ROW_VALIDATION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")

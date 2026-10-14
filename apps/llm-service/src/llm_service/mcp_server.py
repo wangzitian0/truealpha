@@ -919,7 +919,9 @@ def build_mcp_server(
         name="strategy_run",
         description=(
             "Read the latest large_model_value_v0 Core Strategy run. Under definition 1.0.0 each decision's "
-            "valuation_gap divides P/GP (current/target_price_to_gross_profit) and target_price_to_sales is null."
+            "valuation_gap divides P/GP (current/target_price_to_gross_profit) and target_price_to_sales is null. "
+            "The definition field names the strategy definition of the run and its review_state: reviewed, "
+            "provisional (the tier bands are not reviewed) or unknown (not reviewed)."
         ),
     )
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:

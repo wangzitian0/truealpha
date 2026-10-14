@@ -40,7 +40,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from importlib import resources
 from itertools import pairwise
-from typing import Any, Literal, Protocol, Self
+from typing import Any, Literal, NamedTuple, Protocol, Self
 
 from pydantic import (
     BaseModel,
@@ -775,6 +775,64 @@ def live_risk_free_rate(cutoff_at: datetime | str | None = None) -> Decimal:
     return golden.rate_for(cutoff_dt).annualized_rate
 
 
+class StrategyDefinitionIdentity(NamedTuple):
+    """One packaged definition, by the identity that a strategy run records (#1235).
+
+    ``mart.strategy_runs`` stores ``version`` as ``strategy_version`` and ``content_sha256``
+    as ``definition_content_sha256``.
+    """
+
+    version: str
+    content_sha256: str
+    provisional_semantics: bool
+
+
+#: The review state of the definition that a strategy run evaluated (#1235).
+DefinitionReviewState = Literal["reviewed", "provisional", "unknown"]
+
+
+@functools.cache
+def strategy_definition_registry() -> tuple[StrategyDefinitionIdentity, ...]:
+    """Every loadable packaged strategy definition, sorted by version text (#1235).
+
+    A packaged JSON file is a definition when it holds a ``strategy_definition`` object.
+    Each one loads through ``load_strategy_definition``, so a file that does not load raises.
+    A new definition file joins the registry with no code change.
+
+    The content hash covers the version, so one version must map to one hash. Two files
+    with one version raise: a changed definition needs a new version.
+    """
+
+    entries: list[StrategyDefinitionIdentity] = []
+    for item in sorted(resources.files("truealpha_contracts.data").iterdir(), key=lambda entry: entry.name):
+        if not item.name.endswith(".json") or "strategy_definition" not in load_strategy_definition_corpus(item.name):
+            continue
+        definition = load_strategy_definition(item.name)
+        if any(entry.version == definition.definition_version for entry in entries):
+            raise ValueError(f"{item.name}: a second packaged definition has version {definition.definition_version}")
+        entries.append(
+            StrategyDefinitionIdentity(
+                version=definition.definition_version,
+                content_sha256=definition.content_sha256,
+                provisional_semantics=definition.provisional_semantics,
+            )
+        )
+    return tuple(sorted(entries))
+
+
+def definition_review_state(version: str, content_sha256: str) -> DefinitionReviewState:
+    """The review state of the definition that a strategy run recorded (#1235).
+
+    The content hash selects the registry entry and the version must agree with it.
+    A pair that the registry does not hold is ``unknown``, never ``reviewed``.
+    """
+
+    for entry in strategy_definition_registry():
+        if entry.content_sha256 == content_sha256 and entry.version == version:
+            return "provisional" if entry.provisional_semantics else "reviewed"
+    return "unknown"
+
+
 class ExpressionEngineExecutionBinding(_StrictFrozenModel):
     """One exact factor-expression engine runtime, by content identity.
 
@@ -1183,6 +1241,7 @@ __all__ = [
     "CoreStrategyEvaluationProtocol",
     "CutoffRiskFreeRate",
     "DecimalQuantization",
+    "DefinitionReviewState",
     "EqualWeightSizingRule",
     "EvaluationPartition",
     "EvaluationSplitRule",
@@ -1208,15 +1267,18 @@ __all__ = [
     "RiskFreeInstrument",
     "RiskFreeRatePolicy",
     "SelectionRule",
+    "StrategyDefinitionIdentity",
     "StrategyEngineBinding",
     "ThreeTierPgpValuationDefinition",
     "ThreeTierValuationDefinition",
     "ValuationBasis",
     "ValuationGapRule",
     "WalkForwardWindow",
+    "definition_review_state",
     "live_risk_free_rate",
     "load_live_strategy_corpus",
     "load_live_strategy_definition",
     "load_strategy_definition",
     "load_strategy_definition_corpus",
+    "strategy_definition_registry",
 ]

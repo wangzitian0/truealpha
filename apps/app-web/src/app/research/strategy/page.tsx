@@ -1,6 +1,7 @@
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import {
@@ -82,6 +83,8 @@ export default async function StrategyRunsPage() {
                 : `Unavailable: ${outcome.detail.reason} (${outcome.detail.strategy_id})`}
         </p>
       )}
+      {/* #1235: which definition produced this run, and whether its bands were reviewed. */}
+      {outcome.kind === "ready" && <StrategyDefinitionLine definition={outcome.report.definition} />}
 
       {/* #494 assertion (b): the claim ceiling is a property of the PAGE, not
           of its data state — `/research/rankings` has always rendered it

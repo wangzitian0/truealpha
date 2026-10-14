@@ -34,6 +34,7 @@ import {
 	VALUATION_TIERS,
 	type ValuationTier,
 } from "@/contracts/strategyRun";
+import { strategyRunDefinitionOf } from "@/contracts/strategyDefinition";
 
 import { withMartReadonly } from "./db";
 
@@ -62,6 +63,7 @@ export type MartStrategyRunReport = StrategyRunReport & {
 // is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and libs/contracts pins the two texts.
 export const LATEST_RUN_SQL = `
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
+           r.strategy_version, r.definition_content_sha256,
            exists (
                select 1 from mart.served_head h
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
@@ -377,6 +379,16 @@ export class MartStrategyRunRepository {
 			return { strategy_id: strategyId, reason: "schema_mismatch" };
 		}
 
+		// #1235: the definition the served run evaluated. The registry decides the review
+		// state from the content hash, exactly as the Python twin does.
+		const definition = strategyRunDefinitionOf(
+			runRow.strategy_version,
+			runRow.definition_content_sha256,
+		);
+		if (definition === null) {
+			return { strategy_id: strategyId, reason: "schema_mismatch" };
+		}
+
 		try {
 			return {
 				strategy_id: "large_model_value_v0",
@@ -398,6 +410,7 @@ export class MartStrategyRunRepository {
 						? runRow.executed_at.toISOString()
 						: String(runRow.executed_at),
 				governed: Boolean(runRow.is_governed),
+				definition,
 			};
 		} catch (error) {
 			if (error instanceof SchemaMismatchError) {
