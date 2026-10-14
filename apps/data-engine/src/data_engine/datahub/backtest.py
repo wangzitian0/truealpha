@@ -533,8 +533,7 @@ def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulat
         fill = fills.get(decision.cutoff_at)
         if fill is None:
             continue
-        selected = {symbol for symbol, weight in decision.weights.items() if weight > 0}
-        for symbol in sorted(selected & set(fill.unfilled_symbols)):
+        for symbol in sorted(set(decision.weights) & set(fill.unfilled_symbols)):
             found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
     return {symbol: tuple(days) for symbol, days in sorted(found.items())}
 
