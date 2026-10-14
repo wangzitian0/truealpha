@@ -175,4 +175,38 @@ const withFields = asStrategyRunReport({
 assert(withFields.strategy_run_id === "custom_run_123", "expected custom_run_123");
 assert(withFields.governed === true, "expected governed true");
 
+// #1235: the optional definition marker. The parser keeps a marker that the definition
+// registry confirms, reads null as "no definition" (the Python twin's None), and refuses a
+// marker whose review state the registry does not give.
+const V0_SHA256 = "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d";
+const withDefinition = asStrategyRunReport({
+  ...raw,
+  definition: { version: "0.1.0", content_sha256: V0_SHA256, review_state: "provisional" },
+});
+assert(
+  withDefinition.definition?.review_state === "provisional" && withDefinition.definition.version === "0.1.0",
+  `expected the 0.1.0 marker to survive the parse, got ${JSON.stringify(withDefinition.definition)}`,
+);
+assert(asStrategyRunReport({ ...raw, definition: null }).definition === undefined, "null must parse as no definition");
+
+await expectRejected(
+  "a marker that claims a review the registry does not give",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      definition: { version: "0.1.0", content_sha256: V0_SHA256, review_state: "reviewed" },
+    }),
+  /definition registry confirms/,
+);
+
+await expectRejected(
+  "a marker with an unknown field",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      definition: { version: "0.1.0", content_sha256: V0_SHA256, review_state: "provisional", extra: true },
+    }),
+  /definition registry confirms/,
+);
+
 console.log("#347 Python/TypeScript strategy-run fixture parity passed");
