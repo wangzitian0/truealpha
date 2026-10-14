@@ -144,6 +144,7 @@ function firstListedSelection(decisions: CanonDecision[]): CanonDecision {
 /**
  * #1241: binds one capture run to the seeded strategy run and gives `decision` one core result with a
  * lineage. The inputs are synthetic. Returns false when the strategy run is bound already.
+ * The connection must be a superuser connection, because only a superuser can set the replica role.
  */
 async function seedTraceLineage(client: PoolClient, run: CanonRun, decision: CanonDecision): Promise<boolean> {
   const bound = await client.query(

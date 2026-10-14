@@ -11,8 +11,8 @@
  * fails that build.
  *
  * The caller runs `set local session_replication_role = replica` first. That turns off the foreign keys
- * and the insert triggers for the transaction, so the seed holds the rows that the view reads and not the
- * whole capture pipeline. The CHECK constraints stay on.
+ * and the insert triggers for the transaction. So the seed holds the rows that the view reads, and not the
+ * whole capture pipeline. The CHECK constraints stay on. Only a superuser can set that role.
  *
  * This module imports no connection code. The caller owns the client and the transaction.
  */
