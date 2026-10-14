@@ -25,9 +25,10 @@ Rules this module enforces:
   (#1257): a split with an ex-date after the count's basis date and on or before the close's
   session multiplies the filed count. The basis date of a cover-page count is its own date; the
   basis date of a statement count is its filing date, because the filing restates it for an
-  earlier split (``share_count_as_of``). Without this rule, NVDA at 2024-06-30 multiplied a
-  pre-split count by a post-split close, its market value fell tenfold, and the strategy selected
-  it. The split events come from the two stored price series (``datahub.price_series``).
+  earlier split. Without this rule, NVDA at 2024-06-30 multiplied a pre-split count by a
+  post-split close, its market value fell tenfold, and the strategy selected it. The split events
+  come from the two stored price series (``datahub.price_series``). The rule lives in
+  ``datahub.share_basis``, which the live strategy seed also uses (#1262).
 * Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
   and under its entity UUID. The universe is the set of entities those ids name, and each history
   is written under the entity UUID. No row is written under a legacy id.
@@ -53,10 +54,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
 import psycopg
-from factors.backtest.corporate_actions import SplitEvent, split_factor_between
+from factors.backtest.corporate_actions import SplitEvent
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
@@ -77,6 +78,15 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     predecessor_ciks,
 )
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
+from data_engine.datahub.share_basis import (
+    COVER,
+    SHARES_KEY,
+    STATEMENT,
+    UNRECOGNISED,
+    on_close_basis,
+    share_count_as_of,
+    share_count_concepts,
+)
 from data_engine.datahub.strategy_bridge import financial_input_rows, load_strategy_definition
 
 DEFAULT_MONTHS = 36
@@ -94,8 +104,6 @@ _PERIOD_SERIES_SUFFIX = "_periods"
 
 #: The input row this module writes beside the financial inputs.
 _LAST_CLOSE_KEY = "last_close"
-#: The share count that multiplies ``last_close`` into a market value.
-_SHARES_KEY = "shares_outstanding"
 
 FactsLoader = Callable[[int], tuple[bytes, dict[str, Any]] | None]
 
@@ -611,7 +619,7 @@ def project_issuer_rows(
     rows: list[HistoryRow] = []
     no_outcome = undated = split_adjusted = 0
     splits: tuple[SplitEvent, ...] | None = None
-    cover_concepts, statement_concepts = _share_count_concepts(ruleset)
+    cover_concepts, statement_concepts = share_count_concepts(ruleset)
     bases = {COVER: 0, STATEMENT: 0, UNRECOGNISED: 0}
     for cutoff_at in cutoffs:
         as_of = cutoff_at.astimezone(UTC).date() - timedelta(days=1)
@@ -651,11 +659,11 @@ def project_issuer_rows(
             row = HistoryRow(
                 issuer.issuer_id, cutoff_at, input_key, Decimal(str(value)), confidence, knowable_at, fiscal_period
             )
-            if input_key == _SHARES_KEY and fiscal_period is None and bar is not None:
+            if input_key == SHARES_KEY and fiscal_period is None and bar is not None:
                 if splits is None:
                     splits = split_events(issuer.ticker)
                 basis = share_count_as_of(
-                    (payload.get("vintage") or {}).get(_SHARES_KEY),
+                    (payload.get("vintage") or {}).get(SHARES_KEY),
                     row.value,
                     [stored[1] for stored in documents.values() if stored is not None],
                     cover_concepts=cover_concepts,
@@ -686,105 +694,24 @@ def project_issuer_rows(
     )
 
 
-#: The ruleset fields whose concepts can produce the share count (``build_bundle``).
-_SHARE_COUNT_FIELDS = (_SHARES_KEY, "shares_outstanding_last_resort")
-#: How a share count was classed (``ShareBasis.kind``).
-COVER, STATEMENT, UNRECOGNISED = "cover", "statement", "unrecognised"
-
-
-class ShareBasis(NamedTuple):
-    """The date whose share basis a filed share count is on, and how the count was classed."""
-
-    as_of: date
-    kind: str
-
-
-def _share_count_concepts(ruleset: ConceptMappingRuleset) -> tuple[tuple[ConceptRef, ...], tuple[ConceptRef, ...]]:
-    """(cover concepts, statement concepts) of the share count. Cover is the ``dei`` (Document and
-    Entity Information) taxonomy; every other concept of the share-count fields is a statement figure."""
-    concepts = [
-        concept
-        for field in _SHARE_COUNT_FIELDS
-        if (mapping := ruleset.mapping_for(field)) is not None
-        for concept in mapping.concepts
-    ]
-    return (
-        tuple(concept for concept in concepts if concept.taxonomy == "dei"),
-        tuple(concept for concept in concepts if concept.taxonomy != "dei"),
-    )
-
-
-def _carries(
-    documents: Sequence[Mapping[str, Any]],
-    concepts: Sequence[ConceptRef],
-    *,
-    accession: str,
-    period_end: str,
-    value: Decimal,
-) -> bool:
-    """True when a stored entry of one of ``concepts`` has this accession, this period end and this value."""
-    for facts in documents:
-        for concept in concepts:
-            units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
-            for entries in units.values():
-                for item in entries:
-                    if item.get("accn") != accession or item.get("end") != period_end or item.get("val") is None:
-                        continue
-                    try:
-                        if Decimal(str(item["val"])) == value:
-                            return True
-                    except InvalidOperation:
-                        continue
-    return False
-
-
-def share_count_as_of(
-    entry: object,
-    value: Decimal,
-    documents: Sequence[Mapping[str, Any]],
-    *,
-    cover_concepts: Sequence[ConceptRef],
-    statement_concepts: Sequence[ConceptRef],
-    filed_fallback: date,
-) -> ShareBasis:
-    """The share basis of a filed share count, from the stored entry that carries it.
-
-    A cover-page count is a count as of its own date, its ``period_end``. A statement count (a
-    balance-sheet count or a weighted average) is restated for a split before its filing is
-    issued (SAB Topic 4C), so it is on the basis of the filing date. The vintage names the filing
-    and the period end, not the concept, so the stored document decides. Only an entry with the
-    same accession, the same period end AND the same value classifies the count: a 20-F can hold
-    a cover count and a restated balance-sheet count of one date under one accession.
-
-    A count that no stored entry carries is UNRECOGNISED. It falls back to its filing date, which
-    under-adjusts a cover count; the projector counts each case, so the summary shows how often.
-    """
-    if not isinstance(entry, Mapping) or not entry.get("filed"):
-        return ShareBasis(filed_fallback, UNRECOGNISED)
-    filed = date.fromisoformat(str(entry["filed"]))
-    accession, period_end = entry.get("accession"), entry.get("period_end")
-    if not accession or not period_end:
-        return ShareBasis(filed, UNRECOGNISED)
-    if _carries(documents, cover_concepts, accession=str(accession), period_end=str(period_end), value=value):
-        return ShareBasis(date.fromisoformat(str(period_end)), COVER)
-    if _carries(documents, statement_concepts, accession=str(accession), period_end=str(period_end), value=value):
-        return ShareBasis(filed, STATEMENT)
-    return ShareBasis(filed, UNRECOGNISED)
-
-
 def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent], *, as_of: date) -> HistoryRow:
     """The share row on the share basis of ``bar``, or the row itself when no split lies between.
 
-    The filed count is on the basis of ``as_of`` (``share_count_as_of``). A split with an ex-date
-    after that date and on or before the close's session multiplies it. The product is knowable
-    once both the filing and the close are: the close's session is on or after the ex-date, and
-    before the cutoff date.
+    The filed count is on the basis of ``as_of`` (``share_count_as_of``). ``on_close_basis`` applies
+    every split after that date and on or before the close's session. The session is the UTC date
+    of the close's knowable time, which is before the cutoff date.
     """
-    factor = split_factor_between(splits, after=as_of, through=bar.knowable_at.astimezone(UTC).date())
-    if factor == 1:
+    basis = on_close_basis(
+        shares.value,
+        shares.knowable_at,
+        basis_date=as_of,
+        close_session=bar.knowable_at.astimezone(UTC).date(),
+        close_knowable_at=bar.knowable_at,
+        splits=splits,
+    )
+    if basis.factor == 1:
         return shares
-    value = shares.value * Decimal(factor.numerator) / Decimal(factor.denominator)
-    return dataclasses.replace(shares, value=value, knowable_at=max(shares.knowable_at, bar.knowable_at))
+    return dataclasses.replace(shares, value=basis.value, knowable_at=basis.knowable_at)
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
