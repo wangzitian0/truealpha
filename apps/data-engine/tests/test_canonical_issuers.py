@@ -834,3 +834,52 @@ def test_the_history_lane_reports_how_each_share_count_was_classed(monkeypatch) 
         12,
         5,
     )
+
+
+def test_only_a_symbol_with_both_stored_series_can_price_an_issuer(connection) -> None:
+    """A symbol with one series cannot show its splits, so it prices nothing. W has no bar at all."""
+    from datetime import date
+
+    from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
+    from data_engine.datahub.price_series import symbols_with_both_series
+
+    def bar(symbol: str) -> list[PriceBarRecord]:
+        return [
+            PriceBarRecord(symbol, date(2024, 6, 7), Decimal(10), Decimal(10), Decimal(10), Decimal(10), Decimal(1))
+        ]
+
+    for symbol, adjusts in (("H1265X", ("none", "splits")), ("H1265Y", ("none",)), ("H1265Z", ("splits",))):
+        for adjust in adjusts:
+            insert_market_prices_daily(connection, bar(symbol), adjust=adjust)
+
+    assert symbols_with_both_series(connection, ["H1265W", "H1265X", "H1265Y", "H1265Z"]) == {"H1265X"}
+
+
+def test_the_listing_tickers_come_from_the_cells_under_each_id_of_the_entity_known_at_the_tick(connection) -> None:
+    """A cell can name the legacy id of the entity (captures before the identity unification), so the
+    read covers each id. A cell knowable after the tick is not read: the run uses the tick's lineage."""
+    from data_engine.datahub.strategy_history import listing_tickers
+
+    issuer = mint_issuer(
+        connection, lei="H1265TXXXXXXXXXXXX00", mic="XNAS", ticker="H1265T", cik=1_265_401, known_at=MINTED_AT
+    )
+    store = MemoryStore()
+    seed_listing_identity(
+        connection,
+        [
+            Listed(issuer.canonical_issuer_id, issuer.canonical_listing_id, "H1265T", at(2025, 2, 1)),
+            Listed(issuer.legacy_issuer_id, "listing:xnas:h1265u", "H1265U", at(2025, 2, 1)),
+            Listed(issuer.canonical_issuer_id, "listing:xnas:h1265v", "H1265V", at(2025, 6, 1)),
+            Listed("issuer:lei:H1265OTHERXXXXXXXX00", "listing:xnas:h1265w", "H1265W", at(2025, 2, 1)),
+        ],
+        store=store,
+        cutoff=at(2025, 2, 1),
+    )
+    ids = {issuer.canonical_issuer_id: [issuer.canonical_issuer_id, issuer.legacy_issuer_id]}
+
+    assert listing_tickers(connection, ids, known_at=at(2025, 5, 1)) == {
+        issuer.canonical_issuer_id: ("H1265T", "H1265U")
+    }
+    assert listing_tickers(connection, ids, known_at=at(2025, 7, 1)) == {
+        issuer.canonical_issuer_id: ("H1265T", "H1265U", "H1265V")
+    }

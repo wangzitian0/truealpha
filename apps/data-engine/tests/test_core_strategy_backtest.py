@@ -296,3 +296,86 @@ def test_one_error_names_every_failing_symbol_and_cutoff_and_every_split_between
     assert "10/1 split on 2024-06-10, 3/2 split on 2024-08-01)" in message
     assert "NFLX at 2025-12-31T23:59:59+00:00" in message
     assert "NVDA at 2025-12-31" not in message, "the corrected NVDA row at the last cutoff passes"
+
+
+# -- #1265: the price symbol ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("ticker", "listings", "priced", "expected"),
+    [
+        ("GOOG", ["GOOG", "GOOGL"], {"GOOGL"}, "GOOGL"),  # staging: the lineage ticker has no series
+        ("GOOGL", ["GOOG", "GOOGL"], {"GOOG", "GOOGL"}, "GOOGL"),  # the lineage ticker wins, then the sort
+        ("GOOG", ["GOOGL", "GOOG", "GOOGA"], {"GOOGA", "GOOGL"}, "GOOGA"),  # the other tickers in sorted order
+        ("GOOG", [], {"GOOG"}, "GOOG"),  # an issuer without listing cells keeps its lineage ticker
+        ("GOOG", ["GOOG", "GOOGL"], set(), None),  # no listing holds both series: no price symbol
+    ],
+)
+def test_the_price_symbol_is_the_first_listing_with_both_series_and_the_lineage_ticker_goes_first(
+    ticker: str, listings: list[str], priced: set[str], expected: str | None
+) -> None:
+    from data_engine.datahub.price_series import resolve_price_symbol
+
+    assert resolve_price_symbol(ticker, listings, priced) == expected
+
+
+def _two_sessions(before: tuple[str, str], after: tuple[str, str]) -> dict[date, tuple[Decimal, Decimal]]:
+    return {
+        date(2024, 6, 7): (Decimal(before[0]), Decimal(before[1])),
+        date(2024, 6, 10): (Decimal(after[0]), Decimal(after[1])),
+    }
+
+
+def test_the_price_book_names_each_stored_series_and_its_splits_by_the_label() -> None:
+    """The GOOG issuer reads the GOOGL series. The book, its bars and its splits say GOOG."""
+    unadjusted = {"GOOGL": _two_sessions(("1197.70", "1208.88"), ("120.37", "121.79"))}
+    split_adjusted = {"GOOGL": _two_sessions(("119.770", "120.888"), ("120.37", "121.79"))}
+
+    book = price_book(unadjusted, split_adjusted, labels={"GOOGL": "GOOG"})
+
+    assert set(book.bars) == {"GOOG"}
+    assert book.bars["GOOG"][date(2024, 6, 10)].open == Decimal("120.37")
+    assert book.splits == (SplitEvent("GOOG", date(2024, 6, 10), 10, 1),)
+
+
+def test_a_split_error_of_a_labelled_series_names_the_stored_symbol() -> None:
+    """An operator looks up the stored symbol, so the error names GOOGL, not the label GOOG."""
+    flat = _two_sessions(("100", "100"), ("100", "100"))
+    split_adjusted = {"GOOGL": _two_sessions(("10", "10"), ("100", "100"))}
+
+    with pytest.raises(SplitDerivationError, match="GOOGL"):
+        price_book({"GOOGL": flat}, split_adjusted, labels={"GOOGL": "GOOG"})
+
+
+def test_two_stored_series_cannot_take_one_label() -> None:
+    flat = _two_sessions(("100", "100"), ("100", "100"))
+
+    with pytest.raises(ValueError, match="two stored symbols take one name"):
+        price_book({"GOOG": flat, "GOOGL": flat}, {"GOOG": flat, "GOOGL": flat}, labels={"GOOGL": "GOOG"})
+
+
+def test_the_limitations_name_each_selection_without_an_open_with_its_cutoffs() -> None:
+    """GOOG is selected at Q1 and Q2 and has no open on either fill session. HELD has no open at Q2,
+    but no cutoff selects it, so its weight did not stay cash: the limitations do not name it."""
+    from data_engine.datahub.backtest import CutoffDecision, run_limitations, selected_without_open
+    from factors.backtest.engine import Fill, Simulation
+
+    def decision(cutoff: datetime, *symbols: str) -> CutoffDecision:
+        return CutoffDecision(cutoff, {symbol: Decimal("0.5") for symbol in symbols}, symbols, len(symbols), {})
+
+    decisions = [decision(Q1, "GOOG", "AMZN"), decision(Q2, "GOOG", "AMZN"), decision(Q3, "AMZN", "MSFT")]
+    fills = (
+        Fill(Q1, date(2024, 4, 1), ("GOOG",)),
+        Fill(Q2, date(2024, 7, 1), ("GOOG", "HELD")),
+        Fill(Q3, date(2024, 10, 1), ()),
+    )
+    unfilled = selected_without_open(decisions, Simulation((), (), fills, ()))
+
+    assert unfilled == {"GOOG": (date(2024, 3, 31), date(2024, 6, 30))}
+    limitations = run_limitations((), unfilled, {})
+    assert limitations[-1] == (
+        "The strategy selected GOOG at 2024-03-31, 2024-06-30, but no open existed on the fill session, "
+        "so the weight it could not buy stayed cash."
+    )
+    assert run_limitations((), {}, {"GOOG": "GOOGL"})[-1] == "GOOG is priced by the bars of its GOOGL listing."
+    assert len(run_limitations((), {}, {})) == len(run_limitations((), unfilled, {})) - 1
