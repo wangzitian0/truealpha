@@ -14,7 +14,7 @@ A record, not a gate (see `governance/README.md`). It states who reviewed the de
 | Golden decision set id | `golden-decision-set:0712593ce376d1def9f4f355e3fff9f204251bbd784112c8721977949ad1b122` |
 | Tier valuation factor id | `factor-definition:35e3aa2af1d3b92d72ce490d217d0490acb1ecd195603e4b4609fcaf23caea9a` |
 | P/GP factor id | `factor-definition:e1e4f80941f78be4fb111c6c773ba96de58dc530d3d2f0560d48e9eea5a39530` |
-| Replaces | definition `0.1.0`, sha256 `e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d` (kept loadable for history) |
+| Replaces | definition `0.1.0`, sha256 `e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d` (the definition file was deleted in #1274; stored rows that carry this sha256 read as `unknown`, see the update at the end) |
 | Issue | wangzitian0/truealpha#1235 |
 
 New rows carry this sha256 in two places: `mart.strategy_runs.definition_content_sha256` (the strategy tick) and `mart.topt_core_results.tier_definition_sha256` (the TOPT core engine). One file supplies the bands to both engines.
@@ -39,7 +39,7 @@ Reviewer: the owner (wangzitian0), 2026-10-12, in session. The decision is recor
 - P/GP = shares outstanding × last unadjusted close ÷ the latest-complete-fiscal-year gross profit that the labor-efficiency numerator uses.
 - Gap = target P/GP midpoint ÷ current P/GP − 1 (4 dp half-even). A current P/GP above the band upper bound is `rejected_valuation_above_tier_band`.
 - Every tier is eligible. Rank by descending gap, tie-break ascending issuer id, select the top 2, equal weight. These rules and the 0.70 confidence floor are unchanged from 0.1.0.
-- Definition 1.0.0 has no gross-margin gate. P/GP removes the margin effect. The hidden 0.35 gate of 0.1.0 was not in the 0.1.0 definition or its hash; it stays for 0.1.0 only, as the named legacy rule `LEGACY_V0_MARGIN_GATE` (`libs/factors/src/factors/composite/three_tier_valuation.py`), so that 0.1.0 history replays exactly.
+- Definition 1.0.0 has no gross-margin gate. P/GP removes the margin effect. The hidden 0.35 gate of 0.1.0 was not in the 0.1.0 definition or its hash; it stays for 0.1.0 only, as the named legacy rule `LEGACY_V0_MARGIN_GATE` (`libs/factors/src/factors/composite/three_tier_valuation.py`), so that 0.1.0 history replays exactly. (Removed on 2026-10-14, see the update at the end.)
 - P/S is still computed and stored (`current_price_to_sales`). A 1.0.0 decision has no target P/S.
 
 ## Replay on the 2026-10-08 production TOPT head
@@ -73,8 +73,18 @@ Tier census under 1.0.0: traditional 11, tech 5, large_model_native 1 (NVDA).
 | TSLA | 68,823 | traditional | 15.6190 | 86.6676 | 8.7500 | -0.8990 | rejected_valuation_above_tier_band | — |
 | JPM | -514,726 | traditional | 4.8290 | 10.1492 | 8.7500 | -0.1379 | rejected_valuation_above_tier_band | — |
 
-Note on 0.1.0 history: the margin gate lived in code, not in the 0.1.0 definition. The legacy rule keeps it for 0.1.0, so a 0.1.0 replay of the same inputs selects the published JNJ (+0.3715) then NFLX (+0.3645). The same test file holds that check. The rows already in `mart` keep what they recorded.
+Note on 0.1.0 history: the margin gate lived in code, not in the 0.1.0 definition. The legacy rule keeps it for 0.1.0, so a 0.1.0 replay of the same inputs selects the published JNJ (+0.3715) then NFLX (+0.3645). The rows already in `mart` keep what they recorded. (The 0.1.0 replay check no longer exists, see the update at the end.)
 
 ## State
 
 The code is on the branch for #1235. Production deploy waits for the owner, as for every production change.
+
+## Update 2026-10-14 (#1237, #1274)
+
+This update corrects three statements above that #1274 made obsolete. The decision of the owner on 2026-10-12 does not change.
+
+- #1274 deleted the file of definition 0.1.0. It is not loadable any more.
+- #1274 removed the named legacy rule `LEGACY_V0_MARGIN_GATE`. No runtime code holds the 0.35 gross-margin gate now. `libs/factors/tests/test_single_band_source.py` fails when the gate returns.
+- The 0.1.0 replay check is gone with the rule. No test replays definition 0.1.0 on the 2026-10-08 inputs any more.
+- The registry gives a stored run with the sha256 of definition 0.1.0 the review state `unknown`. The test case `deleted-0.1.0` in `libs/contracts/tests/test_strategy_definition_registry.py` pins this.
+- The rows already in `mart` are unchanged. Their `definition_content_sha256` still names definition 0.1.0.
