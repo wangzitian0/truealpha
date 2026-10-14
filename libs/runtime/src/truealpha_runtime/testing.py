@@ -11,8 +11,10 @@ than installed packages, which is why they live here and not behind the runtime
 boundary in `truealpha_runtime.__init__`.
 """
 
+import copy
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -31,6 +33,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 from psycopg import sql
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_corpus
 
 #: One SQL literal that a seed row may hold: a quoted string, a whole number, null, true or false.
 SeedValue = str | int | bool | None
@@ -528,3 +531,21 @@ def clone_test_database(
             admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(clone_name)))
         finally:
             admin_conn.close()
+
+
+#: The version of the synthetic provisional definition. No packaged file uses it.
+SYNTHETIC_PROVISIONAL_DEFINITION_VERSION = "0.0.1-synthetic-provisional"
+
+
+def synthetic_provisional_strategy_definition() -> LargeModelValueV0Definition:
+    """A provisional strategy definition that no packaged file holds (#1235).
+
+    No packaged definition is provisional, so tests use this one to keep the provisional
+    marker armed. It copies the live definition, gives it a test version, and marks its
+    bands provisional in both fields that the model validation compares.
+    """
+    payload = copy.deepcopy(load_live_strategy_corpus()["strategy_definition"])
+    payload["definition_version"] = SYNTHETIC_PROVISIONAL_DEFINITION_VERSION
+    payload["provisional_semantics"] = True
+    payload["tier_valuation"]["provisional_thresholds"] = True
+    return LargeModelValueV0Definition.model_validate_json(json.dumps(payload))

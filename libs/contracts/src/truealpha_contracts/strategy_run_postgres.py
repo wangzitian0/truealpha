@@ -14,6 +14,9 @@ TypeScript twin makes, so MCP and the web report one number.
 
 Which run is "latest" is decided by the governed capture head (#575), see
 `LATEST_RUN_SQL`; the newest recorded run is only a fallback.
+
+The report names the definition that the run evaluated (#1235): `strategy_version` and
+`definition_content_sha256` of the run row. The definition registry gives the review state.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from truealpha_contracts.access import AccessContext
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy_run import (
     StrategyRunDecision,
+    StrategyRunDefinition,
     StrategyRunOutcome,
     StrategyRunReport,
     StrategyRunUnavailable,
@@ -48,7 +52,9 @@ _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, InvalidOperation, Val
 # head withheld past 30 days — does the newest recorded run stand in. The join lives in
 # mart.served_head and mart.strategy_run_capture; the twins only rank by it. The
 # TypeScript twin carries the same statement modulo placeholder syntax, and
-# test_strategy_run_selection_parity pins the two texts.
+# test_strategy_run_selection_parity pins the two texts. Some consumers read a row by
+# position (`is_governed` is column 3 in apps/data-engine/tests/production_topt), so a new
+# column goes at the end of the select list (#1235).
 LATEST_RUN_SQL = """
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
            exists (
@@ -57,7 +63,8 @@ LATEST_RUN_SQL = """
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
                  and h.universe_id like 'universe:topt-%%'
-           ) as is_governed
+           ) as is_governed,
+           r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
     where r.strategy_key = %s
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
@@ -187,6 +194,12 @@ class PostgresStrategyRunRepository:
                 decisions=tuple(_decision_from_row(row) for row in decision_rows),
                 strategy_run_id=run_row["strategy_run_id"],
                 governed=bool(run_row["is_governed"]),
+                # #1235: the definition the served run evaluated. The registry decides the
+                # review state from the content hash; the TypeScript twin does the same.
+                definition=StrategyRunDefinition.resolve(
+                    version=run_row["strategy_version"],
+                    content_sha256=run_row["definition_content_sha256"],
+                ),
             )
         except _ROW_VALIDATION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")

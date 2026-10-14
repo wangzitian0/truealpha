@@ -10,6 +10,11 @@
  * non-default key, rank = 0, target_weight = 1.5) must come back
  * schema_mismatch exactly like the Python twin.
  *
+ * #1235: the canon holds two report cases under the one strategy key: `report` (a run of
+ * the reviewed definition 1.0.0) and `report_definition_not_in_registry` (a run of the
+ * deleted 0.1.0, review state `unknown`). Each report case runs inside its own savepoint,
+ * so the repository's "latest run" is the case under test.
+ *
  * Everything runs inside ONE transaction on the test's own client, lent to the
  * repository via db.ts's `__setTestClient` seam and rolled back at the end —
  * nothing is committed, so the fixed far-future `executed_at` can never poison
@@ -85,6 +90,43 @@ function canonical(value: unknown): string {
   );
 }
 
+type CanonCase = (typeof FIXTURE)[string];
+
+async function seed(client: Client, testCase: CanonCase): Promise<void> {
+  const r = testCase.run;
+  await client.query(RUN_SQL, [
+    r.strategy_run_id,
+    r.content_sha256,
+    r.strategy_key,
+    r.strategy_version,
+    r.definition_content_sha256,
+    r.corpus_sha256,
+    r.claim_ceiling,
+    r.executed_at,
+  ]);
+  for (const d of testCase.decisions) {
+    await client.query(DECISION_SQL, [
+      d.strategy_decision_id,
+      d.content_sha256,
+      r.strategy_run_id,
+      d.issuer_id,
+      d.cutoff_at,
+      d.capital_adjusted_labor_efficiency,
+      d.tier,
+      d.current_price_to_sales,
+      d.target_price_to_sales,
+      d.valuation_gap,
+      d.eligible,
+      d.outcome,
+      d.exclusion_reason,
+      d.rank,
+      d.target_weight,
+      d.current_price_to_gross_profit,
+      d.target_price_to_gross_profit,
+    ]);
+  }
+}
+
 async function reachable(): Promise<Client | null> {
   const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
   try {
@@ -103,60 +145,40 @@ if (admin !== null) {
   try {
     await admin.query("begin");
     __setTestClient(admin as unknown as Pick<PoolClient, "query">);
-    for (const testCase of Object.values(FIXTURE)) {
-      const r = testCase.run;
-      await admin.query(RUN_SQL, [
-        r.strategy_run_id,
-        r.content_sha256,
-        r.strategy_key,
-        r.strategy_version,
-        r.definition_content_sha256,
-        r.corpus_sha256,
-        r.claim_ceiling,
-        r.executed_at,
-      ]);
-      for (const d of testCase.decisions) {
-        await admin.query(DECISION_SQL, [
-          d.strategy_decision_id,
-          d.content_sha256,
-          r.strategy_run_id,
-          d.issuer_id,
-          d.cutoff_at,
-          d.capital_adjusted_labor_efficiency,
-          d.tier,
-          d.current_price_to_sales,
-          d.target_price_to_sales,
-          d.valuation_gap,
-          d.eligible,
-          d.outcome,
-          d.exclusion_reason,
-          d.rank,
-          d.target_weight,
-          d.current_price_to_gross_profit,
-          d.target_price_to_gross_profit,
-        ]);
-      }
-    }
-
     const repository = new MartStrategyRunRepository();
-
-    const reportCase = FIXTURE.report;
-    const report = await repository.getLatest(reportCase.request_strategy_id, CONTEXT);
-    assert("decisions" in report, `report case: expected a report, got ${JSON.stringify(report)}`);
-    // executed_at is the TS-only #370 extension, and `provenance` is the
-    // TS-only input-vintage read joined from mart.topt_core_results; the
-    // shared contract surface (including strategy_run_id and governed) is what
-    // must match the Python twin byte-for-byte.
-    const {
-      executed_at: _executedAt,
-      provenance: _provenance,
-      ...shared
-    } = report;
+    const reportCases = Object.entries(FIXTURE).filter(([, testCase]) => testCase.expected_report !== undefined);
+    const reviewStates = reportCases
+      .map(([, testCase]) => (testCase.expected_report?.definition as { review_state?: string } | undefined)?.review_state)
+      .sort();
     assert(
-      canonical(shared) === canonical(reportCase.expected_report),
-      `report serialization diverges from the frozen canon:\n  ts:     ${canonical(shared)}\n  canon:  ${canonical(reportCase.expected_report)}`,
+      JSON.stringify(reviewStates) === JSON.stringify(["reviewed", "unknown"]),
+      `the canon's report cases carry review states ${JSON.stringify(reviewStates)}`,
     );
 
+    for (const [name, reportCase] of reportCases) {
+      await admin.query("savepoint report_case");
+      await seed(admin, reportCase);
+      const report = await repository.getLatest(reportCase.request_strategy_id, CONTEXT);
+      assert("decisions" in report, `${name}: expected a report, got ${JSON.stringify(report)}`);
+      // executed_at is the TS-only #370 extension, and `provenance` is the
+      // TS-only input-vintage read joined from mart.topt_core_results; the
+      // shared contract surface (including strategy_run_id and governed) is what
+      // must match the Python twin byte-for-byte.
+      const {
+        executed_at: _executedAt,
+        provenance: _provenance,
+        ...shared
+      } = report;
+      assert(
+        canonical(shared) === canonical(reportCase.expected_report),
+        `${name}: report serialization diverges from the frozen canon:\n  ts:     ${canonical(shared)}\n  canon:  ${canonical(reportCase.expected_report)}`,
+      );
+      await admin.query("rollback to savepoint report_case");
+    }
+
+    for (const name of ["wrong_strategy_id", "rank_zero", "weight_out_of_bounds"] as const) {
+      await seed(admin, FIXTURE[name]);
+    }
     for (const name of ["wrong_strategy_id", "rank_zero", "weight_out_of_bounds"] as const) {
       const divergence = FIXTURE[name];
       const result = await repository.getLatest(divergence.request_strategy_id, CONTEXT);

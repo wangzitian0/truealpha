@@ -16,6 +16,8 @@
  *    capture run the strategy run was evaluated for (`mart.strategy_run_capture`,
  *    #877) — mart.strategy_decisions records the verdict and nothing about what it
  *    was reached from;
+ *  - `definition` names the strategy definition of the run (#1235). The generated
+ *    twin of the Python definition registry gives its review state;
  *  - a query error → `database_unavailable`; no run → `no_runs_recorded`;
  *    a row that no longer matches the DTO shape → `schema_mismatch`.
  *
@@ -34,6 +36,11 @@ import {
 	VALUATION_TIERS,
 	type ValuationTier,
 } from "@/contracts/strategyRun";
+import { strategyRunDefinitionOf } from "@/contracts/strategyDefinition";
+import {
+	type RegisteredStrategyDefinition,
+	STRATEGY_DEFINITION_REGISTRY,
+} from "@/contracts/strategyDefinitions.generated";
 
 import { withMartReadonly } from "./db";
 
@@ -60,6 +67,8 @@ export type MartStrategyRunReport = StrategyRunReport & {
 // head resolves a run for this strategy does the newest recorded run stand in. The
 // join lives in mart.served_head and mart.strategy_run_capture; this statement
 // is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and libs/contracts pins the two texts.
+// Python consumers read a row by position (is_governed is column 3), so a new column goes
+// at the end of the select list (#1235).
 export const LATEST_RUN_SQL = `
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
            exists (
@@ -68,7 +77,8 @@ export const LATEST_RUN_SQL = `
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
                  and h.universe_id like 'universe:topt-%'
-           ) as is_governed
+           ) as is_governed,
+           r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
     where r.strategy_key = $1
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
@@ -332,6 +342,12 @@ export function provenanceFromRow(
 }
 
 export class MartStrategyRunRepository {
+	/** `registry` gives each run its review state (#1235). The App uses the generated
+	 * registry; tests pass another one to add a synthetic provisional definition. */
+	constructor(
+		private readonly registry: readonly RegisteredStrategyDefinition[] = STRATEGY_DEFINITION_REGISTRY,
+	) {}
+
 	async getLatest(
 		strategyId: string,
 		_context: AccessContext,
@@ -377,6 +393,17 @@ export class MartStrategyRunRepository {
 			return { strategy_id: strategyId, reason: "schema_mismatch" };
 		}
 
+		// #1235: the definition the served run evaluated. The registry decides the review
+		// state from the content hash, exactly as the Python twin does.
+		const definition = strategyRunDefinitionOf(
+			runRow.strategy_version,
+			runRow.definition_content_sha256,
+			this.registry,
+		);
+		if (definition === null) {
+			return { strategy_id: strategyId, reason: "schema_mismatch" };
+		}
+
 		try {
 			return {
 				strategy_id: "large_model_value_v0",
@@ -398,6 +425,7 @@ export class MartStrategyRunRepository {
 						? runRow.executed_at.toISOString()
 						: String(runRow.executed_at),
 				governed: Boolean(runRow.is_governed),
+				definition,
 			};
 		} catch (error) {
 			if (error instanceof SchemaMismatchError) {

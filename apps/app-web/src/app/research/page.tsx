@@ -13,6 +13,7 @@ import {
 	valuationBasisLabel,
 } from "@/contracts/strategyRun";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { loadOverview } from "@/server/dashboard";
@@ -85,6 +86,10 @@ export default async function ResearchOverviewPage() {
 						</span>
 					)}
 				</p>
+				{/* #1235: which definition produced this run, and whether its bands were reviewed. */}
+				{strategy.kind === "ready" && (
+					<StrategyDefinitionLine definition={strategy.report.definition} />
+				)}
 			</div>
 
 			<ReadStateNotice state={state} />

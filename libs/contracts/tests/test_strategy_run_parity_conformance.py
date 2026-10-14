@@ -8,7 +8,12 @@ must also produce — two languages, one schema, one expected byte shape. The
 divergence-trigger cases (a run recorded under a non-default key, ``rank = 0``,
 ``target_weight = 1.5``) must come back ``schema_mismatch`` on BOTH sides.
 
-Everything runs inside ONE transaction: the repository under test opens its own
+#1235: the canon holds two report cases under the one strategy key. ``report`` is a run of
+the reviewed definition 1.0.0; ``report_definition_not_in_registry`` is a run of the deleted
+0.1.0, whose review state is ``unknown``. Each test seeds one report case only, so the
+repository's "latest run" is the case under test.
+
+Each test runs inside ONE transaction: the repository under test opens its own
 connection per call, so ``psycopg.connect`` is redirected onto the test's
 connection (the same seam the TS half injects through ``db.ts __setTestClient``,
 and the same technique as test_materialization's ``_BorrowedConnection``).
@@ -30,6 +35,9 @@ from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnava
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
 _FIXTURE_PATH = Path(__file__).parents[1] / "conformance" / "strategy_run_parity.json"
+_FIXTURE = json.loads(_FIXTURE_PATH.read_text())
+_REPORT_CASES = sorted(name for name, case in _FIXTURE.items() if "expected_report" in case)
+_DIVERGENCE_CASES = ("wrong_strategy_id", "rank_zero", "weight_out_of_bounds")
 
 _RUN_SQL = """insert into mart.strategy_runs
  (strategy_run_id, content_sha256, strategy_key, strategy_version, definition_content_sha256,
@@ -71,14 +79,13 @@ class _BorrowedConnection:
 
 
 @pytest.fixture
-def seeded(monkeypatch: pytest.MonkeyPatch):
+def database(monkeypatch: pytest.MonkeyPatch):
     from truealpha_runtime.testing import skip_or_fail
 
     url = _database_url()
     if not url:
         skip_or_fail("DATABASE_URL must be explicitly provided for DB parity tests (no default to port 5432)")
         return
-    fixture = json.loads(_FIXTURE_PATH.read_text())
     try:
         connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
@@ -86,15 +93,17 @@ def seeded(monkeypatch: pytest.MonkeyPatch):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; ci-python runs this against a real database")
     try:
-        for case in fixture.values():
-            connection.execute(_RUN_SQL, case["run"])
-            for decision in case["decisions"]:
-                connection.execute(_DECISION_SQL, {**decision, "strategy_run_id": case["run"]["strategy_run_id"]})
         monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
-        yield fixture
+        yield connection
     finally:
         connection.rollback()
         connection.close()
+
+
+def _seed(connection: psycopg.Connection, case: dict) -> None:
+    connection.execute(_RUN_SQL, case["run"])
+    for decision in case["decisions"]:
+        connection.execute(_DECISION_SQL, {**decision, "strategy_run_id": case["run"]["strategy_run_id"]})
 
 
 def _context() -> AccessContext:
@@ -111,18 +120,28 @@ def _context() -> AccessContext:
     )
 
 
-def test_report_serialization_matches_the_frozen_canon(seeded) -> None:
-    case = seeded["report"]
+def test_the_canon_holds_a_reviewed_and_an_unknown_report_case() -> None:
+    """#1235: both twins must agree on each review state that real runs carry today."""
+    states = sorted(_FIXTURE[name]["expected_report"]["definition"]["review_state"] for name in _REPORT_CASES)
+    assert states == ["reviewed", "unknown"], f"the canon's report cases carry review states {states}"
+
+
+@pytest.mark.parametrize("case_name", _REPORT_CASES)
+def test_report_serialization_matches_the_frozen_canon(database, case_name: str) -> None:
+    case = _FIXTURE[case_name]
+    _seed(database, case)
     repository = PostgresStrategyRunRepository(database_url=_database_url())
     result = repository.get_latest(strategy_id=case["request_strategy_id"], context=_context())
     assert isinstance(result, StrategyRunReport), f"expected a report, got {result!r}"
     assert result.model_dump(mode="json") == case["expected_report"]
 
 
-def test_divergence_triggers_are_schema_mismatch(seeded) -> None:
+def test_divergence_triggers_are_schema_mismatch(database) -> None:
+    for name in _DIVERGENCE_CASES:
+        _seed(database, _FIXTURE[name])
     repository = PostgresStrategyRunRepository(database_url=_database_url())
-    for name in ("wrong_strategy_id", "rank_zero", "weight_out_of_bounds"):
-        case = seeded[name]
+    for name in _DIVERGENCE_CASES:
+        case = _FIXTURE[name]
         result = repository.get_latest(strategy_id=case["request_strategy_id"], context=_context())
         assert isinstance(result, StrategyRunUnavailable), f"{name}: expected unavailable, got {result!r}"
         assert result.reason == case["expected_reason"], f"{name}: {result.reason}"

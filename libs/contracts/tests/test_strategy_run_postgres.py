@@ -22,9 +22,14 @@ import psycopg
 import pytest
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.research import ValuationTier
+from truealpha_contracts.strategy import (
+    StrategyDefinitionIdentity,
+    registered_strategy_definition,
+    strategy_definition_registry,
+)
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
-from truealpha_runtime.testing import guard_db_write
+from truealpha_runtime.testing import guard_db_write, synthetic_provisional_strategy_definition
 
 _HASH64 = "c" * 64
 # The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
@@ -76,7 +81,15 @@ def connection():
         active.close()
 
 
-def _insert_run(connection, run_id: str, strategy_key: str, *, executed_at: datetime) -> None:
+def _insert_run(
+    connection,
+    run_id: str,
+    strategy_key: str,
+    *,
+    executed_at: datetime,
+    strategy_version: str = "v0",
+    definition_sha256: str = _HASH64,
+) -> None:
     connection.execute(
         """
         insert into mart.strategy_runs (
@@ -84,7 +97,7 @@ def _insert_run(connection, run_id: str, strategy_key: str, *, executed_at: date
             definition_content_sha256, corpus_sha256, claim_ceiling, executed_at
         ) values (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (run_id, _HASH64, strategy_key, "v0", _HASH64, _HASH64, "preview", executed_at),
+        (run_id, _HASH64, strategy_key, strategy_version, definition_sha256, _HASH64, "preview", executed_at),
     )
 
 
@@ -368,3 +381,97 @@ def test_an_issuer_the_identity_store_does_not_know_keeps_its_raw_id(connection)
 
     assert isinstance(result, StrategyRunReport)
     assert result.decisions[0].issuer_id == unknown_issuer
+
+
+# --- #1235 criterion 1: the report names the definition of the served run ---------------------
+
+_REGISTRY = strategy_definition_registry()
+_REVIEWED = next(entry for entry in _REGISTRY if not entry.provisional_semantics)
+#: Definition 0.1.0. The owner deleted its file (#1274); production and staging still hold its runs.
+_DELETED_V0 = ("0.1.0", "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d")
+
+
+def _served_report(connection, *, strategy_version: str, definition_sha256: str) -> StrategyRunReport:
+    """Record the newest run with this definition identity and read it back through the repository."""
+    strategy_key = "large_model_value_v0"
+    run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
+    _insert_run(
+        connection,
+        run_id,
+        strategy_key,
+        executed_at=datetime.now(UTC),
+        strategy_version=strategy_version,
+        definition_sha256=definition_sha256,
+    )
+    _insert_decision(
+        connection,
+        "strategy-decision:" + uuid.uuid4().hex + "0" * 32,
+        run_id,
+        issuer_id="issuer:adm",
+        cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+    )
+    result = PostgresStrategyRunRepository(database_url=_resolve_database_url()).get_latest(
+        strategy_id=strategy_key, context=_context()
+    )
+    assert isinstance(result, StrategyRunReport), f"expected a report, got {result!r}"
+    assert result.strategy_run_id == run_id, f"the repository served {result.strategy_run_id}, not the seeded run"
+    return result
+
+
+@pytest.mark.parametrize("registered", _REGISTRY, ids=lambda entry: f"definition-{entry.version}")
+def test_the_report_names_the_definition_and_review_state_of_the_served_run(
+    connection, registered: StrategyDefinitionIdentity
+) -> None:
+    """Parametrized over the registry: a future definition file is covered with no edit here.
+    The registry holds 1.0.0 (reviewed) only; the provisional case below adds one."""
+    result = _served_report(
+        connection, strategy_version=registered.version, definition_sha256=registered.content_sha256
+    )
+
+    expected_state = "provisional" if registered.provisional_semantics else "reviewed"
+    assert result.definition is not None, "the report does not name the definition of the served run"
+    assert (result.definition.version, result.definition.content_sha256, result.definition.review_state) == (
+        registered.version,
+        registered.content_sha256,
+        expected_state,
+    )
+
+
+def test_a_provisional_definition_reads_provisional_in_the_report(connection) -> None:
+    """No packaged definition is provisional, so the synthetic one keeps the marker armed: a
+    future provisional definition file gets this state with no code change."""
+    synthetic = synthetic_provisional_strategy_definition()
+    with registered_strategy_definition(synthetic):
+        result = _served_report(
+            connection, strategy_version=synthetic.definition_version, definition_sha256=synthetic.content_sha256
+        )
+
+    assert result.definition is not None, "the report does not name the definition of the served run"
+    assert (result.definition.version, result.definition.content_sha256, result.definition.review_state) == (
+        synthetic.definition_version,
+        synthetic.content_sha256,
+        "provisional",
+    )
+
+
+@pytest.mark.parametrize(
+    ("strategy_version", "definition_sha256"),
+    [
+        pytest.param(*_DELETED_V0, id="deleted-0.1.0"),
+        pytest.param(_REVIEWED.version, "f" * 64, id="hash-outside-registry"),
+        pytest.param(_DELETED_V0[0], _REVIEWED.content_sha256, id="version-disagrees-with-hash"),
+    ],
+)
+def test_a_definition_outside_the_registry_is_unknown_and_never_reviewed(
+    connection, strategy_version: str, definition_sha256: str
+) -> None:
+    """The registry decides from the content hash. The deleted 0.1.0, a reviewed version string
+    with another hash, or a reviewed hash with another version is not a definition it holds."""
+    result = _served_report(connection, strategy_version=strategy_version, definition_sha256=definition_sha256)
+
+    assert result.definition is not None, "the report does not name the definition of the served run"
+    assert (result.definition.version, result.definition.content_sha256, result.definition.review_state) == (
+        strategy_version,
+        definition_sha256,
+        "unknown",
+    )

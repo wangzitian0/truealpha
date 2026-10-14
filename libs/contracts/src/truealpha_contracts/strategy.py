@@ -35,12 +35,16 @@ from __future__ import annotations
 import functools
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from importlib import resources
+from importlib.resources.abc import Traversable
 from itertools import pairwise
-from typing import Any, Literal, Protocol, Self
+from typing import Any, Literal, NamedTuple, Protocol, Self
 
 from pydantic import (
     BaseModel,
@@ -732,16 +736,21 @@ def load_strategy_definition_corpus(resource: str) -> dict[str, Any]:
     return payload
 
 
-@functools.lru_cache(maxsize=16)
-def load_strategy_definition(resource: str) -> LargeModelValueV0Definition:
-    """Validate the definition of one packaged file against the content id that the file pins."""
+def _definition_of_corpus(resource: str, corpus: dict[str, Any]) -> LargeModelValueV0Definition:
+    """Validate the definition of one corpus against the content id that the corpus pins."""
 
-    corpus = load_strategy_definition_corpus(resource)
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
     pinned = corpus["expected"]["strategy_definition_id"]
     if definition.strategy_definition_id != pinned:
         raise ValueError(f"{resource}: definition id {definition.strategy_definition_id} != pinned {pinned}")
     return definition
+
+
+@functools.lru_cache(maxsize=16)
+def load_strategy_definition(resource: str) -> LargeModelValueV0Definition:
+    """Validate the definition of one packaged file against the content id that the file pins."""
+
+    return _definition_of_corpus(resource, load_strategy_definition_corpus(resource))
 
 
 def load_live_strategy_definition() -> LargeModelValueV0Definition:
@@ -773,6 +782,110 @@ def live_risk_free_rate(cutoff_at: datetime | str | None = None) -> Decimal:
     else:
         cutoff_dt = cutoff_at
     return golden.rate_for(cutoff_dt).annualized_rate
+
+
+class StrategyDefinitionIdentity(NamedTuple):
+    """One packaged definition, by the identity that a strategy run records (#1235).
+
+    ``mart.strategy_runs`` stores ``version`` as ``strategy_version`` and ``content_sha256``
+    as ``definition_content_sha256``.
+    """
+
+    version: str
+    content_sha256: str
+    provisional_semantics: bool
+
+
+#: The review state of the definition that a strategy run evaluated (#1235).
+DefinitionReviewState = Literal["reviewed", "provisional", "unknown"]
+
+
+def _identity_of(definition: LargeModelValueV0Definition) -> StrategyDefinitionIdentity:
+    return StrategyDefinitionIdentity(
+        version=definition.definition_version,
+        content_sha256=definition.content_sha256,
+        provisional_semantics=definition.provisional_semantics,
+    )
+
+
+def strategy_definitions_in(directory: Traversable) -> tuple[StrategyDefinitionIdentity, ...]:
+    """Every strategy definition file in one directory, sorted by version text (#1235).
+
+    A JSON file is a definition when it holds a ``strategy_definition`` object. Each one
+    passes the validation of ``load_strategy_definition``, so a file that does not load raises.
+    The content hash covers the version, so one version must map to one hash. Two files
+    with one version raise: a changed definition needs a new version.
+    """
+
+    entries: list[StrategyDefinitionIdentity] = []
+    for item in sorted(directory.iterdir(), key=lambda entry: entry.name):
+        if not item.name.endswith(".json"):
+            continue
+        corpus = json.loads(item.read_bytes())
+        if not isinstance(corpus, dict) or "strategy_definition" not in corpus:
+            continue
+        definition = _definition_of_corpus(item.name, corpus)
+        if any(entry.version == definition.definition_version for entry in entries):
+            raise ValueError(f"{item.name}: a second definition file has version {definition.definition_version}")
+        entries.append(_identity_of(definition))
+    return tuple(sorted(entries))
+
+
+@functools.cache
+def _packaged_strategy_definitions() -> tuple[StrategyDefinitionIdentity, ...]:
+    return strategy_definitions_in(resources.files("truealpha_contracts.data"))
+
+
+#: Definitions that ``registered_strategy_definition`` adds. The value belongs to one
+#: context and the context manager resets it, so an addition cannot leak out of its block.
+_REGISTERED_IN_CONTEXT: ContextVar[tuple[StrategyDefinitionIdentity, ...]] = ContextVar(
+    "truealpha_registered_strategy_definitions", default=()
+)
+
+
+def strategy_definition_registry() -> tuple[StrategyDefinitionIdentity, ...]:
+    """Every packaged strategy definition, sorted by version text (#1235).
+
+    A new definition file in ``truealpha_contracts.data`` joins with no code change.
+    Inside ``registered_strategy_definition`` the registry also holds the definition it adds.
+    """
+
+    return tuple(sorted(_packaged_strategy_definitions() + _REGISTERED_IN_CONTEXT.get()))
+
+
+@contextmanager
+def registered_strategy_definition(definition: LargeModelValueV0Definition) -> Iterator[StrategyDefinitionIdentity]:
+    """Add one definition to the registry inside this context only (#1235).
+
+    No packaged definition is provisional, so tests add a synthetic provisional one to keep
+    the provisional marker armed. The definition passes the full model validation again, so
+    a ``model_construct`` copy cannot skip it. A version or a hash that the registry holds raises.
+    """
+
+    identity = _identity_of(LargeModelValueV0Definition.model_validate_json(definition.model_dump_json()))
+    if any(
+        entry.version == identity.version or entry.content_sha256 == identity.content_sha256
+        for entry in strategy_definition_registry()
+    ):
+        raise ValueError(f"the registry already holds version {identity.version} or its content hash")
+    token = _REGISTERED_IN_CONTEXT.set(_REGISTERED_IN_CONTEXT.get() + (identity,))
+    try:
+        yield identity
+    finally:
+        _REGISTERED_IN_CONTEXT.reset(token)
+
+
+def definition_review_state(version: str, content_sha256: str) -> DefinitionReviewState:
+    """The review state of the definition that a strategy run recorded (#1235).
+
+    The content hash selects the registry entry and the version must agree with it.
+    A pair that the registry does not hold is ``unknown``, never ``reviewed``.
+    """
+
+    for entry in strategy_definition_registry():
+        if entry.content_sha256 == content_sha256 and entry.version == version:
+            return "provisional" if entry.provisional_semantics else "reviewed"
+    return "unknown"
 
 
 class ExpressionEngineExecutionBinding(_StrictFrozenModel):
@@ -1183,6 +1296,7 @@ __all__ = [
     "CoreStrategyEvaluationProtocol",
     "CutoffRiskFreeRate",
     "DecimalQuantization",
+    "DefinitionReviewState",
     "EqualWeightSizingRule",
     "EvaluationPartition",
     "EvaluationSplitRule",
@@ -1208,15 +1322,20 @@ __all__ = [
     "RiskFreeInstrument",
     "RiskFreeRatePolicy",
     "SelectionRule",
+    "StrategyDefinitionIdentity",
     "StrategyEngineBinding",
     "ThreeTierPgpValuationDefinition",
     "ThreeTierValuationDefinition",
     "ValuationBasis",
     "ValuationGapRule",
     "WalkForwardWindow",
+    "definition_review_state",
     "live_risk_free_rate",
     "load_live_strategy_corpus",
     "load_live_strategy_definition",
     "load_strategy_definition",
     "load_strategy_definition_corpus",
+    "registered_strategy_definition",
+    "strategy_definition_registry",
+    "strategy_definitions_in",
 ]

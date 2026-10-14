@@ -16,6 +16,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { asStrategyRunDefinition, type StrategyRunDefinition } from "./strategyDefinition";
+
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const CUTOFF_PATTERN =
 	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -155,6 +157,9 @@ export interface StrategyRunReport {
 	golden_mismatches: readonly string[];
 	strategy_run_id?: string;
 	governed?: boolean;
+	// #1235: the definition the run evaluated and its review state. Absent on a report
+	// that records no definition (the preview fixture), as the Python twin's None.
+	definition?: StrategyRunDefinition;
 }
 
 export interface StrategyRunUnavailable {
@@ -448,9 +453,10 @@ export function asStrategyRunReport(value: unknown): StrategyRunReport {
 			"golden_mismatches",
 			"strategy_run_id",
 			"governed",
+			"definition",
 		],
 		"$",
-		["strategy_run_id", "governed"],
+		["strategy_run_id", "governed", "definition"],
 	);
 
 	if (object.strategy_id !== "large_model_value_v0")
@@ -500,6 +506,13 @@ export function asStrategyRunReport(value: unknown): StrategyRunReport {
 	};
 	if (typeof object.strategy_run_id === "string") {
 		report.strategy_run_id = object.strategy_run_id;
+	}
+	// #1235: null is the Python twin's serialized "no definition".
+	if (object.definition !== undefined && object.definition !== null) {
+		const definition = asStrategyRunDefinition(object.definition);
+		if (definition === null)
+			fail("$.definition", "expected a definition marker that the definition registry confirms");
+		report.definition = definition;
 	}
 	return report;
 }
