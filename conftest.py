@@ -16,6 +16,8 @@ developer's machine without re-introducing a shipped default.
 
 import os
 
+from truealpha_runtime.testing import install_db_write_gate
+
 _LOCAL_OBJECT_STORE = {
     "S3_ENDPOINT": "http://localhost:9000",
     "S3_ACCESS_KEY": "minio",
@@ -24,3 +26,5 @@ _LOCAL_OBJECT_STORE = {
 
 for _name, _value in _LOCAL_OBJECT_STORE.items():
     os.environ.setdefault(_name, _value)
+
+install_db_write_gate()
