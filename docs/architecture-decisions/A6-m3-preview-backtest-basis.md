@@ -83,6 +83,10 @@ each decision:
   `mart.backtest_valuations.benchmark_cum_nav`). Its universe is the issuers with inputs at the
   first cutoff. A benchmark symbol without an open on the first fill session is bought at its next
   open, and the run records the delay.
+- The engine records no order below one cent (#1270). Such an order is the Decimal rounding residue
+  between a held weight and its unchanged target. Staging run `backtest-run:893147d2` recorded two BUY
+  orders of about 4.5e-25 shares. `MIN_ORDER_NOTIONAL` sets the limit. The rule changes the recorded
+  trades, so the engine id is now `factors.backtest.engine:unadjusted-open-explicit-splits:v2`.
 - Decision 6 no longer holds. No frozen universe list exists. The universe is the issuers that hold
   strategy inputs today, resolved through today's stored lineage. That is a survivorship bias, and
   each run stores it in `metrics_payload.limitations`. The page and the MCP response show it.
