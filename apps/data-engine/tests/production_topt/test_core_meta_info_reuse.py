@@ -27,10 +27,14 @@ from data_engine.datahub.production_topt import PostgresToptCoreRepository, comp
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import SourceRequest
-from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from production_topt.test_degraded_capture_reuse import _REUSE_CUTOFF, _arm, _run_tick  # noqa: E402
+from production_topt.test_degraded_capture_reuse import (  # noqa: E402
+    _REUSE_CUTOFF,
+    _arm,
+    _run_tick,
+    tick_database_url,  # noqa: F401 - the database fixture of the reuse tests
+)
 from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
 
 MIGRATIONS = Path(__file__).resolve().parents[4] / "db" / "migrations"
@@ -67,10 +71,13 @@ NON_BANK_FINANCIAL_VALUES = {
 
 
 @pytest.fixture(scope="module")
-def database() -> Iterator[str]:
-    """A scratch copy of the migrated database. The two ticks commit into it."""
-    with isolated_test_database("lineage_reuse") as url:
-        yield str(url)
+def database(tick_database_url) -> str:  # noqa: F811
+    """A scratch copy of the migrated database. The two ticks commit into it.
+
+    The reuse tests own the setup of a database that a tick can run on. This module uses the same
+    fixture, so the two modules cannot drift apart.
+    """
+    return str(tick_database_url)
 
 
 _PLANNED_SOURCE_REQUEST = composition._source_request
