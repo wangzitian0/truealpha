@@ -95,9 +95,7 @@ export default async function AdminDatahubPage() {
   const totalHeads = stats.heads.length;
   const freshHeads = stats.heads.filter((h) => h.freshness === "fresh").length;
   const staleHeads = stats.heads.filter((h) => h.freshness === "stale").length;
-  const anyHeadDegraded = stats.heads.some(
-    (head) => head.is_degraded || head.freshness === "stale",
-  );
+  const anyHeadDegraded = stats.heads.some((head) => head.is_degraded);
 
   // 2. Question Matrix Connectivity Metrics
   let totalQuestionsEvaluated = 0;
