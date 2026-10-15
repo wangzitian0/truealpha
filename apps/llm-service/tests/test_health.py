@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -189,8 +190,8 @@ class _PointersOnly(_VerdictsOnly):
         raise psycopg.errors.UndefinedTable("relation does not exist")
 
 
-#: The newest head per universe, as `mart.served_head` returns it. One head is fresh, one is
-#: stale and one is withheld. Each has its own cadence limit.
+#: The live head of each universe family, as `mart.served_head` returns it. One head is fresh,
+#: one is stale and one is withheld. Each has its own cadence limit.
 SERVED_ROWS = [
     (
         "universe:canary-us-2026-06-30",
@@ -289,11 +290,13 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
     assert connection.asked.count(pointer_sql) == 1 and len(connection.asked) >= 1
     lowered = " ".join(pointer_sql.lower().split())
     assert "from mart.served_head" in lowered
-    assert "distinct on (universe_id)" in lowered and "order by universe_id, advanced_at desc" in lowered
+    # #1320: the view returns the live head of each universe family. The endpoint takes every row,
+    # so the rule has one source. A pick of its own would be a second copy that can drift.
+    assert not re.search(r"\b(distinct|limit|desc)\b", lowered), "the endpoint must not pick a head of its own"
     assert "current_pointer" not in lowered, "the endpoint must read the served head, not the raw pointer"
     assert "now()" not in lowered and "extract(" not in lowered, "the endpoint must not compute an age"
     # The endpoint unpacks the columns by position, so their order is part of the contract.
-    select_list = lowered.split("select distinct on (universe_id)")[1].split(" from ")[0]
+    select_list = lowered.split("select ", 1)[1].split(" from ")[0]
     assert [column.strip() for column in select_list.split(",")] == [
         "universe_id",
         "advanced_at",
@@ -429,7 +432,16 @@ def clone(template_database: str) -> Iterator[Callable[..., str]]:
                     "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
                     "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
                     "values (%s, %s, %s, %s, 'v1', 'f', %s, %s, %s, now() - %s)",
-                    (f"current-pointer:{digest}", digest, environment or own, universe, run_id, sequence, previous, age),
+                    (
+                        f"current-pointer:{digest}",
+                        digest,
+                        environment or own,
+                        universe,
+                        run_id,
+                        sequence,
+                        previous,
+                        age,
+                    ),
                 )
             if identity == "missing":
                 connection.execute("delete from mart.environment_identity")

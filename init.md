@@ -615,6 +615,11 @@ These rules describe what `mart.served_head` and `mart.head_freshness` return.
 - **A quarterly value** reaches its limit at the `withhold` limit. It goes from `fresh`
   straight to withheld. It is never served `stale`.
 - **A head with no registry row** gets the strictest limit.
+- **A retired universe version** is not a head (#1320). The family of a head is its
+  `universe_id` without a trailing `-YYYY-MM-DD`. Per environment, family and factor, the view
+  returns the head that advanced last. Equal times go to the larger `universe_id`. A family with
+  one head keeps that head, also when it is stale or withheld. `mart.current_pointer_head` keeps
+  every version.
 - **A missing refresh time** reads `unknown` and `unavailable`. The reason is
   `refresh_time_unknown`.
 
