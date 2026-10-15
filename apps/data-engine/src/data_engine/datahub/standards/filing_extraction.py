@@ -237,13 +237,41 @@ def parse_as_of(text: str | None) -> date | None:
     return None
 
 
+def _fetch_json_via_gateway(
+    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str
+) -> dict[str, Any]:
+    from data_engine.sources import gateway as gw_mod
+
+    if gateway_instance is not None:
+        return gateway_instance.call("sec", endpoint, lambda: _get_json(http, url))
+    response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
+    response.raise_for_status()
+    return dict(response.json())
+
+
+def _fetch_bytes_via_gateway(http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str) -> bytes:
+    from data_engine.sources import gateway as gw_mod
+
+    if gateway_instance is not None:
+        return gateway_instance.call("sec", endpoint, lambda: _get_bytes(http, url))
+    response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
+    response.raise_for_status()
+    return bytes(response.content)
+
+
 def _annual_filing_from_index(
-    cik: int, index_block: dict[str, Any], *, cutoff_date: date, http: Any, gateway: SourceGateway
+    cik: int,
+    index_block: dict[str, Any],
+    *,
+    cutoff_date: date,
+    http: Any,
+    gateway: SourceGateway | None = None,
+    allowed_forms: Sequence[str] = ANNUAL_FORMS,
 ) -> FilingDocument | None:
-    """Return the first annual filing at or before cutoff_date from one submissions index block."""
+    """Return the first filing in allowed_forms at or before cutoff_date from one submissions index block."""
     forms = index_block.get("form") or ()
     for index, form in enumerate(forms):
-        if form not in ANNUAL_FORMS:
+        if form not in allowed_forms:
             continue
         filing_date = date.fromisoformat(index_block["filingDate"][index])
         if filing_date > cutoff_date:
@@ -251,24 +279,26 @@ def _annual_filing_from_index(
         accession = index_block["accessionNumber"][index].replace("-", "")
         document = index_block["primaryDocument"][index]
         url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
-        body = gateway.call("sec", "archive", lambda: _get_bytes(http, url))
+        body = _fetch_bytes_via_gateway(http, gateway, "archive", url)
         return FilingDocument(cik, accession, form, filing_date, document, url, body)
     return None
 
 
-def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime) -> FilingDocument | None:
-    """The newest 10-K/20-F filed at or before the cutoff, with its primary document (#1264).
-
-    High-volume filers (such as JPM, which files thousands of 424B2 notes per year) push
-    historical 10-K filings out of `filings.recent` into `filings.files` overflow JSONs.
-    When `recent` holds no eligible annual filing, overflow files whose `filingFrom` is on
-    or before `cutoff_date` are searched in order.
-    """
-    submissions = gateway.call("sec", "submissions", lambda: _get_json(http, SUBMISSIONS_URL.format(cik=cik)))
+def _latest_filing_for_forms(
+    cik: int,
+    *,
+    http: Any,
+    gateway: SourceGateway | None = None,
+    cutoff: datetime,
+    allowed_forms: Sequence[str],
+) -> FilingDocument | None:
+    submissions = _fetch_json_via_gateway(http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik))
     filings = submissions.get("filings") or {}
     recent = filings.get("recent") or {}
     cutoff_date = cutoff.astimezone(UTC).date()
-    found = _annual_filing_from_index(cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway)
+    found = _annual_filing_from_index(
+        cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
+    )
     if found is not None:
         return found
     for file_meta in filings.get("files") or ():
@@ -283,11 +313,113 @@ def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff:
             except ValueError:
                 pass
         overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
-        overflow = gateway.call("sec", "submissions", lambda: _get_json(http, overflow_url))
-        found = _annual_filing_from_index(cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway)
+        overflow = _fetch_json_via_gateway(http, gateway, "submissions", overflow_url)
+        found = _annual_filing_from_index(
+            cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
+        )
         if found is not None:
             return found
     return None
+
+
+def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime) -> FilingDocument | None:
+    """The newest 10-K/20-F filed at or before the cutoff, with its primary document (#1264).
+
+    High-volume filers (such as JPM, which files thousands of 424B2 notes per year) push
+    historical 10-K filings out of `filings.recent` into `filings.files` overflow JSONs.
+    When `recent` holds no eligible annual filing, overflow files whose `filingFrom` is on
+    or before `cutoff_date` are searched in order.
+    """
+    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=ANNUAL_FORMS)
+
+
+PERIODIC_FORMS = (
+    "10-K",
+    "10-K/A",
+    "10-KT",
+    "10-KT/A",
+    "10-Q",
+    "10-Q/A",
+    "10-QT",
+    "10-QT/A",
+    "20-F",
+    "20-F/A",
+    "40-F",
+    "40-F/A",
+)
+_CLASS_OF_STOCK_AXIS = "us-gaap:StatementClassOfStockAxis"
+_DEI_SHARES_CONCEPT = "dei:EntityCommonStockSharesOutstanding"
+_PAR_VALUE_CONCEPT = "us-gaap:CommonStockParOrStatedValuePerShare"
+
+
+def latest_periodic_filing(
+    cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
+) -> FilingDocument | None:
+    """Return the newest periodic statement (10-K/10-Q/20-F/40-F) filed at or before cutoff (#1265)."""
+    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=PERIODIC_FORMS)
+
+
+def _format_accession(accession: str) -> str:
+    digits = accession.replace("-", "")
+    if len(digits) == 18 and digits.isdigit():
+        return f"{digits[:10]}-{digits[10:12]}-{digits[12:]}"
+    return accession
+
+
+def _uniform_class_par_values(ix: Any, members: Sequence[str]) -> bool:
+    par_by_member: dict[str, Decimal] = {}
+    for fact in ix.facts((_PAR_VALUE_CONCEPT,)):
+        if fact.value is None or fact.context.start is not None:
+            continue
+        dims = dict(fact.context.dimensions)
+        member = dims.get(_CLASS_OF_STOCK_AXIS)
+        if isinstance(member, str) and member in members:
+            par_by_member[member] = fact.value
+    return len(set(par_by_member.values())) <= 1
+
+
+def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
+    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265).
+
+    Multi-class issuers such as Visa tag cover-page `dei:EntityCommonStockSharesOutstanding`
+    on `us-gaap:StatementClassOfStockAxis`, which SEC's `companyfacts` aggregation strips.
+    Returns segmented `companyfacts`-compatible entries when at least two share classes are
+    tagged at the same instant date and no non-uniform per-class par values exist (refusing
+    1500:1 dual-par structures such as Berkshire Hathaway Class A vs Class B).
+    """
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    ix = InlineXbrl(document.body)
+    by_end: dict[date, dict[str, Decimal]] = {}
+    for fact in ix.facts((_DEI_SHARES_CONCEPT,)):
+        if fact.value is None or fact.context.start is not None:
+            continue
+        dims = dict(fact.context.dimensions)
+        if len(dims) != 1 or _CLASS_OF_STOCK_AXIS not in dims:
+            continue
+        by_end.setdefault(fact.context.end, {})[dims[_CLASS_OF_STOCK_AXIS]] = fact.value
+    if not by_end:
+        return []
+    latest_end = max(by_end)
+    by_member = by_end[latest_end]
+    if len(by_member) < 2 or not _uniform_class_par_values(ix, tuple(by_member)):
+        return []
+    formatted_accn = _format_accession(document.accession)
+    filed_iso = document.filing_date.isoformat()
+    end_iso = latest_end.isoformat()
+    return [
+        {
+            "end": end_iso,
+            "val": int(val) if val == int(val) else str(val),
+            "accn": formatted_accn,
+            "fy": latest_end.year,
+            "fp": "FY" if document.form.startswith(("10-K", "20-F", "40-F")) else "Q",
+            "form": document.form,
+            "filed": filed_iso,
+            "segment": member,
+        }
+        for member, val in sorted(by_member.items())
+    ]
 
 
 def _get_json(http: Any, url: str) -> dict[str, Any]:
