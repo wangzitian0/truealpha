@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 
 import pytest
 from botocore.exceptions import ClientError
+from infra2_sdk.runtime.s3 import S3Settings
 from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import (
     DEPENDENCY_MANIFEST,
     EnvironmentTier,
     RuntimeSettings,
     S3RawObjectStore,
-    S3StorageSettings,
 )
 from truealpha_runtime.tiers import resolve_environment_tier
 
@@ -110,7 +110,7 @@ def test_runtime_settings_converts_to_postgres_and_s3_settings():
     assert s3.bucket == "my-bucket"
     assert s3.documents_prefix == "docs-test"
     assert s3.raw_prefix == "raw"
-    assert issubclass(S3StorageSettings, RuntimeSettings)
+    assert isinstance(s3, S3Settings)
 
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():

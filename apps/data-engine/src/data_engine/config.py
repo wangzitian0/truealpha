@@ -32,20 +32,17 @@ class Settings(RuntimeSettings):
     # them at boot, and an environment that silently stopped injecting one read as "unknown"
     # rather than as a fault.
     #
-    # The env names are the ones the compose actually sets -- `TRUEALPHA_`-prefixed --
-    # declared as validation aliases rather than renamed on the infra2 side. The manifest
-    # must describe reality; a tidier name that nothing injects would be a manifest that
-    # validates an environment nobody deploys.
+    # The canonical env names are aligned with infra2-sdk v3.6.0 (`RELEASE_ID`,
+    # `IMAGE_DIGEST`, `CONFIGURATION_SHA256`) and `TRUEALPHA_CAPTURE_APPROVED_BY`.
     #
     # Where each comes from on the infra2 side, and hence its source class:
     #
-    #   TRUEALPHA_RELEASE_MANIFEST_ID       Vault RELEASE_MANIFEST_ID. Determined by the
-    #                                       release (`tools/release_identity.py`); still a
-    #                                       hand-written key until the infra2 follow-up.
-    #   TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST  Vault DATA_ENGINE_IMAGE_DIGEST, which
+    #   RELEASE_ID                          Vault RELEASE_MANIFEST_ID. Determined by the
+    #                                       release (`tools/release_identity.py`).
+    #   IMAGE_DIGEST                        Vault DATA_ENGINE_IMAGE_DIGEST, which
     #                                       `DataEngineDeployer.pin_release` resolves from the
     #                                       registry for the release tag.
-    #   TRUEALPHA_CONFIGURATION_SHA256      `DataEngineDeployer._configuration_sha256` over the
+    #   CONFIGURATION_SHA256                `DataEngineDeployer._configuration_sha256` over the
     #                                       compose artifacts and public env of that deploy.
     #   TRUEALPHA_CAPTURE_APPROVED_BY       Vault CAPTURE_APPROVED_BY, the reviewed human
     #                                       decision in `governance/approvals/<env>.yaml` --
@@ -256,7 +253,7 @@ class Settings(RuntimeSettings):
             provider=self.llm_provider,
             base_url=self.llm_base_url,
             api_key=self.llm_api_key or None,
-            primary_model=self.llm_model or "glm-5.3-flash",
+            primary_model=self.llm_model,
         )
 
 

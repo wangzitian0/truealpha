@@ -51,7 +51,7 @@
       "injected": false,
       "has_default": true,
       "sensitive": false,
-      "group": "Storage",
+      "group": "s3",
       "description": "Object key prefix for stored documents.",
       "source": "code"
     }

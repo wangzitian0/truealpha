@@ -8,7 +8,7 @@ from truealpha_runtime.checks import (
     ProbeResult,
     run_dependency_checks,
 )
-from truealpha_runtime.config import RuntimeSettings, S3StorageSettings, runtime_settings
+from truealpha_runtime.config import RuntimeSettings, runtime_settings
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST, Dependency, DependencyManifest
 from truealpha_runtime.storage import S3RawObjectStore, StorageError
 from truealpha_runtime.tiers import EnvironmentTier, resolve_environment_tier
@@ -25,7 +25,6 @@ __all__ = [
     "ProbeResult",
     "RuntimeSettings",
     "S3RawObjectStore",
-    "S3StorageSettings",
     "StorageError",
     "resolve_environment_tier",
     "run_dependency_checks",

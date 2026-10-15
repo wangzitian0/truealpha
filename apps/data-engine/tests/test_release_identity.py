@@ -190,6 +190,7 @@ def test_the_settings_model_resolves_canonical_sdk_keys(
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
     monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@127.0.0.1:5432/truealpha")
     monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("LLM_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
     assert settings.data_engine_image_digest == digest
     assert settings.release_manifest_id == release_id
@@ -197,6 +198,7 @@ def test_the_settings_model_resolves_canonical_sdk_keys(
     assert settings.configuration_sha256 == config_sha
     assert settings.migrations_database_url == "postgresql://admin:secret@127.0.0.1:5432/truealpha"
     assert settings.migration_lock_timeout_seconds == 10
+    assert settings.llm_model == "glm-5.3-flash"
 
     identity = settings.to_runtime_identity()
     assert identity.service_name == "data-engine"
@@ -210,3 +212,11 @@ def test_the_settings_model_resolves_canonical_sdk_keys(
 
     llm = settings.to_llm_settings()
     assert llm.provider == settings.llm_provider
+    assert llm.primary_model == "glm-5.3-flash"
+
+
+def test_to_llm_settings_fails_closed_when_model_is_empty() -> None:
+    """Empty llm_model fails closed with ValueError (#1039)."""
+    settings = Settings(_env_file=None, llm_model="")
+    with pytest.raises(ValueError, match="primary_model must be non-empty"):
+        settings.to_llm_settings()
