@@ -5,7 +5,6 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from infra2_sdk.runtime.s3 import (
-    S3Settings,
     create_s3_client,
     is_not_found,
     read_object_bytes,
@@ -36,21 +35,7 @@ class S3RawObjectStore:
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or runtime_settings
         self.bucket = self.settings.s3_bucket
-        # Construct S3Settings from resolved RuntimeSettings fields. Force
-        # addressing_style="path" because MinIO requires path-style routing
-        # and S3Settings defaults addressing_style to None.
-        self.s3_settings = S3Settings(
-            bucket=self.settings.s3_bucket,
-            endpoint_url=self._require_endpoint(),
-            access_key_id=self.settings.s3_access_key,
-            secret_access_key=self.settings.s3_secret_key.get_secret_value(),
-            region_name=self.settings.s3_region,
-            addressing_style="path",
-            connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-            read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-            raw_prefix=self.settings.s3_raw_prefix,
-            documents_prefix=self.settings.s3_documents_prefix,
-        )
+        self.s3_settings = self.settings.to_s3_settings()
         self.client = client or create_s3_client(self.s3_settings)
 
     def _require_endpoint(self) -> str:

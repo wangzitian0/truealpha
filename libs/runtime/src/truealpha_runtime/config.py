@@ -130,6 +130,7 @@ class RuntimeSettings(BaseSettings):
             access_key_id=self.s3_access_key or None,
             secret_access_key=self.s3_secret_key.get_secret_value() or None,
             region_name=self.s3_region,
+            addressing_style="path",
             connect_timeout_seconds=float(self.s3_connect_timeout_seconds),
             read_timeout_seconds=float(self.s3_connect_timeout_seconds),
             raw_prefix=self.s3_raw_prefix,

@@ -2,7 +2,7 @@ import os
 from typing import Literal
 
 from infra2_sdk.runtime.environment import RuntimeEnvKey
-from infra2_sdk.runtime.identity import RuntimeIdentity, canonical_sha256
+from infra2_sdk.runtime.identity import RuntimeIdentity
 from pydantic import AliasChoices, Field
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings
@@ -265,6 +265,5 @@ __all__ = [
     "RuntimeEnvKey",
     "RuntimeIdentity",
     "Settings",
-    "canonical_sha256",
     "settings",
 ]
