@@ -48,6 +48,8 @@ class S3RawObjectStore:
             addressing_style="path",
             connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
             read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
+            raw_prefix=self.settings.s3_raw_prefix,
+            documents_prefix=self.settings.s3_documents_prefix,
         )
         self.client = client or create_s3_client(self.s3_settings)
 

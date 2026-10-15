@@ -43,6 +43,17 @@
       "group": "runtime",
       "source": "code",
       "injected": true
+    },
+    {
+      "field": "s3_documents_prefix",
+      "env": "S3_DOCUMENTS_PREFIX",
+      "required": false,
+      "injected": false,
+      "has_default": true,
+      "sensitive": false,
+      "group": "Storage",
+      "description": "Object key prefix for stored documents.",
+      "source": "code"
     }
   ]
 }

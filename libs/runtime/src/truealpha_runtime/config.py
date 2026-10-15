@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from functools import cached_property
-from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,7 +15,13 @@ class RuntimeSettings(BaseSettings):
     # env_ignore_empty: an empty environment variable must not shadow a default or the next
     # alias (`DATABASE_URL=""` from an unrendered template line reached the URL validator as
     # "" and refused the service as not-PostgreSQL instead of falling through).
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, env_ignore_empty=True)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+        env_ignore_empty=True,
+        populate_by_name=True,
+    )
 
     app_env: str = Field(default="dev", json_schema_extra={"source": "code", "injected": True, "group": "runtime"})
     # GIT_COMMIT_SHA is the release identity of the running build. In deployed tiers it holds
@@ -63,6 +68,11 @@ class RuntimeSettings(BaseSettings):
     s3_bucket: str = Field(default="truealpha-raw", json_schema_extra={"source": "code", "group": "s3"})
     s3_region: str = Field(default="us-east-1", json_schema_extra={"source": "code", "group": "s3"})
     s3_raw_prefix: str = Field(default="raw", json_schema_extra={"source": "code", "group": "s3"})
+    s3_documents_prefix: str = Field(
+        default="documents",
+        validation_alias="S3_DOCUMENTS_PREFIX",
+        json_schema_extra={"source": "code", "group": "s3"},
+    )
     s3_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "s3"})
 
     @field_validator("database_url")
@@ -101,33 +111,32 @@ class RuntimeSettings(BaseSettings):
             EnvironmentTier.PRODUCTION,
         }
 
+    def to_postgres_settings(self):
+        """Construct canonical PostgresSettings."""
+        from infra2_sdk.runtime.postgres import PostgresSettings
+
+        return PostgresSettings(
+            dsn=self.database_url,
+            connect_timeout_seconds=self.database_connect_timeout_seconds,
+        )
+
+    def to_s3_settings(self):
+        """Construct canonical S3Settings."""
+        from infra2_sdk.runtime.s3 import S3Settings
+
+        return S3Settings(
+            bucket=self.s3_bucket,
+            endpoint_url=self.s3_endpoint,
+            access_key_id=self.s3_access_key or None,
+            secret_access_key=self.s3_secret_key.get_secret_value() or None,
+            region_name=self.s3_region,
+            connect_timeout_seconds=float(self.s3_connect_timeout_seconds),
+            read_timeout_seconds=float(self.s3_connect_timeout_seconds),
+            raw_prefix=self.s3_raw_prefix,
+            documents_prefix=self.s3_documents_prefix,
+        )
+
 
 runtime_settings = RuntimeSettings()
+S3StorageSettings = RuntimeSettings
 
-
-class DeploymentSettings(BaseSettings):
-    """Compose/GitHub/infra2 controls owned by runtime, not application code."""
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
-
-    compose_project_name: str = "truealpha"
-    env_suffix: str = ""
-    restart_policy: Literal["no", "always", "on-failure", "unless-stopped"] = "unless-stopped"
-
-    postgres_user: str = "postgres"
-    postgres_password: SecretStr = SecretStr("postgres")
-    postgres_db: str = "truealpha"
-    postgres_ports: str = "127.0.0.1:5432:5432"
-    minio_api_ports: str = "127.0.0.1:9000:9000"
-    minio_console_ports: str = "127.0.0.1:9001:9001"
-
-    registry: str = "ghcr.io"
-    image_prefix: str = "wangzitian0/truealpha"
-    image_tag: str = "local"
-    web_ports: str = "127.0.0.1:3000:3000"
-    llm_ports: str = "127.0.0.1:8000:8000"
-    docker_log_max_size: str = "10m"
-    docker_log_max_file: int = Field(default=3, ge=1, le=10)
-
-
-deployment_settings = DeploymentSettings()

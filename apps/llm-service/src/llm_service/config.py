@@ -1,4 +1,5 @@
-from pydantic import Field
+from infra2_sdk.runtime.llm import LlmSettings
+from pydantic import Field, SecretStr
 from truealpha_runtime import RuntimeSettings
 
 
@@ -35,5 +36,29 @@ class Settings(RuntimeSettings):
     mcp_allowed_hosts: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
     mcp_allowed_origins: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
 
+    llm_provider: str = Field(default="zai", json_schema_extra={"source": "code", "group": "llm"})
+    llm_base_url: str = Field(
+        default="https://open.bigmodel.cn/api/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
+    )
+    llm_api_key: SecretStr | None = Field(
+        default=None,
+        json_schema_extra={"source": "human", "scope": "project", "empty_ok": True, "sensitive": True, "group": "llm"},
+    )
+    llm_model: str = Field(
+        default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"}
+    )
+    llm_timeout_seconds: float = Field(default=90.0, json_schema_extra={"source": "code", "group": "llm"})
+
+    def to_llm_settings(self) -> LlmSettings:
+        return LlmSettings(
+            provider=self.llm_provider,
+            base_url=self.llm_base_url,
+            api_key=self.llm_api_key.get_secret_value() if self.llm_api_key else None,
+            primary_model=self.llm_model,
+            json_timeout_seconds=self.llm_timeout_seconds,
+        )
+
 
 settings = Settings()
+LlmServiceSettings = Settings
+
