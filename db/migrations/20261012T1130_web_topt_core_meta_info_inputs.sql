@@ -22,8 +22,8 @@
 -- owner and the ACL, and db/roles.sql grants select on every mart table to mart_readonly.
 --
 -- Replayed on every boot (2026-09-17 lock incident). `create or replace view` takes ACCESS
--- EXCLUSIVE even when nothing changes, so the view is replaced only when its definition
--- differs from the one below.
+-- EXCLUSIVE even when nothing changes. 20261015T0720 (#1331) now owns the definition, so this
+-- file creates the view only on a database that has none.
 do $$
 declare
     wanted constant text := $view$
@@ -104,13 +104,13 @@ join lateral (
 ) lineage on true
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.topt_core_meta_info') is null
-       or pg_get_viewdef(to_regclass('mart.topt_core_meta_info'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20261015T0720_web_topt_core_meta_info_reused_inputs.sql (#1331) redefines this
+    -- view later in the chain and owns its definition. A boot replays this file first. A
+    -- replacement here would put this older definition back (ACCESS EXCLUSIVE on the view) on
+    -- every replay, only for that file to replace it again. So this file creates the view only
+    -- on a database that has none.
+    if to_regclass('mart.topt_core_meta_info') is null then
         execute 'create or replace view mart.topt_core_meta_info as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
