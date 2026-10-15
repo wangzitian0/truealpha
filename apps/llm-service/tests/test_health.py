@@ -392,10 +392,21 @@ THREE_HEADS = (
 def clone(template_database: str) -> Iterator[Callable[..., str]]:
     """Make a database from the template, with committed heads and an identity row to order.
 
-    A head is (universe, age, environment). An environment of None means the identity row's own.
+    A head is (universe, age, environment) or (universe, age, environment, sequence). An
+    environment of None means the identity row's own. The sequence is 0 when it is not given.
     `identity` is "keep", "missing", or the environment name to store.
     """
     made: list[str] = []
+
+    def capture_run(connection: psycopg.Connection) -> str:
+        digest = uuid.uuid4().hex * 2
+        run_id = f"capture-run:{digest}"
+        connection.execute(
+            "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, "
+            "transaction_time, recorded_at) values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
+            (run_id, digest),
+        )
+        return run_id
 
     def make(heads=(), identity: str = "keep") -> str:
         name = f"truealpha_health_clone_{os.getpid()}_{uuid.uuid4().hex[:8]}"
@@ -408,19 +419,17 @@ def clone(template_database: str) -> Iterator[Callable[..., str]]:
             )
         with REAL_CONNECT(_named(name)) as connection:
             own = connection.execute("select environment from mart.environment_identity").fetchone()[0]
-            for universe, age, environment in heads:
+            for universe, age, environment, *rest in heads:
+                sequence = rest[0] if rest else 0
+                run_id = capture_run(connection)
+                # A head above sequence 0 names a previous run, as a real advance does.
+                previous = capture_run(connection) if sequence else None
                 digest = uuid.uuid4().hex * 2
-                run_id = f"capture-run:{digest}"
-                connection.execute(
-                    "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, "
-                    "transaction_time, recorded_at) values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
-                    (run_id, digest),
-                )
                 connection.execute(
                     "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
                     "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
-                    "values (%s, %s, %s, %s, 'v1', 'f', %s, 0, null, now() - %s)",
-                    (f"current-pointer:{digest}", digest, environment or own, universe, run_id, age),
+                    "values (%s, %s, %s, %s, 'v1', 'f', %s, %s, %s, now() - %s)",
+                    (f"current-pointer:{digest}", digest, environment or own, universe, run_id, sequence, previous, age),
                 )
             if identity == "missing":
                 connection.execute("delete from mart.environment_identity")
@@ -494,6 +503,29 @@ def test_a_database_that_holds_two_environments_lists_only_the_one_it_serves(mon
         "universe:topt-us-health",
     ]
     assert {entry["freshness"] for entry in payload["governed_pointers"]} == {"fresh"}
+
+
+#: The two QQQ heads that Production held on 2026-10-15 (#1320). The universe roll left the
+#: 2026-06-30 version at sequence 36, 150 hours old. The 2026-09-30 version was at sequence 4.
+QQQ_ROLL = (
+    ("universe:qqq-us-2026-06-30", timedelta(hours=150), None, 36),
+    ("universe:qqq-us-2026-09-30", timedelta(hours=6), None, 4),
+)
+
+
+def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(monkeypatch, clone) -> None:
+    """#1320: the retired QQQ head made the Production freshness check fail every day from
+    2026-10-09. The endpoint lists the live version only. The tool that pages reads this answer."""
+    payload = health_of(monkeypatch, clone(QQQ_ROLL))
+    assert [(entry["universe_id"], entry["freshness"]) for entry in payload["governed_pointers"]] == [
+        ("universe:qqq-us-2026-09-30", "fresh")
+    ]
+    tool = load_tool("datahub_freshness")
+    body = json.dumps(payload)
+    verdict = tool.check_pointer_freshness(
+        "https://example.invalid/api/health", environment="production", http_get=lambda _url: (200, body)
+    )
+    assert verdict == 0
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
