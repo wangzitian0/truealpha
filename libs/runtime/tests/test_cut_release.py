@@ -678,4 +678,3 @@ def test_prod_can_promote_an_existing_ancestor_tag_after_main_has_advanced(cerem
     [prod] = prod_dispatches(promoted_calls)
     assert f"owner_approved_sha={tag_sha}" in prod
     assert "reviewed_change_url=https://github.com/wangzitian0/truealpha/pull/12" in prod
-
