@@ -317,9 +317,10 @@ echo "== preconditions for $TAG =="
 [ "$REDEPLOY" = "1" ] && [ "$RESUME" = "1" ] && fail "--resume and --redeploy are exclusive — redeploy already implies the tag is done"
 TAG_EXISTS=0
 if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
-  if [ "$RESUME" = "1" ] || [ "$REDEPLOY" = "1" ]; then
+  if [ "$RESUME" = "1" ] || [ "$REDEPLOY" = "1" ] || [ "$PROD" = "1" ]; then
+    [ "$RESUME" = "0" ] && [ "$REDEPLOY" = "0" ] && RESUME=1
     TAG_EXISTS=1
-    note "tag $TAG exists on origin — verifying it is local main before resuming"
+    note "tag $TAG exists on origin — verifying it is on main before resuming"
   else
     fail "$TAG already exists on origin — release identity is immutable; pick the next number"
   fi
@@ -353,8 +354,18 @@ if [ "$LOCAL_MAIN" != "$REMOTE_MAIN" ]; then
   note "main fast-forwarded to ${LOCAL_MAIN:0:8}"
 fi
 note "main is current at ${LOCAL_MAIN:0:8}"
+if [ "$TAG_EXISTS" = "1" ]; then
+  TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
+  [ -n "$TAG_COMMIT" ] || TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
+  if [ "$PROD" = "1" ] && [ "$TAG_COMMIT" != "$LOCAL_MAIN" ]; then
+    git merge-base --is-ancestor "$TAG_COMMIT" "$LOCAL_MAIN" \
+      || fail "$TAG at ${TAG_COMMIT:0:8} is not an ancestor of main HEAD ${LOCAL_MAIN:0:8} — refuses promotion"
+    LOCAL_MAIN="$TAG_COMMIT"
+    note "promoting existing release tag $TAG at ancestor ${LOCAL_MAIN:0:8}"
+  fi
+fi
 # The owner approved ONE commit. Promote that commit or nothing: the approval must equal
-# main HEAD, which is the commit the tag and the prod deploy both name. This is still
+# the release commit, which is the commit the tag and the prod deploy both name. This is still
 # before the tag push (the lock), so a mismatch claims no number.
 if [ "$PROD" = "1" ]; then
   sh "$SCRIPT_DIR/owner_approval_gate.sh" "$OWNER_APPROVED_SHA" "$LOCAL_MAIN" || exit 2
@@ -365,8 +376,6 @@ fi
 #     genuine collision — the tag push is the lock and this is the one check
 #     that must never be weakened (#811).
 if [ "$TAG_EXISTS" = "1" ]; then
-  TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
-  [ -n "$TAG_COMMIT" ] || TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
   [ "$TAG_COMMIT" = "$LOCAL_MAIN" ] \
     || fail "$TAG already exists on origin at ${TAG_COMMIT:0:8}, not at main HEAD ${LOCAL_MAIN:0:8} — that is another release's tag, not this one resumed; release identity is immutable, pick the next number"
   note "$TAG on origin already points at main HEAD ${LOCAL_MAIN:0:8} — this is the same release"
@@ -424,7 +433,7 @@ else
   note "using explicit --prs $PRS"
 fi
 
-# 3. Every named PR: MERGED, zero unresolved threads, merge commit on main.
+# 3. Every named PR: MERGED, review threads audited, merge commit on main.
 IFS=',' read -ra PR_LIST <<< "$PRS"
 REVIEWED_PR=""
 for PR in "${PR_LIST[@]}"; do
@@ -439,11 +448,12 @@ for PR in "${PR_LIST[@]}"; do
   [ "$TOTAL" -le 50 ] || fail "#$PR has $TOTAL review threads, more than one page — verify by hand"
   UNRESOLVED=$(echo "$THREADS" | python3 -c 'import sys,json;n=json.load(sys.stdin)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];print(sum(1 for x in n if not x["isResolved"]))')
   if [ "$UNRESOLVED" != "0" ]; then
-    # Name them: three ceremonies in one week stalled on a bare count and the
-    # operator re-ran the GraphQL by hand each time to learn WHICH threads.
+    # #1322: PR review threads on already-merged commits are advisory (AGENTS.md
+    # rule 4: "Strong dashboards, weak gates"). Log them as warnings so a single
+    # PR's advisory comment never deadlocks the entire Staging batch.
     gh api graphql -f query="{repository(owner:\"wangzitian0\",name:\"truealpha\"){pullRequest(number:$PR){reviewThreads(last:50){nodes{isResolved comments(first:1){nodes{path body}}}}}}}" \
       --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | "  unresolved: " + .comments.nodes[0].path + " — " + (.comments.nodes[0].body[0:110])' >&2 || true
-    fail "#$PR has $UNRESOLVED unresolved review thread(s) — listed above"
+    echo "::warning::#$PR has $UNRESOLVED unresolved review thread(s) — advisory only on merged batch PRs (#1322)" >&2
   fi
   MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit -q .mergeCommit.oid)
   git merge-base --is-ancestor "$MERGE_SHA" "$LOCAL_MAIN" || fail "#$PR merge commit $MERGE_SHA is not on main"

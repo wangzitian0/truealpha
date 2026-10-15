@@ -52,7 +52,9 @@ if args[:2] == ["pr", "view"]:
     else:
         sys.exit(f"fake gh: unexpected pr view fields {fields!r}")
 elif args[:2] == ["api", "graphql"]:
-    print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}}))
+    unresolved = int(os.environ.get("FAKE_UNRESOLVED_THREADS", "0"))
+    nodes = [{"isResolved": False, "comments": {"nodes": [{"path": "foo.py", "body": "nit"}]}} for _ in range(unresolved)]
+    print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": unresolved, "nodes": nodes}}}}}))
 elif args[0] == "api" and re.fullmatch(r"repos/[^/]+/[^/]+/commits/[0-9a-f]+/pulls", args[1] if len(args) > 1 else ""):
     # #1022: cut_release.sh resolves a commit's PR via this endpoint instead of
     # guessing from commit-message text — the same SHA->PR fact the ceremony
@@ -643,3 +645,37 @@ def test_the_gate_never_echoes_an_unvalidated_approval() -> None:
 
     assert result.returncode == 2
     assert "::error::" not in result.stderr + result.stdout, result.stderr
+
+
+def test_unresolved_review_threads_on_merged_batch_prs_emit_warning_without_blocking(ceremony: Ceremony) -> None:
+    """#1322 Tier 2: advisory review threads on already-merged PRs must emit a
+    `::warning::` rather than failing the batch release ceremony."""
+    result, calls = ceremony.run("v0.0.2", extra_env={"FAKE_UNRESOLVED_THREADS": "2"})
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "::warning::#11 has 2 unresolved review thread(s)" in result.stderr
+    assert "::warning::#12 has 2 unresolved review thread(s)" in result.stderr
+    assert len(workflow_dispatches(calls, "deploy-release.yml")) == 1
+
+
+def test_prod_can_promote_an_existing_ancestor_tag_after_main_has_advanced(ceremony: Ceremony) -> None:
+    """#1322 Tier 3: an existing staging-verified tag on origin (`v0.0.2` at #12)
+    can be promoted to production even after `main` has advanced to #13, provided
+    `--owner-approved-sha` equals the tag's exact commit SHA."""
+    tag_sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2", at=tag_sha)
+    later_sha = ceremony.commit("later (#13)")
+
+    wrong_approval, wrong_calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", later_sha)
+    assert wrong_approval.returncode == 2, f"stdout:\n{wrong_approval.stdout}\nstderr:\n{wrong_approval.stderr}"
+    assert "does not cover this commit" in wrong_approval.stderr
+    assert not dispatched(wrong_calls)
+
+    promoted, promoted_calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", tag_sha)
+    assert promoted.returncode == 0, f"stdout:\n{promoted.stdout}\nstderr:\n{promoted.stderr}"
+    assert f"promoting existing release tag v0.0.2 at ancestor {tag_sha[:8]}" in promoted.stdout
+    assert "derived --prs 11,12" in promoted.stdout
+    [prod] = prod_dispatches(promoted_calls)
+    assert f"owner_approved_sha={tag_sha}" in prod
+    assert "reviewed_change_url=https://github.com/wangzitian0/truealpha/pull/12" in prod
+

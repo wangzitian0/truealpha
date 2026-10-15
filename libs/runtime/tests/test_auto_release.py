@@ -110,10 +110,10 @@ def test_reason_4_inside_the_nightly_tick_window() -> None:
 
 
 def test_reason_5_daily_cap_reached() -> None:
-    today_auto_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(4))
+    today_auto_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(DEFAULT_DAILY_CAP))
     result = decide(facts(tags=today_auto_tags))
     assert result.release is False
-    assert "daily cap reached: 4" in result.reason
+    assert f"daily cap reached: {DEFAULT_DAILY_CAP}" in result.reason
 
 
 def test_reason_6_a_release_is_already_in_flight() -> None:
@@ -138,7 +138,7 @@ def test_reasons_are_checked_in_order_the_first_match_wins() -> None:
         facts(
             main_head=OTHER,
             head_green=False,
-            tags=tuple(tag(f"v0.0.{i}", commit=TRIGGER, auto=True) for i in range(9)),
+            tags=tuple(tag(f"v0.0.{i}", commit=TRIGGER, auto=True) for i in range(DEFAULT_DAILY_CAP + 5)),
             in_flight=("Deploy staging v0.0.9 (run 1, in_progress)",),
         )
     )
@@ -151,18 +151,18 @@ def test_daily_cap_must_be_non_negative() -> None:
 
 
 def test_the_daily_cap_defaults_to_four_and_is_enforced_by_todays_auto_tags() -> None:
-    """Owner constraint: at most 4 automatic releases a day. 3 today still
-    releases; the 4th request for today refuses — proving the bound is
+    """Owner constraint (#1322): at most 10 automatic staging batch releases a day.
+    9 today still releases; the 10th request for today refuses — proving the bound is
     enforced, not merely declared."""
-    assert DEFAULT_DAILY_CAP == 4
-    three_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(3))
-    allowed = decide(facts(tags=three_today))
+    assert DEFAULT_DAILY_CAP == 10
+    nine_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(9))
+    allowed = decide(facts(tags=nine_today))
     assert allowed.release is True
 
-    four_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(4))
-    refused = decide(facts(tags=four_today))
+    ten_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(10))
+    refused = decide(facts(tags=ten_today))
     assert refused.release is False
-    assert "daily cap reached: 4" in refused.reason
+    assert "daily cap reached: 10" in refused.reason
 
 
 def test_a_hand_cut_tag_never_counts_against_the_automatic_cap() -> None:

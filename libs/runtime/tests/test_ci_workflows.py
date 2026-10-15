@@ -877,15 +877,11 @@ def test_auto_release_triggers_only_after_a_green_push_to_main() -> None:
 
 
 def test_auto_release_is_debounced_for_twenty_minutes_before_it_re_reads_head() -> None:
-    """Owner constraint: a burst of merges batches into one release. The wait
-    itself is a plain sleep; what makes it a DEBOUNCE rather than a blind delay
-    is that `tools/auto_release.py` re-reads main HEAD from the GitHub API
-    afterwards and defers to a later push's own run if one landed
-    (test_auto_release.py's reason-1 tests) — this test only pins the
-    workflow's own half: the wait is exactly 20 minutes, and it runs before the
-    checkout that will see whatever landed during it."""
+    """Owner constraint (#1322): a burst of merges batches into one release after a
+    3-minute quiet period. The wait runs before the checkout so `tools/auto_release.py`
+    re-reads main HEAD fresh afterwards."""
     quiet = step_text(AUTO_RELEASE, "Quiet period")
-    assert "sleep 1200" in quiet, "1200s = 20 min; test_auto_release.py's tick-window tests use the same constant"
+    assert "sleep 180" in quiet, "180s = 3 min debounce (#1322)"
     release_steps = job(AUTO_RELEASE, "release")["steps"]
     names = [s.get("name") for s in release_steps]
     checkout_index = next(
@@ -1021,7 +1017,7 @@ def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> Non
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     concurrency = workflow["concurrency"]
     assert concurrency["group"] == "auto-release-staging"
-    assert concurrency["cancel-in-progress"] is True
+    assert concurrency["cancel-in-progress"] is False
 
 
 def test_auto_release_has_only_the_permissions_it_needs() -> None:
