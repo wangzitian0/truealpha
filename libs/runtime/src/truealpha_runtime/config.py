@@ -139,4 +139,3 @@ class RuntimeSettings(BaseSettings):
 
 runtime_settings = RuntimeSettings()
 S3StorageSettings = RuntimeSettings
-

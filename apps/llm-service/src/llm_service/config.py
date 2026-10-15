@@ -44,9 +44,7 @@ class Settings(RuntimeSettings):
         default=None,
         json_schema_extra={"source": "human", "scope": "project", "empty_ok": True, "sensitive": True, "group": "llm"},
     )
-    llm_model: str = Field(
-        default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"}
-    )
+    llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
     llm_timeout_seconds: float = Field(default=90.0, json_schema_extra={"source": "code", "group": "llm"})
 
     def to_llm_settings(self) -> LlmSettings:
@@ -61,4 +59,3 @@ class Settings(RuntimeSettings):
 
 settings = Settings()
 LlmServiceSettings = Settings
-

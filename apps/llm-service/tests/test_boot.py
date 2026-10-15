@@ -59,4 +59,3 @@ def test_llm_service_to_llm_settings() -> None:
     assert llm.api_key == "secret-key"
     assert llm.primary_model == "glm-5.3-flash"
     assert llm.json_timeout_seconds == 60.0
-

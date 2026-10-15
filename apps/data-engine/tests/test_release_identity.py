@@ -210,4 +210,3 @@ def test_the_settings_model_resolves_canonical_sdk_keys(
 
     llm = settings.to_llm_settings()
     assert llm.provider == settings.llm_provider
-

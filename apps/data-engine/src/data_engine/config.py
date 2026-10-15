@@ -270,4 +270,3 @@ __all__ = [
     "canonical_sha256",
     "settings",
 ]
-
