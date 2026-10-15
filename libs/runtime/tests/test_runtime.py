@@ -2,10 +2,10 @@ from datetime import UTC, datetime
 
 import pytest
 from botocore.exceptions import ClientError
-from infra2_sdk.runtime.s3 import S3Settings
 from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import (
     DEPENDENCY_MANIFEST,
+    DeploymentSettings,
     EnvironmentTier,
     RuntimeSettings,
     S3RawObjectStore,
@@ -94,24 +94,10 @@ def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch):
     assert settings.s3_bucket == "truealpha-raw"
 
 
-def test_runtime_settings_converts_to_postgres_and_s3_settings():
-    settings = RuntimeSettings(
-        _env_file=None,
-        app_env="test",
-        database_url="postgresql://user:pass@127.0.0.1:5432/testdb",
-        s3_bucket="my-bucket",
-        s3_documents_prefix="docs-test",
-    )
-    pg = settings.to_postgres_settings()
-    assert pg.dsn == "postgresql://user:pass@127.0.0.1:5432/testdb"
-    assert pg.connect_timeout_seconds == 5
-
-    s3 = settings.to_s3_settings()
-    assert s3.bucket == "my-bucket"
-    assert s3.documents_prefix == "docs-test"
-    assert s3.raw_prefix == "raw"
-    assert s3.addressing_style == "path"
-    assert isinstance(s3, S3Settings)
+def test_deployment_environment_is_typed_separately_from_app_config():
+    settings = DeploymentSettings(_env_file=None, restart_policy="always", docker_log_max_file=2)
+    assert settings.compose_project_name == "truealpha"
+    assert settings.restart_policy == "always"
 
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
@@ -125,8 +111,6 @@ def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing
     assert store.client.meta.config.s3["addressing_style"] == "path"
     assert store.client.meta.endpoint_url == settings.s3_endpoint
     assert store.client.meta.region_name == settings.s3_region
-    assert store.s3_settings.documents_prefix == "documents"
-    assert store.s3_settings.addressing_style == "path"
 
 
 def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
