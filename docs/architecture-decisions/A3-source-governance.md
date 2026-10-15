@@ -27,7 +27,7 @@ property that expansion multiplies.
 | **B** | one authoritative origin + internal cross-checks and domain bounds, graded into the quality report | SEC financial facts (#578's plausibility oracle) |
 | **C** | judgment/extraction carrying accession, evidence span, and confidence | headcount (#70/#564) |
 
-A source without a declared class and a working falsifier is inventory, not data. Class B's
+The class sets how a cell's score can rise: class A reaches High by agreement, class B reaches Medium on one authoritative origin, class C starts Low. A source without a declared class is served with the lowest prior and a dashboard flag (owner decision 2026-10-15, #1333). It is not blocked. Class B's
 oracle rules each ship with a fixture that fires them (D8: a rule that cannot fire measures
 nothing).
 
@@ -54,13 +54,14 @@ on a scheduled tick, then:
 1. **#63 N-PORT holdings first** — independent share counts attack the worst measured lie
    class (a 2010 share count served as fresh, ranking the #1 position);
 2. #62 analyst forecasts last — a new class-C-at-best plane that adds no corroboration to
-   anything existing.
+   anything existing. Since 2026-10-15 (#1333) this order is a priority hint. It no longer blocks
+   the moomoo rating and valuation lanes.
 
    Consequence recorded 2026-09-08: milestone #773's deliverable 7 (module 4, analyst track
    record) rides on #62 and therefore sorts after the #63-backed work inside that milestone.
    The ordering is the corroboration rule, not a scheduling preference: an ETF holdings plane
    gives an independent share count that falsifies the class that produced #529's 2010 count,
-   while a forecast plane has nothing to check it against.
+   while a forecast plane has nothing to check it against and starts at a low score.
 
 Correctness before coverage, coverage before scale; width is a reward, not a starting point.
 
@@ -70,4 +71,4 @@ Correctness before coverage, coverage before scale; width is a reward, not a sta
 - The quality report can state, per cell, which falsifier covered it — and D8 keeps every
   falsifier capable of firing.
 - Single-source semantics stop being unfalsifiable by construction; they are class B with
-  graded oracles, or they are declared inventory.
+  graded oracles, or they are class C with a low score that the dashboard shows.
