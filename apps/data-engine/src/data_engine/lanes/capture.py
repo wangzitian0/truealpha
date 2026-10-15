@@ -265,6 +265,8 @@ TICKS: tuple[UniverseTick, ...] = (
 )
 
 ALL_TICKS: tuple[UniverseTick, ...] = (*TICKS, SP500_TICK)
+_KNOWN_TICK_KEYS = frozenset(tick.key for tick in ALL_TICKS)
+_KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
 
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
@@ -283,6 +285,21 @@ def is_universe_scheduled(universe: str, environment: str) -> bool:
                 return _production_only(environment) == dg.DefaultScheduleStatus.RUNNING
             return tick.default_status == dg.DefaultScheduleStatus.RUNNING
     return False
+
+
+def is_head_scheduled(universe_id: str, environment: str) -> bool:
+    """Whether `universe_id` has a running schedule in `environment` (#1256).
+
+    Fails closed (returns True) when `environment` is omitted or unrecognised, or when
+    `universe_id` does not map to a declared tick in `ALL_TICKS`.
+    """
+    env = environment.strip().lower()
+    if env not in _KNOWN_ENVIRONMENTS:
+        return True
+    key = universe_id.removeprefix("universe:").split("-", 1)[0]
+    if key not in _KNOWN_TICK_KEYS:
+        return True
+    return is_universe_scheduled(key, env)
 
 
 @contextmanager

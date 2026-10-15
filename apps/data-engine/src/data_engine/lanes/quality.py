@@ -43,7 +43,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
-from data_engine.lanes.capture import ALL_TICKS, TICKS, is_universe_scheduled
+from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.quality import surface_proof
 from data_engine.quality.nightly_verdicts import TICK_TAG, check_name, tick_from_config, tick_of, verdict
@@ -237,18 +237,6 @@ from mart.served_head
 where freshness <> 'fresh' or availability <> 'available'
 order by universe_id
 """
-_KNOWN_TICK_KEYS = frozenset(tick.key for tick in ALL_TICKS)
-_KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
-
-
-def _is_head_scheduled_in_env(universe_id: str, environment: str) -> bool:
-    env = environment.strip().lower()
-    if env not in _KNOWN_ENVIRONMENTS:
-        return True
-    key = universe_id.removeprefix("universe:").split("-", 1)[0]
-    if key not in _KNOWN_TICK_KEYS:
-        return True
-    return is_universe_scheduled(key, env)
 
 
 def stale_served_heads(
@@ -270,7 +258,7 @@ def stale_served_heads(
         universe_id = str(row[0])
         if universe_prefix and not universe_id.startswith(universe_prefix):
             continue
-        if not _is_head_scheduled_in_env(universe_id, environment):
+        if not is_head_scheduled(universe_id, environment):
             continue
         freshness = str(row[1])
         availability = str(row[2])
