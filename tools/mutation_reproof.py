@@ -70,6 +70,17 @@ def load(path: Path = MANIFEST) -> list[Mutation]:
     ]
 
 
+_SKIP_GATE_MARKERS = (
+    "DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1",
+    "DB write tests require CI=true or ALLOW_CLEAR_TEST=1",
+    "DATABASE_URL must be explicitly provided for DB write tests",
+)
+
+
+def _skipped_under_db_gate(output: str) -> bool:
+    return any(marker in output for marker in _SKIP_GATE_MARKERS)
+
+
 def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
     """Returns (the guard noticed, why not)."""
     target = REPO_ROOT / mutation.file
@@ -109,6 +120,9 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
         target.write_text(original, encoding="utf-8")
     if result.returncode != 0:
         return True, ""
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    if _skipped_under_db_gate(combined_output):
+        return False, "the guard skipped under the DB write gate instead of proving the property"
     return False, "the guard passed with the property broken"
 
 

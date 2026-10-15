@@ -231,6 +231,30 @@ def _await_settled(context: dg.OpExecutionContext) -> None:
         _sleep(SURFACE_SETTLE_POLL_SECONDS)
 
 
+_SERVED_HEAD_FRESHNESS_SQL = """
+select universe_id, freshness, availability, staleness_reason
+from mart.served_head
+where freshness <> 'fresh' or availability <> 'available'
+order by universe_id
+"""
+
+
+def stale_served_heads(connection: psycopg.Connection, *, universe_prefix: str = "") -> list[str]:
+    """Return every served head where `mart.served_head.freshness != 'fresh'` or
+    `availability != 'available'` (#1299, #54)."""
+    rows = connection.execute(_SERVED_HEAD_FRESHNESS_SQL).fetchall()
+    out: list[str] = []
+    for row in rows:
+        universe_id = str(row[0])
+        if universe_prefix and not universe_id.startswith(universe_prefix):
+            continue
+        freshness = str(row[1])
+        availability = str(row[2])
+        reason = f" ({row[3]})" if len(row) > 3 and row[3] else ""
+        out.append(f"{universe_id} freshness={freshness} availability={availability}{reason}")
+    return out
+
+
 @dg.op
 def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
     """Every report surface serves the governed head (#855 C1): replay each App reader's own
@@ -255,12 +279,19 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
             now = datetime.now(UTC)
             pending = settling(connection, context.instance, now=now)
             surfaces = prove(connection, executed_at=now, settling=pending)
+            stale_heads = stale_served_heads(connection)
         for line in summary_lines(surfaces):
             context.log.info(line)
         failed = [surface for surface in surfaces if surface.mismatched]
         settling_surfaces = [surface for surface in surfaces if surface.state == "IN-PROGRESS"]
+        status = "pass" if not failed and not stale_heads else "fail"
         context.add_output_metadata(
-            {"surfaces": len(surfaces), "mismatched": len(failed), "in_progress": len(settling_surfaces)}
+            {
+                "status": status,
+                "surfaces": len(surfaces),
+                "mismatched": len(failed),
+                "in_progress": len(settling_surfaces),
+            }
         )
         outcome.summary = (
             verdict_counts(surfaces).split(";", 1)[0]
@@ -270,14 +301,17 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
                 else ""
             )
             + (f"; mismatched: {', '.join(surface.surface for surface in failed)}" if failed else "")
+            + (f"; stale served_head: {', '.join(stale_heads)}" if stale_heads else "")
         )
-        if failed:
+        if failed or stale_heads:
+            reasons = [surface.line for surface in failed] + [f"mart.served_head {item}" for item in stale_heads]
             raise dg.Failure(
                 "report surface proof: "
-                + "; ".join(surface.line for surface in failed)
-                + " — the App shows a head the pointer does not name (#855 C1)"
+                + "; ".join(reasons)
+                + " — the App shows a head the pointer does not name or "
+                + "mart.served_head.freshness != 'fresh' (#855 C1, #1299)"
             )
-    return json.dumps([surface.line for surface in surfaces])
+    return json.dumps({"status": "pass", "surfaces": [surface.line for surface in surfaces]})
 
 
 @dg.job(name=OUTPUT_INVARIANTS_JOB_NAME)
@@ -336,6 +370,12 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):
+            stale_heads = stale_served_heads(connection, universe_prefix=UNIVERSE_PREFIXES.get(config.universe, ""))
+            if stale_heads:
+                outcome.summary = f"stale served_head: {', '.join(stale_heads)}"
+                raise dg.Failure(
+                    f"datahub confidence report: mart.served_head is not fresh ({', '.join(stale_heads)}) (#1299, #54)"
+                )
             report = compile_report(
                 connection,
                 universe=config.universe,
@@ -356,6 +396,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
     context.log.info("confidence report %s: %s", report_id, summary_line(report))
     context.add_output_metadata(
         {
+            "status": "pass",
             "report_id": report_id,
             "universe_id": report["universe_id"],
             "run_id": report["run_id"],
@@ -369,7 +410,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             "sec_oracle_issuers_compared": report["accuracy"]["sec_oracle"]["issuers_compared"],
         }
     )
-    return json.dumps({"report_id": report_id, "summary": summary_line(report)})
+    return json.dumps({"status": "pass", "report_id": report_id, "summary": summary_line(report)})
 
 
 @dg.job(name=CONFIDENCE_REPORT_JOB_NAME)

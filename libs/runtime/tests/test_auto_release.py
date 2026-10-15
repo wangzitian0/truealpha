@@ -291,12 +291,16 @@ def test_read_tags_passes_refs_tags_to_git(monkeypatch: pytest.MonkeyPatch) -> N
 # --- gather()/main(): the wiring, with a faked GitHub and a faked git -------
 
 
-def _get_for(*, main_sha: str, green: bool, deploy_runs=(), walk_runs=(), tag_ci_runs=()):
+def _get_for(*, main_sha: str, green: bool, deploy_runs=(), walk_runs=(), tag_ci_runs=(), head_ci_runs=None):
     def get(path: str):
         if path == f"/repos/{REPO}/commits/main":
             return {"sha": main_sha}
         if "workflows/ci-required.yml/runs" in path and "status=success" in path:
             return {"total_count": 1 if green else 0}
+        if "workflows/ci-required.yml/runs" in path and "head_sha=" in path:
+            if head_ci_runs is not None:
+                return {"workflow_runs": list(head_ci_runs)}
+            return {"workflow_runs": [{"status": "in_progress"}]}
         if "workflows/deploy-release.yml/runs" in path:
             return {"workflow_runs": list(deploy_runs)}
         if "workflows/walk-release.yml/runs" in path:
@@ -364,6 +368,98 @@ def test_main_writes_release_false_when_main_has_moved_on(tmp_path: Path) -> Non
     written = output.read_text(encoding="utf-8")
     assert "release=false" in written
     assert "main moved on" in written
+
+
+def test_out_of_order_ci_completion_releases_green_head_when_trigger_is_ancestor() -> None:
+    """#1284: when an older commit's CI finishes after a newer commit's CI and cancels
+    the newer commit's auto-release wait, the surviving run releases main HEAD once
+    HEAD's own CI has completed green and trigger_sha is an ancestor of main_head."""
+    result = decide(
+        facts(
+            trigger_sha=TRIGGER,
+            main_head=OTHER,
+            head_green=True,
+            head_ci_completed=True,
+            trigger_is_ancestor_of_head=True,
+            tags=(tag("v0.0.5", commit=TRIGGER),),
+        )
+    )
+    assert result.release is True
+    assert result.tag == "v0.0.6"
+    assert OTHER[:8] in result.reason
+
+
+def test_non_ancestor_trigger_commit_is_refused() -> None:
+    """#1284: a candidate commit that is not an ancestor of origin/main is refused."""
+    result = decide(
+        facts(
+            trigger_sha=TRIGGER,
+            main_head=OTHER,
+            head_green=True,
+            head_ci_completed=True,
+            trigger_is_ancestor_of_head=False,
+            tags=(tag("v0.0.5", commit=TRIGGER),),
+        )
+    )
+    assert result.release is False
+    assert "not an ancestor of origin/main" in result.reason
+
+
+def test_non_ancestor_latest_release_tag_refuses_rollback() -> None:
+    """#1284: if the highest existing release tag is not an ancestor of main HEAD, refuse to roll back."""
+    result = decide(
+        facts(
+            trigger_sha=TRIGGER,
+            main_head=TRIGGER,
+            head_green=True,
+            latest_tag_is_ancestor_of_head=False,
+            tags=(tag("v0.0.9", commit=OTHER),),
+        )
+    )
+    assert result.release is False
+    assert "latest release v0.0.9 is not an ancestor" in result.reason
+
+
+def test_is_ancestor_calls_git_merge_base_and_handles_exit_one() -> None:
+    seen: list[list[str]] = []
+
+    def fake_run(args):
+        seen.append(list(args))
+        if args[-2] == OTHER:
+            raise subprocess.CalledProcessError(1, args)
+        return ""
+
+    assert auto_release.is_ancestor(TRIGGER, TRIGGER, run=fake_run) is True
+    assert seen == [], "identical SHAs need no git subprocess"
+    assert auto_release.is_ancestor(TRIGGER, OTHER, run=fake_run) is True
+    assert seen[-1] == ["git", "merge-base", "--is-ancestor", TRIGGER, OTHER]
+    assert auto_release.is_ancestor(OTHER, TRIGGER, run=fake_run) is False
+
+
+def test_gather_marks_head_ci_completed_on_reversed_ci_order() -> None:
+    get = _get_for(
+        main_sha=OTHER,
+        green=True,
+        head_ci_runs=[{"status": "completed", "conclusion": "success"}],
+    )
+    result = gather(
+        REPO,
+        TRIGGER,
+        get=get,
+        run=lambda args: (
+            _for_each_ref_blob([("v0.0.5", TRIGGER, "", "1758000000", "v0.0.5")]) if "for-each-ref" in args else ""
+        ),
+        now=NOON,
+    )
+    assert result.trigger_sha == TRIGGER
+    assert result.main_head == OTHER
+    assert result.head_green is True
+    assert result.head_ci_completed is True
+    assert result.trigger_is_ancestor_of_head is True
+    assert result.latest_tag_is_ancestor_of_head is True
+    decision = decide(result)
+    assert decision.release is True
+    assert decision.tag == "v0.0.6"
 
 
 def test_main_rejects_a_trigger_sha_that_is_not_a_40_hex_commit(capsys: pytest.CaptureFixture) -> None:

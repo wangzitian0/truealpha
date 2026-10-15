@@ -102,6 +102,9 @@ class Facts:
     tags: tuple[ReleaseTag, ...]
     in_flight: tuple[str, ...]
     now: datetime
+    trigger_is_ancestor_of_head: bool = True
+    head_ci_completed: bool = False
+    latest_tag_is_ancestor_of_head: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,11 @@ def next_tag(tags: Iterable[ReleaseTag]) -> str:
         raise ValueError("no vX.Y.Z tag exists to count from; cut the first release by hand")
     major, minor, patch = max(versions)
     return f"v{major}.{minor}.{patch + 1}"
+
+
+def highest_tag(tags: Iterable[ReleaseTag]) -> ReleaseTag | None:
+    """The highest vX.Y.Z tag by version tuple, or None when no release tag exists."""
+    return max(tags, key=lambda tag: tag.version, default=None)
 
 
 def in_tick_window(now: datetime, *, lead: timedelta = DEPLOY_LEAD) -> bool:
@@ -143,16 +151,29 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
     if daily_cap < 0:
         raise ValueError(f"daily cap must be >= 0, got {daily_cap}")
     short = facts.trigger_sha[:8]
-    if facts.main_head != facts.trigger_sha:
+    head_short = facts.main_head[:8]
+    if not facts.trigger_is_ancestor_of_head:
         return Decision(
             False,
-            f"main moved on to {facts.main_head[:8]} since {short} went green; that commit's own green run decides",
+            f"trigger {short} is not an ancestor of origin/main {head_short}; refusing non-monotonic candidate",
+        )
+    if facts.main_head != facts.trigger_sha and not (facts.head_green and facts.head_ci_completed):
+        return Decision(
+            False,
+            f"main moved on to {head_short} since {short} went green; that commit's own green run decides",
         )
     if not facts.head_green:
-        return Decision(False, f"main HEAD {short} has no green ci-required push run")
+        return Decision(False, f"main HEAD {head_short} has no green ci-required push run")
+    if not facts.latest_tag_is_ancestor_of_head:
+        latest = highest_tag(facts.tags)
+        latest_name = latest.name if latest is not None else "latest tag"
+        return Decision(
+            False,
+            f"latest release {latest_name} is not an ancestor of main HEAD {head_short}; refusing to roll back",
+        )
     released = sorted(tag.name for tag in facts.tags if tag.commit == facts.main_head)
     if released:
-        return Decision(False, f"main HEAD {short} is already released as {', '.join(released)}")
+        return Decision(False, f"main HEAD {head_short} is already released as {', '.join(released)}")
     if in_tick_window(facts.now, lead=lead):
         return Decision(
             False,
@@ -171,7 +192,7 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
     if facts.in_flight:
         return Decision(False, f"a release is already in flight: {'; '.join(facts.in_flight)}")
     tag = next_tag(facts.tags)
-    return Decision(True, f"main HEAD {short} is green, quiet and untagged; releasing {tag} to staging", tag=tag)
+    return Decision(True, f"main HEAD {head_short} is green, quiet and untagged; releasing {tag} to staging", tag=tag)
 
 
 # --- gathering the facts -----------------------------------------------------------------
@@ -182,6 +203,19 @@ GitHubGet = Callable[[str], object]
 
 def run_command(arguments: Sequence[str]) -> str:
     return subprocess.run(list(arguments), capture_output=True, text=True, check=True).stdout
+
+
+def is_ancestor(ancestor: str, descendant: str, run: Runner = run_command) -> bool:
+    """True when `ancestor` is a git ancestor of `descendant` in the local checkout (#1284)."""
+    if ancestor == descendant:
+        return True
+    try:
+        run(["git", "merge-base", "--is-ancestor", ancestor, descendant])
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 1:
+            return False
+        raise
+    return True
 
 
 def read_tags(run: Runner = run_command) -> tuple[ReleaseTag, ...]:
@@ -253,6 +287,25 @@ def head_is_green(repo: str, sha: str, get: GitHubGet = gh_get) -> bool:
     return isinstance(count, int) and count >= 1
 
 
+def head_ci_completed(repo: str, sha: str, get: GitHubGet = gh_get) -> bool:
+    """True when every ci-required push run for `sha` on main has completed (#1299, #1284)."""
+    payload = get(
+        f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs?head_sha={sha}&branch=main&event=push&per_page=20"
+    )
+    if not isinstance(payload, dict):
+        return False
+    runs = payload.get("workflow_runs")
+    if not isinstance(runs, list):
+        count = payload.get("total_count")
+        return isinstance(count, int) and count >= 1
+    if not runs:
+        return False
+    return all(
+        isinstance(r, dict) and r.get("status") == "completed" and r.get("conclusion", "success") == "success"
+        for r in runs
+    )
+
+
 def gather(
     repo: str,
     trigger_sha: str,
@@ -262,13 +315,22 @@ def gather(
     now: datetime | None = None,
 ) -> Facts:
     head = main_head(repo, get)
+    tags = read_tags(run)
+    latest = highest_tag(tags)
+    trigger_anc = is_ancestor(trigger_sha, head, run)
+    latest_anc = is_ancestor(latest.commit, head, run) if latest is not None else True
+    green = head_is_green(repo, head, get)
+    ci_done = head_ci_completed(repo, head, get) if (head != trigger_sha and green) else green
     return Facts(
         trigger_sha=trigger_sha,
         main_head=head,
-        head_green=head_is_green(repo, head, get),
-        tags=read_tags(run),
+        head_green=green,
+        tags=tags,
         in_flight=in_flight_releases(repo, get),
         now=now or datetime.now(UTC),
+        trigger_is_ancestor_of_head=trigger_anc,
+        head_ci_completed=ci_done,
+        latest_tag_is_ancestor_of_head=latest_anc,
     )
 
 
