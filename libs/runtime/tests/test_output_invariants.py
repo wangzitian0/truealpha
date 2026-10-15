@@ -268,13 +268,16 @@ def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
 
 
 def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None:
-    """#1295, #735, #70: every issuer headcount fact must carry an 18-digit SEC accession and a
+    """#1295, #735, #70, #1264: every issuer headcount fact must carry an 18-digit SEC accession and a
     real filing knowable_at, and 10k-extraction facts must resolve their evidence_ref pointer to
-    raw.fetches. Population spans all staging.issuer_headcount_facts sources."""
+    raw.fetches. Superseded legacy rows in the append-only table are allowed only when an eligible
+    cited row exists for that CIK."""
     (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == "extraction-citations-resolve"]
     assert "staging.issuer_headcount_facts" in invariant.violations
     assert "raw.fetches" in invariant.violations
     assert "accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})" in invariant.violations
+    assert "accession=([0-9]{4}-[0-9]{2}-[0-9]{6})" in invariant.violations
+    assert "with eligible as" in invariant.violations
     assert "2026-01-01T00:00:00Z" in invariant.violations
     assert "staging.issuer_headcount_facts" in invariant.population
     assert "where source = '10k-extraction'" not in invariant.population

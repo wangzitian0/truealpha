@@ -31,13 +31,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from data_engine.lanes.capture import TICKS, is_universe_scheduled
+from data_engine.lanes.capture import ALL_TICKS, is_universe_scheduled
 from infra2_sdk.deploy import HttpGet, default_http_get
 
 # Daily captures; a weekend is two missed days. Three days cannot fire on ordinary
 # operation and is exactly the freeze that went unpaged (2026-08-15/17).
 MAX_AGE_HOURS = 72
-_KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
+_KNOWN_TICK_KEYS = frozenset(tick.key for tick in ALL_TICKS)
 _KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
 
 

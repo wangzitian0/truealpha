@@ -78,6 +78,11 @@ def skip_or_fail(reason: str) -> None:
 
 
 GATE_MARKER = "_truealpha_db_write_gate_installed"
+DB_SKIP_GATE_MARKERS: tuple[str, ...] = (
+    "DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1",
+    "DB write tests require CI=true or ALLOW_CLEAR_TEST=1",
+    "DATABASE_URL must be explicitly provided for DB write tests",
+)
 
 
 def can_write_test_database(environ: Mapping[str, str] = os.environ) -> bool:
@@ -102,7 +107,7 @@ def install_db_write_gate() -> None:
     def gated_connect(*args: Any, **kwargs: Any) -> Any:
         if db_writes_allowed():
             return real_connect(*args, **kwargs)
-        reason = "DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1 and DATABASE_URL to allow database access"
+        reason = f"{DB_SKIP_GATE_MARKERS[0]} and DATABASE_URL to allow database access"
         warnings.warn(reason, stacklevel=2)
         skip_or_fail(reason)
         raise AssertionError("unreachable: skip_or_fail always raises")
@@ -121,12 +126,12 @@ def guard_db_write(database_url: str | None = None) -> str:
     2. A test never defaults DATABASE_URL to port 5432 for writes.
     """
     if not can_write_test_database():
-        reason = "DB write tests require CI=true or ALLOW_CLEAR_TEST=1 to protect ambient databases"
+        reason = f"{DB_SKIP_GATE_MARKERS[1]} to protect ambient databases"
         warnings.warn(reason, stacklevel=2)
         skip_or_fail(reason)
     url = (database_url or os.environ.get("DATABASE_URL") or "").strip()
     if not url:
-        reason = "DATABASE_URL must be explicitly provided for DB write tests (no default to port 5432)"
+        reason = f"{DB_SKIP_GATE_MARKERS[2]} (no default to port 5432)"
         warnings.warn(reason, stacklevel=2)
         skip_or_fail(reason)
     return url

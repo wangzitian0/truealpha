@@ -14,8 +14,13 @@ ran the ceremony (#860 measures the rest of the merge-to-staging time). The work
 period batches a burst of merges into one release (#855 A3); this tool is the set of reasons
 not to release even after that quiet period. The first matching reason wins:
 
-1. main moved on since the green run that started the wait. That commit's own green run
-   starts its own wait, and a red one should never be released.
+1. The trigger SHA is not an ancestor of `origin/main` (non-monotonic candidate), or the
+   latest release tag is not an ancestor of `origin/main` (rollback protection), or `main`
+   moved on since the trigger SHA went green without a completed green `ci-required` push
+   run on `origin/main` HEAD. When `trigger_sha` is an ancestor of `origin/main` and
+   `origin/main` HEAD has already completed its own green `ci-required` push run, the run
+   releases `origin/main` HEAD instead of stranding it when out-of-order CI cancelled the
+   newer workflow run (#1299).
 2. main HEAD has no green `ci-required` push run. This repeats the trigger's own condition;
    `cut_release.sh` checks it a third time before it tags.
 3. main HEAD already carries a vX.Y.Z tag. Someone released it by hand while we waited.

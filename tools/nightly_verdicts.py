@@ -94,6 +94,8 @@ class HealthReport:
     verdicts: list[Verdict] | None
     #: The release whose data engine writes the verdicts, when the endpoint names one.
     release: str | None
+    #: The governed pointer statuses reported on `/api/health`, or None when absent.
+    governed_pointers: object = None
 
 
 def parse_expectations(text: str) -> dict[str, Expectation]:
@@ -129,8 +131,9 @@ def read_report(url: str, http_get: HttpGet) -> HealthReport:
     # The data engine writes the verdicts, so its build decides what is expected; the
     # service's own release stands in when the engine's identity is unreadable.
     release = _known(payload.get("data_engine_git_sha")) or _known(payload.get("git_sha"))
+    governed_pointers = payload.get("governed_pointers")
     if "nightly_verdicts" not in payload:
-        return HealthReport(None, release)
+        return HealthReport(None, release, governed_pointers)
     reported = payload["nightly_verdicts"]
     if reported == "unknown":
         raise VerdictCheckFailure(f'{url} could not read its nightly verdicts (reported "unknown")')
@@ -148,7 +151,7 @@ def read_report(url: str, http_get: HttpGet) -> HealthReport:
             verdicts.append(Verdict(str(entry["check"]), ran_at, ok, str(entry.get("summary", ""))))
         except (KeyError, TypeError, ValueError) as exc:
             raise VerdictCheckFailure(f"{url} reports a malformed verdict entry: {entry!r}") from exc
-    return HealthReport(verdicts, release)
+    return HealthReport(verdicts, release, governed_pointers)
 
 
 #: The expectations file's text at a release ref; None when that release predates the file.
