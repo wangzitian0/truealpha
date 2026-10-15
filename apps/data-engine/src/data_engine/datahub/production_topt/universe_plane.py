@@ -82,6 +82,14 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         label="Nasdaq-100 (QQQ) constituents, from the index operator's API",
         nport_ticker="QQQ",
     ),
+    "sp500": UniverseSource(
+        etf="sp500",
+        index_api="https://api.nasdaq.com/api/quote/list-type/sp500",
+        universe_prefix="sp500-us",
+        label="S&P 500 constituents, from the index constituent plane",
+        mic="xnys",
+        nport_ticker="IVV",
+    ),
     # #648: five hand-picked issuers, one per real code branch, all XNAS so the
     # source-level MIC stays honest: AAPL (non-financial mega), GOOGL+GOOG (one
     # dual-class issuer -> issuer_count < instrument_count), ASML (foreign IFRS

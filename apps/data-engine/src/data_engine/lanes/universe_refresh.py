@@ -8,6 +8,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
+from data_engine.lanes import production_only_schedule_status
 from data_engine.sources import gateway
 
 # -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
@@ -24,36 +25,11 @@ SP500_UNIVERSE_REFRESH_SCHEDULE_NAME = "sp500_universe_refresh_schedule"
 SP500_UNIVERSE_REFRESH_CRON = "37 8 * * 6"
 
 
-def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
-    """Enable recurring schedules in production (`production` / `prod`)."""
-    return (
-        dg.DefaultScheduleStatus.RUNNING
-        if app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    )
-
-
-def active_universe_sources():
-    """Return the active constituent universe sources, including SP500 (#67 / #1281)."""
-    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource
-
-    sources = dict(UNIVERSE_SOURCES)
-    if "sp500" not in sources:
-        sources["sp500"] = UniverseSource(
-            etf="sp500",
-            index_api="https://api.nasdaq.com/api/quote/list-type/sp500",
-            universe_prefix="sp500-us",
-            label="S&P 500 constituents, from the index constituent plane",
-            mic="xnys",
-            nport_ticker="IVV",
-        )
-    return sources
-
-
 @dg.op
 def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     """Refresh every configured universe's constituent plane; publish on change."""
     from data_engine.datahub.production_topt.universe_plane import (
+        UNIVERSE_SOURCES,
         latest_quarter_end,
         refresh_and_publish,
     )
@@ -61,7 +37,7 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     # Every vendor call in the refresh is attributed to this Dagster run in the
     # external call ledger (#729) and admitted by the rule-6 gate first.
     with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
-        _refresh_universes(context, active_universe_sources(), latest_quarter_end, refresh_and_publish)
+        _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish)
 
 
 def _refresh_universes(
@@ -127,7 +103,7 @@ def universe_refresh_pipeline_job() -> None:
     execution_timezone="UTC",
     # Production-only, like the QQQ capture itself; staging exercises the plane
     # via the operator script when needed.
-    default_status=_production_only(settings.app_env),
+    default_status=production_only_schedule_status(settings.app_env),
 )
 def universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
@@ -141,7 +117,7 @@ def build_sp500_universe_refresh_schedule(app_env: str = settings.app_env) -> dg
         job=universe_refresh_pipeline_job,
         cron_schedule=SP500_UNIVERSE_REFRESH_CRON,
         execution_timezone="UTC",
-        default_status=_production_only(app_env),
+        default_status=production_only_schedule_status(app_env),
     )
     def _sp500_universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
         executed_at = context.scheduled_execution_time.isoformat()
@@ -150,7 +126,12 @@ def build_sp500_universe_refresh_schedule(app_env: str = settings.app_env) -> dg
     return _sp500_universe_refresh_schedule
 
 
-defs = dg.Definitions(jobs=[universe_refresh_pipeline_job], schedules=[universe_refresh_schedule])
+sp500_universe_refresh_schedule = build_sp500_universe_refresh_schedule(settings.app_env)
+
+defs = dg.Definitions(
+    jobs=[universe_refresh_pipeline_job],
+    schedules=[universe_refresh_schedule, sp500_universe_refresh_schedule],
+)
 
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
@@ -161,7 +142,7 @@ def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
         job=universe_refresh_pipeline_job,
         cron_schedule=UNIVERSE_REFRESH_CRON,
         execution_timezone="UTC",
-        default_status=_production_only(app_env),
+        default_status=production_only_schedule_status(app_env),
     )
     def _universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
         return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
