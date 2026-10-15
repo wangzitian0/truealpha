@@ -418,14 +418,15 @@ const REUSE_SQL = `
            || count(*) || ' runs' as detail
   from mart.topt_capture_status where cutoff > now() - interval '24 hours'
 `;
+const NON_CANARY_UNIVERSE_WHERE =
+  "s.universe_id not like 'universe:canary%' and s.universe_id not like 'canary%'";
 const PLAUSIBILITY_SQL = `
   select 'plausibility oracle' as check,
          case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,
          coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail
   from mart.datahub_quality_report q
   join mart.topt_capture_status s using (run_id)
-  where s.universe_id not like 'universe:canary%'
-    and s.universe_id not like 'canary%'
+  where ${NON_CANARY_UNIVERSE_WHERE}
   order by s.cutoff desc limit 1
 `;
 const CORROBORATION_SQL = `
@@ -438,8 +439,7 @@ const CORROBORATION_SQL = `
            (select count(*) from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)))::int as cells
     from mart.datahub_quality_report q
     join mart.topt_capture_status s using (run_id)
-    where s.universe_id not like 'universe:canary%'
-      and s.universe_id not like 'canary%'
+    where ${NON_CANARY_UNIVERSE_WHERE}
     order by s.cutoff desc limit 1
   ) newest
 `;
@@ -552,7 +552,6 @@ interface FactorGrade {
 
 interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
   head_availability?: string | null;
-  degraded_reason?: string | null;
   factor_availability: Record<string, FactorGrade>;
 }
 
@@ -622,9 +621,6 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         const isFreshnessDegraded = freshness !== "fresh";
 
         const degraded_reasons: string[] = [];
-        if (row.degraded_reason) {
-          degraded_reasons.push(row.degraded_reason);
-        }
         if (isAvailDegraded) {
           if (
             availNum !== null &&
@@ -654,12 +650,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
             : freshness;
           degraded_reasons.push(`freshness (${detail})`);
         }
-        const is_degraded =
-          Boolean(row.degraded_reason) ||
-          isFreshnessDegraded ||
-          isAvailDegraded ||
-          isCorroborationDegraded ||
-          degraded_reasons.length > 0;
+        const is_degraded = degraded_reasons.length > 0;
 
         return {
           universe_id: row.universe_id,

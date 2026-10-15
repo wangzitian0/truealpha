@@ -20,9 +20,9 @@ existing row matches rather than trusting it blindly -- append-only rows are
 immutable evidence, so a genuine identity collision with different content is
 a bug to raise on, not paper over.
 
-`CLAIM_CEILING = "preview"` matches `core_strategy_replay.py`'s own framing
-(fixture-sourced facts, no BacktestDataGateway yet) -- this writer persists
-exactly what the replay claims to be, not more.
+`CLAIM_CEILING = "preview"` is the default for fixture-sourced replays
+(`core_strategy_replay.py`); callers bound to a governed PIT snapshot pass
+their own `claim_ceiling` so this writer persists the exact ceiling claimed.
 """
 
 from __future__ import annotations

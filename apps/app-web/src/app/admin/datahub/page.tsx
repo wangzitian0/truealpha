@@ -158,7 +158,7 @@ export default async function AdminDatahubPage() {
                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
                   totalHeads === 0
                     ? "bg-zinc-800 text-zinc-400 border-zinc-700"
-                    : staleHeads > 0 || anyHeadDegraded
+                    : anyHeadDegraded
                       ? "bg-amber-950/60 text-amber-400 border-amber-800"
                       : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
                 }`}
