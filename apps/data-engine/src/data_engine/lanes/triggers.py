@@ -122,12 +122,14 @@ def _boot_cursor(cursor: str | None) -> tuple[str, int]:
 
 
 @dg.sensor(
-    jobs=[job for job in (capture_defs.jobs or []) if job.name == CANARY_JOB_NAME],
+    jobs=[job for job in (capture_defs.jobs or []) if job.name in (CANARY_JOB_NAME, TOPT_LIVE_JOB_NAME)],
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def boot_canary_sensor(context: dg.SensorEvaluationContext):
-    """#712: a deployed build proves itself with one canary tick, unasked.
+    """#712 / #1322: a deployed build proves itself with one canary tick on every
+    deployment, plus one unforced TOPT tick (`topt_live_pipeline`) on staging so
+    every staging batch deployment recomputes the 20-issuer TOPT strategy run.
 
     The run plan stamps the build that produced it (`mart.data_engine_identity`),
     llm-service `/health` reports that build, and the release gate compares it with
@@ -160,7 +162,9 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
 
     On staging the canary forces a fresh vendor fetch (`boot_canary_forces_fetch`).
     That is 12 Twelve Data credits (6 canary listings x 2) out of staging's
-    320/day share (#900).
+    320/day share (#900). The companion TOPT run uses `force_fetch=False` so it
+    reuses observations within the 12-hour window (0 extra vendor credits) while
+    executing the full 20-issuer factor and strategy pipeline (`run_strategy=True`).
 
     Read through `settings` since #784: the identity values are declared in the
     data-engine environment manifest, and a value the manifest declares is resolved
@@ -193,6 +197,19 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
             "truealpha/configuration": settings.configuration_sha256 or "unknown",
         },
     )
+    if force_fetch:
+        topt_tick = TICK_BY_JOB[TOPT_LIVE_JOB_NAME]
+        yield dg.RunRequest(
+            run_key=f"boot:{digest}:deploy-{ordinal}:topt",
+            job_name=topt_tick.job_name,
+            run_config=dg.RunConfig(
+                ops={topt_tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=False)}
+            ),
+            tags={
+                "truealpha/build": settings.git_commit_sha or "unknown",
+                "truealpha/configuration": settings.configuration_sha256 or "unknown",
+            },
+        )
 
 
 defs = dg.Definitions(sensors=[pipeline_trigger_sensor, boot_canary_sensor])

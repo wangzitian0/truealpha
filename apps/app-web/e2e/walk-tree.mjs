@@ -49,6 +49,10 @@ if (!BASE || !EMAIL || !PASSWORD) {
   console.error("TA_BASE_URL, TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
 }
+// A loopback base URL means the CI walk. It walks the CI build over the database that
+// scripts/seed-e2e-fixture.ts seeds (5 golden preview issuers + trace lineage).
+const SEEDED_FIXTURE = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(BASE).hostname);
+const PREVIEW_TICKERS = ["ADM", "DDOG", "JPM", "NICE", "SHOP"];
 
 const frozen = JSON.parse(readFileSync(new URL("../routes.frozen.json", import.meta.url), "utf8"));
 const livePages = frozen.routes
@@ -67,12 +71,10 @@ const ID_PATTERN =
  * (a) No raw entity id as VISIBLE text on a research first screen. innerText
  * excludes attributes, so title=/href= demotions pass and visible leaks fail.
  *
- * Known limitation on a CI database: this passes vacuously there. Making it a
- * real check needs an LEI-shaped issuer AND its `mart.entity_display_resolution`
- * row — and that view reads `staging.topt_core_snapshot_members`, whose insert
- * trigger requires durable normalized-payload lineage for every observation id.
- * The seeder deliberately does not fabricate that chain. Against staging and
- * production, where real snapshots exist, this is a real check. See #494.
+ * #1322: `scripts/seed-e2e-fixture.ts` seeds the 5-issuer golden replay (`ADM`,
+ * `DDOG`, `JPM`, `NICE`, `SHOP`) with LEI-shaped `legacy-id` aliases and
+ * `mart.entity_display_resolution` rows, so this assertion is a real check in
+ * PR CI as well as against staging and production.
  */
 async function assertNoVisibleRawIds(page, path, problems) {
   if (!path.startsWith("/research")) return;
@@ -88,27 +90,45 @@ async function assertNoVisibleRawIds(page, path, problems) {
 }
 
 /**
- * (a2) #987 Anti-puppet check against GREEN-WHILE-EMPTY: Research data tables
+ * (a2) #987 / #1322 Anti-puppet check against GREEN-WHILE-EMPTY: Research data tables
  * must display non-empty tickers/labels rather than blank cells.
- * Under populated data state, populated research routes MUST render at least 1 row.
+ * Under populated data state, populated research routes MUST render at least 1 row,
+ * and in the CI seeded fixture `/research/strategy` MUST render all 5 preview tickers.
  */
 async function assertNoBlankResearchTableCells(page, path, problems) {
   if (!["/research/rankings", "/research/strategy", "/research/compare", "/research/coverage"].includes(path)) return;
   const result = await page.evaluate(() => {
     const rows = Array.from(document.querySelectorAll("tbody tr"));
     let emptyCount = 0;
+    const labels = [];
     for (const row of rows) {
       const entityCell = row.querySelector('th[scope="row"]');
-      if (entityCell && entityCell.innerText.trim() === "") {
-        emptyCount += 1;
+      if (entityCell) {
+        const text = entityCell.innerText.trim();
+        if (text === "") {
+          emptyCount += 1;
+        } else {
+          labels.push(text);
+        }
       }
     }
-    return { rowCount: rows.length, emptyCount };
+    return { rowCount: rows.length, emptyCount, labels };
   });
 
   if (DATA_STATE === "populated" && ["/research/rankings", "/research/strategy"].includes(path)) {
     if (result.rowCount === 0) {
       problems.push(`GREEN-WHILE-EMPTY: expected populated table rows on ${path} in ${DATA_STATE} state, found 0`);
+    }
+  }
+
+  if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/strategy") {
+    const missingTickers = PREVIEW_TICKERS.filter(
+      (ticker) => !result.labels.some((label) => label.startsWith(`${ticker} · `) || label === ticker),
+    );
+    if (missingTickers.length > 0) {
+      problems.push(
+        `expected 5 resolved preview tickers on ${path}, missing: ${missingTickers.join(", ")} (rendered: ${result.labels.join(", ")})`,
+      );
     }
   }
 
@@ -248,10 +268,6 @@ async function assertFunnelSaysSomething(page, path, problems, role) {
 const NOT_RECORDED = "not recorded";
 // The five cells of one input row. TraceInputsTable marks each cell with data-field.
 const TRACE_FIELDS = ["value", "period", "knowable_at", "accession", "source"];
-// A loopback base URL means the CI walk. It walks the CI build over the database that
-// scripts/seed-e2e-fixture.ts seeds. That seed gives the first trace link a lineage.
-// A deployed walk cannot assume a lineage.
-const SEEDED_FIXTURE = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(BASE).hostname);
 
 /** #1241 acceptance 1: the trace page of a strategy decision renders its inputs.
  *

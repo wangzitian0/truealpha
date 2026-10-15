@@ -59,7 +59,7 @@ from pathlib import Path
 
 #: The annotation line `cut_release.sh --auto` writes; the daily cap counts tags carrying it.
 AUTO_TRAILER = "Release-Trigger: auto-staging"
-DEFAULT_DAILY_CAP = 4
+DEFAULT_DAILY_CAP = 10
 #: Staging's nightly tick window opens at the TOPT tick (22:45Z) and runs to the end of the
 #: UTC day, past QQQ (23:20Z) and the canary (23:47Z).
 TICK_WINDOW_START = time(22, 45)
