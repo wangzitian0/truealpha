@@ -172,29 +172,30 @@ REVIEWED_HEADCOUNT_FACTS: tuple[ReviewedHeadcountFact, ...] = (
 )
 
 
-def _latest_by_ticker() -> dict[str, str]:
-    latest: dict[str, ReviewedHeadcountFact] = {}
+def _sec_ticker(ticker: str) -> str:
+    return ticker.replace(".", "-")
+
+
+def _resolve_reviewed_facts(
+    ciks_by_ticker: dict[str, int] | None = None,
+    *,
+    log_skipped: bool = False,
+) -> list[tuple[ReviewedHeadcountFact, int]]:
+    index = ciks_by_ticker if ciks_by_ticker is not None else sec.ticker_cik_index()
+    resolved: list[tuple[ReviewedHeadcountFact, int]] = []
     for fact in REVIEWED_HEADCOUNT_FACTS:
         validate_cited_headcount_fact(
             knowable_at=fact.knowable_at,
             period_end=fact.period_end,
             evidence_ref=fact.evidence_ref,
         )
-        prior = latest.get(fact.ticker)
-        if prior is None or fact.filing_date >= prior.filing_date:
-            latest[fact.ticker] = fact
-    out = {ticker: fact.headcount for ticker, fact in latest.items()}
-    if "GOOGL" in out:
-        out["GOOG"] = out["GOOGL"]
-    return out
-
-
-#: Derived latest-by-ticker view for callers that read one figure per symbol.
-REVIEWED_HEADCOUNTS: dict[str, str] = _latest_by_ticker()
-
-
-def _sec_ticker(ticker: str) -> str:
-    return ticker.replace(".", "-")
+        cik = fact.cik_override if fact.cik_override is not None else index.get(_sec_ticker(fact.ticker))
+        if cik is None:
+            if log_skipped:
+                print(f"  {fact.ticker}: no SEC CIK mapping, skipped")
+            continue
+        resolved.append((fact, cik))
+    return resolved
 
 
 def _already_seeded(connection: psycopg.Connection, cik: int, accession: str) -> bool:
@@ -216,20 +217,14 @@ def seed_reviewed_headcounts(
     connection: psycopg.Connection,
     *,
     ciks_by_ticker: dict[str, int] | None = None,
+    verbose: bool = False,
 ) -> int:
     """Seed all reviewed 10-K headcount facts idempotently (#1264)."""
-    index = ciks_by_ticker if ciks_by_ticker is not None else sec.ticker_cik_index()
     written = 0
-    for fact in REVIEWED_HEADCOUNT_FACTS:
-        validate_cited_headcount_fact(
-            knowable_at=fact.knowable_at,
-            period_end=fact.period_end,
-            evidence_ref=fact.evidence_ref,
-        )
-        cik = fact.cik_override if fact.cik_override is not None else index.get(_sec_ticker(fact.ticker))
-        if cik is None or _already_seeded(connection, cik, fact.accession):
+    for fact, cik in _resolve_reviewed_facts(ciks_by_ticker, log_skipped=verbose):
+        if _already_seeded(connection, cik, fact.accession):
             continue
-        record_headcount(
+        fact_id = record_headcount(
             connection,
             cik=cik,
             headcount=Decimal(fact.headcount),
@@ -240,6 +235,11 @@ def seed_reviewed_headcounts(
             confidence=_CONFIDENCE,
         )
         written += 1
+        if verbose:
+            print(
+                f"  {fact.ticker:<6} CIK{cik:010d}  {fact.filing_date.isoformat()}  {fact.headcount}"
+                f"  -> staging.issuer_headcount_facts:{fact_id}"
+            )
     return written
 
 
@@ -248,21 +248,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="resolve CIKs and print, write nothing")
     args = parser.parse_args()
 
-    index = sec.ticker_cik_index()
-    resolved: list[tuple[ReviewedHeadcountFact, int]] = []
-    for fact in REVIEWED_HEADCOUNT_FACTS:
-        validate_cited_headcount_fact(
-            knowable_at=fact.knowable_at,
-            period_end=fact.period_end,
-            evidence_ref=fact.evidence_ref,
-        )
-        cik = fact.cik_override if fact.cik_override is not None else index.get(_sec_ticker(fact.ticker))
-        if cik is None:
-            print(f"  {fact.ticker}: no SEC CIK mapping, skipped")
-            continue
-        resolved.append((fact, cik))
-
     if args.dry_run:
+        resolved = _resolve_reviewed_facts(log_skipped=True)
         for fact, cik in resolved:
             print(
                 f"  {fact.ticker:<6} CIK{cik:010d}  period_end={fact.period_end.isoformat()}"
@@ -271,26 +258,8 @@ def main() -> int:
         print(f"{len(resolved)} facts would be written")
         return 0
 
-    written = 0
     with psycopg.connect(settings.database_url) as connection:
-        for fact, cik in resolved:
-            if _already_seeded(connection, cik, fact.accession):
-                continue
-            fact_id = record_headcount(
-                connection,
-                cik=cik,
-                headcount=Decimal(fact.headcount),
-                knowable_at=fact.knowable_at,
-                period_end=fact.period_end,
-                source=_SOURCE,
-                evidence_ref=fact.evidence_ref,
-                confidence=_CONFIDENCE,
-            )
-            written += 1
-            print(
-                f"  {fact.ticker:<6} CIK{cik:010d}  {fact.filing_date.isoformat()}  {fact.headcount}"
-                f"  -> staging.issuer_headcount_facts:{fact_id}"
-            )
+        written = seed_reviewed_headcounts(connection, verbose=True)
         connection.commit()
     print(f"{written} headcount facts recorded")
     return 0
