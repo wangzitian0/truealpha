@@ -110,6 +110,14 @@ def _is_eligible_headcount_row(
     return True
 
 
+_SELECT_HEADCOUNT_SQL = """
+select headcount, knowable_at, source, evidence_ref, period_end, confidence
+from staging.issuer_headcount_facts
+where cik = %s and knowable_at <= %s
+order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
+"""
+
+
 def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> HeadcountFact | None:
     """Resolve the point-in-time headcount fact for `cik` at `cutoff` (#70, #1264).
 
@@ -118,17 +126,8 @@ def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> Hea
     that lack an 18-digit SEC accession.
     """
     boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
-    cursor = connection.execute(
-        """
-        select headcount, knowable_at, source, evidence_ref, period_end, confidence
-        from staging.issuer_headcount_facts
-        where cik = %s and knowable_at <= %s
-        order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
-        limit 1
-        """,
-        (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
-    )
-    row = cursor.fetchone()
+    params = (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY))
+    row = connection.execute(f"{_SELECT_HEADCOUNT_SQL} limit 1", params).fetchone()
     if row is None:
         return None
     if not _is_eligible_headcount_row(
@@ -137,15 +136,7 @@ def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> Hea
         evidence_ref=str(row[3]),
         period_end=row[4],
     ):
-        rows = connection.execute(
-            """
-            select headcount, knowable_at, source, evidence_ref, period_end, confidence
-            from staging.issuer_headcount_facts
-            where cik = %s and knowable_at <= %s
-            order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
-            """,
-            (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
-        ).fetchall()
+        rows = connection.execute(_SELECT_HEADCOUNT_SQL, params).fetchall()
         row = next(
             (
                 candidate
@@ -209,12 +200,12 @@ def record_headcount(
     """
     if source == "curated-10k-2025":
         raise ValueError("headcount source 'curated-10k-2025' is retired; cite an 18-digit SEC accession (#1264)")
-    if source in (*_ACTIVE_HEADCOUNT_SOURCES, "manual-reviewed"):
+    if source in _ACTIVE_HEADCOUNT_SOURCES:
         validate_cited_headcount_fact(
             knowable_at=knowable_at,
             period_end=period_end,
             evidence_ref=evidence_ref,
-            require_period_end=(source in ("manual-review", "manual-reviewed")),
+            require_period_end=(source == "manual-review"),
             allow_short_cik_accession=(source == "10k-extraction"),
         )
     row = connection.execute(

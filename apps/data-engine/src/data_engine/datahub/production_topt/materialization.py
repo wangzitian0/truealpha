@@ -90,7 +90,6 @@ class FinancialFactPayload(_FrozenModel):
     shares_outstanding: Decimal | None
     shares_basis: str | None = None
     pre_provision_profit: Decimal | None
-    gross_profit_is_revenue_proxy: bool | None = None
     # The fiscal periods behind the two headline figures. Optional so a snapshot frozen
     # before #496 still validates; new captures always carry them, which is what makes
     # "this number is years out of date" answerable in SQL instead of only by re-deriving
@@ -736,10 +735,7 @@ class PostgresToptCoreRepository:
 
         # #1255: when gross_profit is derived from a revenue-proxy tier, cap its confidence at 0.85.
         gp_vintage = (financial.vintage or {}).get("gross_profit")
-        is_revenue_proxy = bool(
-            financial.gross_profit_is_revenue_proxy
-            or (isinstance(gp_vintage, Mapping) and gp_vintage.get("is_revenue_proxy", False))
-        )
+        is_revenue_proxy = bool(isinstance(gp_vintage, Mapping) and gp_vintage.get("is_revenue_proxy", False))
         gross_profit_confidence = (
             min(financial_row.confidence, _REVENUE_PROXY_CONFIDENCE_CAP)
             if is_revenue_proxy

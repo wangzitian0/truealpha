@@ -1842,15 +1842,12 @@ def _member_rows_for_probe(
     shares_outstanding: str = "10000000",
     shares_period_end: str | None = "2026-01-20",
     financial_vintage: dict[str, Any] | None = None,
-    gross_profit_is_revenue_proxy: bool | None = None,
 ) -> dict[str, _ObservationRow]:
     coordinates = ("issuer:cik:0001045810", "security:figi:NVDA", "listing:xnas:nvda", "NVDA")
     financial_payload = _normalized_payload(coordinates, "financial-fact", financial_vintage=financial_vintage)
     financial_payload["shares_outstanding"] = shares_outstanding
     if shares_period_end is not None:
         financial_payload["shares_period_end"] = shares_period_end
-    if gross_profit_is_revenue_proxy is not None:
-        financial_payload["gross_profit_is_revenue_proxy"] = gross_profit_is_revenue_proxy
     rows: dict[str, _ObservationRow] = {}
     for ordinal, semantic_type in enumerate(SEMANTIC_TYPES):
         payload = (
@@ -1914,6 +1911,15 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
     null_vintage_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", null_vintage_rows)
     assert null_vintage_member.gross_profit is not None
     assert null_vintage_member.gross_profit.confidence == Decimal("0.92")
+
+    # SSOT guard: top-level `gross_profit_is_revenue_proxy` is rejected by `extra="forbid"`;
+    # `vintage["gross_profit"]["is_revenue_proxy"]` is the single source of truth (#1255).
+    from pydantic import ValidationError
+
+    duplicate_key_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
+    duplicate_key_rows["financial-fact"].payload["gross_profit_is_revenue_proxy"] = True
+    with pytest.raises(ValidationError):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", duplicate_key_rows)
 
 
 def test_snapshot_member_aligns_stock_split_via_live_on_close_basis() -> None:
