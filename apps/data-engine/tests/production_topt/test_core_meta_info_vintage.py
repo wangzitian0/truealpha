@@ -30,7 +30,7 @@ from factors.production_topt import GppeV0Definition
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
 
-#: The columns of the view, in order. 20261012T1130 must not change one of them (#1241).
+#: The columns of the view, in order. 20261012T1130 (#1241) and 20261015T0720 (#1331) must not change one of them.
 VIEW_COLUMNS = [
     "result_id",
     "invocation_id",
@@ -213,8 +213,8 @@ def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(
 
 
 def test_the_view_keeps_every_column_when_inputs_is_added(connection) -> None:
-    """20261012T1130 replaces the view. A consumer selects these 23 columns by name, so a
-    dropped, renamed or reordered column breaks it."""
+    """20261012T1130 and 20261015T0720 replace the view. A consumer selects these 23 columns by
+    name, so a dropped, renamed or reordered column breaks it."""
     columns = [
         name
         for (name,) in connection.execute(
