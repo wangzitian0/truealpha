@@ -212,6 +212,37 @@ def _already_seeded(connection: psycopg.Connection, cik: int, accession: str) ->
     return row is not None
 
 
+def seed_reviewed_headcounts(
+    connection: psycopg.Connection,
+    *,
+    ciks_by_ticker: dict[str, int] | None = None,
+) -> int:
+    """Seed all reviewed 10-K headcount facts idempotently (#1264)."""
+    index = ciks_by_ticker if ciks_by_ticker is not None else sec.ticker_cik_index()
+    written = 0
+    for fact in REVIEWED_HEADCOUNT_FACTS:
+        validate_cited_headcount_fact(
+            knowable_at=fact.knowable_at,
+            period_end=fact.period_end,
+            evidence_ref=fact.evidence_ref,
+        )
+        cik = fact.cik_override if fact.cik_override is not None else index.get(_sec_ticker(fact.ticker))
+        if cik is None or _already_seeded(connection, cik, fact.accession):
+            continue
+        record_headcount(
+            connection,
+            cik=cik,
+            headcount=Decimal(fact.headcount),
+            knowable_at=fact.knowable_at,
+            period_end=fact.period_end,
+            source=_SOURCE,
+            evidence_ref=fact.evidence_ref,
+            confidence=_CONFIDENCE,
+        )
+        written += 1
+    return written
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="resolve CIKs and print, write nothing")

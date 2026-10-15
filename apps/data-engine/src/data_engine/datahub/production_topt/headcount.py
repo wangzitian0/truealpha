@@ -30,8 +30,10 @@ from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountF
 #: Fusion order for the headcount plane (rule 12). Sources absent from the list rank
 #: last, so an unknown producer can never outrank a cited one by being newer.
 HEADCOUNT_SOURCE_PRIORITY: tuple[str, ...] = ("10k-extraction", "manual-review")
+_ACTIVE_HEADCOUNT_SOURCES: tuple[str, ...] = HEADCOUNT_SOURCE_PRIORITY
 
-_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(\d{18})(?:\s|$)")
+_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6}|\d{4}-\d{2}-\d{6})(?:\s|$)")
+_STRICT_18_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6})(?:\s|$)")
 _FILED_RE = re.compile(r"(?:^|\s)filed=(\d{4}-\d{2}-\d{2})(?:\s|$)")
 
 
@@ -41,6 +43,7 @@ def validate_cited_headcount_fact(
     period_end: date | None,
     evidence_ref: str,
     require_period_end: bool = True,
+    allow_short_cik_accession: bool = False,
 ) -> None:
     """Reject uncited or misdated headcount facts (#1264).
 
@@ -49,7 +52,8 @@ def validate_cited_headcount_fact(
     `knowable_at` anchored to the filing date (never earlier than the filing it cites, and
     never stamped to a literal constant).
     """
-    accession_match = _ACCESSION_RE.search(evidence_ref)
+    accession_re = _ACCESSION_RE if allow_short_cik_accession else _STRICT_18_ACCESSION_RE
+    accession_match = accession_re.search(evidence_ref)
     if accession_match is None:
         raise ValueError(f"headcount evidence_ref does not cite an 18-digit SEC accession: {evidence_ref!r}")
     filed_match = _FILED_RE.search(evidence_ref)
@@ -73,6 +77,100 @@ def validate_cited_headcount_fact(
         )
 
 
+def _is_eligible_headcount_row(
+    *,
+    knowable_at: datetime,
+    source: str,
+    evidence_ref: str,
+    period_end: date | None,
+) -> bool:
+    """True when a stored row satisfies the active-source SEC accession contract (#1264).
+
+    Legacy uncited rows (`#70 supersedes` stamped at `2026-01-01` or retired
+    `curated-10k-2025` rows) remain in the append-only table by trigger design and are
+    excluded at read time so they never outrank cited 10-K filings.
+    """
+    if source == "curated-10k-2025":
+        return False
+    if source in _ACTIVE_HEADCOUNT_SOURCES:
+        accession_re = _ACCESSION_RE if source == "10k-extraction" else _STRICT_18_ACCESSION_RE
+        if accession_re.search(evidence_ref) is None or _FILED_RE.search(evidence_ref) is None:
+            return False
+        if source == "manual-review":
+            try:
+                validate_cited_headcount_fact(
+                    knowable_at=knowable_at,
+                    period_end=period_end,
+                    evidence_ref=evidence_ref,
+                    require_period_end=True,
+                    allow_short_cik_accession=False,
+                )
+            except ValueError:
+                return False
+    return True
+
+
+def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> HeadcountFact | None:
+    """Resolve the point-in-time headcount fact for `cik` at `cutoff` (#70, #1264).
+
+    Orders by declared `HEADCOUNT_SOURCE_PRIORITY` first and `knowable_at desc` second,
+    filtering out retired `curated-10k-2025` rows and uncited legacy `manual-review` rows
+    that lack an 18-digit SEC accession.
+    """
+    boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
+    cursor = connection.execute(
+        """
+        select headcount, knowable_at, source, evidence_ref, period_end, confidence
+        from staging.issuer_headcount_facts
+        where cik = %s and knowable_at <= %s
+        order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
+        limit 1
+        """,
+        (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    if not _is_eligible_headcount_row(
+        knowable_at=row[1],
+        source=str(row[2]),
+        evidence_ref=str(row[3]),
+        period_end=row[4],
+    ):
+        rows = connection.execute(
+            """
+            select headcount, knowable_at, source, evidence_ref, period_end, confidence
+            from staging.issuer_headcount_facts
+            where cik = %s and knowable_at <= %s
+            order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
+            """,
+            (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
+        ).fetchall()
+        row = next(
+            (
+                candidate
+                for candidate in rows
+                if _is_eligible_headcount_row(
+                    knowable_at=candidate[1],
+                    source=str(candidate[2]),
+                    evidence_ref=str(candidate[3]),
+                    period_end=candidate[4],
+                )
+            ),
+            None,
+        )
+        if row is None:
+            return None
+    return HeadcountFact(
+        value=Decimal(row[0]),
+        knowable_at=row[1],
+        source=row[2],
+        evidence_ref=row[3],
+        period_end=row[4],
+        confidence=None if row[5] is None else Decimal(row[5]),
+    )
+
+
 class PostgresHeadcountExtractor:
     """`HeadcountExtractor` over the PIT fact table.
 
@@ -90,31 +188,7 @@ class PostgresHeadcountExtractor:
         self._connection = connection
 
     def __call__(self, cik: int, cutoff: date) -> HeadcountFact | None:
-        boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
-        # init.md rule 12: the winner is chosen by declared source priority, never by
-        # recency. A cited extraction outranks the reviewed seed; among facts of one
-        # source the latest knowable one wins. The knowable_at <= cutoff filter keeps the
-        # read point-in-time either way.
-        row = self._connection.execute(
-            """
-            select headcount, knowable_at, source, evidence_ref, period_end, confidence
-            from staging.issuer_headcount_facts
-            where cik = %s and knowable_at <= %s
-            order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
-            limit 1
-            """,
-            (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
-        ).fetchone()
-        if row is None:
-            return None
-        return HeadcountFact(
-            value=Decimal(row[0]),
-            knowable_at=row[1],
-            source=row[2],
-            evidence_ref=row[3],
-            period_end=row[4],
-            confidence=None if row[5] is None else Decimal(row[5]),
-        )
+        return lookup_headcount(self._connection, cik, cutoff)
 
 
 def record_headcount(
@@ -133,11 +207,15 @@ def record_headcount(
     Deliberately not an upsert: a corrected figure is a NEW row with a later
     `knowable_at`, so history stays readable and a replay of an older cutoff is unaffected.
     """
-    if source in ("manual-review", "manual-reviewed"):
+    if source == "curated-10k-2025":
+        raise ValueError("headcount source 'curated-10k-2025' is retired; cite an 18-digit SEC accession (#1264)")
+    if source in (*_ACTIVE_HEADCOUNT_SOURCES, "manual-reviewed"):
         validate_cited_headcount_fact(
             knowable_at=knowable_at,
             period_end=period_end,
             evidence_ref=evidence_ref,
+            require_period_end=(source in ("manual-review", "manual-reviewed")),
+            allow_short_cik_accession=(source == "10k-extraction"),
         )
     row = connection.execute(
         """

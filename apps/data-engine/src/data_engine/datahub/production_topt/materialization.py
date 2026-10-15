@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from functools import cache, partial
 from typing import Any, Self
 
 from factors.production_topt import (
@@ -25,9 +28,15 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
+from truealpha_runtime.storage import StorageError
 
+from data_engine import raw_store
+from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
+from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, resolve_ruleset
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.production_topt.status_dimensions import (
     StatusDimensions,
@@ -35,6 +44,15 @@ from data_engine.datahub.production_topt.status_dimensions import (
     factor_validation_status_for,
     resolve_raw_pointers,
     source_evidence_status_for,
+)
+from data_engine.datahub.share_basis import (
+    SHARES_KEY,
+    LiveShareCount,
+    OnCloseBasis,
+    SplitHistory,
+    Unavailable,
+    live_on_close_basis,
+    split_history,
 )
 
 # Snapshot invariants are SELF-consistent, never universe literals: the frozen
@@ -46,6 +64,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
 # edit, and an unregistered one cannot be demanded.
 _REQUIRED_TYPES = frozenset(SEMANTIC_TYPES)
 _SEMANTICS_PER_LISTING = len(_REQUIRED_TYPES)
+_REVENUE_PROXY_CONFIDENCE_CAP = Decimal("0.85")
 
 
 class _FrozenModel(BaseModel):
@@ -71,6 +90,7 @@ class FinancialFactPayload(_FrozenModel):
     shares_outstanding: Decimal | None
     shares_basis: str | None = None
     pre_provision_profit: Decimal | None
+    gross_profit_is_revenue_proxy: bool | None = None
     # The fiscal periods behind the two headline figures. Optional so a snapshot frozen
     # before #496 still validates; new captures always carry them, which is what makes
     # "this number is years out of date" answerable in SQL instead of only by re-deriving
@@ -421,14 +441,16 @@ def _metric(
     name: str,
     value: Decimal | None,
     unit: str,
+    confidence: Decimal | None = None,
+    knowable_at: datetime | None = None,
 ) -> ToptMetricInput:
     return ToptMetricInput(
         input_id=row.observation_id,
         metric=name,
         value=value,
         unit=unit,
-        confidence=row.confidence,
-        knowable_at=row.knowable_at,
+        confidence=row.confidence if confidence is None else confidence,
+        knowable_at=row.knowable_at if knowable_at is None else knowable_at,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
     )
@@ -441,6 +463,42 @@ def _cell(row: _ObservationRow) -> ToptCellQualityInput:
         knowable_at=row.knowable_at,
         freshness=row.freshness,
     )
+
+
+def _share_entry(financial: FinancialFactPayload, knowable_at: datetime) -> Mapping[str, Any]:
+    """The share-count vintage entry passed to `share_basis.live_on_close_basis` (#1277)."""
+    entry = (financial.vintage or {}).get(SHARES_KEY)
+    if isinstance(entry, Mapping):
+        if entry.get("period_end") and entry.get("filed"):
+            return entry
+        merged = dict(entry)
+    else:
+        merged = {}
+    if financial.shares_period_end is not None and not merged.get("period_end"):
+        merged["period_end"] = financial.shares_period_end.isoformat()
+    if merged.get("period_end") and not merged.get("filed"):
+        merged["filed"] = knowable_at.astimezone(UTC).date().isoformat()
+    return merged
+
+
+def _observation_documents(connection: Connection[Any], observation_id: str) -> list[dict[str, Any]]:
+    """The stored company-facts documents behind one financial-fact observation (#1277)."""
+    rows = connection.execute(
+        """
+        select v.raw_fetch_id
+        from staging.capture_normalized_observations o
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        where o.observation_id = %s and v.raw_fetch_id is not null
+        """,
+        (observation_id,),
+    ).fetchall()
+    documents: list[dict[str, Any]] = []
+    for (raw_fetch_id,) in rows:
+        try:
+            documents.append(json.loads(raw_store.get_payload(connection, raw_fetch_id)))
+        except (LookupError, StorageError, ValueError):
+            continue
+    return documents
 
 
 class PostgresToptCoreRepository:
@@ -495,7 +553,24 @@ class PostgresToptCoreRepository:
             if row.semantic_type in by_type:
                 raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
-        members = tuple(self._snapshot_member(listing_id, by_type) for listing_id, by_type in grouped.items())
+        histories_by_issuer = self._issuer_split_histories(grouped)
+        ruleset = cache(partial(resolve_ruleset, self._connection))
+        members = tuple(
+            self._snapshot_member(
+                listing_id,
+                by_type,
+                histories=histories_by_issuer.get(
+                    str((by_type.get("listing-identity") or next(iter(by_type.values()))).payload.get("issuer_id", ""))
+                ),
+                documents=(
+                    partial(_observation_documents, self._connection, by_type["financial-fact"].observation_id)
+                    if "financial-fact" in by_type
+                    else None
+                ),
+                ruleset=ruleset,
+            )
+            for listing_id, by_type in grouped.items()
+        )
         snapshot = ToptCoreSnapshot(
             run_id=run_id,
             release_manifest_id=release_manifest_id,
@@ -507,6 +582,32 @@ class PostgresToptCoreRepository:
         )
         self._put_snapshot(snapshot)
         return snapshot
+
+    def _issuer_split_histories(
+        self, grouped: Mapping[str, Mapping[str, _ObservationRow]]
+    ) -> dict[str, tuple[SplitHistory | Unavailable | None, ...]]:
+        """The split histories of each issuer's listings in the snapshot (#1277)."""
+        tickers_by_issuer: dict[str, list[str]] = {}
+        for by_type in grouped.values():
+            listing_row = by_type.get("listing-identity")
+            if listing_row is None:
+                continue
+            issuer_id = listing_row.payload.get("issuer_id")
+            ticker = listing_row.payload.get("ticker")
+            if issuer_id and ticker:
+                tickers_by_issuer.setdefault(str(issuer_id), []).append(str(ticker))
+        symbols = sorted({ticker for names in tickers_by_issuer.values() for ticker in names})
+        if not symbols:
+            return {}
+        unadjusted = load_daily_series(self._connection, symbols, adjust=UNADJUSTED)
+        split_adjusted = load_daily_series(self._connection, symbols, adjust=SPLIT_ADJUSTED)
+        if not unadjusted and not split_adjusted:
+            return {}
+        by_symbol = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
+        return {
+            issuer_id: tuple(by_symbol[symbol] for symbol in sorted(set(names)))
+            for issuer_id, names in tickers_by_issuer.items()
+        }
 
     def _load_observations(self, run_id: str, *, cutoff: datetime) -> tuple[_ObservationRow, ...]:
         rows = self._connection.execute(
@@ -608,7 +709,14 @@ class PostgresToptCoreRepository:
         )
 
     @staticmethod
-    def _snapshot_member(listing_id: str, by_type: dict[str, _ObservationRow]) -> SnapshotMember:
+    def _snapshot_member(
+        listing_id: str,
+        by_type: dict[str, _ObservationRow],
+        *,
+        histories: Sequence[SplitHistory | Unavailable | None] | None = None,
+        documents: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
+        ruleset: Callable[[], ConceptMappingRuleset] | None = None,
+    ) -> SnapshotMember:
         if set(by_type) != _REQUIRED_TYPES:
             raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
         listing = IdentityPayload.model_validate(by_type["listing-identity"].payload)
@@ -625,6 +733,52 @@ class PostgresToptCoreRepository:
         financial_row = by_type["financial-fact"]
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
+
+        # #1255: when gross_profit is derived from a revenue-proxy tier, cap its confidence at 0.85.
+        gp_vintage = (financial.vintage or {}).get("gross_profit")
+        is_revenue_proxy = bool(
+            financial.gross_profit_is_revenue_proxy
+            or (isinstance(gp_vintage, Mapping) and gp_vintage.get("is_revenue_proxy", False))
+        )
+        gross_profit_confidence = (
+            min(financial_row.confidence, _REVENUE_PROXY_CONFIDENCE_CAP)
+            if is_revenue_proxy
+            else financial_row.confidence
+        )
+        financial_cell_confidence = (
+            min(financial_row.confidence, _REVENUE_PROXY_CONFIDENCE_CAP)
+            if (
+                is_revenue_proxy
+                and financial.operating_branch == OperatingBranch.NON_FINANCIAL
+                and financial.gross_profit is not None
+            )
+            else financial_row.confidence
+        )
+
+        # #1277: put the filed share count on the share basis of the captured close via
+        # `share_basis.live_on_close_basis` (read-only reuse of #1262's split logic).
+        shares_value = financial.shares_outstanding
+        shares_knowable_at = financial_row.knowable_at
+        if shares_value is not None and price.close is not None and histories:
+            outcome = live_on_close_basis(
+                LiveShareCount(
+                    shares=shares_value,
+                    knowable_at=financial_row.knowable_at,
+                    entry=_share_entry(financial, financial_row.knowable_at),
+                    close_session=market_row.knowable_at.astimezone(UTC).date(),
+                    close_knowable_at=market_row.knowable_at,
+                    close=price.close,
+                ),
+                histories,
+                documents=documents if documents is not None else (lambda: ()),
+                ruleset=ruleset if ruleset is not None else (lambda: DEFAULT_RULESET),
+            )
+            if isinstance(outcome, OnCloseBasis):
+                shares_value = outcome.value
+                shares_knowable_at = outcome.knowable_at
+            elif isinstance(outcome, Unavailable):
+                shares_value = None
+
         return SnapshotMember(
             issuer_id=listing.issuer_id,
             instrument_id=listing.instrument_id,
@@ -637,7 +791,12 @@ class PostgresToptCoreRepository:
                 observation_ids[3],
             ),
             cell_inputs=(
-                _cell(by_type["financial-fact"]),
+                ToptCellQualityInput(
+                    input_id=financial_row.observation_id,
+                    confidence=financial_cell_confidence,
+                    knowable_at=financial_row.knowable_at,
+                    freshness=financial_row.freshness,
+                ),
                 _cell(by_type["listing-identity"]),
                 _cell(by_type["market-price"]),
                 _cell(by_type["universe-membership"]),
@@ -647,6 +806,7 @@ class PostgresToptCoreRepository:
                 name="gross_profit",
                 value=financial.gross_profit,
                 unit=financial.currency,
+                confidence=gross_profit_confidence,
             ),
             total_assets=_metric(
                 financial_row,
@@ -665,8 +825,9 @@ class PostgresToptCoreRepository:
             shares_outstanding=_metric(
                 financial_row,
                 name="shares_outstanding",
-                value=financial.shares_outstanding,
+                value=shares_value,
                 unit="shares",
+                knowable_at=shares_knowable_at,
             ),
             market_price=_metric(
                 market_row,
