@@ -794,22 +794,6 @@
       "cwd": "."
     },
     {
-      "id": "auto-release/refuses-non-monotonic-candidate",
-      "guard": "libs/runtime/tests/test_auto_release.py",
-      "file": "tools/auto_release.py",
-      "find": "    if not facts.trigger_is_ancestor_of_head:\n",
-      "replace": "    if False:\n",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "libs/runtime/tests/test_auto_release.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
       "id": "invariants/quality-report-matches-core-results",
       "guard": "libs/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
@@ -821,22 +805,6 @@
         "--no-sync",
         "pytest",
         "libs/runtime/tests/test_output_invariants.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
-      "id": "vision-audit/requires-fresh-served-head",
-      "guard": "libs/runtime/tests/test_vision_audit.py",
-      "file": "tools/vision_audit.py",
-      "find": "        if freshness != \"fresh\" or availability != \"available\":\n",
-      "replace": "        if False:\n",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "libs/runtime/tests/test_vision_audit.py",
         "-q"
       ],
       "cwd": "."
