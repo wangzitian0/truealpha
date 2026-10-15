@@ -108,6 +108,11 @@ STANDARDS_PLANE_CRONS: Mapping[str, str] = {
     FORM4_DAILY_SCHEDULE_NAME: FORM4_DAILY_CRON,
     TENK_ANNUAL_SCHEDULE_NAME: TENK_ANNUAL_CRON,
 }
+# The 4 staggered Standards Plane schedules stay STOPPED until dedicated per-form standard
+# implementations exist in ALL_STANDARDS (otherwise form4_daily_schedule re-runs the weekly
+# 10-K backfill and LLM extraction every day, and nport_monthly_schedule duplicates
+# universe_refresh_schedule). Operators can still launch the underlying jobs manually.
+STANDARDS_PLANE_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
 
 __all__ = (
     "FORM4_DAILY_CRON",
@@ -124,6 +129,7 @@ __all__ = (
     "STANDARD_HISTORY_MONTHS",
     "STANDARD_HISTORY_UNIVERSES",
     "STANDARDS_PLANE_CRONS",
+    "STANDARDS_PLANE_SCHEDULE_STATUS",
     "STANDARDS_WITH_HISTORY",
     "StandardBackfillConfig",
     "StandardHistoryConfig",
@@ -1072,12 +1078,18 @@ def _build_standards_plane_schedule(
     job: dg.JobDefinition,
     app_env: str,
 ) -> dg.ScheduleDefinition:
+    status = (
+        STANDARDS_PLANE_SCHEDULE_STATUS
+        if STANDARDS_PLANE_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED
+        else production_only_schedule_status(app_env)
+    )
+
     @dg.schedule(
         name=schedule_name,
         job=job,
         cron_schedule=cron_schedule,
         execution_timezone="UTC",
-        default_status=production_only_schedule_status(app_env),
+        default_status=status,
     )
     def _plane_schedule(context: dg.ScheduleEvaluationContext):
         executed_at = context.scheduled_execution_time.isoformat()
@@ -1123,28 +1135,26 @@ def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
     """Build all standards lane jobs, schedules, and sensors for `app_env` (#67)."""
+    plane_schedules = (
+        (
+            nport_monthly_schedule,
+            thirteenf_quarterly_schedule,
+            form4_daily_schedule,
+            tenk_annual_schedule,
+        )
+        if app_env == settings.app_env
+        else build_standards_plane_schedules(app_env)
+    )
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
         schedules=[
             standard_backfill_schedule,
             standard_history_schedule,
             head_reports_schedule,
-            *build_standards_plane_schedules(app_env),
+            *plane_schedules,
         ],
         sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
     )
 
 
-defs = dg.Definitions(
-    jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
-    schedules=[
-        standard_backfill_schedule,
-        standard_history_schedule,
-        head_reports_schedule,
-        nport_monthly_schedule,
-        thirteenf_quarterly_schedule,
-        form4_daily_schedule,
-        tenk_annual_schedule,
-    ],
-    sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
-)
+defs = build_definitions()
