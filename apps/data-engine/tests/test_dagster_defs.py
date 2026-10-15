@@ -765,6 +765,14 @@ def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatc
     refresh_req = dagster_defs.sp500_universe_refresh_schedule(context)
     assert refresh_req.run_key == f"sp500:{tick.isoformat()}"
 
+    assert dagster_defs.nport_monthly_schedule.job.name == "universe_refresh_pipeline"
+    for schedule in (
+        dagster_defs.thirteenf_quarterly_schedule,
+        dagster_defs.form4_daily_schedule,
+        dagster_defs.tenk_annual_schedule,
+    ):
+        assert schedule.job.name == "standard_backfill_pipeline", schedule.name
+
     for schedule in (
         dagster_defs.nport_monthly_schedule,
         dagster_defs.thirteenf_quarterly_schedule,

@@ -1069,32 +1069,46 @@ def _build_standards_plane_schedule(
     schedule_name: str,
     cron_schedule: str,
     *,
+    job: dg.JobDefinition,
     app_env: str,
-    standard: str = "",
 ) -> dg.ScheduleDefinition:
     @dg.schedule(
         name=schedule_name,
-        job=standard_backfill_pipeline_job,
+        job=job,
         cron_schedule=cron_schedule,
         execution_timezone="UTC",
         default_status=production_only_schedule_status(app_env),
     )
     def _plane_schedule(context: dg.ScheduleEvaluationContext):
         executed_at = context.scheduled_execution_time.isoformat()
-        for universe in STANDARD_BACKFILL_UNIVERSES:
-            yield dg.RunRequest(
-                run_key=f"{schedule_name}:{executed_at}:{universe}",
-                run_config=backfill_run_config(executed_at, universe, standard),
-                tags={UNIVERSE_TAG: universe},
-            )
+        if job.name == STANDARD_BACKFILL_JOB_NAME:
+            for universe in STANDARD_BACKFILL_UNIVERSES:
+                yield dg.RunRequest(
+                    run_key=f"{schedule_name}:{executed_at}:{universe}",
+                    run_config=backfill_run_config(executed_at, universe),
+                    tags={UNIVERSE_TAG: universe},
+                )
+        else:
+            yield dg.RunRequest(run_key=f"{schedule_name}:{executed_at}")
 
     return _plane_schedule
 
 
 def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg.ScheduleDefinition, ...]:
     """Build the 4 staggered Standards Plane Cron schedules (#67)."""
+    from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
+
     return tuple(
-        _build_standards_plane_schedule(schedule_name, cron_schedule, app_env=app_env)
+        _build_standards_plane_schedule(
+            schedule_name,
+            cron_schedule,
+            job=(
+                universe_refresh_pipeline_job
+                if schedule_name == NPORT_MONTHLY_SCHEDULE_NAME
+                else standard_backfill_pipeline_job
+            ),
+            app_env=app_env,
+        )
         for schedule_name, cron_schedule in STANDARDS_PLANE_CRONS.items()
     )
 
