@@ -194,14 +194,14 @@ order by check_name, ran_at desc, recorded_at desc
 """
 
 
-#: The newest governed head per universe, aged at read time (#1062). `mart.served_head` holds
-#: the one definition of age, limit and label. This query picks the newest row of each universe.
-#: It never subtracts a clock of its own.
+#: The live governed head of each universe family, aged at read time (#1062, #1320).
+#: `mart.served_head` holds the one definition of age, limit, label and live version. A retired
+#: universe version is not a head. This query takes every row: it picks no row of its own and
+#: never subtracts a clock of its own.
 GOVERNED_POINTERS_SQL = """
-select distinct on (universe_id)
-       universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
+select universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
 from mart.served_head
-order by universe_id, advanced_at desc
+order by universe_id
 """
 
 #: Runs only when the query above returns no row. `mart.served_head` shows the heads of this
@@ -250,11 +250,11 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             except psycopg.Error:
                 connection.rollback()
             try:
-                # Per universe, never collapsed (the funnel's lesson): one universe's fresh
-                # pointer must not hide another's frozen one. The newest head per universe
-                # across its factors and versions is what "still advancing" means.
-                # The age, the limit and the label come from mart.served_head (#1062).
-                # That view is the one read point. This service computes no head age.
+                # Per universe family, never collapsed (the funnel's lesson): one universe's fresh
+                # pointer must not hide another's frozen one. The live head of each family is
+                # what "still advancing" means (#1320).
+                # The age, the limit, the label and the live version come from mart.served_head
+                # (#1062). That view is the one read point. This service computes no head age.
                 rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
                 # An empty answer means "no head yet" only when no environment holds a head. When
                 # one does, the identity row hides every head. Then `pointers` stays "unknown",

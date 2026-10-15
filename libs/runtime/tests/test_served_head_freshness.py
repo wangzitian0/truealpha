@@ -2,8 +2,8 @@
 
 `mart.head_freshness` turns a refresh time and a cadence family into five values. They are an
 age, a limit, a label, an availability and a reason code. `mart.served_head` applies it to
-every governed head. The limits live in `mart.freshness_limit`. Git is their authority. A replay of
-the migration restores the shipped values.
+the live governed head of each universe family (#1320). The limits live in `mart.freshness_limit`.
+Git is their authority. A replay of the migration restores the shipped values.
 
 Every test builds a scratch database from the real migration chain. A change to the migration
 shows in the result. Rows are seeded inside a transaction that is rolled back. Each time is
@@ -30,6 +30,8 @@ from truealpha_runtime.testing import isolated_test_database, read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
+#: The last file that defines `mart.served_head` (#1320). The seed stays in MIGRATION.
+LIVE_VERSION_MIGRATION = REPO_ROOT / "db" / "migrations" / "20261015T0555_datahub_served_head_live_version.sql"
 
 AS_OF = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 HOUR = timedelta(hours=1)
@@ -218,6 +220,8 @@ def seed_head(
     *,
     environment: str | None = None,
     earlier_age: timedelta | None = None,
+    universe_version: str = "v1",
+    factor_id: str = "f",
 ) -> tuple[str, str]:
     """Seed one governed head `age` before the transaction time.
 
@@ -241,8 +245,19 @@ def seed_head(
         conn.execute(
             "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
             "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
-            "values (%s, %s, %s, %s, 'v1', 'f', %s, %s, %s, now() - %s)",
-            (f"current-pointer:{digest}", digest, environment, universe_id, run_id, sequence, previous, when),
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now() - %s)",
+            (
+                f"current-pointer:{digest}",
+                digest,
+                environment,
+                universe_id,
+                universe_version,
+                factor_id,
+                run_id,
+                sequence,
+                previous,
+                when,
+            ),
         )
 
     first = node()
@@ -350,6 +365,140 @@ def test_a_head_that_matches_two_registry_rows_takes_the_strictest_and_appears_o
     seed_head(conn, "universe:topt-us-overlap-1", 10 * DAY)
     (row,) = served(conn, "universe:topt-us-overlap-1")
     assert (row["artifact_key"], row["limit_hours"], row["freshness"]) == ("head:topt", 72, "stale")
+
+
+# --- T7: a universe roll retires the older version (#1320) --------------------------------
+#
+# The family of a head is its universe id without a trailing `-YYYY-MM-DD`. Per environment,
+# family and factor, the view serves the head that advanced last. Equal times go to the larger
+# universe id. No pointer row is deleted.
+
+
+def served_keys(conn: psycopg.Connection, universe_like: str) -> list[tuple[str, str, str]]:
+    """(universe_id, universe_version, factor_id) of each served row that matches, sorted in Python."""
+    rows = conn.execute(
+        "select universe_id, universe_version, factor_id from mart.served_head where universe_id like %s",
+        (universe_like,),
+    ).fetchall()
+    return sorted((str(universe), str(version), str(factor)) for universe, version, factor in rows)
+
+
+def test_a_universe_roll_serves_only_the_newest_version(conn: psycopg.Connection) -> None:
+    """Production on 2026-10-15: the retired 2026-06-30 version was 150 hours old at sequence 36.
+    The 2026-09-30 version was fresh at sequence 4. The retired head read stale for ever.
+    Here the retired version also has the higher sequence, so an order by sequence fails."""
+    seed_head(conn, "universe:qqq-us-2026-06-30", 150 * HOUR, earlier_age=174 * HOUR)
+    live_run, _ = seed_head(conn, "universe:qqq-us-2026-09-30", 6 * HOUR)
+
+    assert served(conn, "universe:qqq-us-2026-06-30") == []
+    (row,) = served(conn, "universe:qqq-us-2026-09-30")
+    assert (row["head_run_id"], row["sequence"], row["freshness"], row["artifact_key"]) == (
+        live_run,
+        0,
+        "fresh",
+        "head:qqq",
+    )
+    # The view hides the retired head. The pointer history keeps both versions.
+    assert conn.execute(
+        "select count(*) from mart.current_pointer_head "
+        "where universe_id in ('universe:qqq-us-2026-06-30', 'universe:qqq-us-2026-09-30')"
+    ).fetchone() == (2,)
+
+
+def test_the_only_version_of_a_family_stays_served_when_stale_or_withheld(conn: psycopg.Connection) -> None:
+    """A family with one version keeps its head at any age. A hidden head would hide a frozen lane."""
+    stale_run, _ = seed_head(conn, "universe:topt-us-2026-03-31", 4 * DAY)
+    withheld_run, _ = seed_head(conn, "universe:canary-us-2026-06-30", 31 * DAY)
+
+    (stale,) = served(conn, "universe:topt-us-2026-03-31")
+    assert (stale["head_run_id"], stale["freshness"], stale["availability"], stale["staleness_reason"]) == (
+        stale_run,
+        "stale",
+        "available",
+        "older_than_3d",
+    )
+    (withheld,) = served(conn, "universe:canary-us-2026-06-30")
+    assert (withheld["head_run_id"], withheld["run_id"], withheld["freshness"], withheld["availability"]) == (
+        withheld_run,
+        None,
+        "stale",
+        "unavailable",
+    )
+
+
+def test_each_family_keeps_its_head_and_a_head_with_no_registry_row_is_kept(conn: psycopg.Connection) -> None:
+    seed_head(conn, "universe:qqq-us-2026-09-30", HOUR)
+    seed_head(conn, "universe:topt-us-2026-03-31", DAY)
+    seed_head(conn, "universe:unregistered-us-2026-06-30", 2 * DAY)
+    seed_head(conn, "universe:unregistered-us-2026-03-31", 3 * DAY)
+
+    assert served_keys(conn, "universe:%-us-2026-%") == [
+        ("universe:qqq-us-2026-09-30", "v1", "f"),
+        ("universe:topt-us-2026-03-31", "v1", "f"),
+        ("universe:unregistered-us-2026-06-30", "v1", "f"),
+    ]
+    (unregistered,) = served(conn, "universe:unregistered-us-2026-06-30")
+    assert (unregistered["artifact_key"], unregistered["limit_hours"], unregistered["freshness"]) == (None, 72, "fresh")
+
+
+def test_a_rollback_serves_the_older_version_that_advanced_last(conn: psycopg.Connection) -> None:
+    """The lane can go back to the older list. The version that advanced last is the live head."""
+    seed_head(conn, "universe:qqq-us-2026-09-30", 2 * DAY)
+    rolled_back_run, _ = seed_head(conn, "universe:qqq-us-2026-06-30", HOUR)
+
+    assert served(conn, "universe:qqq-us-2026-09-30") == []
+    (row,) = served(conn, "universe:qqq-us-2026-06-30")
+    assert (row["head_run_id"], row["freshness"]) == (rolled_back_run, "fresh")
+
+
+def test_two_versions_that_advanced_at_the_same_time_serve_the_larger_universe_id(conn: psycopg.Connection) -> None:
+    # `now()` is fixed in a transaction, so equal ages give equal `advanced_at` values.
+    seed_head(conn, "universe:qqq-us-2026-09-30", DAY)
+    seed_head(conn, "universe:qqq-us-2026-06-30", DAY)
+    assert served_keys(conn, "universe:qqq-us-%") == [("universe:qqq-us-2026-09-30", "v1", "f")]
+
+
+def test_a_newer_version_in_another_environment_does_not_retire_this_one(conn: psycopg.Connection) -> None:
+    """A Staging database also holds Production heads (measured on Staging). A version that only
+    another environment advanced is not live here."""
+    own_run, _ = seed_head(conn, "universe:qqq-us-2026-06-30", 2 * DAY)
+    seed_head(conn, "universe:qqq-us-2026-09-30", HOUR, environment="other-environment")
+    (row,) = served(conn, "universe:qqq-us-2026-06-30")
+    assert row["head_run_id"] == own_run
+    assert served(conn, "universe:qqq-us-2026-09-30") == []
+
+
+def test_every_factor_of_the_live_version_keeps_its_head(conn: psycopg.Connection) -> None:
+    """A factor is not a version. The roll retires the older version of each factor only."""
+    seed_head(conn, "universe:qqq-us-2026-06-30", 3 * DAY)
+    seed_head(conn, "universe:qqq-us-2026-09-30", HOUR)
+    seed_head(conn, "universe:qqq-us-2026-09-30", 2 * HOUR, factor_id="g")
+    assert served_keys(conn, "universe:qqq-us-%") == [
+        ("universe:qqq-us-2026-09-30", "v1", "f"),
+        ("universe:qqq-us-2026-09-30", "v1", "g"),
+    ]
+
+
+def test_a_superseded_universe_version_of_one_universe_id_is_retired(conn: psycopg.Connection) -> None:
+    """`/api/health` once kept the newest row per universe id itself. The view now does it."""
+    seed_head(conn, "universe:qqq-us-2026-09-30", 2 * DAY)
+    seed_head(conn, "universe:qqq-us-2026-09-30", HOUR, universe_version="v2")
+    assert served_keys(conn, "universe:qqq-us-%") == [("universe:qqq-us-2026-09-30", "v2", "f")]
+
+
+def test_the_family_is_the_universe_id_without_its_trailing_date(conn: psycopg.Connection) -> None:
+    """Another region is another family. A date that does not end the id is part of the id,
+    so that id is its own family."""
+    seed_head(conn, "universe:qqq-us-2026-09-30", HOUR)
+    seed_head(conn, "universe:qqq-eu-2026-06-30", DAY)
+    seed_head(conn, "universe:qqq-us-2026-06-30-x", 2 * DAY)
+    seed_head(conn, "universe:qqq-us-2026-03-31-x", 3 * DAY)
+    assert served_keys(conn, "universe:qqq-%") == [
+        ("universe:qqq-eu-2026-06-30", "v1", "f"),
+        ("universe:qqq-us-2026-03-31-x", "v1", "f"),
+        ("universe:qqq-us-2026-06-30-x", "v1", "f"),
+        ("universe:qqq-us-2026-09-30", "v1", "f"),
+    ]
 
 
 # --- the environments that hold heads ------------------------------------------------------
@@ -498,11 +647,12 @@ def test_a_missing_withhold_limit_fails_closed(conn: psycopg.Connection) -> None
     assert (row["availability"], row["run_id"], row["head_run_id"]) == ("unavailable", None, run_id)
 
 
-def test_a_replay_with_no_change_takes_no_strong_lock(conn: psycopg.Connection) -> None:
+@pytest.mark.parametrize("migration", [MIGRATION, LIVE_VERSION_MIGRATION], ids=["seed", "live-version"])
+def test_a_replay_with_no_change_takes_no_strong_lock(conn: psycopg.Connection, migration: Path) -> None:
     """Boot-lock rule: a replay on a settled database holds only three lock modes. They are
     ACCESS SHARE, ROW EXCLUSIVE and the SHARE UPDATE EXCLUSIVE of a comment. A strong lock on a
     mart relation would queue the boot behind every open reader."""
-    conn.execute(MIGRATION.read_text(encoding="utf-8"))
+    conn.execute(migration.read_text(encoding="utf-8"))
     held = conn.execute(
         """
         select format('%s.%s', n.nspname, c.relname), l.mode

@@ -187,9 +187,11 @@ comment on function mart.head_freshness(timestamptz, text, timestamptz) is
     '#1062: Age in hours, limit, label, availability and reason for one refresh time and cadence family.';
 
 -- 4. The one view consumers read.
--- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
--- queues behind every open reader. Replace it only when the definition differs; the
--- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+-- Superseded: 20261015T0555_datahub_served_head_live_version.sql (#1320) redefines this view
+-- later in the chain. It owns the definition and the comment. A boot replays this file first.
+-- A replacement here would put the older definition back on every replay, with ACCESS EXCLUSIVE
+-- on the view. That file would then replace it again. So this file creates the view only on a
+-- database that has none.
 --
 -- Rows: the newest head per governed key, in this database's own environment.
 -- `head_run_id` is always set. `run_id` is null when the head is withheld.
@@ -227,19 +229,11 @@ cross join lateral mart.head_freshness(h.advanced_at, a.family) f
 where h.environment = (select environment from mart.environment_identity)
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.served_head') is null
-       or pg_get_viewdef(to_regclass('mart.served_head'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
-        execute 'create or replace view mart.served_head as ' || wanted;
+    if to_regclass('mart.served_head') is null then
+        execute 'create view mart.served_head as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
-
-comment on view mart.served_head is
-    '#1062: The newest governed head per key with its age, limit, label and availability. The one read point for consumers.';
 
 -- 5. The environments that hold heads.
 -- `mart.served_head` shows only the heads of this database's own environment. A database can
