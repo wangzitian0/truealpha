@@ -26,22 +26,22 @@ export interface EntityDisplay {
   displayName: string | null;
 }
 
-export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>> {
-  const rows = await withMartReadonly(async (client) => {
-    const result = await client.query(
-      // LATERAL ... limit 1 rather than a plain join, for the reason
-      // strategy-run-repository.ts documents: mart.entity_identity's
-      // staging.kg_entities join can match one entity twice, and a display
-      // lookup must never multiply the rows it is decorating.
-      `select r.issuer_id, r.ticker, r.display_name, ei.legacy_id
+// LATERAL ... limit 1 rather than a plain join, for the reason
+// strategy-run-repository.ts documents: mart.entity_identity's
+// staging.kg_entities join can match one entity twice, and a display
+// lookup must never multiply the rows it is decorating.
+export const ENTITY_DISPLAY_SQL = `select r.issuer_id, r.ticker, r.display_name, ei.legacy_id
        from mart.entity_display_resolution r
        left join lateral (
          select ei.legacy_id
          from mart.entity_identity ei
          where ei.entity_id::text = r.issuer_id
          limit 1
-       ) ei on true`,
-    );
+       ) ei on true`;
+
+export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>> {
+  const rows = await withMartReadonly(async (client) => {
+    const result = await client.query(ENTITY_DISPLAY_SQL);
     return result.rows as {
       issuer_id: string;
       ticker: string;
