@@ -191,6 +191,7 @@ class FinancialFactsBundle:
 
 
 SHARES_POINT_IN_TIME = "point_in_time"
+SHARES_MULTI_CLASS_SUM = "multi_class_sum"
 SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
 
 
@@ -378,6 +379,8 @@ class _Datum:
     statement_form: bool | None = None
     # The company-facts document the figure was read from, when several were merged.
     document: str | None = None
+    # True when this figure is the sum of per-class segmented share facts (#1265).
+    multi_class_sum: bool = False
 
     @property
     def rank(self) -> int:
@@ -399,6 +402,47 @@ def _combined_statement_form(datums: Sequence[_Datum]) -> bool | None:
 def _combined_document(datums: Sequence[_Datum]) -> str | None:
     documents = sorted({datum.document for datum in datums if datum.document is not None})
     return "+".join(documents) if documents else None
+
+
+def _segment_key(entry: Mapping[str, Any], unit: str) -> str | None:
+    """Normalize a dimensional segment on share facts so per-class share counts sum cleanly."""
+    if unit != "shares":
+        return None
+    segment = entry.get("segment")
+    if segment is None:
+        return None
+    if isinstance(segment, Mapping):
+        return json.dumps(segment, sort_keys=True, separators=(",", ":"))
+    return _text_or_none(segment)
+
+
+def _record_better_datum(values: dict[date, _Datum], end: date, datum: _Datum) -> None:
+    existing = values.get(end)
+    if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
+        values[end] = datum
+
+
+def _fold_segmented_shares(
+    values: dict[date, _Datum],
+    segmented_shares: Mapping[tuple[date, date, str | None, str | None, str | None], dict[str, _Datum]],
+) -> None:
+    """Fold per-class segmented share counts per filing when no unsegmented total outranks them."""
+    for (end, _, _, _, _), by_segment in segmented_shares.items():
+        datums = list(by_segment.values())
+        first = datums[0]
+        summed = _Datum(
+            value=sum((d.value for d in datums), Decimal(0)),
+            filed=first.filed,
+            period_end=end,
+            accession=first.accession,
+            form=first.form,
+            fy=first.fy,
+            fp=first.fp,
+            statement_form=_combined_statement_form(datums),
+            document=_combined_document(datums),
+            multi_class_sum=True,
+        )
+        _record_better_datum(values, end, summed)
 
 
 def annual_values_by_period_end(
@@ -427,6 +471,7 @@ def annual_values_by_period_end(
     if not entries:
         return {}
     values: dict[date, _Datum] = {}
+    segmented_shares: dict[tuple[date, date, str | None, str | None, str | None], dict[str, _Datum]] = {}
     for entry in entries:
         filed_raw, end_raw, start_raw, val = (
             entry.get("filed"),
@@ -460,9 +505,13 @@ def annual_values_by_period_end(
             statement_form=_statement_form(form),
             document=_text_or_none(entry.get(_DOCUMENT_KEY)),
         )
-        existing = values.get(end)
-        if existing is None or (datum.rank, -filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
-            values[end] = datum
+        segment_key = _segment_key(entry, unit)
+        if segment_key is not None:
+            group_key = (end, filed, datum.accession, form, _text_or_none(start_raw))
+            segmented_shares.setdefault(group_key, {})[segment_key] = datum
+            continue
+        _record_better_datum(values, end, datum)
+    _fold_segmented_shares(values, segmented_shares)
     return values
 
 
@@ -795,6 +844,14 @@ def financial_components(
     return FinancialComponents(assets, assets_basis, returns, returns_basis, proxy)
 
 
+def _shares_basis(shares_primary: _Datum | None, shares_fallback: _Datum | None) -> str | None:
+    if shares_primary is not None:
+        return SHARES_MULTI_CLASS_SUM if shares_primary.multi_class_sum else SHARES_POINT_IN_TIME
+    if shares_fallback is not None:
+        return SHARES_WEIGHTED_AVERAGE_BASIC
+    return None
+
+
 def build_bundle(
     facts: dict[str, Any],
     cutoff: date,
@@ -826,9 +883,7 @@ def build_bundle(
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
     )
     shares = shares_primary or shares_fallback
-    shares_basis = (
-        SHARES_POINT_IN_TIME if shares_primary else SHARES_WEIGHTED_AVERAGE_BASIC if shares_fallback else None
-    )
+    shares_basis = _shares_basis(shares_primary, shares_fallback)
     # When every candidate is refused the newest measurement date is still recorded, so the
     # warehouse says HOW stale the best candidate was rather than leaving an
     # indistinguishable null. Fail-closed is deliberate: the factor then reports
@@ -1094,6 +1149,24 @@ def _asserts_income(bundle: FinancialFactsBundle) -> bool:
     return any(value is not None for value in (bundle.revenue, bundle.gross_profit, bundle.pre_provision_profit))
 
 
+def _payload_vintage(
+    bundle: FinancialFactsBundle,
+    gross_profit_value: Decimal | None,
+    headcount_evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    vintage = {
+        key: bundle.vintages[key]
+        for key in sorted(bundle.vintages)
+        if not (key == "gross_profit" and gross_profit_value is None)
+    }
+    if bundle.gross_profit_is_revenue_proxy and gross_profit_value is not None and "gross_profit" in vintage:
+        vintage["gross_profit"] = {**vintage["gross_profit"], "is_revenue_proxy": True}
+    if headcount_evidence is not None:
+        # #747: the side-plane input names its evidence next to the XBRL inputs.
+        vintage["headcount"] = headcount_evidence
+    return {key: vintage[key] for key in sorted(vintage)}
+
+
 class SecFinancialFactAdapter:
     """`SourceFetchPort` for financial-fact, backed by an injected company-facts fetcher."""
 
@@ -1240,14 +1313,6 @@ class SecFinancialFactAdapter:
         # asserts is "this source has no such fact yet", not a dated figure.
         knowable_at = bundle.knowable_at or datetime.combine(target.cutoff, datetime.min.time(), tzinfo=UTC)
         headcount, headcount_evidence, knowable_at = self._resolve_headcount_fact(target, knowable_at)
-        vintage = {
-            key: bundle.vintages[key]
-            for key in sorted(bundle.vintages)
-            if not (key == "gross_profit" and gross_profit_value is None)
-        }
-        if headcount_evidence is not None:
-            # #747: the side-plane input names its evidence next to the XBRL inputs.
-            vintage["headcount"] = headcount_evidence
         payload: dict[str, Any] = {
             "issuer_id": target.issuer_id,
             "instrument_id": target.instrument_id,
@@ -1281,7 +1346,7 @@ class SecFinancialFactAdapter:
             # surfaces it per observation, so a served number names its document. A key is
             # present only for an input the payload actually asserts: when the revenue proxy
             # is refused above, `gross_profit` is null and must not claim a filing.
-            "vintage": {key: vintage[key] for key in sorted(vintage)},
+            "vintage": _payload_vintage(bundle, gross_profit_value, headcount_evidence),
         }
         if target.operating_branch is OperatingBranch.FINANCIAL:
             # #1176: the banking tangible-common-equity inputs. Written for a bank only, so the
@@ -1366,6 +1431,36 @@ def _d(value: date | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
+def _enrich_multi_class_shares(
+    cik: int,
+    facts: dict[str, Any],
+    cutoff: date,
+    branch: OperatingBranch,
+    *,
+    ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
+) -> FinancialFactsBundle | None:
+    """Enrich company-facts with multi-class cover-page iXBRL share facts when company-facts drops them (#1265)."""
+    from data_engine.datahub.standards.filing_extraction import latest_periodic_filing, multi_class_share_entries
+    from data_engine.sources import sec
+
+    cutoff_dt = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
+    try:
+        with sec.client() as http:
+            document = latest_periodic_filing(cik, http=http, cutoff=cutoff_dt)
+        if document is None:
+            return None
+        entries = multi_class_share_entries(document)
+    except Exception:  # noqa: BLE001 - best-effort enrichment; preserve primary company-facts result on error
+        return None
+    if not entries:
+        return None
+    dei = facts.setdefault("facts", {}).setdefault("dei", {})
+    units = dei.setdefault("EntityCommonStockSharesOutstanding", {}).setdefault("units", {})
+    units.setdefault("shares", []).extend(entries)
+    enriched_bytes = json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
+    return build_bundle(facts, cutoff, branch, raw_bytes=enriched_bytes, ruleset=ruleset)
+
+
 def sec_financial_fetcher(
     cik: int, cutoff: date, branch: OperatingBranch, *, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> FinancialFactsBundle:
@@ -1382,7 +1477,12 @@ def sec_financial_fetcher(
         body, facts = sec.fetch_company_facts_response(cik)
     except httpx.HTTPError as error:
         raise SourceUnavailableError(str(error)) from error
-    return build_bundle(facts, cutoff, branch, raw_bytes=body, ruleset=ruleset)
+    bundle = build_bundle(facts, cutoff, branch, raw_bytes=body, ruleset=ruleset)
+    if bundle.shares_outstanding is None:
+        enriched = _enrich_multi_class_shares(cik, facts, cutoff, branch, ruleset=ruleset)
+        if enriched is not None:
+            return enriched
+    return bundle
 
 
 # -- registry route (#72) -----------------------------------------------------------------
