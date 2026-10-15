@@ -85,8 +85,35 @@ NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
     for universe in STANDARD_BACKFILL_UNIVERSES
 )
 
+NPORT_MONTHLY_SCHEDULE_NAME = "nport_monthly_schedule"
+# Monthly 1st at 11:07 UTC: staggered outside all weekend and daily capture windows (#67).
+NPORT_MONTHLY_CRON = "7 11 1 * *"
+
+THIRTEENF_QUARTERLY_SCHEDULE_NAME = "13f_quarterly_schedule"
+# Quarterly (Jan/Apr/Jul/Oct 15th at 12:07 UTC): staggered after 45-day 13F filing deadlines (#67).
+THIRTEENF_QUARTERLY_CRON = "7 12 15 1,4,7,10 *"
+
+FORM4_DAILY_SCHEDULE_NAME = "form4_daily_schedule"
+# Daily at 13:07 UTC: staggered midday UTC window, clear of market-close capture and 09:07 backfills (#67).
+FORM4_DAILY_CRON = "7 13 * * *"
+
+TENK_ANNUAL_SCHEDULE_NAME = "10k_annual_schedule"
+# Weekly Sunday at 14:07 UTC: staggered 5 hours after the 09:07 UTC weekly backfill (#67).
+TENK_ANNUAL_CRON = "7 14 * * 0"
+
+STANDARDS_PLANE_CRONS: Mapping[str, str] = {
+    NPORT_MONTHLY_SCHEDULE_NAME: NPORT_MONTHLY_CRON,
+    THIRTEENF_QUARTERLY_SCHEDULE_NAME: THIRTEENF_QUARTERLY_CRON,
+    FORM4_DAILY_SCHEDULE_NAME: FORM4_DAILY_CRON,
+    TENK_ANNUAL_SCHEDULE_NAME: TENK_ANNUAL_CRON,
+}
+
 __all__ = (
+    "FORM4_DAILY_CRON",
+    "FORM4_DAILY_SCHEDULE_NAME",
     "NIGHTLY_VERDICTS",
+    "NPORT_MONTHLY_CRON",
+    "NPORT_MONTHLY_SCHEDULE_NAME",
     "QUESTION_COVERAGE_VERDICT",
     "STANDARD_BACKFILL_CRON",
     "STANDARD_BACKFILL_JOB_NAME",
@@ -95,12 +122,19 @@ __all__ = (
     "STANDARD_HISTORY_JOB_NAME",
     "STANDARD_HISTORY_MONTHS",
     "STANDARD_HISTORY_UNIVERSES",
+    "STANDARDS_PLANE_CRONS",
     "STANDARDS_WITH_HISTORY",
     "StandardBackfillConfig",
     "StandardHistoryConfig",
+    "TENK_ANNUAL_CRON",
+    "TENK_ANNUAL_SCHEDULE_NAME",
+    "THIRTEENF_QUARTERLY_CRON",
+    "THIRTEENF_QUARTERLY_SCHEDULE_NAME",
     "THEME_PURITY_VERDICT",
     "analyst_ratings",
+    "build_standards_plane_schedules",
     "defs",
+    "extended_defs",
     "fail_if_a_lane_failed",
     "run_analyst_ratings",
     "run_supply_chain_exposure",
@@ -1031,3 +1065,79 @@ defs = dg.Definitions(
     schedules=[standard_backfill_schedule, standard_history_schedule, head_reports_schedule],
     sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
 )
+
+
+def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
+    """Enable recurring standards plane schedules in production (`production` / `prod`)."""
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if app_env.strip().lower() in ("production", "prod")
+        else dg.DefaultScheduleStatus.STOPPED
+    )
+
+
+def _build_standards_plane_schedule(
+    schedule_name: str,
+    cron_schedule: str,
+    *,
+    job: dg.JobDefinition,
+    app_env: str,
+    standard: str = "",
+) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name=schedule_name,
+        job=job,
+        cron_schedule=cron_schedule,
+        execution_timezone="UTC",
+        default_status=_production_only(app_env),
+    )
+    def _plane_schedule(context: dg.ScheduleEvaluationContext):
+        executed_at = context.scheduled_execution_time.isoformat()
+        if job.name == STANDARD_BACKFILL_JOB_NAME:
+            for universe in STANDARD_BACKFILL_UNIVERSES:
+                yield dg.RunRequest(
+                    run_key=f"{schedule_name}:{executed_at}:{universe}",
+                    run_config=backfill_run_config(executed_at, universe, standard),
+                    tags={UNIVERSE_TAG: universe},
+                )
+        else:
+            yield dg.RunRequest(run_key=f"{schedule_name}:{executed_at}")
+
+    return _plane_schedule
+
+
+def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg.ScheduleDefinition, ...]:
+    """Build the 4 staggered Standards Plane Cron schedules (#67)."""
+    from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
+
+    return (
+        _build_standards_plane_schedule(
+            NPORT_MONTHLY_SCHEDULE_NAME,
+            NPORT_MONTHLY_CRON,
+            job=universe_refresh_pipeline_job,
+            app_env=app_env,
+        ),
+        _build_standards_plane_schedule(
+            THIRTEENF_QUARTERLY_SCHEDULE_NAME,
+            THIRTEENF_QUARTERLY_CRON,
+            job=standard_backfill_pipeline_job,
+            app_env=app_env,
+        ),
+        _build_standards_plane_schedule(
+            FORM4_DAILY_SCHEDULE_NAME,
+            FORM4_DAILY_CRON,
+            job=standard_backfill_pipeline_job,
+            app_env=app_env,
+        ),
+        _build_standards_plane_schedule(
+            TENK_ANNUAL_SCHEDULE_NAME,
+            TENK_ANNUAL_CRON,
+            job=standard_backfill_pipeline_job,
+            app_env=app_env,
+        ),
+    )
+
+
+def extended_defs(app_env: str = settings.app_env) -> dg.Definitions:
+    """Root-merged definitions for the 4 staggered Standards Plane Cron schedules (#67)."""
+    return dg.Definitions(schedules=list(build_standards_plane_schedules(app_env)))

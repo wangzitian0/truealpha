@@ -186,6 +186,34 @@ CANARY_OBJECTIVES = ServiceObjectives(
 # chain prove itself nightly in BOTH environments (#648/#671).
 CANARY_DAILY_CRON = "47 23 * * *"
 
+SP500_LIVE_JOB_NAME = "sp500_live_pipeline"
+# 01:15 UTC: after the nightly invariants (00:15 UTC) and confidence report (00:45 UTC),
+# well clear of the 22:15/22:45 TOPT, 23:20 QQQ, and 23:47 canary capture windows (#67 / #1281).
+SP500_LIVE_CRON = "15 1 * * *"
+SP500_UNIVERSE_HEAD = "universe-list:sp500"
+SP500_PHASE1_OBJECTIVES = ServiceObjectives(
+    minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
+    minimum_availability=Decimal("0.70"),
+    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
+    minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
+    minimum_corroborated_share=Decimal("0.90"),
+)
+
+SP500_TICK = UniverseTick(
+    key="sp500",
+    job_name=SP500_LIVE_JOB_NAME,
+    op_name="run_sp500_live_tick",
+    schedule_name="sp500_live_schedule",
+    log_label="sp500 live tick",
+    universe_head_kind=SP500_UNIVERSE_HEAD,
+    label_prefix="production-sp500",
+    objectives=SP500_PHASE1_OBJECTIVES,
+    run_strategy=False,
+    consolidate_funds=False,
+    cron=SP500_LIVE_CRON,
+    default_status=_production_only(settings.app_env),
+)
+
 
 TICKS: tuple[UniverseTick, ...] = (
     UniverseTick(
@@ -236,15 +264,22 @@ TICKS: tuple[UniverseTick, ...] = (
     ),
 )
 
+ALL_TICKS: tuple[UniverseTick, ...] = (*TICKS, SP500_TICK)
+
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
     """Whether `universe` has an active schedule in `environment` (#1118)."""
-    key = "qqq" if universe in ("universe-list:qqq", "qqq") else universe
-    for tick in TICKS:
+    if universe in ("universe-list:qqq", "qqq"):
+        key = "qqq"
+    elif universe in ("universe-list:sp500", "sp500"):
+        key = "sp500"
+    else:
+        key = universe
+    for tick in ALL_TICKS:
         if tick.key == key:
             if tick.cron is None:
                 return False
-            if tick.key == "qqq":
+            if tick.key in ("qqq", "sp500"):
                 return _production_only(environment) == dg.DefaultScheduleStatus.RUNNING
             return tick.default_status == dg.DefaultScheduleStatus.RUNNING
     return False
@@ -415,6 +450,39 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     return pipeline.run_id
 
 
+def build_schedule(
+    tick: UniverseTick,
+    job: dg.JobDefinition,
+    *,
+    cron: str | None = None,
+    default_status: dg.DefaultScheduleStatus | None = None,
+) -> dg.ScheduleDefinition | None:
+    """Build the schedule for a tick against `job`."""
+    effective_cron = tick.cron if cron is None else cron
+    if effective_cron is None:
+        return None
+    effective_status = tick.default_status if default_status is None else default_status
+
+    @dg.schedule(
+        name=tick.schedule_name,
+        job=job,
+        cron_schedule=effective_cron,
+        execution_timezone="UTC",
+        default_status=effective_status,
+    )
+    def tick_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        executed_at = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(
+            # run_key == the tick time: the daemon dedupes a re-evaluated tick to a
+            # single run, so an identical tick retry is idempotent. A schedule never
+            # forces a fetch (#874): #635's reuse is what the nightly budget relies on.
+            run_key=executed_at,
+            run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=False)}),
+        )
+
+    return tick_schedule
+
+
 def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, dg.ScheduleDefinition | None]:
     """Op, job and schedule for one declaration. Op and job names are the declaration's:
     operators launch by them and the trigger sensor dispatches by them."""
@@ -427,33 +495,11 @@ def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, d
     def tick_job() -> None:
         tick_op()
 
-    schedule = None
-    if tick.cron is not None:
-
-        @dg.schedule(
-            name=tick.schedule_name,
-            job=tick_job,
-            cron_schedule=tick.cron,
-            execution_timezone="UTC",
-            default_status=tick.default_status,
-        )
-        def tick_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-            executed_at = context.scheduled_execution_time.isoformat()
-            return dg.RunRequest(
-                # run_key == the tick time: the daemon dedupes a re-evaluated tick to a
-                # single run, so an identical tick retry is idempotent. A schedule never
-                # forces a fetch (#874): #635's reuse is what the nightly budget relies on.
-                run_key=executed_at,
-                run_config=dg.RunConfig(
-                    ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=False)}
-                ),
-            )
-
-        schedule = tick_schedule
-    return tick_op, tick_job, schedule
+    return tick_op, tick_job, build_schedule(tick, tick_job)
 
 
 _BUILT = {tick.key: build_tick(tick) for tick in TICKS}
+_SP500_BUILT = build_tick(SP500_TICK)
 TICK_BY_JOB: dict[str, UniverseTick] = {tick.job_name: tick for tick in TICKS}
 
 # The names operators, tests and the trigger sensor address, unchanged from the
@@ -466,3 +512,46 @@ defs = dg.Definitions(
     jobs=[job for _, job, _ in _BUILT.values()],
     schedules=[schedule for _, _, schedule in _BUILT.values() if schedule is not None],
 )
+
+
+def build_sp500_tick(
+    app_env: str = settings.app_env,
+) -> tuple[dg.OpDefinition, dg.JobDefinition, dg.ScheduleDefinition]:
+    """Build the SP500 capture op, job, and schedule for the given environment (#67 / #1281)."""
+    sp500_op, sp500_job, _ = _SP500_BUILT
+    schedule = build_schedule(SP500_TICK, sp500_job, default_status=_production_only(app_env))
+    assert schedule is not None
+    return sp500_op, sp500_job, schedule
+
+
+def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
+    """Build all capture lane jobs and schedules for `app_env`, including SP500 (#67 / #1281)."""
+    topt_tick, qqq_tick, canary_tick = TICKS
+    _, sp500_job, _ = _SP500_BUILT
+    schedules = [
+        build_schedule(
+            topt_tick,
+            topt_live_pipeline_job,
+            cron=live_topt_cron(app_env),
+            default_status=dg.DefaultScheduleStatus.RUNNING,
+        ),
+        build_schedule(
+            qqq_tick,
+            qqq_live_pipeline_job,
+            default_status=_production_only(app_env),
+        ),
+        build_schedule(
+            canary_tick,
+            canary_live_pipeline_job,
+            default_status=dg.DefaultScheduleStatus.RUNNING,
+        ),
+        build_schedule(
+            SP500_TICK,
+            sp500_job,
+            default_status=_production_only(app_env),
+        ),
+    ]
+    return dg.Definitions(
+        jobs=[*[job for _, job, _ in _BUILT.values()], sp500_job],
+        schedules=[schedule for schedule in schedules if schedule is not None],
+    )

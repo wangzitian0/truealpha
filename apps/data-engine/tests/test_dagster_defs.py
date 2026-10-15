@@ -40,8 +40,8 @@ from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 
 def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
     """`dagster -m data_engine.dagster_defs` resolves `defs`; it must build with no
-    database and be exactly what the registered lanes declare — no job listed by name
-    anywhere in the root (#731), and the fixture canary NOT part of it (#429 I2)."""
+    database and be the union of what the registered lanes and root staggered planes declare —
+    and the fixture canary NOT part of it (#429 I2)."""
     assert isinstance(defs, dg.Definitions)
     lanes = lane_definitions()
     assert set(lanes) == set(LANE_MODULES)
@@ -49,8 +49,14 @@ def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
     def names(definitions: dg.Definitions, attribute: str) -> set[str]:
         return {item.name for item in getattr(definitions, attribute) or ()}
 
+    extended_sources = (
+        *lanes.values(),
+        capture.build_definitions(dagster_defs.settings.app_env),
+        dagster_defs._universe_refresh_build_definitions(dagster_defs.settings.app_env),
+        dagster_defs._standards_extended_defs(dagster_defs.settings.app_env),
+    )
     for attribute in ("jobs", "schedules", "sensors"):
-        declared = set().union(*(names(lane, attribute) for lane in lanes.values()))
+        declared = set().union(*(names(source, attribute) for source in extended_sources))
         assert names(defs, attribute) == declared, f"root {attribute} != union of lane {attribute}"
     assert names(defs, "jobs"), "the lanes declare no job at all"
     assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in names(defs, "jobs")
@@ -668,3 +674,114 @@ def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick(
     assert config["executed_at"] == tick.isoformat()
     assert dg.validate_run_config(lane.strategy_history_pipeline_job, request.run_config)
     assert "datetime.now" not in inspect.getsource(lane)
+
+
+# -- #67 / #1281: multi-universe and staggered standards plane schedules ----------------------
+
+
+def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_production() -> None:
+    """#67 A1/A2: `defs` registers and enables (`DefaultScheduleStatus.RUNNING` when `app_env` is
+    production/prod) non-overlapping staggered UTC schedules for `topt`, `qqq`, `sp500`, `canary`,
+    and the 4 Standards Plane schedules (`nport_monthly_schedule`, `13f_quarterly_schedule`,
+    `form4_daily_schedule`, `10k_annual_schedule`)."""
+    from data_engine.lanes import standards, universe_refresh
+
+    active_universe_keys = {"topt", "qqq", "sp500", "canary"}
+    declared_tick_keys = {tick.key for tick in capture.ALL_TICKS}
+    assert active_universe_keys <= declared_tick_keys
+
+    sources = universe_refresh.active_universe_sources()
+    assert {"qqq", "sp500", "canary"} <= set(sources)
+    assert sources["sp500"].head_kind == "universe-list:sp500"
+
+    for env in ("production", "prod", " PRODUCTION "):
+        prod_defs = dagster_defs.build_definitions(env)
+        for key in active_universe_keys:
+            assert capture.is_universe_scheduled(key, env) is True, (key, env)
+
+        expected_schedules = {
+            "topt_live_schedule": "15 22 * * *",
+            "qqq_live_schedule": "20 23 * * *",
+            "sp500_live_schedule": capture.SP500_LIVE_CRON,
+            "sp500_universe_refresh_schedule": universe_refresh.SP500_UNIVERSE_REFRESH_CRON,
+            "canary_daily_schedule": "47 23 * * *",
+            "nport_monthly_schedule": standards.NPORT_MONTHLY_CRON,
+            "13f_quarterly_schedule": standards.THIRTEENF_QUARTERLY_CRON,
+            "form4_daily_schedule": standards.FORM4_DAILY_CRON,
+            "10k_annual_schedule": standards.TENK_ANNUAL_CRON,
+        }
+        seen_crons: dict[str, str] = {}
+        for schedule_name, expected_cron in expected_schedules.items():
+            schedule = prod_defs.get_schedule_def(schedule_name)
+            assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING, (schedule_name, env)
+            assert schedule.execution_timezone == "UTC", schedule_name
+            assert isinstance(schedule.cron_schedule, str)
+            if schedule_name != "topt_live_schedule":
+                assert schedule.cron_schedule == expected_cron, schedule_name
+            assert schedule.cron_schedule not in seen_crons, (
+                f"{schedule_name} collides on cron {schedule.cron_schedule!r} with {seen_crons[schedule.cron_schedule]}"
+            )
+            seen_crons[schedule.cron_schedule] = schedule_name
+
+        # Check all (hour, minute) pairs across the 9 schedules are distinct so no two fire at the same UTC minute.
+        hour_minute_slots: dict[tuple[int, int], str] = {}
+        for schedule_name in expected_schedules:
+            schedule = prod_defs.get_schedule_def(schedule_name)
+            minute_str, hour_str = str(schedule.cron_schedule).split()[:2]
+            slot = (int(hour_str), int(minute_str))
+            assert slot not in hour_minute_slots, (
+                f"{schedule_name} shares UTC (hour, minute) {slot} with {hour_minute_slots[slot]}"
+            )
+            hour_minute_slots[slot] = schedule_name
+
+    # Outside production, production-only schedules default to STOPPED while TOPT and canary stay RUNNING.
+    staging_defs = dagster_defs.build_definitions("staging")
+    assert capture.is_universe_scheduled("sp500", "staging") is False
+    for prod_only_name in (
+        "qqq_live_schedule",
+        "sp500_live_schedule",
+        "sp500_universe_refresh_schedule",
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    ):
+        assert staging_defs.get_schedule_def(prod_only_name).default_status == dg.DefaultScheduleStatus.STOPPED
+
+
+def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatch) -> None:
+    """Every newly registered schedule builds valid RunRequests and the SP500 tick op invokes
+    `run_topt_pipeline` read-only with its existing signature."""
+    tick = datetime(2026, 10, 15, 1, 15, tzinfo=UTC)
+    context = dg.build_schedule_context(scheduled_execution_time=tick)
+
+    sp500_req = dagster_defs.sp500_live_schedule(context)
+    assert sp500_req.run_key == tick.isoformat()
+    assert sp500_req.run_config["ops"]["run_sp500_live_tick"]["config"] == {
+        "executed_at": tick.isoformat(),
+        "force_fetch": False,
+    }
+    assert dg.validate_run_config(dagster_defs.sp500_live_pipeline_job, sp500_req.run_config)
+
+    refresh_req = dagster_defs.sp500_universe_refresh_schedule(context)
+    assert refresh_req.run_key == f"sp500:{tick.isoformat()}"
+
+    for schedule in (
+        dagster_defs.nport_monthly_schedule,
+        dagster_defs.thirteenf_quarterly_schedule,
+        dagster_defs.form4_daily_schedule,
+        dagster_defs.tenk_annual_schedule,
+    ):
+        requests = list(schedule.evaluate_tick(context).run_requests)
+        assert requests, schedule.name
+        for req in requests:
+            assert req.run_key and schedule.name in req.run_key
+
+    calls: list[dict] = []
+    _capturing_tick(monkeypatch, calls)
+    op_ctx = dg.build_op_context()
+    dagster_defs.run_sp500_live_tick(op_ctx, ToptLiveTickConfig(executed_at=TICK))
+    assert len(calls) == 1
+    assert calls[0]["universe_head_kind"] == "universe-list:sp500"
+    assert calls[0]["label_prefix"] == "production-sp500"
+    assert calls[0]["force_fetch"] is False
