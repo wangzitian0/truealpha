@@ -86,7 +86,7 @@ def boot_canary_forces_fetch(app_env: str) -> bool:
     instead of by observations an earlier build committed in the last twelve hours.
     Production keeps the unforced canary and waits for the next cycle.
 
-    Normalised like `capture._production_only` and `capture.live_topt_cron`. The
+    Normalised like `lanes.production_only_schedule_status` and `capture.live_topt_cron`. The
     comparison is exact: production, its `prod` alias, and any name this repository
     does not know get the unforced canary. An environment nobody declared does not
     spend vendor credits on its own.
