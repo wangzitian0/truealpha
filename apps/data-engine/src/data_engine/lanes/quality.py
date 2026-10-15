@@ -42,8 +42,8 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
-from data_engine.lanes.capture import TICKS
+from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
+from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.quality import surface_proof
 from data_engine.quality.nightly_verdicts import TICK_TAG, check_name, tick_from_config, tick_of, verdict
@@ -239,14 +239,26 @@ order by universe_id
 """
 
 
-def stale_served_heads(connection: psycopg.Connection, *, universe_prefix: str = "") -> list[str]:
-    """Return every served head where `mart.served_head.freshness != 'fresh'` or
-    `availability != 'available'` (#1299, #54)."""
+def stale_served_heads(
+    connection: psycopg.Connection,
+    *,
+    universe_prefix: str = "",
+    environment: str | None = None,
+) -> list[str]:
+    """Return every scheduled served head where `mart.served_head.freshness != 'fresh'` or
+    `availability != 'available'` (#1299, #1256, #54)."""
+    if environment is None:
+        try:
+            environment = declared_environment(connection)
+        except Exception:  # noqa: BLE001 - test doubles that do not answer environment_identity fall back to settings
+            environment = settings.app_env
     rows = connection.execute(_SERVED_HEAD_FRESHNESS_SQL).fetchall()
     out: list[str] = []
     for row in rows:
         universe_id = str(row[0])
         if universe_prefix and not universe_id.startswith(universe_prefix):
+            continue
+        if not is_head_scheduled(universe_id, environment):
             continue
         freshness = str(row[1])
         availability = str(row[2])

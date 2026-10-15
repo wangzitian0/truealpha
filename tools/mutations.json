@@ -792,6 +792,22 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "invariants/quality-report-matches-core-results",
+      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "file": "tools/output_invariants.py",
+      "find": "                from mart.datahub_quality_report\n",
+      "replace": "                from mart.served_head\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_output_invariants.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

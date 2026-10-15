@@ -582,13 +582,26 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
         def fetchall(self) -> list[tuple[object, ...]]:
             return self._rows
 
+        def fetchone(self) -> tuple[object, ...] | None:
+            return ("staging",)
+
     # 1. Fresh served_head -> returns JSON with "status": "pass"
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _Conn([]))
     out = quality.run_report_surface_proof(dg.build_op_context())
     assert json.loads(out)["status"] == "pass"
     assert recorded[-1]["ok"] is True
 
-    # 2. Stale served_head -> raises dg.Failure and records ok=False
+    # 2. Manual-only unscheduled QQQ head in staging -> ignored per #1256
+    monkeypatch.setattr(
+        psycopg,
+        "connect",
+        lambda *_a, **_k: _Conn([("universe:qqq-us-2026-09-30", "stale", "available", "older_than_3d")]),
+    )
+    out_staging = quality.run_report_surface_proof(dg.build_op_context())
+    assert json.loads(out_staging)["status"] == "pass"
+    assert recorded[-1]["ok"] is True
+
+    # 3. Stale scheduled served_head -> raises dg.Failure and records ok=False
     monkeypatch.setattr(
         psycopg,
         "connect",

@@ -34,6 +34,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from truealpha_runtime.testing import DB_SKIP_GATE_MARKERS
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("mutations.json")
 # Per mutation, not per job. Without it a single hanging guard exhausts the
@@ -70,11 +72,7 @@ def load(path: Path = MANIFEST) -> list[Mutation]:
     ]
 
 
-_SKIP_GATE_MARKERS = (
-    "DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1",
-    "DB write tests require CI=true or ALLOW_CLEAR_TEST=1",
-    "DATABASE_URL must be explicitly provided for DB write tests",
-)
+_SKIP_GATE_MARKERS = DB_SKIP_GATE_MARKERS
 
 
 def _skipped_under_db_gate(output: str) -> bool:

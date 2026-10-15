@@ -31,29 +31,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from data_engine.lanes.capture import TICKS, is_universe_scheduled
+from data_engine.lanes.capture import is_head_scheduled
 from infra2_sdk.deploy import HttpGet, default_http_get
 
 # Daily captures; a weekend is two missed days. Three days cannot fire on ordinary
 # operation and is exactly the freeze that went unpaged (2026-08-15/17).
 MAX_AGE_HOURS = 72
-_KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
-_KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
-
-
-def is_head_scheduled(universe_id: str, environment: str) -> bool:
-    """Whether `universe_id` has a running schedule in `environment` (#1256).
-
-    Fails closed (returns True) when `environment` is omitted or unrecognised, or when
-    `universe_id` does not map to a declared tick in `TICKS`.
-    """
-    env = environment.strip().lower()
-    if env not in _KNOWN_ENVIRONMENTS:
-        return True
-    key = universe_id.removeprefix("universe:").split("-", 1)[0]
-    if key not in _KNOWN_TICK_KEYS:
-        return True
-    return is_universe_scheduled(key, env)
 
 
 class PointerFreshnessFailure(RuntimeError):

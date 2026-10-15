@@ -35,7 +35,14 @@ class _FakeHealthReport:
     ) -> None:
         self.verdicts = verdicts
         self.release = release
-        self.governed_pointers = governed_pointers
+        self.governed_pointers = (
+            [
+                {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+                {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+            ]
+            if governed_pointers is None
+            else governed_pointers
+        )
 
 
 def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
@@ -50,15 +57,11 @@ def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
         _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
         _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
     ]
-    fresh_pointers = [
-        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
-        {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
-    ]
 
     monkeypatch.setattr(
         _module,
         "read_report",
-        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", fresh_pointers),
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"),
     )
 
     report: VisionAuditReport = audit_vision(env="production")
@@ -68,7 +71,7 @@ def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
     assert {gate.gate_id for gate in report.gates} == {"#56", "#29", "#30", "#31", "#54"}
 
 
-def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale(
+def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale_or_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_verdicts = [
@@ -97,6 +100,32 @@ def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale(
     assert g4.verified is False
     assert g4.status == "OPEN"
     assert "mart.served_head.freshness!=fresh" in g4.evidence
+
+    # Fail-closed when governed_pointers is absent (None)
+    missing_report = _FakeHealthReport(fake_verdicts, "v0.1.2")
+    missing_report.governed_pointers = None
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: missing_report,
+    )
+    report_missing: VisionAuditReport = audit_vision(env="production")
+    assert report_missing.all_passed is False
+    assert report_missing.status == "fail"
+
+    # Manual-only unscheduled QQQ pointer in staging does not fail when TOPT is fresh (#1256)
+    staging_pointers = [
+        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+        {"universe_id": "universe:qqq-us-2026-09-30", "freshness": "stale", "availability": "available"},
+    ]
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", staging_pointers),
+    )
+    report_staging: VisionAuditReport = audit_vision(env="staging")
+    assert report_staging.all_passed is True
+    assert report_staging.status == "pass"
 
 
 def test_vision_audit_fails_gate_3_when_nightly_backtest_verdict_is_missing(

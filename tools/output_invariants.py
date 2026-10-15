@@ -480,12 +480,38 @@ INVARIANTS: tuple[Invariant, ...] = (
             "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
         ),
         violations="""
+            with eligible as (
+                select distinct g.cik
+                from staging.issuer_headcount_facts g
+                where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1')
+                  and (
+                      substring(g.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is not null
+                      or (
+                          g.source = '10k-extraction'
+                          and substring(g.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                      )
+                  )
+                  and substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is not null
+                  and g.knowable_at <> '2026-01-01T00:00:00Z'::timestamptz
+                  and (g.knowable_at at time zone 'UTC')::date
+                      = substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                  and (
+                      g.source <> '10k-extraction'
+                      or (
+                          substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is not null
+                          and exists (
+                              select 1 from raw.fetches r
+                              where r.id = substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                          )
+                      )
+                  )
+            )
             select
                 f.id::text,
                 f.cik::text,
                 f.source,
                 coalesce(
-                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})'),
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),
                     'missing-accession'
                 ) as cited_accession,
                 coalesce(
@@ -493,21 +519,38 @@ INVARIANTS: tuple[Invariant, ...] = (
                     'none'
                 ) as cited_raw_id
             from staging.issuer_headcount_facts f
-            where substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null
-               or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null
-               or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
-               or (f.knowable_at at time zone 'UTC')::date
-                  <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
-               or (
-                   f.source = '10k-extraction'
-                   and (
-                       substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
-                       or not exists (
-                           select 1 from raw.fetches r
-                           where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
-                       )
-                   )
-               )
+            where (
+                f.source = 'curated-10k-2025'
+                or (
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null
+                    and not (
+                        f.source = '10k-extraction'
+                        and substring(f.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                    )
+                )
+                or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null
+                or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                or (f.knowable_at at time zone 'UTC')::date
+                   <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                or (
+                    f.source = '10k-extraction'
+                    and (
+                        substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
+                        or not exists (
+                            select 1 from raw.fetches r
+                            where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                        )
+                    )
+                )
+            )
+            and not (
+                (
+                    f.source = 'curated-10k-2025'
+                    or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                    or f.evidence_ref like '%#70 supersedes%'
+                )
+                and exists (select 1 from eligible e where e.cik = f.cik)
+            )
         """,
         population="""
             select count(*) from staging.issuer_headcount_facts
