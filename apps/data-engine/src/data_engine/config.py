@@ -222,17 +222,18 @@ class Settings(RuntimeSettings):
 
     def to_runtime_identity(self) -> RuntimeIdentity:
         """Resolve or construct canonical runtime identity."""
-        env = {
-            RuntimeEnvKey.SERVICE_NAME.value: "data-engine",
-            RuntimeEnvKey.SERVICE_VERSION.value: self.git_commit_sha,
-            RuntimeEnvKey.ENVIRONMENT.value: self.environment_tier.value,
-            RuntimeEnvKey.GIT_COMMIT_SHA.value: self.git_commit_sha,
-            RuntimeEnvKey.IMAGE_DIGEST.value: self.data_engine_image_digest,
-            RuntimeEnvKey.CONFIGURATION_SHA256.value: self.configuration_sha256,
-            RuntimeEnvKey.RELEASE_ID.value: self.release_manifest_id,
-        }
-        merged = {**env, **{k: v for k, v in os.environ.items() if v}}
-        return RuntimeIdentity.from_env(merged)
+        env = {k: v for k, v in os.environ.items() if v}
+        env.pop("ENV", None)
+        env.pop("APP_ENV", None)
+        env.pop("IMAGE_TAG", None)
+        env[RuntimeEnvKey.SERVICE_NAME.value] = "data-engine"
+        env[RuntimeEnvKey.SERVICE_VERSION.value] = self.git_commit_sha
+        env[RuntimeEnvKey.ENVIRONMENT.value] = self.environment_tier.value
+        env[RuntimeEnvKey.GIT_COMMIT_SHA.value] = self.git_commit_sha
+        env[RuntimeEnvKey.IMAGE_DIGEST.value] = self.data_engine_image_digest
+        env[RuntimeEnvKey.CONFIGURATION_SHA256.value] = self.configuration_sha256
+        env[RuntimeEnvKey.RELEASE_ID.value] = self.release_manifest_id
+        return RuntimeIdentity.from_env(env)
 
     def to_postgres_settings(self):
         """Construct canonical PostgresSettings for data-engine."""
