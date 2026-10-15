@@ -8,11 +8,14 @@
 --
 -- Rule: this view returns the same rows as the view of 20260923T1800.
 -- The columns, their names and their order do not change.
--- The view calls neither helper. Two common table expressions give the same values for all rows:
---   survivors          staging.entity_survivor(entity, 'infinity') for every entity.
---                      It is the walk of staging.entity_backfill() in 20260917T0604.
+-- The view calls neither helper. These common table expressions give the same values for all rows:
+--   survivors          staging.entity_survivor(entity, 'infinity') for every entity, through
+--                      merge_edges and survivor_walk. It is the walk of staging.entity_backfill()
+--                      in 20260917T0604.
 --   alias_retractions  the earliest retraction end of each alias. least() of it and the
 --                      alias's own valid_to is staging.entity_alias_valid_to(alias, 'infinity').
+-- The alias order stays `confidence desc, transaction_time desc`. When two aliases of one
+-- survivor and scheme are equal on both keys, neither definition sets a winner (#1343).
 -- Both helpers compare a transaction_time with p_known_at. At 'infinity' each comparison is true,
 -- because transaction_time is not null. So the set-based form has no time filter.
 -- A change to either helper needs the same change here.
