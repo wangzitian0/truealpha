@@ -8,7 +8,7 @@ from truealpha_runtime.checks import (
     ProbeResult,
     run_dependency_checks,
 )
-from truealpha_runtime.config import DeploymentSettings, RuntimeSettings, deployment_settings, runtime_settings
+from truealpha_runtime.config import RuntimeSettings, runtime_settings
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST, Dependency, DependencyManifest
 from truealpha_runtime.storage import S3RawObjectStore, StorageError
 from truealpha_runtime.tiers import EnvironmentTier, resolve_environment_tier
@@ -19,7 +19,6 @@ __all__ = [
     "Dependency",
     "DependencyManifest",
     "DependencyStatus",
-    "DeploymentSettings",
     "EnvironmentTier",
     "GraphStoreCheck",
     "ObjectStorageCheck",
@@ -28,7 +27,6 @@ __all__ = [
     "S3RawObjectStore",
     "StorageError",
     "resolve_environment_tier",
-    "deployment_settings",
     "run_dependency_checks",
     "runtime_settings",
 ]

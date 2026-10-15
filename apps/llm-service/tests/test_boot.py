@@ -42,3 +42,20 @@ def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch: pyt
     """The inherited `env_ignore_empty`: a blank DATABASE_URL is the default, not "" (#759)."""
     monkeypatch.setenv("DATABASE_URL", "")
     assert Settings(_env_file=None).database_url == Settings.model_fields["database_url"].default
+
+
+def test_llm_service_to_llm_settings() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_provider="zai",
+        llm_base_url="https://open.bigmodel.cn/api/paas/v4",
+        llm_api_key="secret-key",
+        llm_model="glm-5.3-flash",
+        llm_timeout_seconds=60.0,
+    )
+    llm = settings.to_llm_settings()
+    assert llm.provider == "zai"
+    assert llm.base_url == "https://open.bigmodel.cn/api/paas/v4"
+    assert llm.api_key == "secret-key"
+    assert llm.primary_model == "glm-5.3-flash"
+    assert llm.json_timeout_seconds == 60.0
