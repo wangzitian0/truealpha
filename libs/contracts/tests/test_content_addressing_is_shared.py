@@ -404,7 +404,9 @@ def test_no_function_body_is_duplicated_across_two_modules() -> None:
 def test_canonical_sha256_is_defined_once_and_utf8_byte_equivalent() -> None:
     """#1291: `canonical_sha256` has two statements, below the four-statement AST guard threshold.
     Verify that `common.py` defines `canonical_sha256` once across `_SOURCE_ROOTS`.
-    Verify UTF-8 byte equivalence between `.encode()` and `.encode("utf-8")`."""
+    Verify that `canonical_sha256` equals the sha256 of the canonical JSON: sorted keys, compact
+    separators, and non-ASCII text escaped (`ensure_ascii=True`). The unicode sample makes the test
+    fail when the escaping changes."""
     import hashlib
     import json
 
