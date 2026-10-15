@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -37,13 +37,14 @@ from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.production_topt.headcount import record_headcount
+from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
 from data_engine.raw_store import insert_fetch
 from data_engine.sources import llm
 from data_engine.sources.gateway import CapacityExceeded, SourceGateway
+from data_engine.sources.sec import SUBMISSIONS_URL
 
 ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
-SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 SUBMISSIONS_OVERFLOW_URL = "https://data.sec.gov/submissions/{name}"
 EXTRACTION_SOURCE = "10k-extraction"
 # Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
@@ -266,7 +267,7 @@ def _annual_filing_from_index(
     cutoff_date: date,
     http: Any,
     gateway: SourceGateway | None = None,
-    allowed_forms: Sequence[str] = ANNUAL_FORMS,
+    allowed_forms: Collection[str] = ANNUAL_FORMS,
 ) -> FilingDocument | None:
     """Return the first filing in allowed_forms at or before cutoff_date from one submissions index block."""
     forms = index_block.get("form") or ()
@@ -290,7 +291,7 @@ def _latest_filing_for_forms(
     http: Any,
     gateway: SourceGateway | None = None,
     cutoff: datetime,
-    allowed_forms: Sequence[str],
+    allowed_forms: Collection[str],
 ) -> FilingDocument | None:
     submissions = _fetch_json_via_gateway(http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik))
     filings = submissions.get("filings") or {}
@@ -333,20 +334,6 @@ def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff:
     return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=ANNUAL_FORMS)
 
 
-PERIODIC_FORMS = (
-    "10-K",
-    "10-K/A",
-    "10-KT",
-    "10-KT/A",
-    "10-Q",
-    "10-Q/A",
-    "10-QT",
-    "10-QT/A",
-    "20-F",
-    "20-F/A",
-    "40-F",
-    "40-F/A",
-)
 _CLASS_OF_STOCK_AXIS = "us-gaap:StatementClassOfStockAxis"
 _DEI_SHARES_CONCEPT = "dei:EntityCommonStockSharesOutstanding"
 _PAR_VALUE_CONCEPT = "us-gaap:CommonStockParOrStatedValuePerShare"
@@ -356,7 +343,7 @@ def latest_periodic_filing(
     cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
 ) -> FilingDocument | None:
     """Return the newest periodic statement (10-K/10-Q/20-F/40-F) filed at or before cutoff (#1265)."""
-    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=PERIODIC_FORMS)
+    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=STATEMENT_FORMS)
 
 
 def _format_accession(accession: str) -> str:
@@ -413,7 +400,7 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
             "val": int(val) if val == int(val) else str(val),
             "accn": formatted_accn,
             "fy": latest_end.year,
-            "fp": "FY" if document.form.startswith(("10-K", "20-F", "40-F")) else "Q",
+            "fp": "FY" if document.form in ANNUAL_STATEMENT_FORMS else "Q",
             "form": document.form,
             "filed": filed_iso,
             "segment": member,
