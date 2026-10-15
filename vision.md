@@ -37,8 +37,9 @@ This isn't about building a flashy data platform — it's about engineering an a
 "Continuously producing" means the versioned, owned curated universe has graduated
 beyond canary/shadow operation and meets explicit per-module applicability, usable
 coverage, freshness, and traceability objectives across real source refreshes. An
-`unavailable`, stale, unresolved, or low-confidence placeholder does not count as a
-produced result for an applicable subject. Success also requires the deployed MCP/App/
+`unavailable`, stale, unresolved, or sentinel placeholder does not count as a
+produced result for an applicable subject. A computed value with a low confidence score
+counts, and its score is shown beside it (owner decision 2026-10-15, #1333). Success also requires the deployed MCP/App/
 chat and report/card paths to consume the same materialized outputs; fixture-only tools,
 two immediate scheduled runs, or code existence are not completion evidence.
 
