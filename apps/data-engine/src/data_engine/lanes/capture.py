@@ -122,6 +122,7 @@ class UniverseTick:
     #: tranche's problem (stated the same way in the App's fund-valuation reader).
     consolidate_funds: bool
     cron: str | None
+    #: The status that applies in the process environment. `tick_schedule_status` gives the status in any environment.
     default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.RUNNING
 
 
@@ -180,6 +181,14 @@ SP500_LIVE_JOB_NAME = "sp500_live_pipeline"
 # 01:15 UTC: after the nightly invariants (00:15 UTC) and confidence report (00:45 UTC),
 # well clear of the 22:15/22:45 TOPT, 23:20 QQQ, and 23:47 canary capture windows (#67 / #1281).
 SP500_LIVE_CRON = "15 1 * * *"
+# #1310: the SP500 schedule is STOPPED in every environment. One tick needs about 1,000 Twelve Data
+# credits (about 500 issuers, about 2 credits each). Production owns 480 of the 800 daily credits on
+# the shared key. The production core path spends about 286 credits a day. A tick at 01:15 UTC spends
+# the whole share before the 21:15 UTC price refresh and the 22:15 UTC core tick. The core tick then
+# loses its second-origin cells. The plausibility gate refuses that run. The governed head freezes.
+# Operators launch `sp500_live_pipeline` by hand. Remove this constant when a declared Twelve Data
+# budget for the SP500 tick exists.
+SP500_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
 SP500_UNIVERSE_HEAD = "universe-list:sp500"
 SP500_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
@@ -235,7 +244,7 @@ TICKS: tuple[UniverseTick, ...] = (
         run_strategy=False,
         consolidate_funds=False,
         cron=SP500_LIVE_CRON,
-        default_status=production_only_schedule_status(settings.app_env),
+        default_status=SP500_SCHEDULE_STATUS,
     ),
     UniverseTick(
         key="canary",
@@ -257,6 +266,17 @@ _KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
 _KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
 
 
+def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
+    """The default status of `tick`'s schedule in `app_env` (#1310).
+
+    The definitions builder and the freshness checks both read this function, so they cannot disagree.
+    QQQ runs by schedule in production only. Every other tick keeps the status of its declaration.
+    """
+    if tick.key == "qqq":
+        return production_only_schedule_status(app_env)
+    return tick.default_status
+
+
 def is_universe_scheduled(universe: str, environment: str) -> bool:
     """Whether `universe` has an active schedule in `environment` (#1118)."""
     key = universe.removeprefix("universe-list:")
@@ -264,9 +284,7 @@ def is_universe_scheduled(universe: str, environment: str) -> bool:
         if tick.key == key:
             if tick.cron is None:
                 return False
-            if tick.key in ("qqq", "sp500"):
-                return production_only_schedule_status(environment) == dg.DefaultScheduleStatus.RUNNING
-            return tick.default_status == dg.DefaultScheduleStatus.RUNNING
+            return tick_schedule_status(tick, environment) == dg.DefaultScheduleStatus.RUNNING
     return False
 
 
@@ -521,11 +539,7 @@ def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
             tick,
             _BUILT[tick.key][1],
             cron=live_topt_cron(app_env) if tick.key == "topt" else tick.cron,
-            default_status=(
-                production_only_schedule_status(app_env)
-                if tick.key in ("qqq", "sp500")
-                else dg.DefaultScheduleStatus.RUNNING
-            ),
+            default_status=tick_schedule_status(tick, app_env),
         )
         for tick in TICKS
     ]
