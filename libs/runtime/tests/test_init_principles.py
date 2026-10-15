@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 INIT = (ROOT / "init.md").read_text()
 VISION = (ROOT / "vision.md").read_text()
+A3 = (ROOT / "docs" / "architecture-decisions" / "A3-source-governance.md").read_text()
 
 FORBIDDEN = {
     "oracle blocks supply-chain edges": "The blocker is not recall but the absence of an oracle",
@@ -24,6 +25,9 @@ FORBIDDEN = {
     "sealed holdout gates Gate 2": "and pass #65 under the custody rule above",
     "custodian rule 18": "A named custodian controls labels",
     "restore drill gates graduation": "A destructive clean restore must meet declared database and raw-object RPO/RTO",
+    "yfinance cannot be critical path": "can't be the sole dependency on a critical path",
+    "gate fail closed": "(fail closed)",
+    "RPO gate": "recovery within RPO/RTO",
     "two-column rule 17": "Every issuer decomposes into an operating component and a financial component; both are computed",
 }
 
@@ -51,3 +55,8 @@ def test_init_md_states_the_decision(name: str, phrase: str) -> None:
 def test_vision_counts_a_low_score_value_as_produced() -> None:
     assert "stale, unresolved, or low-confidence placeholder" not in VISION
     assert "A computed value with a low confidence score" in VISION
+
+
+def test_a3_does_not_block_a_source_without_a_falsifier() -> None:
+    assert "is inventory, not data" not in A3
+    assert "lowest prior and a dashboard flag" in A3
