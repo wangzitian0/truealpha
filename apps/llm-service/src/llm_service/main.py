@@ -5,7 +5,6 @@ Roadmap: the MCP endpoint comes first (reuses libs/factors, nearly free to wire 
 Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
 """
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
