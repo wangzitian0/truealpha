@@ -92,6 +92,8 @@ def test_a_payload_that_yields_no_number_is_not_usable() -> None:
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "gross_profit": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "headcount": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "total_assets": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "revenue": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "shares_outstanding": None})
 
 
 def test_an_unparseable_or_absent_payload_is_not_usable() -> None:
