@@ -126,19 +126,16 @@ left join issuer_listings ilist on ilist.issuer_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_identity') is null
-       or pg_get_viewdef(to_regclass('mart.entity_identity'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
-        execute 'create or replace view mart.entity_identity as ' || wanted;
+    -- Superseded: 20261015T0900_datahub_mart_entity_identity_set_based.sql redefines
+    -- mart.entity_identity later in the chain (#1337) and owns its definition and comment.
+    -- A replace here would replace the view twice on each boot. So this definition creates
+    -- the view only on a database that has none. The text above stays: it is the definition
+    -- that the #1337 equivalence test compares with.
+    if to_regclass('mart.entity_identity') is null then
+        execute 'create view mart.entity_identity as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
-
-comment on view mart.entity_identity is
-    '#953: canonical entity identity projection for mart consumers (entity_id, kind, current_ticker, name, cik, lei, listing_id, legacy_id).';
 
 -- #953: make mart.entity_identity actually READABLE by the role that has to read it.
 --
