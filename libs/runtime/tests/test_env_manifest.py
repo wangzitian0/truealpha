@@ -35,15 +35,16 @@ def test_every_secret_declares_a_producer() -> None:
 
 
 def test_data_engine_manifest_declares_the_identity_the_deployment_injects() -> None:
-    """#784, #1321: the three release-identity values reach the process under canonical names.
-    Declared here so the deployment can be reconciled against the manifest and so
-    `truealpha_runtime.boot.assert_environment` can require them."""
+    """#784: the three release-identity values reach the process from infra2's compose under
+    these exact names. Declared here so the deployment can be reconciled against the manifest
+    and so `truealpha_runtime.boot.assert_environment` can require them — before #784 they
+    were read straight out of `os.environ` and appeared in no contract at all."""
     manifest = env_manifest.load("apps/data-engine/required-env.generated.json")
     by_env = {field.env: field for field in manifest.fields}
     for name, source in (
-        ("RELEASE_ID", "release"),
-        ("IMAGE_DIGEST", "release"),
-        ("CONFIGURATION_SHA256", "release"),
+        ("TRUEALPHA_RELEASE_MANIFEST_ID", "release"),
+        ("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "release"),
+        ("TRUEALPHA_CONFIGURATION_SHA256", "release"),
         ("TRUEALPHA_CAPTURE_APPROVED_BY", "decision"),
     ):
         field = by_env[name]

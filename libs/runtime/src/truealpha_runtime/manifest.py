@@ -46,7 +46,6 @@ DEPENDENCY_MANIFEST = DependencyManifest(
                     "S3_BUCKET",
                     "S3_REGION",
                     "S3_RAW_PREFIX",
-                    "S3_DOCUMENTS_PREFIX",
                     "S3_CONNECT_TIMEOUT_SECONDS",
                 }
             ),
