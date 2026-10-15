@@ -90,16 +90,10 @@ if _telemetry is not None:
 # that can reach this port set the scheme and host used to build redirects, and
 # "it is not reachable from outside" is an assumption about networking rather
 # than something this process can check (review).
-# Defaults to loopback addresses for standalone runnability; in private
-# deployments behind reverse proxies (e.g. Traefik), TRUSTED_PROXY_HOSTS can
-# be overridden to include proxy network subnets. Overridable so a preview or a
-# different topology declares its own, and a wrong value fails closed — the
-# headers are ignored and the redirect degrades to the pre-fix behaviour rather
-# than trusting a stranger.
-TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "127.0.0.1,::1")
+TRUSTED_PROXIES = ("127.0.0.1", "::1")
 app.add_middleware(
     ProxyHeadersMiddleware,
-    trusted_hosts=[host.strip() for host in TRUSTED_PROXIES.split(",") if host.strip()],
+    trusted_hosts=list(TRUSTED_PROXIES),
 )
 
 
