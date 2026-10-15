@@ -43,9 +43,25 @@ LANE_MODULES: tuple[str, ...] = (
 )
 
 
-def lane_definitions() -> dict[str, dg.Definitions]:
+def production_only_schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
+    """Return RUNNING when `app_env` is production (`production` / `prod`), else STOPPED."""
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if app_env.strip().lower() in ("production", "prod")
+        else dg.DefaultScheduleStatus.STOPPED
+    )
+
+
+def lane_definitions(app_env: str | None = None) -> dict[str, dg.Definitions]:
     """Import every registered lane and return its `defs`, keyed by module name."""
-    return {name: import_module(name).defs for name in LANE_MODULES}
+    definitions: dict[str, dg.Definitions] = {}
+    for name in LANE_MODULES:
+        module = import_module(name)
+        if app_env is not None and hasattr(module, "build_definitions"):
+            definitions[name] = module.build_definitions(app_env)
+        else:
+            definitions[name] = module.defs
+    return definitions
 
 
 def nightly_verdict_names() -> frozenset[str]:

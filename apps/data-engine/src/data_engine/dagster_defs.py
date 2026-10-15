@@ -29,22 +29,23 @@ from truealpha_runtime.telemetry import init_telemetry
 from data_engine.config import settings
 from data_engine.lanes import LANE_MODULES, lane_definitions
 from data_engine.lanes.capture import (
-    ALL_TICKS,
     CANARY_JOB_NAME,
     QQQ_LIVE_JOB_NAME,
     SP500_LIVE_CRON,
     SP500_LIVE_JOB_NAME,
+    TICKS,
     TOPT_LIVE_CRON,
     TOPT_LIVE_JOB_NAME,
     ToptLiveTickConfig,
-    build_sp500_tick,
     canary_daily_schedule,
     live_topt_cron,
     qqq_live_schedule,
+    run_sp500_live_tick,
     run_topt_live_tick,
+    sp500_live_pipeline_job,
+    sp500_live_schedule,
     topt_live_schedule,
 )
-from data_engine.lanes.capture import build_definitions as _capture_build_definitions
 from data_engine.lanes.entity_identity import ENTITY_BACKFILL_JOB_NAME, entity_identity_backfill_sensor
 from data_engine.lanes.standards import (
     FORM4_DAILY_CRON,
@@ -57,29 +58,20 @@ from data_engine.lanes.standards import (
     TENK_ANNUAL_SCHEDULE_NAME,
     THIRTEENF_QUARTERLY_CRON,
     THIRTEENF_QUARTERLY_SCHEDULE_NAME,
-    build_standards_plane_schedules,
+    form4_daily_schedule,
+    nport_monthly_schedule,
+    tenk_annual_schedule,
+    thirteenf_quarterly_schedule,
 )
-from data_engine.lanes.standards import extended_defs as _standards_extended_defs
 from data_engine.lanes.triggers import pipeline_trigger_sensor
 from data_engine.lanes.universe_refresh import (
     SP500_UNIVERSE_REFRESH_CRON,
     SP500_UNIVERSE_REFRESH_SCHEDULE_NAME,
     UNIVERSE_REFRESH_JOB_NAME,
-    build_sp500_universe_refresh_schedule,
+    sp500_universe_refresh_schedule,
 )
-from data_engine.lanes.universe_refresh import build_definitions as _universe_refresh_build_definitions
-
-run_sp500_live_tick, sp500_live_pipeline_job, sp500_live_schedule = build_sp500_tick(settings.app_env)
-sp500_universe_refresh_schedule = build_sp500_universe_refresh_schedule(settings.app_env)
-(
-    nport_monthly_schedule,
-    thirteenf_quarterly_schedule,
-    form4_daily_schedule,
-    tenk_annual_schedule,
-) = build_standards_plane_schedules(settings.app_env)
 
 __all__ = [
-    "ALL_TICKS",
     "CANARY_JOB_NAME",
     "CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME",
     "ENTITY_BACKFILL_JOB_NAME",
@@ -99,6 +91,7 @@ __all__ = [
     "TENK_ANNUAL_SCHEDULE_NAME",
     "THIRTEENF_QUARTERLY_CRON",
     "THIRTEENF_QUARTERLY_SCHEDULE_NAME",
+    "TICKS",
     "TOPT_LIVE_CRON",
     "TOPT_LIVE_JOB_NAME",
     "UNIVERSE_REFRESH_JOB_NAME",
@@ -132,17 +125,11 @@ init_telemetry()
 
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
-    """Build the deployable Dagster Definitions across all registered lanes and staggered planes."""
-    lanes = lane_definitions()
-    lanes["data_engine.lanes.capture"] = _capture_build_definitions(app_env)
-    lanes["data_engine.lanes.universe_refresh"] = _universe_refresh_build_definitions(app_env)
-    return dg.Definitions.merge(
-        *lanes.values(),
-        _standards_extended_defs(app_env),
-    )
+    """Build the deployable Dagster Definitions across all registered lanes (#731, #67)."""
+    return dg.Definitions.merge(*lane_definitions(app_env).values())
 
 
-defs = build_definitions(settings.app_env)
+defs = dg.Definitions.merge(*lane_definitions().values())
 
 
 # -- retired fixture canary (tests only; never deployed) -------------------------------

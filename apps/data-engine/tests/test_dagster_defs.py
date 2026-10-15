@@ -40,7 +40,7 @@ from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 
 def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
     """`dagster -m data_engine.dagster_defs` resolves `defs`; it must build with no
-    database and be the union of what the registered lanes and root staggered planes declare —
+    database and be the exact union of what the registered lanes declare —
     and the fixture canary NOT part of it (#429 I2)."""
     assert isinstance(defs, dg.Definitions)
     lanes = lane_definitions()
@@ -49,14 +49,8 @@ def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
     def names(definitions: dg.Definitions, attribute: str) -> set[str]:
         return {item.name for item in getattr(definitions, attribute) or ()}
 
-    extended_sources = (
-        *lanes.values(),
-        capture.build_definitions(dagster_defs.settings.app_env),
-        dagster_defs._universe_refresh_build_definitions(dagster_defs.settings.app_env),
-        dagster_defs._standards_extended_defs(dagster_defs.settings.app_env),
-    )
     for attribute in ("jobs", "schedules", "sensors"):
-        declared = set().union(*(names(source, attribute) for source in extended_sources))
+        declared = set().union(*(names(lane, attribute) for lane in lanes.values()))
         assert names(defs, attribute) == declared, f"root {attribute} != union of lane {attribute}"
     assert names(defs, "jobs"), "the lanes declare no job at all"
     assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in names(defs, "jobs")
@@ -684,15 +678,20 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
     production/prod) non-overlapping staggered UTC schedules for `topt`, `qqq`, `sp500`, `canary`,
     and the 4 Standards Plane schedules (`nport_monthly_schedule`, `13f_quarterly_schedule`,
     `form4_daily_schedule`, `10k_annual_schedule`)."""
+    from data_engine.datahub.confidence_report import _universe_source
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
     from data_engine.lanes import standards, universe_refresh
 
     active_universe_keys = {"topt", "qqq", "sp500", "canary"}
-    declared_tick_keys = {tick.key for tick in capture.ALL_TICKS}
-    assert active_universe_keys <= declared_tick_keys
+    declared_tick_keys = {tick.key for tick in capture.TICKS}
+    assert active_universe_keys == declared_tick_keys
+    assert not hasattr(capture, "ALL_TICKS")
+    assert not hasattr(universe_refresh, "active_universe_sources")
+    assert not hasattr(standards, "extended_defs")
 
-    sources = universe_refresh.active_universe_sources()
-    assert {"qqq", "sp500", "canary"} <= set(sources)
-    assert sources["sp500"].head_kind == "universe-list:sp500"
+    assert {"qqq", "sp500", "canary"} == set(UNIVERSE_SOURCES)
+    assert UNIVERSE_SOURCES["sp500"].head_kind == "universe-list:sp500"
+    assert _universe_source("universe-list:sp500") == UNIVERSE_SOURCES["sp500"]
 
     for env in ("production", "prod", " PRODUCTION "):
         prod_defs = dagster_defs.build_definitions(env)
@@ -765,6 +764,14 @@ def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatc
 
     refresh_req = dagster_defs.sp500_universe_refresh_schedule(context)
     assert refresh_req.run_key == f"sp500:{tick.isoformat()}"
+
+    assert dagster_defs.nport_monthly_schedule.job.name == "universe_refresh_pipeline"
+    for schedule in (
+        dagster_defs.thirteenf_quarterly_schedule,
+        dagster_defs.form4_daily_schedule,
+        dagster_defs.tenk_annual_schedule,
+    ):
+        assert schedule.job.name == "standard_backfill_pipeline", schedule.name
 
     for schedule in (
         dagster_defs.nport_monthly_schedule,

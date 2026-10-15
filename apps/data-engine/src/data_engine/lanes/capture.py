@@ -40,6 +40,7 @@ from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
+from data_engine.lanes import production_only_schedule_status
 from data_engine.sources import gateway
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
@@ -93,17 +94,6 @@ class ToptLiveTickConfig(dg.Config):
 
     executed_at: str
     force_fetch: bool = False
-
-
-def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
-    """Production-only, by owner directive (2026-08-17: staging needs the TOPT tick and
-    nothing more): outside production the schedule defaults to STOPPED and the job runs
-    there only through the manual trigger."""
-    return (
-        dg.DefaultScheduleStatus.RUNNING
-        if app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    )
 
 
 @dataclass(frozen=True)
@@ -199,21 +189,6 @@ SP500_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_corroborated_share=Decimal("0.90"),
 )
 
-SP500_TICK = UniverseTick(
-    key="sp500",
-    job_name=SP500_LIVE_JOB_NAME,
-    op_name="run_sp500_live_tick",
-    schedule_name="sp500_live_schedule",
-    log_label="sp500 live tick",
-    universe_head_kind=SP500_UNIVERSE_HEAD,
-    label_prefix="production-sp500",
-    objectives=SP500_PHASE1_OBJECTIVES,
-    run_strategy=False,
-    consolidate_funds=False,
-    cron=SP500_LIVE_CRON,
-    default_status=_production_only(settings.app_env),
-)
-
 
 TICKS: tuple[UniverseTick, ...] = (
     UniverseTick(
@@ -246,7 +221,21 @@ TICKS: tuple[UniverseTick, ...] = (
         # QQQ's core rows are the fund's own holdings: the only tick that can value them.
         consolidate_funds=True,
         cron=QQQ_LIVE_CRON,
-        default_status=_production_only(settings.app_env),
+        default_status=production_only_schedule_status(settings.app_env),
+    ),
+    UniverseTick(
+        key="sp500",
+        job_name=SP500_LIVE_JOB_NAME,
+        op_name="run_sp500_live_tick",
+        schedule_name="sp500_live_schedule",
+        log_label="sp500 live tick",
+        universe_head_kind=SP500_UNIVERSE_HEAD,
+        label_prefix="production-sp500",
+        objectives=SP500_PHASE1_OBJECTIVES,
+        run_strategy=False,
+        consolidate_funds=False,
+        cron=SP500_LIVE_CRON,
+        default_status=production_only_schedule_status(settings.app_env),
     ),
     UniverseTick(
         key="canary",
@@ -264,25 +253,19 @@ TICKS: tuple[UniverseTick, ...] = (
     ),
 )
 
-ALL_TICKS: tuple[UniverseTick, ...] = (*TICKS, SP500_TICK)
-_KNOWN_TICK_KEYS = frozenset(tick.key for tick in ALL_TICKS)
+_KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
 _KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
 
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
     """Whether `universe` has an active schedule in `environment` (#1118)."""
-    if universe in ("universe-list:qqq", "qqq"):
-        key = "qqq"
-    elif universe in ("universe-list:sp500", "sp500"):
-        key = "sp500"
-    else:
-        key = universe
-    for tick in ALL_TICKS:
+    key = universe.removeprefix("universe-list:")
+    for tick in TICKS:
         if tick.key == key:
             if tick.cron is None:
                 return False
             if tick.key in ("qqq", "sp500"):
-                return _production_only(environment) == dg.DefaultScheduleStatus.RUNNING
+                return production_only_schedule_status(environment) == dg.DefaultScheduleStatus.RUNNING
             return tick.default_status == dg.DefaultScheduleStatus.RUNNING
     return False
 
@@ -291,7 +274,7 @@ def is_head_scheduled(universe_id: str, environment: str) -> bool:
     """Whether `universe_id` has a running schedule in `environment` (#1256).
 
     Fails closed (returns True) when `environment` is omitted or unrecognised, or when
-    `universe_id` does not map to a declared tick in `ALL_TICKS`.
+    `universe_id` does not map to a declared tick in `TICKS`.
     """
     env = environment.strip().lower()
     if env not in _KNOWN_ENVIRONMENTS:
@@ -516,13 +499,13 @@ def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, d
 
 
 _BUILT = {tick.key: build_tick(tick) for tick in TICKS}
-_SP500_BUILT = build_tick(SP500_TICK)
 TICK_BY_JOB: dict[str, UniverseTick] = {tick.job_name: tick for tick in TICKS}
 
 # The names operators, tests and the trigger sensor address, unchanged from the
 # hand-written era.
 run_topt_live_tick, topt_live_pipeline_job, topt_live_schedule = _BUILT["topt"]
 run_qqq_live_tick, qqq_live_pipeline_job, qqq_live_schedule = _BUILT["qqq"]
+run_sp500_live_tick, sp500_live_pipeline_job, sp500_live_schedule = _BUILT["sp500"]
 run_canary_live_tick, canary_live_pipeline_job, canary_daily_schedule = _BUILT["canary"]
 
 defs = dg.Definitions(
@@ -531,44 +514,22 @@ defs = dg.Definitions(
 )
 
 
-def build_sp500_tick(
-    app_env: str = settings.app_env,
-) -> tuple[dg.OpDefinition, dg.JobDefinition, dg.ScheduleDefinition]:
-    """Build the SP500 capture op, job, and schedule for the given environment (#67 / #1281)."""
-    sp500_op, sp500_job, _ = _SP500_BUILT
-    schedule = build_schedule(SP500_TICK, sp500_job, default_status=_production_only(app_env))
-    assert schedule is not None
-    return sp500_op, sp500_job, schedule
-
-
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
-    """Build all capture lane jobs and schedules for `app_env`, including SP500 (#67 / #1281)."""
-    topt_tick, qqq_tick, canary_tick = TICKS
-    _, sp500_job, _ = _SP500_BUILT
+    """Build all capture lane jobs and schedules for `app_env` (#67 / #1281)."""
     schedules = [
         build_schedule(
-            topt_tick,
-            topt_live_pipeline_job,
-            cron=live_topt_cron(app_env),
-            default_status=dg.DefaultScheduleStatus.RUNNING,
-        ),
-        build_schedule(
-            qqq_tick,
-            qqq_live_pipeline_job,
-            default_status=_production_only(app_env),
-        ),
-        build_schedule(
-            canary_tick,
-            canary_live_pipeline_job,
-            default_status=dg.DefaultScheduleStatus.RUNNING,
-        ),
-        build_schedule(
-            SP500_TICK,
-            sp500_job,
-            default_status=_production_only(app_env),
-        ),
+            tick,
+            _BUILT[tick.key][1],
+            cron=live_topt_cron(app_env) if tick.key == "topt" else tick.cron,
+            default_status=(
+                production_only_schedule_status(app_env)
+                if tick.key in ("qqq", "sp500")
+                else dg.DefaultScheduleStatus.RUNNING
+            ),
+        )
+        for tick in TICKS
     ]
     return dg.Definitions(
-        jobs=[*[job for _, job, _ in _BUILT.values()], sp500_job],
+        jobs=[job for _, job, _ in _BUILT.values()],
         schedules=[schedule for schedule in schedules if schedule is not None],
     )

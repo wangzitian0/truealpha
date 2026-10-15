@@ -77,11 +77,17 @@ insert into mart.served_artifact (artifact_key, lane, schedule_name, universe_li
 values
     ('head:topt', 'capture', 'topt_live_schedule', 'universe:topt-%', 'daily', 'consumers', true),
     ('head:qqq', 'capture', 'qqq_live_schedule', 'universe:qqq-%', 'daily', 'consumers', true),
+    ('head:sp500', 'capture', 'sp500_live_schedule', 'universe:sp500-%', 'daily', 'consumers', true),
     ('head:canary', 'capture', 'canary_daily_schedule', 'universe:canary-%', 'daily', 'operators', true),
     ('head-reports', 'standards', 'head_reports_schedule', null, 'daily', 'operators', false),
     ('standards-backfill', 'standards', 'standard_backfill_schedule', null, 'weekly', 'consumers', false),
     ('standards-history', 'standards', 'standard_history_schedule', null, 'weekly', 'consumers', false),
+    ('standards-nport-monthly', 'standards', 'nport_monthly_schedule', null, 'quarterly', 'consumers', false),
+    ('standards-13f-quarterly', 'standards', '13f_quarterly_schedule', null, 'quarterly', 'consumers', false),
+    ('standards-form4-daily', 'standards', 'form4_daily_schedule', null, 'daily', 'consumers', false),
+    ('standards-10k-annual', 'standards', '10k_annual_schedule', null, 'weekly', 'consumers', false),
     ('universe-refresh', 'universe_refresh', 'universe_refresh_schedule', null, 'weekly', 'consumers', false),
+    ('sp500-universe-refresh', 'universe_refresh', 'sp500_universe_refresh_schedule', null, 'weekly', 'consumers', false),
     -- market-data: the lane runs on weekdays only (cron `15 21 * * 1-5`).
     -- After a long weekend the age can pass 72 hours. Decide the family again when it is wired.
     ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'daily', 'internal', false),
