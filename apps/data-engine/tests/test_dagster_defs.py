@@ -677,16 +677,26 @@ def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick(
 def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_production() -> None:
     """#67 A1/A2: `defs` registers non-overlapping staggered UTC schedules for `topt`, `qqq`, `sp500`,
     `canary`, and the 4 Standards Plane schedules (`nport_monthly_schedule`, `13f_quarterly_schedule`,
-    `form4_daily_schedule`, `10k_annual_schedule`). It enables them (`DefaultScheduleStatus.RUNNING`
-    when `app_env` is production/prod). The SP500 tick schedule is the exception: it stays STOPPED (#1310)."""
+    `form4_daily_schedule`, `10k_annual_schedule`). `topt`, `qqq`, and `canary` are RUNNING in
+    production/prod; the SP500 schedules (#1310) and the 4 unimplemented per-form Standards Plane
+    schedules stay registered and STOPPED until their budgets and per-form filters exist."""
     from data_engine.datahub.confidence_report import _universe_source
     from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
     from data_engine.lanes import standards, universe_refresh
 
     active_universe_keys = {"topt", "qqq", "sp500", "canary"}
-    # #1310: the SP500 tick stays registered and STOPPED until a Twelve Data budget exists for it.
+    # #1310 / #67: the SP500 tick and constituent refresh stay registered and STOPPED until #206 /
+    # a Twelve Data budget and valid constituent endpoint exist; the 4 staggered Standards Plane
+    # schedules stay STOPPED until per-form standard implementations exist in ALL_STANDARDS.
     stopped_universe_keys = {"sp500"}
-    stopped_schedule_names = {"sp500_live_schedule"}
+    stopped_schedule_names = {
+        "sp500_live_schedule",
+        "sp500_universe_refresh_schedule",
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    }
     declared_tick_keys = {tick.key for tick in capture.TICKS}
     assert active_universe_keys == declared_tick_keys
     assert not hasattr(capture, "ALL_TICKS")
@@ -804,6 +814,61 @@ def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatc
     assert calls[0]["force_fetch"] is False
 
 
+def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transactions(monkeypatch) -> None:
+    """While `SP500_SCHEDULE_STATUS` is STOPPED, `_refresh_universes` skips `sp500` (both constituent
+    refresh and `IVV` N-PORT capture) and gives each active universe its own connection so one
+    constituent failure never rolls back another universe's published list."""
+    import psycopg
+    from data_engine.datahub.production_topt import holdings_enrichment, nport_holdings
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
+    from data_engine.lanes import universe_refresh
+
+    commits: list[int] = []
+    conn_counter = 0
+
+    class _FakeConn:
+        def __init__(self, cid: int) -> None:
+            self.cid = cid
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self) -> None:
+            commits.append(self.cid)
+
+    def fake_connect(_dsn: str):
+        nonlocal conn_counter
+        conn_counter += 1
+        return _FakeConn(conn_counter)
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    nport_calls: list[str] = []
+    monkeypatch.setattr(
+        nport_holdings, "capture_fund_holdings", lambda conn, ticker: nport_calls.append(ticker) or f"ok:{ticker}"
+    )
+    monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda conn, api_key="": "enriched")
+
+    refreshed: list[str] = []
+
+    def fake_refresh_and_publish(conn, source, *, report_date, note, openfigi_api_key=""):
+        refreshed.append(source.etf)
+        if source.etf == "qqq":
+            raise ValueError("simulated qqq endpoint failure")
+        return f"published:{source.etf}:{report_date}"
+
+    ctx = dg.build_op_context()
+    with pytest.raises(RuntimeError, match="constituents:qqq"):
+        universe_refresh._refresh_universes(ctx, UNIVERSE_SOURCES, latest_quarter_end, fake_refresh_and_publish)
+
+    # SP500 was skipped completely while STOPPED; canary still refreshed and committed despite qqq failing.
+    assert refreshed == ["qqq", "canary"]
+    assert nport_calls == ["QQQ"]
+    assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
+
+
 # -- #1310: the SP500 schedule stays STOPPED until a Twelve Data budget exists for it ---------------------
 
 #: Every failure below shows this text, so a person who flips the SP500 status reads the reason first.
@@ -892,9 +957,19 @@ def test_issue_1310_the_deployed_module_loads_the_sp500_schedule_stopped_under_p
     assert finished.returncode == 0, finished.stderr
     rows = {name: (job, status) for name, (job, status) in json.loads(finished.stdout.splitlines()[-1]).items()}
 
-    # The probe ran as production: the other captures are RUNNING.
+    # The probe ran as production: the other captures and core weekly schedules are RUNNING.
     assert rows["topt_live_schedule"][1] == "RUNNING" and rows["qqq_live_schedule"][1] == "RUNNING", rows
+    assert rows["universe_refresh_schedule"][1] == "RUNNING", rows
+    assert rows["standard_backfill_schedule"][1] == "RUNNING", rows
     assert rows["sp500_live_schedule"][1] == "STOPPED", SP500_STOPPED_BECAUSE
+    assert rows["sp500_universe_refresh_schedule"][1] == "STOPPED", SP500_STOPPED_BECAUSE
+    for plane_schedule in (
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    ):
+        assert rows[plane_schedule][1] == "STOPPED", (plane_schedule, rows[plane_schedule])
     assert _running_sp500_schedules(rows) == [], SP500_STOPPED_BECAUSE
 
 

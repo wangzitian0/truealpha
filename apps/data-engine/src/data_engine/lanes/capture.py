@@ -526,24 +526,26 @@ run_qqq_live_tick, qqq_live_pipeline_job, qqq_live_schedule = _BUILT["qqq"]
 run_sp500_live_tick, sp500_live_pipeline_job, sp500_live_schedule = _BUILT["sp500"]
 run_canary_live_tick, canary_live_pipeline_job, canary_daily_schedule = _BUILT["canary"]
 
-defs = dg.Definitions(
-    jobs=[job for _, job, _ in _BUILT.values()],
-    schedules=[schedule for _, _, schedule in _BUILT.values() if schedule is not None],
-)
-
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
     """Build all capture lane jobs and schedules for `app_env` (#67 / #1281)."""
-    schedules = [
-        build_schedule(
-            tick,
-            _BUILT[tick.key][1],
-            cron=live_topt_cron(app_env) if tick.key == "topt" else tick.cron,
-            default_status=tick_schedule_status(tick, app_env),
-        )
-        for tick in TICKS
-    ]
+    schedules = (
+        [schedule for _, _, schedule in _BUILT.values() if schedule is not None]
+        if app_env == settings.app_env
+        else [
+            build_schedule(
+                tick,
+                _BUILT[tick.key][1],
+                cron=live_topt_cron(app_env) if tick.key == "topt" else tick.cron,
+                default_status=tick_schedule_status(tick, app_env),
+            )
+            for tick in TICKS
+        ]
+    )
     return dg.Definitions(
         jobs=[job for _, job, _ in _BUILT.values()],
         schedules=[schedule for schedule in schedules if schedule is not None],
     )
+
+
+defs = build_definitions()
