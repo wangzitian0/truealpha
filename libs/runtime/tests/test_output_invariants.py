@@ -9,15 +9,23 @@ The exemption mechanism is the load-bearing piece. Invariant suites die by
 accumulating permanent waivers, so an exemption here defers and never disables:
 it carries an issue and a date, an expired one fails anyway, and one left behind
 after its defect is fixed also fails.
+
+The tests at the end of this file run `quality-report-matches-core-results`
+against a database that the migration chain builds (#1346).
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
+import psycopg
 import pytest
-from truealpha_runtime.testing import load_tool
+from psycopg.types.json import Jsonb
+from truealpha_runtime.testing import isolated_test_database, load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _module = load_tool("output_invariants")
@@ -349,3 +357,368 @@ def test_quality_report_matches_core_results_invariant_structure_and_behavior() 
         )
         == 1
     )
+
+
+# --- quality-report-matches-core-results on a migrated database (#1346) --------------------
+#
+# The report counts subjects. A subject is a listing: the report keys its cells by
+# `raw.capture_obligations.subject_id`. The core writes one result for each issuer, and a
+# dual-class issuer (Alphabet) has two listings. The seeds have the shapes that the writers
+# give. The snapshot payload holds one member for each listing. The member table and the core
+# hold one row for each issuer.
+
+PARITY_INVARIANT = "quality-report-matches-core-results"
+GPPE_FACTOR = "gross_profit_per_employee"
+#: 0042 requires observation_count = 4 * instrument_count on a core snapshot.
+CELLS_PER_LISTING = 4
+SEED_SHA256 = "0" * 64
+
+
+@dataclass(frozen=True)
+class SeededIssuer:
+    """One issuer of a seeded head, with its listings, its report facts and its core result."""
+
+    issuer_id: str
+    listings: tuple[str, ...]
+    facts_complete: bool = True
+    available: bool = True
+
+
+def _issuer(name: str, *tickers: str, facts_complete: bool = True, available: bool = True) -> SeededIssuer:
+    listings = tuple(f"listing:xnas:{ticker}" for ticker in tickers)
+    return SeededIssuer(f"issuer:{name}", listings, facts_complete, available)
+
+
+def _singles(state: str, count: int, *, facts_complete: bool = True, available: bool = True) -> list[SeededIssuer]:
+    """`count` issuers with one listing each, all in the same state."""
+    return [
+        _issuer(f"{state}-{index}", f"{state}{index}", facts_complete=facts_complete, available=available)
+        for index in range(count)
+    ]
+
+
+ALPHABET = _issuer("alphabet", "goog", "googl")
+
+
+def _digest(*parts: str) -> str:
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def _observations(listing: str) -> list[str]:
+    return [f"observation:{_digest(listing, str(cell))}" for cell in range(CELLS_PER_LISTING)]
+
+
+@pytest.fixture(scope="module")
+def migrated_database() -> Iterator[str]:
+    """A database that only the migration chain built, so the seeded heads are its only heads."""
+    with isolated_test_database("output_invariants", template=None) as database:
+        yield str(database)
+
+
+@pytest.fixture
+def conn(migrated_database: str) -> Iterator[psycopg.Connection]:
+    """A connection in a transaction that the test always rolls back."""
+    with psycopg.connect(migrated_database) as connection:
+        try:
+            yield connection
+        finally:
+            connection.rollback()
+
+
+def _seed_issuer(
+    conn: psycopg.Connection, snapshot_id: str, run_id: str, universe_id: str, issuer: SeededIssuer
+) -> None:
+    """Write the member row and the core result of one issuer. Both use its first listing."""
+    execution = issuer.listings[0]
+    instrument_id = f"instrument:{execution}"
+    factor_input = {
+        "snapshot_id": snapshot_id,
+        "issuer_id": issuer.issuer_id,
+        "instrument_id": instrument_id,
+        "listing_id": execution,
+    }
+    conn.execute(
+        "insert into staging.topt_core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, "
+        "observation_ids, member_sha256, factor_input) values (%s, %s, %s, %s, %s, %s, %s)",
+        (
+            snapshot_id,
+            instrument_id,
+            issuer.issuer_id,
+            execution,
+            sorted(item for listing in issuer.listings for item in _observations(listing)),
+            _digest("member", snapshot_id, issuer.issuer_id),
+            Jsonb(factor_input),
+        ),
+    )
+    if issuer.available:
+        value, tier, reasons = 1, "tech", []
+    else:
+        # #1309: an issuer with complete facts and no stored daily series is unavailable.
+        value, tier = None, None
+        reasons = ["no_split_adjusted_series"] if issuer.facts_complete else ["missing_gross_profit"]
+    result_sha = _digest("result", snapshot_id, issuer.issuer_id)
+    conn.execute(
+        """
+        insert into mart.topt_core_results (
+            result_id, content_sha256, invocation_id, snapshot_id, run_id, release_manifest_id,
+            universe_id, universe_version, universe_sha256, cutoff, issuer_id, instrument_id, listing_id,
+            operating_branch, operating_metric, availability, operating_efficiency,
+            capital_adjusted_gross_profit, gppe, tier, target_ps_lower, target_ps_upper,
+            target_ps_midpoint, current_ps, valuation_gap, confidence, freshness, reason_codes,
+            input_observation_ids, gppe_invocation_id, gppe_result_id, gppe_definition_id,
+            gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload
+        ) values (
+            %(result_id)s, %(result_sha)s, %(invocation)s, %(snapshot)s, %(run)s, %(release)s,
+            %(universe)s, 'v1', %(seed)s, '2026-03-31T20:00:00Z', %(issuer)s, %(instrument)s, %(listing)s,
+            'non_financial', 'capital_adjusted_gppe', %(availability)s, %(value)s,
+            %(value)s, %(value)s, %(tier)s, %(value)s, %(value)s,
+            %(value)s, %(value)s, %(value)s, 0.9, 'fresh', %(reasons)s,
+            %(observations)s, %(gppe_invocation)s, %(gppe_result)s, %(gppe_definition)s,
+            %(seed)s, %(tier_definition)s, %(seed)s, '{}'::jsonb
+        )
+        """,
+        {
+            "result_id": f"topt-core-result:{result_sha}",
+            "result_sha": result_sha,
+            "invocation": f"topt-core-invocation:{_digest('core', snapshot_id)}",
+            "snapshot": snapshot_id,
+            "run": run_id,
+            "release": f"release-manifest:{SEED_SHA256}",
+            "universe": universe_id,
+            "seed": SEED_SHA256,
+            "issuer": issuer.issuer_id,
+            "instrument": instrument_id,
+            "listing": execution,
+            "availability": "available" if issuer.available else "unavailable",
+            "value": value,
+            "tier": tier,
+            "reasons": reasons,
+            "observations": sorted(item for listing in issuer.listings for item in _observations(listing)),
+            "gppe_invocation": f"topt-gppe-invocation:{_digest('gppe', snapshot_id)}",
+            "gppe_result": f"topt-gppe-result:{_digest('gppe', snapshot_id, issuer.issuer_id)}",
+            "gppe_definition": f"gppe-definition:{SEED_SHA256}",
+            "tier_definition": f"three-tier-definition:{SEED_SHA256}",
+        },
+    )
+
+
+def _seed_head(
+    conn: psycopg.Connection, universe_id: str, issuers: Sequence[SeededIssuer], *, core: bool = True
+) -> str:
+    """Serve one governed head and write its quality report. With `core`, also write its core.
+
+    The report counts one complete subject for each listing whose facts are complete.
+    Returns the run id of the head."""
+    run_sha = _digest("run", universe_id)
+    run_id = f"capture-run:{run_sha}"
+    environment = conn.execute("select environment from mart.environment_identity").fetchone()
+    assert environment is not None
+    conn.execute(
+        "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, "
+        "recorded_at) values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
+        (run_id, run_sha),
+    )
+    pointer_sha = _digest("pointer", universe_id)
+    conn.execute(
+        "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
+        "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+        "values (%s, %s, %s, %s, 'v1', %s, %s, 0, null, now())",
+        (f"current-pointer:{pointer_sha}", pointer_sha, environment[0], universe_id, GPPE_FACTOR, run_id),
+    )
+    listings = [listing for issuer in issuers for listing in issuer.listings]
+    complete = [listing for issuer in issuers if issuer.facts_complete for listing in issuer.listings]
+    report_sha = _digest("report", universe_id)
+    report = {
+        "run_id": run_id,
+        "factor_availability": {
+            GPPE_FACTOR: {"complete_subjects": len(complete), "universe_subjects": len(listings)},
+        },
+    }
+    conn.execute(
+        "insert into mart.datahub_quality_report (report_id, content_sha256, run_id, requested_count, payload) "
+        "values (%s, %s, %s, %s, %s)",
+        (f"datahub-quality-report:{report_sha}", report_sha, run_id, CELLS_PER_LISTING * len(listings), Jsonb(report)),
+    )
+    if not core:
+        return run_id
+    # A real snapshot and a real core need a complete capture run. The replica role skips the
+    # foreign keys and the validation triggers for the next rows. The check constraints apply.
+    conn.execute("set local session_replication_role = replica")
+    snapshot_sha = _digest("snapshot", universe_id)
+    snapshot_id = f"topt-core-snapshot:{snapshot_sha}"
+    members = [
+        {
+            "issuer_id": issuer.issuer_id,
+            "instrument_id": f"instrument:{listing}",
+            "listing_id": listing,
+            "observation_ids": _observations(listing),
+        }
+        for issuer in issuers
+        for listing in issuer.listings
+    ]
+    conn.execute(
+        "insert into staging.topt_core_snapshots (snapshot_id, content_sha256, run_id, release_manifest_id, "
+        "universe_id, universe_version, universe_sha256, cutoff, issuer_count, instrument_count, "
+        "observation_count, payload) values (%s, %s, %s, %s, %s, 'v1', %s, '2026-03-31T20:00:00Z', %s, %s, %s, %s)",
+        (
+            snapshot_id,
+            snapshot_sha,
+            run_id,
+            f"release-manifest:{SEED_SHA256}",
+            universe_id,
+            SEED_SHA256,
+            len(issuers),
+            len(listings),
+            CELLS_PER_LISTING * len(listings),
+            Jsonb({"run_id": run_id, "universe_id": universe_id, "members": members}),
+        ),
+    )
+    for issuer in issuers:
+        _seed_issuer(conn, snapshot_id, run_id, universe_id, issuer)
+    conn.execute("set local session_replication_role = origin")
+    return run_id
+
+
+def _seeded_shape(conn: psycopg.Connection, run_id: str) -> tuple[int, ...]:
+    """(listings, issuers, complete subjects of the report, available core results) of one run."""
+    row = conn.execute(
+        """
+        select s.instrument_count, s.issuer_count,
+               (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
+               (select count(*)::int from mart.topt_core_results r
+                where r.run_id = s.run_id and r.availability = 'available')
+        from staging.topt_core_snapshots s
+        join mart.datahub_quality_report q on q.run_id = s.run_id
+        where s.run_id = %s
+        """,
+        (run_id,),
+    ).fetchone()
+    assert row is not None
+    return tuple(row)
+
+
+class _Borrowed:
+    """The suite opens and closes its own connection. The seeded rows are in the open
+    transaction of the test, so the suite borrows that connection and leaves it open."""
+
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> psycopg.Connection:
+        return self._connection
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+def _parity_verdict(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    """Run the shipped invariant through `check`, with coverage required as on real data."""
+    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == PARITY_INVARIANT]
+    code = check(
+        "postgresql://borrowed",
+        require_coverage=True,
+        today=TODAY,
+        exemptions={},
+        invariants=(invariant,),
+        connect=lambda _url: _Borrowed(conn),
+    )
+    captured = capsys.readouterr()
+    return code, captured.out + captured.err
+
+
+def test_a_dual_class_issuer_counts_both_listings_and_its_head_passes(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1346 criterion 1. All facts are complete and all 3 issuers are available. The report
+    counts 4 complete listings. The 3 available issuers have 4 listings, so the head passes."""
+    issuers = [ALPHABET, _issuer("apple", "aapl"), _issuer("microsoft", "msft")]
+    run_id = _seed_head(conn, "universe:canary-us-2026-06-30", issuers)
+    assert _seeded_shape(conn, run_id) == (4, 3, 4, 3)
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 0, output
+    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
+
+
+def test_the_production_topt_head_of_1346_passes(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> None:
+    """#1346 production numbers: 21 listings of 20 issuers. BRK.B and XOM have no gross profit,
+    so the report counts 19 complete listings and the core has 18 available issuers. The 18
+    available issuers have 19 listings, so the head passes."""
+    issuers = [
+        ALPHABET,
+        *_singles("valued", 17),
+        *_singles("nogrossprofit", 2, facts_complete=False, available=False),
+    ]
+    run_id = _seed_head(conn, "universe:topt-us-2026-03-31", issuers)
+    assert _seeded_shape(conn, run_id) == (21, 20, 19, 18)
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 0, output
+
+
+def test_single_listing_issuers_that_are_all_available_pass(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1346 criterion 3, the control: no dual-class issuer, all facts complete, all available."""
+    run_id = _seed_head(conn, "universe:topt-us-2026-03-31", _singles("valued", 3))
+    assert _seeded_shape(conn, run_id) == (3, 3, 3, 3)
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 0, output
+
+
+@pytest.mark.parametrize(
+    ("issuers", "shape", "row"),
+    [
+        pytest.param(
+            [ALPHABET, _issuer("apple", "aapl"), _issuer("costco", "cost", available=False)],
+            (4, 3, 4, 2),
+            "4 3 2",
+            id="one-complete-issuer-unavailable",
+        ),
+        pytest.param(
+            [
+                ALPHABET,
+                *_singles("valued", 11),
+                *_singles("noseries", 53, available=False),
+                *_singles("nofacts", 36, facts_complete=False, available=False),
+            ],
+            (102, 101, 66, 12),
+            "66 13 12",
+            id="production-qqq-alphabet-available",
+        ),
+        pytest.param(
+            [
+                replace(ALPHABET, available=False),
+                *_singles("valued", 12),
+                *_singles("noseries", 52, available=False),
+                *_singles("nofacts", 36, facts_complete=False, available=False),
+            ],
+            (102, 101, 66, 12),
+            "66 12 12",
+            id="production-qqq-alphabet-unavailable",
+        ),
+    ],
+)
+def test_a_complete_issuer_without_an_available_result_fails_and_names_its_head(
+    conn: psycopg.Connection,
+    capsys: pytest.CaptureFixture[str],
+    issuers: list[SeededIssuer],
+    shape: tuple[int, ...],
+    row: str,
+) -> None:
+    """#1346 criterion 2, the QQQ shape. #1309 makes an issuer without a stored daily series
+    unavailable in the core, and the report still counts its facts complete. The head fails.
+    The row gives the complete listings, the listings and the issuers of the available core."""
+    universe_id = "universe:qqq-us-2026-09-30"
+    run_id = _seed_head(conn, universe_id, issuers)
+    assert _seeded_shape(conn, run_id) == shape
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 1, output
+    assert f"Offending rows: {universe_id} {run_id} {row}" in output
+
+
+def test_a_head_without_a_core_fails(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> None:
+    """A head whose run has a report and no core snapshot stays in the check, and it fails."""
+    universe_id = "universe:topt-us-2026-03-31"
+    run_id = _seed_head(conn, universe_id, _singles("valued", 3), core=False)
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 1, output
+    assert f"Offending rows: {universe_id} {run_id} 3 0 0" in output
