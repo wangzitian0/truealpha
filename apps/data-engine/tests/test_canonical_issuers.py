@@ -24,10 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from financial_lineage_seed import (  # noqa: E402
     MemoryStore,
     Observed,
+    ShareClass,
     annual_company_facts,
     at,
+    backfill_issuer,
     mint_issuer,
     seed_financial_lineage,
+    seed_tick,
 )
 
 TICK = datetime(2026, 10, 9, 6, 15, tzinfo=UTC)
@@ -744,4 +747,137 @@ def test_the_history_lane_reports_how_each_share_count_was_classed(monkeypatch) 
         31,
         12,
         5,
+    )
+
+
+# -- #1347: the primary share class binds the ticker, whatever the observation ids ------------------
+
+#: Alphabet as the universe corpus keys it: Class A trades as GOOGL (the primary class), Class C as GOOG.
+ALPHABET_CLASSES = (ShareClass("GOOGL", "02079K305"), ShareClass("GOOG", "02079K107"))
+#: The legacy capture that the entity backfill reads. Each later tick writes both listings at one instant.
+BACKFILLED_AT = at(2025, 9, 1)
+LEGACY_TICK = at(2025, 9, 20)
+UUID_TICK = at(2026, 9, 25)
+
+
+@pytest.fixture
+def alphabet(connection):
+    """Alphabet, minted by `staging.entity_backfill()` from its legacy ids, as production minted it."""
+    store = MemoryStore()
+    issuer = backfill_issuer(
+        connection,
+        lei="5493006MHB84DD0ZWV18",
+        mic="XNAS",
+        classes=ALPHABET_CLASSES,
+        cik=1_652_044,
+        known_at=BACKFILLED_AT,
+        store=store,
+    )
+    return issuer, store
+
+
+def _bound(connection, ids: list[str]) -> list[tuple[str, str]]:
+    """The (issuer id, ticker) pairs that the backtest and the projector bind for `ids`."""
+    from data_engine.datahub.strategy_history import canonical_history_issuers
+
+    return [(item.issuer_id, item.ticker) for item in canonical_history_issuers(connection, ids, known_at=TICK).issuers]
+
+
+def _preferred_listing(connection, entity_id: str, ids: list[str]) -> str:
+    """The listing of the observation that `latest_financial_observations` selects for the entity."""
+    from data_engine.datahub.strategy_history import latest_financial_observations
+
+    found = latest_financial_observations(connection, {entity_id: ids}, known_at=TICK)
+    return found[entity_id][0]["listing_id"]
+
+
+@pytest.mark.parametrize("larger_id", ["GOOGL", "GOOG"])
+def test_one_tick_of_uuid_listings_binds_the_primary_ticker_for_either_observation_id_order(
+    connection, alphabet, larger_id: str
+) -> None:
+    """#1347. Production holds only entity UUIDs at the backtest cutoffs. One tick wrote both listings of
+    Alphabet with one recorded_at and one knowable_at, so the old order fell to observation_id. The run
+    of 2026-10-15 bound GOOG, which has no price bar. Red on the code before the fix when GOOG holds the
+    larger observation id. The listing ids come from the entity backfill, as on production."""
+    issuer, store = alphabet
+    seed_tick(connection, issuer, legacy=False, knowable_at=UUID_TICK, larger_id_ticker=larger_id, store=store)
+    ties = connection.execute(
+        """
+        select count(*), count(distinct (o.recorded_at, o.knowable_at))
+        from staging.capture_normalized_observations o
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        where p.normalized_payload ->> 'issuer_id' = %s
+        """,
+        (issuer.canonical_issuer_id,),
+    ).fetchone()
+    assert ties == (2, 1), "the two listings must tie on recorded_at and knowable_at, or this test proves nothing"
+
+    assert _bound(connection, [issuer.canonical_issuer_id]) == [(issuer.canonical_issuer_id, "GOOGL")]
+    assert (
+        _preferred_listing(connection, issuer.canonical_issuer_id, [issuer.canonical_issuer_id])
+        == issuer.listing("GOOGL").canonical_listing_id
+    )
+
+
+def test_a_newer_observation_of_the_secondary_class_does_not_displace_the_primary_class(connection, alphabet) -> None:
+    """A later tick writes GOOG alone, so GOOG holds the newest observation of the issuer. The ticker decides
+    before the age of an observation. Red on the code before the fix, and on an order that puts the age
+    of an observation before the ticker."""
+    issuer, store = alphabet
+    seed_tick(connection, issuer, legacy=False, knowable_at=UUID_TICK, larger_id_ticker="GOOGL", store=store)
+    goog, later = issuer.listing("GOOG"), UUID_TICK + timedelta(days=1)
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(
+                issuer.canonical_issuer_id,
+                goog.canonical_listing_id,
+                issuer.cik,
+                "non_financial",
+                later,
+                instrument_id=goog.canonical_instrument_id,
+            )
+        ],
+        company_facts={issuer.cik: {"facts": {}}},
+        store=store,
+        cutoff=later,
+    )
+
+    assert _bound(connection, [issuer.canonical_issuer_id]) == [(issuer.canonical_issuer_id, "GOOGL")]
+    assert (
+        _preferred_listing(connection, issuer.canonical_issuer_id, [issuer.canonical_issuer_id])
+        == issuer.listing("GOOGL").canonical_listing_id
+    )
+
+
+@pytest.mark.parametrize("larger_id", ["GOOGL", "GOOG"])
+def test_one_tick_of_legacy_listings_binds_the_primary_ticker_for_either_observation_id_order(
+    connection, alphabet, larger_id: str
+) -> None:
+    """The old generation spells the ticker in its listing id (`listing:xnas:googl`). Staging still holds
+    rows under it at the backtest cutoffs."""
+    issuer, store = alphabet
+    seed_tick(connection, issuer, legacy=True, knowable_at=LEGACY_TICK, larger_id_ticker=larger_id, store=store)
+
+    assert _bound(connection, [issuer.legacy_issuer_id]) == [(issuer.canonical_issuer_id, "GOOGL")]
+    assert (
+        _preferred_listing(connection, issuer.canonical_issuer_id, [issuer.legacy_issuer_id])
+        == issuer.listing("GOOGL").legacy_listing_id
+    )
+
+
+@pytest.mark.parametrize("larger_id", ["GOOGL", "GOOG"])
+def test_both_generations_bind_the_primary_ticker_and_the_newest_observation_of_it(
+    connection, alphabet, larger_id: str
+) -> None:
+    """Staging holds both generations at one cutoff. The ticker selects the class. Inside one ticker the
+    newest observation wins: here the UUID tick, which landed after the legacy tick."""
+    issuer, store = alphabet
+    seed_tick(connection, issuer, legacy=True, knowable_at=LEGACY_TICK, larger_id_ticker=larger_id, store=store)
+    seed_tick(connection, issuer, legacy=False, knowable_at=UUID_TICK, larger_id_ticker=larger_id, store=store)
+    ids = [issuer.legacy_issuer_id, issuer.canonical_issuer_id]
+
+    assert _bound(connection, ids) == [(issuer.canonical_issuer_id, "GOOGL")]
+    assert (
+        _preferred_listing(connection, issuer.canonical_issuer_id, ids) == issuer.listing("GOOGL").canonical_listing_id
     )

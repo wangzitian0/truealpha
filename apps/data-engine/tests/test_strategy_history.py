@@ -884,16 +884,21 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
 
     one_id_each = {issuer_id: [issuer_id] for issuer_id in issuer_ids}
     found = latest_financial_observations(
-        connection, one_id_each, parser_version="production-topt-integration-parser:v1"
+        connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
     )
 
     assert sorted(found) == issuer_ids
     assert all(payload["issuer_id"] == entity for entity, (payload, _record) in found.items())
     assert all(record.startswith("production-topt-integration:") for _payload, record in found.values())
-    assert latest_financial_observations(connection, one_id_each, parser_version="no-such-parser:v0") == {}
-    # #1257: two ids of one entity yield ONE observation, the newest of both.
+    assert (
+        latest_financial_observations(connection, one_id_each, known_at=TICK, parser_version="no-such-parser:v0") == {}
+    )
+    # #1257: two ids of one entity yield ONE observation. #1347: the ticker of its listing selects it.
     paired = latest_financial_observations(
-        connection, {"entity:both": issuer_ids[:2]}, parser_version="production-topt-integration-parser:v1"
+        connection,
+        {"entity:both": issuer_ids[:2]},
+        known_at=TICK,
+        parser_version="production-topt-integration-parser:v1",
     )
     assert list(paired) == ["entity:both"]
     # #1257: these ids name no stored entity, and their lineage names no company-facts CIK, so
