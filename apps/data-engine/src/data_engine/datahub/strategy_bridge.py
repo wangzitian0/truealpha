@@ -40,7 +40,7 @@ from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
-from data_engine.datahub.canonical_issuer import listing_sort_key
+from data_engine.datahub.canonical_issuer import ticker_sort_key
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
@@ -143,9 +143,10 @@ def seed_strategy_inputs_from_capture(
 ) -> int:
     """Land the run's captured cells as provenance-neutral strategy inputs.
 
-    One canonical listing per issuer (lowest listing_id) supplies ``last_close``; the
-    SEC shares figure is issuer-level, so a dual-class issuer's market value uses its
-    canonical class's price — an approximation already reflected in the price
+    One listing per issuer supplies ``last_close``. The ticker of the run's listing-identity
+    cell selects it (``ticker_sort_key``, #1347): the primary share class first, then the
+    lowest listing_id. The SEC shares figure is issuer-level, so a dual-class issuer's market
+    value uses its primary class's price — an approximation already reflected in the price
     confidence. Missing fields are simply not seeded; the evaluator excludes those
     issuers with explicit reasons rather than receiving fabricated values.
 
@@ -182,11 +183,17 @@ def seed_strategy_inputs_from_capture(
     # issuer -> (canonical listing, payload, confidence, the observation's own knowable_at)
     financial: dict[str, tuple[str, dict, Decimal, datetime]] = {}
     price: dict[str, tuple[str, dict, Decimal, datetime]] = {}
+    # The run's tickers are read once, when the first issuer with two listings needs them.
+    run_tickers = cache(partial(_run_listing_tickers, connection, run_id))
+
+    def listing_key(listing_id: str) -> tuple[tuple[bool, int, str], str]:
+        return ticker_sort_key(run_tickers().get(listing_id)), listing_id
+
     for semantic_type, confidence, payload, observed_at in rows:
         issuer_id, listing_id = payload["issuer_id"], payload["listing_id"]
         bucket = financial if semantic_type == "financial-fact" else price
         current = bucket.get(issuer_id)
-        if current is None or listing_sort_key(listing_id) < listing_sort_key(current[0]):
+        if current is None or listing_key(listing_id) < listing_key(current[0]):
             bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
 
     on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)
@@ -231,6 +238,28 @@ def seed_strategy_inputs_from_capture(
             )
             written += 1
     return written
+
+
+# The ticker of each listing of the run, as its listing-identity cell names it (#1347).
+_RUN_LISTING_TICKERS_SQL = """
+select distinct p.normalized_payload ->> 'listing_id', p.normalized_payload ->> 'ticker'
+from raw.capture_obligations ob
+join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+where ob.run_id = %s
+  and o.semantic_type = 'listing-identity'
+  and p.normalized_payload ->> 'ticker' is not null
+order by 1, 2
+"""
+
+
+def _run_listing_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
+    """The ticker of each listing of the run. A listing whose cells name two tickers keeps the first."""
+    tickers: dict[str, str] = {}
+    for listing_id, ticker in connection.execute(_RUN_LISTING_TICKERS_SQL, (run_id,)).fetchall():
+        tickers.setdefault(str(listing_id), str(ticker))
+    return tickers
 
 
 # The ticker of each listing of the given issuers in the run. The listing-identity cells name

@@ -291,11 +291,12 @@ def test_split_history_names_each_series_it_cannot_prove() -> None:
 
 def test_alphabet_canonical_ticker_and_listing_selection_agrees_with_default_topt_symbols() -> None:
     """#1265: Alphabet has two listings in the TOPT denominator (`GOOG` and `GOOGL`), while
-    `DEFAULT_TOPT_SYMBOLS` ingests `GOOGL`. All planes must select `GOOGL`."""
+    `DEFAULT_TOPT_SYMBOLS` ingests `GOOGL`. All planes must select `GOOGL`. #1347: a listing is ranked
+    by its ticker, and a listing without a known ticker comes last."""
     from data_engine.datahub.canonical_issuer import (
         instrument_sort_key,
         is_preferred_issuer_ticker,
-        listing_sort_key,
+        ticker_sort_key,
     )
     from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 
@@ -303,7 +304,7 @@ def test_alphabet_canonical_ticker_and_listing_selection_agrees_with_default_top
     assert "GOOG" not in DEFAULT_TOPT_SYMBOLS
     assert is_preferred_issuer_ticker("GOOGL", "GOOG") is True
     assert is_preferred_issuer_ticker("GOOG", "GOOGL") is False
-    assert min(["listing:xnas:goog", "listing:xnas:googl"], key=listing_sort_key) == "listing:xnas:googl"
+    assert sorted([None, "GOOG", "AAPL", "GOOGL"], key=ticker_sort_key) == ["GOOGL", "AAPL", "GOOG", None]
     assert (
         min(["security:cusip:02079K107", "security:cusip:02079K305"], key=instrument_sort_key)
         == "security:cusip:02079K305"

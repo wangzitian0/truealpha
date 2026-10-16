@@ -23,7 +23,8 @@ One path, from staging to mart:
    same prices and costs. A benchmark symbol without an open on that session is bought at its next
    open. A symbol that never opens stays cash, and the run's limitations name it. A strategy
    symbol without an open on its fill session also stays cash, and the limitations name it with
-   the dates of its cutoffs (#1265).
+   the dates of its cutoffs (#1265). A selected symbol without any stored bar stops the run before
+   the simulation, and the error names it with the dates of its cutoffs (#1347).
 5. Persistence. ``run_id`` is the content hash of the engine label, the deployed code identity
    (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the benchmark
    universe, the price snapshot and the run parameters. A rerun of one release on the same data
@@ -252,6 +253,19 @@ def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBoo
     return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
 
 
+def selected_without_bars(decisions: Sequence[CutoffDecision], unadjusted: DailySeries) -> dict[str, tuple[date, ...]]:
+    """Each symbol that a cutoff selected and that has no unadjusted bar at all, with those cutoff dates.
+
+    Such a symbol can never fill. Its weight would stay cash at every cutoff that selects it, and the
+    run would report success. #1347: the store held no GOOG bar, and 47% of the portfolio stayed cash.
+    """
+    found: dict[str, list[date]] = {}
+    for decision in decisions:
+        for symbol in sorted(set(decision.weights) - set(unadjusted)):
+            found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
+    return {symbol: tuple(days) for symbol, days in sorted(found.items())}
+
+
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:
     """The content hash of every bar the run read."""
     rows = [
@@ -412,6 +426,12 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
     unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
     if not unadjusted:
         raise BacktestPending(f"no unadjusted daily bars for {len(symbols)} symbols")
+    unpriced = selected_without_bars(decisions, unadjusted)
+    if unpriced:
+        raise RuntimeError(
+            "no daily bars for selected symbols: "
+            + "; ".join(f"{symbol} ({', '.join(day.isoformat() for day in days)})" for symbol, days in unpriced.items())
+        )
     split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
     missing_adjusted = sorted(set(unadjusted) - set(split_adjusted))
     if missing_adjusted:
@@ -819,5 +839,6 @@ __all__ = [
     "run_core_strategy_backtest",
     "run_limitations",
     "schedule_cutoffs",
+    "selected_without_bars",
     "selected_without_open",
 ]

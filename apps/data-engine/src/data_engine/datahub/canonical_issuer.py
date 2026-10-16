@@ -37,10 +37,8 @@ __all__ = (
     "NO_CANONICAL_ISSUER_ID",
     "PRIMARY_INSTRUMENT_IDS",
     "PRIMARY_ISSUER_TICKERS",
-    "PRIMARY_LISTING_IDS",
     "SECONDARY_INSTRUMENT_IDS",
     "SECONDARY_ISSUER_TICKERS",
-    "SECONDARY_LISTING_IDS",
     "CanonicalIssuer",
     "CanonicalUniverse",
     "ConflictingPredecessorError",
@@ -53,34 +51,26 @@ __all__ = (
     "instrument_sort_key",
     "is_canonical_issuer_id",
     "is_preferred_issuer_ticker",
-    "listing_preference_rank",
-    "listing_sort_key",
     "reason_counts",
     "require_canonical_issuer_id",
     "signed_predecessor_ciks",
     "stored_entity_of",
     "ticker_preference_rank",
+    "ticker_sort_key",
 )
 
-#: Primary share-class ticker, listing, and instrument identities for multi-class issuers (#1265).
-#: Alphabet Inc. (5493006MHB84DD0ZWV18) has Class A voting stock (GOOGL, 02079K305) and
-#: Class C non-voting stock (GOOG, 02079K107) in the universe corpus. All planes resolve to GOOGL.
+#: Primary and secondary share-class tickers of multi-class issuers (#1265). The ticker states which
+#: class is primary. Alphabet Inc. (5493006MHB84DD0ZWV18) has Class A voting stock (GOOGL, 02079K305)
+#: and Class C non-voting stock (GOOG, 02079K107) in the universe corpus. All planes resolve to GOOGL.
+#: Rank a listing by its ticker (`ticker_sort_key`), never by an id literal. Production holds entity
+#: ids that the entity backfill minted, and a literal written in advance did not match them (#1347).
 PRIMARY_ISSUER_TICKERS: frozenset[str] = frozenset({"GOOGL"})
 SECONDARY_ISSUER_TICKERS: frozenset[str] = frozenset({"GOOG"})
 
-PRIMARY_LISTING_IDS: frozenset[str] = frozenset(
-    {
-        "listing:xnas:googl",
-        "94c36c50-7427-582f-9072-30284eb79647",
-    }
-)
-SECONDARY_LISTING_IDS: frozenset[str] = frozenset(
-    {
-        "listing:xnas:goog",
-        "4b7e9abc-4c05-5b50-88f7-c31e8be0a2b6",
-    }
-)
-
+#: The instrument ids of the two classes, as old captures and an empty test store spell them. Their
+#: one reader is the TOPT core execution member (`production_topt.materialization`). Production
+#: instrument ids are other entity ids, so there these sets match nothing (#1347). #1265 item 1 owns
+#: the move of that reader to the ticker rule.
 PRIMARY_INSTRUMENT_IDS: frozenset[str] = frozenset(
     {
         "security:cusip:02079K305",
@@ -111,13 +101,15 @@ def is_preferred_issuer_ticker(candidate: str | None, current: str | None) -> bo
     return ticker_preference_rank(candidate) < ticker_preference_rank(current)
 
 
-def listing_preference_rank(listing_id: str | None) -> int:
-    """Return 0 for a primary listing, 2 for a secondary listing, and 1 otherwise."""
-    if listing_id in PRIMARY_LISTING_IDS:
-        return 0
-    if listing_id in SECONDARY_LISTING_IDS:
-        return 2
-    return 1
+def ticker_sort_key(ticker: str | None) -> tuple[bool, int, str]:
+    """The sort key of one listing of an issuer, by its ticker (#1265, #1347).
+
+    The primary class comes first and the secondary class last (`ticker_preference_rank`). The ticker
+    text breaks a tie between two classes of one rank. A listing without a known ticker comes after
+    every listing with a ticker: no price series names it. Two ids of one ticker tie. The caller breaks
+    that tie with a defined order of its own, for example the listing id.
+    """
+    return (ticker is None, ticker_preference_rank(ticker), ticker or "")
 
 
 def instrument_preference_rank(instrument_id: str | None) -> int:
@@ -129,18 +121,9 @@ def instrument_preference_rank(instrument_id: str | None) -> int:
     return 1
 
 
-def listing_sort_key(listing_id: str) -> tuple[int, str]:
-    """Sort key that orders primary share-class listings ahead of secondary listings (#1265)."""
-    return (listing_preference_rank(listing_id), listing_id)
-
-
-def instrument_sort_key(instrument_id: str, listing_id: str = "") -> tuple[int, int, str]:
+def instrument_sort_key(instrument_id: str) -> tuple[int, str]:
     """Sort key that orders primary share-class instruments ahead of secondary instruments (#1265)."""
-    return (
-        listing_preference_rank(listing_id) if listing_id else 1,
-        instrument_preference_rank(instrument_id),
-        instrument_id,
-    )
+    return (instrument_preference_rank(instrument_id), instrument_id)
 
 
 #: Why an issuer got no row: the store holds no entity for its legacy id.

@@ -11,6 +11,11 @@ repositories, so a test resolves issuers through the real path and needs no stub
     raw.capture_campaigns ... raw.capture_obligations (one run, one obligation per listing)
     raw.fetches + raw.capture_source_vintages         (companyfacts:CIK<cik>, bytes in a store)
     staging.capture_normalized_observations + payloads (parser PARSER_VERSION)
+
+`resolve_entity` in an empty store mints a listing from its `mic-ticker` alias. Production minted
+its entities with `staging.entity_backfill()` from the legacy ids, so its ids are different (#1347).
+`backfill_issuer` mints a multi-class issuer the production way, and `seed_tick` writes one capture
+tick of its listings with the observation id order that a test asks for.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from data_engine import raw_store
 from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.repository import PostgresCaptureControlRepository
-from data_engine.datahub.resolve_coordinates import resolve_entity
+from data_engine.datahub.resolve_coordinates import resolve_coordinates, resolve_entity
 from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
@@ -104,6 +109,8 @@ class Observed:
     cik: int
     operating_branch: str
     knowable_at: datetime
+    #: The payload's instrument id. None writes `security:issue1257:<cik>`: one instrument per issuer.
+    instrument_id: str | None = None
 
 
 def seed_financial_lineage(
@@ -197,7 +204,7 @@ def seed_financial_lineage(
         repository.put_source_vintage(vintage, raw_fetch_id=fetch_id)
         payload = {
             "issuer_id": item.issuer_id,
-            "instrument_id": f"security:issue1257:{item.cik}",
+            "instrument_id": item.instrument_id or f"security:issue1257:{item.cik}",
             "listing_id": item.listing_id,
             "operating_branch": item.operating_branch,
             "currency": "USD",
@@ -217,6 +224,158 @@ def seed_financial_lineage(
         repository.put_observation(
             obligation.obligation_id, observation, normalized_payload=payload, confidence=Decimal("0.9")
         )
+
+
+@dataclass(frozen=True)
+class ShareClass:
+    """One share class of a multi-class issuer, as the universe corpus keys it."""
+
+    ticker: str
+    cusip: str
+
+
+@dataclass(frozen=True)
+class BackfilledListing:
+    """One listing under both id generations. The canonical ids are the ids the entity backfill minted."""
+
+    ticker: str
+    legacy_instrument_id: str
+    legacy_listing_id: str
+    canonical_instrument_id: str
+    canonical_listing_id: str
+
+
+@dataclass(frozen=True)
+class BackfilledIssuer:
+    """A multi-class issuer under both id generations, minted the way production minted it (#1347)."""
+
+    cik: int
+    legacy_issuer_id: str
+    canonical_issuer_id: str
+    listings: tuple[BackfilledListing, ...]
+
+    def listing(self, ticker: str) -> BackfilledListing:
+        (found,) = [item for item in self.listings if item.ticker == ticker]
+        return found
+
+
+def backfill_issuer(
+    connection: psycopg.Connection[Any],
+    *,
+    lei: str,
+    mic: str,
+    classes: Sequence[ShareClass],
+    cik: int,
+    known_at: datetime,
+    store: MemoryStore,
+) -> BackfilledIssuer:
+    """Mint a multi-class issuer in the three steps that production took (#1347).
+
+    1. A capture stores one financial-fact observation per listing under the legacy ids.
+    2. `staging.entity_backfill()` mints each entity from its legacy id (`entity-backfill:v1`). It
+       gives each listing a parsed `mic-ticker` alias.
+    3. A later capture resolves the legacy ids with `resolve_coordinates` and writes the entity UUIDs.
+
+    So the canonical ids are the ids that a store holds after the backfill. No literal names them.
+    """
+    legacy_issuer = f"issuer:lei:{lei}"
+    trios = [
+        (item.ticker, f"security:cusip:{item.cusip}", f"listing:{mic.lower()}:{item.ticker.lower()}")
+        for item in classes
+    ]
+    seed_financial_lineage(
+        connection,
+        [
+            Observed(legacy_issuer, listing, cik, "non_financial", known_at, instrument_id=instrument)
+            for _ticker, instrument, listing in trios
+        ],
+        company_facts={cik: {"facts": {}}},
+        store=store,
+        cutoff=known_at,
+    )
+    summary = connection.execute("select staging.entity_backfill()").fetchone()[0]
+    legacy_ids = [legacy_issuer, *(instrument for _t, instrument, _l in trios), *(listing for _t, _i, listing in trios)]
+    born = dict(
+        connection.execute(
+            "select birth_value, entity_id::text from staging.entities "
+            "where birth_scheme = 'legacy-id' and birth_value = any(%s)",
+            (legacy_ids,),
+        ).fetchall()
+    )
+    if set(born) != set(legacy_ids):
+        raise AssertionError(f"the entity backfill did not mint each entity from its legacy id: {summary}")
+    resolved = resolve_coordinates(
+        connection,
+        [(legacy_issuer, instrument, listing, ticker) for ticker, instrument, listing in trios],
+        as_of=known_at.date(),
+        known_at=known_at,
+    )
+    listings = tuple(
+        BackfilledListing(ticker, instrument, listing, resolved[listing][1], resolved[listing][2])
+        for ticker, instrument, listing in trios
+    )
+    for ticker, instrument, listing in trios:
+        if resolved[listing][:3] != (born[legacy_issuer], born[instrument], born[listing]):
+            raise AssertionError(f"the capture resolver does not return the backfilled entities of {ticker}")
+    return BackfilledIssuer(cik, legacy_issuer, born[legacy_issuer], listings)
+
+
+def seed_tick(
+    connection: psycopg.Connection[Any],
+    issuer: BackfilledIssuer,
+    *,
+    legacy: bool,
+    knowable_at: datetime,
+    larger_id_ticker: str,
+    store: MemoryStore,
+    max_attempts: int = 64,
+) -> datetime:
+    """One capture tick of every listing of `issuer` under one id generation, in one transaction (#1347).
+
+    The observations share `recorded_at` (the transaction start) and `knowable_at`, as one production
+    tick writes them. An observation id is a content hash, so a test cannot set the order of two ids.
+    This function moves `knowable_at` forward one second at a time until the listing with the ticker
+    `larger_id_ticker` holds the larger observation id. An attempt with the other order rolls back to
+    its savepoint. The function returns the `knowable_at` of the tick that it kept.
+    """
+    issuer_id = issuer.legacy_issuer_id if legacy else issuer.canonical_issuer_id
+    wanted = issuer.listing(larger_id_ticker)
+    for offset in range(max_attempts):
+        at = knowable_at + timedelta(seconds=offset)
+        with connection.transaction() as attempt:
+            seed_financial_lineage(
+                connection,
+                [
+                    Observed(
+                        issuer_id,
+                        item.legacy_listing_id if legacy else item.canonical_listing_id,
+                        issuer.cik,
+                        "non_financial",
+                        at,
+                        instrument_id=item.legacy_instrument_id if legacy else item.canonical_instrument_id,
+                    )
+                    for item in issuer.listings
+                ],
+                company_facts={issuer.cik: {"facts": {}}},
+                store=store,
+                cutoff=at,
+            )
+            ordered = connection.execute(
+                """
+                select p.normalized_payload ->> 'listing_id'
+                from staging.capture_normalized_observations o
+                join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+                where o.knowable_at = %s and p.normalized_payload ->> 'issuer_id' = %s
+                order by o.observation_id desc
+                """,
+                (at, issuer_id),
+            ).fetchall()
+            if len(ordered) != len(issuer.listings):
+                raise AssertionError(f"the tick wrote {len(ordered)} observations for {len(issuer.listings)} listings")
+            if ordered[0][0] == (wanted.legacy_listing_id if legacy else wanted.canonical_listing_id):
+                return at
+            raise psycopg.Rollback(attempt)
+    raise AssertionError(f"no tick in {max_attempts} seconds gives {larger_id_ticker} the larger observation id")
 
 
 def annual_company_facts(*, base: int, years: range = range(2018, 2026)) -> dict[str, Any]:
