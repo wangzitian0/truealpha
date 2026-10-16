@@ -39,7 +39,16 @@ Two daily series (#1131, A6): the op also ingests the unadjusted daily bars (`ad
 series. The cutoffs and the mask read the split-adjusted series (`SPLIT_ADJUSTED`), because
 the mask judges the series that returns are computed from.
 
-The op records one nightly verdict, `market_data_freshness` (#876, #1131): green when the
+A second, independent op fetches the risk-free rate (#1255). It appends the U.S. Treasury 3-month
+par yield to `staging.risk_free_rates_daily` (`datahub.treasury_rates`), and the live tick, the TOPT
+core engine and the nightly backtest read that series (`datahub.risk_free`). The two ops share no data,
+so a Treasury failure fails the run and still lets the price refresh finish, and the reverse holds too.
+The op fetches the current year and each of the three years before it that holds no row yet. The
+schedule below is its daily trigger. A manual launch of the job is its replay trigger, and a launch is
+safe to repeat: a second run over the same bytes inserts nothing. No tick can run without a rate, so
+after a deployment that adds this series, launch the job once before the first tick.
+
+The price op records one nightly verdict, `market_data_freshness` (#876, #1131): green when the
 newest bar of each daily series is within `MAX_BAR_LAG_SESSIONS` of the latest closed XNYS
 session, red when a series is behind that or holds no bar, and red when the op crashes. The
 lane failed 8 times between 2026-09-24 and 2026-10-05 with no check watching it.
@@ -62,6 +71,7 @@ from data_engine.datahub.market_prices import (
     UNADJUSTED,
     oldest_session_within_lag,
 )
+from data_engine.datahub.treasury_rates import YearResult, refresh_risk_free_rates
 from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
@@ -302,9 +312,44 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
             raise dg.Failure(f"market data freshness: {freshness.summary}")
 
 
+def _refresh_risk_free(
+    context: dg.OpExecutionContext, connection: psycopg.Connection, *, today: date
+) -> list[YearResult]:
+    """The risk-free op body, factored out like `_refresh_market_data` so that a test can inject a
+    connection. The Treasury transport is the gateway, so a test fakes the HTTP layer under it."""
+    results = refresh_risk_free_rates(connection, today=today)
+    for item in results:
+        context.log.info(
+            f"risk_free: {item.year}: {item.observations} observations, {item.inserted} appended, raw fetch {item.fetch_id}"
+        )
+    return results
+
+
+@dg.op
+def refresh_risk_free_rates_op(context: dg.OpExecutionContext) -> None:
+    """Append the U.S. Treasury 3-month par yield to `staging.risk_free_rates_daily` (#1255).
+
+    Independent of `refresh_market_data_op`. Each year is committed by itself. A failed year fails
+    the op after the other years ran."""
+    with (
+        gateway.run_scope(f"dagster:{context.run_id}"),
+        gateway.capacity_scope(),
+        psycopg.connect(settings.database_url) as connection,
+    ):
+        results = _refresh_risk_free(context, connection, today=datetime.now(UTC).date())
+    context.add_output_metadata(
+        {
+            "years": [item.year for item in results],
+            "observations": sum(item.observations for item in results),
+            "appended": sum(item.inserted for item in results),
+        }
+    )
+
+
 @dg.job(name=MARKET_DATA_REFRESH_JOB_NAME)
 def market_data_refresh_pipeline_job() -> None:
     refresh_market_data_op()
+    refresh_risk_free_rates_op()
 
 
 @dg.schedule(

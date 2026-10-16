@@ -59,7 +59,7 @@ def test_e2e_strategy_runs_from_staging_through_gateway_to_mart(connection) -> N
     assert snapshot_id.startswith("strategy-snapshot:")
 
     run_id, decision_ids = write_replay(
-        connection, decisions, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id
+        connection, decisions, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id, risk_free_rate=None
     )
     assert len(decision_ids) == 10
 

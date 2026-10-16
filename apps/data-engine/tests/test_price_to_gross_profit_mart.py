@@ -81,7 +81,7 @@ def _decision(**overrides: object) -> Decision:
 def test_a_v1_decision_persists_pgp_and_no_target_ps(connection) -> None:
     definition = load_live_strategy_definition()
     run_id, (decision_id,) = write_replay(
-        connection, [_decision()], definition, executed_at=datetime(2026, 10, 8, tzinfo=UTC)
+        connection, [_decision()], definition, executed_at=datetime(2026, 10, 8, tzinfo=UTC), risk_free_rate=None
     )
     row = connection.execute(
         """
@@ -128,6 +128,7 @@ def test_the_mart_refuses_an_ambiguous_valuation_basis(connection, overrides: di
             [_decision(**overrides)],
             load_live_strategy_definition(),
             executed_at=datetime(2026, 10, 8, tzinfo=UTC),
+            risk_free_rate=None,
         )
 
 

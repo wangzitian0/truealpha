@@ -384,8 +384,9 @@ def run_strategy_replay_for_cutoff(
     capture_run_id: str,
 ) -> tuple[str, int, str]:
     """Evaluate the frozen strategy over the captured staging inputs for one cutoff and
-    persist ``mart.strategy_runs``/``mart.strategy_decisions``. The risk-free rate is the
-    same 0.05 the GPPE materialization pins, supplied explicitly by the caller.
+    persist ``mart.strategy_runs``/``mart.strategy_decisions``. The caller supplies the risk-free
+    rate. The tick passes the rate that its core materialization used (#1255), so one tick reads
+    one rate. The rate is part of the run identity.
 
     ``capture_run_id`` is the capture this evaluation belongs to, and the run is bound to
     it (#877): a cutoff alone can name two captures since forced ticks (#874) exist, so
@@ -411,7 +412,12 @@ def run_strategy_replay_for_cutoff(
     )
     snapshot_id = gateway.snapshot_id(cutoff)
     run_id, decision_ids = write_replay(
-        connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
+        connection,
+        decisions,
+        definition,
+        executed_at=executed_at,
+        snapshot_id=snapshot_id,
+        risk_free_rate=risk_free_rate,
     )
     bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
     return run_id, len(decision_ids), snapshot_id

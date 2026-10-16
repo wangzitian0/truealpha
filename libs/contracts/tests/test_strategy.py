@@ -15,7 +15,7 @@ from truealpha_contracts.strategy import (
     GoldenDecisionSet,
     GoldenInputRecord,
     LargeModelValueV0Definition,
-    live_risk_free_rate,
+    RiskFreeInstrument,
 )
 
 # The end-to-end recompute of these golden decisions now lives in
@@ -204,28 +204,26 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
     assert definition.price_to_gross_profit.unit.dimension is FactorDimension.DIMENSIONLESS
 
 
-def test_live_risk_free_rate_resolution() -> None:
-    """Standing checks for all branches of live_risk_free_rate resolution."""
-    # None returns the latest rate
-    latest = live_risk_free_rate()
-    assert latest == Decimal("0.0365")
+def test_the_definition_names_the_measured_series_and_keeps_explicit_golden_rates() -> None:
+    """#1255: definition 1.0.0 declares the rate as a per-cutoff parameter of the 3-month Treasury bill.
 
-    # Exact ISO string with Z
-    march_str = live_risk_free_rate("2026-03-31T23:59:59Z")
-    assert march_str == Decimal("0.0380")
+    The data engine fills that parameter from the stored series (`datahub.risk_free`). The golden set
+    keeps its two explicit rates, so that the golden replay stays fixed. No function of the contract
+    resolves a rate from them any more.
+    """
+    from truealpha_contracts import strategy
 
-    # Exact ISO string with offset
-    june_str = live_risk_free_rate("2026-06-30T23:59:59+00:00")
-    assert june_str == Decimal("0.0365")
+    risk_free = _definition().labor_efficiency.risk_free
+    assert risk_free.rule_id == "per_cutoff_versioned_parameter"
+    assert risk_free.instrument is RiskFreeInstrument.US_TREASURY_BILL_3_MONTH
+    assert risk_free.instrument.value == "us_treasury_bill_3_month"
+    assert risk_free.rate_unit == "annualized_decimal_fraction"
+    assert risk_free.missing_rate_reason is ExclusionReason.MISSING_RISK_FREE_RATE_PARAMETER
 
-    # Exact datetime
-    march_dt = live_risk_free_rate(datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC))
-    assert march_dt == Decimal("0.0380")
-
-    # Nearest prior: cutoff in May 2026 gets March rate
-    may_dt = live_risk_free_rate(datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC))
-    assert may_dt == Decimal("0.0380")
-
-    # Pre-earliest cutoff: earlier than all declared rates falls back to first declared rate
-    ancient_dt = live_risk_free_rate(datetime(2020, 1, 1, 0, 0, 0, tzinfo=UTC))
-    assert ancient_dt == Decimal("0.0380")
+    assert [(rate.cutoff_at, rate.annualized_rate) for rate in _golden().risk_free_rates] == [
+        (datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC), Decimal("0.0380")),
+        (datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC), Decimal("0.0365")),
+    ]
+    assert not hasattr(strategy, "live_risk_free_rate"), "the table lookup is deleted"
+    assert "live_risk_free_rate" not in strategy.__all__
+    assert not hasattr(GoldenDecisionSet, "rate_for"), "no cutoff before the first point falls back to the first rate"

@@ -49,6 +49,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectS
 from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from risk_free_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import share_count_vintage, store_topt_series  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -114,6 +115,8 @@ def tick_database_url():
     with isolated_test_database("forced") as target_url:
         # The strategy seed takes each issuer's splits from the stored daily series (#1262).
         store_topt_series(target_url)
+        # The core engine reads the risk-free rate of the cutoff from the stored series (#1255).
+        store_risk_free_series(target_url)
         yield target_url
 
 

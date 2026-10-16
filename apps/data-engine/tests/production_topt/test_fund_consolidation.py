@@ -11,8 +11,10 @@ Two halves, because a passing factor test proves the arithmetic and not the wiri
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import dagster as dg
 import psycopg
@@ -24,6 +26,9 @@ from data_engine.datahub.production_topt.fund_consolidation import (
 )
 from data_engine.datahub.resolve_coordinates import resolve_entity
 from data_engine.lanes import capture
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from risk_free_seed import stub_rate  # noqa: E402
 
 #: A HISTORICAL replay cutoff. The look-ahead this guards against is not a filing dated
 #: in the future — `staging.kg_identifiers` already refuses to record one (recorded_at >=
@@ -402,6 +407,7 @@ def _run_deployed_tick(monkeypatch, op, *, spy: list) -> None:
             core_result_count=20,
             quality_report_id="datahub-quality-report:" + "c" * 64,
             quality={"available_count": 20, "requested_count": 20, "independent_reconciliation": "20/20"},
+            risk_free_rate=stub_rate(),
         ),
     )
     monkeypatch.setattr(capture, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
