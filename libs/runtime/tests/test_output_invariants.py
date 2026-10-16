@@ -318,9 +318,9 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
 
 
 def test_quality_report_matches_core_results_invariant_structure_and_behavior() -> None:
-    """#1299, #1227: for every governed head in mart.served_head, the gross_profit_per_employee
-    complete_subjects count in mart.datahub_quality_report must match the available count in
-    mart.topt_core_results."""
+    """#1299, #1227, #1346: for every governed head in mart.served_head, the gross_profit_per_employee
+    complete_subjects count in mart.datahub_quality_report must equal the number of listings of
+    the available issuers in mart.topt_core_results. The DB tests below prove the SQL."""
     (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == "quality-report-matches-core-results"]
     assert "mart.served_head" in invariant.violations
     assert "mart.datahub_quality_report" in invariant.violations
@@ -706,7 +706,8 @@ def test_a_complete_issuer_without_an_available_result_fails_and_names_its_head(
 ) -> None:
     """#1346 criterion 2, the QQQ shape. #1309 makes an issuer without a stored daily series
     unavailable in the core, and the report still counts its facts complete. The head fails.
-    The row gives the complete listings, the listings and the issuers of the available core."""
+    The row gives the complete listings of the report, then the listings and the issuers of
+    the available core results."""
     universe_id = "universe:qqq-us-2026-09-30"
     run_id = _seed_head(conn, universe_id, issuers)
     assert _seeded_shape(conn, run_id) == shape

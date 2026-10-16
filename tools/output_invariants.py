@@ -560,8 +560,19 @@ INVARIANTS: tuple[Invariant, ...] = (
         id="quality-report-matches-core-results",
         claim=(
             "for every governed head in mart.served_head, the gross_profit_per_employee complete_subjects "
-            "count in mart.datahub_quality_report equals the available count in mart.topt_core_results (#1299, #1227)"
+            "count in mart.datahub_quality_report equals the number of listings of the available issuers "
+            "in mart.topt_core_results (#1299, #1227, #1346)"
         ),
+        # The report counts subjects, and a subject is a listing (raw.capture_obligations.subject_id).
+        # The core writes one result for each issuer. Alphabet has two listings.
+        # For each dual-class issuer, the issuer count is one less than the listing count (#1346).
+        # This check counts the listings of the issuers that have an `available` result.
+        # The core snapshot of the run supplies the listings. Its payload holds one member for each listing.
+        # Do not count the rows of staging.topt_core_snapshot_members. That table holds one row for each issuer.
+        # `exists` counts each listing one time, also when two invocations wrote results for one run.
+        # A payload without members gives 0 listings, so each head with complete facts fails.
+        # Equality stays the rule. An issuer with complete facts and an unavailable result fails its head.
+        # #1309 gives that shape on QQQ: an issuer without a stored daily series is unavailable.
         violations="""
             select
                 h.universe_id,
@@ -570,12 +581,8 @@ INVARIANTS: tuple[Invariant, ...] = (
                     (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
                     -1
                 )::text as report_complete_subjects,
-                (
-                    select count(*)::int
-                    from mart.topt_core_results r
-                    where r.run_id = coalesce(h.run_id, h.head_run_id)
-                      and r.availability = 'available'
-                )::text as core_available_results
+                core.available_listings::text as core_available_listings,
+                core.available_issuers::text as core_available_issuers
             from mart.served_head h
             left join lateral (
                 select payload
@@ -584,16 +591,26 @@ INVARIANTS: tuple[Invariant, ...] = (
                 order by created_at desc
                 limit 1
             ) q on true
+            cross join lateral (
+                select
+                    count(*)::int as available_listings,
+                    count(distinct member->>'issuer_id')::int as available_issuers
+                from staging.topt_core_snapshots s
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                where s.run_id = coalesce(h.run_id, h.head_run_id)
+                  and exists (
+                      select 1
+                      from mart.topt_core_results r
+                      where r.run_id = s.run_id
+                        and r.issuer_id = member->>'issuer_id'
+                        and r.availability = 'available'
+                  )
+            ) core
             where h.factor_id = 'gross_profit_per_employee'
               and coalesce(
                   (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
                   -1
-              ) <> (
-                  select count(*)::int
-                  from mart.topt_core_results r
-                  where r.run_id = coalesce(h.run_id, h.head_run_id)
-                    and r.availability = 'available'
-              )
+              ) <> core.available_listings
         """,
         population="""
             select count(*)
