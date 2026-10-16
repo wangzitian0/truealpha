@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "eb245be129846cbb64b3119c4fefb0f2a30cc6b19d36675e068e8c882aae6712",
+    "repo": "50641145a338dee66ef5190c3a06e679a8dddee3409fb84ab1aabef5d14854e4",
     "root": "749e6cf6cfb5e18b32675996d0ddd5055f3583ff433e3c0aaa4cbf63b1805eaa",
     "skills": "8d76bd34354d68478e988b9daf66fdaaeccac27a6a0636c29013996032ba0921"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "f463d3be756cc6491e47d3efea13843e6734eb742eda8f79450a1c88b726869c",
+    "AGENTS.md": "5e9563882cf395afd7f0eb0497795b7ce345c0beefbe58dc96a13c4c72ae7071",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -66,7 +66,7 @@
     "links": {},
     "root": "skills"
   },
-  "source_revision": "9b62272a71c338a3fa72f93c8e53016080108441",
+  "source_revision": "3712d213fed3342c95d4d1b2253434953146fef4",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
