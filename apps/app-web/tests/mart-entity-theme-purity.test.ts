@@ -137,6 +137,37 @@ if (admin !== null) {
       assert(byId.get("zz-theme-b")?.unvisitedReason === "no_segment_partition", "the other theme names its reason");
     }
 
+    // #1358 AC2: bidirectional coordinate resolution between UUID entity_id and legacy_id.
+    {
+      const lei = "ZZ135800000000000100";
+      const minted = await admin.query(
+        "select staging.entity_mint('issuer', 'lei', $1, 'test:1358') as entity_id",
+        [lei],
+      );
+      const uuidCoord = String(minted.rows[0].entity_id);
+      const legacyCoord = `issuer:lei:${lei}`;
+      await admin.query(
+        `insert into staging.entity_aliases
+           (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)
+         values ($1, 'legacy-id', $2, '2026-01-01', '2026-01-01T00:00:00Z', 'test:1358', 'test:1358', 'asserted', 1, 'test:1358')`,
+        [uuidCoord, legacyCoord],
+      );
+      // Case A: row stored under legacy_id, queried by UUID.
+      await themeRow(admin, { issuerId: legacyCoord, themeId: "zz-theme-legacy", cutoff: NEW_CUTOFF, fill: false });
+      const fromUuid = await adapter.entityThemePurity(CONTEXT, uuidCoord);
+      assert(
+        fromUuid.some((theme) => theme.themeId === "zz-theme-legacy" && theme.themeShare === "0.5"),
+        `UUID lookup must resolve theme row stored under legacy_id: ${JSON.stringify(fromUuid)}`,
+      );
+      // Case B: row stored under UUID, queried by legacy_id.
+      await themeRow(admin, { issuerId: uuidCoord, themeId: "zz-theme-uuid", cutoff: NEW_CUTOFF, fill: false });
+      const fromLegacy = await adapter.entityThemePurity(CONTEXT, legacyCoord);
+      assert(
+        fromLegacy.some((theme) => theme.themeId === "zz-theme-uuid" && theme.themeShare === "0.5"),
+        `legacy_id lookup must resolve theme row stored under UUID: ${JSON.stringify(fromLegacy)}`,
+      );
+    }
+
     console.log("mart-entity-theme-purity: ok");
   } finally {
     __setTestClient(null);

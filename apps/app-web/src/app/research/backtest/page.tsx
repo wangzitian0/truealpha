@@ -62,7 +62,7 @@ export default async function BacktestListPage() {
             </thead>
             <tbody className="divide-y divide-border text-gray-200">
               {runs.map((r) => (
-                <tr key={r.run_id} className="hover:bg-muted/20">
+                <tr key={r.run_id} data-run-id={r.run_id} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-medium text-white">
                     <div>{r.strategy_key}</div>
                     <div className="text-xs text-gray-500">{r.strategy_version}</div>
@@ -111,7 +111,7 @@ export default async function BacktestListPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <Link
-                      href={`/research/backtest/${r.run_id}`}
+                      href={`/research/backtest/${encodeURIComponent(r.run_id)}`}
                       className="rounded bg-accent/20 px-2.5 py-1 text-xs font-semibold text-accent hover:bg-accent/30"
                     >
                       View Report

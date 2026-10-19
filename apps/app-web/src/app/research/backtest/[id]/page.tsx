@@ -5,7 +5,7 @@ import {
   getBacktestValuations,
   getBacktestTrades,
 } from "@/server/mart/backtest-repository";
-import { formatPercentFromFraction } from "@/client/format";
+import { decodeRouteParam, formatPercentFromFraction } from "@/client/format";
 import { BacktestBasis } from "@/components/backtest-basis";
 import { BacktestChart } from "@/components/backtest-chart";
 
@@ -17,16 +17,17 @@ interface PageProps {
 
 export default async function BacktestDetailPage({ params }: PageProps) {
   const { id } = await params;
-  const run = await getBacktestRun(id);
+  const runId = decodeRouteParam(id);
+  const run = await getBacktestRun(runId);
 
   if (!run) {
     notFound();
   }
 
   const [valM, valD, trades] = await Promise.all([
-    getBacktestValuations(id, "1M"),
-    getBacktestValuations(id, "1D"),
-    getBacktestTrades(id, 100),
+    getBacktestValuations(runId, "1M"),
+    getBacktestValuations(runId, "1D"),
+    getBacktestTrades(runId, 100),
   ]);
 
   return (

@@ -23,6 +23,14 @@ export interface LaborEfficiencyInput {
 	strategyMetric: string | null;
 }
 
+function sameMetricValue(a: string, b: string): boolean {
+	if (a === b) return true;
+	const numA = Number(a);
+	const numB = Number(b);
+	if (!Number.isFinite(numA) || !Number.isFinite(numB)) return false;
+	return numA.toFixed(2) === numB.toFixed(2);
+}
+
 /**
  * Every present number with its metric name. The published value and the strategy value collapse
  * into one entry only when they name the same metric and carry the same number.
@@ -34,10 +42,12 @@ export function laborEfficiencyLabels(input: LaborEfficiencyInput): LaborEfficie
 	}
 	if (input.strategyValue !== null) {
 		const metric = input.strategyMetric ?? UNRECORDED_METRIC;
+		const strategyValue = input.strategyValue;
 		const duplicate = labels.some(
-			(label) => label.metric === metric && label.value === input.strategyValue,
+			(label) => label.metric === metric && sameMetricValue(label.value, strategyValue),
 		);
-		if (!duplicate) labels.push({ metric, value: input.strategyValue });
+		if (!duplicate) labels.push({ metric, value: strategyValue });
 	}
 	return labels;
 }
+

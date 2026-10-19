@@ -162,3 +162,14 @@ export function formatPrincipalLabel(principalId: string | null): string | null 
   return parts.length > 1 ? parts[parts.length - 1] : trimmed;
 }
 
+/**
+ * Decodes a Next.js dynamic route segment (`[id]`).
+ * Returns the raw segment when percent-encoding is malformed so the route does not throw URIError.
+ */
+export function decodeRouteParam(id: string): string {
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}

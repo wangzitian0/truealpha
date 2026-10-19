@@ -68,18 +68,16 @@ export function TraceInputsTable({
   return (
     <>
       <p className="mt-1 text-xs text-gray-500">
-        Core result: {lineageResultId ?? NOT_RECORDED}. A field the lineage does not carry reads &quot;
-        {NOT_RECORDED}&quot;. A listing is one traded class of the issuer.
+        {`Core result: ${lineageResultId ?? NOT_RECORDED}. A field the lineage does not carry reads "${NOT_RECORDED}". A listing is one traded class of the issuer.`}
       </p>
-      {listings.map((listing) => (
+      {listings.map((listing, index) => (
         <div
-          key={listing.listingId ?? NOT_RECORDED}
+          key={`${listing.listingId ?? NOT_RECORDED}-${index}`}
           data-listing={listing.listingId ?? NOT_RECORDED}
           className="mt-3 overflow-x-auto"
         >
-          <p className="font-mono text-xs text-gray-300" title={listing.listingId ?? undefined}>
-            Listing: {formatListingLabel(listing.listingId) ?? NOT_RECORDED}
-            {listing.isResultListing ? " (listing named by the core result)" : ""}
+          <p data-evidence="true" className="font-mono text-xs text-gray-300" title={listing.listingId ?? undefined}>
+            {`Listing: ${formatListingLabel(listing.listingId) ?? NOT_RECORDED}${listing.isResultListing ? " (listing named by the core result)" : ""}`}
           </p>
           <table className="mt-1 w-full text-left text-xs" data-testid="trace-inputs">
             <thead className="text-gray-500">

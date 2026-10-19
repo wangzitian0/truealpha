@@ -92,4 +92,16 @@ for (const label of laborEfficiencyLabels({ publishedGppe: "1", strategyValue: "
   assert(label.metric.length > 0, "every displayed number needs a metric name");
 }
 
-console.log("labor-efficiency-metric: 6 checks passed");
+// 7. #1358 AC3: scale-4 publishedGppe and scale-2 strategyValue of the same metric collapse to one entry.
+assertSameJson(
+  laborEfficiencyLabels({
+    publishedGppe: "76328.6381",
+    strategyValue: "76328.64",
+    strategyMetric: PUBLISHED_GPPE_METRIC,
+  }),
+  [{ metric: PUBLISHED_GPPE_METRIC, value: "76328.6381" }],
+  "scale-4 publishedGppe and scale-2 rounded strategyValue of the same metric collapse to one entry",
+);
+
+console.log("labor-efficiency-metric: 7 checks passed");
+

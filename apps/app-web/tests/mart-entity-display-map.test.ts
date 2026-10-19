@@ -234,6 +234,62 @@ try {
     await admin.query("rollback to savepoint tie_break");
   }
 
+  // 5. #1358 AC5: display_name resolves from kg_entities keyed by legacy_id, scheme='name' aliases, and etf_constituent_facts.
+  await admin.query("savepoint display_name_sources");
+  try {
+    const leiA = "ZZ135800000000009901";
+    const leiB = "ZZ135800000000009902";
+    const leiC = "ZZ135800000000009903";
+    const idA = String((await admin.query("select staging.entity_mint('issuer', 'lei', $1, 'test:1358') as id", [leiA])).rows[0].id);
+    const idB = String((await admin.query("select staging.entity_mint('issuer', 'lei', $1, 'test:1358') as id", [leiB])).rows[0].id);
+    const idC = String((await admin.query("select staging.entity_mint('issuer', 'lei', $1, 'test:1358') as id", [leiC])).rows[0].id);
+    for (const [id, lei] of [
+      [idA, `issuer:lei:${leiA}`],
+      [idB, `issuer:lei:${leiB}`],
+      [idC, `issuer:lei:${leiC}`],
+    ]) {
+      await admin.query(
+        `insert into staging.entity_aliases
+           (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)
+         values ($1, 'legacy-id', $2, '2026-01-01', '2026-01-01T00:00:00Z', 'test:1358', 'test:1358', 'asserted', 1, 'test:1358')`,
+        [id, lei],
+      );
+    }
+    // Issuer A: KG row keyed by legacy_id only (not UUID).
+    await admin.query("insert into staging.kg_entities (id, entity_type, display_name) values ($1, 'company', 'Legacy KG Corp')", [
+      `issuer:lei:${leiA}`,
+    ]);
+    // Issuer B: name alias in staging.entity_aliases (no kg_entities row).
+    await admin.query(
+      `insert into staging.entity_aliases
+         (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)
+       values ($1, 'name', 'Alias Name Corp', '2026-01-01', '2026-01-01T00:00:00Z', 'test:1358', 'test:1358', 'asserted', 1, 'test:1358')`,
+      [idB],
+    );
+    // Issuer C: company_name in staging.etf_constituent_facts (no kg_entities row and no name alias).
+    await admin.query("set local session_replication_role = replica");
+    await admin.query(
+      `insert into staging.etf_constituent_facts
+         (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, knowable_at)
+       values ('QQQ', '2026-01-01', 'test:1358', 0, 'TC9903', 'Constituent Facts Corp', '2026-01-01T00:00:00Z')`,
+    );
+    await addMember(admin, idA, "TA9901");
+    await addMember(admin, idB, "TB9902");
+    await addMember(admin, idC, "TC9903");
+    await admin.query("set local session_replication_role = origin");
+
+    const sourceMap = await loadEntityDisplayMap();
+    assert(sourceMap.get(idA)?.displayName === "Legacy KG Corp", `expected Legacy KG Corp, got ${JSON.stringify(sourceMap.get(idA))}`);
+    assert(sourceMap.get(`issuer:lei:${leiA}`)?.displayName === "Legacy KG Corp", "legacy key must also carry Legacy KG Corp");
+    assert(sourceMap.get(idB)?.displayName === "Alias Name Corp", `expected Alias Name Corp, got ${JSON.stringify(sourceMap.get(idB))}`);
+    assert(
+      sourceMap.get(idC)?.displayName === "Constituent Facts Corp",
+      `expected Constituent Facts Corp, got ${JSON.stringify(sourceMap.get(idC))}`,
+    );
+  } finally {
+    await admin.query("rollback to savepoint display_name_sources");
+  }
+
   console.log("mart-entity-display-map: ok");
 } finally {
   __setTestClient(null);

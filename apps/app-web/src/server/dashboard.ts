@@ -132,10 +132,10 @@ export async function loadEntityDetail(
     const detail = await mart.entityDetail(ctx, issuerId);
     if (detail === null) return { kind: "empty" };
     const [themes, gppeDetail, analystRatings, supplyChainExposure] = await Promise.all([
-      mart.entityThemePurity ? mart.entityThemePurity(ctx, issuerId) : Promise.resolve([]),
-      mart.entityGppeDetail ? mart.entityGppeDetail(ctx, issuerId) : Promise.resolve(null),
-      mart.entityAnalystRatings ? mart.entityAnalystRatings(ctx, issuerId) : Promise.resolve(null),
-      mart.entitySupplyChainExposure ? mart.entitySupplyChainExposure(ctx, issuerId) : Promise.resolve(null),
+      mart.entityThemePurity ? mart.entityThemePurity(ctx, detail.issuerId) : Promise.resolve([]),
+      mart.entityGppeDetail ? mart.entityGppeDetail(ctx, detail.issuerId) : Promise.resolve(null),
+      mart.entityAnalystRatings ? mart.entityAnalystRatings(ctx, detail.issuerId) : Promise.resolve(null),
+      mart.entitySupplyChainExposure ? mart.entitySupplyChainExposure(ctx, detail.issuerId) : Promise.resolve(null),
     ]);
     return {
       kind: "ready",

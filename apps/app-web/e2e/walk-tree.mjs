@@ -420,7 +420,8 @@ async function gotoStable(page, url) {
   throw lastError;
 }
 
-async function checkRoute(page, path, role) {
+async function checkRoute(page, path, role, pageErrors = []) {
+  pageErrors.length = 0;
   await gotoStable(page, `${BASE}${path}`);
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
@@ -436,6 +437,9 @@ async function checkRoute(page, path, role) {
   await assertFunnelSaysSomething(page, path, problems, role);
   // Last, because it navigates away from this page.
   await assertTraceRendersDecisionInputs(page, path, problems);
+  for (const err of pageErrors) {
+    problems.push(`pageerror: ${err}`);
+  }
   return problems;
 }
 
@@ -457,10 +461,14 @@ async function walkRoutes(browser, { role, email, password }) {
     }
   }
   const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(error.message || String(error));
+  });
 
   let failures = 0;
   for (const path of livePages) {
-    const problems = await checkRoute(page, path, role);
+    const problems = await checkRoute(page, path, role, pageErrors);
     if (problems.length > 0) {
       failures += 1;
       console.log(`FAIL [${role}] ${path} — ${problems.join("; ")}`);

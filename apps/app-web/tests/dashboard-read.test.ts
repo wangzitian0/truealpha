@@ -295,4 +295,49 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
   assert(outcome.message.includes("simulated read failure"), `unexpected message ${outcome.message}`);
 }
 
+// --- #1358 AC2: entityDetail and traceView resolve UUID route coordinates to legacy_id decisions (and vice versa) ---
+{
+  const { loadEntityDetail, loadTrace } = await import("../src/server/dashboard");
+  const uuidCoord = "e2829028-4666-5f7e-97e5-8163fb2fb025";
+  const legacyCoord = "issuer:cik:0000723125";
+  const cutoff = "2026-06-30T23:59:59Z";
+  const decisionRow: StrategyRunDecision = {
+    issuer_id: legacyCoord,
+    cutoff_at: cutoff,
+    outcome: "selected",
+    eligible: true,
+    tier: "tech",
+    capital_adjusted_labor_efficiency: "76328.64",
+    current_price_to_sales: "5.12",
+    target_price_to_sales: "6.50",
+    valuation_gap: "0.2695",
+    confidence: "0.9",
+    exclusion_reason: null,
+    rank: 1,
+    target_weight: "0.05",
+  };
+  const crossCoordAdapter = new StrategyRunReadAdapter(
+    repositoryReturning({ ...emptyReport(), decisions: [decisionRow] }),
+    async (fn) =>
+      fn({
+        query: async (sql: string) => {
+          if (sql.includes("mart.entity_identity")) {
+            return { rows: [{ entity_id: uuidCoord, legacy_id: legacyCoord }] };
+          }
+          return { rows: [] };
+        },
+      }),
+  );
+  const detailFromUuid = await loadEntityDetail(TEST_CONTEXT, uuidCoord, crossCoordAdapter);
+  assert(detailFromUuid.kind === "ready", `expected ready for UUID coordinate, got ${detailFromUuid.kind}`);
+  assert(
+    detailFromUuid.data.issuerId === legacyCoord && detailFromUuid.data.rows.length === 1,
+    `expected canonical issuerId ${legacyCoord}, got ${detailFromUuid.data.issuerId}`,
+  );
+  const traceFromUuid = await loadTrace(TEST_CONTEXT, uuidCoord, cutoff, crossCoordAdapter);
+  assert(traceFromUuid.kind === "ready", `expected ready trace for UUID coordinate, got ${traceFromUuid.kind}`);
+  assert(traceFromUuid.data.issuerId === legacyCoord, `expected trace issuerId ${legacyCoord}`);
+}
+
 console.log("#370/#371 dashboard read loaders + adapter states passed");
+
