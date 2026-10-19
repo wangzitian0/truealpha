@@ -10,6 +10,7 @@
  */
 
 import Link from "next/link";
+import { formatCell } from "@/client/format";
 import { exclusionLabel } from "@/contracts/exclusion-reasons";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
@@ -92,7 +93,7 @@ export default async function CoveragePage() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-gray-400">{exclusionLabel(decision.exclusion_reason) ?? "—"}</td>
+                <td className="px-4 py-3 text-gray-400">{formatCell(exclusionLabel(decision.exclusion_reason))}</td>
               </tr>
             ))}
           </tbody>

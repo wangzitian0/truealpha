@@ -184,7 +184,7 @@ export default async function RankingsPage({
                   } = projectPegByConvention(row, convention);
                   return (
                     <tr key={row.issuerId} className="border-t border-border">
-                      <td className="px-4 py-3">{row.rank ?? "—"}</td>
+                      <td className="px-4 py-3">{formatCell(row.rank)}</td>
                       <th scope="row" className="px-4 py-3 font-medium">
                         <Link
                           href={`/research/entities/${encodeURIComponent(row.issuerId)}${

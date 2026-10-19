@@ -12,6 +12,7 @@ import React from "react";
 import { ImageResponse } from "next/og";
 import { NextResponse } from "next/server";
 import {
+  formatCell,
   formatPercentFromFraction,
   formatRatio,
   formatSignedRatio,
@@ -115,7 +116,7 @@ export function buildRankingCardJson(data: RankingCardData) {
       subject_id: item.issuerId,
       display_name: item.displayName,
       rank: item.rank,
-      tier: item.tier ?? "—",
+      tier: formatCell(item.tier),
       valuation_basis: item.valuationBasis,
       metrics: [
         { key: "current_price_to_sales", value: item.currentPriceToSales },
@@ -319,7 +320,7 @@ export function buildEntityCardJson(data: EntityCardData) {
     source_attribution:
       "TrueAlpha research — traceable to materialized factor outputs (mart.strategy_decisions, mart.topt_gppe_results, mart.issuer_theme_purity).",
     metrics: {
-      tier: data.tier ?? "—",
+      tier: formatCell(data.tier),
       current_price_to_sales: data.currentPriceToSales,
       current_price_to_gross_profit: data.valuationBasis === "price_to_gross_profit" ? data.currentMultiple : null,
       valuation_basis: data.valuationBasis,
@@ -353,7 +354,7 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
       ? displayThemes
           .map((t, idx) => {
             const y = 85 + idx * 65;
-            const pctStr = formatPercentFromFraction(t.themeShare) ?? "—";
+            const pctStr = formatCell(formatPercentFromFraction(t.themeShare));
             const shareNum = Number(t.themeShare ?? 0);
             const barWidth = isNaN(shareNum)
               ? 0
@@ -464,7 +465,7 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
 
     <!-- Operating Branch Tag -->
     <rect x="740" y="55" width="190" height="38" rx="8" fill="#1E293B" stroke="#334155"/>
-    <text x="835" y="79" font-size="14" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(data.operatingBranch ?? "—")}</text>
+    <text x="835" y="79" font-size="14" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(formatCell(data.operatingBranch))}</text>
   </g>
 
   <!-- Module 6 Theme Purity Block -->

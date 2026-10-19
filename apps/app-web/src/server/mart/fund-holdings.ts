@@ -87,7 +87,7 @@ export async function loadFundHoldings(): Promise<FundHoldingsVintage[]> {
   }
   for (const vintage of byFund.values()) {
     const sum = vintage.lines.reduce((total, line) => total + (line.weightPct ? Number(line.weightPct) : 0), 0);
-    vintage.weightSumPct = formatRatio(String(sum)) ?? "0.00";
+    vintage.weightSumPct = formatRatio(sum) ?? "0.00";
   }
   return [...byFund.values()].sort((a, b) => a.fundName.localeCompare(b.fundName));
 }

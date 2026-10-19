@@ -280,7 +280,7 @@ export default async function ResearchOverviewPage() {
 									>
 										{module.output.rows} rows · {module.output.availableRows}{" "}
 										available · latest cutoff{" "}
-										{module.output.latestCutoff ?? "—"}
+										{formatCell(module.output.latestCutoff)}
 									</p>
 								)}
 								<div className="mt-3 flex items-center gap-2">

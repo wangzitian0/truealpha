@@ -91,8 +91,11 @@ export default async function EntityDetailPage({
               </span>
             )}
             {latestRow?.valuationGap && (
-              <span className={`font-mono text-sm font-semibold ${signColor(latestRow.valuationGap)}`}>
-                Valuation Gap ({basisLabel}): {formatSignedRatio(latestRow.valuationGap)}
+              <span
+                className={`font-mono text-sm font-semibold ${signColor(latestRow.valuationGap)}`}
+                title={latestRow.valuationGap}
+              >
+                Valuation Gap ({basisLabel}): {formatCell(formatSignedRatio(latestRow.valuationGap))}
               </span>
             )}
           </div>
@@ -123,27 +126,40 @@ export default async function EntityDetailPage({
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs text-gray-400">Current {basisLabel}</div>
-                  <div className="mt-1 font-mono text-2xl font-bold text-white">
-                    {formatRatio(latestRow?.currentMultiple ?? null) ?? "—"}
+                  <div
+                    className="mt-1 font-mono text-2xl font-bold text-white"
+                    title={latestRow?.currentMultiple ?? undefined}
+                  >
+                    {formatCell(formatRatio(latestRow?.currentMultiple ?? null))}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-400">Target {basisLabel}</div>
-                  <div className="mt-1 font-mono text-2xl font-bold text-gray-300">
-                    {formatRatio(latestRow?.targetMultiple ?? null) ?? "—"}
+                  <div
+                    className="mt-1 font-mono text-2xl font-bold text-gray-300"
+                    title={latestRow?.targetMultiple ?? undefined}
+                  >
+                    {formatCell(formatRatio(latestRow?.targetMultiple ?? null))}
                   </div>
                 </div>
               </div>
               {latestRow?.valuationBasis === "price_to_gross_profit" && (
-                <div className="mt-2 text-xs text-gray-500" data-testid="recorded-price-to-sales">
-                  Current P/S {formatRatio(latestRow.currentPriceToSales) ?? "—"} (recorded; the tier band targets P/GP)
+                <div
+                  className="mt-2 text-xs text-gray-500"
+                  data-testid="recorded-price-to-sales"
+                  title={latestRow.currentPriceToSales ?? undefined}
+                >
+                  Current P/S {formatCell(formatRatio(latestRow.currentPriceToSales))} (recorded; the tier band targets P/GP)
                 </div>
               )}
               <div className="mt-4 border-t border-border/60 pt-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400">Valuation Gap ({basisLabel})</span>
-                  <span className={`font-mono font-bold ${signColor(latestRow?.valuationGap ?? null)}`}>
-                    {formatSignedRatio(latestRow?.valuationGap ?? null) ?? "—"}
+                  <span
+                    className={`font-mono font-bold ${signColor(latestRow?.valuationGap ?? null)}`}
+                    title={latestRow?.valuationGap ?? undefined}
+                  >
+                    {formatCell(formatSignedRatio(latestRow?.valuationGap ?? null))}
                   </span>
                 </div>
               </div>
@@ -160,12 +176,12 @@ export default async function EntityDetailPage({
                     {operatingBranch}
                   </span>
                 ) : (
-                  <span className="text-gray-500 font-mono text-[11px]">—</span>
+                  <span className="text-gray-500 font-mono text-[11px]">{formatCell(null)}</span>
                 )}
               </div>
               <div className="mt-4">
                 {laborLabels.length === 0 ? (
-                  <div className="font-mono text-2xl font-bold text-white">—</div>
+                  <div className="font-mono text-2xl font-bold text-white">{formatCell(null)}</div>
                 ) : (
                   laborLabels.map((label) => (
                     <div key={`${label.metric}:${label.value}`} className="mt-2 first:mt-0">
@@ -226,14 +242,17 @@ export default async function EntityDetailPage({
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs text-gray-400">PEG Ratio</div>
-                  <div className="mt-1 font-mono text-2xl font-bold text-sky-400">
-                    {formatRatio(displayPeg) ?? "—"}
+                  <div
+                    className="mt-1 font-mono text-2xl font-bold text-sky-400"
+                    title={displayPeg ?? undefined}
+                  >
+                    {formatCell(formatRatio(displayPeg))}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-400">PEG Rank</div>
                   <div className="mt-1 font-mono text-2xl font-bold text-gray-300">
-                    {displayPegRank !== null && displayPegRank !== undefined ? `#${displayPegRank}` : "—"}
+                    {displayPegRank !== null && displayPegRank !== undefined ? `#${displayPegRank}` : formatCell(null)}
                   </div>
                 </div>
               </div>
@@ -274,13 +293,21 @@ export default async function EntityDetailPage({
                   <div className="grid grid-cols-3 gap-3">
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Consensus Rating (1–5)</div>
-                      <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m4-consensus-rating">
+                      <div
+                        className="mt-1 font-mono text-xl font-bold text-sky-400"
+                        data-testid="m4-consensus-rating"
+                        title={analystRatings.consensusRating ?? undefined}
+                      >
                         {formatRatio(analystRatings.consensusRating) ?? formatCell(analystRatings.consensusRating)}
                       </div>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Target Price</div>
-                      <div className="mt-1 font-mono text-xl font-bold text-white" data-testid="m4-target-price">
+                      <div
+                        className="mt-1 font-mono text-xl font-bold text-white"
+                        data-testid="m4-target-price"
+                        title={analystRatings.targetPrice ?? undefined}
+                      >
                         {analystRatings.targetPrice
                           ? `$${formatRatio(analystRatings.targetPrice) ?? analystRatings.targetPrice}`
                           : "Not disclosed"}
@@ -312,7 +339,10 @@ export default async function EntityDetailPage({
                         Extractor: <span className="font-mono text-gray-300" data-testid="m4-extractor">{analystRatings.extractor}</span>
                       </span>
                       <span>
-                        Confidence: <span className="font-mono text-gray-300">{formatRatio(analystRatings.confidence) ?? "—"}</span>
+                        Confidence:{" "}
+                        <span className="font-mono text-gray-300" title={analystRatings.confidence ?? undefined}>
+                          {formatCell(formatRatio(analystRatings.confidence))}
+                        </span>
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -359,7 +389,11 @@ export default async function EntityDetailPage({
                   <div className="grid grid-cols-3 gap-3">
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Scenario Exposure Score</div>
-                      <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m3-exposure-score">
+                      <div
+                        className="mt-1 font-mono text-xl font-bold text-sky-400"
+                        data-testid="m3-exposure-score"
+                        title={supplyChainExposure.exposureScore ?? undefined}
+                      >
                         {formatRatio(supplyChainExposure.exposureScore) ?? formatCell(supplyChainExposure.exposureScore)}
                       </div>
                     </div>
@@ -371,7 +405,11 @@ export default async function EntityDetailPage({
                     </div>
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Max Partner Share</div>
-                      <div className="mt-1 font-mono text-xl font-bold text-gray-200" data-testid="m3-max-partner-share">
+                      <div
+                        className="mt-1 font-mono text-xl font-bold text-gray-200"
+                        data-testid="m3-max-partner-share"
+                        title={supplyChainExposure.maxPartnerShare ?? undefined}
+                      >
                         {formatPercentFromFraction(supplyChainExposure.maxPartnerShare) ?? formatCell(supplyChainExposure.maxPartnerShare)}
                       </div>
                     </div>
@@ -392,7 +430,10 @@ export default async function EntityDetailPage({
                         Extractor: <span className="font-mono text-gray-300" data-testid="m3-extractor">{supplyChainExposure.extractor}</span>
                       </span>
                       <span>
-                        Confidence: <span className="font-mono text-gray-300">{formatRatio(supplyChainExposure.confidence) ?? "—"}</span>
+                        Confidence:{" "}
+                        <span className="font-mono text-gray-300" title={supplyChainExposure.confidence ?? undefined}>
+                          {formatCell(formatRatio(supplyChainExposure.confidence))}
+                        </span>
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -450,9 +491,17 @@ export default async function EntityDetailPage({
                         <span className="font-medium text-gray-200">{theme.theme}</span>
                         <div className="flex items-center gap-3 font-mono text-xs">
                           <span className="text-gray-400">
-                            In-theme: {formatUsdMagnitude(theme.inThemeRevenue) ?? "—"} / Consolidated: {formatUsdMagnitude(theme.consolidatedRevenue) ?? "—"} ({theme.segments} segment{theme.segments === 1 ? "" : "s"})
+                            In-theme:{" "}
+                            <span title={theme.inThemeRevenue ?? undefined}>
+                              {formatCell(formatUsdMagnitude(theme.inThemeRevenue))}
+                            </span>{" "}
+                            / Consolidated:{" "}
+                            <span title={theme.consolidatedRevenue ?? undefined}>
+                              {formatCell(formatUsdMagnitude(theme.consolidatedRevenue))}
+                            </span>{" "}
+                            ({theme.segments} segment{theme.segments === 1 ? "" : "s"})
                           </span>
-                          <span className="font-bold text-sky-400">
+                          <span className="font-bold text-sky-400" title={theme.themeShare ?? undefined}>
                             {formatPercentFromFraction(theme.themeShare) ?? "Refused / unclassified"}
                           </span>
                         </div>

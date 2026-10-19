@@ -148,6 +148,77 @@ mock.module("@/server/dashboard", () => ({
       links: [],
     },
   }),
+  loadEntityDetail: async () => ({
+    kind: "ready" as const,
+    data: {
+      issuerId: "issuer:aapl",
+      rows: [
+        {
+          issuerId: "issuer:aapl",
+          cutoffAt: "2026-10-18T00:00:00Z",
+          capitalAdjustedLaborEfficiency: "3375549.33",
+          laborEfficiencyMetric: "gppe",
+          currentPriceToSales: "7.8912",
+          currentMultiple: "14.5678",
+          targetMultiple: "18.2345",
+          valuationBasis: "price_to_gross_profit",
+          tier: "large_model_native",
+          valuationGap: "0.2517",
+          peg: "1.4234",
+          pegRank: 2,
+          pegReasonCodes: [],
+          pegByConvention: {
+            historical_cagr: { peg: "1.4234", pegRank: 2, pegReasonCodes: [] },
+          },
+          availability: "available",
+          traceId: "trace:aapl:2026-10-18",
+        },
+      ],
+      gppeDetail: {
+        gppe: "3375549.33",
+        operatingBranch: "industrial_gppe",
+        capitalAdjustedGrossProfit: "171018000000",
+      },
+      themes: [
+        {
+          themeId: "theme:ai",
+          theme: "AI Infrastructure",
+          themeShare: "0.6250",
+          inThemeRevenue: "125000000000",
+          consolidatedRevenue: "200000000000",
+          segments: 3,
+          unvisitedReason: null,
+        },
+      ],
+      analystRatings: {
+        consensusRating: "4.3456",
+        targetPrice: "245.6789",
+        analystsCount: 38,
+        buyCount: 28,
+        holdCount: 8,
+        sellCount: 2,
+        extractor: "moomoo_consensus_v1",
+        confidence: "0.9123",
+        cutoff: "2026-10-18T00:00:00Z",
+        availabilityStatus: "available",
+        sourceEvidenceStatus: "verified",
+        reasonCodes: [],
+      },
+      supplyChainExposure: {
+        exposureScore: "0.7654",
+        directPartners: 14,
+        maxPartnerShare: "0.3456",
+        suppliersCount: 9,
+        customersCount: 5,
+        extractor: "sec_10k_supply_chain_v1",
+        confidence: "0.8456",
+        cutoff: "2026-10-18T00:00:00Z",
+        availabilityStatus: "available",
+        factorValidationStatus: "accepted",
+        reasonCodes: [],
+      },
+    },
+  }),
 }));
 
 mock.module("@/server/admin/universes", () => ({
@@ -298,6 +369,7 @@ mock.module("@/server/strategy-page", () => ({
 
 mock.module("@/server/mart/theme-purity", () => ({
   classifiedShare: () => "0.8500",
+  unvisitedReasonText: (reason: string) => reason,
   loadThemePurity: async () => [
     {
       themeId: "theme:ai",
@@ -357,6 +429,85 @@ mock.module("@/server/mart/fund-valuation", () => ({
   ],
 }));
 
+const MOCK_BACKTEST_RUN = {
+  run_id: "bt:core:20261018:abcdef0123456789",
+  strategy_key: "large_model_value_v0",
+  strategy_version: "1.0.0",
+  universe_id: "univ:topt:1",
+  start_date: "2021-01-01",
+  end_date: "2026-09-30",
+  price_basis: "split_adjusted_close",
+  claim_ceiling: "research_hypothesis_only",
+  benchmark_symbol: "QQQ",
+  rebalance_frequency: "1Q",
+  fee_bps: 10,
+  slippage_bps: 5,
+  initial_cash: 1000000,
+  final_nav: 2450000,
+  total_return: 1.45,
+  cagr_monthly: 0.18456,
+  benchmark_cagr: 0.12345,
+  sharpe_daily: 1.4256,
+  max_dd_daily: -0.2134,
+  benchmark_max_dd: -0.2876,
+  vol_daily: 0.1987,
+  turnover_monthly: 0.0845,
+  status: "succeeded",
+  limitations_json: [],
+  parameters_json: {
+    universe_mode: "point_in_time",
+    execution_timing: "next_open",
+    dividend_treatment: "price_only",
+  },
+};
+
+mock.module("@/server/mart/backtest-repository", () => ({
+  listBacktestRuns: async () => [MOCK_BACKTEST_RUN],
+  getBacktestRun: async () => MOCK_BACKTEST_RUN,
+  getBacktestValuations: async () => [],
+  getBacktestTrades: async () => [
+    {
+      trade_id: "trade:1",
+      run_id: MOCK_BACKTEST_RUN.run_id,
+      trade_date: "2026-06-30",
+      symbol: "NVDA",
+      side: "BUY" as const,
+      shares: 1234.5678,
+      execution_price: 125.4321,
+      trade_value: 154854.32,
+      weight_after: 0.1548,
+      fee_paid: 15.485,
+    },
+  ],
+}));
+
+mock.module("@/components/backtest-chart", () => ({
+  BacktestChart: () => createElement("div", { "data-testid": "backtest-chart" }, "Chart"),
+}));
+
+mock.module("@/server/documents", () => ({
+  PostgresDocumentsRepository: class {
+    async getDocument(_ctx: unknown, docId: string) {
+      return {
+        documentId: docId,
+        createdAt: "2026-10-18T00:00:00Z",
+      };
+    }
+    async listRevisions() {
+      return [
+        {
+          revisionId: "rev:1",
+          sourceArtifactId: "art:card:1",
+          artifactSha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          artifactByteLength: 184320,
+          artifactContentType: "image/png",
+          createdAt: "2026-10-18T00:05:00Z",
+        },
+      ];
+    }
+  },
+}));
+
 const { default: ComparePage } = await import("../src/app/research/compare/page");
 const { default: AdminUniversesPage } = await import("../src/app/admin/universes/page");
 const { default: AdminOverviewPage } = await import("../src/app/admin/page");
@@ -367,16 +518,24 @@ const { default: ResearchOverviewPage } = await import("../src/app/research/page
 const { default: ThemesPage } = await import("../src/app/research/themes/page");
 const { default: StrategyRunsPage } = await import("../src/app/research/strategy/page");
 const { default: HoldingsPage } = await import("../src/app/research/holdings/page");
+const { default: EntityDetailPage } = await import("../src/app/research/entities/[id]/page");
+const { default: BacktestListPage } = await import("../src/app/research/backtest/page");
+const { default: BacktestDetailPage } = await import("../src/app/research/backtest/[id]/page");
+const { default: DocumentDetailPage } = await import("../src/app/research/library/[id]/page");
 
 // --- AC1: /research/compare formatting parity (rendered SSR component) ---
 {
   assert(formatUsdMagnitude("3375549.33") === "$3.38M", "3375549.33 must format as $3.38M");
+  assert(formatUsdMagnitude(3375549.33) === "$3.38M", "numeric 3375549.33 must format as $3.38M");
   assert(formatUsdMagnitude("1091637.30") === "$1.09M", "1091637.30 must format as $1.09M");
   assert(formatUsdMagnitude("76328.64") === "$76.3K", "76328.64 must format as $76.3K");
   assert(formatRatio("1.3344") === "1.33", "1.3344 must format as 1.33");
+  assert(formatRatio(1.3344) === "1.33", "numeric 1.3344 must format as 1.33");
   assert(formatRatio("5.5117") === "5.51", "5.5117 must format as 5.51");
   assert(formatSignedRatio("-0.4992") === "−0.50", "-0.4992 must format as −0.50");
+  assert(formatSignedRatio(-0.4992) === "−0.50", "numeric -0.4992 must format as −0.50");
   assert(signColor("-0.4992") === "text-red-400", "negative valuationGap must use text-red-400");
+  assert(signColor(-0.4992) === "text-red-400", "numeric negative valuationGap must use text-red-400");
   assert(signColor("0.4200") === "text-emerald-400", "positive valuationGap must use text-emerald-400");
   assert(formatCell(null) === "—", "formatCell(null) must render em-dash");
   assert(formatShortSha("abcdef0123456789") === "abcdef012345…", "formatShortSha must truncate to 12 chars");
@@ -405,6 +564,7 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(formatNumberMagnitude("706413000000") === "706.41B", "706413000000 must format as 706.41B");
   assert(formatNumberMagnitude("7933746241") === "7.93B", "7933746241 must format as 7.93B");
   assert(formatNumberMagnitude("110000") === "110,000", "110000 must format with thousand separator");
+  assert(formatNumberMagnitude(184320) === "184,320", "numeric 184320 must format with thousand separator");
   assert(formatNumberMagnitude("55.5") === "55.5", "small decimal prices must stay exact");
 
   const universesHtml = renderToStaticMarkup(await AdminUniversesPage());
@@ -498,6 +658,10 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     "entityLabel must delegate unmapped CIK fallback to formatIssuerLabel",
   );
   assert(
+    entityLabel("company:cik:0000104169", displayMap) === "CIK 0000104169",
+    "entityLabel must delegate unmapped company:cik:* fallback to formatIssuerLabel",
+  );
+  assert(
     entityLabel("issuer:lei:HWUPKR0MPOU8FGXBT394", displayMap) === "LEI HWUPKR0MPOU8…",
     "entityLabel must delegate unmapped LEI fallback to formatIssuerLabel",
   );
@@ -518,6 +682,10 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(
     formatIssuerLabel("issuer:cik:0000104169") === "CIK 0000104169",
     "unmapped CIK issuer must format as CIK 0000104169",
+  );
+  assert(
+    formatIssuerLabel("company:cik:0000104169") === "CIK 0000104169",
+    "unmapped company:cik:* issuer must format as CIK 0000104169",
   );
   assert(
     formatIssuerLabel("issuer:cik:0000104169", "WMT · WALMART INC") === "WMT · WALMART INC",
@@ -557,7 +725,7 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   );
 }
 
-// --- AC4: Whitespace hygiene and title parity on /research, /research/themes, /research/strategy, and /research/holdings ---
+// --- AC4: Whitespace hygiene and title parity on /research, /research/themes, /research/strategy, /research/holdings, /research/entities/[id], /research/backtest, /research/backtest/[id], and /research/library/[id] ---
 {
   const researchHtml = renderToStaticMarkup(await ResearchOverviewPage());
   const researchText = visibleText(researchHtml);
@@ -624,9 +792,73 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     holdingsHtml.includes(">8.12<") && holdingsHtml.includes('title="8.1234"'),
     "/research/holdings must render formatted currentPs 8.12 with raw title",
   );
+
+  const entityHtml = renderToStaticMarkup(
+    await EntityDetailPage({ params: Promise.resolve({ id: "issuer%3Aaapl" }) }),
+  );
+  assert(
+    entityHtml.includes(">14.57<") &&
+      entityHtml.includes('title="14.5678"') &&
+      entityHtml.includes(">18.23<") &&
+      entityHtml.includes('title="18.2345"') &&
+      entityHtml.includes(">+0.25<") &&
+      entityHtml.includes('title="0.2517"') &&
+      entityHtml.includes(">1.42<") &&
+      entityHtml.includes('title="1.4234"'),
+    `EntityDetailPage must render formatted card metrics with raw values in title attributes: ${entityHtml}`,
+  );
+  assert(
+    entityHtml.includes('title="4.3456"') &&
+      entityHtml.includes('title="245.6789"') &&
+      entityHtml.includes('title="0.9123"') &&
+      entityHtml.includes('title="0.7654"') &&
+      entityHtml.includes('title="0.3456"') &&
+      entityHtml.includes('title="125000000000"') &&
+      entityHtml.includes('title="200000000000"'),
+    `EntityDetailPage must preserve raw M3, M4, and M6 values in title attributes: ${entityHtml}`,
+  );
+
+  const backtestListHtml = renderToStaticMarkup(await BacktestListPage());
+  assert(
+    backtestListHtml.includes(">18.5%<") &&
+      backtestListHtml.includes('title="0.18456"') &&
+      backtestListHtml.includes(">1.43<") &&
+      backtestListHtml.includes('title="1.4256"') &&
+      backtestListHtml.includes(">0.08<") &&
+      backtestListHtml.includes('title="0.0845"'),
+    `BacktestListPage must format CAGR, Sharpe, and Turnover via format.ts with raw titles: ${backtestListHtml}`,
+  );
+
+  const backtestDetailHtml = renderToStaticMarkup(
+    await BacktestDetailPage({ params: Promise.resolve({ id: MOCK_BACKTEST_RUN.run_id }) }),
+  );
+  assert(
+    backtestDetailHtml.includes(">1234.57<") &&
+      backtestDetailHtml.includes('title="1234.5678"') &&
+      backtestDetailHtml.includes(">$125.43<") &&
+      backtestDetailHtml.includes('title="125.4321"') &&
+      backtestDetailHtml.includes(">$154.9K<") &&
+      backtestDetailHtml.includes('title="154854.32"') &&
+      backtestDetailHtml.includes(">15.5%<") &&
+      backtestDetailHtml.includes('title="0.1548"') &&
+      backtestDetailHtml.includes(">$15.48<") &&
+      backtestDetailHtml.includes('title="15.485"'),
+    `BacktestDetailPage must format rebalance trade rows via format.ts with raw titles: ${backtestDetailHtml}`,
+  );
+
+  const documentDetailHtml = renderToStaticMarkup(
+    await DocumentDetailPage({ params: Promise.resolve({ id: "doc:card:1" }) }),
+  );
+  assert(
+    documentDetailHtml.includes(">abcdef012345…<") &&
+      documentDetailHtml.includes('title="abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"') &&
+      documentDetailHtml.includes(">184,320<") &&
+      documentDetailHtml.includes('title="184320"'),
+    `DocumentDetailPage must format artifactSha256 and artifactByteLength with raw titles: ${documentDetailHtml}`,
+  );
 }
 
-// --- SSOT static guard: no duplicate local formatting functions in Root D files ---
+// --- SSOT static guard: no duplicate local formatting functions or inline em-dash fallbacks in Root D files ---
 {
   const ROOT_D_FILES = [
     "src/app/research/compare/page.tsx",
@@ -635,13 +867,16 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     "src/app/admin/quality/page.tsx",
     "src/app/admin/universes/page.tsx",
     "src/app/admin/page.tsx",
+    "src/app/admin/datahub/page.tsx",
     "src/app/research/themes/page.tsx",
     "src/app/research/trace/page.tsx",
     "src/app/research/page.tsx",
     "src/app/research/strategy/page.tsx",
     "src/app/research/holdings/page.tsx",
+    "src/app/research/coverage/page.tsx",
     "src/app/research/backtest/page.tsx",
     "src/app/research/backtest/[id]/page.tsx",
+    "src/app/research/library/[id]/page.tsx",
     "src/components/trace-inputs-table.tsx",
     "src/components/provenance-cell.tsx",
     "src/components/app-chrome.tsx",
@@ -651,16 +886,20 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   for (const relativePath of ROOT_D_FILES) {
     const source = readAppFile(relativePath);
     assert(
-      !/function\s+cell\s*\(/.test(source),
+      !/(?:function\s+cell\s*\(|(?:const|let|var)\s+cell\s*=\s*\()/.test(source),
       `${relativePath} must not define a local cell() helper; import formatCell from @/client/format`,
     );
     assert(
-      !/function\s+(?:shortSha|shorten)\s*\(/.test(source),
+      !/(?:function\s+(?:shortSha|shorten)\s*\(|(?:const|let|var)\s+(?:shortSha|shorten)\s*=\s*\()/.test(source),
       `${relativePath} must not define a local shortSha()/shorten() helper; import formatShortSha from @/client/format`,
     );
     assert(
-      !/function\s+(?:formatRatio|formatPct|pct)\s*\(/.test(source),
-      `${relativePath} must not define a local formatRatio/formatPct/pct helper; import from @/client/format`,
+      !/(?:function\s+(?:formatRatio|formatPct|pct|percent)\s*\(|(?:const|let|var)\s+(?:formatRatio|formatPct|pct|percent)\s*=\s*\()/.test(source),
+      `${relativePath} must not define a local formatRatio/formatPct/pct/percent helper; import from @/client/format`,
+    );
+    assert(
+      !/\?\?\s*["'`]—["'`]/.test(source),
+      `${relativePath} must not use inline ?? "—" fallback; use formatCell(...) from @/client/format`,
     );
     assert(
       !/\.slice\(\s*0\s*,\s*12\s*\)/.test(source),
@@ -680,11 +919,23 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     );
   }
 
-  for (const martLoader of ["src/server/mart/fund-valuation.ts", "src/server/mart/fund-holdings.ts"]) {
-    const source = readAppFile(martLoader);
+  for (const serverModule of [
+    "src/server/mart/fund-valuation.ts",
+    "src/server/mart/fund-holdings.ts",
+    "src/server/cards/xhs-card.ts",
+  ]) {
+    const source = readAppFile(serverModule);
     assert(
       !/\.toFixed\s*\(\s*2\s*\)/.test(source),
-      `${martLoader} must not inline .toFixed(2); use formatRatio from @/client/format`,
+      `${serverModule} must not inline .toFixed(2); use formatRatio from @/client/format`,
+    );
+    assert(
+      !/(?:function\s+(?:formatRatio|formatPct|pct|percent)\s*\(|(?:const|let|var)\s+(?:formatRatio|formatPct|pct|percent)\s*=\s*\()/.test(source),
+      `${serverModule} must not define a local pct/percent/formatRatio helper; import from @/client/format`,
+    );
+    assert(
+      !/\?\?\s*["'`]—["'`]/.test(source),
+      `${serverModule} must not use inline ?? "—" fallback; use formatCell(...) from @/client/format`,
     );
   }
 }
