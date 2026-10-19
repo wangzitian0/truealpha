@@ -329,6 +329,14 @@ def test_app_web_s3_contract_matches_python_runtime_settings() -> None:
         int_defaults["S3_CONNECT_TIMEOUT_SECONDS"] == RuntimeSettings.model_fields["s3_connect_timeout_seconds"].default
     )
 
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    llm_compose = compose["services"]["llm-service"]
+    llm_compose_env = llm_compose.get("environment") or {}
+    assert not any(str(key).startswith("S3_") for key in llm_compose_env), llm_compose_env
+    assert "minio-init" not in (llm_compose.get("depends_on") or {})
+
 
 def test_apply_migrations_sh_defaults_match_llm_service_settings() -> None:
     """#1375 (G3), #1389 (F2): migration timeout precedence and defaults in db/apply_migrations.sh
