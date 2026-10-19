@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 import pytest
