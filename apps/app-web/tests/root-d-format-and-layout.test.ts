@@ -3,17 +3,17 @@
  * across UI tables and components.
  *
  * Standing checks for AC1–AC4 and SSOT invariants:
- *   AC1: /research/compare formats capitalAdjustedLaborEfficiency with formatUsdMagnitude,
+ *   AC1: /research/compare renders capitalAdjustedLaborEfficiency with formatUsdMagnitude,
  *        currentPriceToSales/currentMultiple/confidence with formatRatio, and valuationGap
- *        with formatSignedRatio and signColor.
+ *        with formatSignedRatio and signColor (with raw strings in title attributes).
  *   AC2: Market cap values on /admin/universes and monetary/share counts in TraceInputsTable
  *        render human-readable formatted numbers (with exact raw values preserved in title).
- *   AC3: /admin/quality, /research/trace, and AppChrome display human-readable ticker,
- *        issuer, and principal labels while preserving raw IDs in title or <code> metadata.
- *   AC4: /research and /research/themes include explicit whitespace around inline <code>
- *        and badge spans so text never contains "frommart.", "BRK.Bmissing_", or "available(".
- *   SSOT: No duplicate local `function cell(` or `function shortSha(` definitions or inline
- *        `Number(row.confidence).toFixed` calls across Root D surfaces.
+ *   AC3: /admin/quality, /research/trace, and AppChrome render human-readable ticker,
+ *        issuer, and principal labels while preserving raw IDs in title or <code data-evidence="true">.
+ *   AC4: /research, /research/themes, and /research/strategy include explicit whitespace
+ *        around inline <code> and badge spans so visible text never concatenates tokens.
+ *   SSOT: No duplicate local `function cell(`, `function shortSha(`, `function formatRatio(`,
+ *        or `function formatPct(` definitions in Root D surfaces.
  *
  * Run standalone: `bun run tests/root-d-format-and-layout.test.ts`.
  */
@@ -38,8 +38,17 @@ import {
 import { TraceInputsTable } from "../src/components/trace-inputs-table";
 import { traceInputsFromLineage } from "../src/server/mart/research-read";
 
+const bunTestModuleId = "bun:test";
+const { mock } = (await import(bunTestModuleId)) as {
+  mock: { module: (id: string, factory: () => Record<string, unknown>) => void };
+};
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function visibleText(html: string): string {
+  return html.replace(/<[^>]*>/g, "");
 }
 
 const APP_ROOT = new URL("../", import.meta.url).pathname;
@@ -48,7 +57,276 @@ function readAppFile(relativePath: string): string {
   return readFileSync(join(APP_ROOT, relativePath), "utf8");
 }
 
-// --- AC1: /research/compare formatting parity ---
+// --- Mock server loaders to render async Server Components directly via renderToStaticMarkup ---
+const MOCK_ADMIN_PRINCIPAL = {
+  principalKind: "administrator" as const,
+  context: {
+    contextId: "ctx:root-d",
+    principalId: "principal:e2e:admin",
+    tenantId: "tenant:truealpha",
+    sessionId: "sess:root-d",
+    authenticationMethod: "session" as const,
+    issuedAt: "2026-10-19T00:00:00Z",
+    expiresAt: "2026-10-19T12:00:00Z",
+  },
+};
+
+mock.module("@/server/auth/request-context", () => ({
+  getServerPrincipal: async () => MOCK_ADMIN_PRINCIPAL,
+}));
+
+mock.module("@/components/sign-out-button", () => ({
+  SignOutButton: () => createElement("button", { type: "button" }, "Sign out"),
+}));
+
+mock.module("@/components/card-export-button", () => ({
+  CardExportButton: () => createElement("button", { type: "button" }, "Export Card"),
+}));
+
+mock.module("@/server/mart/entity-resolution", () => ({
+  loadEntityDisplayMap: async () =>
+    new Map([
+      ["issuer:cik:0000104169", { ticker: "WMT", name: "WALMART INC", label: "WMT · WALMART INC" }],
+      ["issuer:brk", { ticker: "BRK.B", name: "BERKSHIRE HATHAWAY", label: "BRK.B" }],
+      ["issuer:aapl", { ticker: "AAPL", name: "APPLE INC", label: "AAPL · APPLE INC" }],
+    ]),
+  entityLabel: (id: string, map: Map<string, { label: string }>) => map.get(id)?.label ?? id,
+}));
+
+mock.module("@/server/dashboard", () => ({
+  loadComparison: async () => ({
+    kind: "ready" as const,
+    data: {
+      cutoffAt: "2026-10-18T00:00:00Z",
+      page: { total: 1, hasMore: false, nextCursor: null },
+      rows: [
+        {
+          issuerId: "issuer:aapl",
+          capitalAdjustedLaborEfficiency: "3375549.33",
+          laborEfficiencyMetric: "gppe",
+          currentPriceToSales: "1.3344",
+          currentMultiple: "5.5117",
+          valuationBasis: "price_to_gross_profit",
+          tier: "large_model_native",
+          valuationGap: "-0.4992",
+          confidence: "0.8812",
+          availability: "available",
+        },
+      ],
+    },
+  }),
+  loadOverview: async () => ({
+    kind: "ready" as const,
+    data: {
+      run: {
+        strategyRunId: "run:overview-1",
+        executedAt: "2026-10-18T01:00:00Z",
+        source: "mart.strategy_runs",
+      },
+      latestCutoff: "2026-10-18T00:00:00Z",
+      modules: [],
+    },
+  }),
+  loadTrace: async () => ({
+    kind: "ready" as const,
+    data: {
+      traceId: "trace:wmt:2026-10-18",
+      strategyId: "large_model_value_v0",
+      source: "mart",
+      issuerId: "issuer:cik:0000104169",
+      cutoffAt: "2026-10-18T00:00:00Z",
+      governed: true,
+      lineageResultId: "topt-core-result:wmt",
+      listings: [],
+      links: [],
+    },
+  }),
+}));
+
+mock.module("@/server/admin/universes", () => ({
+  loadUniverses: async () => ({
+    heads: [
+      {
+        kind: "topt",
+        universe_id: "univ:topt:1",
+        sequence: 1,
+        instrument_count: 1,
+        mapping_sha256: "abcdef0123456789abcdef0123456789",
+        advanced_at: "2026-10-18T00:00:00Z",
+        note: "initial",
+      },
+    ],
+    members: {
+      topt: [
+        {
+          ticker: "NVDA",
+          company_name: "NVIDIA CORP",
+          cik: null,
+          figi: "BBG000BBJQV0",
+          market_cap: "5525648000000",
+          as_of: "2026-10-18",
+          source: "sec",
+          fetch_sha256: "1234567890abcdef1234567890abcdef",
+          object_uri: "s3://raw/nvda.json",
+        },
+      ],
+    },
+    history: [],
+  }),
+}));
+
+mock.module("@/server/topt-quality", () => ({
+  captureAvailableCount: () => 1,
+  loadToptQuality: async () => ({
+    kind: "ready" as const,
+    data: {
+      run_id: "run:topt:1",
+      requested_count: 1,
+      cells: [
+        {
+          listing_id: "listing:xnas:aapl",
+          availability: "available",
+          gppe: "1091637.30",
+          confidence: "0.9123",
+        },
+      ],
+      quality: { availability: "1.0000" },
+    },
+  }),
+}));
+
+mock.module("@/server/admin/funnel", () => ({
+  loadQualityFunnel: async () => ({ kind: "empty" as const }),
+}));
+
+mock.module("@/server/admin/ops", () => ({
+  loadOpsOverview: async () => ({ kind: "ready" as const, data: { quotaToday: [] } }),
+}));
+
+mock.module("@/server/strategy-page", () => ({
+  loadStrategyRunPage: async () => ({
+    kind: "ready" as const,
+    report: {
+      strategy_id: "large_model_value_v0",
+      source: "mart",
+      corpus_sha256: "deadbeefcafe1234",
+      governed: true,
+      golden_mismatches: ["mismatch-1"],
+      definition: {
+        version: "1.0.0",
+        review_state: "reviewed" as const,
+        content_sha256: "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803",
+      },
+      decisions: [
+        {
+          issuer_id: "issuer:aapl",
+          cutoff_at: "2026-10-18T00:00:00Z",
+          outcome: "selected" as const,
+          exclusion_reason: null,
+          tier: "large_model_native",
+          valuation_basis: "price_to_gross_profit" as const,
+          current_price_to_sales: "8.1234",
+          current_price_to_gross_profit: "14.5678",
+          target_price_to_sales: "10.0000",
+          target_price_to_gross_profit: "18.0000",
+          valuation_gap: "0.2356",
+          confidence: "0.9234",
+          rank: 1,
+          target_weight: "0.5000",
+        },
+        {
+          issuer_id: "issuer:brk",
+          cutoff_at: "2026-10-18T00:00:00Z",
+          outcome: "excluded" as const,
+          exclusion_reason: "missing_gross_profit_fact",
+          tier: null,
+          valuation_basis: "price_to_gross_profit" as const,
+          current_price_to_sales: null,
+          current_price_to_gross_profit: null,
+          target_price_to_sales: null,
+          target_price_to_gross_profit: null,
+          valuation_gap: null,
+          confidence: null,
+          rank: null,
+          target_weight: null,
+        },
+      ],
+    },
+  }),
+}));
+
+mock.module("@/server/mart/theme-purity", () => ({
+  classifiedShare: () => "0.8500",
+  loadThemePurity: async () => [
+    {
+      themeId: "theme:ai",
+      theme: "Large Model Value",
+      definitionVersion: "1.0.0",
+      definitionSha256: "abcdef0123456789abcdef0123456789",
+      runId: "run:theme:1",
+      cutoff: "2026-10-18",
+      rows: [
+        {
+          issuerId: "issuer:aapl",
+          themeShare: "0.6250",
+          inThemeRevenue: "125000000000",
+          consolidatedRevenue: "200000000000",
+          segments: 3,
+          periodEnd: "2026-09-30",
+          confidence: "0.8765",
+          availabilityStatus: "available",
+          extractor: "sec-xbrl",
+          reasonCodes: ["unclassified_revenue"],
+        },
+      ],
+    },
+  ],
+}));
+
+mock.module("@/server/mart/fund-valuation", () => ({
+  loadFundValuation: async () => [
+    {
+      fundId: "fund:brk",
+      fundName: "Berkshire Hathaway",
+      reportPeriod: "2026-06-30",
+      totalWeightPct: "100.00",
+      resolvedWeightPct: "95.00",
+      valuedWeightPct: "90.00",
+      weightedGap: "0.1234",
+      weightedGapBasis: "price_to_gross_profit" as const,
+      reasonCodes: [],
+      availabilityStatus: "available",
+      sourceEvidenceStatus: "verified",
+      factorValidationStatus: "accepted",
+      runId: "run:fund:12345678901234567890",
+      lines: [
+        {
+          holdingName: "Apple Inc",
+          ticker: "AAPL",
+          weightPct: "25.4321",
+          currentPs: "8.1234",
+          currentPgp: "14.5678",
+          targetPsMidpoint: null,
+          targetPgpMidpoint: "18.0000",
+          valuationGap: "0.2356",
+          tier: "large_model_native",
+        },
+      ],
+    },
+  ],
+}));
+
+const { default: ComparePage } = await import("../src/app/research/compare/page");
+const { default: AdminUniversesPage } = await import("../src/app/admin/universes/page");
+const { default: ToptQualityPage } = await import("../src/app/admin/quality/page");
+const { default: TracePage } = await import("../src/app/research/trace/page");
+const { AppChrome } = await import("../src/components/app-chrome");
+const { default: ResearchOverviewPage } = await import("../src/app/research/page");
+const { default: ThemesPage } = await import("../src/app/research/themes/page");
+const { default: StrategyRunsPage } = await import("../src/app/research/strategy/page");
+const { default: HoldingsPage } = await import("../src/app/research/holdings/page");
+
+// --- AC1: /research/compare formatting parity (rendered SSR component) ---
 {
   assert(formatUsdMagnitude("3375549.33") === "$3.38M", "3375549.33 must format as $3.38M");
   assert(formatUsdMagnitude("1091637.30") === "$1.09M", "1091637.30 must format as $1.09M");
@@ -61,36 +339,19 @@ function readAppFile(relativePath: string): string {
   assert(formatCell(null) === "—", "formatCell(null) must render em-dash");
   assert(formatShortSha("abcdef0123456789") === "abcdef012345…", "formatShortSha must truncate to 12 chars");
 
-  const compareSource = readAppFile("src/app/research/compare/page.tsx");
+  const compareHtml = renderToStaticMarkup(await ComparePage({ searchParams: Promise.resolve({}) }));
+  assert(compareHtml.includes("$3.38M"), `ComparePage must render $3.38M: ${compareHtml}`);
+  assert(compareHtml.includes('title="3375549.33"'), "ComparePage must preserve raw 3375549.33 in title");
+  assert(compareHtml.includes(">1.33<") && compareHtml.includes('title="1.3344"'), "ComparePage must render 1.33 with raw title");
+  assert(compareHtml.includes(">5.51<") && compareHtml.includes('title="5.5117"'), "ComparePage must render 5.51 with raw title");
   assert(
-    compareSource.includes("formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))"),
-    "/research/compare must format capitalAdjustedLaborEfficiency with formatUsdMagnitude",
+    compareHtml.includes(">−0.50<") && compareHtml.includes("text-red-400") && compareHtml.includes('title="-0.4992"'),
+    "ComparePage must render signed valuationGap −0.50 with text-red-400 and raw title",
   );
-  assert(
-    compareSource.includes("formatCell(formatRatio(row.currentPriceToSales))"),
-    "/research/compare must format currentPriceToSales with formatRatio",
-  );
-  assert(
-    compareSource.includes("formatCell(formatRatio(row.currentMultiple ?? null))"),
-    "/research/compare must format currentMultiple with formatRatio",
-  );
-  assert(
-    compareSource.includes("formatCell(formatSignedRatio(row.valuationGap))") &&
-      compareSource.includes("signColor(row.valuationGap)"),
-    "/research/compare must format valuationGap with formatSignedRatio and signColor",
-  );
-  assert(
-    compareSource.includes("formatCell(formatRatio(row.confidence))"),
-    "/research/compare must format confidence with formatRatio",
-  );
-  assert(
-    compareSource.includes("title={row.capitalAdjustedLaborEfficiency ?? undefined}") &&
-      compareSource.includes("title={row.valuationGap ?? undefined}"),
-    "/research/compare must preserve raw numeric strings in title attributes",
-  );
+  assert(compareHtml.includes(">0.88<") && compareHtml.includes('title="0.8812"'), "ComparePage must render 0.88 with raw title");
 }
 
-// --- AC2: /admin/universes and TraceInputsTable number formatting ---
+// --- AC2: /admin/universes and TraceInputsTable number formatting (rendered SSR components) ---
 {
   assert(formatUsdMagnitude("5525648000000") === "$5.53T", "5525648000000 must format as $5.53T");
   assert(formatUsdMagnitude("4912984755200") === "$4.91T", "4912984755200 must format as $4.91T");
@@ -100,12 +361,10 @@ function readAppFile(relativePath: string): string {
   assert(formatNumberMagnitude("110000") === "110,000", "110000 must format with thousand separator");
   assert(formatNumberMagnitude("55.5") === "55.5", "small decimal prices must stay exact");
 
-  const universesSource = readAppFile("src/app/admin/universes/page.tsx");
-  assert(
-    universesSource.includes("formatUsdMagnitude(member.market_cap)") &&
-      universesSource.includes("title={member.market_cap ?? undefined}"),
-    "/admin/universes must format market_cap with formatUsdMagnitude and keep raw value in title",
-  );
+  const universesHtml = renderToStaticMarkup(await AdminUniversesPage());
+  assert(universesHtml.includes(">$5.53T<"), `AdminUniversesPage must render $5.53T: ${universesHtml}`);
+  assert(universesHtml.includes('title="5525648000000"'), "AdminUniversesPage must preserve raw 5525648000000 in title");
+  assert(universesHtml.includes("abcdef012345…"), "AdminUniversesPage must render truncated mapping sha256");
 
   const uuidListing = "3dc96dda-763e-5379-bf95-2f729b3ed6da";
   const lineage = [
@@ -139,7 +398,7 @@ function readAppFile(relativePath: string): string {
   assert(html.includes("Listing: Listing #3dc96dda"), "TraceInputsTable must render human-readable UUID listing label");
 }
 
-// --- AC3: Human-readable labels on /admin/quality, /research/trace, and AppChrome ---
+// --- AC3: Human-readable labels on /admin/quality, /research/trace, and AppChrome (rendered SSR components) ---
 {
   assert(formatListingLabel("listing:xnas:aapl") === "AAPL (XNAS)", "listing:xnas:aapl must format as AAPL (XNAS)");
   assert(
@@ -165,47 +424,77 @@ function readAppFile(relativePath: string): string {
     "principal:friend-alice must format as friend-alice",
   );
 
-  const qualitySource = readAppFile("src/app/admin/quality/page.tsx");
+  const qualityHtml = renderToStaticMarkup(await ToptQualityPage());
+  assert(qualityHtml.includes(">AAPL (XNAS)<"), `ToptQualityPage must render AAPL (XNAS): ${qualityHtml}`);
+  assert(qualityHtml.includes('title="listing:xnas:aapl"'), "ToptQualityPage must preserve listing:xnas:aapl in title");
   assert(
-    qualitySource.includes("formatListingLabel(row.listing_id)") && qualitySource.includes("title={row.listing_id}"),
-    "/admin/quality must render formatListingLabel(row.listing_id) and preserve raw listing_id in title",
+    qualityHtml.includes('data-evidence="true"') && qualityHtml.includes(">listing:xnas:aapl</code>"),
+    "ToptQualityPage must mark raw listing_id code badge with data-evidence=\"true\"",
   );
 
-  const traceSource = readAppFile("src/app/research/trace/page.tsx");
+  const traceHtml = renderToStaticMarkup(
+    await TracePage({ searchParams: Promise.resolve({ issuer: "issuer:cik:0000104169", cutoff: "2026-10-18T00:00:00Z" }) }),
+  );
+  assert(traceHtml.includes(">WMT · WALMART INC<"), `TracePage must render resolved WMT · WALMART INC: ${traceHtml}`);
   assert(
-    traceSource.includes("formatIssuerLabel(state.data.issuerId, entityLabel(state.data.issuerId, names))") &&
-      traceSource.includes('data-evidence="true"'),
-    "/research/trace must display resolved issuer label and mark raw ID code badge with data-evidence",
+    traceHtml.includes('data-evidence="true"') && traceHtml.includes(">issuer:cik:0000104169</code>"),
+    "TracePage must mark raw issuerId code badge with data-evidence=\"true\"",
   );
 
-  const chromeSource = readAppFile("src/components/app-chrome.tsx");
+  const chromeElement = await AppChrome();
+  assert(chromeElement !== null, "AppChrome must render for authenticated principal");
+  const chromeHtml = renderToStaticMarkup(chromeElement);
+  assert(chromeHtml.includes(">admin<"), `AppChrome must render formatted principal label 'admin': ${chromeHtml}`);
   assert(
-    chromeSource.includes("formatPrincipalLabel(principal.context.principalId)") &&
-      chromeSource.includes("title={`${principal.context.principalId} · ${principal.context.tenantId}`}"),
-    "AppChrome must render formatPrincipalLabel and preserve raw principalId in title",
+    chromeHtml.includes('title="principal:e2e:admin · tenant:truealpha"'),
+    "AppChrome must preserve full principalId and tenantId in title",
   );
 }
 
-// --- AC4: Whitespace hygiene on /research and /research/themes ---
+// --- AC4: Whitespace hygiene on /research, /research/themes, and /research/strategy (rendered SSR visibleText) ---
 {
-  const researchSource = readAppFile("src/app/research/page.tsx");
+  const researchHtml = renderToStaticMarkup(await ResearchOverviewPage());
+  const researchText = visibleText(researchHtml);
   assert(
-    /\{\s*" "\s*\}\s*<span\s+data-testid="served-run-age"/.test(researchSource),
-    "/research must include explicit whitespace before the served-run-age badge",
+    !researchText.includes("one.stale") && !/one\.\d+\s*h ago/.test(researchText),
+    `/research visibleText must separate period and served-run-age badge with a space: ${researchText}`,
   );
   assert(
-    /\{\s*" "\s*\}\s*<code[^>]*>\s*\{item\.exclusion_reason\}/.test(researchSource),
-    "/research must include explicit whitespace before the exclusion_reason code badge",
+    researchText.includes("BRK.B missing_gross_profit_fact") && !researchText.includes("BRK.Bmissing_"),
+    `/research visibleText must separate ticker and exclusion_reason badge with a space: ${researchText}`,
   );
 
-  const themesSource = readAppFile("src/app/research/themes/page.tsx");
+  const themesHtml = renderToStaticMarkup(await ThemesPage());
+  const themesText = visibleText(themesHtml);
   assert(
-    /read from\{" "\}\s*<code[^>]*>mart\.issuer_theme_purity<\/code>/.test(themesSource),
-    "/research/themes must include explicit whitespace before <code>mart.issuer_theme_purity</code>",
+    themesText.includes("read from mart.issuer_theme_purity") && !themesText.includes("frommart."),
+    `/research/themes visibleText must separate 'read from' and 'mart.issuer_theme_purity': ${themesText}`,
   );
   assert(
-    /\{\s*" "\s*\}\s*<span[^>]*>\(\{row\.reasonCodes\.join\(", "\)\}\)<\/span>/.test(themesSource),
-    "/research/themes must include explicit whitespace before the reasonCodes span",
+    themesText.includes("available (unclassified_revenue)") && !themesText.includes("available("),
+    `/research/themes visibleText must separate status and reason codes with a space: ${themesText}`,
+  );
+  assert(
+    themesHtml.includes(">0.88<") && themesHtml.includes('title="0.8765"'),
+    "/research/themes must format confidence with formatRatio and preserve raw confidence in title",
+  );
+
+  const strategyHtml = renderToStaticMarkup(await StrategyRunsPage());
+  const strategyText = visibleText(strategyHtml);
+  assert(
+    strategyText.includes("Corpus deadbeefcafe1234. 1 golden mismatch(es).") &&
+      !strategyText.includes("deadbeefcafe1234.1"),
+    `/research/strategy visibleText must separate corpus_sha256 period and golden_mismatches badge: ${strategyText}`,
+  );
+
+  const holdingsHtml = renderToStaticMarkup(await HoldingsPage());
+  assert(
+    holdingsHtml.includes(">25.43%<") && holdingsHtml.includes('title="25.4321"'),
+    `/research/holdings must render formatted weightPct 25.43% with raw title: ${holdingsHtml}`,
+  );
+  assert(
+    holdingsHtml.includes(">8.12<") && holdingsHtml.includes('title="8.1234"'),
+    "/research/holdings must render formatted currentPs 8.12 with raw title",
   );
 }
 
@@ -218,6 +507,8 @@ function readAppFile(relativePath: string): string {
     "src/app/research/themes/page.tsx",
     "src/app/research/trace/page.tsx",
     "src/app/research/page.tsx",
+    "src/app/research/strategy/page.tsx",
+    "src/app/research/holdings/page.tsx",
     "src/components/trace-inputs-table.tsx",
     "src/components/app-chrome.tsx",
   ];
@@ -231,6 +522,10 @@ function readAppFile(relativePath: string): string {
     assert(
       !/function\s+shortSha\s*\(/.test(source),
       `${relativePath} must not define a local shortSha() helper; import formatShortSha from @/client/format`,
+    );
+    assert(
+      !/function\s+format(?:Ratio|Pct)\s*\(/.test(source),
+      `${relativePath} must not define a local formatRatio/formatPct helper; import from @/client/format`,
     );
     assert(
       !/Number\s*\(\s*row\.confidence\s*\)\s*\.toFixed/.test(source),

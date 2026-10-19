@@ -59,9 +59,9 @@ export default async function AdminUniversesPage() {
                     <td className="px-3 py-1.5 font-mono">{member.ticker}</td>
                     <td className="px-3 py-1.5">{member.company_name}</td>
                     <td className="px-3 py-1.5 font-mono">{member.cik ?? "—"}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs">{ formatCell(member.figi) }</td>
+                    <td className="px-3 py-1.5 font-mono text-xs">{formatCell(member.figi)}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums" title={member.market_cap ?? undefined}>
-                      {formatUsdMagnitude(member.market_cap) ?? formatCell(member.market_cap)}
+                      {formatCell(formatUsdMagnitude(member.market_cap))}
                     </td>
                     <td className="px-3 py-1.5">{member.as_of}</td>
                     <td className="px-3 py-1.5 font-mono text-xs" title={member.object_uri ?? ""}>
