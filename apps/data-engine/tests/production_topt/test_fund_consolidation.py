@@ -11,7 +11,7 @@ Two halves, because a passing factor test proves the arithmetic and not the wiri
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import dagster as dg
@@ -326,6 +326,71 @@ def test_materialize_supports_legacy_string_listing_id(connection) -> None:
     assert fund.valued_weight == Decimal("70")
     assert fund.weighted_valuation_gap == Decimal("-0.15")
     assert fund.result.confidence == Decimal("0.90")
+
+
+def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
+    """Two share-class holdings of the same issuer (GOOGL and GOOG) both value against the
+    issuer's single mart.topt_core_results row while keeping their own listing_ids."""
+    _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
+    _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
+    issuer_cik = "issuer:cik:0001652044"
+    connection.execute(
+        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'Alphabet Inc.') "
+        "on conflict (id) do nothing",
+        (issuer_cik,),
+    )
+    for isin in ("US02079K3059", "US02079K1079"):
+        connection.execute(
+            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
+            "valid_time, transaction_time, confidence, source, raw_ref) "
+            "values (%s, 'isin', %s, daterange(%s, null), %s, 0.95, 'openfigi', 'test:dual') "
+            "on conflict do nothing",
+            (issuer_cik, isin, (KNOWABLE_FILING + timedelta(seconds=1)).date(), KNOWABLE_FILING + timedelta(seconds=1)),
+        )
+    issuer_uuid = resolve_entity(connection, issuer_cik, "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
+    listing_uuid = resolve_entity(connection, "listing:xnas:googl", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    connection.execute("set local session_replication_role = replica")
+    res_sha = f"{abs(hash((RUN, str(issuer_uuid)))):064x}"[:64]
+    connection.execute(
+        """
+        insert into mart.topt_core_results (
+            result_id, content_sha256, invocation_id, snapshot_id, run_id,
+            release_manifest_id, universe_id, universe_version, universe_sha256,
+            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+            operating_metric, availability, operating_efficiency,
+            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+            confidence, freshness, reason_codes, input_observation_ids,
+            gppe_invocation_id, gppe_result_id,
+            gppe_definition_id, gppe_definition_sha256,
+            tier_definition_id, tier_definition_sha256, payload, availability_status
+        ) values (
+            'topt-core-result:' || %s, %s,
+            'topt-core-invocation:' || repeat('b', 64),
+            'topt-core-snapshot:' || repeat('c', 64),
+            %s,
+            'release-manifest:' || repeat('d', 64),
+            'universe:test', '1', repeat('e', 64),
+            now(), %s, 'inst:test', %s,
+            'non_financial', 'capital_adjusted_gppe', 'available',
+            100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, 0.25,
+            0.85, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
+            'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
+            'gppe-def:v0', repeat('1', 64),
+            'tier-def:v0', repeat('2', 64),
+            '{}'::jsonb, 'available'
+        )
+        """,
+        (res_sha, res_sha, RUN, str(issuer_uuid), str(listing_uuid)),
+    )
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert (fund.lines, fund.valued_lines) == (2, 2)
+    assert fund.valued_weight == Decimal("75")
+    assert fund.weighted_valuation_gap == Decimal("0.25")
 
 
 def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate(connection) -> None:

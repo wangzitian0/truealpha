@@ -598,3 +598,40 @@ def test_a_second_run_of_the_chain_keeps_the_view(database: str) -> None:
     apply_migration_chain(database)
     with psycopg.connect(database) as connection:
         assert view_state(connection) == before
+
+
+def test_equal_confidence_and_transaction_time_tie_breaks_by_alias_id(conn: psycopg.Connection) -> None:
+    """#1343: two aliases of one survivor and scheme with equal confidence and transaction_time pick the newer alias_id."""
+    store = Store(conn)
+    issuer = store.mint("issuer", "lei", lei(901), at=T0)
+    store.alias(issuer, "name", "First Tie Name", at=T0, confidence="0.9")
+    store.alias(issuer, "name", "Second Tie Name", at=T0, confidence="0.9")
+    row = conn.execute(
+        "select name from mart.entity_identity where entity_id = %s::uuid",
+        (issuer,),
+    ).fetchone()
+    assert row == ("Second Tie Name",)
+    create_old_view(conn)
+    assert all_rows(conn, "mart.entity_identity") == all_rows(conn, OLD_VIEW)
+
+
+def test_multi_class_issuer_prefers_primary_share_class_ticker_and_listing(conn: psycopg.Connection) -> None:
+    """#1347: an issuer with both GOOG and GOOGL listings at the same transaction_time resolves to GOOGL."""
+    store = Store(conn)
+    issuer = store.mint("issuer", "lei", lei(902), at=T0)
+    inst_c = store.mint("instrument", "figi", figi(902), at=T0)
+    inst_a = store.mint("instrument", "figi", figi(903), at=T0)
+    list_c = store.mint("listing", "mic-ticker", "XNAS:GOOG", at=T0)
+    store.alias(list_c, "legacy-id", "listing:xnas:goog", at=T0)
+    list_a = store.mint("listing", "mic-ticker", "XNAS:GOOGL", at=T0)
+    store.alias(list_a, "legacy-id", "listing:xnas:googl", at=T0)
+    store.relate("issues", issuer, inst_c, at=T0)
+    store.relate("listed_as", inst_c, list_c, at=T0)
+    store.relate("issues", issuer, inst_a, at=T0)
+    store.relate("listed_as", inst_a, list_a, at=T0)
+    row = conn.execute(
+        "select current_ticker, listing_id from mart.entity_identity where entity_id = %s::uuid",
+        (issuer,),
+    ).fetchone()
+    assert row == ("GOOGL", "listing:xnas:googl")
+    assert_same_rows_as_the_old_definition(conn)

@@ -575,3 +575,31 @@ def test_a_single_segment_row_with_no_description_is_refused_before_any_model_ca
         [NO_DESCRIPTION, "unclassified_revenue", "below_minimum_classified_share"],
         NO_DESCRIPTION_EXTRACTOR,
     )
+
+
+def test_canonical_uuid_member_resolves_ticker_from_legacy_corpus_map(connection, seated, monkeypatch) -> None:
+    """#1263, #1265: when governed_members returns a canonical UUID and tickers is keyed by legacy LEI,
+    materialize_theme_purity resolves the member's ticker through its staging.entity_aliases entry."""
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.resolve_coordinates import resolve_entity
+
+    legacy_lei_id = "issuer:lei:5493006MHB84DD0ZWV99"
+    canonical_uuid = str(resolve_entity(connection, legacy_lei_id, "issuer", as_of=CUTOFF.date(), known_at=CUTOFF))
+    monkeypatch.setattr(theme_purity, "governed_members", lambda _connection, *, run_id: {CIK: canonical_uuid})
+    _seed(connection)
+    transport = _answers(
+        [{"index": 0, "in_theme": True, "reason": "a"}, {"index": 1, "in_theme": False, "reason": "b"}]
+    )
+    monkeypatch.setattr(llm, "_gateway_transport", transport)
+
+    written = materialize_theme_purity(
+        connection,
+        run_id=RUN_ID,
+        cutoff=CUTOFF,
+        themes=(AI,),
+        tickers={legacy_lei_id: "AVGO"},
+    )
+    assert len(written) == 1
+    assert written[0].entity_id == canonical_uuid
+    asked = json.dumps(transport.sent)
+    assert f"Issuer: AVGO ({ISSUER})." in asked

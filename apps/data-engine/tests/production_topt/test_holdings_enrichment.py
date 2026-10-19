@@ -251,3 +251,58 @@ def test_figi_from_raw_skips_ticker_keyed_batches(connection) -> None:
     )
     mapping, missing = figi_from_raw(connection, [_NVDA_ISIN], store=store)
     assert mapping == {} and missing == [_NVDA_ISIN], "ticker-keyed batches carry no isins metadata"
+
+
+def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) -> None:
+    """An OpenFIGI-resolved US equity omitted from SEC company_tickers.json still records its
+    per-ISIN openfigi-listing ticker on company:isin:<isin>, so mart.fund_holdings_resolved
+    resolves listing_id."""
+    store = _InMemoryObjectStore()
+    ea_isin = "US2855121099"
+    minted = f"company:isin:{ea_isin}"
+    er.ensure_entity(connection, "etf:series:S-TEST-OMITTED", "etf", "Omitted Crosswalk Test Fund")
+    er.ensure_entity(connection, minted, "company", ea_isin)
+    er.assert_identifier(
+        connection,
+        entity_id=minted,
+        source="nport",
+        identifier_type="isin",
+        identifier_value=ea_isin,
+        confidence=1.0,
+        transaction_time=_AT,
+        valid_from="2026-06-30",
+        raw_ref="raw.fetches:0",
+    )
+    connection.execute(
+        """
+        insert into staging.fund_holding_facts
+            (fund_id, holding_id, holding_name, report_period, transaction_time,
+             cusip, isin, lei, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
+        values (%s, %s, 'Electronic Arts Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 1.5, 1.0, 'raw.fetches:0')
+        on conflict do nothing
+        """,
+        ("etf:series:S-TEST-OMITTED", minted, _AT, ea_isin),
+    )
+    raw_store.insert_json_fetch(
+        connection,
+        source=DataSource.OPENFIGI,
+        source_record_id=f"mapping:{ea_isin}",
+        payload=[{"data": _class_records("EA")}],
+        fetched_at=_AT,
+        metadata={"isins": [ea_isin]},
+        store=store,
+    )
+
+    outcome = enrich_holding_identities(
+        connection,
+        ticker_cik={},
+        now=_AT,
+        store=store,
+        isins=[ea_isin],
+    )
+    assert outcome.repointed == 0 and outcome.unmapped == 1
+    row = connection.execute(
+        "select ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",
+        ("etf:series:S-TEST-OMITTED", ea_isin),
+    ).fetchone()
+    assert row == ("EA", "listing:xnas:ea")

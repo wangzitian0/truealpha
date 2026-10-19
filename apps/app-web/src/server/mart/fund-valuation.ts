@@ -102,6 +102,10 @@ const VALUED_LINES_SQL = `
   from mart.fund_holdings_valuation v
   left join (
     select coalesce(ei.listing_id, c.listing_id) as listing_id,
+           coalesce(
+             case when ei_issuer.cik is not null then 'issuer:cik:' || lpad(ei_issuer.cik, 10, '0') end,
+             c.issuer_id
+           ) as issuer_cik_entity,
            c.run_id,
            c.current_ps,
            c.target_ps_midpoint,
@@ -115,8 +119,14 @@ const VALUED_LINES_SQL = `
     join mart.topt_core_results t on t.result_id = c.result_id
     left join mart.entity_identity ei
       on ei.entity_id::text = c.listing_id
+    left join mart.entity_identity ei_issuer
+      on ei_issuer.entity_id::text = c.issuer_id
   ) r
-    on r.listing_id = v.listing_id and r.run_id = $1
+    on r.run_id = $1
+   and (
+     r.listing_id = v.listing_id
+     or (v.issuer_entity like 'issuer:cik:%' and r.issuer_cik_entity = v.issuer_entity)
+   )
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;
 

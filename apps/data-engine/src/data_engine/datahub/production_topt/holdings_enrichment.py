@@ -185,18 +185,14 @@ def enrich_holding_identities(
         if listing is None or ticker is None:
             unmapped += 1
             continue
-        if index is None:
-            index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
-        cik = index.get(ticker)
-        if cik is None:
-            unmapped += 1
-            continue
-        target = f"issuer:cik:{cik:010d}"
         minted_id = f"{_MINTED_PREFIX}{isin}"
         raw_ref, transaction_time = provenance[isin]
         # The per-ISIN ticker rides the minted entity — THIS ISIN's own listing
         # (#706): the issuer-level ticker below stays newest-wins and collapses
         # share classes by design; readers that must not collapse resolve here.
+        # Asserted before the SEC ticker_cik gate so US-listed holdings omitted
+        # from company_tickers.json (such as EA or HON) still resolve their
+        # listing_id in mart.fund_holdings_resolved.
         # Its OWN source name, because kg_identifiers is unique on
         # (source, type, value, transaction_time): under source="openfigi" this
         # row and the issuer-level row are the same tuple whenever both derive
@@ -216,6 +212,13 @@ def enrich_holding_identities(
             valid_from=transaction_time.date().isoformat(),
             raw_ref=raw_ref,
         )
+        if index is None:
+            index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
+        cik = index.get(ticker)
+        if cik is None:
+            unmapped += 1
+            continue
+        target = f"issuer:cik:{cik:010d}"
         if (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX):
             er.ensure_entity(connection, target, "company", listing.name or ticker)
             for id_type, id_value in (("isin", isin), ("ticker", ticker)):

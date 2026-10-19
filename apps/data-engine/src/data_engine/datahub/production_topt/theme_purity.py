@@ -35,6 +35,11 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 from truealpha_contracts.standards import STANDARDS, confidence_for
 from truealpha_contracts.theme_purity import THEMES, ThemeDefinition
 
+from data_engine.datahub.canonical_issuer import (
+    expand_issuer_alias_ids,
+    is_canonical_issuer_id,
+    is_preferred_issuer_ticker,
+)
 from data_engine.datahub.production_topt.status_dimensions import LOW_CONFIDENCE_FLOOR
 from data_engine.sources import llm
 
@@ -379,6 +384,56 @@ on conflict (run_id, issuer_id, theme_id) do update set
 """
 
 
+def _resolve_member_tickers(
+    connection: Connection[Any],
+    partitions: tuple[IssuerPartition, ...],
+    members: Mapping[int, str],
+    *,
+    tickers: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """Resolve each partitioned member's subject_id to its ticker across UUIDs and legacy aliases (#1263, #1265)."""
+    if not partitions or not tickers:
+        return {}
+    provided = dict(tickers)
+    resolved: dict[str, str] = {}
+    unresolved_uuids: dict[str, str] = {}
+    for partition in partitions:
+        subject_id = members[partition.cik]
+        if subject_id in provided:
+            resolved[subject_id] = provided[subject_id]
+        elif partition.issuer_id in provided:
+            resolved[subject_id] = provided[partition.issuer_id]
+        elif is_canonical_issuer_id(subject_id):
+            unresolved_uuids[subject_id] = subject_id
+
+    if unresolved_uuids:
+        expanded = expand_issuer_alias_ids(connection, unresolved_uuids)
+        for subject_id, aliases in expanded.items():
+            best: str | None = None
+            for alias in aliases:
+                candidate = provided.get(alias)
+                if candidate is not None and (best is None or is_preferred_issuer_ticker(candidate, best)):
+                    best = candidate
+            if best is not None:
+                resolved[subject_id] = best
+
+        still_missing = [uid for uid in unresolved_uuids if uid not in resolved]
+        if still_missing:
+            rows = connection.execute(
+                """
+                select entity_id::text, current_ticker
+                from mart.entity_identity
+                where entity_id = any(%s::uuid[])
+                  and current_ticker is not null
+                """,
+                (still_missing,),
+            ).fetchall()
+            for entity_id, current_ticker in rows:
+                if current_ticker:
+                    resolved[str(entity_id)] = str(current_ticker)
+    return resolved
+
+
 def materialize_theme_purity(
     connection: Connection[Any],
     *,
@@ -399,12 +454,14 @@ def materialize_theme_purity(
     issuer outside that universe would be ranked as if it were in it; and a row keyed by CIK
     under a run whose members are LEI-keyed is a row the coverage report can never join.
 
-    `tickers` names the members (by the run's issuer id) for the classifier (#849); a member
-    without one is labelled by id, as before.
+    `tickers` names the members (by the run's issuer id or its legacy corpus alias) for the
+    classifier (#849, #1263); a member without one is labelled by id, as before.
     """
     members = governed_members(connection, run_id=run_id)
+    partitions = load_partitions(connection, cutoff=cutoff, ciks=members.keys())
+    resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers)
     written: list[ThemePurity] = []
-    for partition in load_partitions(connection, cutoff=cutoff, ciks=members.keys()):
+    for partition in partitions:
         subject_id = members[partition.cik]
         for definition in themes:
             purity, extractor = compute_for_theme(
@@ -413,7 +470,7 @@ def materialize_theme_purity(
                 definition,
                 cutoff=cutoff,
                 subject_id=subject_id,
-                ticker=(tickers or {}).get(subject_id),
+                ticker=resolved_tickers.get(subject_id),
                 persist_invocations=persist_invocations,
             )
             availability, evidence, validation = _status_dimensions(purity, definition)
