@@ -329,15 +329,16 @@ def test_materialize_supports_legacy_string_listing_id(connection) -> None:
 
 
 def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
-    """Two share-class holdings of the same issuer (GOOGL and GOOG) both value against the
-    issuer's single mart.topt_core_results row while keeping their own listing_ids."""
+    """Two share-class holdings of the same issuer (GOOGL and GOOG) resolved to unpadded
+    company:cik:1652044 in staging.kg_identifiers both value against the issuer's single
+    mart.topt_core_results row (issuer:cik:0001652044) while keeping their own listing_ids."""
     _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
-    issuer_cik = "issuer:cik:0001652044"
+    holding_company_cik = "company:cik:1652044"
     connection.execute(
         "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'Alphabet Inc.') "
         "on conflict (id) do nothing",
-        (issuer_cik,),
+        (holding_company_cik,),
     )
     for isin in ("US02079K3059", "US02079K1079"):
         connection.execute(
@@ -345,10 +346,15 @@ def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
             "valid_time, transaction_time, confidence, source, raw_ref) "
             "values (%s, 'isin', %s, daterange(%s, null), %s, 0.95, 'openfigi', 'test:dual') "
             "on conflict do nothing",
-            (issuer_cik, isin, (KNOWABLE_FILING + timedelta(seconds=1)).date(), KNOWABLE_FILING + timedelta(seconds=1)),
+            (
+                holding_company_cik,
+                isin,
+                (KNOWABLE_FILING + timedelta(seconds=1)).date(),
+                KNOWABLE_FILING + timedelta(seconds=1),
+            ),
         )
-    issuer_uuid = resolve_entity(connection, issuer_cik, "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
-    listing_uuid = resolve_entity(connection, "listing:xnas:googl", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
+    listing_uuid = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
     connection.execute("set local session_replication_role = replica")
     res_sha = f"{abs(hash((RUN, str(issuer_uuid)))):064x}"[:64]
     connection.execute(

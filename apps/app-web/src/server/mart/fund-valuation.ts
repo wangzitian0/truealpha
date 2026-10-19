@@ -103,9 +103,9 @@ const VALUED_LINES_SQL = `
   left join (
     select coalesce(ei.listing_id, c.listing_id) as listing_id,
            coalesce(
-             case when ei_issuer.cik is not null then 'issuer:cik:' || lpad(ei_issuer.cik, 10, '0') end,
-             c.issuer_id
-           ) as issuer_cik_entity,
+             lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
+             lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+           ) as issuer_cik,
            c.run_id,
            c.current_ps,
            c.target_ps_midpoint,
@@ -125,7 +125,10 @@ const VALUED_LINES_SQL = `
     on r.run_id = $1
    and (
      r.listing_id = v.listing_id
-     or (v.issuer_entity like 'issuer:cik:%' and r.issuer_cik_entity = v.issuer_entity)
+     or (
+       r.issuer_cik is not null
+       and r.issuer_cik = lpad(substring(v.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+     )
    )
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;

@@ -306,3 +306,51 @@ def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) 
         ("etf:series:S-TEST-OMITTED", ea_isin),
     ).fetchone()
     assert row == ("EA", "listing:xnas:ea")
+
+
+def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(connection) -> None:
+    """Holdings whose ISIN maps to bootstrap_universe's company:cik:<cik> entity resolve
+    ticker and listing_id through the issuer_ticker lateral join in mart.fund_holdings_resolved."""
+    ea_isin = "US2855121099"
+    company_cik = "company:cik:712515"
+    er.ensure_entity(connection, "etf:series:S-TEST-COMPANY-CIK", "etf", "Company CIK Test Fund")
+    er.ensure_entity(connection, company_cik, "company", "Electronic Arts Inc.")
+    er.assert_identifier(
+        connection,
+        entity_id=company_cik,
+        source="openfigi",
+        identifier_type="isin",
+        identifier_value=ea_isin,
+        confidence=0.95,
+        transaction_time=_AT,
+        valid_from="2026-06-30",
+        raw_ref="raw.fetches:0",
+    )
+    er.assert_identifier(
+        connection,
+        entity_id=company_cik,
+        source="sec_edgar",
+        identifier_type="ticker",
+        identifier_value="EA",
+        confidence=1.0,
+        transaction_time=_AT,
+        valid_from="2026-06-30",
+        raw_ref="raw.fetches:0",
+    )
+    connection.execute(
+        """
+        insert into staging.fund_holding_facts
+            (fund_id, holding_id, holding_name, report_period, transaction_time,
+             cusip, isin, lei, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
+        values (%s, %s, 'Electronic Arts Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 1.5, 1.0, 'raw.fetches:0')
+        on conflict do nothing
+        """,
+        ("etf:series:S-TEST-COMPANY-CIK", company_cik, _AT, ea_isin),
+    )
+
+    row = connection.execute(
+        "select issuer_entity, ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",
+        ("etf:series:S-TEST-COMPANY-CIK", ea_isin),
+    ).fetchone()
+    assert row == (company_cik, "EA", "listing:xnas:ea")
+

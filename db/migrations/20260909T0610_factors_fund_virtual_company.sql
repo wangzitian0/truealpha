@@ -121,7 +121,7 @@ left join lateral (
     from staging.kg_identifiers identifier
     where identifier.identifier_type = 'ticker'
       and identifier.entity_id = resolved.issuer_entity
-      and resolved.issuer_entity like 'issuer:cik:%'
+      and (resolved.issuer_entity like 'issuer:cik:%' or resolved.issuer_entity like 'company:cik:%')
     order by identifier.transaction_time desc, identifier.confidence desc, identifier.id desc
     limit 1
 ) issuer_ticker on true
