@@ -170,20 +170,38 @@ def seed_strategy_inputs_from_capture(
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
         join staging.capture_observation_payloads p on p.observation_id = o.observation_id
         where ob.run_id = %s
-          and o.semantic_type in ('financial-fact', 'market-price')
+          and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity')
           and (
               o.parser_version = %s
+              or o.semantic_type = 'listing-identity'
               or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null)
           )
         """,
         (run_id, parser_version, SERVED_BY_FAILOVER),
     ).fetchall()
 
+    # #1333 / #1352: market-price reuse keys on (listing, session_date), so a reused
+    # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
+    # Resolve the target run's issuer_id for each listing from listing-identity or
+    # financial-fact before bucketing price observations.
+    listing_to_issuer: dict[str, str] = {
+        str(payload["listing_id"]): str(payload["issuer_id"])
+        for semantic_type, _conf, payload, _obs_at in rows
+        if semantic_type in ("listing-identity", "financial-fact")
+    }
+
     # issuer -> (canonical listing, payload, confidence, the observation's own knowable_at)
     financial: dict[str, tuple[str, dict, Decimal, datetime]] = {}
     price: dict[str, tuple[str, dict, Decimal, datetime]] = {}
     for semantic_type, confidence, payload, observed_at in rows:
-        issuer_id, listing_id = payload["issuer_id"], payload["listing_id"]
+        if semantic_type == "listing-identity":
+            continue
+        listing_id = str(payload["listing_id"])
+        issuer_id = (
+            str(payload["issuer_id"])
+            if semantic_type == "financial-fact"
+            else listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
+        )
         bucket = financial if semantic_type == "financial-fact" else price
         current = bucket.get(issuer_id)
         if current is None or listing_sort_key(listing_id) < listing_sort_key(current[0]):

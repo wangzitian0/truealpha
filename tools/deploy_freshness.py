@@ -33,134 +33,46 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import subprocess
-import sys
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from collections.abc import Sequence
 
-from infra2_sdk.deploy import HttpGet, default_http_get
-from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
+from infra2_sdk.deploy import (
+    FreshnessFailure,
+    HttpGet,
+    ReleaseIdentityError,
+    Staleness,
+    check_deploy_freshness,
+    default_http_get,
+    format_freshness_failure,
+    measure_freshness,
+    read_deployed_release,
+)
 
-# Daily releases were the norm before the lane stopped (v0.0.16 through v0.0.19
-# in three days). Three days is therefore comfortably above normal cadence and
-# far below the 15-day gap that went unnoticed: it cannot fire on a weekend of
-# ordinary work, and it cannot stay quiet through the failure it exists for.
 STAGING_MAX_AGE_DAYS = 3
-# Production is promoted by hand (cut_release.sh --prod) and lags by design;
-# fourteen days bounds that lag without reopening #560, whose 15-day gap is
-# still past it. deploy-freshness.yml's matrix carries both numbers and
-# test_ci_workflows.py holds them equal to these.
 PRODUCTION_MAX_AGE_DAYS = 14
-# A caller that names no bound gets the strict one: falling into the lenient
-# bound by omission is how a lag becomes invisible again.
 DEFAULT_MAX_AGE_DAYS = STAGING_MAX_AGE_DAYS
 
+measure = measure_freshness
+format_failure = format_freshness_failure
+check_freshness = check_deploy_freshness
 
-class FreshnessFailure(RuntimeError):
-    """The environment could not be confirmed fresh."""
-
-
-@dataclass(frozen=True)
-class Staleness:
-    environment: str
-    deployed_ref: str
-    unreleased_commits: int
-    oldest_unreleased_age: timedelta | None
-    oldest_unreleased_subject: str
-
-
-def _git(args: Sequence[str], repo: str, run: Callable[..., subprocess.CompletedProcess[str]]) -> str:
-    result = run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise FreshnessFailure(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def measure(
-    environment: str,
-    deployed_ref: str,
-    *,
-    repo: str = ".",
-    now: datetime | None = None,
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> Staleness:
-    """How far behind ``origin/main`` the deployed release is."""
-    # Not via `_git`: a failing rev-parse must produce the message an operator
-    # can act on ("that ref is not in this checkout" — a shallow clone, or tags
-    # not fetched), not git's own stderr.
-    resolved = run(
-        ["git", "-C", repo, "rev-parse", "--verify", f"{deployed_ref}^{{commit}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if resolved.returncode != 0 or not resolved.stdout.strip():
-        raise FreshnessFailure(
-            f"{environment} reports {deployed_ref!r}, which is not a commit here — fetch tags, "
-            f"or check that the environment reports a ref this repository knows"
-        )
-    log = _git(["log", "--reverse", "--format=%cI%x1f%s", f"{deployed_ref}..origin/main"], repo, run)
-    lines = [line for line in log.splitlines() if line]
-    if not lines:
-        return Staleness(environment, deployed_ref, 0, None, "")
-    oldest_iso, _, subject = lines[0].partition("\x1f")
-    oldest = datetime.fromisoformat(oldest_iso)
-    reference = now or datetime.now(UTC)
-    return Staleness(environment, deployed_ref, len(lines), reference - oldest, subject)
-
-
-def format_failure(staleness: Staleness, max_age: timedelta) -> str:
-    """The message an operator must be able to act on without opening a shell."""
-    age = staleness.oldest_unreleased_age
-    assert age is not None
-    return (
-        f"{staleness.environment} is stale: it serves {staleness.deployed_ref} while "
-        f"{staleness.unreleased_commits} commit(s) sit unreleased on main, the oldest merged "
-        f"{age.days}d{age.seconds // 3600}h ago (limit {max_age.days}d) — "
-        f"{staleness.oldest_unreleased_subject[:80]!r}. Finished work is invisible to every user "
-        f"of this environment until a release carries it (#560)."
-    )
-
-
-def check_freshness(
-    url: str,
-    *,
-    environment: str = "",
-    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
-    repo: str = ".",
-    http_get: HttpGet | None = None,
-    now: datetime | None = None,
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-    warn_only: bool = False,
-) -> int:
-    http_get = http_get or default_http_get()
-    max_age = timedelta(days=max_age_days)
-    try:
-        deployed_ref = read_deployed_release(url, http_get)
-        staleness = measure(environment or url, deployed_ref, repo=repo, now=now, run=run)
-    except (FreshnessFailure, ReleaseIdentityError) as exc:
-        print(f"freshness check failed: {exc}", file=sys.stderr)
-        return 1
-
-    if staleness.unreleased_commits == 0:
-        print(f"{staleness.environment} is current: serving {deployed_ref}, nothing newer on main")
-        return 0
-    age = staleness.oldest_unreleased_age
-    assert age is not None
-    if age > max_age:
-        failure_msg = format_failure(staleness, max_age)
-        if warn_only:
-            print(f"::warning::{failure_msg}")
-            return 0
-        print(f"freshness check failed: {failure_msg}", file=sys.stderr)
-        return 1
-    print(
-        f"{staleness.environment} is fresh enough: serving {deployed_ref}, "
-        f"{staleness.unreleased_commits} commit(s) unreleased, oldest {age.days}d "
-        f"(limit {max_age.days}d)"
-    )
-    return 0
+__all__ = [
+    "DEFAULT_MAX_AGE_DAYS",
+    "FreshnessFailure",
+    "HttpGet",
+    "PRODUCTION_MAX_AGE_DAYS",
+    "ReleaseIdentityError",
+    "STAGING_MAX_AGE_DAYS",
+    "Staleness",
+    "check_deploy_freshness",
+    "check_freshness",
+    "default_http_get",
+    "format_failure",
+    "format_freshness_failure",
+    "main",
+    "measure",
+    "measure_freshness",
+    "read_deployed_release",
+]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -169,7 +81,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment", default="")
     parser.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--warn-only", action="store_true", default=False, help="Emit warning and exit 0 on age exceedance")
+    parser.add_argument(
+        "--warn-only", action="store_true", default=False, help="Emit warning and exit 0 on age exceedance"
+    )
     return parser
 
 

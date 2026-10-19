@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=e23fe8eabcb158eb64457ba99f7b8b9c07b7cc081345c7b3a4136b820dd9e1ec -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=b3513ad19934f1149ea17c385b5072752dcd2cd900bb83cbd8c821487511a31c -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -48,104 +48,77 @@
 
 ## How work happens
 
-Development is conventional: an issue describes the goal, one pull request delivers it,
-tests prove it, review and green CI gate the merge.
-
 1. **One issue, one PR.** Every PR references its issue (`Closes #N` when it completes
    the issue, a plain `#N` reference otherwise). Keep PRs small and reviewable.
-2. **Issues are the shared coordination surface.** Record verified findings, decisions,
-   and next actions on the issue as you learn them. Anyone (human or agent) may improve
-   an issue. `governance/capabilities/` holds the dependency graph between capability
-   issues as information, not enforcement.
-3. **Parallel agents** work on disjoint files. Prefix your issue and PR titles with your
-   workspace name (for example `[truealpha-factors]`) so lanes are visible. If two lanes
-   need the same file, coordinate through the issue rather than racing; shared surfaces
-   (migrations, registries, public exports, lockfiles) deserve a heads-up comment before
-   you touch them. A finding outside your lane is filed with its evidence and handed to
-   the owning lane — recording it is in scope, adopting it is not.
+2. **Issues are the shared coordination surface.** Record verified findings, decisions, and
+   next actions on the issue as you learn them.
+3. **Parallel agents** work on disjoint files. Prefix issue and PR titles with your workspace
+   name (for example `[truealpha-factors]`). If two lanes need the same file, coordinate through
+   the issue instead of racing. Shared surfaces (migrations, registries, public exports,
+   lockfiles) deserve a heads-up comment first. File a finding outside your lane with its evidence
+   and hand it to the owning lane: recording it is in scope, adopting it is not.
 4. **Before starting**: `git status --short --branch`, sync `main`, check open issues and
    PRs for the same work. **Strong dashboards, weak gates**: Merge gates enforce baseline
    correctness (compilation, type checks, backward-compatible migrations, secrets scanning,
-   focused test suites, and deployable `main`). Third-party and AI reviewer feedback is advisory:
-   reviewer platform errors, timeouts, or unparseable reviews emit warnings and do not fail-close
-   or deadlock PR readiness. Actionable code review findings are tracked, with unresolved blockers
-   budgeted (High = 0, Medium <= 2, Low <= 4). Observability and reality are governed through
-   transparent, live Dashboards (`/admin/datahub`, `/research/backtest`, Postgres `mart` health
-   tables) rather than brittle, blocking mechanical regexes on PR descriptions or issue comments.
-   Once a PR is merge-ready, the agent that owns it merges it. A merge whose pipeline
-   reaches production (a release promote, see `docs/release-protocol.md`) waits for the
-   owner. **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. A release workflow deploys, promotes or applies to a production environment. The release code is the code that a release workflow runs. The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter. Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this. A workflow that defines a required check is part of the gate, so this rule covers its edits too. In a repository with a release workflow, the owner also approves workflow edits and edits to the release code. A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`. With a verified run, the agent merges an edit to the release code. With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check. With a verified run, the agent merges a proven tightening of the infra2 gate inventory. In a repository whose gate does not print `production lock verified`, these edits stay with the owner. A Repo tier may record an owner decision that replaces this rule for that repository.
-   This repository's merge gate does not read a production lock yet (#1097).
-   Until it does, the owner approves every workflow edit and every edit to the release code.
+   focused tests, deployable `main`). Third-party and AI reviewer feedback is advisory: reviewer
+   platform errors, timeouts, and unparseable reviews warn and never block. Actionable review
+   findings are tracked, with unresolved blockers budgeted (High = 0, Medium <= 2, Low <= 4). Live dashboards (`/admin/datahub`,
+   `/research/backtest`, Postgres `mart` health tables) govern observability, not regexes on
+   PR descriptions or issue comments. Once a PR is merge-ready, the agent that owns it merges
+   it. A merge whose pipeline reaches production (a release promote, see
+   `docs/release-protocol.md`) waits for the owner.
+   **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. A release workflow deploys, promotes or applies to a production environment. The release code is the code that a release workflow runs. The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter. Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this. A workflow that defines a required check is part of the gate, so this rule covers its edits too. In a repository with a release workflow, the owner also approves workflow edits and edits to the release code. A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`. With a verified run, the agent merges an edit to the release code. With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check. With a verified run, the agent merges a proven tightening of the infra2 gate inventory. In a repository whose gate does not print `production lock verified`, these edits stay with the owner. A Repo tier may record an owner decision that replaces this rule for that repository.
+   **Workflow edits**: An owner decision of 2026-10-06 (`docs/release-protocol.md`) replaces the block's rule on workflow and release-code edits here. Workflow edits and release-code edits are the agent's, like any other non-production change. The production release is `tools/cut_release.sh <tag> --prod` or `deploy-release.yml` with `deploy_type=prod`. The owner approves the exact commit SHA of each such dispatch at run time. The block's holds on merge-gate code and data still apply, including required-check workflows.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
    never a merge gate.
-6. **Closed means deployed, real, and evidenced.** A product issue closes only when its
-   capability is invoked by a deployed path — reachable from the Dagster composition root
-   (`dagster_defs.py`) or a deployed service/App entrypoint — on real captured data, with
-   evidence posted on the issue: the deployed call site plus real-data output (SQL rows or
-   an HTTP response). Reaching a read model is not reaching the reader: where a capability
-   has an owner-facing surface, name the page or response field that renders it (#284: PEG
-   reached `mart` and both read repositories while no page referenced it). Fixture data
-   lives in tests only; fixture assets are named `*_fixture` and are never scheduled or
-   reachable from a deployed route. Code that merely exists is not done: wire it into the
-   deployed path or explicitly demote it on the issue. Landing on main via PR merge gate is a prerequisite before deployment. Do not trigger deployment from an unmerged branch. Honest partial scope stays open with a scope note instead of closing.
-   (vision.md: fixture-only tools or code existence are not completion evidence;
-   drift audit #429, invariants I1–I4; root #434.)
-7. **Acceptance criteria are standing checks, and they cover the whole scope.** Two rules,
-   both learned from closed issues whose scope silently evaporated (#371, #494, #495 —
-   see `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md`):
-   - **Every scope item has a matching acceptance criterion.** If a deliverable is named in
-     the issue body, exactly one acceptance criterion must assert it. A deliverable with no
-     criterion does not belong in the scope — delete it or write the check. Closure is
-     judged against the scope, item by item, not against whichever criteria happen to exist.
-   - **A criterion is a check that runs again, not a run that happened.** "I executed this
-     and pasted the output" is evidence; acceptance is a named CI step, test, or gate that
-     turns red on the next regression. A one-time manual walk, a hand-run script, or a
-     measurement taken on one production run satisfies rule 6's evidence requirement and
-     still fails this one. State how the check is armed and where it lives.
+6. **Closed means deployed, real, and evidenced.** A product issue closes only when a deployed
+   path invokes its capability on real captured data. A deployed path is reachable from the
+   Dagster composition root (`dagster_defs.py`) or a deployed service/App entrypoint. Post
+   evidence on the issue: the deployed call site plus real-data output (SQL rows or an HTTP
+   response). Reaching a read model is not reaching the reader: where a capability has an
+   owner-facing surface, name the page or response field that renders it (#284). Fixture data lives
+   in tests only; fixture assets are named `*_fixture` and are never scheduled or reachable
+   from a deployed route. Code that merely exists is not done: wire it into the deployed path
+   or explicitly demote it on the issue.
+   (vision.md; drift audit #429, invariants I1–I4; root #434.) Landing on main via PR merge gate is a prerequisite before deployment. Do not trigger deployment from an unmerged branch.
+   Honest partial scope stays open with a scope note instead of closing.
+7. **Acceptance criteria are standing checks, and they cover the whole scope.** See
+   `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md` (#371, #494, #495):
+   - **Every scope item has a matching acceptance criterion.** If the issue body names a
+     deliverable, exactly one criterion must assert it. Delete deliverables without a check,
+     or write the check. Judge closure against scope item by item.
+   - **A criterion is a check that runs again, not a run that happened.** Pasted output is
+     evidence. Acceptance is a named CI step, test, or gate that turns red on the next
+     regression. A one-time manual walk or script satisfies rule 6 and still fails this rule.
+     State where the check lives.
    - **A criterion must be able to fail where production calls.** A test that supplies an
-     argument the deployed caller omits proves the parameter, not the wiring — it is green
-     *because* it supplies what production does not. Assert through the deployed entry
-     point, and confirm the check goes red against the unfixed code before trusting it
-     (#284: two parser vintages computed nothing in either environment while every gate,
-     including the end-to-end test written to prove the path, stayed green).
-   Auto-closing an issue with `Closes #N` asserts all three rules were evaluated. When an
-   issue carries a criterion a merge cannot prove — a user journey, a role-dependent view, a
-   deployed-environment state — reference it with a plain `#N` instead and close it by hand
-   with a comment that walks the criteria in order.
+     argument the deployed caller omits proves the parameter, not the wiring. Assert through
+     the deployed entry point. Confirm the check fails on unfixed code first.
+   `Closes #N` asserts all three rules. When a merge cannot prove a criterion (such as deployed
+   state), use a plain `#N` and close by hand with a comment walking the criteria.
 
-At the start of a task and after context compaction: re-read the user's latest
-instruction, run the checkpoint commands above, and note (issue number, branch, files you
-intend to touch) before editing. When handing off, leave a short note on the issue: what
-is done, what is verified, what is next, what failed and why.
+Before editing or after compaction, re-read the prompt, run rule 4 checks, and note the issue,
+branch, and target files. On handoff, post done, verified, next, and failed items on the issue.
 
 ## Project context
 
-TrueAlpha is a fundamental and supply-chain research monorepo: immutable raw source
-capture, Postgres warehouse and knowledge-graph metadata, factor computation under
-Dagster, and typed `mart` consumption through the Web App, MCP, and `/chat`. Read
-`vision.md` for the investment questions; read `init.md` before cross-service design,
-public contract, schema, or known-risk decisions. Reconnaissance findings live in
-`apps/data-engine/samples/README.md`.
+TrueAlpha is a fundamental and supply-chain research monorepo: raw source capture, a Postgres
+warehouse with knowledge-graph metadata, Dagster factors, and typed `mart` consumption through the
+Web App, MCP, and `/chat`. Read `init.md` before cross-service design, public contract, schema, or
+known-risk decisions. Reconnaissance findings live in `apps/data-engine/samples/README.md`.
 
 Repository shape:
 
-- `apps/data-engine/`: Python source adapters, sweep scripts, dlt, and Dagster assets.
-- `apps/llm-service/`: Python FastAPI, MCP first, `/chat` SSE Tier 3.
 - `apps/app-web/`: TypeScript/Next.js; reads `mart` through a read-only account.
-- `libs/contracts/`: cross-module PIT DTOs and repository/storage/backtest ports.
 - `libs/factors/base/`: provenance-neutral PIT factors; modules 1-6.
 - `libs/factors/composite/`: factors that reload materialized upstream outputs; module 7.
 - `libs/factors/shared/`: KG entity resolution and the shared structured-extraction
   primitive. Do not reimplement extraction per factor.
-- `libs/runtime/`: environment/dependency contracts and Postgres/KG/S3 probes.
 - `db/migrations/`: the schema source of truth for `raw`, `staging`, `mart`, `dagster`,
   and `app`.
-- `db/roles.sql`: database role and permission configuration.
 - `governance/`: historical delivery records (capabilities graph, evidence, handoffs).
-- `.github/workflows/`: GitHub Actions with path filtering.
 
 ## Architecture red lines
 
@@ -157,11 +130,10 @@ Repository shape:
   default. `recorded_at` is ingestion audit time only.
 - A constant never stands in for a measurement. A run's shape (universe size, listing and
   obligation counts), a record's time, and a field's freshness are derived from the run or
-  the source, never written down as a literal or a default. This is the repository's most
-  repeated defect shape, and each instance passes every test built on the founding
+  the source, never written down as a literal or a default. This is the most repeated
+  defect shape here; each instance passes every test built on the founding
   assumption: an insertion-clock `transaction_time`, a stamped `freshness`, a hardcoded
-  84-cell denominator that survived five serial fixes (#539), a growth window behind a
-  default-off flag (#284).
+  84-cell denominator (#539).
 - Never overwrite a point-in-time record. Restatements insert new rows and set
   `is_restatement`; they never update history in place. Parsed facts carry
   `mapping_version` so reparses remain distinguishable from restatements.
@@ -184,25 +156,22 @@ Repository shape:
 - LLM surfaces use typed `mart` reads only, never raw/staging access, arbitrary SQL, or
   live factor computation. `mart_readonly` enforces the database boundary and
   `ResearchQueryService` enforces allowed queries, pagination, and row limits.
-- LLM extraction is a separate versioned, append-only step. Bind model, instructions,
-  schema, and decoding settings; store semantic results and evidence spans. Replay never
-  silently calls a model. Self-reported confidence is not calibrated evidence without an
-  accepted sealed holdout policy.
-- Every external request — SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo and the
-  LLM extraction provider — goes through the source gateway and `api_call_ledger` with a
-  declared capacity; no module calls a vendor or a model directly (init.md rule 6, owner
-  decision 2026-09-04). The ledger is throttle and audit infrastructure, not a fictional
-  monthly-call quota: moomoo's quote/fundamental endpoints use burst rate limits; do not
-  confuse a subscription tier ceiling with a call budget. See `init.md` Section 5.
+- LLM extraction is a versioned, append-only step. Bind model, instructions, schema, and
+  decoding settings; store semantic results and evidence spans. Replay never calls a model.
+  Confidence uses the continuous `0-100` score (`prior x agreement x freshness x lineage`), never
+  a constant. Single-source extraction lowers confidence and never blocks a row.
+- Every external request (SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo, the LLM
+  extraction provider) goes through the source gateway and `api_call_ledger` with a declared
+  capacity. No module calls a vendor or a model directly (init.md rule 6). The ledger is
+  throttle and audit infrastructure, not a monthly-call quota: moomoo's quote/fundamental
+  endpoints use burst rate limits; do not confuse a tier ceiling with a call budget.
 - Moomoo access is Quote API read-only. Every trading context and every order placement,
-  modification, cancellation, or trade-unlock operation is forbidden. The public
-  repository's security CI must reject trading APIs rather than relying on review alone.
-- Consumers of data-engine outputs read through a governed, access-controlled
-  `current_pointer` that resolves to an immutable exact run, identified by that run's
-  content hash. Pinning an exact snapshot/handoff identity for a reproducible read stays
-  supported; a bare mutable `latest` is never a read path. The pointer advances only on an
-  accepted refresh, and consumers re-pull when it advances. See
-  `docs/architecture-decisions/A1-evidence-chain-in-database.md`.
+  modification, cancellation, or trade-unlock operation is forbidden. Security CI rejects
+  trading APIs rather than relying on review alone.
+- Consumers of data-engine outputs read through `mart.served_head` (or a pinned
+  `run_id` / `snapshot_id` / `evidence_hash`). A bare mutable `latest` is never a read path.
+  The pointer advances only on an accepted refresh, and consumers re-pull when it advances
+  (`docs/architecture-decisions/A1-evidence-chain-in-database.md`).
 
 ## Environments and source gotchas
 
@@ -212,7 +181,7 @@ This repository consumes only released `infra2-sdk` contracts.
 
 | Environment | Postgres | Object storage | Provisioning |
 |---|---|---|---|
-| Local | `make runtime-up` or localhost | Local MinIO | `make db-reset` to start where CI starts, `make db-migrate` to move forward, `make db-check` to prove it matches; bucket bootstrap |
+| Local | `make runtime-up` or localhost | Local MinIO | `make db-reset`, `make db-migrate`, `make db-check` (see Commands); bucket bootstrap |
 | GitHub CI | Ephemeral service container | Ephemeral MinIO container | Per workflow run |
 | Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `apps/data-engine/scripts/setup_vps_ingest.sh` |
 | Production | `truealpha-postgres`, host loopback `:15433` | Platform MinIO, bucket `truealpha-raw` | Explicit graduation |
@@ -221,36 +190,28 @@ This repository consumes only released `infra2-sdk` contracts.
   only; they are not scheduled-run evidence.
 - SEC XBRL concept tags and units vary across industries. Do not assume one field mapping
   works for every issuer.
-- yfinance has no official SLA. Represent that limitation through lower row confidence;
-  never make it a critical-path dependency or a provenance branch in factors.
+- `yfinance` is the zero-quota default base for price and split coverage. Twelve Data and
+  moomoo corroborate within their quotas. Represent `yfinance`'s missing SLA through lower
+  confidence (`Low` when single-source), never a provenance branch in factors. Price reuse
+  keys on `(listing, session_date)`, not issuer namespace.
 - N-PORT holdings identify positions by CUSIP/ISIN, not ticker/CIK. Resolve identifiers
   through OpenFIGI or equivalent before writing PIT `same_as` KG edges. Use
   `staging.kg_entities`, `staging.kg_identifiers`, and `staging.kg_edges`, not a flat
   symbol-mapping table.
-- Build the structured-extraction primitive in `libs/factors/shared` before
-  factor-specific extraction. Do not duplicate extraction logic.
 
 ## Commands
 
 - Install/check/test: `make install`, `make check`, `make test`.
-- Local dependencies: `make runtime-up`, `make runtime-check`.
 - Database: `make db-up`, `make db-migrate` (apply the chain forward), `make db-reset`
   (drop, recreate, re-apply — the repair path when a database has drifted; replay does not
   repair a table already in a superseded shape), `make db-check` (diff a live database
   against the declared chain).
-- Python: `uv sync --all-packages`, `uv run pytest`, `uv run ruff check .`.
-- Web: `cd apps/app-web && bun install`, `bun run dev`, `bun run typecheck`,
-  `bun run build`.
 
-Reconnaissance/bootstrap ingestion (ordered; the moomoo commands need the OpenD host and
-`MOOMOO_LEDGER_BACKEND=postgres`; probe non-US endpoints before a full sweep):
-
-```sh
-uv run --package truealpha-data-engine python apps/data-engine/scripts/bootstrap_universe.py
-uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_sec_facts.py
-uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_nonus.py
-uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_moomoo_fundamentals.py --dry-run
-```
+Reconnaissance/bootstrap ingestion runs these scripts of `apps/data-engine/scripts/` in order
+(`uv run --package truealpha-data-engine python <script>`): `bootstrap_universe.py`,
+`sweep_sec_facts.py`, `probe_moomoo_nonus.py`, `sweep_moomoo_fundamentals.py --dry-run`. The
+moomoo scripts need the OpenD host and `MOOMOO_LEDGER_BACKEND=postgres`. Probe non-US endpoints
+before a full sweep.
 
 Run the narrowest relevant tests first. Report what was not run and why.
 <!-- WS_STATIC_END -->

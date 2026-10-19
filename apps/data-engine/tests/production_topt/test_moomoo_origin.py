@@ -693,3 +693,32 @@ def test_the_price_route_wires_the_third_origin_only_when_enabled(monkeypatch) -
     monkeypatch.setattr(origin_module.settings, "moomoo_opend_host", "opend.test")
     monkeypatch.setattr(origin_module.settings, "moomoo_opend_port", 11111)
     assert [o.origin for o in build_route(context, cells)._corroborating_origins] == ["moomoo-kline"]
+
+
+def test_parse_valuation_profit_growth_filters_annual_periods_by_cutoff() -> None:
+    valuation = {
+        "profit_growth_rate": {
+            "profit_data": [
+                {
+                    "period_str": "2024/FY",
+                    "financial_quarter": 4,
+                    "report_date_str": "2024-12-31",
+                    "profit_growth_rate": 24.5,
+                },
+                {
+                    "period_str": "2025/Q2",
+                    "financial_quarter": 2,
+                    "report_date_str": "2025-06-30",
+                    "profit_growth_rate": 12.0,
+                },
+                {
+                    "period_str": "2025/FY",
+                    "financial_quarter": 4,
+                    "report_date_str": "2025-12-31",
+                    "profit_growth_rate": 18.25,
+                },
+            ]
+        }
+    }
+    parsed = origin_module.parse_valuation_profit_growth(valuation, cutoff=date(2025, 6, 30))
+    assert parsed == {date(2024, 12, 31): Decimal("24.5")}

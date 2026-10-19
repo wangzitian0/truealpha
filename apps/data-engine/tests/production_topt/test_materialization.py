@@ -1922,6 +1922,30 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
         PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", duplicate_key_rows)
 
 
+def test_snapshot_member_accepts_listing_reused_price_with_foreign_issuer_id() -> None:
+    """#1333 / #1352: `market-price` is reused across universes by `(listing, session_date)`,
+    so a price payload carrying a foreign `issuer_id` / `instrument_id` (e.g., LEI vs CIK)
+    must materialize cleanly under the target run's `listing.issuer_id` as long as
+    `price.listing_id == listing.listing_id`. Mismatched `price.listing_id` or mismatched
+    `financial.issuer_id` must still raise `ValueError`."""
+    reused_price_rows = _member_rows_for_probe()
+    reused_price_rows["market-price"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
+    reused_price_rows["market-price"].payload["instrument_id"] = "instrument:us67066g1040"
+    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", reused_price_rows)
+    assert member.issuer_id == "issuer:cik:0001045810"
+    assert member.listing_id == "listing:xnas:nvda"
+
+    wrong_price_listing_rows = _member_rows_for_probe()
+    wrong_price_listing_rows["market-price"].payload["listing_id"] = "listing:xnas:aapl"
+    with pytest.raises(ValueError, match="normalized payload identities disagree"):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_price_listing_rows)
+
+    wrong_financial_issuer_rows = _member_rows_for_probe()
+    wrong_financial_issuer_rows["financial-fact"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
+    with pytest.raises(ValueError, match="normalized payload identities disagree"):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_financial_issuer_rows)
+
+
 def test_snapshot_member_aligns_stock_split_via_live_on_close_basis() -> None:
     """#1277: `_snapshot_member` calls `share_basis.live_on_close_basis` to adjust
     `shares_outstanding` for any split with `ex_date` in `(basis_date, close_session]`."""
