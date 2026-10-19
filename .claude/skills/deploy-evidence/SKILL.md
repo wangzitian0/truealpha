@@ -33,7 +33,7 @@ docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
 
 ### Step 3: Deployed Execution Proof (Reachable Path)
 Verify that the capability was invoked via the deployed entrypoint:
-- **For DataHub/Ingestion**: The Dagster job ticked under daemon or sensor, writing to `mart.current_pointer`.
+- **For DataHub/Ingestion**: The Dagster job ticked under daemon or sensor, writing to `mart.served_head`.
 - **For Web/API**: An HTTP 200 response with typed data from the live service domain (`truealpha.club` or staging subdomain).
 - **For Factors**: Factor outputs materialized into `mart` tables and readable via `mart_readonly`.
 
@@ -53,5 +53,5 @@ LIMIT 5;
 ## 3. Red Lines (Instant Rejection)
 - ❌ Code merged into `main` without deployed proof: **DO NOT CLOSE ISSUE**.
 - ❌ Green tests using fixture data or mocked responses: **DO NOT CLOSE ISSUE**.
-- ❌ Output says `unavailable`, `unsourced`, or returns low-confidence sentinel without explicit scope demotion note: **DO NOT CLOSE ISSUE**.
+- ❌ Output says `unavailable`, `unsourced`, or returns a sentinel placeholder / hardcoded confidence stamp (`0.85`, `0.92`, `1.00`) without an explicit scope demotion note (a real computed value with a `low_confidence` continuous score is valid and counts as produced): **DO NOT CLOSE ISSUE**.
 - ❌ Standing checks supply parameters that deployed callers omit (#284): **REJECT EVIDENCE**.
