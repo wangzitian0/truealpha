@@ -20,10 +20,18 @@ from factors.base.analyst_track_record import (
     AnalystTrackRecord,
     analyst_track_record,
 )
+from factors.confidence import evaluate_continuous_confidence
 from psycopg import Connection
+from truealpha_contracts.confidence import (
+    ContinuousConfidenceInput,
+    ContinuousConfidencePolicy,
+    SourceConfidenceEvidence,
+)
 
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
+
+_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 __all__ = (
     "MAX_FAILURES_LOGGED",
@@ -36,6 +44,7 @@ __all__ = (
     "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
     "materialize_universe_analyst_ratings",
+    "parse_rating_summary",
 )
 
 log = logging.getLogger(__name__)
@@ -199,6 +208,84 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     }
 
 
+def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRatingItem]:
+    """Parse per-analyst rating summary rows filtered to recommendations on or before `as_of`.
+
+    Each item carries continuous confidence derived from source prior, analyst track-record
+    success rate, and vendor-timestamp sample conformance (`vendor_timestamp`).
+    """
+    if _is_empty(payload) or not isinstance(payload, Mapping):
+        return []
+    summaries = payload.get("analyst_rating_summary_list")
+    if not isinstance(summaries, list):
+        return []
+    cutoff_iso = as_of.date().isoformat()
+    out: list[AnalystRatingItem] = []
+    for entry in summaries:
+        if not isinstance(entry, Mapping):
+            continue
+        analyst_info = entry.get("analyst_info")
+        if not isinstance(analyst_info, Mapping):
+            continue
+        analyst_id = str(analyst_info.get("analyst_id") or analyst_info.get("analyst_name") or "").strip()
+        if not analyst_id:
+            continue
+        raw_sr = analyst_info.get("success_rate")
+        sr_factor = Decimal("0.85")
+        if isinstance(raw_sr, Real) and not isinstance(raw_sr, bool):
+            clamped = max(0.0, min(100.0, float(raw_sr)))
+            sr_factor = Decimal(str(round(0.70 + 0.30 * (clamped / 100.0), 4)))
+        safe_analyst = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in analyst_id).strip("-") or "analyst"
+        item_conf = evaluate_continuous_confidence(
+            _CONFIDENCE_POLICY,
+            ContinuousConfidenceInput(
+                case_id=f"analyst:{safe_analyst}",
+                sources=(
+                    SourceConfidenceEvidence(
+                        provider_id="origin:moomoo-ratings:v1",
+                        origin_group_id="lineage:moomoo",
+                        independence_weight=Decimal("1"),
+                        successful_outcome_mass=Decimal("40"),
+                        failed_outcome_mass=Decimal("0"),
+                        freshness=Decimal("1"),
+                        sample_conformance=Decimal("0.90"),
+                        transport_integrity=Decimal("1"),
+                        evidence_ids=(f"analyst:{safe_analyst}",),
+                        reason_codes=("vendor_timestamp",),
+                    ),
+                ),
+                agreement=sr_factor,
+                semantic_mapping_quality=Decimal("1"),
+                lineage_completeness=Decimal("1"),
+                required_component_completeness=Decimal("1"),
+            ),
+        ).confidence
+
+        items = entry.get("rating_item_list")
+        if not isinstance(items, list):
+            continue
+        latest_date: str | None = None
+        latest_rating: int | None = None
+        for r_item in items:
+            if not isinstance(r_item, Mapping):
+                continue
+            rec_date = r_item.get("recommendation_date_str")
+            raw_rating = r_item.get("rating")
+            if not isinstance(rec_date, str) or len(rec_date) < 10 or rec_date[:10] > cutoff_iso:
+                continue
+            if isinstance(raw_rating, bool) or not isinstance(raw_rating, Real) or not float(raw_rating).is_integer():
+                continue
+            rating_int = int(float(raw_rating))
+            if not (_RATING_MIN <= rating_int <= _RATING_MAX):
+                continue
+            if latest_date is None or rec_date[:10] >= latest_date:
+                latest_date = rec_date[:10]
+                latest_rating = rating_int
+        if latest_rating is not None:
+            out.append(AnalystRatingItem(analyst_id=analyst_id, rating=latest_rating, confidence=item_conf))
+    return out
+
+
 def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
     """The unavailable row for an issuer whose fetch failed. The reason code holds the exception
     type only, never its text, which can name a host."""
@@ -236,10 +323,28 @@ def _ticker_row(
         return _fetch_error_row(company_id, open_error), failure
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
     try:
-        from data_engine.sources.moomoo import get_analyst_consensus
+        from data_engine.sources.moomoo import (
+            get_analyst_consensus,
+            get_rating_summary,
+            get_valuation_detail,
+        )
 
         payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
         consensus_row = _consensus_row(payload, company_id)
+        summary_items: list[AnalystRatingItem] = []
+        if hasattr(ctx, "get_research_rating_summary"):
+            try:
+                summary_payload = get_rating_summary(ctx, code, caller="capture_ticker_analyst_ratings")
+                summary_items = parse_rating_summary(summary_payload, as_of=as_of)
+            except Exception:  # noqa: BLE001
+                summary_items = []
+        has_valuation = False
+        if hasattr(ctx, "get_valuation_detail"):
+            try:
+                val_payload = get_valuation_detail(ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings")
+                has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
+            except Exception:  # noqa: BLE001
+                has_valuation = False
     except Exception as exc:
         failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
         log.error(
@@ -251,7 +356,49 @@ def _ticker_row(
         )
         return _fetch_error_row(company_id, exc), failure
     if consensus_row is None:
+        if summary_items:
+            rec = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of)
+            return {
+                "issuer_id": company_id,
+                "consensus_rating": rec.consensus_rating,
+                "analysts_count": rec.ratings_count,
+                "buy_count": rec.buy_count,
+                "hold_count": rec.hold_count,
+                "sell_count": rec.sell_count,
+                "confidence": rec.result.confidence,
+                "availability_status": "available" if rec.consensus_rating is not None else "unavailable",
+                "reason_codes": [*rec.result.flags, "vendor_timestamp"],
+            }, None
         return analyst_track_record([], entity_id=company_id, as_of=as_of), None
+    if summary_items or has_valuation:
+        agreement = min(item.confidence for item in summary_items) if summary_items else Decimal("0.90")
+        cont = evaluate_continuous_confidence(
+            _CONFIDENCE_POLICY,
+            ContinuousConfidenceInput(
+                case_id=f"consensus:{company_id}",
+                sources=(
+                    SourceConfidenceEvidence(
+                        provider_id="origin:moomoo-ratings:v1",
+                        origin_group_id="lineage:moomoo",
+                        independence_weight=Decimal("1"),
+                        successful_outcome_mass=Decimal("40"),
+                        failed_outcome_mass=Decimal("0"),
+                        freshness=Decimal("1"),
+                        sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
+                        transport_integrity=Decimal("1"),
+                        evidence_ids=(f"consensus:{company_id}",),
+                        reason_codes=("vendor_timestamp",),
+                    ),
+                ),
+                agreement=agreement,
+                semantic_mapping_quality=Decimal("1"),
+                lineage_completeness=Decimal("1"),
+                required_component_completeness=Decimal("1"),
+            ),
+        )
+        consensus_row["confidence"] = cont.confidence
+        if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
+            consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "vendor_timestamp"]
     return consensus_row, None
 
 

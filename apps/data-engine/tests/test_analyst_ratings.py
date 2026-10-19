@@ -1564,3 +1564,56 @@ def test_the_terminal_op_follows_coverage_and_the_analyst_summary(job_name) -> N
         for handle, outputs in structure.input_to_upstream_outputs_for_node("fail_if_a_lane_failed").items()
     }
     assert upstream == {"analyst_summary": ["run_analyst_ratings"], "coverage_summary": ["run_question_coverage"]}
+
+
+def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_timestamp() -> None:
+    from data_engine.datahub.analyst_ratings import parse_rating_summary
+
+    summary_payload = {
+        "analyst_rating_summary_list": [
+            {
+                "analyst_info": {"analyst_id": "a-1", "analyst_name": "Alice", "success_rate": 80.0},
+                "rating_item_list": [
+                    {"recommendation_date_str": "2026-09-01", "rating": 4},
+                    {"recommendation_date_str": "2026-11-01", "rating": 1},  # future relative to cutoff
+                ],
+            },
+            {
+                "analyst_info": {"analyst_id": "a-2", "analyst_name": "Bob", "success_rate": 60.0},
+                "rating_item_list": [
+                    {"recommendation_date_str": "2026-10-01", "rating": 5},
+                ],
+            },
+        ]
+    }
+    cutoff = datetime(2026, 10, 6, tzinfo=UTC)
+    items = parse_rating_summary(summary_payload, as_of=cutoff)
+    assert len(items) == 2
+    assert items[0].rating == 4  # future 2026-11-01 rating filtered out
+    assert items[1].rating == 5
+    assert items[0].confidence > items[1].confidence
+
+    class _FullQuoteContext:
+        def get_research_analyst_consensus(self, code: str):
+            return 0, _sample("DDOG")
+
+        def get_research_rating_summary(self, code: str, **kwargs: Any):
+            return 0, summary_payload
+
+        def get_valuation_detail(self, code: str, **kwargs: Any):
+            return 0, {"profit_growth_rate": {"profit_data": []}}
+
+    conn = _MockConnection()
+    res = capture_ticker_analyst_ratings(
+        ctx=_FullQuoteContext(),
+        ticker="DDOG",
+        company_id=DDOG,
+        connection=conn,
+        run_id="run:rich",
+        cutoff=cutoff,
+    )
+    assert res.rows == 1
+    assert res.failure is None
+    _, params = conn.executed[0]
+    assert "vendor_timestamp" in params[9]
+    assert Decimal("0.40") < params[8] < Decimal("0.85")

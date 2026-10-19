@@ -18,10 +18,19 @@ from factors.base.supply_chain_exposure import (
     SupplyChainPartner,
     supply_chain_exposure,
 )
+from factors.confidence import evaluate_continuous_confidence
+from factors.shared.entity_resolution import add_edge, ensure_entity
 from psycopg import Connection
+from truealpha_contracts.confidence import (
+    ContinuousConfidenceInput,
+    ContinuousConfidencePolicy,
+    SourceConfidenceEvidence,
+)
 
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
+
+_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 __all__ = (
     "SupplyChainEdgeCandidate",
@@ -30,6 +39,7 @@ __all__ = (
     "extract_supply_chain_relationships",
     "materialize_supply_chain_exposure",
     "materialize_universe_supply_chain_exposure",
+    "persist_extracted_supply_chain_edges",
     "supply_chain_exposure",
 )
 
@@ -156,16 +166,147 @@ def extract_supply_chain_relationships(
             if not target_name:
                 continue
 
+            sample_conf = Decimal("0.98") if len(line_clean) >= 40 else Decimal("0.92")
+            safe_issuer = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", issuer_id).strip("-") or "issuer"
+            safe_acc = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", accession).strip("-") or "acc"
+            safe_target = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", target_name).strip("-") or "partner"
+            edge_conf = evaluate_continuous_confidence(
+                _CONFIDENCE_POLICY,
+                ContinuousConfidenceInput(
+                    case_id=f"supply-chain:{safe_issuer}:{safe_acc}:{safe_target}",
+                    sources=(
+                        SourceConfidenceEvidence(
+                            provider_id="origin:sec-10k:v1",
+                            origin_group_id="lineage:sec-10k",
+                            independence_weight=Decimal("1"),
+                            successful_outcome_mass=Decimal("70"),
+                            failed_outcome_mass=Decimal("0"),
+                            freshness=Decimal("1"),
+                            sample_conformance=sample_conf,
+                            transport_integrity=Decimal("1"),
+                            evidence_ids=(f"accession:{safe_acc}",),
+                            reason_codes=(f"relation:{rel}",),
+                        ),
+                    ),
+                    agreement=Decimal("1"),
+                    semantic_mapping_quality=Decimal("0.95"),
+                    lineage_completeness=Decimal("1"),
+                    required_component_completeness=Decimal("1"),
+                ),
+            ).confidence
+
             results.append(
                 SupplyChainEdgeCandidate(
                     source_entity_id=issuer_id,
                     target_entity_name=target_name,
                     relation_type=rel,
                     evidence_sentence=line_clean[:200],
-                    confidence=Decimal("0.85"),
+                    confidence=edge_conf,
                 )
             )
     return tuple(results)
+
+
+def _slug_entity_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return f"company:partner:{slug or 'unknown'}"
+
+
+def persist_extracted_supply_chain_edges(
+    connection: Connection[Any],
+    *,
+    issuers: Sequence[CanonicalIssuer],
+    cutoff: datetime,
+    object_store: Any | None = None,
+) -> int:
+    """Extract supply-chain edges from captured SEC 10-K filings at or before `cutoff` and
+    persist them into `staging.kg_entities` and `staging.kg_edges`.
+    """
+    by_cik: dict[str, CanonicalIssuer] = {}
+    by_legacy: dict[str, CanonicalIssuer] = {}
+    by_issuer_id: dict[str, CanonicalIssuer] = {}
+    for iss in issuers:
+        by_legacy[iss.legacy_id] = iss
+        by_issuer_id[iss.issuer_id] = iss
+        if iss.legacy_id.startswith("company:cik:"):
+            cik_raw = iss.legacy_id.removeprefix("company:cik:").lstrip("0") or "0"
+            by_cik[cik_raw] = iss
+
+    try:
+        rows = connection.execute(
+            """
+            select id, source_record_id, object_key, source_published_at, metadata
+            from raw.fetches
+            where source = 'sec'
+              and source_record_id like 'filing-document:CIK%%'
+              and source_published_at <= %s
+            order by source_published_at asc, id asc
+            """,
+            (cutoff,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return 0
+
+    inserted = 0
+    for row in rows:
+        if not isinstance(row, tuple | list) or len(row) < 5:
+            continue
+        fetch_id, source_record_id, object_key, published_at, metadata = row[:5]
+        meta = metadata if isinstance(metadata, dict) else {}
+        matched: CanonicalIssuer | None = None
+        issuer_hint = str(meta.get("issuer_id") or meta.get("legacy_id") or "")
+        if issuer_hint in by_legacy:
+            matched = by_legacy[issuer_hint]
+        elif issuer_hint in by_issuer_id:
+            matched = by_issuer_id[issuer_hint]
+        elif isinstance(source_record_id, str) and source_record_id.startswith("filing-document:CIK"):
+            parts = source_record_id.split(":")
+            if len(parts) >= 2:
+                cik_digits = parts[1].removeprefix("CIK").lstrip("0") or "0"
+                matched = by_cik.get(cik_digits)
+        if matched is None:
+            continue
+
+        filing_text = meta.get("plain_text") if isinstance(meta.get("plain_text"), str) else None
+        if not filing_text and object_store is not None and isinstance(object_key, str) and object_key:
+            try:
+                from data_engine.datahub.sec_filing_documents import (  # type: ignore[import-untyped]
+                    filing_plain_text,
+                )
+
+                raw_bytes = object_store.get_bytes(object_key)
+                filing_text = filing_plain_text(raw_bytes, document_name=str(meta.get("primary_document") or "10k.txt"))
+            except Exception:  # noqa: BLE001
+                filing_text = None
+        if not filing_text:
+            continue
+
+        tx_time = published_at if isinstance(published_at, datetime) else cutoff
+        filing_dt = tx_time.date() if hasattr(tx_time, "date") else cutoff.date()
+        accession = str(meta.get("accession") or source_record_id)
+        candidates = extract_supply_chain_relationships(
+            filing_text,
+            issuer_id=matched.legacy_id,
+            filing_date=filing_dt,
+            accession=accession,
+        )
+        for cand in candidates:
+            partner_id = _slug_entity_id(cand.target_entity_name)
+            ensure_entity(connection, matched.legacy_id, "company", matched.ticker)
+            ensure_entity(connection, partner_id, "company", cand.target_entity_name)
+            if add_edge(
+                connection,
+                from_id=matched.legacy_id,
+                to_id=partner_id,
+                relation_type="supplies_to",
+                confidence=float(cand.confidence),
+                source="sec_10k_supply_chain",
+                transaction_time=tx_time,
+                valid_from=filing_dt.isoformat(),
+                raw_ref=f"raw.fetches:{fetch_id}",
+            ):
+                inserted += 1
+    return inserted
 
 
 def materialize_supply_chain_exposure(
@@ -265,6 +406,7 @@ def materialize_universe_supply_chain_exposure(
     run_id: str,
     cutoff: datetime,
     issuers: Sequence[CanonicalIssuer],
+    object_store: Any | None = None,
 ) -> int:
     """Extract and materialize supply chain exposure for all issuers in a universe run.
 
@@ -284,6 +426,14 @@ def materialize_universe_supply_chain_exposure(
         except Exception:
             pass
         has_edges_table = False
+
+    if has_edges_table:
+        persist_extracted_supply_chain_edges(
+            connection,
+            issuers=issuers,
+            cutoff=cutoff,
+            object_store=object_store,
+        )
 
     cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
     # One measurement per run, taken before any issuer: does the graph hold a supplier edge at all?
