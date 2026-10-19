@@ -1224,6 +1224,147 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
     )
 
 
+#: `python3 tools/<name>.py` or `python tools/<name>.py`: the shell finds the interpreter through PATH.
+_BARE_TOOL_CALL = re.compile(r"(?<![\w./-])python(?:3(?:\.\d+)?)?(?:\s+-\w+)*\s+tools/(\w+)\.py\b")
+#: `uv run` starts the call when no shell separator stands between `uv run` and the call.
+_STARTED_BY_UV_RUN = re.compile(r"\buv\s+run\b[^;&|()`]*$")
+_IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+
+
+def _bare_tool_calls(run: str) -> list[str]:
+    """The names of the tools that a `run` script starts with the PATH interpreter."""
+    calls = []
+    for line in run.replace("\\\n", " ").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for match in _BARE_TOOL_CALL.finditer(line):
+            if not _STARTED_BY_UV_RUN.search(line[: match.start()]):
+                calls.append(match.group(1))
+    return calls
+
+
+def _module_level_imports(tool: str, seen: set[str] | None = None) -> set[str]:
+    """The non-stdlib top-level modules that `tools/<tool>.py` imports when it starts.
+
+    The walk reads the code that runs at start: top-level statements and the `__main__` block.
+    It skips function bodies and `if TYPE_CHECKING:` bodies, because that code does not run at start.
+    It skips a `try` body whose handler catches an import failure, because that import is optional.
+    A module in `tools/` is not an install. The walk follows it into its own imports.
+    """
+    seen = set() if seen is None else seen
+    seen.add(tool)
+    tools_dir = REPO_ROOT / "tools"
+    names: set[str] = set()
+
+    def visit(body: list[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    names.add(node.module.split(".")[0])
+            elif isinstance(node, ast.If) and "TYPE_CHECKING" in {
+                getattr(node.test, "id", None),
+                getattr(node.test, "attr", None),
+            }:
+                visit(node.orelse)
+            elif isinstance(node, (ast.Try, ast.TryStar)):
+                caught = {
+                    name
+                    for handler in node.handlers
+                    for name in (re.findall(r"\w+", ast.unparse(handler.type)) if handler.type else ["BaseException"])
+                }
+                if not caught & _IMPORT_ERRORS:
+                    visit(node.body)
+                for handler in node.handlers:
+                    visit(handler.body)
+                visit(node.orelse)
+                visit(node.finalbody)
+            else:
+                for field in ("body", "orelse", "finalbody"):
+                    child = getattr(node, field, None)
+                    if isinstance(child, list):
+                        visit(child)
+
+    visit(ast.parse((tools_dir / f"{tool}.py").read_text(encoding="utf-8")).body)
+    needed: set[str] = set()
+    for name in names:
+        if (tools_dir / f"{name}.py").is_file() or (tools_dir / name / "__init__.py").is_file():
+            if name not in seen:
+                needed |= _module_level_imports(name, seen)
+        elif name not in sys.stdlib_module_names:
+            needed.add(name)
+    return needed
+
+
+def _installs_for_the_path_interpreter(earlier: list[dict]) -> bool:
+    """True when an earlier step puts packages where a bare `python3` finds them.
+
+    Two forms count. One: setup-uv, then `uv sync`, and a `.venv/bin` line into `$GITHUB_PATH`.
+    Two: `pip install` (not `uv pip install`), which installs into the interpreter that PATH finds.
+    `uv sync` alone does not count. It fills `.venv`, and a bare `python3` does not read `.venv`.
+    """
+    setup_uv = [
+        index
+        for index, spec in enumerate(earlier)
+        if re.fullmatch(r"\./\.github/actions/setup-uv|astral-sh/setup-uv@\S+", str(spec.get("uses", "")))
+    ]
+    runs = [str(spec.get("run", "")) for spec in earlier]
+    synced = bool(setup_uv) and any(re.search(r"\buv\s+sync\b", run) for run in runs[setup_uv[0] + 1 :])
+    on_path = any(re.search(r"\.venv/bin\"?\s*>>\s*\"?\$\{?GITHUB_PATH\b", run) for run in runs)
+    pip = any(re.search(r"(?<!uv )\bpip3?\s+install\b|\buv\s+pip\s+install\b[^\n]*--system", run) for run in runs)
+    return (synced and on_path) or pip
+
+
+def test_a_bare_python_runs_a_tool_only_after_its_job_installs_what_the_tool_imports() -> None:
+    """A tool that a bare `python3` runs must find its imports on PATH — #1369.
+
+    #1357 made `tools/verified_sha_images.py` import `infra2_sdk` at module level.
+    The `plan` job of release-images.yml ran that tool after a checkout and nothing else.
+    So every tag run failed with `ModuleNotFoundError: No module named 'infra2_sdk'`.
+    Only a tag sets `reuse_verified_sha`, so no pull request and no main push ran the tool.
+    CI stayed green, and each automatic release deleted its own tag.
+
+    This is the general form of the check, not the narrow `infra2_sdk` form.
+    It reads every step of every workflow, `workflow_call` files too.
+    A bare call is `python3 tools/<name>.py` or `python tools/<name>.py` that no `uv run` starts.
+    `ast` gives the imports that run at start, and `sys.stdlib_module_names` removes the stdlib.
+    The general form was exact on the tree of #1369: of 20 bare calls, it flagged only the one that failed.
+    For each such import, an earlier step of the same job must install for the PATH interpreter.
+    `_installs_for_the_path_interpreter` gives the two forms that count.
+
+    Limits. The check does not prove that the install holds each module.
+    It does not read step `if:` conditions.
+    `test_the_plan_job_installs_the_sdk_on_each_run_that_asks_the_registry` pins both for release-images.
+    `test_every_workflow_installs_what_the_tools_it_runs_import` covers the calls that `uv run` starts.
+    """
+    calls = 0
+    offenders = []
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_id, spec in (workflow.get("jobs") or {}).items():
+            job_steps = spec.get("steps") or []
+            for index, item in enumerate(job_steps):
+                for tool in _bare_tool_calls(str(item.get("run", ""))):
+                    calls += 1
+                    imported = _module_level_imports(tool)
+                    if imported and not _installs_for_the_path_interpreter(job_steps[:index]):
+                        label = item.get("name") or item.get("id") or f"#{index + 1}"
+                        offenders.append(
+                            f"{path.name}: job {job_id!r}, step {label!r} runs tools/{tool}.py with a bare "
+                            f"python, and the tool imports {sorted(imported)} at module level"
+                        )
+    assert calls, "no workflow step runs a tools/ script with a bare python: this check has lost its subject"
+    assert not offenders, (
+        f"no earlier step of the job installs these imports for the PATH interpreter: {offenders}. "
+        f"The step fails with ModuleNotFoundError on a runner without them (#1369). Before the step, add "
+        f'setup-uv, then `uv sync`, then `echo "$PWD/.venv/bin" >> "$GITHUB_PATH"`. Or start the call '
+        f"with `uv run --no-sync` after a `uv sync`"
+    )
+
+
 def test_two_different_releases_never_queue_behind_each_other() -> None:
     """`docs/release-protocol.md` tells an author the tag push is the only lock
     and that parallel releases do not deadlock. That claim rests entirely on the
@@ -1602,6 +1743,52 @@ def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
     )
     # A build never runs for a re-tagged image: the build matrix is what the split left.
     assert str(job(IMAGES, "build")["strategy"]["matrix"]) == "${{ fromJSON(needs.plan.outputs.matrix) }}"
+
+
+def test_the_plan_job_installs_the_sdk_on_each_run_that_asks_the_registry() -> None:
+    """#1369: `plan` installs what tools/verified_sha_images.py imports, on each run that calls it.
+
+    The split calls the tool only when `REUSE_VERIFIED_SHA` is "true", and that variable carries one input.
+    So each install step runs before the split, on that same input.
+    The general check above reads neither `if:` conditions nor the contents of an install. This test pins both.
+    The metadata of this environment maps each module that the tool imports to its distribution.
+    The dependency group that `uv sync --frozen --only-group` names must list that distribution.
+    """
+    plan = job(IMAGES, "plan")["steps"]
+    names = [spec.get("name") for spec in plan]
+    split = names.index("Select available images")
+    gate = str(plan[split]["env"]["REUSE_VERIFIED_SHA"]).removeprefix("${{").removesuffix("}}").strip()
+    setup = job_step(IMAGES, "plan", "Install uv for the verified-SHA split")
+    sync = job_step(IMAGES, "plan", "Install the pinned SDK for the verified-SHA split")
+    for spec in (setup, sync):
+        assert names.index(spec["name"]) < split, f"plan runs {spec['name']!r} after the split that needs it"
+        condition = str(spec.get("if", "")).removeprefix("${{").removesuffix("}}").strip()
+        assert condition == gate, (
+            f"plan runs {spec['name']!r} on {condition!r}, and the split runs on {gate!r}: "
+            f"a tag run can call the tool without the SDK (#1369)"
+        )
+
+    install = re.search(r"\buv sync --frozen --only-group (\S+)", str(sync["run"]))
+    assert install, "plan no longer runs `uv sync --frozen --only-group <group>`, so uv.lock does not pin the SDK"
+    group = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["dependency-groups"]
+    assert install.group(1) in group, (
+        f"plan installs the group {install.group(1)!r}, and pyproject.toml has only {sorted(group)}"
+    )
+    listed = {
+        re.sub(r"[-_.]+", "-", re.split(r"[\s\[<>=!~;@]", str(requirement), maxsplit=1)[0]).lower()
+        for requirement in group[install.group(1)]
+    }
+    imported = _module_level_imports("verified_sha_images")
+    assert imported, (
+        "tools/verified_sha_images.py imports only the stdlib again: delete the two plan install steps and this test"
+    )
+    distributions = importlib.metadata.packages_distributions()
+    for module in sorted(imported):
+        provided = {re.sub(r"[-_.]+", "-", name).lower() for name in distributions.get(module, [])}
+        assert provided & listed, (
+            f"tools/verified_sha_images.py imports {module} (distribution {sorted(provided)}), and the "
+            f"{install.group(1)!r} group that plan installs lists only {sorted(listed)} (#1369)"
+        )
 
 
 def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:

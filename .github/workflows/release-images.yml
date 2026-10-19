@@ -43,7 +43,9 @@ on:
 jobs:
   plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10, not 5: on a GitHub outage, the retry waits of setup-uv and uv add up to about
+    # 9 min (#1248, .github/actions/setup-uv). A 5 min cap would stop those retries early.
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -53,6 +55,25 @@ jobs:
       has_retag: ${{ steps.matrix.outputs.has_retag }}
     steps:
       - uses: actions/checkout@v4
+      # #1369: since #1357, tools/verified_sha_images.py imports infra2_sdk at module level.
+      # This job installed nothing, so every tag run failed with ModuleNotFoundError.
+      # Only a reuse run calls the tool, so only a reuse run installs. A PR and a main
+      # push skip both steps. No uv cache: no caller of this workflow grants
+      # `actions: write`, and a cache needs it (#645, test_anything_that_caches_can_actually_save).
+      - name: Install uv for the verified-SHA split
+        if: inputs.reuse_verified_sha
+        uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: false
+      # The `dev` group of the root pyproject.toml holds infra2-sdk[http], and uv.lock pins
+      # its hash. --frozen installs the lock as written. --only-group dev installs no
+      # workspace package. The PATH line makes `python3` in the next step the venv python.
+      - name: Install the pinned SDK for the verified-SHA split
+        if: inputs.reuse_verified_sha
+        run: |
+          set -euo pipefail
+          uv sync --frozen --only-group dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - id: matrix
         name: Select available images
         env:
