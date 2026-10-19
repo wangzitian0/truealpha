@@ -89,8 +89,5 @@ def test_sweep_owner_plate_uses_canonical_moomoo_bytes(monkeypatch):
     module.sweep_owner_plate(_Conn(), object(), ["US.NVDA"], stats)
     assert len(captured_fetches) == 1
     assert captured_fetches[0]["source_record_id"] == "owner_plate:US.NVDA"
-    assert captured_fetches[0]["body"] == mm.canonical_moomoo_bytes(
-        [{"code": "US.NVDA", "plate_code": "US.BK2010"}]
-    )
+    assert captured_fetches[0]["body"] == mm.canonical_moomoo_bytes([{"code": "US.NVDA", "plate_code": "US.BK2010"}])
     assert stats[("US", "owner_plate", "ok")] == 1
-
