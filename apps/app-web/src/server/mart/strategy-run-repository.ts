@@ -7,7 +7,7 @@
  * Parity with the Python `PostgresStrategyRunRepository` is not a comment —
  * it is EXECUTED: tests/strategy-run-parity-conformance.test.ts and its Python
  * half seed the same rows on one real schema and assert both serializations
- * equal the frozen canon in libs/contracts/conformance/strategy_run_parity.json
+ * equal the frozen canon in common/contracts/conformance/strategy_run_parity.json
  * (#469). The shared semantics:
  *  - the run the governed capture head resolves to per `strategy_key` (#575), else the
  *    newest by `executed_at desc, created_at desc, strategy_run_id desc`;
@@ -66,7 +66,7 @@ export type MartStrategyRunReport = StrategyRunReport & {
 // The run the governed capture head resolves to comes first (#575, #1062); only when no
 // head resolves a run for this strategy does the newest recorded run stand in. The
 // join lives in mart.served_head and mart.strategy_run_capture; this statement
-// is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and libs/contracts pins the two texts.
+// is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and common/contracts pins the two texts.
 // Python consumers read a row by position (is_governed is column 3), so a new column goes
 // at the end of the select list (#1235).
 export const LATEST_RUN_SQL = `
@@ -138,7 +138,7 @@ export const DECISIONS_SQL = `
          -- coordinates, and translating either would break the confidence join.
          --
          -- A join is a read, not a computation: init.md principle 2 keeps
-         -- metric computation in libs/factors, and this adds no metric.
+         -- metric computation in common/factors, and this adds no metric.
          t.confidence,
          t.operating_period_end, t.revenue_period_end, t.shares_period_end,
          t.universe_version, t.universe_sha256,

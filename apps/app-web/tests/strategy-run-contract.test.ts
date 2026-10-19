@@ -2,9 +2,9 @@
  * Python/TypeScript parity for #347's provisional StrategyRunReadRepository.
  *
  * Both `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`
- * (see libs/contracts/tests/test_strategy_run.py) and
+ * (see common/contracts/tests/test_strategy_run.py) and
  * `FixtureStrategyRunRepository` here read the identical checked-in fixture
- * bytes at `libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json`.
+ * bytes at `common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json`.
  * This test asserts the same field values the Python test asserts, proving
  * both adapters agree rather than merely both parsing without error.
  */
@@ -21,7 +21,7 @@ import {
 } from "../src/contracts/strategyRun";
 
 const fixtureUrl = new URL(
-  "../../../libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+  "../../../common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
   import.meta.url,
 );
 

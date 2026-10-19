@@ -14,7 +14,7 @@ each other rather than both asking. The call itself goes through the ledger
 (`record_call`, rule 6) with its token cost, under the `filing-extraction-model` seat.
 
 `as_selector()` at the bottom adapts `select_headcount` to the shared extraction
-primitive's `Selector` protocol (`libs/factors/shared/extraction.py`, #769) for a caller
+primitive's `Selector` protocol (`common/factors/shared/extraction.py`, #769) for a caller
 that only needs "chosen value or None" in the primitive's own vocabulary; every ledger,
 replay, and persistence behaviour above is unchanged and still reached through it.
 """
@@ -803,7 +803,7 @@ def as_selector(
     on_model_selection: Callable[[ModelSelection], None] | None = None,
 ) -> extraction_primitive.Selector:
     """Bind this call's ledger/replay context and return a `Selector`-conformant callable
-    (`libs/factors/shared/extraction.py`'s protocol) for a caller that only has the shared
+    (`common/factors/shared/extraction.py`'s protocol) for a caller that only has the shared
     primitive's `Candidate` sequence — this is the "model-backed selector plugs in without
     the library importing data_engine" half of #769: the primitive depends only on the
     protocol shape, and this factory is where a concrete implementation is bound to it.

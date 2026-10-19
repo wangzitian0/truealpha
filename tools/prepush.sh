@@ -121,15 +121,15 @@ for path in "${CHANGED[@]}"; do
     apps/data-engine/*|apps/app-web/*)
       SKIPPED+=("$path -> ${path%%/tests/*} suite (CI tier: data-engine ~168 s sharded, web walk needs a browser)")
       continue ;;
-    libs/*/tests/fixtures/*) ;;
-    libs/*/tests/*.py|apps/llm-service/tests/*.py) target="$path" ;;
+    common/*/tests/fixtures/*) ;;
+    common/*/tests/*.py|apps/llm-service/tests/*.py) target="$path" ;;
     tools/*.py|tools/*.sh|tools/*.json)
       base=$(basename "$path"); base="${base%.*}"
-      [ -f "libs/runtime/tests/test_${base}.py" ] && target="libs/runtime/tests/test_${base}.py" ;;
-    .github/workflows/*) target="libs/runtime/tests/test_ci_workflows.py" ;;
-    libs/*) target="$(echo "$path" | cut -d/ -f1-3)/tests" ;;
+      [ -f "common/runtime/tests/test_${base}.py" ] && target="common/runtime/tests/test_${base}.py" ;;
+    .github/workflows/*) target="common/runtime/tests/test_ci_workflows.py" ;;
+    common/*) target="$(echo "$path" | cut -d/ -f1-3)/tests" ;;
     apps/llm-service/*) target="apps/llm-service/tests" ;;
-    db/migrations/*|db/*.sql) target="libs/runtime/tests/test_migration_chain.py" ;;
+    db/migrations/*|db/*.sql) target="common/runtime/tests/test_migration_chain.py" ;;
   esac
   if [ -n "$target" ] && [ -e "$target" ] && [ -z "${SEEN[$target]:-}" ]; then
     SEEN[$target]=1
@@ -140,7 +140,7 @@ done
 if [ "${#TESTS[@]}" -gt 0 ]; then
   echo
   echo "== scoped tests: ${TESTS[*]} =="
-  # The marker breaks re-entry: libs/runtime/tests/test_prepush.py runs THIS
+  # The marker breaks re-entry: common/runtime/tests/test_prepush.py runs THIS
   # script, and this script runs that test file whenever it changed — an
   # unbounded recursion that would burn a CI job to its timeout. The test skips
   # itself when it sees the marker.

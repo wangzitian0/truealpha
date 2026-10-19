@@ -13,7 +13,7 @@ call does), and writes `tools/pytest_shard_weights.json`.
 The harvest records the run it came from — which dates it, since a run id is
 resolvable to its timestamp. That is not decoration:
 weights go stale silently — the lanes stay green and merely drift back out of
-balance — so `libs/runtime/tests/test_pytest_shard.py` asserts the harvest
+balance — so `common/runtime/tests/test_pytest_shard.py` asserts the harvest
 still covers most of the tree, which is the observable symptom of a harvest
 nobody refreshed.
 

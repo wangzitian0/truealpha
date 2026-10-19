@@ -5,14 +5,14 @@
 members = [
     "apps/data-engine",
     "apps/llm-service",
-    "libs/contracts",
-    "libs/factors",
-    "libs/runtime",
+    "common/contracts",
+    "common/factors",
+    "common/runtime",
 ]
 
 [dependency-groups]
 dev = [
-    "infra2-sdk[http] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.7.3/infra2_sdk-3.7.3-py3-none-any.whl",
+    "infra2-sdk[http] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.0/infra2_sdk-3.8.0-py3-none-any.whl",
     "mypy>=1.14",
     "pandas-stubs>=2.2",
 ]
@@ -22,9 +22,9 @@ python_version = "3.12"
 files = [
     "apps/data-engine/src",
     "apps/llm-service/src",
-    "libs/contracts/src",
-    "libs/factors/src",
-    "libs/runtime/src",
+    "common/contracts/src",
+    "common/factors/src",
+    "common/runtime/src",
 ]
 
 # Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
@@ -56,7 +56,7 @@ addopts = "--import-mode=importlib"
 testpaths = [
     "apps/data-engine/tests",
     "apps/llm-service/tests",
-    "libs/contracts/tests",
-    "libs/factors/tests",
-    "libs/runtime/tests",
+    "common/contracts/tests",
+    "common/factors/tests",
+    "common/runtime/tests",
 ]

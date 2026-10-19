@@ -44,8 +44,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
-from infra2_sdk.deploy import HttpGet, default_http_get
-from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
+from infra2_sdk.deploy import HttpGet, ReleaseIdentityError, default_http_get, read_deployed_release
 
 WALK_STEP_NAME = "Walk the deployed surface"
 # Query the walk workflow's OWN runs, not every run in the repository: on a

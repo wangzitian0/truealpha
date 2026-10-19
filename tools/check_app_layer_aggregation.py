@@ -3,7 +3,7 @@
 
 Rule 2 confines `apps/app-web` to deterministic reformatting — "simple within-row
 arithmetic that doesn't span tables"; anything that "jointly computes a new metric across
-factors or time points must go back into `libs/factors` and be materialized into mart".
+factors or time points must go back into `common/factors` and be materialized into mart".
 init.md §10 recorded that no code-level check enforced this, and #723 is what that costs:
 `fund-valuation.ts` grew a window-function weighted mean that contradicted its own file
 header, and nothing went red. This is that check.
@@ -99,7 +99,7 @@ def main() -> int:
         print(f"::error file={path.relative_to(REPO_ROOT)},line={number}::{location}: {line}", file=sys.stderr)
     print(
         f"\n{len(found)} aggregate(s) in the App's mart readers (init.md §1 rule 2, #727).\n"
-        "A metric computed across rows belongs in libs/factors and is materialized into mart;\n"
+        "A metric computed across rows belongs in common/factors and is materialized into mart;\n"
         "the reader then reads a column. If this aggregate is genuinely presentation, add the\n"
         "file to ALLOWED in this script with the issue that decided it.",
         file=sys.stderr,

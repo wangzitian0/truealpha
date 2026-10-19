@@ -68,7 +68,7 @@
     },
     {
       "id": "workflow-contract/health-gate-compares-a-release-ref",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-release.yml",
       "find": "EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}",
       "replace": "EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).source_sha || '' }}",
@@ -77,14 +77,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/unconfigured-walk-is-skipped",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/walk-release.yml",
       "find": "      - name: Walk the deployed surface\n        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}\n",
       "replace": "      - name: Walk the deployed surface\n",
@@ -93,14 +93,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "invariants/head-matches-the-consumer",
-      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "guard": "common/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
       "find": "    select run_id from mart.served_head\n    where factor_id = 'gross_profit_per_employee'\n",
       "replace": "    select run_id from mart.served_head\n",
@@ -109,14 +109,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_output_invariants.py",
+        "common/runtime/tests/test_output_invariants.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "invariants/strategy-ordering-must-match-the-consumer",
-      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "guard": "common/runtime/tests/test_output_invariants.py",
       "file": "apps/app-web/src/server/mart/strategy-run-repository.ts",
       "find": "order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc",
       "replace": "order by r.created_at desc",
@@ -125,15 +125,15 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_output_invariants.py",
+        "common/runtime/tests/test_output_invariants.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "migration-chain/a-new-collision-must-not-be-waved-through",
-      "guard": "libs/runtime/tests/test_migration_chain.py",
-      "file": "libs/runtime/tests/test_migration_chain.py",
+      "guard": "common/runtime/tests/test_migration_chain.py",
+      "file": "common/runtime/tests/test_migration_chain.py",
       "find": "KNOWN_COLLISIONS = {\"0019\"",
       "replace": "KNOWN_COLLISIONS = {\"0041\", \"0019\"",
       "command": [
@@ -141,14 +141,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_migration_chain.py",
+        "common/runtime/tests/test_migration_chain.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/release-lane-installs-what-it-imports",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-release.yml",
       "find": "run: uv sync --frozen --all-packages",
       "replace": "run: uv sync --frozen --only-group dev --no-install-workspace",
@@ -157,14 +157,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/freshness-alert-closes-only-on-a-scheduled-run-of-main",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-freshness.yml",
       "find": "        if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days))\n",
       "replace": "        if: success()\n",
@@ -173,14 +173,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/a-looser-freshness-override-cannot-close-the-alert",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-freshness.yml",
       "find": "(github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days)",
       "replace": "github.event_name == 'workflow_dispatch'",
@@ -189,14 +189,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/main-health-reports-only-push-runs",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/main-health.yml",
       "find": "    if: github.event.workflow_run.event == 'push'\n",
       "replace": "    if: github.event.workflow_run.head_branch == 'main'\n",
@@ -205,14 +205,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "escalate-issue/a-superstring-title-is-not-the-same-issue",
-      "guard": "libs/runtime/tests/test_escalate_issue.py",
+      "guard": "common/runtime/tests/test_escalate_issue.py",
       "file": "tools/escalate_issue.py",
       "find": "issue.get(\"title\") == title",
       "replace": "title in str(issue.get(\"title\"))",
@@ -221,14 +221,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_escalate_issue.py",
+        "common/runtime/tests/test_escalate_issue.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "scheduler-liveness/the-bound-follows-the-measured-gap",
-      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "guard": "common/runtime/tests/test_scheduler_liveness.py",
       "file": "tools/scheduler_liveness.py",
       "find": "    bound = bound_for(gap)\n",
       "replace": "    bound = timedelta(hours=24)\n",
@@ -237,14 +237,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_scheduler_liveness.py",
+        "common/runtime/tests/test_scheduler_liveness.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "scheduler-liveness/a-workflow-github-will-not-schedule-is-red",
-      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "guard": "common/runtime/tests/test_scheduler_liveness.py",
       "file": "tools/scheduler_liveness.py",
       "find": "    if workflow_state != ACTIVE:\n",
       "replace": "    if workflow_state == \"disabled_manually\":\n",
@@ -253,14 +253,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_scheduler_liveness.py",
+        "common/runtime/tests/test_scheduler_liveness.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "scheduler-liveness/an-unreadable-listing-is-not-a-pass",
-      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "guard": "common/runtime/tests/test_scheduler_liveness.py",
       "file": "tools/scheduler_liveness.py",
       "find": "        return [Verdict(repo, LISTING, UNVERIFIABLE, f\"cannot verify: {error}\")], 0\n",
       "replace": "        return [], 0\n",
@@ -269,14 +269,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_scheduler_liveness.py",
+        "common/runtime/tests/test_scheduler_liveness.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/a-capped-liveness-drill-cannot-close-the-alert",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/scheduler-liveness.yml",
       "find": " && !github.event.inputs.bound_cap_hours))",
       "replace": "))",
@@ -285,7 +285,7 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
@@ -293,7 +293,7 @@
     {
       "id": "factor-contract/a-parameter-gaining-a-default-is-caught",
       "guard": "tools/check_factor_contract.py",
-      "file": "libs/factors/src/factors/base/peg.py",
+      "file": "common/factors/src/factors/base/peg.py",
       "find": "    cagr_years: int,",
       "replace": "    cagr_years: int = 3,",
       "command": [
@@ -328,22 +328,22 @@
     },
     {
       "id": "fiscal-period/encode-parse-round-trip-holds",
-      "guard": "libs/contracts/tests/test_fiscal_period.py",
-      "file": "libs/contracts/src/truealpha_contracts/fiscal_period.py",
+      "guard": "common/contracts/tests/test_fiscal_period.py",
+      "file": "common/contracts/src/truealpha_contracts/fiscal_period.py",
       "find": "    return period if period.is_annual else None",
       "replace": "    return period",
       "command": [
         "uv",
         "run",
         "pytest",
-        "libs/contracts/tests/test_fiscal_period.py",
+        "common/contracts/tests/test_fiscal_period.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "health/data-engine-vintage-is-reported",
-      "guard": "libs/runtime/tests/test_health_check.py",
+      "guard": "common/runtime/tests/test_health_check.py",
       "file": "apps/llm-service/src/llm_service/main.py",
       "find": "        \"data_engine_parser\": parser,",
       "replace": "        # \"data_engine_parser\": parser,",
@@ -351,7 +351,7 @@
         "uv",
         "run",
         "pytest",
-        "libs/runtime/tests/test_health_check.py",
+        "common/runtime/tests/test_health_check.py",
         "-q"
       ],
       "cwd": "."
@@ -359,7 +359,7 @@
     {
       "id": "factor-contract/a-factor-no-question-counts-is-caught",
       "guard": "tools/check_factor_contract.py",
-      "file": "libs/contracts/src/truealpha_contracts/question_requirements.py",
+      "file": "common/contracts/src/truealpha_contracts/question_requirements.py",
       "find": "columns=(FactorColumn(\"mart.issuer_theme_purity\", \"theme_share\", \"theme_purity\", 6),),",
       "replace": "columns=(),",
       "command": [
@@ -371,7 +371,7 @@
     {
       "id": "factor-contract/a-question-column-must-name-a-registered-factor",
       "guard": "tools/check_factor_contract.py",
-      "file": "libs/contracts/src/truealpha_contracts/question_requirements.py",
+      "file": "common/contracts/src/truealpha_contracts/question_requirements.py",
       "find": "FactorColumn(\"mart.topt_gppe_results\", \"gppe\", \"gross_profit_per_employee\", 2)",
       "replace": "FactorColumn(\"mart.topt_gppe_results\", \"gppe\", \"gross_profit_per_employe\", 2)",
       "command": [
@@ -383,7 +383,7 @@
     {
       "id": "factor-contract/the-evaluator-derives-its-input-keys-from-the-registry",
       "guard": "tools/check_factor_contract.py",
-      "file": "libs/factors/src/factors/composite/strategy_evaluator.py",
+      "file": "common/factors/src/factors/composite/strategy_evaluator.py",
       "find": "def _input_keys(factor_name: str) -> tuple[str, ...]:",
       "replace": "_PEG_KEYS = (\"last_close\", \"shares_outstanding\", \"net_income\")\n\n\ndef _input_keys(factor_name: str) -> tuple[str, ...]:",
       "command": [
@@ -394,7 +394,7 @@
     },
     {
       "id": "workflow-contract/main-push-gets-its-own-concurrency-group",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/ci-required.yml",
       "find": "  group: ci-required-${{ (github.event_name == 'push' && github.ref_type != 'tag') && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}",
       "replace": "  group: ci-required-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}",
@@ -403,14 +403,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/dagster-liveness-is-gated-on-a-pr",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/ci-python.yml",
       "find": "  dagster-code-server-liveness:\n    if: inputs.dagster_liveness_only || inputs.dagster_liveness_required",
       "replace": "  dagster-code-server-liveness:",
@@ -419,14 +419,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/dagster-liveness-filter-is-a-subset-of-python",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/ci-required.yml",
       "find": "            dagster_liveness:",
       "replace": "            unrelated_lane:",
@@ -435,14 +435,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "walk-evidence/a-release-in-flight-is-waited-for",
-      "guard": "libs/runtime/tests/test_walk_evidence.py",
+      "guard": "common/runtime/tests/test_walk_evidence.py",
       "file": "tools/walk_evidence.py",
       "find": "    for run in (*deploys, *walks):\n        if run.get(\"status\") != \"completed\":",
       "replace": "    for run in ():\n        if run.get(\"status\") != \"completed\":",
@@ -451,14 +451,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_walk_evidence.py",
+        "common/runtime/tests/test_walk_evidence.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "nightly-verdicts/a-stale-verdict-is-red",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "tools/nightly_verdicts.py",
       "find": "        if age > expectation.max_age_hours:\n",
       "replace": "        if False:\n",
@@ -467,14 +467,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "nightly-verdicts/a-red-verdict-is-red",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "tools/nightly_verdicts.py",
       "find": "        if not verdict.ok:\n",
       "replace": "        if False:\n",
@@ -483,14 +483,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "nightly-verdicts/a-missing-verdict-is-red",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "tools/nightly_verdicts.py",
       "find": "        if verdict is None:\n",
       "replace": "        if verdict is None:\n            continue\n",
@@ -499,14 +499,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "nightly-verdicts/a-recorded-check-cannot-go-unwatched",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "apps/data-engine/src/data_engine/lanes/quality.py",
       "find": "    RELEASE_FETCH_PROOF_VERDICT,\n)\n",
       "replace": "    RELEASE_FETCH_PROOF_VERDICT,\n    \"unwatched_check\",\n)\n",
@@ -515,7 +515,7 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
@@ -603,7 +603,7 @@
     },
     {
       "id": "nightly-verdicts/the-grace-runs-from-the-first-declaring-deploy",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "tools/nightly_verdicts.py",
       "find": "        return min(served) if complete else None\n",
       "replace": "        return max(served) if complete else None\n",
@@ -612,14 +612,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "nightly-verdicts/a-short-listing-gives-no-grace",
-      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "tools/nightly_verdicts.py",
       "find": "        return min(served) if complete else None\n",
       "replace": "        return min(served)\n",
@@ -628,14 +628,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_nightly_verdicts.py",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "pytest-shard/the-packer-uses-measured-seconds",
-      "guard": "libs/runtime/tests/test_pytest_shard.py",
+      "guard": "common/runtime/tests/test_pytest_shard.py",
       "file": "tools/pytest_shard.py",
       "find": "    if key in weights:\n        return weights[key]\n    return float(test_functions(path)) * rate\n",
       "replace": "    return float(test_functions(path)) * rate\n",
@@ -644,15 +644,15 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_pytest_shard.py",
+        "common/runtime/tests/test_pytest_shard.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "forest/gppe-tree-reproduces-v020",
-      "guard": "libs/factors/tests/forest/test_gppe_tree.py",
-      "file": "libs/factors/src/factors/forest/registry.py",
+      "guard": "common/factors/tests/forest/test_gppe_tree.py",
+      "file": "common/factors/src/factors/forest/registry.py",
       "find": "                IssuerClass.FINANCIAL: (PRE_PROVISION_PROFIT.key,),\n",
       "replace": "                IssuerClass.FINANCIAL: (TOTAL_ASSETS.key,),\n",
       "command": [
@@ -660,14 +660,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/factors/tests/forest/test_gppe_tree.py",
+        "common/factors/tests/forest/test_gppe_tree.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "invariants/a-declared-signal-is-printed",
-      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "guard": "common/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
       "find": "        signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]\n",
       "replace": "        signalled: set[IssuerClass] = set()\n",
@@ -676,14 +676,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_output_invariants.py",
+        "common/runtime/tests/test_output_invariants.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "cut-release/a-resume-counts-from-the-release-before-its-tag",
-      "guard": "libs/runtime/tests/test_cut_release.py",
+      "guard": "common/runtime/tests/test_cut_release.py",
       "file": "tools/cut_release.sh",
       "find": "[ \"$TAG_EXISTS\" = \"1\" ] && RESUMED_TAG=\"$TAG\"",
       "replace": "[ \"$TAG_EXISTS\" = \"1\" ] && RESUMED_TAG=\"\"",
@@ -692,14 +692,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_cut_release.py",
+        "common/runtime/tests/test_cut_release.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "cut-release/prod-promotes-only-the-owner-approved-sha",
-      "guard": "libs/runtime/tests/test_cut_release.py",
+      "guard": "common/runtime/tests/test_cut_release.py",
       "file": "tools/cut_release.sh",
       "find": "  sh \"$SCRIPT_DIR/owner_approval_gate.sh\" \"$OWNER_APPROVED_SHA\" \"$LOCAL_MAIN\" || exit 2\n",
       "replace": "  true\n",
@@ -708,14 +708,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_cut_release.py",
+        "common/runtime/tests/test_cut_release.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "cut-release/prod-is-refused-before-any-git-call-without-an-approval",
-      "guard": "libs/runtime/tests/test_cut_release.py",
+      "guard": "common/runtime/tests/test_cut_release.py",
       "file": "tools/cut_release.sh",
       "find": "if [ \"$PROD\" = \"1\" ] && [ -z \"$OWNER_APPROVED_SHA\" ]; then\n",
       "replace": "if false; then\n",
@@ -724,14 +724,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_cut_release.py",
+        "common/runtime/tests/test_cut_release.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "cut-release/prod-dispatch-carries-the-owner-approved-sha",
-      "guard": "libs/runtime/tests/test_cut_release.py",
+      "guard": "common/runtime/tests/test_cut_release.py",
       "file": "tools/cut_release.sh",
       "find": "    -f reviewed_change_url=\"https://github.com/$REPO/pull/$REVIEWED_PR\" \\\n    -f owner_approved_sha=\"$OWNER_APPROVED_SHA\" | tail -1)\n",
       "replace": "    -f reviewed_change_url=\"https://github.com/$REPO/pull/$REVIEWED_PR\" | tail -1)\n",
@@ -740,14 +740,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_cut_release.py",
+        "common/runtime/tests/test_cut_release.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "cut-release/the-owner-gate-compares-the-approval-with-the-release-sha",
-      "guard": "libs/runtime/tests/test_cut_release.py",
+      "guard": "common/runtime/tests/test_cut_release.py",
       "file": "tools/owner_approval_gate.sh",
       "find": "if [ \"$approved\" != \"$release\" ]; then\n",
       "replace": "if false; then\n",
@@ -756,14 +756,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_cut_release.py",
+        "common/runtime/tests/test_cut_release.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "workflow-contract/prod-deploy-needs-the-owner-approved-sha",
-      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-release.yml",
       "find": "          if [[ \"$DEPLOY_TYPE\" != \"prod\" ]]; then\n            echo \"deploy_type=${DEPLOY_TYPE}: no owner approval is needed\"\n",
       "replace": "          if true; then\n            echo \"deploy_type=${DEPLOY_TYPE}: no owner approval is needed\"\n",
@@ -772,14 +772,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_ci_workflows.py",
+        "common/runtime/tests/test_ci_workflows.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "local-target/a-deployed-postgres-port-is-never-local",
-      "guard": "libs/runtime/tests/test_migration_applier.py",
+      "guard": "common/runtime/tests/test_migration_applier.py",
       "file": "db/local_target.sh",
       "find": "deployed_ports=\"15432 15433\"\n",
       "replace": "deployed_ports=\"0\"\n",
@@ -788,14 +788,14 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_migration_applier.py",
+        "common/runtime/tests/test_migration_applier.py",
         "-q"
       ],
       "cwd": "."
     },
     {
       "id": "invariants/quality-report-matches-core-results",
-      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "guard": "common/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
       "find": "                from mart.datahub_quality_report\n",
       "replace": "                from mart.served_head\n",
@@ -804,7 +804,7 @@
         "run",
         "--no-sync",
         "pytest",
-        "libs/runtime/tests/test_output_invariants.py",
+        "common/runtime/tests/test_output_invariants.py",
         "-q"
       ],
       "cwd": "."

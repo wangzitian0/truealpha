@@ -30,7 +30,7 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
     _stub_no_db_when_unarmed(monkeypatch)
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
-    # data_engine_parser is asserted separately (libs/runtime test_health_check.py): it
+    # data_engine_parser is asserted separately (common/runtime test_health_check.py): it
     # reports the DATA ENGINE's vintage, which has no HTTP surface of its own (#712). With
     # no database in a unit test the honest answer is "unknown" -- and it must never raise.
     payload = resp.json()

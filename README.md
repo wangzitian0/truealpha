@@ -13,9 +13,9 @@ the authoritative doc) → [`CLAUDE.md`](CLAUDE.md) (working rules).
 apps/data-engine    Python  ingestion into immutable raw objects + Postgres lineage/staging
 apps/llm-service    Python  FastAPI: MCP endpoint (priority) + /chat (Tier 3)
 apps/app-web        TS/Bun  Next.js — reads mart via the mart_readonly role, no API hop (strategy runs live; seven-module dashboard read pending #41)
-libs/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
-libs/factors        Python  the ONLY place computation logic lives (base / composite / shared)
-libs/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
+common/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
+common/factors        Python  the ONLY place computation logic lives (base / composite / shared)
+common/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
 db                  SQL     raw / staging / mart / dagster schemas + mart_readonly role
 ```
 
@@ -50,7 +50,7 @@ TOPT example, quality objectives, and the boundary with confidence calibration a
 
 The continuous-confidence formula and its sensitivity table are documented in
 [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
-Its DTOs live in `libs/contracts`. The evaluator and the report builder were
+Its DTOs live in `common/contracts`. The evaluator and the report builder were
 deleted in #1239, because no deployed path called them.
 
 ### Production TOPT orchestration

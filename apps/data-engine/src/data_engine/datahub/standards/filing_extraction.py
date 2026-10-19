@@ -1,7 +1,7 @@
 """Filing extraction: one field from the issuer's latest annual filing (#70 slice 1, #735).
 
 This is the SEC-filing ADAPTER for the shared structured-extraction primitive
-(`libs/factors/shared/extraction.py`, #769): recall (this module's regex, sentence
+(`common/factors/shared/extraction.py`, #769): recall (this module's regex, sentence
 window, and partial/total classification) is filing-specific and stays here; selecting
 among what recall found is not, and is delegated to the primitive.
 
@@ -48,7 +48,7 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{docume
 SUBMISSIONS_OVERFLOW_URL = "https://data.sec.gov/submissions/{name}"
 EXTRACTION_SOURCE = "10k-extraction"
 # Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
-# primitive (libs/factors/shared/extraction.py, #769) — this module owns only the
+# primitive (common/factors/shared/extraction.py, #769) — this module owns only the
 # filing-specific recall and the mapping back onto `FilingCandidate`.
 RULE_SINGLE_CANDIDATE = extraction_primitive.RULE_SINGLE_CANDIDATE
 
@@ -212,8 +212,8 @@ def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, Filing
     The domain-specific half stays here: filtering to non-partial ("company-wide")
     candidates, and mapping the primitive's selection back onto this module's own
     `FilingCandidate`. The rule itself is `extract_metric` without a selector
-    (libs/factors/shared/extraction.py, #769). This function does not decide the rule.
-    `libs/factors/tests/test_extraction_ownership.py` fails CI if a filing-shaped copy of
+    (common/factors/shared/extraction.py, #769). This function does not decide the rule.
+    `common/factors/tests/test_extraction_ownership.py` fails CI if a filing-shaped copy of
     the rule appears in this module or in any other module.
     """
     totals = [candidate for candidate in found if not candidate.partial]

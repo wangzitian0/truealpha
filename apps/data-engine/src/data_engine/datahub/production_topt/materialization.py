@@ -118,7 +118,7 @@ class FinancialFactPayload(_FrozenModel):
     # the cutoff — the PIT obligation that strategy participation adds.
     net_income: Decimal | None = None
     # The annual net-income SERIES, period end (ISO date) -> value. This is the field that
-    # lets a multi-period factor exist in `libs/factors` at all: the transport used to
+    # lets a multi-period factor exist in `common/factors` at all: the transport used to
     # carry only the scalar below, so any factor needing history had to be pre-reduced in
     # this adapter — computation in L0/L1, which init.md rule 2 and the AGENTS.md red line
     # both forbid. The series travels; the factor reduces it.

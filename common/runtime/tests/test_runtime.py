@@ -1,0 +1,213 @@
+from datetime import UTC, datetime
+
+import pytest
+from botocore.exceptions import ClientError
+from infra2_sdk.runtime.s3 import S3Settings
+from truealpha_contracts.models import DataSource, RawCapture
+from truealpha_runtime import (
+    DEPENDENCY_MANIFEST,
+    EnvironmentTier,
+    RuntimeSettings,
+    S3RawObjectStore,
+    resolve_environment_tier,
+)
+
+
+class FakeS3:
+    def __init__(self):
+        self.bucket_exists = False
+        self.objects = {}
+        self.put_count = 0
+
+    def head_bucket(self, *, Bucket):
+        if not self.bucket_exists:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadBucket")
+
+    def create_bucket(self, **kwargs):
+        self.bucket_exists = True
+
+    def head_object(self, *, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        return {"ContentLength": len(self.objects[Key])}
+
+    def put_object(self, *, Bucket, Key, Body, **kwargs):
+        self.put_count += 1
+        self.objects[Key] = Body
+
+
+def test_manifest_declares_database_graph_and_object_storage_for_every_tier():
+    for tier in EnvironmentTier:
+        assert DEPENDENCY_MANIFEST.required_for(tier) == {"database", "graph_store", "object_storage"}
+
+
+def test_environment_resolution_is_explicit():
+    assert resolve_environment_tier("dev") is EnvironmentTier.LOCAL_DEV
+    assert resolve_environment_tier("ci", github_actions=True) is EnvironmentTier.GITHUB_CI
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("local_dev", "local_dev"),
+        ("local_test", "local_test"),
+        ("github_ci", "github_ci"),
+        ("pr-42", "preview"),
+        ("staging", "staging"),
+        ("prod", "production"),
+    ],
+)
+def test_runtime_accepts_the_shared_sdk_environment_vocabulary(value, expected):
+    from infra2_sdk.runtime.environment import EnvironmentTier as SDKEnvironmentTier
+
+    assert resolve_environment_tier(value) is SDKEnvironmentTier(expected)
+    assert DEPENDENCY_MANIFEST.required_for(resolve_environment_tier(value)) == {
+        "database",
+        "graph_store",
+        "object_storage",
+    }
+
+
+def test_unknown_environment_keeps_the_app_error_contract():
+    with pytest.raises(ValueError, match="unknown APP_ENV"):
+        resolve_environment_tier("unknown-tier")
+
+
+def test_runtime_dependency_environment_keys_do_not_drift():
+    declared = {env_var for dependency in DEPENDENCY_MANIFEST for env_var in dependency.env_vars}
+    settings_keys = {
+        field_name.upper()
+        for field_name in RuntimeSettings.model_fields
+        if field_name not in {"app_env", "git_commit_sha"}
+    }
+    assert declared == settings_keys
+
+
+def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch):
+    """`DATABASE_URL=""` -- an unrendered template line -- falls through to the default
+    (or the next alias). Before `env_ignore_empty` it reached the URL validator as "" and
+    refused the whole service as not-PostgreSQL (#759, SDK 1.5.0 migration)."""
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("S3_BUCKET", "")
+    settings = RuntimeSettings(_env_file=None, app_env="test")
+    assert settings.database_url == RuntimeSettings.model_fields["database_url"].default
+    assert settings.s3_bucket == "truealpha-raw"
+
+
+def test_runtime_settings_converts_to_s3_settings():
+    from truealpha_runtime import CoreRuntimeSettings
+
+    assert issubclass(RuntimeSettings, CoreRuntimeSettings)
+    assert set(CoreRuntimeSettings.model_fields) == {
+        "app_env",
+        "git_commit_sha",
+        "database_url",
+        "database_connect_timeout_seconds",
+    }
+    assert "s3_documents_prefix" not in RuntimeSettings.model_fields
+    settings = RuntimeSettings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql://user:pass@127.0.0.1:5432/testdb",
+        s3_bucket="my-bucket",
+    )
+    s3 = settings.to_s3_settings()
+    assert s3.bucket == "my-bucket"
+    assert s3.raw_prefix == "raw"
+    assert s3.addressing_style == "path"
+    assert isinstance(s3, S3Settings)
+
+
+def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
+    from truealpha_contracts.models import RawObjectRef
+    from truealpha_runtime.checks import ObjectStorageCheck
+
+    settings = RuntimeSettings(_env_file=None, app_env="test", s3_endpoint="   ")
+    store = S3RawObjectStore(settings)
+    capture = RawCapture(
+        source=DataSource.SEC,
+        source_record_id="0001564590-20-006422",
+        body=b"{}",
+        content_type="application/json",
+        fetched_at=datetime(2026, 7, 10, tzinfo=UTC),
+    )
+    ref = RawObjectRef(
+        bucket="truealpha-raw",
+        key="raw/sec/2026/07/10/test",
+        sha256="a" * 64,
+        byte_length=2,
+        content_type="application/json",
+    )
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.ensure_bucket()
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.store(capture)
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.get(ref)
+    from truealpha_runtime.checks import DependencyStatus
+
+    result = ObjectStorageCheck(settings, store=store).probe()
+    assert result.status is DependencyStatus.ABSENT
+    assert "S3_ENDPOINT is not configured" in (result.detail or "")
+
+
+def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
+    """S3RawObjectStore.__init__ builds its client through infra2_sdk.runtime.s3 from
+    resolved RuntimeSettings values. It forces addressing_style="path" because MinIO
+    requires path-style routing and S3Settings defaults addressing_style to None."""
+    settings = RuntimeSettings(_env_file=None, app_env="test")
+
+    store = S3RawObjectStore(settings)
+
+    assert store.client.meta.config.s3["addressing_style"] == "path"
+    assert store.client.meta.endpoint_url == settings.s3_endpoint
+    assert store.client.meta.region_name == settings.s3_region
+    assert store.s3_settings.addressing_style == "path"
+
+
+def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
+    from infra2_sdk.runtime.environment import runtime_env_contract
+    from truealpha_runtime.testing import run_python_probe
+
+    contract_keys = sorted(
+        {key for item in runtime_env_contract()["variables"] for key in (item["name"], *item["aliases"])}
+    )
+    for key in contract_keys:
+        monkeypatch.setenv(key, f"ambient-{key}")
+    monkeypatch.setenv("OTEL_CUSTOM_AMBIENT", "ambient-otel")
+    monkeypatch.setenv("UNRELATED_AMBIENT_VAR", "kept")
+
+    proc = run_python_probe(
+        "import json, os; print(json.dumps({k: os.environ.get(k) for k in "
+        f"{contract_keys + ['OTEL_CUSTOM_AMBIENT', 'UNRELATED_AMBIENT_VAR']!r}"
+        "}))",
+        {},
+    )
+    assert proc.returncode == 0, proc.stderr
+    import json
+
+    observed = json.loads(proc.stdout)
+    for key in contract_keys:
+        assert observed[key] is None, f"{key} leaked from ambient environment into probe"
+    assert observed["OTEL_CUSTOM_AMBIENT"] is None
+    assert observed["UNRELATED_AMBIENT_VAR"] == "kept"
+
+
+def test_raw_storage_is_content_addressed_and_idempotent():
+    client = FakeS3()
+    settings = RuntimeSettings(_env_file=None, app_env="test")
+    store = S3RawObjectStore(settings, client=client)
+    capture = RawCapture(
+        source=DataSource.SEC,
+        source_record_id="0001564590-20-006422",
+        body=b'{"entityName":"Datadog, Inc."}',
+        content_type="application/json",
+        fetched_at=datetime(2026, 7, 10, tzinfo=UTC),
+    )
+
+    first = store.store(capture)
+    second = store.store(capture)
+
+    assert first.object.key == second.object.key
+    assert first.object.uri.startswith("s3://truealpha-raw/raw/sec/")
+    assert client.put_count == 1

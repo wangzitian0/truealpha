@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Unreachable-code ratchet for the data engine and the factor library
-(#429 / truealpha#539 P6; extended to ``libs/factors`` by #791).
+(#429 / truealpha#539 P6; extended to ``common/factors`` by #791).
 
 Computes the import closure from the DEPLOYED roots — the Dagster composition
 root plus every module an operator script imports — and compares the unreachable
@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 #: which is what lets a module be attributed back to its tree for the per-tree count.
 TREES: dict[str, Path] = {
     "data_engine": ROOT / "apps" / "data-engine" / "src",
-    "factors": ROOT / "libs" / "factors" / "src",
+    "factors": ROOT / "common" / "factors" / "src",
 }
 PACKAGE_PREFIXES = tuple(TREES)
 SCRIPTS = ROOT / "apps" / "data-engine" / "scripts"
@@ -53,7 +53,7 @@ SCRIPTS = ROOT / "apps" / "data-engine" / "scripts"
 #: (#800), so that string is a wiring exactly like an operator script's import — and a
 #: registry the deployed loop reads is a deployment path whatever layer it lives in.
 #: Contracts' own modules are not censused here; this file guards the trees that consume it.
-REGISTRY_SOURCES = (ROOT / "libs" / "contracts" / "src" / "truealpha_contracts",)
+REGISTRY_SOURCES = (ROOT / "common" / "contracts" / "src" / "truealpha_contracts",)
 BASELINE = Path(__file__).with_name("reachability_baseline.json")
 DEPLOYED_ROOT = "data_engine.dagster_defs"
 

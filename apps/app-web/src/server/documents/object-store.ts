@@ -1,7 +1,7 @@
 /**
  * #373: private document artifact storage over the same S3-compatible
  * object storage (MinIO locally, per docker-compose.yml) that
- * `libs/runtime/src/truealpha_runtime/storage.py`'s `S3RawObjectStore`
+ * `common/runtime/src/truealpha_runtime/storage.py`'s `S3RawObjectStore`
  * already uses for raw source capture — this is the first TypeScript-side
  * caller, mirroring that adapter's shape field-for-field (content-addressed
  * key, head-before-put dedup, checksum-verified read).

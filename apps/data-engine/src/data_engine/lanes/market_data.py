@@ -43,7 +43,7 @@ The op records one nightly verdict, `market_data_freshness` (#876, #1131): green
 newest bar of each daily series is within `MAX_BAR_LAG_SESSIONS` of the latest closed XNYS
 session, red when a series is behind that or holds no bar, and red when the op crashes. The
 lane failed 8 times between 2026-09-24 and 2026-10-05 with no check watching it.
-`tools/nightly_verdicts.json` carries the name; `libs/runtime/tests/test_nightly_verdicts.py`
+`tools/nightly_verdicts.json` carries the name; `common/runtime/tests/test_nightly_verdicts.py`
 holds the two sets equal.
 """
 

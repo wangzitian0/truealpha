@@ -6,7 +6,7 @@ read-time age limit. A lane that has no registry row would serve data with no li
 No database here. The registry is the seed in
 `db/migrations/20261006T1020_datahub_served_head_freshness.sql`, read from the file text. The
 lanes are the Dagster definitions that the deployed image loads.
-`libs/runtime/tests/test_served_head_freshness.py` proves that the file text and the real
+`common/runtime/tests/test_served_head_freshness.py` proves that the file text and the real
 database agree. So reading the text is reading the registry.
 
 A new lane, a new schedule, a renamed schedule or a dead registry row turns a test red.

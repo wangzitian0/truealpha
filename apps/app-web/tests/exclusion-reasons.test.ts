@@ -2,7 +2,7 @@
  * #494 acceptance 3: the exclusion-reason translation table is complete
  * against the contracts enum — the reason strings the deployed strategy can
  * emit are read from the PYTHON contract source (single source of truth,
- * libs/contracts strategy.ExclusionReason) so a new enum member fails THIS
+ * common/contracts strategy.ExclusionReason) so a new enum member fails THIS
  * test instead of rendering a raw code on the page.
  *
  * Run standalone: `bun run tests/exclusion-reasons.test.ts`.
@@ -21,7 +21,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const contractSource = readFileSync(
-  join(process.cwd(), "..", "..", "libs", "contracts", "src", "truealpha_contracts", "strategy.py"),
+  join(process.cwd(), "..", "..", "common", "contracts", "src", "truealpha_contracts", "strategy.py"),
   "utf8",
 );
 const enumBlock = contractSource.split("class ExclusionReason(StrEnum):")[1]?.split("\n\n\n")[0];

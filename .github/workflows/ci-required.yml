@@ -93,7 +93,7 @@ jobs:
               - '.github/actions/**'
             python:
               # tools/*.py are the deploy gates themselves; their tests live in
-              # libs/runtime/tests via load_tool, which only ci-python runs. A
+              # common/runtime/tests via load_tool, which only ci-python runs. A
               # tools-only PR used to match NO filter, and `required` treats a
               # skipped job as success — so the gate tooling could merge with
               # zero tests executed (A4 review finding, #673).
@@ -106,9 +106,9 @@ jobs:
               - '.github/workflows/**'
               - 'apps/data-engine/**'
               - 'apps/llm-service/**'
-              - 'libs/contracts/**'
-              - 'libs/factors/**'
-              - 'libs/runtime/**'
+              - 'common/contracts/**'
+              - 'common/factors/**'
+              - 'common/runtime/**'
               - 'db/**'
               - 'pyproject.toml'
               - 'uv.lock'
@@ -152,9 +152,9 @@ jobs:
               - '.github/workflows/ci-python.yml'
             data_engine:
               - 'apps/data-engine/**'
-              - 'libs/contracts/**'
-              - 'libs/factors/**'
-              - 'libs/runtime/**'
+              - 'common/contracts/**'
+              - 'common/factors/**'
+              - 'common/runtime/**'
               - 'db/**'
               - 'pyproject.toml'
               - 'uv.lock'
@@ -172,8 +172,8 @@ jobs:
               - 'docker-compose.yml'
               - '.env.example'
               - 'db/**'
-              - 'libs/contracts/**'
-              - 'libs/runtime/**'
+              - 'common/contracts/**'
+              - 'common/runtime/**'
               - 'Makefile'
               - 'pyproject.toml'
               - 'uv.lock'
@@ -185,7 +185,7 @@ jobs:
               # and the walk seeds read tools/route_manifest.json.
               - 'tools/**'
               - 'apps/app-web/**'
-              - 'libs/contracts/conformance/**'
+              - 'common/contracts/conformance/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
             image_app_web:
@@ -200,15 +200,15 @@ jobs:
               - '!apps/llm-service/tests/**'
               - '!apps/llm-service/**/*.md'
               - 'apps/data-engine/pyproject.toml'
-              - 'libs/contracts/**'
-              - '!libs/contracts/tests/**'
-              - '!libs/contracts/**/*.md'
-              - 'libs/factors/**'
-              - '!libs/factors/tests/**'
-              - '!libs/factors/**/*.md'
-              - 'libs/runtime/**'
-              - '!libs/runtime/tests/**'
-              - '!libs/runtime/**/*.md'
+              - 'common/contracts/**'
+              - '!common/contracts/tests/**'
+              - '!common/contracts/**/*.md'
+              - 'common/factors/**'
+              - '!common/factors/tests/**'
+              - '!common/factors/**/*.md'
+              - 'common/runtime/**'
+              - '!common/runtime/tests/**'
+              - '!common/runtime/**/*.md'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
@@ -218,15 +218,15 @@ jobs:
               - '!apps/data-engine/tests/**'
               - '!apps/data-engine/samples/**'
               - '!apps/data-engine/**/*.md'
-              - 'libs/contracts/**'
-              - '!libs/contracts/tests/**'
-              - '!libs/contracts/**/*.md'
-              - 'libs/factors/**'
-              - '!libs/factors/tests/**'
-              - '!libs/factors/**/*.md'
-              - 'libs/runtime/**'
-              - '!libs/runtime/tests/**'
-              - '!libs/runtime/**/*.md'
+              - 'common/contracts/**'
+              - '!common/contracts/tests/**'
+              - '!common/contracts/**/*.md'
+              - 'common/factors/**'
+              - '!common/factors/tests/**'
+              - '!common/factors/**/*.md'
+              - 'common/runtime/**'
+              - '!common/runtime/tests/**'
+              - '!common/runtime/**/*.md'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
@@ -404,7 +404,7 @@ jobs:
       reuse_verified_sha: ${{ github.ref_type == 'tag' }}
       # A tag publishes every image under its version (deploy-release.yml promotes all
       # three by tag), and the manual force does the same by definition. A main push
-      # publishes only what changed: before #731 every uv.lock or libs/** merge rebuilt
+      # publishes only what changed: before #731 every uv.lock or common/** merge rebuilt
       # and republished app-web too, one image every three days for a dependency it
       # does not use.
       app_web: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}

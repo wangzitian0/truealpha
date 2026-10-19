@@ -48,7 +48,7 @@ ENV_MANIFEST_PATH = Path("apps/data-engine/required-env.generated.json")
 
 #: The migration set this image ships. `db/apply_migrations.sh` applies `db/migrations/*.sql`
 #: in shell glob order, so the ordered filenames ARE the applied schema (see
-#: `libs/runtime/tests/test_migration_chain.py`).
+#: `common/runtime/tests/test_migration_chain.py`).
 MIGRATIONS_PATH = Path("db/migrations")
 
 
@@ -75,7 +75,7 @@ def migration_ids(path: Path | None = None) -> tuple[str, ...]:
     answerable, not just comparable. The trade is that an in-place edit of an ALREADY-RELEASED
     migration would not move the id; `db/migrations/README.md` forbids that ("the filename ...
     is permanent once an environment has run it", "never rename a migration that has reached
-    staging or production") and `libs/runtime/tests/test_migration_chain.py` guards the chain.
+    staging or production") and `common/runtime/tests/test_migration_chain.py` guards the chain.
     """
     directory = MIGRATIONS_PATH if path is None else Path(path)
     if not directory.is_dir():

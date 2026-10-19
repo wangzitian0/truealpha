@@ -36,5 +36,5 @@ id = "generic-api-key"
 [rules.allowlist]
 description = "Forest registry metric node keys are identifiers, not credentials (#1176)"
 paths = [
-  '''libs/factors/src/factors/forest/registry\.py$''',
+  '''common/factors/src/factors/forest/registry\.py$''',
 ]

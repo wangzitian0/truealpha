@@ -3,7 +3,7 @@
  *
  * Mirrors `truealpha_contracts.strategy.definition_review_state` and
  * `truealpha_contracts.strategy_run.StrategyRunDefinition`. The registry is the generated
- * twin of the Python registry: the web image cannot read libs/contracts at run time.
+ * twin of the Python registry: the web image cannot read common/contracts at run time.
  */
 
 import { type RegisteredStrategyDefinition, STRATEGY_DEFINITION_REGISTRY } from "./strategyDefinitions.generated";

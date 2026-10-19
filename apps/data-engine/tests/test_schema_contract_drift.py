@@ -1,5 +1,5 @@
 """DTO <-> DDL drift guard (init.md Section 6). db/migrations is the schema's
-source of truth and libs/contracts is the code's. This suite fails when they
+source of truth and common/contracts is the code's. This suite fails when they
 disagree. A field added on one side without the other then surfaces in CI
 instead of at the first parser's expense.
 

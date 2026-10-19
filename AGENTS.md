@@ -112,9 +112,9 @@ known-risk decisions. Reconnaissance findings live in `apps/data-engine/samples/
 Repository shape:
 
 - `apps/app-web/`: TypeScript/Next.js; reads `mart` through a read-only account.
-- `libs/factors/base/`: provenance-neutral PIT factors; modules 1-6.
-- `libs/factors/composite/`: factors that reload materialized upstream outputs; module 7.
-- `libs/factors/shared/`: KG entity resolution and the shared structured-extraction
+- `common/factors/base/`: provenance-neutral PIT factors; modules 1-6.
+- `common/factors/composite/`: factors that reload materialized upstream outputs; module 7.
+- `common/factors/shared/`: KG entity resolution and the shared structured-extraction
   primitive. Do not reimplement extraction per factor.
 - `db/migrations/`: the schema source of truth for `raw`, `staging`, `mart`, `dagster`,
   and `app`.
@@ -143,7 +143,7 @@ Repository shape:
 - Immutable source-response bytes live in S3-compatible object storage. Postgres
   `raw.fetches` stores checksums, object pointers, timestamps, and lineage. Apps and LLM
   services never use object storage as a service-to-service data path.
-- Never put computation logic outside `libs/factors`. Application and LLM layers perform
+- Never put computation logic outside `common/factors`. Application and LLM layers perform
   only deterministic formatting and transport over materialized outputs. Screens and the
   three-tier valuation framework are composite factors, not consumer-side rules.
 - Factor inputs are provenance-neutral typed records with opaque input identity, subject,

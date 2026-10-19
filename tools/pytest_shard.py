@@ -9,7 +9,7 @@ What a split does NOT tolerate is silently dropping files. A shard scheme that
 stops covering a renamed directory reports success over nothing — the
 green-while-empty shape (#527), and the most expensive kind of green there is.
 So the partition lives here, in one place, and its covering property is
-asserted by `libs/runtime/tests/test_pytest_shard.py` rather than trusted:
+asserted by `common/runtime/tests/test_pytest_shard.py` rather than trusted:
 every collectable file lands in exactly one shard, for any shard count.
 
 Assignment is by index over the sorted file list, so a new test file joins a

@@ -53,7 +53,12 @@ PARTITION = "2026-04-01"
 # The accepted demand's machine-readable form; `docs/datahub-service-demand.md` describes
 # this exact object.
 DEMAND_FIXTURE = (
-    Path(__file__).resolve().parents[4] / "libs" / "contracts" / "tests" / "fixtures" / "datahub_service_demand.v1.json"
+    Path(__file__).resolve().parents[4]
+    / "common"
+    / "contracts"
+    / "tests"
+    / "fixtures"
+    / "datahub_service_demand.v1.json"
 )
 
 

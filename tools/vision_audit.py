@@ -13,17 +13,15 @@ import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
+from data_engine.lanes.capture import is_head_scheduled
 from infra2_sdk.deploy import default_http_get
+from truealpha_runtime.testing import load_tool
 
-_TOOLS_DIR = Path(__file__).resolve().parent
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_DIR))
-
-from datahub_freshness import is_head_scheduled  # noqa: E402
-from nightly_verdicts import HealthReport, read_report  # noqa: E402
+_nightly_verdicts = load_tool("nightly_verdicts")
+HealthReport = _nightly_verdicts.HealthReport
+read_report = _nightly_verdicts.read_report
 
 
 @dataclass(frozen=True)

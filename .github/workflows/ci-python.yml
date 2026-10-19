@@ -66,10 +66,10 @@ jobs:
       - run: python3 tools/reachability_ratchet.py --check
       - run: python3 tools/complexity_gate.py --check
       - run: python3 tools/sql_literal_gate.py
-      - run: uv run ruff check apps libs
-      - run: uv run ruff format --check apps libs
+      - run: uv run ruff check apps common
+      - run: uv run ruff format --check apps common
       - run: uv run mypy
-      - run: uv run python libs/contracts/conformance/export_issue58.py --check
+      - run: uv run python common/contracts/conformance/export_issue58.py --check
       # #759 environment manifests: fresh against the settings models and past the
       # infra2-sdk offline gate. No infrastructure involved.
       - run: uv run python tools/env_manifest.py --check
@@ -137,7 +137,7 @@ jobs:
       - name: Run tests (shard ${{ matrix.shard }} of 2)
         run: |
           set -euo pipefail
-          FILE_LIST=$(python3 tools/pytest_shard.py libs/contracts/tests libs/factors/tests libs/runtime/tests apps/llm-service/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
+          FILE_LIST=$(python3 tools/pytest_shard.py common/contracts/tests common/factors/tests common/runtime/tests apps/llm-service/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
@@ -158,7 +158,7 @@ jobs:
   # every PR's CI wall (run 33361977933; next-slowest job 163 s). The tree has
   # no conftest.py and every fixture is defined in the file that uses it, so it
   # shards without coupling. tools/pytest_shard.py owns the partition and
-  # libs/runtime/tests/test_pytest_shard.py proves it covers the tree exactly;
+  # common/runtime/tests/test_pytest_shard.py proves it covers the tree exactly;
   # a per-directory list here would rot the first time a directory is added.
   # fail-fast is off so one red shard does not hide the other two.
   #

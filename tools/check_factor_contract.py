@@ -31,9 +31,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "tools" / "factor_contract.json"
-FACTORS = REPO / "libs" / "factors" / "src" / "factors"
+FACTORS = REPO / "common" / "factors" / "src" / "factors"
 MIGRATIONS = REPO / "db" / "migrations"
-QUESTIONS = REPO / "libs" / "contracts" / "src" / "truealpha_contracts" / "question_requirements.py"
+QUESTIONS = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "question_requirements.py"
 
 #: Registered factors that no question column names, each with the reason that is not a gap
 #: (I5, #855). Anything else registered and unnamed is a factor the coverage report can never
@@ -189,7 +189,7 @@ def main() -> int:
     # Module 7 is the composite. A FEEDER registers the module it feeds, so a feeder may
     # claim 7 (`price_to_sales`, #770 — until #855 B3 a name carve-out here); a base factor
     # may not — the `registered_semantic_probe` bug this rule was written for. The exact
-    # per-factor identity check is `libs/factors/tests/test_module_identity.py`.
+    # per-factor identity check is `common/factors/tests/test_module_identity.py`.
     for name, spec in sorted(actual_factors.items()):
         module, kind = spec.get("module"), spec.get("kind")
         if not isinstance(module, int) or not 1 <= module <= 7:
@@ -307,7 +307,7 @@ def main() -> int:
     # the 84-cell core everywhere, and a module card read "available" at 4% coverage.
     for path in (
         list((REPO / "apps").rglob("*.py"))
-        + list((REPO / "libs").rglob("*.py"))
+        + list((REPO / "common").rglob("*.py"))
         + list((REPO / "apps").rglob("*.ts"))
         + list((REPO / "tools").glob("*.py"))
     ):
@@ -339,7 +339,7 @@ def main() -> int:
                 break
 
     # --- I2: one encoder, one parser. Nobody re-implements the period-tag format ---
-    for path in sorted((REPO / "libs").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
+    for path in sorted((REPO / "common").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
         if "test" in path.name or path.name == "fiscal_period.py":
             continue
         text = path.read_text()

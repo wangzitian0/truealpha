@@ -9,7 +9,7 @@
  * materialized into `mart.fund_virtual_company` by the tick that produced the core
  * rows they weight; this file reads those columns. init.md §1 rule 2: a weight-weighted
  * mean across a fund's holdings spans two tables and aggregates across rows, so it is a
- * metric and metrics live in libs/factors. The previous version computed it in a window
+ * metric and metrics live in common/factors. The previous version computed it in a window
  * function here, against this header — the drift #727 recorded.
  *
  * Head resolution mirrors topt-gppe-repository.ts / truealpha_contracts.topt_read

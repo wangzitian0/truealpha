@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 
 import { STABLE_ID_PATTERN } from "../src/server/documents";
 
-const schemaUrl = new URL("../../../libs/contracts/conformance/issue58.schemas.json", import.meta.url);
+const schemaUrl = new URL("../../../common/contracts/conformance/issue58.schemas.json", import.meta.url);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

@@ -93,7 +93,7 @@ grant app_runtime to app_service_login;
 -- The ALTER ROLE is built via \gexec rather than a dollar-quoted DO block: psql does
 -- NOT interpolate `:'var'` inside `$$...$$` bodies (verified empirically -- it sends
 -- the literal `:'...'` text and Postgres's parser rejects it), so the substitution has
--- to happen in a plain top-level statement instead. generate_password() (libs/env.py)
+-- to happen in a plain top-level statement instead. generate_password() (common/env.py)
 -- emits ascii-letters/digits only, so no quoting/escaping edge cases reach the %L
 -- literal psql produces.
 \if :{?app_service_db_password}

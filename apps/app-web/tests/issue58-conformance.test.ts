@@ -7,8 +7,8 @@ import {
   validateIssue58Conformance,
 } from "../src/contracts/issue58";
 
-const schemaUrl = new URL("../../../libs/contracts/conformance/issue58.schemas.json", import.meta.url);
-const fixtureUrl = new URL("../../../libs/contracts/conformance/issue58.fixtures.json", import.meta.url);
+const schemaUrl = new URL("../../../common/contracts/conformance/issue58.schemas.json", import.meta.url);
+const fixtureUrl = new URL("../../../common/contracts/conformance/issue58.fixtures.json", import.meta.url);
 
 function readJson(url: URL): unknown {
   return JSON.parse(readFileSync(url, "utf8")) as unknown;

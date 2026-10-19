@@ -3,7 +3,7 @@
  * unit test without Postgres/S3. The repository's storage-backed behavior
  * (RLS isolation, owner-scoped composite FKs, append-only, single-redemption,
  * tombstone non-enumeration) is covered by db/tests/documents_contract.sql
- * (run via libs/contracts/tests/test_documents_db_contract.py) and live
+ * (run via common/contracts/tests/test_documents_db_contract.py) and live
  * verification, not here — same split as #396's conversations tests.
  *
  * Run standalone: `bun run tests/documents-validation.test.ts`.

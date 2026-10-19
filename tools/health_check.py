@@ -23,13 +23,15 @@ import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from infra2_sdk.deploy import HttpGet, default_http_get, poll_until_healthy
-from infra2_sdk.refs import ReleaseError, resolve_image_digest
-from truealpha_runtime.deployed_release import (
+from infra2_sdk.deploy import (
+    HttpGet,
     ReleaseIdentityError,
+    default_http_get,
     identifier_kind,
     identity_from_body,
+    poll_until_healthy,
 )
+from infra2_sdk.refs import ReleaseError, resolve_image_digest
 
 if TYPE_CHECKING:
     from infra2_sdk.transport import HttpTransport
@@ -41,7 +43,7 @@ DATA_ENGINE_IMAGE = "wangzitian0/truealpha-data-engine"
 # #526: the two sides of this gate must speak the same kind of identifier.
 # `deploy-release.yml` passed `source_sha` (a 40-hex commit sha) while the
 # deployed service reports `GIT_COMMIT_SHA`, a release TAG in deployed tiers
-# (`RuntimeSettings.git_commit_sha`, libs/runtime/.../config.py, states this once).
+# (`RuntimeSettings.git_commit_sha`, common/runtime/.../config.py, states this once).
 # The SDK's version match is a two-way prefix match, so a tag and
 # a sha can never match and the gate burned its whole 24-attempt budget before
 # reporting "did not become healthy (last status: HTTP 200)" — the endpoint was

@@ -27,7 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.7.3/infra2_sdk-3.7.3-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.0/infra2_sdk-3.8.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -868,13 +868,13 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "3.7.3"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.7.3/infra2_sdk-3.7.3-py3-none-any.whl" }
+version = "3.8.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.0/infra2_sdk-3.8.0-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.7.3/infra2_sdk-3.7.3-py3-none-any.whl", hash = "sha256:8e7f5018bfde75a91ea30b66c68cd35d43bae7731020297854b13b0c6c7eb3ce" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.0/infra2_sdk-3.8.0-py3-none-any.whl", hash = "sha256:6dbbeb32691171493070cd25258a34497fd6c50b5bae5d5b3818164920428439" },
 ]
 
 [package.optional-dependencies]
@@ -2632,7 +2632,7 @@ wheels = [
 [[package]]
 name = "truealpha-contracts"
 version = "0.1.0"
-source = { editable = "libs/contracts" }
+source = { editable = "common/contracts" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -2690,9 +2690,9 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
-    { name = "truealpha-contracts", editable = "libs/contracts" },
-    { name = "truealpha-factors", editable = "libs/factors" },
-    { name = "truealpha-runtime", editable = "libs/runtime" },
+    { name = "truealpha-contracts", editable = "common/contracts" },
+    { name = "truealpha-factors", editable = "common/factors" },
+    { name = "truealpha-runtime", editable = "common/runtime" },
 ]
 
 [package.metadata.requires-dev]
@@ -2704,7 +2704,7 @@ dev = [
 [[package]]
 name = "truealpha-factors"
 version = "0.1.0"
-source = { editable = "libs/factors" }
+source = { editable = "common/factors" }
 dependencies = [
     { name = "polars" },
     { name = "pydantic" },
@@ -2721,7 +2721,7 @@ dev = [
 requires-dist = [
     { name = "polars", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
-    { name = "truealpha-contracts", editable = "libs/contracts" },
+    { name = "truealpha-contracts", editable = "common/contracts" },
 ]
 
 [package.metadata.requires-dev]
@@ -2758,9 +2758,9 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.45b0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
-    { name = "truealpha-contracts", editable = "libs/contracts" },
-    { name = "truealpha-factors", editable = "libs/factors" },
-    { name = "truealpha-runtime", editable = "libs/runtime" },
+    { name = "truealpha-contracts", editable = "common/contracts" },
+    { name = "truealpha-factors", editable = "common/factors" },
+    { name = "truealpha-runtime", editable = "common/runtime" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 
@@ -2774,7 +2774,7 @@ dev = [
 [[package]]
 name = "truealpha-runtime"
 version = "0.1.0"
-source = { editable = "libs/runtime" }
+source = { editable = "common/runtime" }
 dependencies = [
     { name = "boto3" },
     { name = "infra2-sdk", extra = ["otel"] },
@@ -2793,10 +2793,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.7.3/infra2_sdk-3.7.3-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.0/infra2_sdk-3.8.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
-    { name = "truealpha-contracts", editable = "libs/contracts" },
+    { name = "truealpha-contracts", editable = "common/contracts" },
 ]
 
 [package.metadata.requires-dev]

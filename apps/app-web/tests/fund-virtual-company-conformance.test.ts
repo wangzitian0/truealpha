@@ -1,9 +1,9 @@
 /**
  * #727: the App side of the fund-consolidation conformance case.
  *
- * `libs/contracts/conformance/fund_virtual_company.json` pins one fund's filed lines, the
+ * `common/contracts/conformance/fund_virtual_company.json` pins one fund's filed lines, the
  * consolidation the module-5 factor computes, and the strings this reader must render.
- * `libs/contracts/tests/test_fund_virtual_company_conformance.py` asserts the factor
+ * `common/contracts/tests/test_fund_virtual_company_conformance.py` asserts the factor
  * reproduces the numbers; this asserts `loadFundValuation` renders exactly those numbers
  * from the materialized row — which is what "the App value equals the mart value" means
  * now that the App reads a column instead of computing one.
@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { loadFundValuation } from "../src/server/mart/fund-valuation";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
-const fixtureUrl = new URL("../../../libs/contracts/conformance/fund_virtual_company.json", import.meta.url);
+const fixtureUrl = new URL("../../../common/contracts/conformance/fund_virtual_company.json", import.meta.url);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

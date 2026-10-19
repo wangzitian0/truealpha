@@ -201,11 +201,9 @@ def check_vps(name_filter: str = "truealpha") -> bool:
         return False
     print(f"=== TrueAlpha VPS Container Truth ({host}) ===")
     try:
-        try:
-            import runtime_truth
-        except ImportError:
-            from tools import runtime_truth  # type: ignore[no-redef]
+        from truealpha_runtime.testing import load_tool
 
+        runtime_truth = load_tool("runtime_truth")
         containers = runtime_truth.fetch_inspect(host, name_filter)
         print(runtime_truth.render(containers))
         return True
