@@ -171,7 +171,7 @@ class _RunConnection(_FakeConnection):
         self.ticker_reads = 0
 
     def execute(self, sql: str, params: tuple = ()) -> _FakeCursor:
-        if "'listing-identity'" in sql:
+        if "->> 'ticker'" in sql:
             self.ticker_reads += 1
             return _FakeCursor(self._tickers)
         return super().execute(sql, params)
@@ -199,3 +199,48 @@ def test_the_seed_takes_the_close_of_the_primary_class_whatever_the_listing_ids(
         ((issuer_id, _cutoff, input_key, value, *_rest),) = fake.inserts
         assert (issuer_id, input_key, value) == (issuer, "last_close", "101.00"), "the GOOGL close, never GOOG's"
         assert fake.ticker_reads == 1, "the seed reads the run's tickers once"
+
+
+def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> None:
+    """#1333 / #1352: when a `market-price` observation is reused by `(listing, session_date)`
+    from a run that keyed the issuer under another namespace (e.g., `issuer:lei:...`),
+    `seed_strategy_inputs_from_capture` maps `last_close` to the target run's `issuer_id`
+    (`issuer:cik:...`) via the run's `listing-identity` / `financial-fact` cells."""
+    from decimal import Decimal
+
+    import data_engine.datahub.strategy_bridge as strategy_bridge
+
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    listing_payload = {
+        "issuer_id": "issuer:cik:0000320193",
+        "instrument_id": "instrument:cik:0000320193",
+        "listing_id": "listing:xnas:aapl",
+        "ticker": "AAPL",
+    }
+    financial_payload = {
+        "issuer_id": "issuer:cik:0000320193",
+        "instrument_id": "instrument:cik:0000320193",
+        "listing_id": "listing:xnas:aapl",
+        "revenue": "390000000000",
+    }
+    reused_price_payload = {
+        "issuer_id": "issuer:lei:HWUPKR0MPOU8FGXBT394",
+        "instrument_id": "instrument:us0378331005",
+        "listing_id": "listing:xnas:aapl",
+        "close": "225.50",
+    }
+    fake = _FakeConnection(
+        [
+            ("listing-identity", "1.00", listing_payload, cutoff),
+            ("financial-fact", "0.95", financial_payload, cutoff),
+            ("market-price", "0.90", reused_price_payload, cutoff),
+        ]
+    )
+    written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test-reuse", cutoff=cutoff)
+    assert written == 2
+    by_key = {params[2]: params for params in fake.inserts}
+    assert set(by_key) == {"revenue", "last_close"}
+    assert by_key["revenue"][0] == "issuer:cik:0000320193"
+    assert by_key["last_close"][0] == "issuer:cik:0000320193"
+    assert by_key["last_close"][3] == "225.50"
+    assert by_key["last_close"][4] == Decimal("0.90")

@@ -9,9 +9,11 @@ def test_settings_defaults(monkeypatch):
     # APP_ENV=ci) still win — strip them so this genuinely tests the defaults.
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     s = Settings(_env_file=None)
     assert s.app_env == "dev"
     assert s.sec_user_agent == ""
+    assert s.llm_model == "glm-5.3-flash"
 
 
 def test_throttle_rate_must_be_positive():

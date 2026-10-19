@@ -723,9 +723,12 @@ class PostgresToptCoreRepository:
         financial = FinancialFactPayload.model_validate(by_type["financial-fact"].payload)
         price = MarketPricePayload.model_validate(by_type["market-price"].payload)
         coordinates = {
-            (item.issuer_id, item.instrument_id, item.listing_id) for item in (listing, membership, financial, price)
+            (item.issuer_id, item.instrument_id, item.listing_id) for item in (listing, membership, financial)
         }
-        if coordinates != {(listing.issuer_id, listing.instrument_id, listing.listing_id)}:
+        if (
+            coordinates != {(listing.issuer_id, listing.instrument_id, listing.listing_id)}
+            or price.listing_id != listing.listing_id
+        ):
             raise ValueError(f"listing {listing_id} normalized payload identities disagree")
         if financial.currency != price.currency:
             raise ValueError(f"listing {listing_id} financial and market currencies disagree")

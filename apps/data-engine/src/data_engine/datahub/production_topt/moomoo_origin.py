@@ -167,6 +167,15 @@ class OpenDClient:
         normalized = to_jsonable(statements)
         return normalized if isinstance(normalized, Mapping) else {}
 
+    def valuation_detail(self, code: str, *, valuation_type: int = 1) -> Mapping[str, Any]:
+        from data_engine.jsonable import to_jsonable
+        from data_engine.sources import moomoo
+
+        with moomoo.connect() as ctx:
+            valuation = moomoo.get_valuation_detail(ctx, code, valuation_type=valuation_type, caller=CALLER)
+        normalized = to_jsonable(valuation)
+        return normalized if isinstance(normalized, Mapping) else {}
+
 
 def moomoo_code(symbol: str) -> str:
     """moomoo's code for a US listing: the canonical ticker under the `US.` market prefix."""
@@ -482,6 +491,42 @@ def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
     )
 
 
+def parse_valuation_profit_growth(valuation: Mapping[str, Any], *, cutoff: date) -> dict[date, Decimal]:
+    """Parse annual profit growth rates from `get_valuation_detail` on or before `cutoff`.
+
+    Returns a mapping from fiscal period end (`report_date_str`) to `profit_growth_rate`.
+    Rows after `cutoff` or non-annual periods are excluded.
+    """
+    pg = valuation.get("profit_growth_rate")
+    if not isinstance(pg, Mapping):
+        return {}
+    rows = pg.get("profit_data")
+    if not isinstance(rows, list):
+        return {}
+    out: dict[date, Decimal] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        period_str = row.get("period_str")
+        fq = row.get("financial_quarter")
+        is_annual = (isinstance(period_str, str) and period_str.endswith("/FY")) or fq == 4
+        if not is_annual:
+            continue
+        report_date_str = row.get("report_date_str")
+        if not isinstance(report_date_str, str) or len(report_date_str) < 10:
+            continue
+        try:
+            end_date = date.fromisoformat(report_date_str[:10])
+        except ValueError:
+            continue
+        if end_date > cutoff or end_date in out:
+            continue
+        rate = _statement_value(row.get("profit_growth_rate"))
+        if rate is not None:
+            out[end_date] = rate
+    return out
+
+
 def _require_opend() -> None:
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
         raise ValueError(
@@ -505,5 +550,6 @@ __all__ = (
     "moomoo_kline_origin",
     "parse_annual_financials",
     "parse_settled_close",
+    "parse_valuation_profit_growth",
     "period_end_of",
 )

@@ -58,9 +58,15 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol
 
+from factors.confidence import evaluate_continuous_confidence
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.confidence import (
+    ContinuousConfidenceInput,
+    ContinuousConfidencePolicy,
+    SourceConfidenceEvidence,
+)
 from truealpha_contracts.reconciliation import (
     ConsensusBand,
     ReconciliationCell,
@@ -244,6 +250,18 @@ class FamilyPolicy:
     unit: str = "USD"
 
 
+CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
+LINEAGE_OUTCOME_MASS: Mapping[str, tuple[Decimal, Decimal]] = {
+    "sec-company-facts": (Decimal("90"), Decimal("0")),
+    "sec-nport": (Decimal("90"), Decimal("0")),
+    "sec-10k": (Decimal("70"), Decimal("0")),
+    "nasdaq-index": (Decimal("90"), Decimal("0")),
+    "twelve-data": (Decimal("40"), Decimal("0")),
+    "moomoo": (Decimal("40"), Decimal("0")),
+    "yahoo": (Decimal("12"), Decimal("0")),
+}
+
+
 @dataclass(frozen=True)
 class CellGrade:
     family: str
@@ -259,6 +277,8 @@ class CellGrade:
     comparison: str | None = None
     excluded: tuple[str, ...] = ()
     values: Mapping[str, str | None] = field(default_factory=dict)
+    confidence: Decimal = Decimal("0")
+    score_100: Decimal = Decimal("0")
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -271,6 +291,8 @@ class CellGrade:
             "relative_delta": self.relative_delta,
             "comparison": self.comparison,
             "excluded": list(self.excluded),
+            "confidence": str(self.confidence),
+            "score_100": str(self.score_100),
         }
 
 
@@ -481,6 +503,66 @@ def _deltas(
     return str(integral if worst == integral else worst), str(relative)
 
 
+def _continuous_confidence_for_cell(
+    policy: FamilyPolicy,
+    subject_id: str,
+    valued: Sequence[OriginValue],
+    *,
+    band: Band,
+    reason: str,
+    relative_delta: str | None,
+    cutoff: datetime,
+) -> tuple[Decimal, Decimal]:
+    """Evaluate continuous 0-1 confidence and 0-100 score_100 via factors.confidence."""
+    if not valued or band is Band.MISSING:
+        return Decimal("0"), Decimal("0")
+    sources: list[SourceConfidenceEvidence] = []
+    for origin in valued:
+        succ, fail = LINEAGE_OUTCOME_MASS.get(origin.lineage, (Decimal("12"), Decimal("0")))
+        conformance = Decimal("0.90") if origin.served_by_failover else Decimal("1")
+        freshness = Decimal("1")
+        if policy.session_bound and origin.knowable_at is not None:
+            lag_days = max(0, (utc_day(cutoff) - utc_day(origin.knowable_at)).days)
+            if lag_days > 4:
+                freshness = max(Decimal("0.20"), Decimal("1") - Decimal("0.05") * Decimal(lag_days - 4))
+        evidence_id = origin.observation_id or _synthetic_observation_id(policy.family, subject_id, origin)
+        sources.append(
+            SourceConfidenceEvidence(
+                provider_id=origin.origin_id,
+                origin_group_id=f"lineage:{origin.lineage}",
+                independence_weight=Decimal("1"),
+                successful_outcome_mass=succ,
+                failed_outcome_mass=fail,
+                freshness=freshness,
+                sample_conformance=conformance,
+                transport_integrity=Decimal("1"),
+                evidence_ids=(evidence_id,),
+                reason_codes=(f"reason:{reason}",),
+            )
+        )
+    if len(valued) == 1:
+        agreement = Decimal("1")
+    elif reason in ("cross_origin_conflict", "not_agreed_within_tolerance"):
+        rel = _decimal(relative_delta) or Decimal("0")
+        agreement = max(Decimal("0.05"), Decimal("0.20") * (Decimal("1") - min(Decimal("0.90"), rel)))
+    else:
+        rel = _decimal(relative_delta) or Decimal("0")
+        agreement = max(Decimal("0.50"), Decimal("1") - min(Decimal("0.50"), rel))
+    semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
+    evaluation = evaluate_continuous_confidence(
+        CONTINUOUS_CONFIDENCE_POLICY,
+        ContinuousConfidenceInput(
+            case_id=f"cell:{policy.family}:{subject_id}",
+            sources=tuple(sources),
+            agreement=agreement,
+            semantic_mapping_quality=semantic_quality,
+            lineage_completeness=Decimal("1"),
+            required_component_completeness=Decimal("1"),
+        ),
+    )
+    return evaluation.confidence, evaluation.score_100
+
+
 def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
     """Grade one cell from what its origins asserted. Pure: no clock, no database.
 
@@ -515,6 +597,15 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
         relative: str | None = None,
         comparison: str | None = None,
     ) -> CellGrade:
+        confidence, score_100 = _continuous_confidence_for_cell(
+            policy,
+            subject_id,
+            valued,
+            band=band,
+            reason=reason,
+            relative_delta=relative,
+            cutoff=cutoff,
+        )
         return CellGrade(
             family=policy.family,
             subject_id=subject_id,
@@ -529,6 +620,8 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             comparison=comparison,
             excluded=excluded_ids,
             values=values,
+            confidence=confidence,
+            score_100=score_100,
         )
 
     if not valued:
@@ -670,11 +763,17 @@ def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, An
     )
     agreed = sum(1 for grade in rows if grade.outcome == ReconciliationOutcome.AGREED.value)
     reasons = Counter(grade.reason for grade in rows)
+    mean_score_100 = (
+        str((sum((grade.score_100 for grade in rows), Decimal(0)) / Decimal(total)).quantize(_RATIO_PLACES))
+        if total
+        else "0"
+    )
     return {
         "semantic_type": policy.semantic_type,
         "cells": total,
         **{band.value: counts.get(band.value, 0) for band in Band},
         "share": {band.value: _ratio(counts.get(band.value, 0), total) or "0" for band in Band},
+        "mean_score_100": mean_score_100,
         "compared": compared,
         "agreed": agreed,
         "agreement_rate": _ratio(agreed, compared),

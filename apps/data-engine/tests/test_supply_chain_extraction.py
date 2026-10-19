@@ -190,3 +190,65 @@ def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
             exposure_data=[{"issuer_id": legacy_id, "partners": [], "supplies_to_edges_exist": True}],
         )
     assert conn.executed == [], "nothing reached the table"
+
+
+def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> None:
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner across North America.\n"
+    )
+    edges = extract_supply_chain_relationships(
+        text,
+        issuer_id="company:cik:0001045810",
+        filing_date=date(2026, 2, 15),
+        accession="0001045810-26-000001",
+    )
+    assert len(edges) == 1
+    assert Decimal("0.55") < edges[0].confidence < Decimal("0.70")
+    assert edges[0].confidence != Decimal("0.85")
+
+    class _FilingConn:
+        def __init__(self) -> None:
+            self.queries: list[tuple[str, object]] = []
+
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("raw.fetches",)
+
+            return _RegCur()
+
+        def execute(self, sql: str, params: object = None):
+            self.queries.append((sql, params))
+            cur = _MockCursor()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        101,
+                        "filing-document:CIK0001045810:0001045810-26-000001",
+                        "sec/10k.txt",
+                        datetime(2026, 2, 15, tzinfo=UTC),
+                        {"plain_text": text, "accession": "0001045810-26-000001"},
+                    )
+                ]
+            elif "insert into staging.kg_edges" in sql:
+                cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
+            return cur
+
+    conn = _FilingConn()
+    issuers = [CanonicalIssuer(issuer_id=_issuer_id("nvda"), legacy_id="company:cik:0001045810", ticker="NVDA")]
+    inserted = persist_extracted_supply_chain_edges(
+        conn,  # type: ignore[arg-type]
+        issuers=issuers,
+        cutoff=datetime(2026, 10, 6, tzinfo=UTC),
+    )
+    assert inserted == 1
+    assert any("insert into staging.kg_edges" in q[0] for q in conn.queries)

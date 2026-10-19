@@ -35,16 +35,8 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
-MANIFEST_ACCEPT = ", ".join(
-    (
-        "application/vnd.oci.image.index.v1+json",
-        "application/vnd.docker.distribution.manifest.list.v2+json",
-        "application/vnd.oci.image.manifest.v1+json",
-        "application/vnd.docker.distribution.manifest.v2+json",
-    )
-)
-#: docker/metadata-action `type=sha,format=short`: the first seven hex characters.
-SHORT_SHA_LENGTH = 7
+from infra2_sdk.refs import MANIFEST_ACCEPT, SHORT_SHA_LENGTH, short_sha  # noqa: F401
+
 #: A transient registry answer is retried this many times in total before it is a failure.
 ATTEMPTS = 3
 _RETRIED_STATUSES = frozenset({429, 500, 502, 503, 504})
@@ -110,13 +102,6 @@ def _send(
             continue
         return response
     raise AssertionError("unreachable: every attempt returns or raises")
-
-
-def short_sha(sha: str) -> str:
-    """The `sha-<short>` reference main published this commit under: metadata-action's seven."""
-    if not _SHA_RE.fullmatch(sha):
-        raise ValueError(f"--sha must be the full 40-hex commit sha the tag points at, got {sha!r}")
-    return sha[:SHORT_SHA_LENGTH]
 
 
 def _anonymous_token(transport: Transport, challenge: str, sleep: Callable[[float], None]) -> str:
