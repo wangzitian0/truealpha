@@ -225,17 +225,17 @@ def _match_filing_issuer(
     return None
 
 
-def _resolve_filing_text(meta: dict[str, Any], object_key: object, object_store: Any | None) -> str | None:
+def _resolve_filing_text(meta: dict[str, Any], object_uri: object, object_store: Any | None) -> str | None:
     plain = meta.get("plain_text")
     if isinstance(plain, str) and plain:
         return plain
-    if object_store is not None and isinstance(object_key, str) and object_key:
+    if object_store is not None and isinstance(object_uri, str) and object_uri:
         try:
             from data_engine.datahub.sec_filing_documents import (  # type: ignore[import-untyped]
                 filing_plain_text,
             )
 
-            raw_bytes = object_store.get_bytes(object_key)
+            raw_bytes = object_store.get_bytes(object_uri)
             return str(filing_plain_text(raw_bytes, document_name=str(meta.get("primary_document") or "10k.txt")))
         except Exception:  # noqa: BLE001
             return None
@@ -268,7 +268,7 @@ def persist_extracted_supply_chain_edges(
     try:
         rows = connection.execute(
             """
-            select id, source_record_id, object_key, source_published_at, metadata
+            select id, source_record_id, object_uri, source_published_at, metadata
             from raw.fetches
             where source = 'sec'
               and source_record_id like 'filing-document:CIK%%'
@@ -284,10 +284,10 @@ def persist_extracted_supply_chain_edges(
     for row in rows:
         if not isinstance(row, tuple | list) or len(row) < 5:
             continue
-        fetch_id, source_record_id, object_key, published_at, metadata = row[:5]
+        fetch_id, source_record_id, object_uri, published_at, metadata = row[:5]
         meta = metadata if isinstance(metadata, dict) else {}
         matched = _match_filing_issuer(source_record_id, meta, by_cik, by_legacy, by_issuer_id)
-        filing_text = _resolve_filing_text(meta, object_key, object_store) if matched is not None else None
+        filing_text = _resolve_filing_text(meta, object_uri, object_store) if matched is not None else None
         if matched is None or not filing_text:
             continue
         tx_time = published_at if isinstance(published_at, datetime) else cutoff
