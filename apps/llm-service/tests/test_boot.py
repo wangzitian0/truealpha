@@ -23,16 +23,15 @@ def test_the_image_ships_the_manifest_where_the_service_reads_it() -> None:
 def test_a_deployed_boot_refuses_a_missing_injected_value_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """Through the app's own lifespan, not the helper: the wiring is the deliverable. The
     refusal happens before the MCP session manager starts, so nothing is left half-open."""
-    monkeypatch.delenv("S3_ENDPOINT", raising=False)
+    monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
-    with pytest.raises(RuntimeError, match="S3_ENDPOINT") as failure:
+    with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA") as failure:
         with TestClient(main.app):
             pass
     assert "postgresql://" not in str(failure.value), "names only, never values"
 
 
 def test_a_local_boot_tolerates_what_nothing_injects(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("S3_ENDPOINT", raising=False)
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="dev"))
     assert main.refuse_to_boot_on_a_missing_environment() is None
@@ -44,18 +43,16 @@ def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch: pyt
     assert Settings(_env_file=None).database_url == Settings.model_fields["database_url"].default
 
 
-def test_llm_service_to_llm_settings() -> None:
-    settings = Settings(
-        _env_file=None,
-        llm_provider="zai",
-        llm_base_url="https://open.bigmodel.cn/api/paas/v4",
-        llm_api_key="secret-key",
-        llm_model="glm-5.3-flash",
-        llm_timeout_seconds=60.0,
-    )
-    llm = settings.to_llm_settings()
-    assert llm.provider == "zai"
-    assert llm.base_url == "https://open.bigmodel.cn/api/paas/v4"
-    assert llm.api_key == "secret-key"
-    assert llm.primary_model == "glm-5.3-flash"
-    assert llm.json_timeout_seconds == 60.0
+def test_llm_service_settings_owns_migrations_and_excludes_s3_and_unused_llm_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert not any(name.startswith(("s3_", "llm_")) for name in Settings.model_fields)
+    monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@db:5432/truealpha")
+    monkeypatch.setenv("MIGRATION_LOCK_BUDGET_SECONDS", "30")
+    monkeypatch.setenv("TRUEALPHA_MIGRATION_LOCK_TIMEOUT", "7")
+    monkeypatch.setenv("MIGRATION_STATEMENT_TIMEOUT_SECONDS", "90")
+    resolved = Settings(_env_file=None)
+    assert resolved.migrations_database_url == "postgresql://admin:secret@db:5432/truealpha"
+    assert resolved.migration_lock_budget_seconds == 30
+    assert resolved.migration_lock_timeout_seconds == 7
+    assert resolved.migration_statement_timeout_seconds == 90

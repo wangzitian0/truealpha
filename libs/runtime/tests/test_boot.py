@@ -10,6 +10,7 @@ from truealpha_runtime.boot import assert_environment
 
 ROOT = Path(__file__).resolve().parents[3]
 LLM_MANIFEST = ROOT / "apps/llm-service/required-env.generated.json"
+DATA_ENGINE_MANIFEST = ROOT / "apps/data-engine/required-env.generated.json"
 
 
 def test_a_deployed_process_refuses_to_boot_without_what_the_deployment_injects() -> None:
@@ -17,9 +18,14 @@ def test_a_deployed_process_refuses_to_boot_without_what_the_deployment_injects(
     with pytest.raises(RuntimeError) as failure:
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     message = str(failure.value)
-    for name in ("APP_ENV", "GIT_COMMIT_SHA", "S3_ENDPOINT"):
+    for name in ("APP_ENV", "GIT_COMMIT_SHA"):
         assert name in message
+    assert "S3_ENDPOINT" not in message
     assert "hunter2" not in message and "postgresql://" not in message, "names only, never values"
+
+    with pytest.raises(RuntimeError) as de_failure:
+        assert_environment(DATA_ENGINE_MANIFEST, environ=environ, require_injected=True)
+    assert "S3_ENDPOINT" in str(de_failure.value)
 
 
 def test_a_local_process_tolerates_absent_injected_values() -> None:
@@ -27,10 +33,10 @@ def test_a_local_process_tolerates_absent_injected_values() -> None:
 
 
 def test_an_empty_injected_value_counts_as_missing() -> None:
-    environ = {"APP_ENV": "staging", "GIT_COMMIT_SHA": "v0.0.50", "S3_ENDPOINT": ""}
-    with pytest.raises(RuntimeError, match="S3_ENDPOINT"):
+    environ = {"APP_ENV": "staging", "GIT_COMMIT_SHA": ""}
+    with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA"):
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
-    environ["S3_ENDPOINT"] = "http://platform-minio:9000"
+    environ["GIT_COMMIT_SHA"] = "v0.0.50"
     assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
 
 

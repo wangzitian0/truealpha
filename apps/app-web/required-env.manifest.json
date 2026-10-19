@@ -45,6 +45,60 @@
       "injected": true
     },
     {
+      "field": "git_commit_sha",
+      "env": "GIT_COMMIT_SHA",
+      "group": "runtime",
+      "source": "release",
+      "injected": true
+    },
+    {
+      "field": "s3_endpoint",
+      "env": "S3_ENDPOINT",
+      "group": "s3",
+      "source": "code",
+      "injected": true
+    },
+    {
+      "field": "s3_access_key",
+      "env": "S3_ACCESS_KEY",
+      "group": "s3",
+      "source": "runtime",
+      "empty_ok": true,
+      "sensitive": true
+    },
+    {
+      "field": "s3_secret_key",
+      "env": "S3_SECRET_KEY",
+      "group": "s3",
+      "source": "runtime",
+      "empty_ok": true,
+      "sensitive": true
+    },
+    {
+      "field": "s3_bucket",
+      "env": "S3_BUCKET",
+      "group": "s3",
+      "source": "code"
+    },
+    {
+      "field": "s3_region",
+      "env": "S3_REGION",
+      "group": "s3",
+      "source": "code"
+    },
+    {
+      "field": "s3_raw_prefix",
+      "env": "S3_RAW_PREFIX",
+      "group": "s3",
+      "source": "code"
+    },
+    {
+      "field": "s3_connect_timeout_seconds",
+      "env": "S3_CONNECT_TIMEOUT_SECONDS",
+      "group": "s3",
+      "source": "code"
+    },
+    {
       "field": "s3_documents_prefix",
       "env": "S3_DOCUMENTS_PREFIX",
       "required": false,

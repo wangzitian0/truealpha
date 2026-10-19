@@ -78,7 +78,9 @@ def run_runner(
     database_url: str, db_dir: Path = DB_DIR, **knobs: str
 ) -> tuple[subprocess.CompletedProcess[str], float]:
     environment = {
-        key: value for key, value in os.environ.items() if not key.startswith(("PG", "TRUEALPHA_MIGRATION_"))
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PG", "TRUEALPHA_MIGRATION_", "MIGRATION_"))
     }
     environment.pop("MIGRATIONS_DATABASE_URL", None)
     environment |= {"DATABASE_URL": database_url, "TRUEALPHA_DB_DIR": str(db_dir), **knobs}
@@ -318,6 +320,16 @@ def test_the_session_carries_both_timeouts(empty_database: str, tmp_path: Path) 
     completed, _ = run_runner(empty_database, db_dir)
     assert completed.returncode == 0, _output(completed)
     assert "lock_timeout=5s" in completed.stdout and "statement_timeout=1min" in completed.stdout, completed.stdout
+
+    canonical, _ = run_runner(
+        empty_database,
+        db_dir,
+        MIGRATION_LOCK_TIMEOUT_SECONDS="7",
+        MIGRATION_STATEMENT_TIMEOUT_SECONDS="90",
+        MIGRATION_LOCK_BUDGET_SECONDS="30",
+    )
+    assert canonical.returncode == 0, _output(canonical)
+    assert "lock_timeout=7s" in canonical.stdout and "statement_timeout=90s" in canonical.stdout, canonical.stdout
 
 
 def test_non_numeric_knobs_are_refused(empty_database: str, tmp_path: Path) -> None:

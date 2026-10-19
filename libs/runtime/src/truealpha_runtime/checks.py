@@ -99,6 +99,8 @@ class ObjectStorageCheck:
         started = time.perf_counter()
         try:
             store = self._store or S3RawObjectStore(self.settings)
+            if not store._has_injected_client:
+                store._require_endpoint()
             return probe_s3(store.s3_settings, client=store.client)
         except Exception as exc:  # noqa: BLE001
             return ProbeResult(

@@ -1,10 +1,13 @@
-from infra2_sdk.runtime.llm import LlmSettings
-from pydantic import Field, SecretStr
-from truealpha_runtime import RuntimeSettings
+from pydantic import AliasChoices, Field
+from truealpha_runtime import CoreRuntimeSettings
 
 
-class Settings(RuntimeSettings):
-    """Runtime settings layered on the shared runtime contract.
+class Settings(CoreRuntimeSettings):
+    """Runtime settings layered on the core runtime contract.
+
+    `llm-service` serves the MCP streamable-HTTP surface and `/health` over `mart`, and
+    its container entrypoint runs `db/apply_migrations.sh`. It never accesses S3 object
+    storage (AGENTS.md red line) and never calls an external LLM API.
 
     There is no fixture backend to select (#434 exit criterion 3, 2026-09-07): the MCP
     tools read the real `mart` and nothing else. The checked-in golden fixture lives in
@@ -24,6 +27,30 @@ class Settings(RuntimeSettings):
             "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
         },
     )
+    migrations_database_url: str | None = Field(
+        default=None,
+        validation_alias="MIGRATIONS_DATABASE_URL",
+        description="Optional PostgreSQL DSN override for schema migrations",
+        json_schema_extra={"source": "runtime", "group": "postgres", "empty_ok": True},
+    )
+    migration_lock_budget_seconds: int = Field(
+        default=25,
+        validation_alias=AliasChoices("MIGRATION_LOCK_BUDGET_SECONDS", "TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS"),
+        description="Maximum seconds spent waiting on migration locks",
+        json_schema_extra={"source": "code", "group": "postgres"},
+    )
+    migration_lock_timeout_seconds: int = Field(
+        default=5,
+        validation_alias=AliasChoices("MIGRATION_LOCK_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_LOCK_TIMEOUT"),
+        description="Migration lock timeout seconds",
+        json_schema_extra={"source": "code", "group": "postgres"},
+    )
+    migration_statement_timeout_seconds: int = Field(
+        default=60,
+        validation_alias=AliasChoices("MIGRATION_STATEMENT_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT"),
+        description="Migration statement timeout seconds",
+        json_schema_extra={"source": "code", "group": "postgres"},
+    )
 
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
     # This MCP surface is service-identity only -- there is no browser session or
@@ -35,26 +62,6 @@ class Settings(RuntimeSettings):
     mcp_dns_rebinding_protection: bool = Field(default=False, json_schema_extra={"source": "code", "group": "mcp"})
     mcp_allowed_hosts: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
     mcp_allowed_origins: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
-
-    llm_provider: str = Field(default="zai", json_schema_extra={"source": "code", "group": "llm"})
-    llm_base_url: str = Field(
-        default="https://open.bigmodel.cn/api/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
-    )
-    llm_api_key: SecretStr | None = Field(
-        default=None,
-        json_schema_extra={"source": "human", "scope": "project", "empty_ok": True, "sensitive": True, "group": "llm"},
-    )
-    llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
-    llm_timeout_seconds: float = Field(default=90.0, json_schema_extra={"source": "code", "group": "llm"})
-
-    def to_llm_settings(self) -> LlmSettings:
-        return LlmSettings(
-            provider=self.llm_provider,
-            base_url=self.llm_base_url,
-            api_key=self.llm_api_key.get_secret_value() if self.llm_api_key else None,
-            primary_model=self.llm_model,
-            json_timeout_seconds=self.llm_timeout_seconds,
-        )
 
 
 settings = Settings()

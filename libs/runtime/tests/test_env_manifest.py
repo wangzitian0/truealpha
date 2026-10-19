@@ -121,3 +121,90 @@ def test_validate_env_reports_missing_injected_values(monkeypatch: pytest.Monkey
     out = capsys.readouterr().out
     assert "missing: RELEASE_ID" in out and "missing: GIT_COMMIT_SHA" in out
     assert "missing: SEC_USER_AGENT" not in out and "missing: LLM_MODEL" not in out
+
+
+def test_llm_service_manifest_excludes_s3_and_unused_llm_variables_and_declares_migrations() -> None:
+    """#1367: llm-service inherits CoreRuntimeSettings (no S3_* or unused LLM_* fields) and
+    owns the four migration variables consumed by its container entrypoint."""
+    llm_manifest = env_manifest.load("apps/llm-service/required-env.generated.json")
+    llm_envs = {field.env for field in llm_manifest.fields}
+    assert not any(env.startswith(("S3_", "LLM_")) for env in llm_envs), llm_envs
+    migration_vars = {
+        "MIGRATIONS_DATABASE_URL",
+        "MIGRATION_LOCK_BUDGET_SECONDS",
+        "MIGRATION_LOCK_TIMEOUT_SECONDS",
+        "MIGRATION_STATEMENT_TIMEOUT_SECONDS",
+    }
+    assert migration_vars <= llm_envs
+
+    de_manifest = env_manifest.load("apps/data-engine/required-env.generated.json")
+    de_envs = {field.env for field in de_manifest.fields}
+    assert not (migration_vars & de_envs), de_envs
+    assert "S3_DOCUMENTS_PREFIX" not in de_envs
+
+
+def test_app_web_manifest_declares_every_process_env_variable_read_by_server_code() -> None:
+    """#1367: every process.env reader in apps/app-web/src must have a matching manifest entry."""
+    raw = json.loads((ROOT / "apps/app-web/required-env.manifest.json").read_text(encoding="utf-8"))
+    manifest = EnvironmentManifest.from_dict(raw)
+    declared = {field.env for field in manifest.fields}
+
+    pattern = re.compile(
+        r"""process\.env\.([A-Z0-9_]+)|(?:env|envPositiveSeconds|requireEnv)\(\s*["']([A-Z0-9_]+)["']"""
+    )
+    read_in_src: set[str] = set()
+    for path in (ROOT / "apps/app-web/src").rglob("*.ts*"):
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            name = match.group(1) or match.group(2)
+            if name:
+                read_in_src.add(name)
+
+    assert read_in_src <= declared, f"undeclared app-web env vars: {sorted(read_in_src - declared)}"
+
+
+def test_env_example_contains_no_undeclared_variables() -> None:
+    """#1367: .env.example must not advertise dead variables that no service manifest or compose file uses."""
+    declared = {
+        name
+        for manifest in env_manifest.all_manifests().values()
+        for field in manifest.fields
+        for name in (field.env, *field.aliases)
+    }
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    compose_interpolated = set(re.findall(r"\$\{([A-Z0-9_]+)", compose_text))
+    allowed = declared | compose_interpolated | {"COMPOSE_PROJECT_NAME"}
+
+    example_keys: set[str] = set()
+    for raw_line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        example_keys.add(key)
+
+    assert "JWT_ALGORITHM" not in example_keys
+    assert example_keys <= allowed, f"dead .env.example keys: {sorted(example_keys - allowed)}"
+
+
+def test_db_connect_passes_configured_database_connect_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1367: DATABASE_CONNECT_TIMEOUT_SECONDS must reach psycopg.connect in both Python services."""
+    import psycopg
+    from data_engine import db as de_db
+    from llm_service import main as llm_main
+
+    observed: list[tuple[str, object]] = []
+
+    def fake_connect(conninfo: str, **kwargs: object) -> object:
+        observed.append((conninfo, kwargs.get("connect_timeout")))
+        raise psycopg.OperationalError("probe only")
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    monkeypatch.setattr(de_db.settings, "database_connect_timeout_seconds", 11)
+    with pytest.raises(psycopg.OperationalError):
+        de_db.connect()
+    assert observed[-1][1] == 11
+
+    monkeypatch.setattr(llm_main.settings, "database_connect_timeout_seconds", 13)
+    llm_main.health()
+    assert observed[-1][1] == 13

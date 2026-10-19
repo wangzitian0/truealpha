@@ -32,6 +32,8 @@ def mcp_allowed_hosts() -> Iterator[None]:
 def isolate_ambient_database(monkeypatch: pytest.MonkeyPatch) -> None:
     """When DATABASE_URL is unset, tests must not connect to ambient localhost:5432 (#1197)."""
     if "DATABASE_URL" not in os.environ:
+        from llm_service.config import settings
         from truealpha_runtime import runtime_settings
 
         monkeypatch.setattr(runtime_settings, "database_url", "postgresql://127.0.0.1:1/unreachable")
+        monkeypatch.setattr(settings, "database_url", "postgresql://127.0.0.1:1/unreachable")

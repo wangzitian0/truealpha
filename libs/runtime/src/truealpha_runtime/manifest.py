@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from infra2_sdk.runtime.health import Dependency, DependencyKind, DependencyManifest
 
+from truealpha_runtime.config import CoreRuntimeSettings, RuntimeSettings
 from truealpha_runtime.tiers import EnvironmentTier
 
 
@@ -15,6 +16,13 @@ class RuntimeBackend(StrEnum):
 
 
 _ALL = frozenset(EnvironmentTier)
+_IDENTITY_FIELDS = frozenset({"app_env", "git_commit_sha"})
+_DATABASE_ENV_VARS = frozenset(
+    name.upper() for name in CoreRuntimeSettings.model_fields if name not in _IDENTITY_FIELDS
+)
+_OBJECT_STORAGE_ENV_VARS = frozenset(
+    name.upper() for name in RuntimeSettings.model_fields if name not in CoreRuntimeSettings.model_fields
+)
 
 DEPENDENCY_MANIFEST = DependencyManifest(
     (
@@ -22,7 +30,7 @@ DEPENDENCY_MANIFEST = DependencyManifest(
             name="database",
             kind=DependencyKind.CODE_DOMINANT,
             required_in=_ALL,
-            env_vars=frozenset({"DATABASE_URL", "DATABASE_CONNECT_TIMEOUT_SECONDS"}),
+            env_vars=_DATABASE_ENV_VARS,
             local_backend=RuntimeBackend.POSTGRES,
             deployed_backend=RuntimeBackend.POSTGRES,
         ),
@@ -38,18 +46,7 @@ DEPENDENCY_MANIFEST = DependencyManifest(
             name="object_storage",
             kind=DependencyKind.CODE_DOMINANT,
             required_in=_ALL,
-            env_vars=frozenset(
-                {
-                    "S3_ENDPOINT",
-                    "S3_ACCESS_KEY",
-                    "S3_SECRET_KEY",
-                    "S3_BUCKET",
-                    "S3_REGION",
-                    "S3_RAW_PREFIX",
-                    "S3_DOCUMENTS_PREFIX",
-                    "S3_CONNECT_TIMEOUT_SECONDS",
-                }
-            ),
+            env_vars=_OBJECT_STORAGE_ENV_VARS,
             local_backend=RuntimeBackend.MINIO,
             deployed_backend=RuntimeBackend.S3_COMPATIBLE,
         ),

@@ -230,9 +230,11 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
     verdicts: list[dict[str, Any]] | str = "unknown"
     try:
         import psycopg
-        from truealpha_runtime import runtime_settings
 
-        with psycopg.connect(runtime_settings.database_url, connect_timeout=3) as connection:
+        with psycopg.connect(
+            settings.database_url,
+            connect_timeout=settings.database_connect_timeout_seconds,
+        ) as connection:
             try:
                 row = connection.execute(
                     "select parser_version from staging.capture_normalized_observations "
