@@ -171,7 +171,10 @@ export default async function ToptQualityPage() {
                   <tr key={row.listing_id} className="border-t border-border">
                     <th scope="row" className="px-4 py-3 font-medium" title={row.listing_id}>
                       <span>{formatListingLabel(row.listing_id) ?? row.listing_id}</span>{" "}
-                      <code className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+                      <code
+                        data-evidence="true"
+                        className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400"
+                      >
                         {row.listing_id}
                       </code>
                     </th>

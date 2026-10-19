@@ -2,7 +2,7 @@ import { loadStrategyRunPage } from "@/server/strategy-page";
 import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { StrategyDefinitionLine } from "@/components/strategy-definition";
-import { formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
+import { formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import {
   currentMultipleOf,
@@ -25,10 +25,6 @@ const OUTCOME_LABEL: Record<StrategyRunOutcome, string> = {
 function decisionLabel(decision: StrategyRunDecision): string {
   const base = OUTCOME_LABEL[decision.outcome];
   return decision.exclusion_reason ? `${base}: ${decision.exclusion_reason}` : base;
-}
-
-function cell(value: string | null): string {
-  return value ?? "—";
 }
 
 /** The non-`ready` states, rendered as one notice line. Kept beside the
@@ -64,9 +60,12 @@ export default async function StrategyRunsPage() {
           {outcome.report.strategy_id} — provisional source: {outcome.report.source}. Corpus{" "}
           <code className="text-accent">{outcome.report.corpus_sha256}</code>.
           {outcome.report.golden_mismatches.length > 0 && (
-            <span role="status" className="ml-2 text-red-400">
-              {outcome.report.golden_mismatches.length} golden mismatch(es).
-            </span>
+            <>
+              {" "}
+              <span role="status" className="ml-2 text-red-400">
+                {outcome.report.golden_mismatches.length} golden mismatch(es).
+              </span>
+            </>
           )}
         </p>
       ) : (
@@ -142,25 +141,25 @@ export default async function StrategyRunsPage() {
                   </th>
                   <td className="px-4 py-3">{decision.cutoff_at}</td>
                   <td className="px-4 py-3">{decisionLabel(decision)}</td>
-                  <td className="px-4 py-3">{cell(decision.tier)}</td>
+                  <td className="px-4 py-3">{formatCell(decision.tier)}</td>
                   <td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
-                    {cell(formatRatio(currentMultipleOf(decision)))}
+                    {formatCell(formatRatio(currentMultipleOf(decision)))}
                   </td>
                   <td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
-                    {cell(formatRatio(targetMultipleOf(decision)))}
+                    {formatCell(formatRatio(targetMultipleOf(decision)))}
                   </td>
                   <td
                     className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
                     title={decision.valuation_gap ?? undefined}
                   >
-                    {cell(formatSignedRatio(decision.valuation_gap))}
+                    {formatCell(formatSignedRatio(decision.valuation_gap))}
                   </td>
                   <td className="px-4 py-3 tabular-nums" title={decision.confidence ?? undefined}>
-                    {cell(formatRatio(decision.confidence))}
+                    {formatCell(formatRatio(decision.confidence))}
                   </td>
                   <td className="px-4 py-3 tabular-nums">{decision.rank ?? "—"}</td>
                   <td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
-                    {cell(formatPercentFromFraction(decision.target_weight))}
+                    {formatCell(formatPercentFromFraction(decision.target_weight))}
                   </td>
                 </tr>
               ))}

@@ -1,17 +1,10 @@
 import { redirect } from "next/navigation";
+import { formatCell, formatRatio } from "@/client/format";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadFundValuation } from "@/server/mart/fund-valuation";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
-
-function formatPct(value: string | null): string {
-  return value === null ? "—" : `${Number(value).toFixed(2)}%`;
-}
-
-function formatRatio(value: string | null): string {
-  return value === null ? "—" : Number(value).toFixed(2);
-}
 
 export default async function HoldingsPage() {
   const principal = await getServerPrincipal();
@@ -73,29 +66,44 @@ export default async function HoldingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {fund.lines.map((line, index) => (
-                    <tr key={`${line.holdingName}-${index}`} className="border-t border-border">
-                      <td className="px-3 py-1.5">{line.holdingName}</td>
-                      <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{line.ticker ?? "—"}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatPct(line.weightPct)}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.currentPs)}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.currentPgp) ?? "—"}</td>
-                      {/* #1235: a P/GP row's band and gap are P/GP; a former-band row's are P/S. */}
-                      <td className="px-3 py-1.5 text-right tabular-nums">
-                        {line.targetPgpMidpoint !== null
-                          ? `${formatRatio(line.targetPgpMidpoint)} P/GP`
-                          : line.targetPsMidpoint !== null
-                            ? `${formatRatio(line.targetPsMidpoint)} P/S`
-                            : "—"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">
-                        {line.valuationGap === null
-                          ? "—"
-                          : `${formatRatio(line.valuationGap)} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
-                      </td>
-                      <td className="px-3 py-1.5 text-xs">{line.tier ?? "—"}</td>
-                    </tr>
-                  ))}
+                  {fund.lines.map((line, index) => {
+                    const weightFormatted = formatRatio(line.weightPct);
+                    const targetPgpFormatted = formatRatio(line.targetPgpMidpoint);
+                    const targetPsFormatted = formatRatio(line.targetPsMidpoint);
+                    const gapFormatted = formatRatio(line.valuationGap);
+                    return (
+                      <tr key={`${line.holdingName}-${index}`} className="border-t border-border">
+                        <td className="px-3 py-1.5">{line.holdingName}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{formatCell(line.ticker)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.weightPct ?? undefined}>
+                          {weightFormatted !== null ? `${weightFormatted}%` : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.currentPs ?? undefined}>
+                          {formatCell(formatRatio(line.currentPs))}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.currentPgp ?? undefined}>
+                          {formatCell(formatRatio(line.currentPgp))}
+                        </td>
+                        {/* #1235: a P/GP row's band and gap are P/GP; a former-band row's are P/S. */}
+                        <td
+                          className="px-3 py-1.5 text-right tabular-nums"
+                          title={line.targetPgpMidpoint ?? line.targetPsMidpoint ?? undefined}
+                        >
+                          {targetPgpFormatted !== null
+                            ? `${targetPgpFormatted} P/GP`
+                            : targetPsFormatted !== null
+                              ? `${targetPsFormatted} P/S`
+                              : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.valuationGap ?? undefined}>
+                          {gapFormatted === null
+                            ? "—"
+                            : `${gapFormatted} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs">{formatCell(line.tier)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
