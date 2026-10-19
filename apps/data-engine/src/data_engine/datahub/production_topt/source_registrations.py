@@ -307,6 +307,8 @@ MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
 #: #1131). That run is at 21:15 UTC, before the capture ticks. 60 plus the busiest capture day
 #: (152) is 212 of production's 480. `test_the_lane_fits_the_twelve_data_production_share`
 #: measures the lane's calls and holds this sum inside the share.
+#: The QQQ price lane (`lanes/qqq_prices.py`, #1277) spends only what the other callers leave below
+#: 85 % of the share. init.md section 5 holds its formula and the measured spend.
 TWELVE_DATA_ENVIRONMENT_SHARES: tuple[tuple[str, int], ...] = (("production", 60), ("staging", 40))
 
 LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(

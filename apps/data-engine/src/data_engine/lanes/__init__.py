@@ -28,6 +28,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.universe_refresh",
     # datahub: daily multi-resolution TOPT OHLCV refresh + PIT universe mask (#938)
     "data_engine.lanes.market_data",
+    # datahub: both daily series of the QQQ listings outside TOPT, within the Twelve Data budget (#1277)
+    "data_engine.lanes.qqq_prices",
     # the DB-mediated manual trigger (#495): a sensor over the capture lane's jobs
     "data_engine.lanes.triggers",
     # data quality: the output-invariant suite against this environment's own database

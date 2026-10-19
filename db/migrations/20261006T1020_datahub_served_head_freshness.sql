@@ -91,6 +91,9 @@ values
     -- market-data: the lane runs on weekdays only (cron `15 21 * * 1-5`).
     -- After a long weekend the age can pass 72 hours. Decide the family again when it is wired.
     ('market-data', 'market_data', 'market_data_refresh_schedule', null, 'daily', 'internal', false),
+    -- qqq-prices: both daily series of the QQQ listings outside TOPT, on weekdays (cron `35 21 * * 1-5`, #1277).
+    -- Like market-data, decide the family again when it is wired.
+    ('qqq-prices', 'qqq_prices', 'qqq_price_refresh_schedule', null, 'daily', 'internal', false),
     -- strategy-history: the lane runs on Sundays (cron `7 10 * * 0`) and reads stored bytes only.
     ('strategy-history', 'strategy_history', 'strategy_history_schedule', null, 'weekly', 'internal', false),
     -- backtest: the lane runs on weekdays (cron `30 21 * * 1-5`) and simulates daily/monthly portfolios.

@@ -74,6 +74,10 @@ DEFAULT_TOPT_SYMBOLS: tuple[str, ...] = (
 )
 
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
+#: The ledger seat (`source`) of every Twelve Data request (`source_registrations.LEDGER_CAPACITIES`).
+TWELVE_DATA_SEAT = "twelvedata"
+#: The ledger `caller` of a `TwelveDataClient` that does not name another one.
+TIME_SERIES_CALLER = "market_prices.fetch_time_series"
 
 # Twelve Data's `/time_series` `adjust` parameter is sent explicitly on every call
 # (#938 contract item 4). Left unset, the vendor's own default governs the returned
@@ -92,6 +96,10 @@ SPLIT_ADJUSTED = "splits"
 # Daily only. Returns and the universe mask read the split-adjusted series.
 UNADJUSTED = "none"
 DEFAULT_ADJUST = SPLIT_ADJUSTED
+#: The two daily series of one symbol, in the order a refresh fetches them (#1131).
+DAILY_SERIES: tuple[str, ...] = (SPLIT_ADJUSTED, UNADJUSTED)
+#: The years of daily bars a refresh keeps (`ingest_twelve_data_market_prices`, `ingest_daily_series`).
+DAILY_LOOKBACK_YEARS = 3
 
 #: How many XNYS sessions the newest bar of a series may trail the latest closed session.
 #: One: in winter the market-data tick runs 15 minutes after the 21:00 UTC close, and the vendor
@@ -409,6 +417,7 @@ class TwelveDataClient:
         sleep_fn: Callable[[float], None] = time.sleep,
         max_retries: int = 5,
         backoff_base: float = 2.0,
+        caller: str = TIME_SERIES_CALLER,
     ) -> None:
         self.api_key: str = api_key or str(getattr(settings, "twelve_data_api_key", ""))
         self.base_url = base_url.rstrip("/")
@@ -417,6 +426,9 @@ class TwelveDataClient:
         self.sleep_fn = sleep_fn
         self.max_retries = max_retries
         self.backoff_base = backoff_base
+        #: The ledger `caller` of every request this client makes. A lane that budgets its own
+        #: calls (`lanes.qqq_prices`, #1277) names itself here, so the ledger can tell it apart.
+        self.caller = caller
         self.call_count = 0
 
     def _default_transport(self, url: str) -> tuple[int, bytes]:
@@ -427,9 +439,7 @@ class TwelveDataClient:
         `gateway.capacity_scope()`/`gateway.run_scope()` around it -- `lanes.market_data`
         does (#938 contract item 3); a caller that does not is only ledgered, not gated."""
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
-        status, body = gateway.urlopen(
-            "twelvedata", "time_series", req, caller="market_prices.fetch_time_series", timeout=30
-        )
+        status, body = gateway.urlopen(TWELVE_DATA_SEAT, "time_series", req, caller=self.caller, timeout=30)
         return status or 0, body
 
     def fetch_time_series(
@@ -811,7 +821,7 @@ def ingest_twelve_data_market_prices(
     symbols: Sequence[str] = DEFAULT_TOPT_SYMBOLS,
     client: TwelveDataClient | None = None,
     connection: psycopg.Connection | None = None,
-    daily_lookback_years: int = 3,
+    daily_lookback_years: int = DAILY_LOOKBACK_YEARS,
     monthly_lookback_years: int = 10,
     now: datetime | None = None,
     adjust: str = DEFAULT_ADJUST,
@@ -834,7 +844,7 @@ def ingest_twelve_data_market_prices(
     """
     now_instant = now or datetime.now(UTC)
     as_of_date = now_instant.date()
-    min_daily_date = as_of_date - timedelta(days=daily_lookback_years * 365 + 30)
+    min_daily_date = daily_lookback_floor(now_instant, daily_lookback_years)
     min_monthly_date = as_of_date - timedelta(days=monthly_lookback_years * 365 + 60)
 
     td_client = client or TwelveDataClient()
@@ -891,3 +901,32 @@ def ingest_twelve_data_market_prices(
         unadjusted_daily_inserted=unadjusted_daily_inserted,
         unadjusted_daily_records=all_unadjusted_daily_records,
     )
+
+
+def daily_lookback_floor(now: datetime, years: int = DAILY_LOOKBACK_YEARS) -> date:
+    """The oldest session a daily refresh keeps: `years` years and 30 days before the date of `now`."""
+    return now.date() - timedelta(days=years * 365 + 30)
+
+
+def ingest_daily_series(
+    symbol: str,
+    *,
+    client: TwelveDataClient,
+    connection: psycopg.Connection,
+    now: datetime,
+) -> dict[str, int]:
+    """Fetch both daily series of one symbol and append them (#1277). Return the rows appended per series.
+
+    One request per series in `DAILY_SERIES`, so one credit per series. The function parses both
+    answers before it writes. A vendor error, or a series without a closed bar, writes nothing:
+    one stored series without the other makes the issuer unavailable (`share_basis.split_history`).
+    The rows carry the provenance of every daily bar (`insert_market_prices_daily`).
+    """
+    floor = daily_lookback_floor(now)
+    bars: dict[str, list[PriceBarRecord]] = {}
+    for adjust in DAILY_SERIES:
+        payload = client.fetch_time_series(symbol, interval="1day", outputsize=5000, adjust=adjust)
+        bars[adjust] = parse_daily_bars(symbol, payload, min_date=floor, now=now)
+        if not bars[adjust]:
+            raise TwelveDataApiError(f"Twelve Data answered no closed daily bar for {symbol} (adjust={adjust})")
+    return {adjust: insert_market_prices_daily(connection, records, adjust=adjust) for adjust, records in bars.items()}

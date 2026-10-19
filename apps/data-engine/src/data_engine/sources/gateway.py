@@ -59,7 +59,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -355,6 +355,15 @@ class MemoryLedger(list[CallRecord]):
         times = [row.called_at for row in self if row.source == source and row.called_at > since]
         return len(times), min(times, default=None)
 
+    def daily_calls(self, source: str, since: datetime, until: datetime) -> dict[tuple[str, date], int]:
+        return dict(
+            Counter(
+                (row.caller, row.called_at.astimezone(UTC).date())
+                for row in self
+                if row.source == source and since <= row.called_at < until
+            )
+        )
+
 
 _writer: Callable[[CallRecord], None] = postgres_writer
 
@@ -467,6 +476,37 @@ def ledger_window(source: str, since: datetime) -> tuple[int, datetime | None]:
     return reader(source, since) if reader is not None else (0, None)
 
 
+_DAILY_SQL = (
+    "select caller, (called_at at time zone 'UTC')::date, count(*) from staging.api_call_ledger "
+    "where source = %s and called_at >= %s and called_at < %s group by 1, 2"
+)
+
+
+def ledger_daily_calls(source: str, since: datetime, until: datetime) -> dict[tuple[str, date], int]:
+    """Calls per (caller, UTC day) that the ledger holds for ``source`` in ``[since, until)``.
+
+    The rows the gate counts, read from the same place (`ledger_calls_since`). A lane that
+    budgets its own share of a seat against the other callers reads them here (#1277)."""
+    if settings.external_call_ledger == "off":
+        return {}
+    if _writer is postgres_writer:
+        rows = _pg_execute(_DAILY_SQL, (source, since, until)).fetchall()
+        return {(str(caller), day): int(calls) for caller, day, calls in rows}
+    reader = getattr(_writer, "daily_calls", None)
+    return dict(reader(source, since, until)) if reader is not None else {}
+
+
+def capacity_environment() -> str:
+    """The environment whose share of a shared seat this process spends.
+
+    The resolved tier. An unknown APP_ENV stays as written: a gate names it in the refusal and
+    grants it no share. `CapacityGate` and every budget that reads a share use this one answer."""
+    try:
+        return settings.environment_tier.value
+    except ValueError:
+        return settings.app_env
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -528,13 +568,7 @@ class CapacityGate:
         self._admitted[source] = (today, self._admitted_today(source, today) + 1)
 
     def _environment(self) -> str:
-        if self.environment is not None:
-            return self.environment
-        try:
-            return settings.environment_tier.value
-        except ValueError:
-            # An unknown APP_ENV is named in the refusal and granted no share.
-            return settings.app_env
+        return self.environment if self.environment is not None else capacity_environment()
 
     def _admitted_today(self, source: str, today: date) -> int:
         day, admitted = self._admitted.get(source, (today, 0))
