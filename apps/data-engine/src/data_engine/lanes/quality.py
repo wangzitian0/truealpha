@@ -217,7 +217,7 @@ _sleep = time.sleep
 
 def _await_settled(context: dg.OpExecutionContext) -> None:
     """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed.
-    The surface proof and the confidence report both judge heads through it."""
+    The output-invariants suite, the surface proof, and the confidence report all judge heads through it."""
     deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
     while True:
         with psycopg.connect(settings.database_url) as connection:

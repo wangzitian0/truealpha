@@ -13,6 +13,8 @@
 
 import {
   ACCEPTED_SERVICE_OBJECTIVES,
+  type HeadFreshness,
+  NON_CANARY_UNIVERSE_WHERE,
   REGISTERED_RAW_SOURCE_FILTER,
   isCanaryUniverse,
   isHeadScheduled,
@@ -35,7 +37,7 @@ export interface HeadStatusRow {
   availability: string | null;
   agreed_cells: number | null;
   total_cells: number | null;
-  freshness: "fresh" | "stale" | "manual" | "unknown";
+  freshness: HeadFreshness;
   age_hours: number | null;
   limit_hours: number | null;
   staleness_reason: string | null;
@@ -426,8 +428,6 @@ const REUSE_SQL = `
            || count(*) || ' runs' as detail
   from mart.topt_capture_status where cutoff > now() - interval '24 hours'
 `;
-const NON_CANARY_UNIVERSE_WHERE =
-  "s.universe_id not like 'universe:canary%' and s.universe_id not like 'canary%'";
 const PLAUSIBILITY_SQL = `
   select 'plausibility oracle' as check,
          case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,

@@ -292,7 +292,7 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
       if (!container) return [];
       return Array.from(container.querySelectorAll("tbody tr td:first-child")).map((td) => td.innerText.trim());
     });
-    const sweepLeaks = sourceNames.filter((name) => /-\d{8}T\d{4}$/.test(name));
+    const sweepLeaks = sourceNames.filter((name) => SWEEP_RUN_SOURCE_PATTERN.test(name));
     if (sweepLeaks.length > 0) {
       problems.push(`/admin/datahub Sources table includes timestamped sweep run(s): ${sweepLeaks.join(", ")}`);
     }
