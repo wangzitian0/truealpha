@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=0802d617a6b777efa216a0d6eca3e39faa7b74a7907832de45ed2062b81d1476 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=367641534398a6351d3a1a0d1baf02bc43af7d37c99571c86ba02aaed9f1b0a8 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -165,25 +165,22 @@ Repository shape:
 - LLM surfaces use typed `mart` reads only, never raw/staging access, arbitrary SQL, or
   live factor computation. `mart_readonly` enforces the database boundary and
   `ResearchQueryService` enforces allowed queries, pagination, and row limits.
-- LLM extraction is a separate versioned, append-only step. Bind model, instructions,
-  schema, and decoding settings; store semantic results and evidence spans. Replay never
-  silently calls a model. Self-reported confidence is not calibrated evidence without an
-  accepted sealed holdout policy.
+- LLM extraction is a versioned, append-only step. Bind model, instructions, schema, and
+  decoding settings; store semantic results and evidence spans. Replay never calls a model.
+  Confidence uses the continuous `0-100` score (`prior x agreement x freshness x lineage`), never
+  a constant. Single-source extraction lowers confidence and never blocks a row.
 - Every external request (SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo, the LLM
   extraction provider) goes through the source gateway and `api_call_ledger` with a declared
-  capacity. No module calls a vendor or a model directly (init.md rule 6, owner decision
-  2026-09-04). The ledger is throttle and audit infrastructure, not a monthly-call quota:
-  moomoo's quote/fundamental endpoints use burst rate limits; do not confuse a subscription
-  tier ceiling with a call budget. See `init.md` Section 5.
+  capacity. No module calls a vendor or a model directly (init.md rule 6). The ledger is
+  throttle and audit infrastructure, not a monthly-call quota: moomoo's quote/fundamental
+  endpoints use burst rate limits; do not confuse a tier ceiling with a call budget.
 - Moomoo access is Quote API read-only. Every trading context and every order placement,
-  modification, cancellation, or trade-unlock operation is forbidden. The public
-  repository's security CI must reject trading APIs rather than relying on review alone.
-- Consumers of data-engine outputs read through a governed, access-controlled
-  `current_pointer` that resolves to an immutable exact run, identified by that run's
-  content hash. Pinning an exact snapshot/handoff identity for a reproducible read stays
-  supported; a bare mutable `latest` is never a read path. The pointer advances only on an
-  accepted refresh, and consumers re-pull when it advances. See
-  `docs/architecture-decisions/A1-evidence-chain-in-database.md`.
+  modification, cancellation, or trade-unlock operation is forbidden. Security CI rejects
+  trading APIs rather than relying on review alone.
+- Consumers of data-engine outputs read through `mart.served_head` (or a pinned
+  `run_id` / `snapshot_id` / `evidence_hash`). A bare mutable `latest` is never a read path.
+  The pointer advances only on an accepted refresh, and consumers re-pull when it advances
+  (`docs/architecture-decisions/A1-evidence-chain-in-database.md`).
 
 ## Environments and source gotchas
 
@@ -202,8 +199,10 @@ This repository consumes only released `infra2-sdk` contracts.
   only; they are not scheduled-run evidence.
 - SEC XBRL concept tags and units vary across industries. Do not assume one field mapping
   works for every issuer.
-- yfinance has no official SLA. Represent that limitation through lower row confidence;
-  never make it a critical-path dependency or a provenance branch in factors.
+- `yfinance` is the zero-quota default base for price and split coverage. Twelve Data and
+  moomoo corroborate within their quotas. Represent `yfinance`'s missing SLA through lower
+  confidence (`Low` when single-source), never a provenance branch in factors. Price reuse
+  keys on `(listing, session_date)`, not issuer namespace.
 - N-PORT holdings identify positions by CUSIP/ISIN, not ticker/CIK. Resolve identifiers
   through OpenFIGI or equivalent before writing PIT `same_as` KG edges. Use
   `staging.kg_entities`, `staging.kg_identifiers`, and `staging.kg_edges`, not a flat

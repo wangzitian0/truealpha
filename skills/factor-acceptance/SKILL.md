@@ -18,7 +18,7 @@ description: TrueAlpha Factor Acceptance Protocol. Enforces the strict quantitat
 ### 1. Point-in-Time & Measurement Integrity
 - [ ] **Dual Timestamps**: Distinguish `valid_time` from `transaction_time` (knowable-at).
 - [ ] **No Clock Defaults**: `transaction_time` must come from an explicit source property, never an insertion-clock default (`now()`).
-- [ ] **No Hardcoded Constants**: Universe size, obligation count, denominator cells (never hardcode 84 cells!), growth window, and freshness must be measured from the run, not hardcoded.
+- [ ] **No Hardcoded Constants**: Universe size, obligation count, denominator cells (never hardcode 84 cells!), growth window, freshness, and confidence scores (never stamp `0.85`, `0.92`, or `1.00`) must be derived from the run and the continuous `0-100` confidence model (`source prior x agreement x freshness x lineage`), not hardcoded.
 - [ ] **Decimal Monetary Arithmetic**: Use `Decimal` with explicit rounding context (`ROUND_HALF_EVEN`) for monetary values; binary floating point (`float`) is strictly prohibited.
 
 ### 2. Degenerate & Missing Data Gating
@@ -28,7 +28,7 @@ description: TrueAlpha Factor Acceptance Protocol. Enforces the strict quantitat
 ### 3. Composite Factor Rules (Module 7)
 - [ ] **Confidence Bounding**: Composite factor confidence must satisfy:
   $$\text{confidence}_{\text{composite}} \le \min_{i}(\text{confidence}_{\text{input}_i})$$
-- [ ] **Availability Bounding**: `data_availability` is `"verified"` ONLY when all consumed inputs are `"verified"`.
+- [ ] **Availability & Score Propagation**: Every computed value is served (`available`) alongside its continuous `0-100` confidence score (`High` $\ge 80$, `Medium` $60\text{–}79$, `Low` $< 60$). Low confidence lowers the composite score; it never silently drops or blocks the row.
 - [ ] **Materialized Inputs Only**: Composite factors reload materialized upstream factor results from `mart`; they never branch on raw source vendors or bypass the mart layer.
 
 ### 4. Standing Checks (Rule 7)
