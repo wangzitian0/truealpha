@@ -9,9 +9,17 @@
 
 import { Pool, type PoolClient } from "pg";
 
-let pool: Pool | null = null;
+export type DatabaseRole = "app_runtime" | "mart_readonly" | "app_ops_reader";
 
-export function getPool(): Pool {
+let pool: Pool | null = null;
+let testPoolOverride: Pick<Pool, "connect"> | null = null;
+
+export function __setTestPool(overridePool: Pick<Pool, "connect"> | null): void {
+  testPoolOverride = overridePool;
+}
+
+export function getPool(): Pick<Pool, "connect"> {
+  if (testPoolOverride) return testPoolOverride;
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
@@ -22,22 +30,34 @@ export function getPool(): Pool {
   return pool;
 }
 
-/** Runs `fn` on a client that has already assumed `app_runtime` for this
- * session. Always resets the role and releases the client back to the pool,
- * even on error. */
-export async function withAppRuntime<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+/** Runs `fn` on a pooled client that has assumed `role` for this session.
+ * Resets the role before returning the client to the pool; if `reset role`
+ * fails, passes `true` to `client.release(true)` so `pg.Pool` destroys the
+ * tainted connection instead of handing it to the next request. */
+export async function withRoleClient<T>(
+  role: DatabaseRole,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await getPool().connect();
+  let resetFailed = false;
   try {
-    await client.query("set role app_runtime");
+    await client.query(`set role ${role}`);
     return await fn(client);
   } finally {
     try {
       await client.query("reset role");
     } catch {
-      // best-effort — the client is being released either way
+      resetFailed = true;
     }
-    client.release();
+    client.release(resetFailed);
   }
+}
+
+/** Runs `fn` on a client that has already assumed `app_runtime` for this
+ * session. Always resets the role and releases the client back to the pool,
+ * even on error. */
+export async function withAppRuntime<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  return withRoleClient("app_runtime", fn);
 }
 
 export interface OwnerScope {
@@ -64,6 +84,7 @@ export async function withOwnerScopedRuntime<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await getPool().connect();
+  let rollbackFailed = false;
   try {
     await client.query("begin");
     await client.query("set local role app_runtime");
@@ -73,9 +94,14 @@ export async function withOwnerScopedRuntime<T>(
     await client.query("commit");
     return result;
   } catch (error) {
-    await client.query("rollback").catch(() => {});
+    try {
+      await client.query("rollback");
+    } catch {
+      rollbackFailed = true;
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(rollbackFailed);
   }
 }
+

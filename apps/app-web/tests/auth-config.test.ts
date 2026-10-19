@@ -6,13 +6,74 @@
  * Run standalone: `bun run tests/auth-config.test.ts`.
  */
 
+import type { PoolClient } from "pg";
 import { loadAuthConfig } from "../src/server/auth/config";
+import { __setTestPool, withAppRuntime, withOwnerScopedRuntime } from "../src/server/auth/db";
+import { withMartReadonly } from "../src/server/mart/db";
+import { withOpsReader } from "../src/server/admin/ops";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-function run() {
+async function testPooledClientDisposalOnFailedCleanup() {
+  const queries: string[] = [];
+  const releasedWith: unknown[] = [];
+  let failOnSql: string | null = null;
+
+  const fakeClient = {
+    query: async (sql: string) => {
+      queries.push(sql);
+      if (failOnSql && sql === failOnSql) {
+        throw new Error(`simulated failure on ${sql}`);
+      }
+      return { rows: [] };
+    },
+    release: (err?: boolean | Error) => {
+      releasedWith.push(err);
+    },
+  } as unknown as PoolClient;
+
+  __setTestPool({
+    connect: async () => fakeClient,
+  });
+
+  try {
+    // Healthy role switch resets role and returns connection to pool (release(false))
+    await withAppRuntime(async () => "ok");
+    await withMartReadonly(async () => "ok");
+    await withOpsReader(async () => "ok");
+    assert(releasedWith.length === 3, `expected 3 releases, got ${releasedWith.length}`);
+    assert(
+      releasedWith.every((arg) => !arg),
+      `healthy role switch must release(false), got ${JSON.stringify(releasedWith)}`,
+    );
+
+    // Failed reset role must evict tainted connection from shared pool (release(true))
+    releasedWith.length = 0;
+    failOnSql = "reset role";
+    await withMartReadonly(async () => "ok");
+    assert(releasedWith.length === 1 && releasedWith[0] === true, "failed reset role must call release(true)");
+
+    // Failed rollback in owner-scoped transaction must also evict tainted connection (release(true))
+    releasedWith.length = 0;
+    failOnSql = "rollback";
+    let txThrew = false;
+    try {
+      await withOwnerScopedRuntime({ tenantId: "t1", principalId: "p1" }, async () => {
+        throw new Error("tx body failure");
+      });
+    } catch {
+      txThrew = true;
+    }
+    assert(txThrew, "withOwnerScopedRuntime must rethrow body error");
+    assert(releasedWith.length === 1 && releasedWith[0] === true, "failed rollback must call release(true)");
+  } finally {
+    __setTestPool(null);
+  }
+}
+
+async function run() {
   const originalSecret = process.env.SECRET_KEY;
   const originalEnv = process.env.NODE_ENV;
   const originalAppEnv = process.env.APP_ENV;
@@ -96,7 +157,10 @@ function run() {
     else process.env.ACCESS_TOKEN_EXPIRE_MINUTES = originalExpiry;
   }
 
+  await testPooledClientDisposalOnFailedCleanup();
+
   console.log("auth-config.test.ts: all assertions passed");
 }
 
-run();
+await run();
+

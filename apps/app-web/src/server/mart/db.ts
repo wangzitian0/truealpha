@@ -7,7 +7,7 @@
  */
 
 import type { PoolClient } from "pg";
-import { getPool } from "../auth/db";
+import { withRoleClient } from "../auth/db";
 
 let testClientOverride: Pick<PoolClient, "query"> | null = null;
 
@@ -33,16 +33,6 @@ export async function withMartReadonly<T>(fn: (client: PoolClient) => Promise<T>
       await injected.query("reset role").catch(() => {});
     }
   }
-  const client = await getPool().connect();
-  try {
-    await client.query("set role mart_readonly");
-    return await fn(client);
-  } finally {
-    try {
-      await client.query("reset role");
-    } catch {
-      // best-effort — the client is being released either way
-    }
-    client.release();
-  }
+  return withRoleClient("mart_readonly", fn);
 }
+

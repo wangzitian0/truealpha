@@ -13,7 +13,7 @@
  */
 
 import type { PoolClient } from "pg";
-import { getPool } from "../auth/db";
+import { withRoleClient } from "../auth/db";
 import {
   type HeadFreshness,
   REGISTERED_RAW_SOURCE_FILTER,
@@ -38,14 +38,7 @@ export async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) =
       await injected.query("reset role").catch(() => {});
     }
   }
-  const client = await getPool().connect();
-  try {
-    await client.query("set role app_ops_reader");
-    return await fn(client);
-  } finally {
-    await client.query("reset role").catch(() => {});
-    client.release();
-  }
+  return withRoleClient("app_ops_reader", fn);
 }
 
 /** #495: the run table's two absent states, owned by the loader that produces
