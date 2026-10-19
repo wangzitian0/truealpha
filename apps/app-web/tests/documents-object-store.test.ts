@@ -171,6 +171,36 @@ async function run() {
 
   __setTestClient(null);
 
+  const savedS3Env = {
+    S3_ENDPOINT: process.env.S3_ENDPOINT,
+    S3_ACCESS_KEY: process.env.S3_ACCESS_KEY,
+    S3_SECRET_KEY: process.env.S3_SECRET_KEY,
+  };
+  try {
+    delete process.env.S3_ENDPOINT;
+    delete process.env.S3_ACCESS_KEY;
+    delete process.env.S3_SECRET_KEY;
+    await assertThrows(
+      () => storeDocumentArtifact("principal:dave", Buffer.from("x"), "text/plain"),
+      "storeDocumentArtifact without S3_ENDPOINT must fail closed instead of falling back to localhost:9000",
+    );
+    process.env.S3_ENDPOINT = "http://127.0.0.1:9000";
+    await assertThrows(
+      () => storeDocumentArtifact("principal:dave", Buffer.from("x"), "text/plain"),
+      "storeDocumentArtifact without S3_ACCESS_KEY must fail closed instead of falling back to minio",
+    );
+    process.env.S3_ACCESS_KEY = "explicit-key";
+    await assertThrows(
+      () => storeDocumentArtifact("principal:dave", Buffer.from("x"), "text/plain"),
+      "storeDocumentArtifact without S3_SECRET_KEY must fail closed instead of falling back to minio_local_secret",
+    );
+  } finally {
+    for (const [k, v] of Object.entries(savedS3Env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+
   const originalTimeout = process.env.S3_CONNECT_TIMEOUT_SECONDS;
   try {
     delete process.env.S3_CONNECT_TIMEOUT_SECONDS;

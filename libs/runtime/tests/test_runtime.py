@@ -94,24 +94,61 @@ def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch):
     assert settings.s3_bucket == "truealpha-raw"
 
 
-def test_runtime_settings_converts_to_postgres_and_s3_settings():
+def test_runtime_settings_converts_to_s3_settings():
+    from truealpha_runtime import CoreRuntimeSettings
+
+    assert issubclass(RuntimeSettings, CoreRuntimeSettings)
+    assert set(CoreRuntimeSettings.model_fields) == {
+        "app_env",
+        "git_commit_sha",
+        "database_url",
+        "database_connect_timeout_seconds",
+    }
+    assert "s3_documents_prefix" not in RuntimeSettings.model_fields
     settings = RuntimeSettings(
         _env_file=None,
         app_env="test",
         database_url="postgresql://user:pass@127.0.0.1:5432/testdb",
         s3_bucket="my-bucket",
-        s3_documents_prefix="docs-test",
     )
-    pg = settings.to_postgres_settings()
-    assert pg.dsn == "postgresql://user:pass@127.0.0.1:5432/testdb"
-    assert pg.connect_timeout_seconds == 5
-
     s3 = settings.to_s3_settings()
     assert s3.bucket == "my-bucket"
-    assert s3.documents_prefix == "docs-test"
     assert s3.raw_prefix == "raw"
     assert s3.addressing_style == "path"
     assert isinstance(s3, S3Settings)
+
+
+def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
+    from truealpha_contracts.models import RawObjectRef
+    from truealpha_runtime.checks import ObjectStorageCheck
+
+    settings = RuntimeSettings(_env_file=None, app_env="test", s3_endpoint="   ")
+    store = S3RawObjectStore(settings)
+    capture = RawCapture(
+        source=DataSource.SEC,
+        source_record_id="0001564590-20-006422",
+        body=b"{}",
+        content_type="application/json",
+        fetched_at=datetime(2026, 7, 10, tzinfo=UTC),
+    )
+    ref = RawObjectRef(
+        bucket="truealpha-raw",
+        key="raw/sec/2026/07/10/test",
+        sha256="a" * 64,
+        byte_length=2,
+        content_type="application/json",
+    )
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.ensure_bucket()
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.store(capture)
+    with pytest.raises(RuntimeError, match="S3_ENDPOINT is not configured"):
+        store.get(ref)
+    from truealpha_runtime.checks import DependencyStatus
+
+    result = ObjectStorageCheck(settings, store=store).probe()
+    assert result.status is DependencyStatus.ABSENT
+    assert "S3_ENDPOINT is not configured" in (result.detail or "")
 
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
@@ -125,7 +162,6 @@ def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing
     assert store.client.meta.config.s3["addressing_style"] == "path"
     assert store.client.meta.endpoint_url == settings.s3_endpoint
     assert store.client.meta.region_name == settings.s3_region
-    assert store.s3_settings.documents_prefix == "documents"
     assert store.s3_settings.addressing_style == "path"
 
 

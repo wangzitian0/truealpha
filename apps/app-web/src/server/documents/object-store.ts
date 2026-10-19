@@ -60,20 +60,33 @@ export function __setTestClient(overrideClient: Pick<S3Client, "send"> | null): 
   testClientOverride = overrideClient;
 }
 
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim() ?? "";
+  if (value === "") {
+    throw new DocumentStorageError(
+      `${name} is not set: document object storage requires an explicit S3 configuration (#1367)`,
+    );
+  }
+  return value;
+}
+
 function getClient(): S3Client {
   if (testClientOverride) return testClientOverride as S3Client;
   if (!client) {
+    const endpoint = requireEnv("S3_ENDPOINT");
+    const accessKeyId = requireEnv("S3_ACCESS_KEY");
+    const secretAccessKey = requireEnv("S3_SECRET_KEY");
     // Mirrors S3_CONNECT_TIMEOUT_SECONDS's role in the Python
     // S3RawObjectStore adapter — without an explicit timeout here, a
     // stalled S3/MinIO call could hang a server request indefinitely.
     const timeoutMs = envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) * 1000;
     client = new S3Client({
-      endpoint: env("S3_ENDPOINT", "http://localhost:9000"),
+      endpoint,
       region: env("S3_REGION", "us-east-1"),
       forcePathStyle: true,
       credentials: {
-        accessKeyId: env("S3_ACCESS_KEY", "minio"),
-        secretAccessKey: env("S3_SECRET_KEY", "minio_local_secret"),
+        accessKeyId,
+        secretAccessKey,
       },
       requestHandler: new NodeHttpHandler({
         connectionTimeout: timeoutMs,

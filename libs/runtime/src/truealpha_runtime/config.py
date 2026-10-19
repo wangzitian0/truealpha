@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from truealpha_runtime.tiers import EnvironmentTier, resolve_environment_tier
 
 
-class RuntimeSettings(BaseSettings):
+class CoreRuntimeSettings(BaseSettings):
     """Runtime/CICD settings shared by every Python application."""
 
     # env_ignore_empty: an empty environment variable must not shadow a default or the next
@@ -42,6 +42,31 @@ class RuntimeSettings(BaseSettings):
     )
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code"})
 
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: str) -> str:
+        if not value.startswith(("postgresql://", "postgres://")):
+            raise ValueError("DATABASE_URL must use PostgreSQL")
+        return value
+
+    @cached_property
+    def environment_tier(self) -> EnvironmentTier:
+        return resolve_environment_tier(self.app_env, github_actions=os.getenv("GITHUB_ACTIONS") == "true")
+
+    @property
+    def is_deployed(self) -> bool:
+        """Preview, staging, production: a platform-provisioned stack, where every value the
+        deployment injects must be present at boot (#759). Local and CI tiers run without them."""
+        return self.environment_tier in {
+            EnvironmentTier.PREVIEW,
+            EnvironmentTier.STAGING,
+            EnvironmentTier.PRODUCTION,
+        }
+
+
+class RuntimeSettings(CoreRuntimeSettings):
+    """Runtime settings for Python services that also access raw S3 object storage."""
+
     # Object-store coordinates and credentials come from the environment ONLY. No
     # defaults, for two reasons that agree:
     #
@@ -68,19 +93,7 @@ class RuntimeSettings(BaseSettings):
     s3_bucket: str = Field(default="truealpha-raw", json_schema_extra={"source": "code", "group": "s3"})
     s3_region: str = Field(default="us-east-1", json_schema_extra={"source": "code", "group": "s3"})
     s3_raw_prefix: str = Field(default="raw", json_schema_extra={"source": "code", "group": "s3"})
-    s3_documents_prefix: str = Field(
-        default="documents",
-        validation_alias="S3_DOCUMENTS_PREFIX",
-        json_schema_extra={"source": "code", "group": "s3"},
-    )
     s3_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "s3"})
-
-    @field_validator("database_url")
-    @classmethod
-    def validate_database_url(cls, value: str) -> str:
-        if not value.startswith(("postgresql://", "postgres://")):
-            raise ValueError("DATABASE_URL must use PostgreSQL")
-        return value
 
     @field_validator("s3_bucket")
     @classmethod
@@ -88,10 +101,6 @@ class RuntimeSettings(BaseSettings):
         if not 3 <= len(value) <= 63 or value.lower() != value or "_" in value:
             raise ValueError("S3_BUCKET must be a lowercase S3-compatible bucket name")
         return value
-
-    @cached_property
-    def environment_tier(self) -> EnvironmentTier:
-        return resolve_environment_tier(self.app_env, github_actions=os.getenv("GITHUB_ACTIONS") == "true")
 
     @property
     def may_create_bucket(self) -> bool:
@@ -101,32 +110,13 @@ class RuntimeSettings(BaseSettings):
             EnvironmentTier.GITHUB_CI,
         }
 
-    @property
-    def is_deployed(self) -> bool:
-        """Preview, staging, production: a platform-provisioned stack, where every value the
-        deployment injects must be present at boot (#759). Local and CI tiers run without them."""
-        return self.environment_tier in {
-            EnvironmentTier.PREVIEW,
-            EnvironmentTier.STAGING,
-            EnvironmentTier.PRODUCTION,
-        }
-
-    def to_postgres_settings(self):
-        """Construct canonical PostgresSettings."""
-        from infra2_sdk.runtime.postgres import PostgresSettings
-
-        return PostgresSettings(
-            dsn=self.database_url,
-            connect_timeout_seconds=self.database_connect_timeout_seconds,
-        )
-
     def to_s3_settings(self):
         """Construct canonical S3Settings."""
         from infra2_sdk.runtime.s3 import S3Settings
 
         return S3Settings(
             bucket=self.s3_bucket,
-            endpoint_url=self.s3_endpoint,
+            endpoint_url=(self.s3_endpoint or "").strip() or None,
             access_key_id=self.s3_access_key or None,
             secret_access_key=self.s3_secret_key.get_secret_value() or None,
             region_name=self.s3_region,
@@ -134,7 +124,6 @@ class RuntimeSettings(BaseSettings):
             connect_timeout_seconds=float(self.s3_connect_timeout_seconds),
             read_timeout_seconds=float(self.s3_connect_timeout_seconds),
             raw_prefix=self.s3_raw_prefix,
-            documents_prefix=self.s3_documents_prefix,
         )
 
 

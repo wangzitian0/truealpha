@@ -177,10 +177,10 @@ def test_the_release_ref_comes_from_settings_not_from_the_process_environment(
     )
 
 
-def test_the_settings_model_resolves_canonical_sdk_keys(
+def test_the_settings_model_resolves_canonical_and_legacy_release_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Settings resolves canonical SDK environment variables and constructs canonical identity."""
+    """Settings resolves canonical SDK environment variables and legacy Vault aliases (#1367)."""
     digest = "sha256:" + "d" * 64
     release_id = "release-manifest:" + "e" * 64
     config_sha = "a" * 64
@@ -188,35 +188,19 @@ def test_the_settings_model_resolves_canonical_sdk_keys(
     monkeypatch.setenv("RELEASE_ID", release_id)
     monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
-    monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@127.0.0.1:5432/truealpha")
-    monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT_SECONDS", "10")
     monkeypatch.setenv("LLM_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
     assert settings.data_engine_image_digest == digest
     assert settings.release_manifest_id == release_id
     assert settings.capture_approved_by == "zitian"
     assert settings.configuration_sha256 == config_sha
-    assert settings.migrations_database_url == "postgresql://admin:secret@127.0.0.1:5432/truealpha"
-    assert settings.migration_lock_timeout_seconds == 10
     assert settings.llm_model == "glm-5.3-flash"
+    assert "migrations_database_url" not in Settings.model_fields
 
-    identity = settings.to_runtime_identity()
-    assert identity.service_name == "data-engine"
-    assert identity.image_digest == digest
-    assert identity.release_id == release_id
-    assert identity.configuration_sha256 == config_sha
-
-    pg = settings.to_postgres_settings()
-    assert pg.migrations_dsn == "postgresql://admin:secret@127.0.0.1:5432/truealpha"
-    assert pg.migration_lock_timeout_seconds == 10
-
-    llm = settings.to_llm_settings()
-    assert llm.provider == settings.llm_provider
-    assert llm.primary_model == "glm-5.3-flash"
-
-
-def test_to_llm_settings_fails_closed_when_model_is_empty() -> None:
-    """Empty llm_model fails closed with ValueError (#1039)."""
-    settings = Settings(_env_file=None, llm_model="")
-    with pytest.raises(ValueError, match="primary_model must be non-empty"):
-        settings.to_llm_settings()
+    monkeypatch.delenv("RELEASE_ID")
+    monkeypatch.delenv("TRUEALPHA_CAPTURE_APPROVED_BY")
+    monkeypatch.setenv("RELEASE_MANIFEST_ID", release_id)
+    monkeypatch.setenv("CAPTURE_APPROVED_BY", "wangzitian0")
+    legacy = Settings(_env_file=None)
+    assert legacy.release_manifest_id == release_id
+    assert legacy.capture_approved_by == "wangzitian0"

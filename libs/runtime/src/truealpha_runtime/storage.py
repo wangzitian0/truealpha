@@ -36,6 +36,7 @@ class S3RawObjectStore:
         self.settings = settings or runtime_settings
         self.bucket = self.settings.s3_bucket
         self.s3_settings = self.settings.to_s3_settings()
+        self._has_injected_client = client is not None
         self.client = client or create_s3_client(self.s3_settings)
 
     def _require_endpoint(self) -> str:
@@ -45,13 +46,16 @@ class S3RawObjectStore:
         placeholder credentials, so "nobody configured S3 here" arrived as a connection
         failure against the container's own loopback (#531). Refusing names the cause.
         """
-        if not self.settings.s3_endpoint:
+        endpoint = (self.settings.s3_endpoint or "").strip()
+        if not endpoint:
             raise _unconfigured("S3_ENDPOINT")
-        if not self.settings.s3_access_key or not self.settings.s3_secret_key.get_secret_value():
+        if not self.settings.s3_access_key.strip() or not self.settings.s3_secret_key.get_secret_value().strip():
             raise _unconfigured("S3_ACCESS_KEY / S3_SECRET_KEY")
-        return self.settings.s3_endpoint
+        return endpoint
 
     def ensure_bucket(self, *, create: bool | None = None) -> None:
+        if not self._has_injected_client:
+            self._require_endpoint()
         allow_create = self.settings.may_create_bucket if create is None else create
         try:
             ensure_bucket_sdk(self.s3_settings, client=self.client, allow_create=allow_create)
@@ -59,6 +63,8 @@ class S3RawObjectStore:
             raise StorageError(f"cannot access or create bucket {self.bucket}: {exc}") from exc
 
     def store(self, capture: RawCapture) -> RawIngestionEnvelope:
+        if not self._has_injected_client:
+            self._require_endpoint()
         digest = hashlib.sha256(capture.body).hexdigest()
         key = f"{self.settings.s3_raw_prefix}/{capture.source.value}/{digest[:2]}/{digest}"
         ref = RawObjectRef(
@@ -109,6 +115,8 @@ class S3RawObjectStore:
     def get(self, ref: RawObjectRef) -> bytes:
         if ref.bucket != self.bucket:
             raise StorageError(f"object belongs to unexpected bucket {ref.bucket}")
+        if not self._has_injected_client:
+            self._require_endpoint()
         try:
             content = read_object_bytes(self.client, bucket=ref.bucket, key=ref.key)
         except Exception as exc:

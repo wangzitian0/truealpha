@@ -1,8 +1,6 @@
-import os
 from typing import Literal
 
 from infra2_sdk.runtime.environment import RuntimeEnvKey
-from infra2_sdk.runtime.identity import RuntimeIdentity
 from pydantic import AliasChoices, Field
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings
@@ -52,7 +50,7 @@ class Settings(RuntimeSettings):
     # which infra2-sdk's offline gate enforces (`COMPOSE_SOURCES`).
     release_manifest_id: str = Field(
         default="",
-        validation_alias=RuntimeEnvKey.RELEASE_ID.value,
+        validation_alias=AliasChoices(RuntimeEnvKey.RELEASE_ID.value, "RELEASE_MANIFEST_ID"),
         json_schema_extra={"source": "release", "group": "release"},
     )
     data_engine_image_digest: str = Field(
@@ -67,32 +65,8 @@ class Settings(RuntimeSettings):
     )
     capture_approved_by: str = Field(
         default="",
-        validation_alias="TRUEALPHA_CAPTURE_APPROVED_BY",
+        validation_alias=AliasChoices("TRUEALPHA_CAPTURE_APPROVED_BY", "CAPTURE_APPROVED_BY"),
         json_schema_extra={"source": "decision", "group": "release"},
-    )
-    migrations_database_url: str | None = Field(
-        default=None,
-        validation_alias="MIGRATIONS_DATABASE_URL",
-        description="Optional PostgreSQL DSN override for schema migrations",
-        json_schema_extra={"source": "runtime", "group": "postgres", "empty_ok": True},
-    )
-    migration_lock_budget_seconds: int = Field(
-        default=25,
-        validation_alias="MIGRATION_LOCK_BUDGET_SECONDS",
-        description="Maximum seconds spent waiting on migration locks",
-        json_schema_extra={"source": "code", "group": "postgres"},
-    )
-    migration_lock_timeout_seconds: int = Field(
-        default=5,
-        validation_alias=AliasChoices("MIGRATION_LOCK_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_LOCK_TIMEOUT"),
-        description="Migration lock timeout seconds",
-        json_schema_extra={"source": "code", "group": "postgres"},
-    )
-    migration_statement_timeout_seconds: int = Field(
-        default=60,
-        validation_alias=AliasChoices("MIGRATION_STATEMENT_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT"),
-        description="Migration statement timeout seconds",
-        json_schema_extra={"source": "code", "group": "postgres"},
     )
 
     # The shared runtime contract owns DATABASE_URL; this service composes it for the
@@ -200,45 +174,6 @@ class Settings(RuntimeSettings):
     llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
     llm_provider: str = Field(default="zhipu-glm-coding-plan", json_schema_extra={"source": "code", "group": "llm"})
 
-    def to_runtime_identity(self) -> RuntimeIdentity:
-        """Resolve or construct canonical runtime identity."""
-        env = {k: v for k, v in os.environ.items() if v}
-        env.pop("ENV", None)
-        env.pop("APP_ENV", None)
-        env.pop("IMAGE_TAG", None)
-        env[RuntimeEnvKey.SERVICE_NAME.value] = "data-engine"
-        env[RuntimeEnvKey.SERVICE_VERSION.value] = self.git_commit_sha
-        env[RuntimeEnvKey.ENVIRONMENT.value] = self.environment_tier.value
-        env[RuntimeEnvKey.GIT_COMMIT_SHA.value] = self.git_commit_sha
-        env[RuntimeEnvKey.IMAGE_DIGEST.value] = self.data_engine_image_digest
-        env[RuntimeEnvKey.CONFIGURATION_SHA256.value] = self.configuration_sha256
-        env[RuntimeEnvKey.RELEASE_ID.value] = self.release_manifest_id
-        return RuntimeIdentity.from_env(env)
-
-    def to_postgres_settings(self):
-        """Construct canonical PostgresSettings for data-engine."""
-        from infra2_sdk.runtime.postgres import PostgresSettings
-
-        return PostgresSettings(
-            dsn=self.database_url,
-            connect_timeout_seconds=self.database_connect_timeout_seconds,
-            migrations_dsn=self.migrations_database_url,
-            migration_lock_budget_seconds=self.migration_lock_budget_seconds,
-            migration_lock_timeout_seconds=self.migration_lock_timeout_seconds,
-            migration_statement_timeout_seconds=self.migration_statement_timeout_seconds,
-        )
-
-    def to_llm_settings(self):
-        """Construct canonical LlmSettings for data-engine."""
-        from infra2_sdk.runtime.llm import LlmSettings
-
-        return LlmSettings(
-            provider=self.llm_provider,
-            base_url=self.llm_base_url,
-            api_key=self.llm_api_key or None,
-            primary_model=self.llm_model,
-        )
-
 
 settings = Settings()
 DataEngineSettings = Settings
@@ -246,7 +181,6 @@ DataEngineSettings = Settings
 __all__ = [
     "DataEngineSettings",
     "RuntimeEnvKey",
-    "RuntimeIdentity",
     "Settings",
     "settings",
 ]
