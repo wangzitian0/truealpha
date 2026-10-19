@@ -20,6 +20,7 @@
  */
 
 import Link from "next/link";
+import { formatPrincipalLabel } from "@/client/format";
 import { SignOutButton } from "@/components/sign-out-button";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -48,7 +49,7 @@ export async function AppChrome() {
         className="max-w-[16rem] truncate text-gray-400"
         title={`${principal.context.principalId} · ${principal.context.tenantId}`}
       >
-        {principal.context.principalId}
+        {formatPrincipalLabel(principal.context.principalId) ?? principal.context.principalId}
       </span>
       {/* #540: the session's other end. The endpoint has worked since #368;
           nothing ever called it. */}

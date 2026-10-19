@@ -4,14 +4,11 @@
  * bytes the index operator answered.
  */
 
+import { formatCell, formatShortSha, formatUsdMagnitude } from "@/client/format";
 import { loadUniverses } from "@/server/admin/universes";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
-
-function shortSha(sha: string): string {
-  return sha ? `${sha.slice(0, 12)}…` : "—";
-}
 
 export default async function AdminUniversesPage() {
   const principal = await getServerPrincipal();
@@ -40,7 +37,7 @@ export default async function AdminUniversesPage() {
           <h2 className="font-mono text-lg text-accent">{head.universe_id}</h2>
           <p className="text-xs text-gray-500">
             {head.kind} · sequence {head.sequence} · {head.instrument_count} instruments · mapping{" "}
-            <span className="font-mono">{shortSha(head.mapping_sha256)}</span> · published {head.advanced_at} ·{" "}
+            <span className="font-mono">{formatShortSha(head.mapping_sha256)}</span> · published {head.advanced_at} ·{" "}
             {head.note}
           </p>
           <div className="overflow-x-auto rounded-xl border border-border">
@@ -62,11 +59,13 @@ export default async function AdminUniversesPage() {
                     <td className="px-3 py-1.5 font-mono">{member.ticker}</td>
                     <td className="px-3 py-1.5">{member.company_name}</td>
                     <td className="px-3 py-1.5 font-mono">{member.cik ?? "—"}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs">{member.figi ?? "—"}</td>
-                    <td className="px-3 py-1.5 text-right">{member.market_cap ?? "—"}</td>
+                    <td className="px-3 py-1.5 font-mono text-xs">{ formatCell(member.figi) }</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums" title={member.market_cap ?? undefined}>
+                      {formatUsdMagnitude(member.market_cap) ?? formatCell(member.market_cap)}
+                    </td>
                     <td className="px-3 py-1.5">{member.as_of}</td>
                     <td className="px-3 py-1.5 font-mono text-xs" title={member.object_uri ?? ""}>
-                      {member.source} · {shortSha(member.fetch_sha256)}
+                      {member.source} · {formatShortSha(member.fetch_sha256)}
                     </td>
                   </tr>
                 ))}
@@ -82,7 +81,7 @@ export default async function AdminUniversesPage() {
           <ul className="mt-2 space-y-1 text-xs text-gray-500">
             {overview.history.map((row) => (
               <li key={`${row.kind}:${row.sequence}`} className="font-mono">
-                {row.kind} seq {row.sequence} · {row.universe_id} · {shortSha(row.mapping_sha256)} ·{" "}
+                {row.kind} seq {row.sequence} · {row.universe_id} · {formatShortSha(row.mapping_sha256)} ·{" "}
                 {row.advanced_at} · {row.note}
               </li>
             ))}

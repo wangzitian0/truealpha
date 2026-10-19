@@ -1,5 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import {
+  formatCell,
+  formatRatio,
+  formatSignedRatio,
+  formatUsdMagnitude,
+  signColor,
+} from "@/client/format";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
@@ -8,10 +15,6 @@ import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resoluti
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
-
-function cell(value: string | null): string {
-  return value ?? "—";
-}
 
 export default async function ComparePage({
   searchParams,
@@ -74,17 +77,28 @@ export default async function ComparePage({
                         {entityLabel(row.issuerId, names)}
                       </Link>
                     </th>
-                    <td className="px-4 py-3">
-                      {cell(row.capitalAdjustedLaborEfficiency)}
+                    <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
+                      {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
                       {row.capitalAdjustedLaborEfficiency !== null && (
                         <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? UNRECORDED_METRIC}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3">{cell(row.currentPriceToSales)}</td>
-                    <td className="px-4 py-3">{cell(row.currentMultiple ?? null)}</td>
-                    <td className="px-4 py-3">{cell(row.tier)}</td>
-                    <td className="px-4 py-3">{cell(row.valuationGap)}</td>
-                    <td className="px-4 py-3">{cell(row.confidence)}</td>
+                    <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
+                      {formatCell(formatRatio(row.currentPriceToSales))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
+                      {formatCell(formatRatio(row.currentMultiple ?? null))}
+                    </td>
+                    <td className="px-4 py-3">{formatCell(row.tier)}</td>
+                    <td
+                      className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}
+                      title={row.valuationGap ?? undefined}
+                    >
+                      {formatCell(formatSignedRatio(row.valuationGap))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
+                      {formatCell(formatRatio(row.confidence))}
+                    </td>
                     <td className="px-4 py-3">
                       <AvailabilityBadge status={row.availability} />
                     </td>

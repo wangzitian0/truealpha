@@ -3,7 +3,7 @@ import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { captureAvailableCount, loadToptQuality } from "@/server/topt-quality";
 import { loadQualityFunnel, type FunnelLayer } from "@/server/admin/funnel";
 import { loadOpsOverview } from "@/server/admin/ops";
-import { formatRatio, formatUsdMagnitude } from "@/client/format";
+import { formatCell, formatListingLabel, formatRatio, formatUsdMagnitude } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 const LAYER_BAR: Record<FunnelLayer["status"], string> = {
@@ -14,10 +14,6 @@ const LAYER_BAR: Record<FunnelLayer["status"], string> = {
 };
 
 export const dynamic = "force-dynamic";
-
-function cell(value: string | null): string {
-  return value ?? "—";
-}
 
 /**
  * #494 P0a: headline metrics lifted out of the raw report. Reads
@@ -173,17 +169,20 @@ export default async function ToptQualityPage() {
               <tbody>
                 {state.data.cells.map((row) => (
                   <tr key={row.listing_id} className="border-t border-border">
-                    <th scope="row" className="px-4 py-3 font-medium">
-                      {row.listing_id}
+                    <th scope="row" className="px-4 py-3 font-medium" title={row.listing_id}>
+                      <span>{formatListingLabel(row.listing_id) ?? row.listing_id}</span>{" "}
+                      <code className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+                        {row.listing_id}
+                      </code>
                     </th>
                     <td className="px-4 py-3">
                       <AvailabilityBadge status={row.availability === "available" ? "available" : "unavailable"} />
                     </td>
                     <td className="px-4 py-3 tabular-nums" title={row.gppe ?? undefined}>
-                      {cell(formatUsdMagnitude(row.gppe))}
+                      {formatCell(formatUsdMagnitude(row.gppe))}
                     </td>
                     <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                      {cell(formatRatio(row.confidence))}
+                      {formatCell(formatRatio(row.confidence))}
                     </td>
                   </tr>
                 ))}
