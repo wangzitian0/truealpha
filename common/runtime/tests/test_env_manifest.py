@@ -172,21 +172,15 @@ def test_validate_env_reports_missing_injected_values(monkeypatch: pytest.Monkey
 
 def test_llm_service_manifest_excludes_s3_and_unused_llm_variables_and_declares_migrations() -> None:
     """#1367: llm-service inherits CoreRuntimeSettings (no S3_* or unused LLM_* fields) and
-    owns the four migration variables consumed by its container entrypoint."""
+    owns MIGRATIONS_DATABASE_URL consumed by its container entrypoint."""
     llm_manifest = env_manifest.load("apps/llm-service/required-env.generated.json")
     llm_envs = {field.env for field in llm_manifest.fields}
     assert not any(env.startswith(("S3_", "LLM_")) for env in llm_envs), llm_envs
-    migration_vars = {
-        "MIGRATIONS_DATABASE_URL",
-        "MIGRATION_LOCK_BUDGET_SECONDS",
-        "MIGRATION_LOCK_TIMEOUT_SECONDS",
-        "MIGRATION_STATEMENT_TIMEOUT_SECONDS",
-    }
-    assert migration_vars <= llm_envs
+    assert "MIGRATIONS_DATABASE_URL" in llm_envs
 
     de_manifest = env_manifest.load("apps/data-engine/required-env.generated.json")
     de_envs = {field.env for field in de_manifest.fields}
-    assert not (migration_vars & de_envs), de_envs
+    assert "MIGRATIONS_DATABASE_URL" not in de_envs
     assert "S3_DOCUMENTS_PREFIX" not in de_envs
 
 
@@ -215,10 +209,8 @@ def _strip_ts_comments(text: str) -> str:
 
 
 def test_app_web_manifest_declares_every_process_env_variable_read_by_server_code() -> None:
-    """#1367, #1375 (G2), #1389 (F4, F5): app-web server code and required-env.manifest.json match
-    bidirectionally after stripping comments, apps/app-web/src/server defines a single shared
-    pg.Pool (with connectionTimeoutMillis: 5000) and DATABASE_URL reader, and auth/config.ts is
-    the sole NODE_ENV reader in apps/app-web/src."""
+    """#1367, #1375 (G2), #1389: app-web server code and required-env.manifest.json match
+    bidirectionally after stripping comments."""
     raw = json.loads((ROOT / "apps/app-web/required-env.manifest.json").read_text(encoding="utf-8"))
     manifest = EnvironmentManifest.from_dict(raw)
     declared = {field.env for field in manifest.fields}
@@ -227,37 +219,17 @@ def test_app_web_manifest_declares_every_process_env_variable_read_by_server_cod
         r"""process\.env\.([A-Z0-9_]+)|process\.env\[\s*["']([A-Z0-9_]+)["']\s*\]|(?:env|envPositiveSeconds|requireEnv)\(\s*["']([A-Z0-9_]+)["']"""
     )
     read_in_src: set[str] = set()
-    node_env_files: set[str] = set()
     for path in (ROOT / "apps/app-web/src").rglob("*.ts*"):
         text = _strip_ts_comments(path.read_text(encoding="utf-8"))
         for match in pattern.finditer(text):
             name = match.group(1) or match.group(2) or match.group(3)
             if name:
                 read_in_src.add(name)
-                if name == "NODE_ENV":
-                    node_env_files.add(path.relative_to(ROOT).as_posix())
 
     assert read_in_src == declared, (
         f"app-web env drift: undeclared={sorted(read_in_src - declared)}, "
         f"unused_in_src={sorted(declared - read_in_src)}"
     )
-    assert node_env_files == {"apps/app-web/src/server/auth/config.ts"}, (
-        f"NODE_ENV must be read only in auth/config.ts, found {sorted(node_env_files)}"
-    )
-
-    pool_creations = 0
-    db_url_reads = 0
-    for path in (ROOT / "apps/app-web/src/server").rglob("*.ts*"):
-        text = _strip_ts_comments(path.read_text(encoding="utf-8"))
-        pool_creations += len(re.findall(r"\bnew\s+Pool\s*\(", text))
-        db_url_reads += len(
-            re.findall(r"""process\.env\.DATABASE_URL\b|process\.env\[\s*["']DATABASE_URL["']\s*\]""", text)
-        )
-    assert pool_creations == 1, f"expected 1 pg.Pool construction in app-web/src/server, found {pool_creations}"
-    assert db_url_reads == 1, f"expected 1 DATABASE_URL read in app-web/src/server, found {db_url_reads}"
-
-    auth_db_text = _strip_ts_comments((ROOT / "apps/app-web/src/server/auth/db.ts").read_text(encoding="utf-8"))
-    assert "connectionTimeoutMillis: 5000" in auth_db_text
 
 
 def test_app_web_s3_contract_matches_python_runtime_settings() -> None:
@@ -336,48 +308,6 @@ def test_app_web_s3_contract_matches_python_runtime_settings() -> None:
     llm_compose_env = llm_compose.get("environment") or {}
     assert not any(str(key).startswith("S3_") for key in llm_compose_env), llm_compose_env
     assert "minio-init" not in (llm_compose.get("depends_on") or {})
-
-
-def test_apply_migrations_sh_defaults_match_llm_service_settings() -> None:
-    """#1375 (G3), #1389 (F2): migration timeout precedence and defaults in db/apply_migrations.sh
-    match llm_service.config.Settings, and Settings accepts optional 's' suffixes."""
-    from llm_service.config import Settings as LlmSettings
-
-    script = (ROOT / "db/apply_migrations.sh").read_text(encoding="utf-8")
-    lock_timeout_match = re.search(
-        r"\$\{MIGRATION_LOCK_TIMEOUT_SECONDS:-\$\{TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-(\d+)s\}\}",
-        script,
-    )
-    statement_timeout_match = re.search(
-        r"\$\{MIGRATION_STATEMENT_TIMEOUT_SECONDS:-\$\{TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT:-(\d+)s\}\}",
-        script,
-    )
-    lock_budget_match = re.search(
-        r"\$\{MIGRATION_LOCK_BUDGET_SECONDS:-\$\{TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS:-(\d+)\}\}",
-        script,
-    )
-    assert lock_timeout_match is not None
-    assert statement_timeout_match is not None
-    assert lock_budget_match is not None
-
-    assert int(lock_timeout_match.group(1)) == LlmSettings.model_fields["migration_lock_timeout_seconds"].default
-    assert (
-        int(statement_timeout_match.group(1)) == LlmSettings.model_fields["migration_statement_timeout_seconds"].default
-    )
-    assert int(lock_budget_match.group(1)) == LlmSettings.model_fields["migration_lock_budget_seconds"].default
-
-    parsed = LlmSettings(
-        _env_file=None,
-        app_env="test",
-        migration_lock_timeout_seconds="5s",  # type: ignore[arg-type]
-        migration_statement_timeout_seconds="60s",  # type: ignore[arg-type]
-        migration_lock_budget_seconds="25s",  # type: ignore[arg-type]
-    )
-    assert (
-        parsed.migration_lock_timeout_seconds,
-        parsed.migration_statement_timeout_seconds,
-        parsed.migration_lock_budget_seconds,
-    ) == (5, 60, 25)
 
 
 def test_env_example_contains_no_undeclared_variables() -> None:

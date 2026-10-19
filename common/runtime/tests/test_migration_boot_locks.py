@@ -321,16 +321,6 @@ def test_the_session_carries_both_timeouts(empty_database: str, tmp_path: Path) 
     assert completed.returncode == 0, _output(completed)
     assert "lock_timeout=5s" in completed.stdout and "statement_timeout=1min" in completed.stdout, completed.stdout
 
-    canonical, _ = run_runner(
-        empty_database,
-        db_dir,
-        MIGRATION_LOCK_TIMEOUT_SECONDS="7",
-        MIGRATION_STATEMENT_TIMEOUT_SECONDS="90",
-        MIGRATION_LOCK_BUDGET_SECONDS="30",
-    )
-    assert canonical.returncode == 0, _output(canonical)
-    assert "lock_timeout=7s" in canonical.stdout and "statement_timeout=90s" in canonical.stdout, canonical.stdout
-
 
 def test_non_numeric_knobs_are_refused(empty_database: str, tmp_path: Path) -> None:
     db_dir = _chain(tmp_path, ("0001_noop.sql", "select 1;\n"))

@@ -98,69 +98,6 @@
       "store_key": ""
     },
     {
-      "field": "migration_lock_budget_seconds",
-      "env": "MIGRATION_LOCK_BUDGET_SECONDS",
-      "aliases": [
-        "TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS"
-      ],
-      "required": false,
-      "injected": false,
-      "has_default": true,
-      "sensitive": false,
-      "group": "postgres",
-      "description": "Maximum seconds spent waiting on migration locks",
-      "source": "code",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden",
-      "store_key": ""
-    },
-    {
-      "field": "migration_lock_timeout_seconds",
-      "env": "MIGRATION_LOCK_TIMEOUT_SECONDS",
-      "aliases": [
-        "TRUEALPHA_MIGRATION_LOCK_TIMEOUT"
-      ],
-      "required": false,
-      "injected": false,
-      "has_default": true,
-      "sensitive": false,
-      "group": "postgres",
-      "description": "Migration lock timeout seconds",
-      "source": "code",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden",
-      "store_key": ""
-    },
-    {
-      "field": "migration_statement_timeout_seconds",
-      "env": "MIGRATION_STATEMENT_TIMEOUT_SECONDS",
-      "aliases": [
-        "TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT"
-      ],
-      "required": false,
-      "injected": false,
-      "has_default": true,
-      "sensitive": false,
-      "group": "postgres",
-      "description": "Migration statement timeout seconds",
-      "source": "code",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden",
-      "store_key": ""
-    },
-    {
       "field": "mcp_dns_rebinding_protection",
       "env": "MCP_DNS_REBINDING_PROTECTION",
       "aliases": [],

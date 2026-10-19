@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import Field
 from truealpha_runtime import CoreRuntimeSettings, database_url_field
 from truealpha_runtime.config import POSTGRES_PROVIDED_BY
 
@@ -36,38 +36,6 @@ class Settings(CoreRuntimeSettings):
             "composed_from": _APP_STACK_DSN,
         },
     )
-    migration_lock_budget_seconds: int = Field(
-        default=25,
-        validation_alias=AliasChoices("MIGRATION_LOCK_BUDGET_SECONDS", "TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS"),
-        description="Maximum seconds spent waiting on migration locks",
-        json_schema_extra={"source": "code", "group": "postgres"},
-    )
-    migration_lock_timeout_seconds: int = Field(
-        default=5,
-        validation_alias=AliasChoices("MIGRATION_LOCK_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_LOCK_TIMEOUT"),
-        description="Migration lock timeout seconds",
-        json_schema_extra={"source": "code", "group": "postgres"},
-    )
-    migration_statement_timeout_seconds: int = Field(
-        default=60,
-        validation_alias=AliasChoices("MIGRATION_STATEMENT_TIMEOUT_SECONDS", "TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT"),
-        description="Migration statement timeout seconds",
-        json_schema_extra={"source": "code", "group": "postgres"},
-    )
-
-    @field_validator(
-        "migration_lock_budget_seconds",
-        "migration_lock_timeout_seconds",
-        "migration_statement_timeout_seconds",
-        mode="before",
-    )
-    @classmethod
-    def strip_seconds_unit_suffix(cls, value: object) -> object:
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped.endswith("s") and stripped[:-1].isdigit():
-                return int(stripped[:-1])
-        return value
 
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
     # This MCP surface is service-identity only -- there is no browser session or
@@ -87,4 +55,3 @@ class Settings(CoreRuntimeSettings):
 
 
 settings = Settings()
-LlmServiceSettings = Settings
