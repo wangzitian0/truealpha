@@ -10,8 +10,10 @@ import {
   CARD_SCHEMA_VERSION,
   CARD_TEMPLATE_VERSION,
   renderRankingCardSvg,
+  renderRankingCardPng,
   buildRankingCardJson,
   renderEntityDeepDiveCardSvg,
+  renderEntityDeepDiveCardPng,
   buildEntityCardJson,
   entityCardThemes,
   type RankingCardData,
@@ -168,5 +170,24 @@ assert(cardThemes.length === 2, "the card drops the fill and keeps a refused rea
 assert(cardThemes[0].theme === "AI Compute" && cardThemes[0].themeShare === "0.85", "a judged theme passes through");
 assert(cardThemes[1].theme === "Refused Theme" && cardThemes[1].themeShare === null, "a refused real row stays");
 assert(!("unvisitedReason" in cardThemes[0]), "the card data carries no reason field");
+
+// 8. 1080x1440 PNG rendering (#1360 AC4)
+const rankingPng = await renderRankingCardPng(mockData);
+assert(
+  rankingPng.subarray(0, 8).toString("hex") === "89504e470d0a1a0a",
+  "ranking PNG must start with PNG magic bytes",
+);
+assert(rankingPng.subarray(12, 16).toString("ascii") === "IHDR", "ranking PNG must contain IHDR chunk");
+assert(rankingPng.readUInt32BE(16) === XHS_CARD_WIDTH, "ranking PNG width must be 1080");
+assert(rankingPng.readUInt32BE(20) === XHS_CARD_HEIGHT, "ranking PNG height must be 1440");
+
+const entityPng = await renderEntityDeepDiveCardPng(mockEntityData);
+assert(
+  entityPng.subarray(0, 8).toString("hex") === "89504e470d0a1a0a",
+  "entity PNG must start with PNG magic bytes",
+);
+assert(entityPng.subarray(12, 16).toString("ascii") === "IHDR", "entity PNG must contain IHDR chunk");
+assert(entityPng.readUInt32BE(16) === XHS_CARD_WIDTH, "entity PNG width must be 1080");
+assert(entityPng.readUInt32BE(20) === XHS_CARD_HEIGHT, "entity PNG height must be 1440");
 
 console.log("xhs-card.test.ts: all assertions passed");

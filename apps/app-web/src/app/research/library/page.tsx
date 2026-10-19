@@ -67,7 +67,7 @@ export default async function LibraryPage() {
                 href={`/research/library/${encodeURIComponent(document.documentId)}`}
                 className="flex-1 text-gray-300 hover:text-white"
               >
-                {document.documentId} — {document.createdAt}
+                <span data-evidence={document.documentId}>{document.documentId}</span> — {document.createdAt}
               </Link>
               <form action={tombstoneDocumentAction.bind(null, document.documentId)}>
                 <button type="submit" className="text-xs text-gray-500 hover:text-red-400">

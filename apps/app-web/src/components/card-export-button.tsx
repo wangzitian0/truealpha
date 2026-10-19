@@ -6,9 +6,10 @@ interface CardExportButtonProps {
   cutoff?: string;
   issuerId?: string;
   kind?: "ranking" | "entity";
+  format?: "png" | "svg";
 }
 
-export function CardExportButton({ cutoff, issuerId, kind }: CardExportButtonProps) {
+export function CardExportButton({ cutoff, issuerId, kind, format = "png" }: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
 
   const handleExport = () => {
@@ -18,14 +19,15 @@ export function CardExportButton({ cutoff, issuerId, kind }: CardExportButtonPro
     query.set("kind", effectiveKind);
     if (cutoff) query.set("cutoff", cutoff);
     if (issuerId) query.set("issuer", issuerId);
-    query.set("format", "svg");
+    query.set("format", format);
 
+    const ext = format === "svg" ? "svg" : "png";
     const url = `/research/api/cards/export?${query.toString()}`;
     const a = document.createElement("a");
     a.href = url;
     a.download = issuerId
-      ? `truealpha-card-entity-${issuerId.replace(/[:]/g, "-")}.svg`
-      : `truealpha-card-ranking.svg`;
+      ? `truealpha-card-entity-${issuerId.replace(/[:]/g, "-")}.${ext}`
+      : `truealpha-card-ranking.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

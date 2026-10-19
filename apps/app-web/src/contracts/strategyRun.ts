@@ -55,6 +55,29 @@ export const VALUATION_TIERS = [
 ] as const;
 export type ValuationTier = (typeof VALUATION_TIERS)[number];
 
+/** Module 1 (#284 / #1360): growth-rate conventions selectable on rankings and entity surfaces. */
+export const PEG_GROWTH_CONVENTIONS = [
+	"historical_cagr",
+	"consensus",
+	"guidance",
+] as const;
+export type PegGrowthConvention = (typeof PEG_GROWTH_CONVENTIONS)[number];
+
+export const PEG_CONVENTION_LABELS: Record<PegGrowthConvention, string> = {
+	historical_cagr: "Historical CAGR",
+	consensus: "Consensus",
+	guidance: "Guidance",
+};
+
+/** Normalizes query parameters or legacy aliases into the canonical PEG convention union. */
+export function normalizePegConvention(
+	value: string | null | undefined,
+): PegGrowthConvention {
+	if (value === "consensus" || value === "analyst_consensus") return "consensus";
+	if (value === "guidance" || value === "company_guidance") return "guidance";
+	return "historical_cagr";
+}
+
 export interface StrategyRunDecision {
 	issuer_id: string;
 	cutoff_at: string;

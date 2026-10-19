@@ -5,6 +5,8 @@
  * embedding immutable cutoff, governed run lineage, and strict research-risk attribution.
  */
 
+import React from "react";
+import { ImageResponse } from "next/og";
 import {
   formatPercentFromFraction,
   formatRatio,
@@ -429,4 +431,545 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
     <text x="928" y="156" font-size="13" font-family="monospace" fill="#475569" text-anchor="end">template: ${CARD_TEMPLATE_VERSION}</text>
   </g>
 </svg>`;
+}
+
+const h = React.createElement;
+
+export async function renderRankingCardPng(data: RankingCardData): Promise<Buffer> {
+  const displayItems = data.items.slice(0, 7);
+  const basisLabel = valuationBasisLabel(
+    data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null,
+  );
+
+  const rowNodes = displayItems.map((item, idx) => {
+    const rankStr = item.rank !== null ? `#${item.rank}` : "-";
+    const gapVal = Number(item.valuationGap);
+    const gapColor =
+      Number.isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
+    const formattedGap = formatSignedRatio(item.valuationGap) ?? "-";
+    const formattedMultiple = formatRatio(item.currentMultiple) ?? "-";
+    const formattedPeg = formatRatio(item.peg) ?? "-";
+    const formattedConf = formatRatio(item.confidence) ?? "-";
+
+    return h(
+      "div",
+      {
+        key: `${item.issuerId}-${idx}`,
+        style: {
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          width: "960px",
+          height: "92px",
+          borderRadius: "16px",
+          backgroundColor: "#131B2E",
+          border: "2px solid #1E293B",
+          paddingLeft: "24px",
+          paddingRight: "24px",
+          marginBottom: "14px",
+        },
+      },
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "56px",
+            height: "56px",
+            borderRadius: "28px",
+            backgroundColor: "#1E293B",
+            color: idx === 0 ? "#F59E0B" : "#F8FAFC",
+            fontSize: 20,
+            fontWeight: 700,
+          },
+        },
+        rankStr,
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            width: "260px",
+            marginLeft: "16px",
+          },
+        },
+        h("div", { style: { fontSize: 22, fontWeight: 700, color: "#F8FAFC" } }, item.displayName),
+        h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "4px" } }, item.issuerId),
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "110px",
+            height: "34px",
+            borderRadius: "8px",
+            backgroundColor: "#1E293B",
+            color: "#38BDF8",
+            fontSize: 14,
+            fontWeight: 600,
+          },
+        },
+        item.tier ?? "-",
+      ),
+      h(
+        "div",
+        { style: { width: "110px", textAlign: "center", fontSize: 20, color: "#E2E8F0" } },
+        formattedMultiple,
+      ),
+      h(
+        "div",
+        {
+          style: {
+            width: "140px",
+            textAlign: "center",
+            fontSize: 22,
+            fontWeight: 700,
+            color: gapColor,
+          },
+        },
+        formattedGap,
+      ),
+      h(
+        "div",
+        { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#CBD5E1" } },
+        formattedPeg,
+      ),
+      h(
+        "div",
+        { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#94A3B8" } },
+        formattedConf,
+      ),
+    );
+  });
+
+  const tree = h(
+    "div",
+    {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        width: `${XHS_CARD_WIDTH}px`,
+        height: `${XHS_CARD_HEIGHT}px`,
+        backgroundColor: "#0B0F19",
+        color: "#F8FAFC",
+        padding: "56px",
+      },
+    },
+    h(
+      "div",
+      { style: { display: "flex", flexDirection: "column" } },
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          },
+        },
+        h(
+          "div",
+          { style: { fontSize: 16, fontWeight: 700, color: "#06B6D4", letterSpacing: "2px" } },
+          "TRUEALPHA · QUANTITATIVE RESEARCH",
+        ),
+        h(
+          "div",
+          {
+            style: {
+              backgroundColor: "#1E293B",
+              color: "#94A3B8",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "6px 12px",
+              borderRadius: "6px",
+            },
+          },
+          `${XHS_CARD_WIDTH} x ${XHS_CARD_HEIGHT} · 3:4`,
+        ),
+      ),
+      h(
+        "div",
+        { style: { fontSize: 44, fontWeight: 700, color: "#FFFFFF", marginTop: "24px" } },
+        "Valuation Rankings",
+      ),
+      h(
+        "div",
+        { style: { fontSize: 22, color: "#94A3B8", marginTop: "8px" } },
+        `Large-Model Value Universe · Valuation Gap (${basisLabel})`,
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            backgroundColor: "#131B2E",
+            border: "1px solid #1E293B",
+            borderRadius: "12px",
+            padding: "14px 20px",
+            marginTop: "24px",
+          },
+        },
+        h(
+          "div",
+          { style: { fontSize: 16, color: "#E2E8F0" } },
+          `Governed Execution · Cutoff: ${data.cutoffAt}`,
+        ),
+        h(
+          "div",
+          { style: { fontSize: 15, color: "#64748B" } },
+          `${data.totalMembers} total members`,
+        ),
+      ),
+      h(
+        "div",
+        { style: { display: "flex", flexDirection: "column", marginTop: "28px" } },
+        ...rowNodes,
+      ),
+    ),
+    h(
+      "div",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          backgroundColor: "#0C1322",
+          border: "1px solid #1E293B",
+          borderRadius: "16px",
+          padding: "24px",
+        },
+      },
+      h(
+        "div",
+        { style: { fontSize: 15, fontWeight: 700, color: "#F59E0B" } },
+        "RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE",
+      ),
+      h(
+        "div",
+        { style: { fontSize: 14, color: "#94A3B8", marginTop: "8px" } },
+        "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            marginTop: "14px",
+            fontSize: 13,
+            color: "#38BDF8",
+          },
+        },
+        h("div", null, "TrueAlpha Research Card Export"),
+        h("div", { style: { color: "#64748B" } }, `template: ${CARD_TEMPLATE_VERSION}`),
+      ),
+    ),
+  );
+
+  const response = new ImageResponse(tree, {
+    width: XHS_CARD_WIDTH,
+    height: XHS_CARD_HEIGHT,
+  });
+  return Buffer.from(await response.arrayBuffer());
+}
+
+export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise<Buffer> {
+  const gapVal = Number(data.valuationGap);
+  const gapColor =
+    Number.isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
+  const formattedGap = formatSignedRatio(data.valuationGap) ?? "-";
+  const formattedMultiple = formatRatio(data.currentMultiple) ?? "-";
+  const basisLabel = valuationBasisLabel(data.valuationBasis);
+  const formattedPeg = formatRatio(data.peg) ?? "-";
+  const formattedGppe = formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : "-");
+  const formattedConf = formatRatio(data.confidence) ?? "-";
+  const tierText = formatTierLabel(data.tier);
+
+  const displayThemes = data.themes.slice(0, 4);
+  const themeNodes =
+    displayThemes.length > 0
+      ? displayThemes.map((t, idx) =>
+          h(
+            "div",
+            {
+              key: `${t.theme}-${idx}`,
+              style: {
+                display: "flex",
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                backgroundColor: "#0F172A",
+                borderRadius: "10px",
+                padding: "14px 18px",
+                marginBottom: "10px",
+              },
+            },
+            h("div", { style: { fontSize: 18, fontWeight: 600, color: "#E2E8F0" } }, t.theme),
+            h(
+              "div",
+              { style: { fontSize: 18, fontWeight: 700, color: "#38BDF8" } },
+              formatPercentFromFraction(t.themeShare) ?? "-",
+            ),
+          ),
+        )
+      : [
+          h(
+            "div",
+            { key: "empty", style: { fontSize: 16, color: "#64748B", marginTop: "12px" } },
+            "No theme purity materialization recorded for this issuer",
+          ),
+        ];
+
+  const tree = h(
+    "div",
+    {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        width: `${XHS_CARD_WIDTH}px`,
+        height: `${XHS_CARD_HEIGHT}px`,
+        backgroundColor: "#0B0F19",
+        color: "#F8FAFC",
+        padding: "56px",
+      },
+    },
+    h(
+      "div",
+      { style: { display: "flex", flexDirection: "column" } },
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          },
+        },
+        h(
+          "div",
+          { style: { fontSize: 16, fontWeight: 700, color: "#06B6D4", letterSpacing: "2px" } },
+          "TRUEALPHA · RESEARCH DEEP DIVE",
+        ),
+        h(
+          "div",
+          {
+            style: {
+              backgroundColor: "#1E293B",
+              color: "#94A3B8",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "6px 12px",
+              borderRadius: "6px",
+            },
+          },
+          `${XHS_CARD_WIDTH} x ${XHS_CARD_HEIGHT} · 3:4`,
+        ),
+      ),
+      h(
+        "div",
+        { style: { fontSize: 42, fontWeight: 700, color: "#FFFFFF", marginTop: "20px" } },
+        "TrueAlpha Deep Dive",
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            backgroundColor: "#131B2E",
+            border: "1px solid #1E293B",
+            borderRadius: "16px",
+            padding: "24px",
+            marginTop: "20px",
+          },
+        },
+        h(
+          "div",
+          { style: { display: "flex", flexDirection: "column" } },
+          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC" } }, data.displayName),
+          h("div", { style: { fontSize: 16, color: "#64748B", marginTop: "6px" } }, data.issuerId),
+        ),
+        h(
+          "div",
+          {
+            style: {
+              backgroundColor: "#1E293B",
+              border: "1px solid #38BDF8",
+              borderRadius: "10px",
+              padding: "10px 20px",
+              color: "#38BDF8",
+              fontSize: 16,
+              fontWeight: 600,
+            },
+          },
+          tierText,
+        ),
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            marginTop: "20px",
+          },
+        },
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              width: "465px",
+              backgroundColor: "#131B2E",
+              border: "1px solid #1E293B",
+              borderRadius: "16px",
+              padding: "24px",
+            },
+          },
+          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "VALUATION · MODULE 7"),
+          h(
+            "div",
+            { style: { fontSize: 16, color: "#94A3B8", marginTop: "12px" } },
+            `Current ${basisLabel}: ${formattedMultiple}`,
+          ),
+          h(
+            "div",
+            { style: { fontSize: 24, fontWeight: 700, color: gapColor, marginTop: "8px" } },
+            `Valuation Gap (${basisLabel}): ${formattedGap}`,
+          ),
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              width: "465px",
+              backgroundColor: "#131B2E",
+              border: "1px solid #1E293B",
+              borderRadius: "16px",
+              padding: "24px",
+            },
+          },
+          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "GROWTH · MODULE 1"),
+          h(
+            "div",
+            { style: { fontSize: 28, fontWeight: 700, color: "#38BDF8", marginTop: "14px" } },
+            `PEG: ${formattedPeg}`,
+          ),
+          h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "6px" } }, "Historical CAGR"),
+        ),
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            backgroundColor: "#131B2E",
+            border: "1px solid #1E293B",
+            borderRadius: "16px",
+            padding: "24px",
+            marginTop: "20px",
+          },
+        },
+        h(
+          "div",
+          { style: { display: "flex", flexDirection: "column" } },
+          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "LABOR EFFICIENCY · MODULE 2"),
+          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC", marginTop: "10px" } }, formattedGppe),
+        ),
+        h(
+          "div",
+          { style: { fontSize: 15, color: "#94A3B8" } },
+          `Branch: ${data.operatingBranch ?? "-"} · Conf: ${formattedConf}`,
+        ),
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: "#131B2E",
+            border: "1px solid #1E293B",
+            borderRadius: "16px",
+            padding: "24px",
+            marginTop: "20px",
+          },
+        },
+        h(
+          "div",
+          { style: { fontSize: 14, fontWeight: 700, color: "#64748B", marginBottom: "14px" } },
+          "THEME PURITY & BUSINESS EXPOSURE · MODULE 6",
+        ),
+        ...themeNodes,
+      ),
+    ),
+    h(
+      "div",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          backgroundColor: "#0C1322",
+          border: "1px solid #1E293B",
+          borderRadius: "16px",
+          padding: "24px",
+        },
+      },
+      h(
+        "div",
+        { style: { fontSize: 15, fontWeight: 700, color: "#F59E0B" } },
+        "RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE",
+      ),
+      h(
+        "div",
+        { style: { fontSize: 14, color: "#94A3B8", marginTop: "8px" } },
+        `Cutoff: ${data.cutoffAt} · Traceable to materialized factor outputs (schema: ${CARD_SCHEMA_VERSION}).`,
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            marginTop: "14px",
+            fontSize: 13,
+            color: "#38BDF8",
+          },
+        },
+        h("div", null, "TrueAlpha Research Card Export"),
+        h("div", { style: { color: "#64748B" } }, `template: ${CARD_TEMPLATE_VERSION}`),
+      ),
+    ),
+  );
+
+  const response = new ImageResponse(tree, {
+    width: XHS_CARD_WIDTH,
+    height: XHS_CARD_HEIGHT,
+  });
+  return Buffer.from(await response.arrayBuffer());
 }

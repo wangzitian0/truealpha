@@ -43,7 +43,7 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
         Document
       </h1>
       <p className="text-xs text-gray-500">
-        {document.documentId} — created {document.createdAt}
+        <span data-evidence={document.documentId}>{document.documentId}</span> — created {document.createdAt}
       </p>
 
       {revisions.length === 0 ? (
@@ -54,7 +54,9 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
         <ul className="space-y-3">
           {revisions.map((revision) => (
             <li key={revision.revisionId} className="rounded-lg border border-border bg-card p-4 text-sm">
-              <span className="text-xs uppercase tracking-wider text-gray-500">{revision.sourceArtifactId}</span>
+              <span className="text-xs uppercase tracking-wider text-gray-500" data-evidence={revision.sourceArtifactId}>
+                {revision.sourceArtifactId}
+              </span>
               <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
                 <dt>sha256</dt>
                 <dd className="truncate font-mono">{revision.artifactSha256}</dd>
