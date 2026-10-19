@@ -46,7 +46,7 @@ import {
   type ResearchDocument,
   type ResearchDocumentRevision,
 } from "../src/server/documents";
-import { StrategyRunReadAdapter } from "../src/server/mart/research-read";
+import { StrategyRunReadAdapter, toAvailabilityStatus } from "../src/server/mart/research-read";
 import { DECISIONS_SQL, provenanceFromRow } from "../src/server/mart/strategy-run-repository";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
@@ -200,6 +200,10 @@ const TEST_CONTEXT: AccessContext = {
   assert(tierKey("large_model_native") === "lm-native" && formatTierLabel("large_model_native") === "Large Model Native", "SSOT: formatTierLabel formats Large Model Native");
   assert(tierKey("tech_enabled") === "tech" && formatTierLabel("tech_enabled") === "Tech", "SSOT: formatTierLabel formats Tech");
   assert(tierKey("traditional") === "traditional" && formatTierLabel("traditional") === "Traditional", "SSOT: formatTierLabel formats Traditional");
+  for (const status of ["available", "unavailable", "stale", "excluded", "low_confidence", "error"] as const) {
+    assert(toAvailabilityStatus(status) === status, `SSOT: toAvailabilityStatus must preserve ${status}`);
+  }
+  assert(toAvailabilityStatus("unknown_status") === "unavailable", "SSOT: toAvailabilityStatus falls back to unavailable");
 
   const prov = provenanceFromRow({
     operating_period_end: "2025-12-31",
