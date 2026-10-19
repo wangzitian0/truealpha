@@ -625,6 +625,8 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
 {
   const ROOT_D_FILES = [
     "src/app/research/compare/page.tsx",
+    "src/app/research/rankings/page.tsx",
+    "src/app/research/entities/[id]/page.tsx",
     "src/app/admin/quality/page.tsx",
     "src/app/admin/universes/page.tsx",
     "src/app/admin/page.tsx",
@@ -633,9 +635,12 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     "src/app/research/page.tsx",
     "src/app/research/strategy/page.tsx",
     "src/app/research/holdings/page.tsx",
+    "src/app/research/backtest/page.tsx",
+    "src/app/research/backtest/[id]/page.tsx",
     "src/components/trace-inputs-table.tsx",
     "src/components/provenance-cell.tsx",
     "src/components/app-chrome.tsx",
+    "src/components/backtest-basis.tsx",
   ];
 
   for (const relativePath of ROOT_D_FILES) {
@@ -657,8 +662,12 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
       `${relativePath} must not inline .slice(0, 12); use formatShortSha from @/client/format`,
     );
     assert(
-      !/Number\s*\(\s*row\.confidence\s*\)\s*\.toFixed/.test(source),
-      `${relativePath} must not inline Number(row.confidence).toFixed; use formatRatio from @/client/format`,
+      !/\.toFixed\s*\(\s*2\s*\)/.test(source),
+      `${relativePath} must not inline .toFixed(2); use formatRatio or formatUsdMagnitude from @/client/format`,
+    );
+    assert(
+      !/\.toLocaleString\s*\(\s*\)/.test(source),
+      `${relativePath} must not call zero-arg locale-dependent .toLocaleString(); use formatUsdMagnitude, formatNumberMagnitude, or an explicit locale`,
     );
     assert(
       !/formatIssuerLabel\s*\([^)]*entityLabel\s*\(/.test(source),
@@ -666,7 +675,7 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     );
   }
 
-  for (const martLoader of ["src/server/mart/fund-holdings.ts"]) {
+  for (const martLoader of ["src/server/mart/fund-valuation.ts", "src/server/mart/fund-holdings.ts"]) {
     const source = readAppFile(martLoader);
     assert(
       !/\.toFixed\s*\(\s*2\s*\)/.test(source),

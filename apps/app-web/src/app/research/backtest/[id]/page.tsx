@@ -5,7 +5,13 @@ import {
   getBacktestValuations,
   getBacktestTrades,
 } from "@/server/mart/backtest-repository";
-import { decodeRouteParam, formatPercentFromFraction } from "@/client/format";
+import {
+  decodeRouteParam,
+  formatCell,
+  formatPercentFromFraction,
+  formatRatio,
+  formatUsdMagnitude,
+} from "@/client/format";
 import { BacktestBasis } from "@/components/backtest-basis";
 import { BacktestChart } from "@/components/backtest-chart";
 
@@ -40,7 +46,9 @@ export default async function BacktestDetailPage({ params }: PageProps) {
               Backtests
             </Link>
             <span>/</span>
-            <span className="font-mono text-gray-300">{run.run_id.slice(0, 20)}...</span>
+            <span className="font-mono text-gray-300" title={run.run_id}>
+              {run.run_id.slice(0, 20)}…
+            </span>
           </div>
           <h1 id="backtest-detail-heading" className="mt-1 text-2xl font-bold tracking-tight text-white">
             {run.strategy_key} ({run.strategy_version})
@@ -69,36 +77,54 @@ export default async function BacktestDetailPage({ params }: PageProps) {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="text-xs font-medium text-gray-400">CAGR</div>
-          <div className="mt-1 text-2xl font-bold font-mono text-emerald-400">
-            {run.cagr_monthly !== null ? formatPercentFromFraction(String(run.cagr_monthly)) : "—"}
+          <div
+            className="mt-1 text-2xl font-bold font-mono text-emerald-400"
+            title={run.cagr_monthly !== null ? String(run.cagr_monthly) : undefined}
+          >
+            {formatCell(run.cagr_monthly !== null ? formatPercentFromFraction(String(run.cagr_monthly)) : null)}
           </div>
-          <div className="text-[10px] text-gray-500">
-            Benchmark {run.benchmark_cagr !== null ? formatPercentFromFraction(String(run.benchmark_cagr)) : "—"}
+          <div
+            className="text-[10px] text-gray-500"
+            title={run.benchmark_cagr !== null ? String(run.benchmark_cagr) : undefined}
+          >
+            Benchmark {formatCell(run.benchmark_cagr !== null ? formatPercentFromFraction(String(run.benchmark_cagr)) : null)}
           </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="text-xs font-medium text-gray-400">Sharpe Ratio (daily)</div>
-          <div className="mt-1 text-2xl font-bold font-mono text-white">
-            {run.sharpe_daily !== null ? run.sharpe_daily.toFixed(2) : "—"}
+          <div
+            className="mt-1 text-2xl font-bold font-mono text-white"
+            title={run.sharpe_daily !== null ? String(run.sharpe_daily) : undefined}
+          >
+            {formatCell(run.sharpe_daily !== null ? formatRatio(String(run.sharpe_daily)) : null)}
           </div>
           <div className="text-[10px] text-gray-500">Risk-adjusted return (rf=0)</div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="text-xs font-medium text-gray-400">Max Drawdown (daily)</div>
-          <div className="mt-1 text-2xl font-bold font-mono text-rose-400">
-            {run.max_dd_daily !== null ? formatPercentFromFraction(String(run.max_dd_daily)) : "—"}
+          <div
+            className="mt-1 text-2xl font-bold font-mono text-rose-400"
+            title={run.max_dd_daily !== null ? String(run.max_dd_daily) : undefined}
+          >
+            {formatCell(run.max_dd_daily !== null ? formatPercentFromFraction(String(run.max_dd_daily)) : null)}
           </div>
-          <div className="text-[10px] text-gray-500">
-            Benchmark {run.benchmark_max_dd !== null ? formatPercentFromFraction(String(run.benchmark_max_dd)) : "—"}
+          <div
+            className="text-[10px] text-gray-500"
+            title={run.benchmark_max_dd !== null ? String(run.benchmark_max_dd) : undefined}
+          >
+            Benchmark {formatCell(run.benchmark_max_dd !== null ? formatPercentFromFraction(String(run.benchmark_max_dd)) : null)}
           </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="text-xs font-medium text-gray-400">Annualized Volatility</div>
-          <div className="mt-1 text-2xl font-bold font-mono text-amber-400">
-            {run.vol_daily !== null ? formatPercentFromFraction(String(run.vol_daily)) : "—"}
+          <div
+            className="mt-1 text-2xl font-bold font-mono text-amber-400"
+            title={run.vol_daily !== null ? String(run.vol_daily) : undefined}
+          >
+            {formatCell(run.vol_daily !== null ? formatPercentFromFraction(String(run.vol_daily)) : null)}
           </div>
           <div className="text-[10px] text-gray-500">Daily returns, annualized</div>
         </div>
@@ -148,11 +174,21 @@ export default async function BacktestDetailPage({ params }: PageProps) {
                         {t.side}
                       </span>
                     </td>
-                    <td className="px-4 py-2 text-right">{t.shares.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-right">${t.execution_price.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-right">${t.trade_value.toLocaleString()}</td>
-                    <td className="px-4 py-2 text-right">{(t.weight_after * 100).toFixed(1)}%</td>
-                    <td className="px-4 py-2 text-right text-gray-500">${t.fee_paid.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-right" title={String(t.shares)}>
+                      {formatCell(formatRatio(String(t.shares)))}
+                    </td>
+                    <td className="px-4 py-2 text-right" title={String(t.execution_price)}>
+                      ${formatCell(formatRatio(String(t.execution_price)))}
+                    </td>
+                    <td className="px-4 py-2 text-right" title={String(t.trade_value)}>
+                      {formatCell(formatUsdMagnitude(String(t.trade_value)))}
+                    </td>
+                    <td className="px-4 py-2 text-right" title={String(t.weight_after)}>
+                      {formatCell(formatPercentFromFraction(String(t.weight_after)))}
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-500" title={String(t.fee_paid)}>
+                      ${formatCell(formatRatio(String(t.fee_paid)))}
+                    </td>
                   </tr>
                 ))
               )}
