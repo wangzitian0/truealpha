@@ -392,9 +392,9 @@ def _resolve_member_tickers(
     tickers: Mapping[str, str] | None,
 ) -> dict[str, str]:
     """Resolve each partitioned member's subject_id to its ticker across UUIDs and legacy aliases (#1263, #1265)."""
-    if not partitions or not tickers:
+    if not partitions:
         return {}
-    provided = dict(tickers)
+    provided = {k: v for k, v in (tickers or {}).items() if v}
     resolved: dict[str, str] = {}
     unresolved_uuids: dict[str, str] = {}
     for partition in partitions:
@@ -407,15 +407,16 @@ def _resolve_member_tickers(
             unresolved_uuids[subject_id] = subject_id
 
     if unresolved_uuids:
-        expanded = expand_issuer_alias_ids(connection, unresolved_uuids)
-        for subject_id, aliases in expanded.items():
-            best: str | None = None
-            for alias in aliases:
-                candidate = provided.get(alias)
-                if candidate is not None and (best is None or is_preferred_issuer_ticker(candidate, best)):
-                    best = candidate
-            if best is not None:
-                resolved[subject_id] = best
+        if provided:
+            expanded = expand_issuer_alias_ids(connection, unresolved_uuids)
+            for subject_id, aliases in expanded.items():
+                best: str | None = None
+                for alias in aliases:
+                    candidate = provided.get(alias)
+                    if candidate is not None and (best is None or is_preferred_issuer_ticker(candidate, best)):
+                        best = candidate
+                if best is not None:
+                    resolved[subject_id] = best
 
         still_missing = [uid for uid in unresolved_uuids if uid not in resolved]
         if still_missing:
@@ -457,6 +458,10 @@ def materialize_theme_purity(
     `tickers` names the members (by the run's issuer id or its legacy corpus alias) for the
     classifier (#849, #1263); a member without one is labelled by id, as before.
     """
+    connection.execute(
+        "delete from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'",
+        (run_id,),
+    )
     members = governed_members(connection, run_id=run_id)
     partitions = load_partitions(connection, cutoff=cutoff, ciks=members.keys())
     resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers)
