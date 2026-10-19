@@ -801,6 +801,33 @@ def test_aggregate_with_nothing_compared_has_no_agreement_rate() -> None:
     assert summary["compared"] == 0 and summary["agreement_rate"] is None and summary["tolerance"] is None
 
 
+def test_continuous_confidence_score_100_orders_bands_and_rolls_up_mean() -> None:
+    """#1352: every cell evaluates continuous 0-1 confidence and 0-100 score_100 via
+    factors.confidence (`evaluate_continuous_confidence`), ordering HIGH > MEDIUM > LOW > MISSING (0)."""
+    policy = family_policy(CLOSE_FAMILY)
+    high = classify_cell(policy, "listing:xnas:a", (_yahoo("100"), _twelve("100.05"), _moomoo("100")), CUTOFF)
+    medium = classify_cell(policy, "listing:xnas:b", (_yahoo("100"), _twelve("100.05")), CUTOFF)
+    low_single = classify_cell(policy, "listing:xnas:c", (_yahoo("100"),), CUTOFF)
+    low_conflict = classify_cell(policy, "listing:xnas:e", (_yahoo("100"), _twelve("103")), CUTOFF)
+    missing = classify_cell(policy, "listing:xnas:d", (_yahoo(None),), CUTOFF)
+
+    assert (
+        high.score_100
+        > medium.score_100
+        > low_single.score_100
+        > low_conflict.score_100
+        > missing.score_100
+        == Decimal("0")
+    )
+    assert high.payload()["score_100"] == str(high.score_100)
+    assert high.payload()["confidence"] == str(high.confidence)
+    summary = aggregate(policy, [high, medium, low_single, missing])
+    expected_mean = str(
+        ((high.score_100 + medium.score_100 + low_single.score_100) / Decimal(4)).quantize(Decimal("0.0001"))
+    )
+    assert summary["mean_score_100"] == expected_mean
+
+
 # -- the families are the registry's semantics -----------------------------------------------
 
 
