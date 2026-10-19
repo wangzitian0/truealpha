@@ -7,6 +7,7 @@ import {
   normalizePegConvention,
   PEG_CONVENTION_LABELS,
   PEG_GROWTH_CONVENTIONS,
+  projectPegByConvention,
   valuationBasisLabel,
 } from "@/contracts/strategyRun";
 import { loadEntityDetail } from "@/server/dashboard";
@@ -19,19 +20,12 @@ import {
   formatPercentFromFraction,
   formatRatio,
   formatSignedRatio,
+  formatTierLabel,
   formatUsdMagnitude,
   signColor,
 } from "@/client/format";
 
 export const dynamic = "force-dynamic";
-
-function tierLabel(tier: string | null | undefined): string {
-  if (!tier) return "—";
-  if (tier === "large_model_native") return "Large Model Native";
-  if (tier === "tech") return "Tech";
-  if (tier === "traditional") return "Traditional";
-  return tier;
-}
 
 export default async function EntityDetailPage({
   params,
@@ -71,12 +65,11 @@ export default async function EntityDetailPage({
   const basisLabel = valuationBasisLabel(latestRow?.valuationBasis ?? null);
   const operatingBranch = gppeDetail?.operatingBranch ?? null;
   const capitalAdjustedGrossProfit = gppeDetail?.capitalAdjustedGrossProfit ?? null;
-  const displayPeg = convention === "historical_cagr" ? (latestRow?.peg ?? null) : null;
-  const displayPegRank = convention === "historical_cagr" ? (latestRow?.pegRank ?? null) : null;
-  const displayPegReasonCodes =
-    convention === "historical_cagr"
-      ? (latestRow?.pegReasonCodes ?? [])
-      : [`growth_convention_unsourced:${convention}`];
+  const {
+    peg: displayPeg,
+    pegRank: displayPegRank,
+    pegReasonCodes: displayPegReasonCodes,
+  } = projectPegByConvention(latestRow ?? {}, convention);
 
   return (
     <section aria-labelledby="entity-heading" className="space-y-6">
@@ -94,7 +87,7 @@ export default async function EntityDetailPage({
             </span>
             {latestRow?.tier && (
               <span className="rounded-md border border-sky-800 bg-sky-950/60 px-2.5 py-0.5 text-xs font-semibold text-sky-400">
-                {tierLabel(latestRow.tier)}
+                {formatTierLabel(latestRow.tier)}
               </span>
             )}
             {latestRow?.valuationGap && (
@@ -124,7 +117,7 @@ export default async function EntityDetailPage({
                   Valuation &amp; AI Tier (Module 7)
                 </span>
                 <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-sky-400">
-                  {tierLabel(latestRow?.tier)}
+                  {formatTierLabel(latestRow?.tier)}
                 </span>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-4">
@@ -272,7 +265,7 @@ export default async function EntityDetailPage({
                   </p>
                 </div>
                 {analystRatings && (
-                  <AvailabilityBadge status={analystRatings.availabilityStatus as "available" | "unavailable"} />
+                  <AvailabilityBadge status={analystRatings.availabilityStatus} />
                 )}
               </div>
 
@@ -357,7 +350,7 @@ export default async function EntityDetailPage({
                   </p>
                 </div>
                 {supplyChainExposure && (
-                  <AvailabilityBadge status={supplyChainExposure.availabilityStatus as "available" | "unavailable"} />
+                  <AvailabilityBadge status={supplyChainExposure.availabilityStatus} />
                 )}
               </div>
 
@@ -503,50 +496,51 @@ export default async function EntityDetailPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((row) => (
-                    <tr key={row.cutoffAt} className="border-t border-border">
-                      <th scope="row" className="px-4 py-3 font-medium text-white">
-                        {row.cutoffAt}
-                      </th>
-                      <td className="px-4 py-3 font-mono">
-                        {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
-                        {row.capitalAdjustedLaborEfficiency !== null && (
-                          <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
-                            {row.laborEfficiencyMetric ?? UNRECORDED_METRIC}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        {row.currentMultiple
-                          ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
-                          : "—"}
-                      </td>
-                      <td className="px-4 py-3">{tierLabel(row.tier)}</td>
-                      <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}>
-                        {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        {convention === "historical_cagr"
-                          ? (formatRatio(row.peg ?? null) ?? formatCell(row.peg))
-                          : "—"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <AvailabilityBadge status={row.availability} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <Link
-                          href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
-                          className="font-mono text-xs text-gray-400 hover:text-accent"
-                          data-evidence={row.traceId}
-                        >
-                          {row.traceId}
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedRows.map((row) => {
+                    const rowProjectedPeg = projectPegByConvention(row, convention).peg;
+                    return (
+                      <tr key={row.cutoffAt} className="border-t border-border">
+                        <th scope="row" className="px-4 py-3 font-medium text-white">
+                          {row.cutoffAt}
+                        </th>
+                        <td className="px-4 py-3 font-mono">
+                          {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
+                          {row.capitalAdjustedLaborEfficiency !== null && (
+                            <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
+                              {row.laborEfficiencyMetric ?? UNRECORDED_METRIC}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono">
+                          {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
+                        </td>
+                        <td className="px-4 py-3 font-mono">
+                          {row.currentMultiple
+                            ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
+                        <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}>
+                          {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
+                        </td>
+                        <td className="px-4 py-3 font-mono">
+                          {formatRatio(rowProjectedPeg) ?? formatCell(rowProjectedPeg)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <AvailabilityBadge status={row.availability} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <Link
+                            href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
+                            className="font-mono text-xs text-gray-400 hover:text-accent"
+                            data-evidence={row.traceId}
+                          >
+                            {row.traceId}
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

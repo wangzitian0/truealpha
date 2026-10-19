@@ -205,6 +205,29 @@ export interface ComparisonRow {
 	provenance: Provenance;
 }
 
+export interface EntityThemePurityRow {
+	themeId: string;
+	theme: string;
+	themeShare: string | null;
+	inThemeRevenue: string | null;
+	consolidatedRevenue: string | null;
+	/** Null for a fill row: it has no segments. */
+	segments: number | null;
+	confidence?: string | null;
+	availabilityStatus: Availability;
+	/** The reason code of a fill row (an issuer without a segment partition, #1117), else null.
+	 * A fill row is "no answer, and why". It is not a refused share. */
+	unvisitedReason?: string | null;
+}
+
+export interface EntityGppeDetail {
+	gppe: string | null;
+	operatingBranch: string | null;
+	capitalAdjustedGrossProfit: string | null;
+	availabilityStatus: Availability;
+	reasonCodes: string[];
+}
+
 export interface AnalystRatingsDetail {
 	runId: string;
 	cutoff: string;
@@ -217,7 +240,7 @@ export interface AnalystRatingsDetail {
 	confidence: string | null;
 	reasonCodes: string[];
 	extractor: string;
-	availabilityStatus: string;
+	availabilityStatus: Availability;
 	sourceEvidenceStatus: string;
 	factorValidationStatus: string;
 }
@@ -233,7 +256,7 @@ export interface SupplyChainExposureDetail {
 	confidence: string | null;
 	reasonCodes: string[];
 	extractor: string;
-	availabilityStatus: string;
+	availabilityStatus: Availability;
 	sourceEvidenceStatus: string;
 	factorValidationStatus: string;
 }
@@ -241,27 +264,8 @@ export interface SupplyChainExposureDetail {
 export interface EntityDetail {
 	issuerId: string;
 	rows: readonly ComparisonRow[];
-	themes?: Array<{
-		themeId: string;
-		theme: string;
-		themeShare: string | null;
-		inThemeRevenue: string | null;
-		consolidatedRevenue: string | null;
-		/** Null for a fill row: it has no segments. */
-		segments: number | null;
-		confidence?: string | null;
-		availabilityStatus: string;
-		/** The reason code of a fill row (an issuer without a segment partition, #1117), else null.
-		 * A fill row is "no answer, and why". It is not a refused share. */
-		unvisitedReason?: string | null;
-	}>;
-	gppeDetail?: {
-		gppe: string | null;
-		operatingBranch: string | null;
-		capitalAdjustedGrossProfit: string | null;
-		availabilityStatus: string;
-		reasonCodes: string[];
-	} | null;
+	themes?: EntityThemePurityRow[];
+	gppeDetail?: EntityGppeDetail | null;
 	analystRatings?: AnalystRatingsDetail | null;
 	supplyChainExposure?: SupplyChainExposureDetail | null;
 }
@@ -1105,19 +1109,7 @@ export class StrategyRunReadAdapter {
 	async entityThemePurity(
 		_context: AccessContext,
 		issuerId: string,
-	): Promise<
-		Array<{
-			themeId: string;
-			theme: string;
-			themeShare: string | null;
-			inThemeRevenue: string | null;
-			consolidatedRevenue: string | null;
-			segments: number | null;
-			confidence: string | null;
-			availabilityStatus: string;
-			unvisitedReason: string | null;
-		}>
-	> {
+	): Promise<EntityThemePurityRow[]> {
 		try {
 			return await this.runWithClient(async (client) => {
 				const result = await client.query(
@@ -1155,25 +1147,12 @@ export class StrategyRunReadAdapter {
 				return result.rows.map((row) => ({
 					themeId: String(row.theme_id ?? ""),
 					theme: String(row.theme ?? ""),
-					themeShare:
-						row.theme_share !== null && row.theme_share !== undefined
-							? String(row.theme_share)
-							: null,
-					inThemeRevenue:
-						row.in_theme_revenue !== null && row.in_theme_revenue !== undefined
-							? String(row.in_theme_revenue)
-							: null,
-					consolidatedRevenue:
-						row.consolidated_revenue !== null &&
-						row.consolidated_revenue !== undefined
-							? String(row.consolidated_revenue)
-							: null,
+					themeShare: nullableString(row.theme_share),
+					inThemeRevenue: nullableString(row.in_theme_revenue),
+					consolidatedRevenue: nullableString(row.consolidated_revenue),
 					segments: typeof row.segments === "number" ? row.segments : null,
-					confidence:
-						row.confidence !== null && row.confidence !== undefined
-							? String(row.confidence)
-							: null,
-					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					confidence: nullableString(row.confidence),
+					availabilityStatus: toAvailabilityStatus(row.availability_status),
 					unvisitedReason:
 						typeof row.unvisited_reason === "string" ? row.unvisited_reason : null,
 				}));
@@ -1187,13 +1166,7 @@ export class StrategyRunReadAdapter {
 	async entityGppeDetail(
 		_context: AccessContext,
 		issuerId: string,
-	): Promise<{
-		gppe: string | null;
-		operatingBranch: string | null;
-		capitalAdjustedGrossProfit: string | null;
-		availabilityStatus: string;
-		reasonCodes: string[];
-	} | null> {
+	): Promise<EntityGppeDetail | null> {
 		try {
 			return await this.runWithClient(async (client) => {
 				const result = await client.query(
@@ -1211,23 +1184,13 @@ export class StrategyRunReadAdapter {
 				if (result.rows.length === 0) return null;
 				const row = result.rows[0];
 				return {
-					gppe:
-						row.gppe !== null && row.gppe !== undefined
-							? String(row.gppe)
-							: null,
-					operatingBranch:
-						row.operating_branch !== null && row.operating_branch !== undefined
-							? String(row.operating_branch)
-							: null,
-					capitalAdjustedGrossProfit:
-						row.capital_adjusted_gross_profit !== null &&
-						row.capital_adjusted_gross_profit !== undefined
-							? String(row.capital_adjusted_gross_profit)
-							: null,
-					availabilityStatus: String(row.availability_status ?? "unavailable"),
-					reasonCodes: Array.isArray(row.reason_codes)
-						? row.reason_codes.map(String)
-						: [],
+					gppe: nullableString(row.gppe),
+					operatingBranch: nullableString(row.operating_branch),
+					capitalAdjustedGrossProfit: nullableString(
+						row.capital_adjusted_gross_profit,
+					),
+					availabilityStatus: toAvailabilityStatus(row.availability_status),
+					reasonCodes: stringArray(row.reason_codes),
 				};
 			});
 		} catch (error) {
@@ -1271,36 +1234,23 @@ export class StrategyRunReadAdapter {
 				);
 				if (result.rows.length === 0) return null;
 				const row = result.rows[0];
-				const reasonCodes = Array.isArray(row.reason_codes)
-					? row.reason_codes.map(String)
-					: [];
+				const reasonCodes = stringArray(row.reason_codes);
 				const targetFromReason = reasonCodes
 					.find((code) => code.startsWith("target_price:"))
 					?.slice("target_price:".length);
-				const rawTarget =
-					row.target_price !== null && row.target_price !== undefined
-						? String(row.target_price)
-						: targetFromReason ?? null;
 				return {
 					runId: String(row.run_id ?? ""),
 					cutoff: String(row.cutoff ?? ""),
-					consensusRating:
-						row.consensus_rating !== null && row.consensus_rating !== undefined
-							? String(row.consensus_rating)
-							: null,
-					targetPrice: rawTarget,
-					analystsCount:
-						typeof row.analysts_count === "number" ? row.analysts_count : 0,
-					buyCount: typeof row.buy_count === "number" ? row.buy_count : 0,
-					holdCount: typeof row.hold_count === "number" ? row.hold_count : 0,
-					sellCount: typeof row.sell_count === "number" ? row.sell_count : 0,
-					confidence:
-						row.confidence !== null && row.confidence !== undefined
-							? String(row.confidence)
-							: null,
+					consensusRating: nullableString(row.consensus_rating),
+					targetPrice: nullableString(row.target_price) ?? targetFromReason ?? null,
+					analystsCount: numberOrZero(row.analysts_count),
+					buyCount: numberOrZero(row.buy_count),
+					holdCount: numberOrZero(row.hold_count),
+					sellCount: numberOrZero(row.sell_count),
+					confidence: nullableString(row.confidence),
 					reasonCodes,
 					extractor: String(row.extractor ?? "origin:moomoo:v1"),
-					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					availabilityStatus: toAvailabilityStatus(row.availability_status),
 					sourceEvidenceStatus: String(
 						row.source_evidence_status ?? "degraded",
 					),
@@ -1346,30 +1296,15 @@ export class StrategyRunReadAdapter {
 				return {
 					runId: String(row.run_id ?? ""),
 					cutoff: String(row.cutoff ?? ""),
-					exposureScore:
-						row.exposure_score !== null && row.exposure_score !== undefined
-							? String(row.exposure_score)
-							: null,
-					directPartners:
-						typeof row.direct_partners === "number" ? row.direct_partners : 0,
-					suppliersCount:
-						typeof row.suppliers_count === "number" ? row.suppliers_count : 0,
-					customersCount:
-						typeof row.customers_count === "number" ? row.customers_count : 0,
-					maxPartnerShare:
-						row.max_partner_share !== null &&
-						row.max_partner_share !== undefined
-							? String(row.max_partner_share)
-							: null,
-					confidence:
-						row.confidence !== null && row.confidence !== undefined
-							? String(row.confidence)
-							: null,
-					reasonCodes: Array.isArray(row.reason_codes)
-						? row.reason_codes.map(String)
-						: [],
+					exposureScore: nullableString(row.exposure_score),
+					directPartners: numberOrZero(row.direct_partners),
+					suppliersCount: numberOrZero(row.suppliers_count),
+					customersCount: numberOrZero(row.customers_count),
+					maxPartnerShare: nullableString(row.max_partner_share),
+					confidence: nullableString(row.confidence),
+					reasonCodes: stringArray(row.reason_codes),
 					extractor: String(row.extractor ?? "graph:kg-edges:v1"),
-					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					availabilityStatus: toAvailabilityStatus(row.availability_status),
 					sourceEvidenceStatus: String(
 						row.source_evidence_status ?? "degraded",
 					),
@@ -1384,3 +1319,20 @@ export class StrategyRunReadAdapter {
 		}
 	}
 }
+
+function nullableString(value: unknown): string | null {
+	return value !== null && value !== undefined ? String(value) : null;
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.map(String) : [];
+}
+
+function numberOrZero(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+export function toAvailabilityStatus(value: unknown): Availability {
+	return value === "available" ? "available" : "unavailable";
+}
+

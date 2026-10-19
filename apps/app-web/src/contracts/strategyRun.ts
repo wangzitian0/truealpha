@@ -78,6 +78,62 @@ export function normalizePegConvention(
 	return "historical_cagr";
 }
 
+export const GROWTH_CONVENTION_UNSOURCED_PREFIX =
+	"growth_convention_unsourced:" as const;
+
+export function growthConventionUnsourcedCode(
+	convention: PegGrowthConvention,
+): `${typeof GROWTH_CONVENTION_UNSOURCED_PREFIX}${PegGrowthConvention}` {
+	return `${GROWTH_CONVENTION_UNSOURCED_PREFIX}${convention}`;
+}
+
+export interface PegProjectionInput {
+	peg?: string | null;
+	pegRank?: number | null;
+	pegReasonCodes?: readonly string[] | null;
+}
+
+export interface PegProjection {
+	peg: string | null;
+	pegRank: number | null;
+	pegReasonCodes: readonly string[];
+}
+
+/** Projects materialized PEG fields onto the active growth-rate convention (#284 / #1360). */
+export function projectPegByConvention(
+	input: PegProjectionInput,
+	convention: PegGrowthConvention,
+): PegProjection {
+	if (convention === "historical_cagr") {
+		return {
+			peg: input.peg ?? null,
+			pegRank: input.pegRank ?? null,
+			pegReasonCodes: input.pegReasonCodes ?? [],
+		};
+	}
+	return {
+		peg: null,
+		pegRank: null,
+		pegReasonCodes: [growthConventionUnsourcedCode(convention)],
+	};
+}
+
+/** Universe scopes selectable on rankings (#1360). */
+export const RANKING_UNIVERSES = ["topt", "qqq"] as const;
+export type RankingUniverse = (typeof RANKING_UNIVERSES)[number];
+
+export const RANKING_UNIVERSE_LABELS: Record<RankingUniverse, string> = {
+	topt: "TOPT (Top-100)",
+	qqq: "QQQ (Nasdaq-100)",
+};
+
+export function normalizeRankingUniverse(value: unknown): RankingUniverse {
+	const normalized = typeof value === "string" ? value.toLowerCase().trim() : "";
+	return (RANKING_UNIVERSES as readonly string[]).includes(normalized)
+		? (normalized as RankingUniverse)
+		: "topt";
+}
+
 export interface StrategyRunDecision {
 	issuer_id: string;
 	cutoff_at: string;
@@ -549,18 +605,22 @@ export const parseStrategyRunReport = asStrategyRunReport;
 // work fine under a bare `bun run` or `tsc`). Every invocation of this
 // package (bun test, `next dev`/`build`/`start`) runs with cwd == apps/app-web
 // (see the Makefile), so this stays stable across both.
-const FIXTURE_PATH = join(
-	process.cwd(),
-	"..",
-	"..",
-	"common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
-);
+const FIXTURE_RELATIVE =
+	"common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json";
+const FIXTURE_PATH = join(process.cwd(), "..", "..", FIXTURE_RELATIVE);
+const REPO_ROOT_FIXTURE_PATH = join(process.cwd(), FIXTURE_RELATIVE);
 
 /**
  * Loads the one checked-in `large_model_value_v0` preview fixture — server-side only.
  * Mirrors `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`.
  */
 export class FixtureStrategyRunRepository {
+	private readonly fixturePath: string | undefined;
+
+	constructor(fixturePath?: string) {
+		this.fixturePath = fixturePath;
+	}
+
 	/** `context` is reserved for a future authorization decision; unused today. */
 	getLatest(
 		strategyId: string,
@@ -568,12 +628,22 @@ export class FixtureStrategyRunRepository {
 	): StrategyRunReport | StrategyRunUnavailable {
 		let raw: string;
 		try {
-			raw = readFileSync(FIXTURE_PATH, "utf8");
+			raw = readFileSync(this.fixturePath ?? FIXTURE_PATH, "utf8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT" && !this.fixturePath) {
+				try {
+					raw = readFileSync(REPO_ROOT_FIXTURE_PATH, "utf8");
+				} catch (fallbackError) {
+					if ((fallbackError as NodeJS.ErrnoException).code === "ENOENT") {
+						return { strategy_id: strategyId, reason: "fixture_missing" };
+					}
+					throw fallbackError;
+				}
+			} else if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 				return { strategy_id: strategyId, reason: "fixture_missing" };
+			} else {
+				throw error;
 			}
-			throw error;
 		}
 
 		let report: StrategyRunReport;

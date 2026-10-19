@@ -23,11 +23,17 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { formatTierLabel, tierKey } from "../src/client/format";
 import {
   FixtureStrategyRunRepository,
+  GROWTH_CONVENTION_UNSOURCED_PREFIX,
   normalizePegConvention,
+  normalizeRankingUniverse,
   PEG_CONVENTION_LABELS,
   PEG_GROWTH_CONVENTIONS,
+  projectPegByConvention,
+  RANKING_UNIVERSE_LABELS,
+  RANKING_UNIVERSES,
   type AccessContext,
 } from "../src/contracts/strategyRun";
 import { handleCardExportGet, XHS_CARD_HEIGHT, XHS_CARD_WIDTH } from "../src/server/cards/xhs-card";
@@ -48,6 +54,8 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const APP_ROOT = new URL("../", import.meta.url).pathname;
+
 const TEST_CONTEXT: AccessContext = {
   contextId: "ctx:root-c-test",
   principalId: "principal:root-c-owner",
@@ -60,8 +68,10 @@ const TEST_CONTEXT: AccessContext = {
 
 // ─── AC1 & AC2: Module 4 and Module 3 Mart Read Adapter + loadEntityDetail ──
 {
+  const executedSqls: string[] = [];
   const fakeClient: MartClientLike = {
     query: async (sql: string) => {
+      executedSqls.push(sql);
       if (sql.includes("from mart.issuer_analyst_ratings")) {
         return {
           rows: [
@@ -119,6 +129,16 @@ const TEST_CONTEXT: AccessContext = {
   const state = await loadEntityDetail(TEST_CONTEXT, "issuer:adm", adapter);
   assert(state.kind === "ready", `expected ready entity detail, got ${state.kind}`);
 
+  // Verify bidirectional alias resolution predicate in all 4 entity detail queries
+  assert(executedSqls.length === 4, `expected 4 entity detail queries, got ${executedSqls.length}`);
+  for (const sql of executedSqls) {
+    assert(
+      sql.includes("select entity_id::text from mart.entity_identity where legacy_id = $1") &&
+        sql.includes("select legacy_id from mart.entity_identity where entity_id::text = $1"),
+      "entity detail queries must resolve issuer aliases bidirectionally (legacy_id <-> entity_id) via bidirectionalIssuerPredicate",
+    );
+  }
+
   // AC1 assertions: Module 4 Analyst Ratings & Consensus
   const m4 = state.data.analystRatings;
   assert(m4 !== null && m4 !== undefined, "AC1: analystRatings must be loaded by loadEntityDetail");
@@ -140,7 +160,7 @@ const TEST_CONTEXT: AccessContext = {
   assert(m3.reasonCodes.includes("supplier:tsmc") && m3.reasonCodes.includes("customer:msft"), "AC2: expected partner edge reason codes");
 }
 
-// ─── AC3: Module 1 PEG Conventions & peg_reason_codes Projection ─────────────
+// ─── AC3: Module 1 PEG Conventions, SSOT Helpers & peg_reason_codes ──────────
 {
   assert(
     PEG_GROWTH_CONVENTIONS.join(",") === "historical_cagr,consensus,guidance",
@@ -153,6 +173,33 @@ const TEST_CONTEXT: AccessContext = {
   assert(normalizePegConvention("company_guidance") === "guidance", "AC3: legacy company_guidance must normalize to guidance");
   assert(PEG_CONVENTION_LABELS.historical_cagr === "Historical CAGR", "AC3: label for historical_cagr");
   assert(DECISIONS_SQL.includes("d.peg_reason_codes"), "AC3: DECISIONS_SQL must select d.peg_reason_codes");
+
+  // SSOT helper: projectPegByConvention
+  const cagrProjected = projectPegByConvention(
+    { peg: "1.42", pegRank: 2, pegReasonCodes: ["ok"] },
+    "historical_cagr",
+  );
+  assert(cagrProjected.peg === "1.42" && cagrProjected.pegRank === 2, "AC3: historical_cagr preserves materialized peg and pegRank");
+  assert(cagrProjected.pegReasonCodes.join(",") === "ok", "AC3: historical_cagr preserves materialized reason codes");
+
+  const consensusProjected = projectPegByConvention(
+    { peg: "1.42", pegRank: 2, pegReasonCodes: ["ok"] },
+    "consensus",
+  );
+  assert(consensusProjected.peg === null && consensusProjected.pegRank === null, "AC3: non-historical convention without materialized column returns null peg/pegRank");
+  assert(
+    consensusProjected.pegReasonCodes.includes(`${GROWTH_CONVENTION_UNSOURCED_PREFIX}consensus`),
+    "AC3: non-historical convention appends explicit growth_convention_unsourced:consensus code",
+  );
+
+  // SSOT helper: RankingUniverse & formatTierLabel
+  assert(RANKING_UNIVERSES.join(",") === "topt,qqq", "SSOT: RANKING_UNIVERSES must define topt,qqq");
+  assert(normalizeRankingUniverse(undefined) === "topt", "SSOT: default universe must be topt");
+  assert(normalizeRankingUniverse("QQQ") === "qqq", "SSOT: QQQ normalizes to qqq");
+  assert(RANKING_UNIVERSE_LABELS.qqq.includes("QQQ"), "SSOT: qqq label must describe QQQ universe");
+  assert(tierKey("large_model_native") === "lm-native" && formatTierLabel("large_model_native") === "Large Model Native", "SSOT: formatTierLabel formats Large Model Native");
+  assert(tierKey("tech_enabled") === "tech" && formatTierLabel("tech_enabled") === "Tech", "SSOT: formatTierLabel formats Tech");
+  assert(tierKey("traditional") === "traditional" && formatTierLabel("traditional") === "Traditional", "SSOT: formatTierLabel formats Traditional");
 
   const prov = provenanceFromRow({
     operating_period_end: "2025-12-31",
@@ -169,14 +216,21 @@ const TEST_CONTEXT: AccessContext = {
     "AC3: provenanceFromRow must preserve peg_reason_codes from mart.strategy_decisions",
   );
 
-  const rankingsPageSource = readFileSync(join(process.cwd(), "src/app/research/rankings/page.tsx"), "utf8");
+  const rankingsPageSource = readFileSync(join(APP_ROOT, "src/app/research/rankings/page.tsx"), "utf8");
   assert(rankingsPageSource.includes("data-peg-convention"), "AC3: /research/rankings must render data-peg-convention selector");
   assert(rankingsPageSource.includes("data-universe-selector"), "AC3: /research/rankings must render data-universe-selector (TOPT / QQQ)");
+  assert(!rankingsPageSource.includes("function cell("), "SSOT: rankings/page.tsx must not define local function cell()");
+  assert(!rankingsPageSource.includes("function tierLabel("), "SSOT: rankings/page.tsx must not define local function tierLabel()");
 
-  const entityPageSource = readFileSync(join(process.cwd(), "src/app/research/entities/[id]/page.tsx"), "utf8");
+  const entityPageSource = readFileSync(join(APP_ROOT, "src/app/research/entities/[id]/page.tsx"), "utf8");
   assert(entityPageSource.includes("data-testid=\"module-4-analyst-ratings\""), "AC1: entity page must render module-4-analyst-ratings section");
   assert(entityPageSource.includes("data-testid=\"module-3-supply-chain\""), "AC2: entity page must render module-3-supply-chain section");
   assert(entityPageSource.includes("data-testid=\"entity-peg-convention-selector\""), "AC3: entity page must render entity-peg-convention-selector");
+  assert(!entityPageSource.includes("function cell("), "SSOT: entities/[id]/page.tsx must not define local function cell()");
+  assert(!entityPageSource.includes("function tierLabel("), "SSOT: entities/[id]/page.tsx must not define local function tierLabel()");
+
+  const xhsCardSource = readFileSync(join(APP_ROOT, "src/server/cards/xhs-card.ts"), "utf8");
+  assert(!xhsCardSource.includes("function formatTierLabel("), "SSOT: xhs-card.ts must import formatTierLabel from @/client/format instead of redefining it");
 }
 
 // ─── AC4: 1080x1440 PNG Export Route + Library Persistence + Raw UUID Guard ─
@@ -279,12 +333,12 @@ const TEST_CONTEXT: AccessContext = {
   assert((savedDocs.length as number) === 2, "AC4: Library repository must hold both ranking and entity card documents");
 
   // 3. CardExportButton defaults to format=png and Library wraps documentId in data-evidence
-  const buttonSource = readFileSync(join(process.cwd(), "src/components/card-export-button.tsx"), "utf8");
+  const buttonSource = readFileSync(join(APP_ROOT, "src/components/card-export-button.tsx"), "utf8");
   assert(
     buttonSource.includes('format = "png"') && buttonSource.includes("truealpha-card-ranking.${ext}"),
     "AC4: CardExportButton must default to format=png",
   );
-  const libraryPageSource = readFileSync(join(process.cwd(), "src/app/research/library/page.tsx"), "utf8");
+  const libraryPageSource = readFileSync(join(APP_ROOT, "src/app/research/library/page.tsx"), "utf8");
   assert(
     libraryPageSource.includes("data-evidence={document.documentId}"),
     "AC4: /research/library/page.tsx must wrap document.documentId in data-evidence so UUIDs pass walk-tree.mjs",
@@ -297,4 +351,4 @@ const TEST_CONTEXT: AccessContext = {
   );
 }
 
-console.log("#1360 root-c-reader-surfaces.test.ts: all AC1-AC4 assertions passed");
+console.log("#1360 root-c-reader-surfaces.test.ts: all AC1-AC4 and SSOT assertions passed");
