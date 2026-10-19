@@ -3,7 +3,7 @@ from typing import Literal
 from infra2_sdk.runtime.environment import RuntimeEnvKey
 from pydantic import AliasChoices, Field
 from truealpha_contracts.common import CaptureEnvironment
-from truealpha_runtime import RuntimeSettings
+from truealpha_runtime import RuntimeSettings, database_url_field
 
 
 class Settings(RuntimeSettings):
@@ -71,15 +71,9 @@ class Settings(RuntimeSettings):
 
     # The shared runtime contract owns DATABASE_URL; this service composes it for the
     # host-network topology (host loopback port), which is why the override lives here.
-    database_url: str = Field(
-        default="postgresql://postgres:postgres@localhost:5432/truealpha",
-        json_schema_extra={
-            "source": "runtime",
-            "group": "postgres",
-            "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
-            # host-network service: dials the host loopback port infra2 publishes
-            "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
-        },
+    database_url: str = database_url_field(
+        # host-network service: dials the host loopback port infra2 publishes
+        composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
     )
     # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = Field(default="", json_schema_extra={"source": "code", "group": "sec"})

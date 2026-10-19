@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import os
 from functools import cached_property
+from typing import Any
 
 from infra2_sdk.runtime.environment import EnvironmentTier
 from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
+POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
+
+
+def database_url_field(*, composed_from: str | None = None) -> Any:
+    """Create the canonical DATABASE_URL field with optional service network composition."""
+    schema_extra: dict[str, Any] = {
+        "source": "runtime",
+        "group": "postgres",
+        "provided_by": POSTGRES_PROVIDED_BY,
+    }
+    if composed_from is not None:
+        schema_extra["composed_from"] = composed_from
+    return Field(default=DEFAULT_DATABASE_URL, json_schema_extra=schema_extra)
 
 
 def resolve_environment_tier(app_env: str, *, github_actions: bool = False) -> EnvironmentTier:
@@ -40,14 +56,7 @@ class CoreRuntimeSettings(BaseSettings):
 
     # Composed by each service from the postgres service's password: the host and port
     # depend on the service's network topology, so the subclasses declare `composed_from`.
-    database_url: str = Field(
-        default="postgresql://postgres:postgres@localhost:5432/truealpha",
-        json_schema_extra={
-            "source": "runtime",
-            "group": "postgres",
-            "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
-        },
-    )
+    database_url: str = database_url_field()
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code"})
 
     @field_validator("database_url")
@@ -133,6 +142,3 @@ class RuntimeSettings(CoreRuntimeSettings):
             read_timeout_seconds=float(self.s3_connect_timeout_seconds),
             raw_prefix=self.s3_raw_prefix,
         )
-
-
-runtime_settings = RuntimeSettings()

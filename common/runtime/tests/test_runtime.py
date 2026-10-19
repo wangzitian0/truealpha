@@ -211,3 +211,43 @@ def test_raw_storage_is_content_addressed_and_idempotent():
     assert first.object.key == second.object.key
     assert first.object.uri.startswith("s3://truealpha-raw/raw/sec/")
     assert client.put_count == 1
+
+
+def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1375 (G1): truealpha_runtime exposes no import-time runtime_settings singleton, and
+    CoreRuntimeSettings / llm-service Settings ignore invalid S3 environment variables."""
+    import truealpha_runtime
+    import truealpha_runtime.config as runtime_config
+    from llm_service.config import Settings as LlmSettings
+    from truealpha_runtime import CoreRuntimeSettings
+
+    assert "runtime_settings" not in dir(truealpha_runtime)
+    assert "runtime_settings" not in dir(runtime_config)
+
+    monkeypatch.setenv("S3_BUCKET", "INVALID_UPPERCASE")
+    core = CoreRuntimeSettings(_env_file=None, app_env="test")
+    llm = LlmSettings(_env_file=None, app_env="test")
+    assert core.app_env == "test"
+    assert llm.app_env == "test"
+
+    with pytest.raises(ValueError, match="S3_BUCKET must be a lowercase"):
+        RuntimeSettings(_env_file=None, app_env="test")
+
+
+def test_database_url_field_shares_default_and_metadata_across_services() -> None:
+    """#1375 (G4): CoreRuntimeSettings, data-engine, and llm-service share database_url_field."""
+    from data_engine.config import Settings as DataEngineSettings
+    from llm_service.config import Settings as LlmSettings
+    from truealpha_runtime import CoreRuntimeSettings
+    from truealpha_runtime.config import DEFAULT_DATABASE_URL, POSTGRES_PROVIDED_BY
+
+    for cls in (CoreRuntimeSettings, DataEngineSettings, LlmSettings):
+        field = cls.model_fields["database_url"]
+        assert field.default == DEFAULT_DATABASE_URL
+        extra = field.json_schema_extra
+        assert isinstance(extra, dict)
+        assert extra["source"] == "runtime"
+        assert extra["group"] == "postgres"
+        assert extra["provided_by"] == POSTGRES_PROVIDED_BY

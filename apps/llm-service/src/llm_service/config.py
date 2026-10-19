@@ -1,5 +1,5 @@
 from pydantic import AliasChoices, Field
-from truealpha_runtime import CoreRuntimeSettings
+from truealpha_runtime import CoreRuntimeSettings, database_url_field
 
 
 class Settings(CoreRuntimeSettings):
@@ -17,15 +17,9 @@ class Settings(CoreRuntimeSettings):
     deployed route.
     """
 
-    database_url: str = Field(
-        default="postgresql://postgres:postgres@localhost:5432/truealpha",
-        json_schema_extra={
-            "source": "runtime",
-            "group": "postgres",
-            "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
-            # app stack: reaches postgres over the compose network
-            "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
-        },
+    database_url: str = database_url_field(
+        # app stack: reaches postgres over the compose network
+        composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
     )
     migrations_database_url: str | None = Field(
         default=None,
