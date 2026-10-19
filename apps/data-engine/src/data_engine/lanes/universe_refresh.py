@@ -90,7 +90,7 @@ def _refresh_universes(
             context.log.error(
                 f"nport[{source.nport_ticker}] failed:\n" + "".join(traceback.format_exception(error)).rstrip()
             )
-            failures.append((source.nport_ticker, error))
+            failures.append((f"nport:{source.nport_ticker}", error))
     # Identity enrichment sweeps AFTER every fund captured: re-points minted
     # company:isin identities onto the plane's issuer:cik keying (#63 tranche 2).
     # Its own connection for the same isolation reason as the captures.
@@ -104,9 +104,9 @@ def _refresh_universes(
         context.log.error("holdings enrichment failed:\n" + "".join(traceback.format_exception(error)).rstrip())
         failures.append(("identity-enrichment", error))
     if failures:
-        raise RuntimeError(
-            f"N-PORT holdings capture failed for: {', '.join(ticker for ticker, _ in failures)}"
-        ) from failures[-1][1]
+        raise RuntimeError(f"Universe refresh failed for: {', '.join(step for step, _ in failures)}") from failures[-1][
+            1
+        ]
 
 
 @dg.job(name=UNIVERSE_REFRESH_JOB_NAME)

@@ -860,7 +860,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
         return f"published:{source.etf}:{report_date}"
 
     ctx = dg.build_op_context()
-    with pytest.raises(RuntimeError, match="constituents:qqq"):
+    with pytest.raises(RuntimeError, match=r"^Universe refresh failed for: constituents:qqq$"):
         universe_refresh._refresh_universes(ctx, UNIVERSE_SOURCES, latest_quarter_end, fake_refresh_and_publish)
 
     # SP500 was skipped completely while STOPPED; canary still refreshed and committed despite qqq failing.
