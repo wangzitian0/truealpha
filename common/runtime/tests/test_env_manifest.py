@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from infra2_sdk.ci import validate_manifest_offline
 from infra2_sdk.runtime.config_schema import EnvironmentManifest
+from pydantic_core import PydanticUndefined
 from truealpha_runtime.testing import load_tool
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -34,6 +35,49 @@ def test_every_secret_declares_a_producer() -> None:
                 assert field.source in {"human", "runtime"}, f"{path}: {field.env} is sensitive but {field.source}"
 
 
+def _carries_no_value(default: object) -> bool:
+    """True for no default, None, a blank string or an empty collection.
+
+    A number or a boolean always carries a value."""
+    if default is None or default is PydanticUndefined:
+        return True
+    if isinstance(default, str):
+        return not default.strip()
+    if isinstance(default, (list, tuple, set, frozenset, dict)):
+        return not default
+    return False
+
+
+def test_every_code_setting_that_runs_on_its_default_has_a_value() -> None:
+    """#1377: a `code` setting is a default of the settings model, never stored.
+
+    `FieldSource.CODE` in `infra2_sdk/runtime/config_schema.py` states this contract. The
+    deployment does not supply a code setting unless the manifest marks it `injected`. The
+    model default is then the value that runs. #1366 made `SEC_USER_AGENT` a code setting with
+    the default "". Every SEC request on staging then raised a RuntimeError.
+
+    An injected setting is out of scope: boot validation requires the deployment to supply it.
+    An `empty_ok` setting declares that an empty value is acceptable. The hand-written app-web
+    manifest has no settings model. Its defaults are TypeScript literals, so this check cannot
+    read them."""
+    problems: list[str] = []
+    for spec in env_manifest.SPECS:
+        model = spec.resolve_model()
+        for field in env_manifest.load(spec.path).fields:
+            if field.source != "code" or field.injected or field.empty_ok:
+                continue
+            default = model.model_fields[field.field].get_default(call_default_factory=True, validated_data={})
+            if _carries_no_value(default):
+                problems.append(
+                    f"{spec.path}: {field.env} has source={field.source!r}, injected=false and empty_ok=false, "
+                    f"but its default is {default!r}. A code setting is a default of the settings model, "
+                    "never stored (infra2_sdk/runtime/config_schema.py). The deployment does not supply it, "
+                    "so the empty default is the value that runs. Set a non-empty default, inject the value, "
+                    "or declare empty_ok."
+                )
+    assert problems == [], "\n".join(problems)
+
+
 def test_data_engine_manifest_declares_the_identity_the_deployment_injects() -> None:
     """#784, #1321: the three release-identity values reach the process under canonical names.
     Declared here so the deployment can be reconciled against the manifest and so
@@ -56,9 +100,11 @@ def test_data_engine_manifest_carries_the_datahub_vendor_keys() -> None:
     by_env = {field.env: field for field in manifest.fields}
     for name in ("TWELVE_DATA_API_KEY", "OPENFIGI_API_KEY"):
         assert (by_env[name].source, by_env[name].scope, by_env[name].empty_ok) == ("human", "project", True)
-    for name in ("SEC_USER_AGENT", "LLM_MODEL"):
-        field = by_env[name]
-        assert (field.source, field.injected, field.empty_ok, field.scope) == ("code", False, False, "env"), name
+    # #1377: the SEC contact email lives in Vault, out of this public repository.
+    sec = by_env["SEC_USER_AGENT"]
+    assert (sec.source, sec.injected, sec.empty_ok, sec.scope) == ("human", True, False, "project")
+    llm = by_env["LLM_MODEL"]
+    assert (llm.source, llm.injected, llm.empty_ok, llm.scope) == ("code", False, False, "env")
     assert by_env["GIT_COMMIT_SHA"].source == "release" and by_env["GIT_COMMIT_SHA"].injected
     assert by_env["DATABASE_URL"].provided_by == "truealpha/postgres:POSTGRES_PASSWORD"
     assert by_env["DATABASE_URL"].composed_env == ("TA_POSTGRES_PORT",)
@@ -119,8 +165,9 @@ def test_validate_env_reports_missing_injected_values(monkeypatch: pytest.Monkey
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     assert env_manifest.main(["--validate-env", "apps/data-engine/required-env.generated.json"]) == 1
     out = capsys.readouterr().out
-    assert "missing: RELEASE_ID" in out and "missing: GIT_COMMIT_SHA" in out
-    assert "missing: SEC_USER_AGENT" not in out and "missing: LLM_MODEL" not in out
+    assert "missing: SEC_USER_AGENT" in out and "missing: GIT_COMMIT_SHA" in out
+    assert "missing: RELEASE_ID" in out
+    assert "missing: LLM_MODEL" not in out
 
 
 def test_llm_service_manifest_excludes_s3_and_unused_llm_variables_and_declares_migrations() -> None:

@@ -54,8 +54,13 @@ class Settings(CoreRuntimeSettings):
     # list its public host(s). Default-on FastMCP protection rejects any non-localhost
     # Host with "421 Invalid Host header", which is what blocked external callers.
     mcp_dns_rebinding_protection: bool = Field(default=False, json_schema_extra={"source": "code", "group": "mcp"})
-    mcp_allowed_hosts: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
-    mcp_allowed_origins: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
+    # Empty lists are acceptable while the protection is off (#1377).
+    mcp_allowed_hosts: list[str] = Field(
+        default_factory=list, json_schema_extra={"source": "code", "empty_ok": True, "group": "mcp"}
+    )
+    mcp_allowed_origins: list[str] = Field(
+        default_factory=list, json_schema_extra={"source": "code", "empty_ok": True, "group": "mcp"}
+    )
 
 
 settings = Settings()
