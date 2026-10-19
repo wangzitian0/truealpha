@@ -76,7 +76,9 @@ class Settings(RuntimeSettings):
         composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
     )
     # SEC requires a descriptive User-Agent including a contact email.
-    sec_user_agent: str = Field(default="", json_schema_extra={"source": "code", "group": "sec"})
+    sec_user_agent: str = Field(
+        default="", json_schema_extra={"source": "human", "injected": True, "scope": "project", "group": "sec"}
+    )
     # moomoo OpenD gateway coordinates. Supplied by the environment ONLY — never a
     # default here, for two reasons that happen to agree:
     #
@@ -90,7 +92,9 @@ class Settings(RuntimeSettings):
     #    which surfaces as a timeout rather than as a missing configuration.
     #
     # Empty means unconfigured, and callers must refuse rather than dial a guess.
-    moomoo_opend_host: str = Field(default="", json_schema_extra={"source": "code", "group": "moomoo"})
+    moomoo_opend_host: str = Field(
+        default="", json_schema_extra={"source": "code", "empty_ok": True, "group": "moomoo"}
+    )
     moomoo_opend_port: int = Field(default=0, json_schema_extra={"source": "code", "group": "moomoo"})
     # Self-imposed precautionary cap, NOT a real moomoo-side monthly quota —
     # moomoo's own docs only rate-limit fundamental/quote endpoints (bursts
