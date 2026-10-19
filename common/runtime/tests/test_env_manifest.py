@@ -190,6 +190,24 @@ def test_llm_service_manifest_excludes_s3_and_unused_llm_variables_and_declares_
     assert "S3_DOCUMENTS_PREFIX" not in de_envs
 
 
+def test_llm_service_migrations_url_is_supplied_like_the_database_url() -> None:
+    """#1390: the migration DSN is the server of DATABASE_URL, and infra2 supplies both the same way.
+
+    infra2 declares MIGRATIONS_DATABASE_URL in its own supplement for the app stack, with the
+    provider and the composition of DATABASE_URL. It refuses two declarations of one variable that
+    differ in source, provided_by, composed_from, store_key, empty_ok or scope. #1367 declared the
+    field here without a provider, so a sync of this manifest into infra2 could not render a template.
+    One DSN, one declaration: the two entries agree on every key that infra2 compares."""
+    fields = {field.env: field for field in env_manifest.load("apps/llm-service/required-env.generated.json").fields}
+    database, migrations = fields["DATABASE_URL"], fields["MIGRATIONS_DATABASE_URL"]
+    assert database.provided_by and database.composed_from, "DATABASE_URL lost its provider or its composition"
+    for key in ("source", "provided_by", "composed_from", "store_key", "empty_ok", "scope"):
+        assert getattr(migrations, key) == getattr(database, key), (
+            f"MIGRATIONS_DATABASE_URL.{key} is {getattr(migrations, key)!r} and DATABASE_URL.{key} is "
+            f"{getattr(database, key)!r}; infra2 supplies both the same way (#1390)"
+        )
+
+
 def test_app_web_manifest_declares_every_process_env_variable_read_by_server_code() -> None:
     """#1367, #1375 (G2): app-web server code and required-env.manifest.json match bidirectionally,
     and apps/app-web/src/server defines a single shared pg.Pool and DATABASE_URL reader."""
