@@ -2025,3 +2025,68 @@ def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_
     assert aapl_result.current_ps == Decimal("4")
     assert nvda_result.confidence == Decimal("0.85")
     assert aapl_result.confidence == Decimal("0.85")
+
+
+def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its_two_series(connection) -> None:
+    """#1277: no lane stored a daily series of a QQQ listing outside TOPT, so its issuer was unavailable (#1309).
+
+    The core finds no split history for the issuer and drops its share count. The QQQ price lane's
+    weekday run stores both series of that listing through the deployed op body. The same capture
+    then values the issuer on its filed share count. The head's TOPT symbol keeps the series of the
+    market-data lane, and the lane does not fetch it.
+    """
+    from datetime import time
+
+    import dagster as dg
+    from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
+    from data_engine.lanes import qqq_prices
+    from data_engine.lanes.capture import QQQ_UNIVERSE_HEAD
+    from factors.production_topt import ToptCoreReasonCode
+    from qqq_head_seed import daily_series_client, publish_qqq_head
+    from split_series_seed import sessions
+
+    publish_qqq_head(connection, [("AAPL", 320193), ("T1277Q", 1277)])
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection,
+        corpus=resolve_universe_corpus(connection, QQQ_UNIVERSE_HEAD),
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20)),
+        },
+    )
+    close_session = (CUTOFF - timedelta(minutes=58)).astimezone(UTC).date()
+    store_flat_daily_series(connection, ["AAPL"], first=date(2026, 1, 2), last=close_session)
+    repository = PostgresToptCoreRepository(connection)
+
+    def results_by_listing() -> dict[str, Any]:
+        """The core results of the capture, frozen and materialized in a savepoint that rolls back."""
+        with connection.transaction() as savepoint:
+            snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+            results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+            found = {item.listing_id: item for item in results}
+            raise psycopg.Rollback(savepoint)
+        return found
+
+    before = results_by_listing()
+    assert before["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE
+    assert before["listing:xnas:t1277q"].availability is ToptCoreAvailability.UNAVAILABLE
+    assert ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING in before["listing:xnas:t1277q"].reason_codes
+
+    requests: list[tuple[str, str, str]] = []
+    outcome = qqq_prices._refresh_qqq_prices(
+        dg.build_op_context(),
+        connection,
+        # The lane's weekday run, after the close of the session that the capture values.
+        now=datetime.combine(close_session, time(21, 35), tzinfo=UTC),
+        environment="production",
+        client=daily_series_client(
+            requests, sessions(date(2023, 1, 3), close_session), caller=qqq_prices.QQQ_PRICE_CALLER
+        ),
+        commit=lambda: None,
+    )
+
+    assert outcome.stored == ["T1277Q"]
+    assert {symbol for symbol, _interval, _adjust in requests} == {"T1277Q"}
+    after = results_by_listing()
+    assert after["listing:xnas:t1277q"].availability is ToptCoreAvailability.AVAILABLE
+    assert ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING not in after["listing:xnas:t1277q"].reason_codes
+    assert after["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE

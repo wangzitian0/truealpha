@@ -21,6 +21,7 @@ import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from data_engine.sources import gateway
@@ -781,3 +782,38 @@ def test_the_gate_enforces_the_warehouse_ledger_every_process_shares(warehouse_s
     # A second process's gate has admitted nothing itself, and still finds the budget spent.
     with pytest.raises(gateway.BudgetExhausted):
         gateway.CapacityGate(capacities={seat: capacity}, environment="production").admit(seat)
+
+
+_NEW_YORK = ZoneInfo("America/New_York")
+
+
+def test_the_daily_calls_split_the_warehouse_ledger_by_caller_and_utc_day(warehouse_seat) -> None:
+    """#1277: the QQQ price lane budgets against the other callers of its seat, per UTC day.
+
+    The deployed read is the warehouse SQL. The test double answers the same question from its rows.
+    """
+    seat = warehouse_seat
+    records = [
+        gateway.CallRecord(seat, "probe", "lane-a", datetime(2026, 10, 14, 23, 59, 59, tzinfo=UTC), ok=True),
+        gateway.CallRecord(seat, "probe", "lane-a", datetime(2026, 10, 15, 0, 0, 1, tzinfo=UTC), ok=True),
+        gateway.CallRecord(seat, "probe", "lane-b", datetime(2026, 10, 15, 0, 0, 1, tzinfo=UTC), ok=False),
+        # 20:30 in New York is 00:30 UTC on the next day: the day is the UTC day.
+        gateway.CallRecord(seat, "probe", "lane-b", datetime(2026, 10, 15, 20, 30, tzinfo=_NEW_YORK), ok=True),
+    ]
+    for record in records:
+        gateway.postgres_writer(record)
+    since, until = datetime(2026, 10, 14, tzinfo=UTC), datetime(2026, 10, 17, tzinfo=UTC)
+    expected = {
+        ("lane-a", date(2026, 10, 14)): 1,
+        ("lane-a", date(2026, 10, 15)): 1,
+        ("lane-b", date(2026, 10, 15)): 1,
+        ("lane-b", date(2026, 10, 16)): 1,
+    }
+
+    assert gateway.ledger_daily_calls(seat, since, until) == expected
+    # `since` is included and `until` is not.
+    assert gateway.ledger_daily_calls(seat, records[1].called_at, records[3].called_at) == {
+        ("lane-a", date(2026, 10, 15)): 1,
+        ("lane-b", date(2026, 10, 15)): 1,
+    }
+    assert gateway.MemoryLedger(records).daily_calls(seat, since, until) == expected
