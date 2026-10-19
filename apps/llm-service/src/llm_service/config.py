@@ -1,5 +1,9 @@
 from pydantic import AliasChoices, Field
 from truealpha_runtime import CoreRuntimeSettings, database_url_field
+from truealpha_runtime.config import POSTGRES_PROVIDED_BY
+
+#: app stack: postgres is reached over the compose network
+_APP_STACK_DSN = "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha"
 
 
 class Settings(CoreRuntimeSettings):
@@ -17,15 +21,20 @@ class Settings(CoreRuntimeSettings):
     deployed route.
     """
 
-    database_url: str = database_url_field(
-        # app stack: reaches postgres over the compose network
-        composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
-    )
+    database_url: str = database_url_field(composed_from=_APP_STACK_DSN)
+    # The migration DSN is the same server as DATABASE_URL. infra2 supplies it with the same
+    # provider and the same composition (its supplement `10.app/env.manifest.json`), and two
+    # declarations of one variable must agree (#1390). Locally the field stays optional.
     migrations_database_url: str | None = Field(
         default=None,
         validation_alias="MIGRATIONS_DATABASE_URL",
-        description="Optional PostgreSQL DSN override for schema migrations",
-        json_schema_extra={"source": "runtime", "group": "postgres", "empty_ok": True},
+        description="PostgreSQL DSN for schema migrations (superuser; the server of DATABASE_URL)",
+        json_schema_extra={
+            "source": "runtime",
+            "group": "postgres",
+            "provided_by": POSTGRES_PROVIDED_BY,
+            "composed_from": _APP_STACK_DSN,
+        },
     )
     migration_lock_budget_seconds: int = Field(
         default=25,
