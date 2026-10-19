@@ -57,7 +57,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   response.cookies.set(config.cookieName, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: config.secureCookie,
     path: "/",
     maxAge: config.accessTokenExpireMinutes * 60,
   });

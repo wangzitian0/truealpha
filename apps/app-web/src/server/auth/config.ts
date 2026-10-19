@@ -13,6 +13,7 @@ export interface AuthConfig {
   secret: Uint8Array;
   accessTokenExpireMinutes: number;
   cookieName: string;
+  secureCookie: boolean;
 }
 
 const DEPLOYED_APP_ENVS = new Set(["production", "staging", "preview"]);
@@ -45,5 +46,6 @@ export function loadAuthConfig(): AuthConfig {
     secret: new TextEncoder().encode(secretKey ?? DEV_ONLY_DEFAULT_SECRET),
     accessTokenExpireMinutes,
     cookieName: SESSION_COOKIE_NAME,
+    secureCookie: isProduction,
   };
 }

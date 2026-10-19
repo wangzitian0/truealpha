@@ -57,7 +57,9 @@ class CoreRuntimeSettings(BaseSettings):
     # Composed by each service from the postgres service's password: the host and port
     # depend on the service's network topology, so the subclasses declare `composed_from`.
     database_url: str = database_url_field()
-    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code"})
+    database_connect_timeout_seconds: int = Field(
+        default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "postgres"}
+    )
 
     @field_validator("database_url")
     @classmethod
