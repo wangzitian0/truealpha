@@ -24,7 +24,7 @@ Task completion requires both code landing and physical reality verification.
    A change to rule text also carries the section `Owner touchpoints` (dev_env Repo tier, rule-text checklist item 8).
 2. Run the `prr` gate. Fix each finding in the issue worktree. Do not touch unrelated files.
 3. Run focused checks on every fix. Read the decision from the gate exit code:
-   - Exit 0: Merge directly with `--merge`.
+   - Exit 0: Merge with `ws-pr-gate --merge` (or `gh pr merge --squash --delete-branch` when the repository requires squash merge).
    - Exit 1 (Wait): Poll with exponential backoff (`30s * 1.5^n`, capped at 120s). Apply a client-side deadline of 45 minutes (maximum 30 iterations). If checks remain pending after 45 minutes, transition to `Suspend`, record the CI snapshot in the issue, and report `In review`. Do not spin indefinitely.
    - Exit 2 (Needs owner): Stop immediately. Do not spin. Label `needs-owner` and record the holding reason in the issue.
    - Exit 3 (Action required): Resolve findings or fix conflicts, push, and re-run. If unresolved after two rounds, escalate to Senior or Suspend.
@@ -32,11 +32,11 @@ Task completion requires both code landing and physical reality verification.
 4. A change with no side effect needs no question to the owner. Fix it and merge it.
 5. Merge. Verify with `ws-delivery-status` that the commit is merged on `origin/main` (exit code 0, `CODE_LANDED_STAGE1`).
    Transition to Reality Probe or deployment verification before declaring task complete.
-6. Execute the post-delivery retrospective checks before closing the delivery.
+6. When the delivery required rework (CI retry, gate rejection, or more than one review round), execute the post-delivery retrospective checks before closing the delivery.
 
-## Post-delivery retrospective (Retrospective Swarm: M=3)
+## Post-delivery retrospective (Conditional Retrospective Swarm: M=3)
 
-Do not stop immediately after `git merge`. Dispatch 1 Retrospective Swarm (M=3 Interns via `subagent_batch`) before concluding the delivery:
+On a clean first-pass delivery (zero CI failures, zero gate rejections, at most one review round), skip the swarm and proceed directly to `ws-delivery-status` and `close`. When rework occurred, dispatch 1 Retrospective Swarm (M=3 Interns via `subagent_batch`) before concluding the delivery:
 
 1. **Intern 1: Recurring mistake and harness constraint check**:
    - Check if any review comment, gate rejection, or CI retry occurred during this delivery.

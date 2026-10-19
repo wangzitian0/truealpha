@@ -15,10 +15,14 @@ description: TrueAlpha Deploy Evidence & Issue Closure Guard. Automates AGENTS.m
 
 ## 2. The Verification Protocol (Step-by-Step)
 
-### Step 1: Physical Image & Digest Check
-Verify that the target commit SHA is built and deployed as an accepted OCI image digest:
+### Step 1: Release Workflow, Health & Image Digest Check
+Verify that the target release tag (`vX.Y.Z`) and commit SHA are promoted and served on the target environment:
 ```bash
-# Verify deployed container image digest matches promoted digest
+# 1. Verify remote release deploy and surface walk workflows succeeded for vX.Y.Z
+gh run list --workflow deploy-release.yml --limit 5
+gh run list --workflow walk-release.yml --limit 5
+
+# 2. If running directly on the VPS host via SSH, verify container image digests:
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-web-staging
@@ -26,10 +30,7 @@ docker inspect -f '{{.Config.Image}}' truealpha-llm-staging
 ```
 
 ### Step 2: Dagster & Runtime Liveness Proof
-Confirm daemon heartbeat and recurring-run authority:
-```bash
-docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
-```
+Confirm live service health (`git_sha` and `governed_pointers` in `/api/health`) and daemon heartbeat (on VPS host: `docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check`).
 
 ### Step 3: Deployed Execution Proof (Reachable Path)
 Verify that the capability was invoked via the deployed entrypoint:
