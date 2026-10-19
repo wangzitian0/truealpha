@@ -8,6 +8,7 @@
  * Penetrating Physical Matrix for question coverage, enforcing "Strong Dashboard, Weak Gates".
  */
 
+import { formatCell } from "@/client/format";
 import { loadDatahubStats, type QuestionCoverageQuestion } from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -494,7 +495,7 @@ export default async function AdminDatahubPage() {
                     <td className="pr-4">{family.low}</td>
                     <td className="pr-4">{family.missing}</td>
                     <td className="pr-4">
-                      {family.agreement_rate ?? "—"} ({family.compared}/{family.cells})
+                      {formatCell(family.agreement_rate)} ({family.compared}/{family.cells})
                     </td>
                     <td className="font-mono text-gray-400">{family.origins.join(", ")}</td>
                   </tr>
@@ -508,7 +509,7 @@ export default async function AdminDatahubPage() {
                 <span key={match.family}>
                   {" "}
                   <span className="font-mono">{match.family}</span>{" "}
-                  {match.matches === null ? "—" : String(match.matches)}
+                  {formatCell(match.matches)}
                   {match.mismatches > 0 ? ` (${match.mismatches} cells)` : ""}
                 </span>
               ))}
@@ -579,13 +580,13 @@ export default async function AdminDatahubPage() {
               <div>
                 <dt className="text-gray-500">capture availability</dt>
                 <dd className={head.is_avail_degraded ? "text-amber-400 font-medium" : ""}>
-                  {head.availability ?? "—"}
+                  {formatCell(head.availability)}
                 </dd>
               </div>
               <div>
                 <dt className="text-gray-500">corroborated cells</dt>
                 <dd className={head.is_corroboration_degraded ? "text-amber-400 font-medium" : ""}>
-                  {head.agreed_cells ?? "—"}/{head.total_cells ?? "—"}
+                  {formatCell(head.agreed_cells)}/{formatCell(head.total_cells)}
                 </dd>
               </div>
                 <div>
@@ -690,18 +691,18 @@ export default async function AdminDatahubPage() {
                 <th className="font-normal">last error</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-border/40">
               {stats.traffic.map((row) => (
                 <tr key={row.source} className="border-t border-border">
                   <td className="pr-4 font-mono">{row.source}</td>
                   <td className="pr-4">{row.calls}</td>
                   <td className={`pr-4 ${row.failed > 0 ? "text-amber-400" : ""}`}>{row.failed}</td>
                   <td className="pr-4">
-                    {row.calls - row.failed > 0 ? `${row.landed}/${row.calls - row.failed}` : "—"}
+                    {row.calls - row.failed > 0 ? `${row.landed}/${row.calls - row.failed}` : formatCell(null)}
                   </td>
-                  <td className="pr-4">{row.avg_ms ?? "—"}</td>
+                  <td className="pr-4">{formatCell(row.avg_ms)}</td>
                   <td className="pr-4 text-gray-400">{row.last_call}</td>
-                  <td className="text-gray-400">{row.last_error ?? "—"}</td>
+                  <td className="text-gray-400">{formatCell(row.last_error)}</td>
                 </tr>
               ))}
             </tbody>
@@ -745,14 +746,14 @@ export default async function AdminDatahubPage() {
                       {call.ok ? "ok" : "failed"}
                       {call.status_code !== null ? ` ${call.status_code}` : ""}
                     </td>
-                    <td className="pr-4">{call.duration_ms ?? "—"}</td>
+                    <td className="pr-4">{formatCell(call.duration_ms)}</td>
                     <td className="pr-4 font-mono">
-                      {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : "—"}
+                      {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : formatCell(null)}
                     </td>
                     <td className="pr-4 font-mono text-gray-400" title={call.run_key ?? undefined}>
-                      {call.run_key ? shortRun(call.run_key) : "—"}
+                      {call.run_key ? shortRun(call.run_key) : formatCell(null)}
                     </td>
-                    <td className="text-gray-400">{call.error ?? "—"}</td>
+                    <td className="text-gray-400">{formatCell(call.error)}</td>
                   </tr>
                 ))}
               </tbody>

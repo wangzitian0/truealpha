@@ -18,8 +18,10 @@ const HIGH_MAGNITUDE_TIERS: ReadonlyArray<readonly [number, string]> = [
 
 const UUID_PREFIX_PATTERN = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function toFinite(value: string | null | undefined): number | null {
-  if (value === null || value === undefined || value.trim() === "") return null;
+function toFinite(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -34,8 +36,10 @@ function scaleHighMagnitude(n: number): string | null {
 }
 
 /** Honest-absence cell fallback: renders em-dash when a formatted or raw value is absent. */
-export function formatCell(value: string | null | undefined): string {
-  return value ?? "—";
+export function formatCell(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return String(value);
+  return typeof value === "number" ? (Number.isFinite(value) ? String(value) : "—") : value;
 }
 
 /** Truncates a SHA-256 hex digest to 12 chars with an ellipsis, or em-dash when empty. */
@@ -44,7 +48,7 @@ export function formatShortSha(sha: string | null | undefined): string {
 }
 
 /** `1077115.2439…` → `$1.08M`; magnitude suffixes K/M/B/T, 2 significant decimals. */
-export function formatUsdMagnitude(value: string | null): string | null {
+export function formatUsdMagnitude(value: string | number | null | undefined): string | null {
   const n = toFinite(value);
   if (n === null) return null;
   const high = scaleHighMagnitude(n);
@@ -61,7 +65,7 @@ export function formatUsdMagnitude(value: string | null): string | null {
  * Currency-neutral magnitude / thousand-separator formatter for decision inputs and share counts:
  * `171018000000` → `171.02B`, `7933746241` → `7.93B`, `110000` → `110,000`, `55.5` → `55.5`.
  */
-export function formatNumberMagnitude(value: string | null): string | null {
+export function formatNumberMagnitude(value: string | number | null | undefined): string | null {
   const n = toFinite(value);
   if (n === null) return null;
   const high = scaleHighMagnitude(n);
@@ -69,24 +73,24 @@ export function formatNumberMagnitude(value: string | null): string | null {
   const abs = Math.abs(n);
   const sign = n < 0 ? "-" : "";
   if (abs >= 1e3) return `${sign}${abs.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  return value!.trim();
+  return typeof value === "number" ? String(value) : value!.trim();
 }
 
 /** Plain ratio at 2dp: `13.0359` → `13.04`. */
-export function formatRatio(value: string | null): string | null {
+export function formatRatio(value: string | number | null | undefined): string | null {
   const n = toFinite(value);
   return n === null ? null : n.toFixed(2);
 }
 
 /** Signed ratio at 2dp: `1.1917` → `+1.19`, `-0.2367` → `−0.24`. */
-export function formatSignedRatio(value: string | null): string | null {
+export function formatSignedRatio(value: string | number | null | undefined): string | null {
   const n = toFinite(value);
   if (n === null) return null;
   return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(2)}`;
 }
 
 /** Fraction to percent: `0.500000` → `50%`. */
-export function formatPercentFromFraction(value: string | null): string | null {
+export function formatPercentFromFraction(value: string | number | null | undefined): string | null {
   const n = toFinite(value);
   if (n === null) return null;
   const pct = n * 100;
@@ -94,7 +98,7 @@ export function formatPercentFromFraction(value: string | null): string | null {
 }
 
 /** Tailwind text color for a signed quantity (positive = favorable gap). */
-export function signColor(value: string | null): string {
+export function signColor(value: string | number | null | undefined): string {
   const n = toFinite(value);
   if (n === null || n === 0) return "";
   return n > 0 ? "text-emerald-400" : "text-red-400";
@@ -124,7 +128,8 @@ export function formatListingLabel(listingId: string | null): string | null {
 
 /**
  * Formats a raw issuer identifier into a human-readable label when not resolved in the KG map:
- * `issuer:cik:0000104169` → `CIK 0000104169`, `issuer:lei:HWUPKR0MPOU8FGXBT394` → `LEI HWUPKR0MPOU8…`.
+ * `issuer:cik:0000104169` / `company:cik:0000104169` → `CIK 0000104169`,
+ * `issuer:lei:HWUPKR0MPOU8FGXBT394` → `LEI HWUPKR0MPOU8…`.
  */
 export function formatIssuerLabel(issuerId: string | null, resolvedLabel?: string | null): string | null {
   if (issuerId === null) return null;
@@ -133,7 +138,7 @@ export function formatIssuerLabel(issuerId: string | null, resolvedLabel?: strin
   if (resolvedLabel && resolvedLabel.trim() !== "" && resolvedLabel.trim() !== trimmed) {
     return resolvedLabel.trim();
   }
-  const cikMatch = trimmed.match(/^issuer:cik:([0-9]+)$/i);
+  const cikMatch = trimmed.match(/^(?:issuer|company):cik:([0-9]+)$/i);
   if (cikMatch) {
     return `CIK ${cikMatch[1]}`;
   }

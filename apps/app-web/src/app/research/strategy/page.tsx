@@ -163,7 +163,7 @@ export default async function StrategyRunsPage() {
                   <td className="px-4 py-3 tabular-nums" title={decision.confidence ?? undefined}>
                     {formatCell(formatRatio(decision.confidence))}
                   </td>
-                  <td className="px-4 py-3 tabular-nums">{decision.rank ?? "—"}</td>
+                  <td className="px-4 py-3 tabular-nums">{formatCell(decision.rank)}</td>
                   <td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
                     {formatCell(formatPercentFromFraction(decision.target_weight))}
                   </td>

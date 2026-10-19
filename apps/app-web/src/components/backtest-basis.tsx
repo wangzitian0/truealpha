@@ -55,10 +55,6 @@ export function benchmarkNeverFilled(run: BacktestRunRecord): string[] {
   return Array.isArray(stored) ? stored.map((item) => String(item)) : [];
 }
 
-function percent(value: number | null): string {
-  return formatCell(value !== null ? formatPercentFromFraction(String(value)) : null);
-}
-
 export function BacktestBasis({ run }: { run: BacktestRunRecord }) {
   return (
     <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs text-gray-300" data-backtest-basis>
@@ -80,8 +76,8 @@ export function BacktestBasis({ run }: { run: BacktestRunRecord }) {
         <div>
           <dt className="font-semibold uppercase tracking-wider text-gray-400">Benchmark</dt>
           <dd data-benchmark-rule={run.benchmark_rule ?? ""}>
-            {describe(BENCHMARK_LABELS, run.benchmark_rule)} CAGR {percent(run.benchmark_cagr)}, max drawdown{" "}
-            {percent(run.benchmark_max_dd)}.
+            {describe(BENCHMARK_LABELS, run.benchmark_rule)} CAGR {formatCell(formatPercentFromFraction(run.benchmark_cagr))}, max drawdown{" "}
+            {formatCell(formatPercentFromFraction(run.benchmark_max_dd))}.
             {benchmarkNeverFilled(run).length > 0 && (
               <span className="mt-1 block text-amber-400" data-benchmark-never-filled={benchmarkNeverFilled(run).join(",")}>
                 Never bought, so held as cash for the whole run: {benchmarkNeverFilled(run).join(", ")}.

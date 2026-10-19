@@ -6,7 +6,7 @@
  */
 
 import { notFound, redirect } from "next/navigation";
-import { decodeRouteParam } from "@/client/format";
+import { decodeRouteParam, formatCell, formatNumberMagnitude, formatShortSha } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { PostgresDocumentsRepository } from "@/server/documents";
 
@@ -46,9 +46,13 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
               </span>
               <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
                 <dt>sha256</dt>
-                <dd className="truncate font-mono">{revision.artifactSha256}</dd>
+                <dd className="truncate font-mono" title={revision.artifactSha256}>
+                  {formatShortSha(revision.artifactSha256)}
+                </dd>
                 <dt>bytes</dt>
-                <dd>{revision.artifactByteLength}</dd>
+                <dd className="font-mono tabular-nums" title={String(revision.artifactByteLength)}>
+                  {formatCell(formatNumberMagnitude(revision.artifactByteLength))}
+                </dd>
                 <dt>content type</dt>
                 <dd>{revision.artifactContentType}</dd>
                 <dt>created</dt>

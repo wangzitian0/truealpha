@@ -81,13 +81,13 @@ export default async function BacktestDetailPage({ params }: PageProps) {
             className="mt-1 text-2xl font-bold font-mono text-emerald-400"
             title={run.cagr_monthly !== null ? String(run.cagr_monthly) : undefined}
           >
-            {formatCell(run.cagr_monthly !== null ? formatPercentFromFraction(String(run.cagr_monthly)) : null)}
+            {formatCell(formatPercentFromFraction(run.cagr_monthly))}
           </div>
           <div
             className="text-[10px] text-gray-500"
             title={run.benchmark_cagr !== null ? String(run.benchmark_cagr) : undefined}
           >
-            Benchmark {formatCell(run.benchmark_cagr !== null ? formatPercentFromFraction(String(run.benchmark_cagr)) : null)}
+            Benchmark {formatCell(formatPercentFromFraction(run.benchmark_cagr))}
           </div>
         </div>
 
@@ -97,7 +97,7 @@ export default async function BacktestDetailPage({ params }: PageProps) {
             className="mt-1 text-2xl font-bold font-mono text-white"
             title={run.sharpe_daily !== null ? String(run.sharpe_daily) : undefined}
           >
-            {formatCell(run.sharpe_daily !== null ? formatRatio(String(run.sharpe_daily)) : null)}
+            {formatCell(formatRatio(run.sharpe_daily))}
           </div>
           <div className="text-[10px] text-gray-500">Risk-adjusted return (rf=0)</div>
         </div>
@@ -108,13 +108,13 @@ export default async function BacktestDetailPage({ params }: PageProps) {
             className="mt-1 text-2xl font-bold font-mono text-rose-400"
             title={run.max_dd_daily !== null ? String(run.max_dd_daily) : undefined}
           >
-            {formatCell(run.max_dd_daily !== null ? formatPercentFromFraction(String(run.max_dd_daily)) : null)}
+            {formatCell(formatPercentFromFraction(run.max_dd_daily))}
           </div>
           <div
             className="text-[10px] text-gray-500"
             title={run.benchmark_max_dd !== null ? String(run.benchmark_max_dd) : undefined}
           >
-            Benchmark {formatCell(run.benchmark_max_dd !== null ? formatPercentFromFraction(String(run.benchmark_max_dd)) : null)}
+            Benchmark {formatCell(formatPercentFromFraction(run.benchmark_max_dd))}
           </div>
         </div>
 
@@ -124,7 +124,7 @@ export default async function BacktestDetailPage({ params }: PageProps) {
             className="mt-1 text-2xl font-bold font-mono text-amber-400"
             title={run.vol_daily !== null ? String(run.vol_daily) : undefined}
           >
-            {formatCell(run.vol_daily !== null ? formatPercentFromFraction(String(run.vol_daily)) : null)}
+            {formatCell(formatPercentFromFraction(run.vol_daily))}
           </div>
           <div className="text-[10px] text-gray-500">Daily returns, annualized</div>
         </div>
@@ -175,19 +175,19 @@ export default async function BacktestDetailPage({ params }: PageProps) {
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right" title={String(t.shares)}>
-                      {formatCell(formatRatio(String(t.shares)))}
+                      {formatCell(formatRatio(t.shares))}
                     </td>
                     <td className="px-4 py-2 text-right" title={String(t.execution_price)}>
-                      ${formatCell(formatRatio(String(t.execution_price)))}
+                      ${formatCell(formatRatio(t.execution_price))}
                     </td>
                     <td className="px-4 py-2 text-right" title={String(t.trade_value)}>
-                      {formatCell(formatUsdMagnitude(String(t.trade_value)))}
+                      {formatCell(formatUsdMagnitude(t.trade_value))}
                     </td>
                     <td className="px-4 py-2 text-right" title={String(t.weight_after)}>
-                      {formatCell(formatPercentFromFraction(String(t.weight_after)))}
+                      {formatCell(formatPercentFromFraction(t.weight_after))}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-500" title={String(t.fee_paid)}>
-                      ${formatCell(formatRatio(String(t.fee_paid)))}
+                      ${formatCell(formatRatio(t.fee_paid))}
                     </td>
                   </tr>
                 ))

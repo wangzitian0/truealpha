@@ -164,12 +164,6 @@ const FUND_COVERAGE_SQL = `
   order by fund_id, transaction_time desc, report_period desc
 `;
 
-/** The masses arrive as exact numerics the factor measured and the database stored
- * (review on #699 — a JS float accumulator drifts); formatting is the only conversion. */
-function pct(value: unknown): string {
-  return (typeof value === "string" ? formatRatio(value) : null) ?? "0.00";
-}
-
 type ConsolidationRow = {
   weightedGap: string | null;
   weightedGapBasis: ValuationBasis | null;
@@ -216,7 +210,8 @@ export async function loadFundValuation(
           row.valuation_basis === "price_to_gross_profit" || row.valuation_basis === "price_to_sales"
             ? row.valuation_basis
             : null,
-        valuedWeightPct: pct(row.valued_weight_pct),
+        valuedWeightPct:
+          (typeof row.valued_weight_pct === "string" ? formatRatio(row.valued_weight_pct) : null) ?? "0.00",
         availabilityStatus: row.availability_status === null ? null : String(row.availability_status),
         sourceEvidenceStatus: row.source_evidence_status === null ? null : String(row.source_evidence_status),
         factorValidationStatus:
@@ -229,8 +224,10 @@ export async function loadFundValuation(
     const coverageRows = await client.query(FUND_COVERAGE_SQL);
     for (const row of coverageRows.rows) {
       coverage.set(String(row.fund_id), {
-        totalWeightPct: pct(row.total_weight_pct),
-        resolvedWeightPct: pct(row.resolved_weight_pct),
+        totalWeightPct:
+          (typeof row.total_weight_pct === "string" ? formatRatio(row.total_weight_pct) : null) ?? "0.00",
+        resolvedWeightPct:
+          (typeof row.resolved_weight_pct === "string" ? formatRatio(row.resolved_weight_pct) : null) ?? "0.00",
       });
     }
     const byFund = new Map<string, FundValuation>();
