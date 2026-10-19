@@ -107,7 +107,7 @@ def _expected_input_keys() -> tuple[str, ...]:
         from data_engine.datahub.strategy_bridge import load_strategy_definition
         from factors.composite import strategy_evaluator
 
-        peg_keys: tuple[str, ...] = getattr(strategy_evaluator, "_PEG_KEYS", ())
+        peg_keys: tuple[str, ...] = strategy_evaluator._input_keys("peg")
         return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(peg_keys)))
     except (
         ImportError,
