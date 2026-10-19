@@ -121,6 +121,7 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
     with verdict(
         OUTPUT_INVARIANTS_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
+        _await_settled(context)
         module = runpy.run_path(str(_suite_path()), run_name="output_invariants")
         report = io.StringIO()
         with contextlib.redirect_stdout(report), contextlib.redirect_stderr(report):
@@ -216,7 +217,7 @@ _sleep = time.sleep
 
 def _await_settled(context: dg.OpExecutionContext) -> None:
     """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed.
-    The surface proof and the confidence report both judge heads through it."""
+    The output-invariants suite, the surface proof, and the confidence report all judge heads through it."""
     deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
     while True:
         with psycopg.connect(settings.database_url) as connection:
@@ -447,6 +448,9 @@ def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
+MODEL_KEY_HEALTH_MAX_ATTEMPTS = 3
+
+
 @dg.op
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
     """One minimal ask of the seated model provider (#876 W2). A rejected key, an erroring or
@@ -458,7 +462,7 @@ def run_model_key_health(context: dg.OpExecutionContext) -> str:
     ) as outcome:
         # The ask lands in the external call ledger attributed to this run (#729).
         with gateway.run_scope(f"dagster:{context.run_id}"):
-            health = probe()
+            health = probe(max_attempts=MODEL_KEY_HEALTH_MAX_ATTEMPTS)
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
         context.add_output_metadata({"outcome": health.outcome, "status_code": health.status_code or 0})

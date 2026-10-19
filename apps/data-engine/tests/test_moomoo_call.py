@@ -39,3 +39,19 @@ def test_call_records_failure_return_code():
     with pytest.raises(mm.MoomooConnectionError):
         mm._call(ctx=object(), endpoint="ep", caller="test", fn=lambda c: (mm.moomoo.RET_ERROR, "boom"))
     assert ledger.calls_this_month() == 1
+
+
+def test_get_history_kline_hashes_bars_without_page_req_key():
+    import hashlib
+
+    class _Ctx:
+        def request_history_kline(self, code, **kwargs):
+            return (mm.moomoo.RET_OK, [{"close": 100.5, "time_key": "2026-07-29 00:00:00"}], "page-token-2")
+
+    bars, next_key = mm.get_history_kline(_Ctx(), "US.AAPL", start="2026-07-15", end="2026-07-29")
+    assert next_key == "page-token-2"
+    golden_raw = b'[{"close":100.5,"time_key":"2026-07-29 00:00:00"}]'
+    assert mm.canonical_moomoo_bytes(bars) == golden_raw
+    recorded = ledger._load()["calls"][-1]
+    assert recorded["payload_sha256"] == hashlib.sha256(golden_raw).hexdigest()
+    assert recorded["byte_length"] == len(golden_raw)

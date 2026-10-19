@@ -603,6 +603,11 @@ def test_a_kline_request_is_gated_recorded_and_unadjusted(opend) -> None:
         "moomoo_origin",
         True,
     )
+    expected_raw = canonical_bytes(bars)
+    assert recorded["payload_sha256"] == hashlib.sha256(expected_raw).hexdigest(), (
+        "ledger payload_sha256 must match the exact canonical_bytes landed in raw.fetches (#1358)"
+    )
+    assert recorded["byte_length"] == len(expected_raw)
     (kwargs,) = opend.kline_kwargs
     assert kwargs["autype"] == mm.moomoo.AuType.NONE, (
         "unadjusted: the primary's raw close, not a forward-adjusted series"

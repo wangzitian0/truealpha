@@ -249,6 +249,31 @@ def test_the_nightly_schedule_stamps_its_tick_on_the_run() -> None:
     assert request.tags[nightly_verdicts.TICK_TAG] == tick.isoformat()
 
 
+def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkeypatch, written) -> None:
+    tick = {"universe-list:qqq": "qqq_live_pipeline run 1a2b3c4d is started"}
+    answers = [tick, tick, {}]
+    slept: list[float] = []
+    suite_called_when_settled: list[bool] = []
+
+    def settling(_connection, _instance, *, now):
+        return dict(answers.pop(0) if len(answers) > 1 else answers[0])
+
+    def main(_argv: list[str]) -> int:
+        suite_called_when_settled.append(answers == [{}])
+        print("  ok       peg_bounded: 20 row(s) examined")
+        return 0
+
+    monkeypatch.setattr(quality, "settling", settling)
+    monkeypatch.setattr(quality, "_sleep", slept.append)
+    monkeypatch.setattr(psycopg, "connect", _Sink())
+    monkeypatch.setattr(quality, "_suite_path", lambda: "suite.py")
+    monkeypatch.setattr(quality.runpy, "run_path", lambda *_a, **_k: {"main": main})
+    quality.run_output_invariants(dg.build_op_context(run_tags={nightly_verdicts.TICK_TAG: TICK}))
+    assert slept == [quality.SURFACE_SETTLE_POLL_SECONDS] * 2
+    assert suite_called_when_settled == [True]
+    assert [(row["check"], row["ok"]) for row in written] == [("output_invariants", True)]
+
+
 def test_the_confidence_report_records_a_verdict_per_universe(monkeypatch, written) -> None:
     from data_engine.datahub import confidence_report
 
@@ -655,6 +680,28 @@ def test_a_working_key_is_a_green_verdict_through_the_deployed_job(monkeypatch, 
     result = quality.model_key_health_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
     assert result.success
     assert [(row["check"], row["ok"]) for row in written] == [("model_key_health", True)]
+
+
+def test_the_deployed_probe_retries_transient_429_before_succeeding(monkeypatch, written, call_ledger) -> None:
+    answers: list[Any] = [429, 429, _OK_BODY]
+    slept: list[float] = []
+
+    def urlopen(request: urllib.request.Request, timeout: float) -> _Answer:
+        answer = answers.pop(0)
+        if isinstance(answer, int):
+            raise urllib.error.HTTPError(
+                request.full_url, answer, "rate limited", {}, io.BytesIO(b'{"error": {"message": "rate limit"}}')
+            )
+        return _Answer(answer)
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(settings, "llm_api_key", FAKE_KEY)
+    monkeypatch.setattr(model_key_health, "_sleep", slept.append)
+    result = quality.model_key_health_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
+    assert result.success
+    assert slept == [2.0, 4.0]
+    assert [(row["check"], row["ok"]) for row in written] == [("model_key_health", True)]
+    assert [row.status_code for row in call_ledger] == [429, 429, 200]
 
 
 def test_the_probe_is_scheduled_daily_before_the_watchdog_reads_it() -> None:

@@ -81,6 +81,23 @@ assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for G
 assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
 assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 golden preview tickers");
 
+// #1362 / #1363: SWEEP_RUN_SOURCE_PATTERN in walk-tree.mjs must match serviceObjectives.ts and catch timestamped sweep sources.
+const sweepLiteral = source.match(/const SWEEP_RUN_SOURCE_PATTERN =\s*\/(.+)\/([a-z]*);/);
+assert(sweepLiteral !== null, "e2e/walk-tree.mjs no longer declares SWEEP_RUN_SOURCE_PATTERN as a regex literal");
+const SWEEP_RUN_SOURCE_PATTERN = new RegExp(sweepLiteral[1], sweepLiteral[2]);
+for (const sweepName of ["yfinance-20260725T0527", "moomoo-fundamentals-20260903T2059"]) {
+  assert(
+    SWEEP_RUN_SOURCE_PATTERN.test(sweepName),
+    `SWEEP_RUN_SOURCE_PATTERN misses timestamped sweep source ${sweepName}`,
+  );
+}
+for (const registeredSource of ["moomoo", "twelvedata", "sec-edgar", "yfinance"]) {
+  assert(
+    !SWEEP_RUN_SOURCE_PATTERN.test(registeredSource),
+    `SWEEP_RUN_SOURCE_PATTERN falsely flags registered source ${registeredSource}`,
+  );
+}
+
 console.log(
-  `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty check verified`,
+  `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty & sweep-source checks verified`,
 );

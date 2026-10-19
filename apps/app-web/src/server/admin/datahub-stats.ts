@@ -11,7 +11,14 @@
  * app_ops_reader, like every loader in this directory.
  */
 
-import { ACCEPTED_SERVICE_OBJECTIVES } from "../../contracts/serviceObjectives";
+import {
+  ACCEPTED_SERVICE_OBJECTIVES,
+  type HeadFreshness,
+  NON_CANARY_UNIVERSE_WHERE,
+  REGISTERED_RAW_SOURCE_FILTER,
+  isCanaryUniverse,
+  isHeadScheduled,
+} from "../../contracts/serviceObjectives";
 import { withOpsReader } from "./ops";
 
 export interface FactorAvailabilityRow {
@@ -30,7 +37,7 @@ export interface HeadStatusRow {
   availability: string | null;
   agreed_cells: number | null;
   total_cells: number | null;
-  freshness: "fresh" | "stale" | "unknown";
+  freshness: HeadFreshness;
   age_hours: number | null;
   limit_hours: number | null;
   staleness_reason: string | null;
@@ -137,10 +144,11 @@ interface QuestionCoverageDbRow {
   };
 }
 
-/** #748: the newest weekly question-coverage report per governed universe. */
+/** #748 / #1359 / #1362: the newest weekly question-coverage report per active governed universe. */
 const QUESTION_COVERAGE_SQL = `
   select distinct on (universe_id) universe_id, cutoff::text, created_at::text, payload
   from mart.question_coverage_report
+  where universe_id in (select universe_id from mart.served_head)
   order by universe_id, created_at desc
 `;
 
@@ -284,10 +292,11 @@ interface ConfidenceReportDbRow {
   };
 }
 
-/** The newest nightly confidence & accuracy report per governed universe. */
+/** The newest nightly confidence & accuracy report per active governed universe (#1359 / #1362). */
 const CONFIDENCE_REPORT_SQL = `
   select distinct on (universe_id) universe_id, run_id, cutoff::text, created_at::text, payload
   from mart.datahub_confidence_report
+  where universe_id in (select universe_id from mart.served_head)
   order by universe_id, created_at desc
 `;
 
@@ -370,7 +379,7 @@ export interface DatahubStats {
 }
 
 const HEADS_SQL = `
-  select h.universe_id, h.sequence, h.advanced_at::text as advanced_at,
+  select h.environment, h.universe_id, h.sequence, h.advanced_at::text as advanced_at,
          coalesce(h.run_id, h.head_run_id) as target_run_id,
          q.payload->>'availability' as availability,
          h.availability as head_availability,
@@ -393,6 +402,7 @@ const SOURCES_SQL = `
          (count(*) filter (where recorded_at > now() - interval '24 hours'))::int as fetches_24h,
          max(recorded_at)::text as last_fetch
   from raw.fetches
+  where ${REGISTERED_RAW_SOURCE_FILTER}
   group by source
   order by max(recorded_at) desc, count(*) desc
   limit 12
@@ -418,8 +428,6 @@ const REUSE_SQL = `
            || count(*) || ' runs' as detail
   from mart.topt_capture_status where cutoff > now() - interval '24 hours'
 `;
-const NON_CANARY_UNIVERSE_WHERE =
-  "s.universe_id not like 'universe:canary%' and s.universe_id not like 'canary%'";
 const PLAUSIBILITY_SQL = `
   select 'plausibility oracle' as check,
          case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,
@@ -551,6 +559,7 @@ interface FactorGrade {
 }
 
 interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
+  environment?: string | null;
   head_availability?: string | null;
   factor_availability: Record<string, FactorGrade>;
 }
@@ -612,13 +621,20 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
             ? row.agreed_cells / row.total_cells
             : null;
         const isCorroborationDegraded =
+          !isCanaryUniverse(row.universe_id) &&
           corroborationRatio !== null &&
           corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
-        const freshness = (row.freshness ?? "unknown") as
+        const scheduled = isHeadScheduled(row.universe_id, row.environment);
+        const rawFreshness = (row.freshness ?? "unknown") as
           | "fresh"
           | "stale"
+          | "manual"
           | "unknown";
-        const isFreshnessDegraded = freshness !== "fresh";
+        const freshness: "fresh" | "stale" | "manual" | "unknown" = scheduled
+          ? rawFreshness
+          : "manual";
+        const isFreshnessDegraded =
+          freshness !== "fresh" && freshness !== "manual";
 
         const degraded_reasons: string[] = [];
         if (isAvailDegraded) {

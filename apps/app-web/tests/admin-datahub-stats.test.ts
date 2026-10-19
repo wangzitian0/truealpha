@@ -210,6 +210,8 @@ const confidenceRows = [
     query: async (sql: string) => {
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: confidenceRows } as never;
+      if (typeof sql === "string" && sql.includes("question_coverage_report"))
+        return { rows: coverageRows } as never;
       if (typeof sql === "string" && sql.includes("served_head"))
         return { rows: headRows } as never;
       // "as check" FIRST: capacity SQLs also mention raw.fetches, and matching the
@@ -231,8 +233,6 @@ const confidenceRows = [
             : recentCallRows,
         } as never;
       }
-      if (typeof sql === "string" && sql.includes("question_coverage_report"))
-        return { rows: coverageRows } as never;
       if (typeof sql === "string" && sql.includes("raw.fetches"))
         return { rows: sourceRows } as never;
       return { rows: runRows } as never;
@@ -419,12 +419,46 @@ const confidenceRows = [
       staleness_reason: null,
       factor_availability: {},
     },
+    {
+      environment: "production",
+      universe_id: "canary-topt3",
+      sequence: 4,
+      advanced_at: "2026-10-19 06:00:00+00",
+      target_run_id: "capture-run:" + "d".repeat(64),
+      availability: "1.0000",
+      head_availability: "available",
+      agreed_cells: 0,
+      total_cells: 3,
+      freshness: "fresh",
+      age_hours: 1.2,
+      limit_hours: 72.0,
+      staleness_reason: null,
+      factor_availability: {},
+    },
+    {
+      environment: "staging",
+      universe_id: "universe:qqq-us-t5",
+      sequence: 5,
+      advanced_at: "2026-10-12 06:00:00+00",
+      target_run_id: "capture-run:" + "e".repeat(64),
+      availability: "1.0000",
+      head_availability: "available",
+      agreed_cells: 100,
+      total_cells: 100,
+      freshness: "stale",
+      age_hours: 170.0,
+      limit_hours: 72.0,
+      staleness_reason: "older_than_3d",
+      factor_availability: {},
+    },
   ];
 
   __setTestOpsClient({
     query: async (sql: string) => {
       capturedSqls.push(sql);
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
+        return { rows: [] } as never;
+      if (typeof sql === "string" && sql.includes("question_coverage_report"))
         return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("served_head"))
         return { rows: staleAndWithheldHeads } as never;
@@ -433,8 +467,6 @@ const confidenceRows = [
           rows: [{ check: "stub", verdict: "pass", detail: "stubbed" }],
         } as never;
       if (typeof sql === "string" && sql.includes("api_call_ledger"))
-        return { rows: [] } as never;
-      if (typeof sql === "string" && sql.includes("question_coverage_report"))
         return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("raw.fetches"))
         return { rows: [] } as never;
@@ -459,12 +491,33 @@ const confidenceRows = [
       stats.heads[2].is_avail_degraded === true,
     "head with non-numeric 'unavailable' availability is degraded",
   );
+  assert(
+    stats.heads[3].universe_id === "canary-topt3" &&
+      stats.heads[3].is_corroboration_degraded === false &&
+      stats.heads[3].is_degraded === false,
+    "canary% head is exempt from multi-vendor corroboration degradation (#1362)",
+  );
+  assert(
+    stats.heads[4].universe_id === "universe:qqq-us-t5" &&
+      stats.heads[4].freshness === "manual" &&
+      stats.heads[4].is_degraded === false,
+    "unscheduled staging universe:qqq-% head is graded as manual and not false-degraded (#1359, #1362)",
+  );
 
   const plausibilitySql = capturedSqls.find((s) =>
     s.includes("'plausibility oracle' as check"),
   );
   const corroborationSql = capturedSqls.find((s) =>
     s.includes("'price corroboration' as check"),
+  );
+  const coverageSql = capturedSqls.find((s) =>
+    s.includes("from mart.question_coverage_report"),
+  );
+  const confidenceSql = capturedSqls.find((s) =>
+    s.includes("from mart.datahub_confidence_report"),
+  );
+  const sourcesSql = capturedSqls.find(
+    (s) => s.includes("from raw.fetches") && s.includes("fetches_total"),
   );
   assert(
     plausibilitySql !== undefined &&
@@ -477,6 +530,21 @@ const confidenceRows = [
       corroborationSql.toLowerCase().includes("not like") &&
       corroborationSql.toLowerCase().includes("canary%"),
     "CORROBORATION_SQL filters out synthetic canary% universes",
+  );
+  assert(
+    coverageSql !== undefined &&
+      coverageSql.includes("select universe_id from mart.served_head"),
+    "QUESTION_COVERAGE_SQL scopes to active governed heads in mart.served_head (#1359, #1362)",
+  );
+  assert(
+    confidenceSql !== undefined &&
+      confidenceSql.includes("select universe_id from mart.served_head"),
+    "CONFIDENCE_REPORT_SQL scopes to active governed heads in mart.served_head (#1359, #1362)",
+  );
+  assert(
+    sourcesSql !== undefined &&
+      sourcesSql.includes("-[0-9]{8}T[0-9]{4}$"),
+    "SOURCES_SQL filters out legacy run-suffixed source strings (#1362)",
   );
 
   __setTestOpsClient(null);

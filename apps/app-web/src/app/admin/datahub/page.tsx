@@ -93,7 +93,9 @@ export default async function AdminDatahubPage() {
 
   // 1. Governed Heads Metrics
   const totalHeads = stats.heads.length;
-  const freshHeads = stats.heads.filter((h) => h.freshness === "fresh").length;
+  const freshHeads = stats.heads.filter(
+    (h) => h.freshness === "fresh" || h.freshness === "manual",
+  ).length;
   const staleHeads = stats.heads.filter((h) => h.freshness === "stale").length;
   const anyHeadDegraded = stats.heads.some((head) => head.is_degraded);
 
@@ -538,6 +540,10 @@ export default async function AdminDatahubPage() {
               {head.freshness === "fresh" ? (
                 <span className="inline-flex items-center rounded-full bg-emerald-950/60 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
                   fresh{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
+                </span>
+              ) : head.freshness === "manual" ? (
+                <span className="inline-flex items-center rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium text-zinc-300 border border-zinc-700">
+                  manual{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
                 </span>
               ) : head.freshness === "stale" ? (
                 <span className="inline-flex items-center rounded-full bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-400 border border-rose-800">

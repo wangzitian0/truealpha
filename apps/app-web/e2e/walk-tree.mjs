@@ -263,6 +263,42 @@ async function assertFunnelSaysSomething(page, path, problems, role) {
   }
 }
 
+const SWEEP_RUN_SOURCE_PATTERN = /-\d{8}T\d{4}$/;
+
+/** #1363 / #1362 / #1277: /admin/datahub renders the plant health overview, question coverage
+ * matrix, external call ledger traffic, and registered sources without leaking per-run sweep
+ * identifiers into the Sources table. */
+async function assertDatahubPlantHealth(page, path, problems, role) {
+  if (path !== "/admin/datahub" || role !== "administrator") return;
+  for (const requiredHeading of [
+    /^Datahub$/i,
+    /Question coverage matrix/i,
+    /Traffic \(external calls, today UTC\)/i,
+    /^Sources$/i,
+    /^Recent capture runs$/i,
+  ]) {
+    if ((await page.getByRole("heading", { name: requiredHeading }).count()) === 0) {
+      problems.push(`missing /admin/datahub heading matching ${requiredHeading}`);
+    }
+  }
+  const mainText = await page.locator("main").innerText();
+  const leak = mainText.match(/\bundefined\b|\[object Object\]|\bNaN\b/);
+  if (leak) problems.push(`/admin/datahub shows "${leak[0]}"`);
+
+  const sourcesHeading = page.getByRole("heading", { name: /^Sources$/i });
+  if ((await sourcesHeading.count()) > 0) {
+    const sourceNames = await sourcesHeading.first().evaluate((node) => {
+      const container = node.closest("div") ?? node.parentElement;
+      if (!container) return [];
+      return Array.from(container.querySelectorAll("tbody tr td:first-child")).map((td) => td.innerText.trim());
+    });
+    const sweepLeaks = sourceNames.filter((name) => SWEEP_RUN_SOURCE_PATTERN.test(name));
+    if (sweepLeaks.length > 0) {
+      problems.push(`/admin/datahub Sources table includes timestamped sweep run(s): ${sweepLeaks.join(", ")}`);
+    }
+  }
+}
+
 // #1241. The text that NOT_RECORDED prints in src/server/mart/research-read.ts for a field that the
 // lineage does not carry. tests/walk-tree-trace-inputs.test.ts fails when the two texts differ.
 const NOT_RECORDED = "not recorded";
@@ -435,6 +471,7 @@ async function checkRoute(page, path, role, pageErrors = []) {
   await assertSignedInIdentity(page, path, problems);
   await assertCurrentNavLink(page, path, problems);
   await assertFunnelSaysSomething(page, path, problems, role);
+  await assertDatahubPlantHealth(page, path, problems, role);
   // Last, because it navigates away from this page.
   await assertTraceRendersDecisionInputs(page, path, problems);
   for (const err of pageErrors) {

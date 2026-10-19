@@ -184,7 +184,9 @@ def moomoo_code(symbol: str) -> str:
 
 def canonical_bytes(payload: Any) -> bytes:
     """The landed rendering of an SDK answer: canonical JSON, key-sorted, no whitespace."""
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    from data_engine.sources.moomoo import canonical_moomoo_bytes
+
+    return canonical_moomoo_bytes(payload)
 
 
 # --- market price: the settled daily close --------------------------------------------
