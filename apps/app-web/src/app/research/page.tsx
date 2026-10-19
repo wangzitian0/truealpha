@@ -70,22 +70,25 @@ export default async function ResearchOverviewPage() {
 							? "No decisions recorded for this strategy run."
 							: "No strategy run recorded yet."}
 					{age && (
-						<span
-							data-testid="served-run-age"
-							data-stale={age.stale ? "true" : "false"}
-							className={
-								age.stale
-									? "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-300"
-									: "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-gray-500/15 text-gray-300"
-							}
-							title={
-								age.stale
-									? "Older than one scheduled cycle plus slack (36 h) — the same threshold the nightly pointer invariant raises."
-									: "Within one scheduled cycle plus slack (36 h)."
-							}
-						>
-							{age.stale ? `stale · ${age.label}` : age.label}
-						</span>
+						<>
+							{" "}
+							<span
+								data-testid="served-run-age"
+								data-stale={age.stale ? "true" : "false"}
+								className={
+									age.stale
+										? "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-300"
+										: "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-gray-500/15 text-gray-300"
+								}
+								title={
+									age.stale
+										? "Older than one scheduled cycle plus slack (36 h) — the same threshold the nightly pointer invariant raises."
+										: "Within one scheduled cycle plus slack (36 h)."
+								}
+							>
+								{age.stale ? `stale · ${age.label}` : age.label}
+							</span>
+						</>
 					)}
 				</p>
 				{/* #1235: which definition produced this run, and whether its bands were reviewed. */}
@@ -214,9 +217,12 @@ export default async function ResearchOverviewPage() {
 											{entityLabel(item.issuer_id, names)}
 										</span>
 										{item.exclusion_reason && (
-											<code className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-[11px] text-gray-300">
-												{item.exclusion_reason}
-											</code>
+											<>
+												{" "}
+												<code className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-[11px] text-gray-300">
+													{item.exclusion_reason}
+												</code>
+											</>
 										)}{" "}
 										— {item.label}
 									</li>

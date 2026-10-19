@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
+import { formatIssuerLabel } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadTrace } from "@/server/dashboard";
 import { GovernedRunNotice, TraceInputsTable } from "@/components/trace-inputs-table";
 import { getServerPrincipal } from "@/server/auth/request-context";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,7 @@ export default async function TracePage({
   const issuer = params.issuer ?? "";
   const cutoff = params.cutoff ?? "";
   const state = issuer && cutoff ? await loadTrace(principal.context, issuer, cutoff) : ({ kind: "empty" } as const);
+  const names = state.kind === "ready" ? await loadEntityDisplayMap() : new Map();
 
   return (
     <section aria-labelledby="trace-heading" className="space-y-6">
@@ -48,8 +51,15 @@ export default async function TracePage({
           </div>
           <div>
             <dt className="text-gray-500">Subject / cutoff</dt>
-            <dd>
-              {state.data.issuerId} @ {state.data.cutoffAt}
+            <dd title={state.data.issuerId}>
+              <span>{formatIssuerLabel(state.data.issuerId, entityLabel(state.data.issuerId, names))}</span>{" "}
+              <code
+                data-evidence="true"
+                className="ml-1 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400"
+              >
+                {state.data.issuerId}
+              </code>{" "}
+              @ {state.data.cutoffAt}
             </dd>
           </div>
           <div>

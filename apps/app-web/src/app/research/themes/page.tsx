@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { formatCell, formatRatio } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
@@ -30,7 +31,7 @@ export default async function ThemesPage() {
           Theme purity
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          What share of each issuer&apos;s revenue a theme accounts for (init.md §0 question 6), read from
+          What share of each issuer&apos;s revenue a theme accounts for (init.md §0 question 6), read from{" "}
           <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code> and computed nowhere here. The
           denominator is the issuer&apos;s <strong>consolidated</strong> revenue, never the sum of the segments that
           happened to be classified — a missed segment would otherwise raise every remaining share and rank the
@@ -103,11 +104,16 @@ export default async function ThemesPage() {
                       <td className="px-4 py-3 tabular-nums">{millions(row.consolidatedRevenue)}</td>
                       <td className="px-4 py-3 tabular-nums">{row.segments}</td>
                       <td className="px-4 py-3">{row.periodEnd}</td>
-                      <td className="px-4 py-3 tabular-nums">{Number(row.confidence).toFixed(2)}</td>
+                      <td className="px-4 py-3 tabular-nums" title={row.confidence}>
+                        {formatCell(formatRatio(row.confidence))}
+                      </td>
                       <td className="px-4 py-3 text-xs">
                         <span title={row.extractor}>{row.availabilityStatus}</span>
                         {row.reasonCodes.length > 0 && (
-                          <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
+                          <>
+                            {" "}
+                            <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
+                          </>
                         )}
                       </td>
                     </tr>

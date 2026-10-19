@@ -1,3 +1,4 @@
+import { formatListingLabel, formatNumberMagnitude } from "@/client/format";
 import {
   NOT_RECORDED,
   type KnowableAtBasis,
@@ -18,10 +19,19 @@ const BASIS_TEXT: Record<KnowableAtBasis, string> = {
   observation: "observation knowable_at",
 };
 
+function withCurrency(amount: string, input: TraceInput): string {
+  return `${amount} ${input.currency ?? `(currency ${NOT_RECORDED})`}`;
+}
+
+function rawValueText(input: TraceInput): string | undefined {
+  if (input.value === null) return undefined;
+  return input.monetary ? withCurrency(input.value, input) : input.value;
+}
+
 function valueText(input: TraceInput): string {
   if (input.value === null) return NOT_RECORDED;
-  if (!input.monetary) return input.value;
-  return `${input.value} ${input.currency ?? `(currency ${NOT_RECORDED})`}`;
+  const formatted = formatNumberMagnitude(input.value) ?? input.value;
+  return input.monetary ? withCurrency(formatted, input) : formatted;
 }
 
 function knowableAtText(input: TraceInput): string {
@@ -67,8 +77,8 @@ export function TraceInputsTable({
           data-listing={listing.listingId ?? NOT_RECORDED}
           className="mt-3 overflow-x-auto"
         >
-          <p className="font-mono text-xs text-gray-300">
-            Listing: {listing.listingId ?? NOT_RECORDED}
+          <p className="font-mono text-xs text-gray-300" title={listing.listingId ?? undefined}>
+            Listing: {formatListingLabel(listing.listingId) ?? NOT_RECORDED}
             {listing.isResultListing ? " (listing named by the core result)" : ""}
           </p>
           <table className="mt-1 w-full text-left text-xs" data-testid="trace-inputs">
@@ -86,7 +96,7 @@ export function TraceInputsTable({
               {listing.inputs.map((input) => (
                 <tr key={input.key} data-input={input.key} className="border-t border-border align-top">
                   <td className="py-1 pr-4 font-sans text-gray-400">{input.label}</td>
-                  <td data-field="value" className="py-1 pr-4">
+                  <td data-field="value" className="py-1 pr-4 tabular-nums" title={rawValueText(input)}>
                     {valueText(input)}
                   </td>
                   <td data-field="period" className="py-1 pr-4">
