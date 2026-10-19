@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/mart/entity-resolution";
+import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
@@ -12,8 +14,6 @@ import {
   type StrategyRunDecision,
   type StrategyRunOutcome,
 } from "@/contracts/strategyRun";
-
-const STRATEGY_ID = "large_model_value_v0";
 
 const OUTCOME_LABEL: Record<StrategyRunOutcome, string> = {
   selected: "Selected",
@@ -39,7 +39,7 @@ const NOTICE_STYLE = {
 
 export default async function StrategyRunsPage() {
   const principal = await getServerPrincipal();
-  const outcome = await loadStrategyRunPage(principal, STRATEGY_ID);
+  const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
   // Authorization first: a denied request must not reach a mart read (the
   // guard pattern `dashboard.ts` documents), so this stays conditional.
   const names: Map<string, EntityDisplay> =
@@ -136,8 +136,14 @@ export default async function StrategyRunsPage() {
             <tbody>
               {outcome.report.decisions.map((decision) => (
                 <tr key={`${decision.issuer_id}:${decision.cutoff_at}`} className="border-t border-border">
-                  <th scope="row" className="px-4 py-3 font-medium" title={decision.issuer_id}>
-                    {entityLabel(decision.issuer_id, names)}
+                  <th scope="row" className="px-4 py-3 font-medium">
+                    <Link
+                      href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
+                      className="text-accent hover:underline"
+                      title={decision.issuer_id}
+                    >
+                      {entityLabel(decision.issuer_id, names)}
+                    </Link>
                   </th>
                   <td className="px-4 py-3">{decision.cutoff_at}</td>
                   <td className="px-4 py-3">{decisionLabel(decision)}</td>
