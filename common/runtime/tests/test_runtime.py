@@ -216,15 +216,20 @@ def test_raw_storage_is_content_addressed_and_idempotent():
 def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1375 (G1): truealpha_runtime exposes no import-time runtime_settings singleton, and
-    CoreRuntimeSettings / llm-service Settings ignore invalid S3 environment variables."""
+    """#1375 (G1), #1389 (F1): truealpha_runtime exposes no import-time runtime_settings singleton,
+    and cold-importing truealpha_runtime and llm_service.main in a fresh subprocess with
+    S3_BUCKET=INVALID_UPPERCASE succeeds without instantiating RuntimeSettings."""
     import truealpha_runtime
     import truealpha_runtime.config as runtime_config
     from llm_service.config import Settings as LlmSettings
     from truealpha_runtime import CoreRuntimeSettings
+    from truealpha_runtime.testing import run_python_probe
 
     assert "runtime_settings" not in dir(truealpha_runtime)
     assert "runtime_settings" not in dir(runtime_config)
+
+    proc = run_python_probe("import truealpha_runtime, llm_service.main", {"S3_BUCKET": "INVALID_UPPERCASE"})
+    assert proc.returncode == 0, proc.stderr
 
     monkeypatch.setenv("S3_BUCKET", "INVALID_UPPERCASE")
     core = CoreRuntimeSettings(_env_file=None, app_env="test")

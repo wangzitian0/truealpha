@@ -67,7 +67,7 @@
       "injected": false,
       "has_default": true,
       "sensitive": false,
-      "group": "Application",
+      "group": "postgres",
       "description": "",
       "source": "code",
       "empty_ok": false,

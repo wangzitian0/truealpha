@@ -6,10 +6,10 @@ description: TrueAlpha Factor Acceptance Protocol. Enforces the strict quantitat
 # TrueAlpha Factor Acceptance Protocol
 
 > **Core Axiom (AGENTS.md & init.md)**:
-> *"A constant never stands in for a measurement. Never overwrite a point-in-time record. Never put computation logic outside `common/factors`. Factor inputs are provenance-neutral typed records. Composite confidence cannot exceed the minimum consumed confidence."*
+> *"A constant never stands in for a measurement. Never overwrite a point-in-time record. Never put computation logic outside `libs/factors`. Factor inputs are provenance-neutral typed records. Composite confidence cannot exceed the minimum consumed confidence."*
 
 ## 1. When to Activate This Skill
-- When designing, reviewing, or modifying any factor module in `common/factors`.
+- When designing, reviewing, or modifying any factor module in `libs/factors`.
 - When adding or reviewing composite factor definitions (such as three-tier valuation, strategy evaluators).
 - When validating factor outputs against ground-truth datasets.
 

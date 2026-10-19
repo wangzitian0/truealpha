@@ -25,6 +25,7 @@ function run() {
     (process.env as Record<string, string | undefined>).NODE_ENV = "development";
     const devConfig = loadAuthConfig();
     assert(devConfig.secret.length > 0, "dev config must still produce a usable secret");
+    assert(devConfig.secureCookie === false, "dev config must set secureCookie to false");
 
     // --- production: no SECRET_KEY set must throw, never silently use the dev default ---
     delete process.env.SECRET_KEY;
@@ -66,6 +67,14 @@ function run() {
     (process.env as Record<string, string | undefined>).NODE_ENV = "production";
     const prodConfig = loadAuthConfig();
     assert(prodConfig.secret.length > 0, "production config with SECRET_KEY set must succeed");
+    assert(prodConfig.secureCookie === true, "production config must set secureCookie to true");
+
+    // --- staging APP_ENV without NODE_ENV=production also sets secureCookie to true ---
+    delete (process.env as Record<string, string | undefined>).NODE_ENV;
+    process.env.APP_ENV = "staging";
+    const stagingConfig = loadAuthConfig();
+    assert(stagingConfig.secureCookie === true, "staging APP_ENV must set secureCookie to true");
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production";
 
     // --- ACCESS_TOKEN_EXPIRE_MINUTES: invalid/absent value falls back to a sane default ---
     process.env.ACCESS_TOKEN_EXPIRE_MINUTES = "not-a-number";

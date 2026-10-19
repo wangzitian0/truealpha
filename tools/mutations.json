@@ -808,6 +808,70 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "env-manifest/app-web-undeclared-env-is-caught",
+      "guard": "common/runtime/tests/test_env_manifest.py",
+      "file": "apps/app-web/src/server/auth/db.ts",
+      "find": "    const connectionString = process.env.DATABASE_URL;",
+      "replace": "    const connectionString = process.env.DATABASE_URL ?? process.env.UNDECLARED_MUTATION_ENV;",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_env_manifest.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "env-manifest/s3-cross-stack-default-drift-is-caught",
+      "guard": "common/runtime/tests/test_env_manifest.py",
+      "file": "apps/app-web/src/server/documents/object-store.ts",
+      "find": "  return env(\"S3_BUCKET\", \"truealpha-raw\");",
+      "replace": "  return env(\"S3_BUCKET\", \"truealpha-mutated\");",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_env_manifest.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "env-manifest/apply-migrations-precedence-drift-is-caught",
+      "guard": "common/runtime/tests/test_env_manifest.py",
+      "file": "db/apply_migrations.sh",
+      "find": "lock_timeout_raw=\"${MIGRATION_LOCK_TIMEOUT_SECONDS:-${TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-5s}}\"",
+      "replace": "lock_timeout_raw=\"${TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-${MIGRATION_LOCK_TIMEOUT_SECONDS:-5s}}\"",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_env_manifest.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "runtime/import-time-s3-singleton-is-caught",
+      "guard": "common/runtime/tests/test_runtime.py",
+      "file": "common/runtime/src/truealpha_runtime/__init__.py",
+      "find": "__all__ = [",
+      "replace": "runtime_settings = RuntimeSettings()\n\n__all__ = [",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_runtime.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }
