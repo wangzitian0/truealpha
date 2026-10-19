@@ -65,6 +65,13 @@ def connect() -> Iterator["moomoo.OpenQuoteContext"]:
         ctx.close()
 
 
+def canonical_moomoo_bytes(payload) -> bytes:
+    """Canonical JSON byte rendering shared between the API call ledger and raw.fetches (#1358)."""
+    from data_engine.jsonable import to_jsonable
+
+    return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def _call(ctx, endpoint: str, caller: str, fn):
     """Gate, throttle, call, record — the one path every moomoo call must go through.
 
@@ -107,10 +114,7 @@ def _call(ctx, endpoint: str, caller: str, fn):
     byte_length: int | None = None
     if ok:
         try:
-            from data_engine.jsonable import to_jsonable
-
-            payload_data = to_jsonable(rest[0] if len(rest) == 1 else rest)
-            raw = json.dumps(payload_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            raw = canonical_moomoo_bytes(rest[0] if len(rest) == 1 else rest)
             payload_sha = hashlib.sha256(raw).hexdigest()
             byte_length = len(raw)
         except Exception:
@@ -305,11 +309,10 @@ def get_history_kline(
     30-day window, not calls (init.md Section 5); the governed universes (TOPT 20 +
     QQQ ~100) fit a 2,000-stock window with an order of magnitude to spare. Every call
     still goes through the gate and the ledger like any other moomoo request."""
-    return _call(
-        ctx,
-        "request_history_kline",
-        caller,
-        lambda c: c.request_history_kline(
+    page_req_key: list = [None]
+
+    def _invoke(c):
+        res = c.request_history_kline(
             code,
             start=start,
             end=end,
@@ -318,8 +321,14 @@ def get_history_kline(
             fields=[moomoo.KL_FIELD.ALL],
             max_count=max_count,
             extended_time=False,
-        ),
-    )
+        )
+        if isinstance(res, tuple) and len(res) >= 3:
+            page_req_key[0] = res[2]
+            return (res[0], res[1])
+        return res
+
+    bars = _call(ctx, "request_history_kline", caller, _invoke)
+    return bars, page_req_key[0]
 
 
 def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin"):

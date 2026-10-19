@@ -126,10 +126,13 @@ def main() -> None:
         conn.close()
         return
 
+    from data_engine.sources import gateway
+
     stats: Counter = Counter()
     made = 0
     aborted = False
-    with mm.connect() as ctx:
+    run_key = f"script:{CALLER}:{int(datetime.now(UTC).timestamp())}"
+    with gateway.run_scope(run_key), mm.connect() as ctx:
         for code, endpoint in plan:
             if args.limit is not None and made >= args.limit:
                 break
@@ -144,11 +147,12 @@ def main() -> None:
                 stats[(market, endpoint, "fail")] += 1
                 print(f"  {code}.{endpoint}: FAILED — {e}")
                 continue
-            raw_store.insert_json_fetch(
+            raw_store.insert_fetch(
                 conn,
                 source=DataSource.MOOMOO,
                 source_record_id=f"{endpoint}:{code}",
-                payload=jsonable.to_jsonable(data),
+                body=mm.canonical_moomoo_bytes(data),
+                content_type="application/json",
                 fetched_at=datetime.now(UTC),
             )
             conn.commit()

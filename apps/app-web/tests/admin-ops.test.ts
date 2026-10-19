@@ -81,6 +81,13 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.data.pointers[1].ageHours === 4.2 && outcome.data.pointers[1].freshness === "fresh", "age and freshness passed through");
   assert(outcome.data.dataEngine !== null && outcome.data.dataEngine.gitSha === "4cf7291deadbeef", "data-engine build shape");
   assert(outcome.data.quotaToday[0].source === "twelve-data" && outcome.data.quotaToday[0].fetches === 21, "quota shape");
+  const quotaSql = queries.find((q) => q.includes("from raw.fetches"));
+  assert(
+    quotaSql !== undefined &&
+      quotaSql.includes("at time zone 'utc'") &&
+      quotaSql.includes("-[0-9]{8}T[0-9]{4}$"),
+    "quotaToday query uses explicit UTC day boundary and excludes legacy run-suffixed source strings",
+  );
 }
 
 // --- honest degradation: dagster.runs missing -> runs: "unavailable", rest intact ---
