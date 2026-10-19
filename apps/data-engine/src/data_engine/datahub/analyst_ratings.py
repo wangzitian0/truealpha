@@ -208,6 +208,65 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     }
 
 
+def _analyst_confidence(analyst_id: str, raw_sr: object) -> Decimal:
+    sr_factor = Decimal("0.85")
+    if isinstance(raw_sr, Real) and not isinstance(raw_sr, bool):
+        clamped = max(0.0, min(100.0, float(raw_sr)))
+        sr_factor = Decimal(str(round(0.70 + 0.30 * (clamped / 100.0), 4)))
+    safe_analyst = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in analyst_id).strip("-") or "analyst"
+    return evaluate_continuous_confidence(
+        _CONFIDENCE_POLICY,
+        ContinuousConfidenceInput(
+            case_id=f"analyst:{safe_analyst}",
+            sources=(
+                SourceConfidenceEvidence(
+                    provider_id="origin:moomoo-ratings:v1",
+                    origin_group_id="lineage:moomoo",
+                    independence_weight=Decimal("1"),
+                    successful_outcome_mass=Decimal("40"),
+                    failed_outcome_mass=Decimal("0"),
+                    freshness=Decimal("1"),
+                    sample_conformance=Decimal("0.90"),
+                    transport_integrity=Decimal("1"),
+                    evidence_ids=(f"analyst:{safe_analyst}",),
+                    reason_codes=("vendor_timestamp",),
+                ),
+            ),
+            agreement=sr_factor,
+            semantic_mapping_quality=Decimal("1"),
+            lineage_completeness=Decimal("1"),
+            required_component_completeness=Decimal("1"),
+        ),
+    ).confidence
+
+
+def _valid_rating_point(r_item: object, cutoff_iso: str) -> tuple[str, int] | None:
+    if not isinstance(r_item, Mapping):
+        return None
+    rec_date = r_item.get("recommendation_date_str")
+    raw_rating = r_item.get("rating")
+    if not isinstance(rec_date, str) or len(rec_date) < 10 or rec_date[:10] > cutoff_iso:
+        return None
+    if isinstance(raw_rating, bool) or not isinstance(raw_rating, Real) or not float(raw_rating).is_integer():
+        return None
+    rating_int = int(float(raw_rating))
+    if not (_RATING_MIN <= rating_int <= _RATING_MAX):
+        return None
+    return rec_date[:10], rating_int
+
+
+def _latest_rating_before_cutoff(items: object, cutoff_iso: str) -> int | None:
+    if not isinstance(items, list):
+        return None
+    latest_date: str | None = None
+    latest_rating: int | None = None
+    for r_item in items:
+        point = _valid_rating_point(r_item, cutoff_iso)
+        if point is not None and (latest_date is None or point[0] >= latest_date):
+            latest_date, latest_rating = point
+    return latest_rating
+
+
 def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRatingItem]:
     """Parse per-analyst rating summary rows filtered to recommendations on or before `as_of`.
 
@@ -230,58 +289,9 @@ def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRat
         analyst_id = str(analyst_info.get("analyst_id") or analyst_info.get("analyst_name") or "").strip()
         if not analyst_id:
             continue
-        raw_sr = analyst_info.get("success_rate")
-        sr_factor = Decimal("0.85")
-        if isinstance(raw_sr, Real) and not isinstance(raw_sr, bool):
-            clamped = max(0.0, min(100.0, float(raw_sr)))
-            sr_factor = Decimal(str(round(0.70 + 0.30 * (clamped / 100.0), 4)))
-        safe_analyst = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in analyst_id).strip("-") or "analyst"
-        item_conf = evaluate_continuous_confidence(
-            _CONFIDENCE_POLICY,
-            ContinuousConfidenceInput(
-                case_id=f"analyst:{safe_analyst}",
-                sources=(
-                    SourceConfidenceEvidence(
-                        provider_id="origin:moomoo-ratings:v1",
-                        origin_group_id="lineage:moomoo",
-                        independence_weight=Decimal("1"),
-                        successful_outcome_mass=Decimal("40"),
-                        failed_outcome_mass=Decimal("0"),
-                        freshness=Decimal("1"),
-                        sample_conformance=Decimal("0.90"),
-                        transport_integrity=Decimal("1"),
-                        evidence_ids=(f"analyst:{safe_analyst}",),
-                        reason_codes=("vendor_timestamp",),
-                    ),
-                ),
-                agreement=sr_factor,
-                semantic_mapping_quality=Decimal("1"),
-                lineage_completeness=Decimal("1"),
-                required_component_completeness=Decimal("1"),
-            ),
-        ).confidence
-
-        items = entry.get("rating_item_list")
-        if not isinstance(items, list):
-            continue
-        latest_date: str | None = None
-        latest_rating: int | None = None
-        for r_item in items:
-            if not isinstance(r_item, Mapping):
-                continue
-            rec_date = r_item.get("recommendation_date_str")
-            raw_rating = r_item.get("rating")
-            if not isinstance(rec_date, str) or len(rec_date) < 10 or rec_date[:10] > cutoff_iso:
-                continue
-            if isinstance(raw_rating, bool) or not isinstance(raw_rating, Real) or not float(raw_rating).is_integer():
-                continue
-            rating_int = int(float(raw_rating))
-            if not (_RATING_MIN <= rating_int <= _RATING_MAX):
-                continue
-            if latest_date is None or rec_date[:10] >= latest_date:
-                latest_date = rec_date[:10]
-                latest_rating = rating_int
+        latest_rating = _latest_rating_before_cutoff(entry.get("rating_item_list"), cutoff_iso)
         if latest_rating is not None:
+            item_conf = _analyst_confidence(analyst_id, analyst_info.get("success_rate"))
             out.append(AnalystRatingItem(analyst_id=analyst_id, rating=latest_rating, confidence=item_conf))
     return out
 
