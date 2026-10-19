@@ -6,6 +6,8 @@
  * labels. It never derives a name from an issuer class: the name comes from the decision row.
  */
 
+import { formatRatio } from "@/client/format";
+
 /** The uniform total-assets charge. The published mart column `gppe` carries it for every class. */
 export const PUBLISHED_GPPE_METRIC = "gppe_uniform_charge_v0";
 
@@ -25,10 +27,10 @@ export interface LaborEfficiencyInput {
 
 function sameMetricValue(a: string, b: string): boolean {
 	if (a === b) return true;
-	const numA = Number(a);
-	const numB = Number(b);
-	if (!Number.isFinite(numA) || !Number.isFinite(numB)) return false;
-	return numA.toFixed(2) === numB.toFixed(2);
+	const ratioA = formatRatio(a);
+	const ratioB = formatRatio(b);
+	if (ratioA === null || ratioB === null) return false;
+	return ratioA === ratioB;
 }
 
 /**

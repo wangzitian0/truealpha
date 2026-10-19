@@ -517,10 +517,11 @@ export const TRACE_LINEAGE_SQL = `
 	    select ei.legacy_id
 	    from mart.entity_identity ei
 	    where ei.entity_id::text = d.issuer_id
+	    order by ei.legacy_id
 	    limit 1
 	) ei on true
 	where d.strategy_run_id = $1
-	  and coalesce(ei.legacy_id, d.issuer_id) = $2
+	  and (d.issuer_id = $2 or coalesce(ei.legacy_id, d.issuer_id) = $2)
 	  and d.cutoff_at = $3::timestamptz
 	order by m.result_id
 	limit 1
@@ -1098,7 +1099,7 @@ export class StrategyRunReadAdapter {
 	}
 
 	private bidirectionalIssuerPredicate(column: string): string {
-		return `${column} = $1 or ${column} in (select entity_id::text from mart.entity_identity where legacy_id = $1) or ${column} in (select legacy_id from mart.entity_identity where entity_id::text = $1 and legacy_id is not null)`;
+		return `(${column} = $1 or ${column} in (select entity_id::text from mart.entity_identity where legacy_id = $1) or ${column} in (select legacy_id from mart.entity_identity where entity_id::text = $1 and legacy_id is not null))`;
 	}
 
 	async entityThemePurity(

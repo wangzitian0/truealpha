@@ -316,13 +316,23 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
     rank: 1,
     target_weight: "0.05",
   };
+  const forwardedIds: Record<string, string> = {};
   const crossCoordAdapter = new StrategyRunReadAdapter(
     repositoryReturning({ ...emptyReport(), decisions: [decisionRow] }),
     async (fn) =>
       fn({
-        query: async (sql: string) => {
-          if (sql.includes("mart.entity_identity")) {
+        query: async (sql: string, params?: readonly unknown[]) => {
+          if (sql.includes("select entity_id::text as entity_id")) {
             return { rows: [{ entity_id: uuidCoord, legacy_id: legacyCoord }] };
+          }
+          if (sql.includes("from mart.issuer_theme_purity")) {
+            forwardedIds.themePurity = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.topt_gppe_results")) {
+            forwardedIds.gppeDetail = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.issuer_analyst_ratings")) {
+            forwardedIds.analystRatings = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.issuer_supply_chain_exposure")) {
+            forwardedIds.supplyChainExposure = String(params?.[0] ?? "");
           }
           return { rows: [] };
         },
@@ -333,6 +343,16 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
   assert(
     detailFromUuid.data.issuerId === legacyCoord && detailFromUuid.data.rows.length === 1,
     `expected canonical issuerId ${legacyCoord}, got ${detailFromUuid.data.issuerId}`,
+  );
+  for (const [loader, receivedId] of Object.entries(forwardedIds)) {
+    assert(
+      receivedId === legacyCoord,
+      `loadEntityDetail must forward resolved ${legacyCoord} to ${loader}, got ${receivedId}`,
+    );
+  }
+  assert(
+    Object.keys(forwardedIds).length === 4,
+    `expected all 4 detail loaders to run with resolved issuerId, got ${JSON.stringify(forwardedIds)}`,
   );
   const traceFromUuid = await loadTrace(TEST_CONTEXT, uuidCoord, cutoff, crossCoordAdapter);
   assert(traceFromUuid.kind === "ready", `expected ready trace for UUID coordinate, got ${traceFromUuid.kind}`);

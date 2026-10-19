@@ -56,8 +56,8 @@ export default async function TracePage({
                 className="ml-1 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400"
               >
                 {state.data.issuerId}
-              </code>{" "}
-              {`@ ${state.data.cutoffAt}`}
+              </code>
+              {` @ ${state.data.cutoffAt}`}
             </dd>
           </div>
           <div>
