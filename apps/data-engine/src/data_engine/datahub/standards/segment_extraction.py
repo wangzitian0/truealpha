@@ -44,6 +44,7 @@ from factors.shared.extraction import (
 )
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
+from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
     fetch_annual_filing,
@@ -132,6 +133,22 @@ def _whole(value: Decimal | None) -> int | None:
     return int(value) if value is not None and value == value.to_integral_value() else None
 
 
+def _ruleset_concepts(*fields: str) -> tuple[str, ...]:
+    """The shipped ruleset's concepts of `fields` as `taxonomy:concept`, in declared order, each once.
+
+    A field that the ruleset does not declare raises. An empty list would make the reader find no
+    segment for any issuer and report each one as a refusal.
+    """
+    names: dict[str, None] = {}
+    for field in fields:
+        mapping = DEFAULT_RULESET.mapping_for(field)
+        if mapping is None:
+            raise LookupError(f"the concept ruleset declares no {field!r} field")
+        for item in mapping.concepts:
+            names.setdefault(f"{item.taxonomy}:{item.concept}", None)
+    return tuple(names)
+
+
 #: Segment revenue as the filer TAGS it (#830): a revenue fact whose context names one member of
 #: the business-segment axis. Since ASU 2023-07 a 10-K tags its segment note, and this is the
 #: part of the filing that says, in a form nothing has to interpret, which segment earned what.
@@ -142,14 +159,11 @@ def _whole(value: Decimal | None) -> int | None:
 #: was Comcast's GEOGRAPHY table ("United States, United Kingdom, Other") taken for its segments.
 #:
 #: Tried in this order; the first concept whose members balance the oracle is the answer.
-_REVENUE_CONCEPTS = (
-    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-    "us-gaap:Revenues",
-    "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
-    "us-gaap:SalesRevenueNet",
-    # A bank's top line (JPM): net revenue is what its segments report and what the oracle holds.
-    "us-gaap:RevenuesNetOfInterestExpense",
-)
+#:
+#: The concepts come from the concept ruleset, not from a copy of it (#1379). The oracle is the
+#: capture's `revenue`, so the reader tries the concepts that figure resolves from, in the same
+#: order. Then it tries `bank_revenue`: a bank's top line (JPM) is what its segments report.
+_REVENUE_CONCEPTS = _ruleset_concepts("revenue", "bank_revenue")
 _SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
 #: The one second dimension a segment fact may carry and still be the segment's revenue: the
 #: filer marking the value as the operating segment's own.

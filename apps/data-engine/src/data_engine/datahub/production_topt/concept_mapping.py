@@ -30,15 +30,24 @@ _KIND = "concept-mapping"
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v2",
+        "version": "production-topt-concepts:v3",
         "mappings": (
             {
+                # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
+                # 4,812,005,000 USD for the year that ends 2026-01-31 and no other revenue concept.
+                # The Including form is last. For a period that two concepts report, the earlier
+                # concept wins. So an issuer that reports both forms keeps the Excluding value.
+                # `SalesRevenueNet` is not here. The NICE and PLUG samples tag it last for FY2017 and
+                # tag `Revenues` for each later year. There it can add only stale figures.
+                # `segment_extraction` reads this list. The vendor oracle keeps a wider list on purpose.
+                # `apps/data-engine/tests/test_revenue_concepts.py` states each difference and its reason.
                 "field": "revenue",
                 "unit": "USD",
                 "kind": "synonym",
                 "concepts": (
                     {"taxonomy": "us-gaap", "concept": "RevenueFromContractWithCustomerExcludingAssessedTax"},
                     {"taxonomy": "us-gaap", "concept": "Revenues"},
+                    {"taxonomy": "us-gaap", "concept": "RevenueFromContractWithCustomerIncludingAssessedTax"},
                 ),
             },
             {
