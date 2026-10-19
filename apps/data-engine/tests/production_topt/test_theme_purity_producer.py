@@ -603,3 +603,68 @@ def test_canonical_uuid_member_resolves_ticker_from_legacy_corpus_map(connection
     assert written[0].entity_id == canonical_uuid
     asked = json.dumps(transport.sent)
     assert f"Issuer: AVGO ({ISSUER})." in asked
+
+
+def test_canonical_uuid_member_resolves_ticker_from_entity_identity_when_tickers_omitted(
+    connection, seated, monkeypatch
+) -> None:
+    """#1359 AC1/AC5: even when `tickers` is None or empty, a canonical UUID member resolves its
+    current_ticker from mart.entity_identity and materialize_theme_purity purges retired
+    lane:unvisited:v1 fill rows on the run."""
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
+
+    coords = resolve_coordinates(
+        connection,
+        [[ISSUER, "security:figi:BBG000BPH459", "listing:xnas:mu", "MU"]],
+        as_of=CUTOFF.date(),
+        known_at=CUTOFF,
+    )
+    canonical_uuid = coords["listing:xnas:mu"][0]
+    # Seed a retired lane:unvisited:v1 fill row on the same run_id to verify convergence on re-run.
+    connection.execute(
+        """
+        insert into mart.issuer_theme_purity (
+            run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256,
+            cutoff, period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,
+            out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,
+            reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status
+        ) values (
+            %s, %s, null, %s, %s, %s, %s,
+            %s, null, null, null, null, null,
+            null, null, null, 0, 0,
+            array['no_segment_partition'], 'lane:unvisited:v1', 'unavailable', 'degraded', 'not_evaluated'
+        )
+        """,
+        (
+            RUN_ID,
+            "00000000-0000-5000-8000-000000000099",
+            AI.theme_id,
+            AI.theme,
+            AI.factor_version,
+            AI.content_sha256,
+            CUTOFF,
+        ),
+    )
+    monkeypatch.setattr(theme_purity, "governed_members", lambda _connection, *, run_id: {CIK: canonical_uuid})
+    _seed(connection)
+    transport = _answers(
+        [{"index": 0, "in_theme": True, "reason": "a"}, {"index": 1, "in_theme": False, "reason": "b"}]
+    )
+    monkeypatch.setattr(llm, "_gateway_transport", transport)
+
+    written = materialize_theme_purity(
+        connection,
+        run_id=RUN_ID,
+        cutoff=CUTOFF,
+        themes=(AI,),
+        tickers=None,
+    )
+    assert len(written) == 1
+    asked = json.dumps(transport.sent)
+    assert f"Issuer: MU ({ISSUER})." in asked
+    stale_unvisited = connection.execute(
+        "select count(*) from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'",
+        (RUN_ID,),
+    ).fetchone()[0]
+    assert stale_unvisited == 0

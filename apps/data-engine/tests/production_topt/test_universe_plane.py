@@ -181,7 +181,10 @@ def test_a_same_day_second_refresh_does_not_smear_the_denominator(connection) ->
 
 def test_the_edgar_atom_cik_parses() -> None:
     """The fallback's parse leg on EDGAR's real answer shape: SEC's crosswalk files
-    miss AEP entirely while browse-edgar resolves it (verified live 2026-08-17)."""
+    miss AEP entirely while browse-edgar resolves it (verified live 2026-08-17).
+    Newly listed constituents (SPCX 0001181412, HONA 0002089271) before their first
+    10-K return an Atom <feed> with <company-info><cik>...</cik></company-info> and
+    zero <entry> elements."""
     from data_engine.datahub.production_topt.universe_plane import _parse_edgar_cik
 
     assert (
@@ -190,9 +193,15 @@ def test_the_edgar_atom_cik_parses() -> None:
     )
     assert (
         _parse_edgar_cik(
-            b'<feed><entry><link href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000004904&amp;type=10-K"/></entry></feed>'
+            b'<feed><company-info><cik>0000004904</cik></company-info><entry><link href="...CIK=0000004904&amp;type=10-K"/></entry></feed>'
         )
         == 4904
+    )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><company-info><cik>0001181412</cik></company-info><link rel="self" href="...CIK=0001181412&amp;type=10-K"/></feed>'
+        )
+        == 1181412
     )
     assert (
         _parse_edgar_cik(

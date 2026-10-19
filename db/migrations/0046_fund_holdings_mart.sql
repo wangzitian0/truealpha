@@ -10,7 +10,14 @@
 do $$
 declare
     wanted constant text := $view$
-select
+select distinct on (
+    facts.fund_id,
+    facts.report_period,
+    facts.transaction_time,
+    coalesce(facts.isin, ''),
+    coalesce(facts.cusip, ''),
+    facts.holding_name
+)
     facts.fund_id,
     fund_entity.display_name as fund_name,
     facts.holding_id,
@@ -25,6 +32,15 @@ select
     facts.raw_ref
 from staging.fund_holding_facts facts
 left join staging.kg_entities fund_entity on fund_entity.id = facts.fund_id
+order by
+    facts.fund_id,
+    facts.report_period,
+    facts.transaction_time,
+    coalesce(facts.isin, ''),
+    coalesce(facts.cusip, ''),
+    facts.holding_name,
+    facts.recorded_at desc,
+    facts.id desc
 $view$;
 begin
     -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
