@@ -7,15 +7,15 @@ description: PR review mechanics. Weigh unresolved review findings by severity, 
 
 `auto` calls this skill. Use it alone when only the review loop is needed.
 
-## Weighted score
+## Blocking threshold (conjunctive budget)
 
-| Severity tag | Weight |
-|---|---|
-| `severity: high` | 1.0 |
-| `severity: middle` | 0.5 (also the weight of an untagged finding) |
-| `severity: low` | 0.25 |
+| Severity tag | Allowed unresolved count | Notes |
+|---|---|---|
+| `severity: high` | `0` | Any unresolved high finding blocks the merge |
+| `severity: medium` | `<= 2` | Unlabelled findings and `severity: middle` count as `medium` |
+| `severity: low` | `<= 4` | Minor/nit findings |
 
-A total of 1.0 or more blocks the merge. Two middle findings block it. Read the literal tag. Do not infer severity from tone.
+A PR is review-ready only when all three conditions hold simultaneously: `High == 0` AND `Medium <= 2` AND `Low <= 4`. Read the literal `severity:` tag. Do not infer severity from tone. Reviewer platform errors, timeouts, or unparseable reviews warn and do not block.
 
 ## Thread rules
 
@@ -29,4 +29,4 @@ A total of 1.0 or more blocks the merge. Two middle findings block it. Read the 
 - Checks, review, and merge refer to the same head SHA. A result from an older head does not count.
 - Every check marked `blocks_merge: true` ends in success. Pending, skipped, cancelled, and unreadable all count as unmet.
 - Let the gate tool compute the decision. Do not read a check table by eye.
-- Commands are in `local.md`. Use the exit code only. Do not grep the output text.
+- Run `ws-pr-gate` (see `AGENTS.md`). Use the exit code only. Do not grep the output text.

@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=367641534398a6351d3a1a0d1baf02bc43af7d37c99571c86ba02aaed9f1b0a8 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=b3513ad19934f1149ea17c385b5072752dcd2cd900bb83cbd8c821487511a31c -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -68,8 +68,7 @@
    it. A merge whose pipeline reaches production (a release promote, see
    `docs/release-protocol.md`) waits for the owner.
    **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. A release workflow deploys, promotes or applies to a production environment. The release code is the code that a release workflow runs. The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter. Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this. A workflow that defines a required check is part of the gate, so this rule covers its edits too. In a repository with a release workflow, the owner also approves workflow edits and edits to the release code. A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`. With a verified run, the agent merges an edit to the release code. With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check. With a verified run, the agent merges a proven tightening of the infra2 gate inventory. In a repository whose gate does not print `production lock verified`, these edits stay with the owner. A Repo tier may record an owner decision that replaces this rule for that repository.
-   This repository's merge gate does not read a production lock yet (#1097).
-   Until it does, the owner approves every workflow edit and every edit to the release code.
+   **Workflow edits**: An owner decision of 2026-10-06 (`docs/release-protocol.md`) replaces the block's rule on workflow and release-code edits here. Workflow edits and release-code edits are the agent's, like any other non-production change. The production release is `tools/cut_release.sh <tag> --prod` or `deploy-release.yml` with `deploy_type=prod`. The owner approves the exact commit SHA of each such dispatch at run time. The block's holds on merge-gate code and data still apply, including required-check workflows.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
@@ -85,31 +84,23 @@
    or explicitly demote it on the issue.
    (vision.md; drift audit #429, invariants I1–I4; root #434.) Landing on main via PR merge gate is a prerequisite before deployment. Do not trigger deployment from an unmerged branch.
    Honest partial scope stays open with a scope note instead of closing.
-7. **Acceptance criteria are standing checks, and they cover the whole scope.** Learned from
-   closed issues whose scope silently evaporated (#371, #494, #495; see
-   `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md`):
+7. **Acceptance criteria are standing checks, and they cover the whole scope.** See
+   `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md` (#371, #494, #495):
    - **Every scope item has a matching acceptance criterion.** If the issue body names a
-     deliverable, exactly one criterion must assert it. A deliverable with no criterion does
-     not belong in the scope: delete it or write the check. Judge closure against the scope,
-     item by item.
+     deliverable, exactly one criterion must assert it. Delete deliverables without a check,
+     or write the check. Judge closure against scope item by item.
    - **A criterion is a check that runs again, not a run that happened.** Pasted output is
      evidence. Acceptance is a named CI step, test, or gate that turns red on the next
-     regression. A one-time manual walk, a hand-run script, or one production measurement
-     satisfies rule 6 and still fails this rule. State how the check is armed and where it
-     lives.
+     regression. A one-time manual walk or script satisfies rule 6 and still fails this rule.
+     State where the check lives.
    - **A criterion must be able to fail where production calls.** A test that supplies an
      argument the deployed caller omits proves the parameter, not the wiring. Assert through
-     the deployed entry point. Confirm the check goes red against the unfixed code before you
-     trust it.
-   Auto-closing with `Closes #N` asserts that all three rules were evaluated. When a merge
-   cannot prove a criterion (a user journey, a role-dependent view, a deployed-environment
-   state), reference the issue with a plain `#N` and close it by hand with a comment that
-   walks the criteria in order.
+     the deployed entry point. Confirm the check fails on unfixed code first.
+   `Closes #N` asserts all three rules. When a merge cannot prove a criterion (such as deployed
+   state), use a plain `#N` and close by hand with a comment walking the criteria.
 
-At the start of a task and after context compaction, re-read the user's latest instruction, run the
-rule 4 checkpoint commands, and note the issue number, branch, and files you intend to touch before
-editing. When handing off, leave a short
-note on the issue: what is done, what is verified, what is next, what failed and why.
+Before editing or after compaction, re-read the prompt, run rule 4 checks, and note the issue,
+branch, and target files. On handoff, post done, verified, next, and failed items on the issue.
 
 ## Project context
 

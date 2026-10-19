@@ -16,12 +16,13 @@ To declare **Complete**, you MUST run:
 ws-delivery-status --assert-complete --reality-probe "<command>"
 ```
 
-| Condition | Mode | Required Action / Disposition |
+| Condition | Task Mode | Issue & Production Disposition |
 |---|---|---|
-| `ws-delivery-status --assert-complete ...` exit 0, no service impact | **Complete** | Production disposition `none` |
+| `ws-delivery-status --assert-complete ...` exit 0, single-PR scope or no service deploy | **Complete** | Clean up worktree/branch; close issue; disposition `none` |
+| `ws-delivery-status --assert-complete ...` exit 0, service change in batched-staging repo (`auto-release-staging.yml`) or lane of multi-lane issue | **Complete** | Clean up worktree/branch; keep root product issue open with scope note (no `prod-pending`); disposition `batched-staging` |
+| `ws-delivery-status --assert-complete ...` exit 0, release promotion task with Stage 2 staging green + owner gave "deploy" + prod verified | **Complete** | Clean up worktree/branch; close issue; disposition `deployed` |
+| Release promotion task with Stage 2 staging green, awaiting owner reply to `[PROD GATEKEEPER]` | **Suspend** | Keep issue open with `prod-pending`; disposition `pending` |
 | `ws-delivery-status` exit 0 (Stage 1 only, no reality probe or probe failed) | **Suspend** | Report state strictly as `Stage 1 Landed (Unverified)`; issue stays open |
-| `ws-delivery-status --assert-complete ...` exit 0 + service impact, owner gave "deploy" + prod verified | **Complete** | Production disposition `deployed` |
-| `ws-delivery-status` exit 0 + service impact, no owner answer yet | **Suspend** | Production disposition `pending` (issue stays open) |
 | `ws-delivery-status` exit 1 (PR in review) | **Suspend** | Report state strictly as `In review` with PR URL |
 | `ws-delivery-status` exit 2 (unmerged branch, draft changes, or probe failed) | **Suspend** | Run `auto` to merge or write handover |
 
@@ -71,9 +72,9 @@ Merge to main is Stage 1 only. Before declaring **Complete**, you MUST execute a
 
 If the reality probe fails, is empty, or is unperformed, the session MUST exit as **Suspend** (`Stage 1 Landed`), never Complete.
 
-## 3. Production gatekeeper (service changes)
+## 3. Production gatekeeper (release promotion tasks)
 
-Merge, staging deploy, and production deploy are three separate stages. Report all three with evidence, then ask:
+Merge, staging deploy, and production deploy are three separate stages. In repositories with batched or debounced automatic staging releases (`auto-release-staging.yml`), ordinary PR merges complete at Stage 1 (`batched-staging`) without prompting `[PROD GATEKEEPER]`. When executing a release promotion after Stage 2 staging (`deploy-release.yml` and `walk-release.yml`) is verified for `vX.Y.Z`, report all three with evidence, then ask:
 
 ```text
 [PROD GATEKEEPER]
@@ -87,7 +88,7 @@ Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
   The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
 - Only a production change requires owner approval, with the owner present (owner instruction, 2026-10-06). Ask once, then finish the non-production close.
   Closing in silence is forbidden.
-- Without an answer, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
+- Without an answer on an active release promotion, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
   Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
 - A "deploy" covers only the release it names. Immediately before dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production.
 - Refuse bare "deploy" keywords without release tags or commits. If the owner replies only "deploy", request explicit disambiguation naming the target: "Please confirm release target: deploy vX.Y.Z". Without explicit approval, do not deploy production.
@@ -113,7 +114,6 @@ ws-bm write-note --folder memory/handover --tags handover --title "Handover: iss
 ```
 
 Also update the issue with the same four parts. Search for an existing issue first. Create one only when none matches.
-Commands for this machine are in `local.md`.
 
 ## 5. Complete: clean up
 
@@ -143,8 +143,8 @@ Commands for this machine are in `local.md`.
    Run `git branch -d` first. A squash or rebase merge can make it refuse. The equal tip proves that nothing is lost, so `-D` is then safe. A host gate that blocks `-D` stays in force: leave the local branch and say so in the handover.
    Delete the remote branch only at that tip: `git push --force-with-lease=refs/heads/<branch>:<headRefOid> origin --delete <branch>`. GitHub may have deleted it already.
    The PR keeps `refs/pull/<n>/head`, so the commits stay recoverable. A different tip means commits that the PR did not merge: open a new PR for them or write them into the handover.
-4. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
-   With `pending`, keep it open (section 3).
+4. Close the issue with the merge proof when the disposition is `none`, `deployed`, or `hold` and the whole issue scope is satisfied.
+   When the disposition is `batched-staging` (awaiting deployed evidence) or `pending` (section 3), or when sibling lanes remain on a multi-lane issue, keep the issue open with a scope note.
 5. Delete scratch files. Record each leftover TODO in the handover.
 
 ## 6. Route each lesson (distill)
