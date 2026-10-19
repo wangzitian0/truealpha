@@ -242,6 +242,16 @@ def _resolve_filing_text(meta: dict[str, Any], object_key: object, object_store:
     return None
 
 
+def _has_raw_fetches_table(connection: Connection[Any]) -> bool:
+    try:
+        with connection.cursor() as cur:
+            cur.execute("select to_regclass('raw.fetches')")
+            res = cur.fetchone()
+            return bool(res and res[0])
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def persist_extracted_supply_chain_edges(
     connection: Connection[Any],
     *,
@@ -252,6 +262,8 @@ def persist_extracted_supply_chain_edges(
     """Extract supply-chain edges from captured SEC 10-K filings at or before `cutoff` and
     persist them into `staging.kg_entities` and `staging.kg_edges`.
     """
+    if not _has_raw_fetches_table(connection):
+        return 0
     by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers)
     try:
         rows = connection.execute(

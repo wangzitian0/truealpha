@@ -213,6 +213,19 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
         def __init__(self) -> None:
             self.queries: list[tuple[str, object]] = []
 
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("raw.fetches",)
+
+            return _RegCur()
+
         def execute(self, sql: str, params: object = None):
             self.queries.append((sql, params))
             cur = _MockCursor()
