@@ -411,6 +411,14 @@ console.log(
 			"pegReasonCodes",
 			"Module 1 PEG reason codes returned by the read model must render on rankings and entity surfaces (#1360 AC3)",
 		],
+		[
+			"sourceEvidenceStatus",
+			"Module governance sourceEvidenceStatus returned by the read model must render on /research/entities/[id] (#1360)",
+		],
+		[
+			"factorValidationStatus",
+			"Module governance factorValidationStatus returned by the read model must render on /research/entities/[id] (#1360)",
+		],
 	] as const) {
 		// Any reading position counts: `row.provenance` and
 		// `const { provenance } = row` are both reads, and the first version of
@@ -488,3 +496,68 @@ console.log(
 		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell is SSOT",
 	);
 }
+
+// ---------------------------------------------------------------------------
+// Next.js App Router route.ts files must export only valid Route segment fields.
+//
+// Exporting helper functions or constants from a `src/app/**/route.ts` file
+// passes `tsc --noEmit` and unit tests, then fails `next build` under
+// `.next/types/validator.ts`. Guard every `route.ts` across `src/app/`.
+// ---------------------------------------------------------------------------
+{
+	const ROUTE_EXPORT_ALLOWLIST = new Set([
+		"GET",
+		"POST",
+		"PUT",
+		"DELETE",
+		"PATCH",
+		"HEAD",
+		"OPTIONS",
+		"dynamic",
+		"dynamicParams",
+		"revalidate",
+		"fetchCache",
+		"runtime",
+		"preferredRegion",
+		"maxDuration",
+	]);
+
+	const routeFiles = listFiles(join(process.cwd(), "src/app")).filter((f) =>
+		f.endsWith("/route.ts"),
+	);
+	assert(
+		routeFiles.length > 0,
+		"expected at least one route.ts under src/app to scan",
+	);
+
+	for (const file of routeFiles) {
+		const code = withoutComments(readFileSync(file, "utf8"));
+		const exportedNames = [
+			...[
+				...code.matchAll(
+					/\bexport\s+(?:async\s+)?(?:function|const|let|var)\s+([A-Za-z0-9_]+)/g,
+				),
+			].map((m) => m[1]),
+			...[...code.matchAll(/\bexport\s*\{([^}]+)\}/g)].flatMap((m) =>
+				m[1]
+					.split(",")
+					.map((part) => part.trim())
+					.filter((part) => part.length > 0 && !part.startsWith("type "))
+					.map((part) => {
+						const asParts = part.split(/\s+as\s+/);
+						return (asParts[1] ?? asParts[0]).trim();
+					}),
+			),
+		];
+		const disallowed = exportedNames.filter(
+			(name) => !ROUTE_EXPORT_ALLOWLIST.has(name),
+		);
+		assert(
+			disallowed.length === 0,
+			`${file} exports non-route symbol(s) [${disallowed.join(", ")}]. Next.js App Router ` +
+				`route.ts files may export only HTTP method handlers and route segment config fields.`,
+		);
+	}
+	console.log("ok  every src/app/**/route.ts exports only Next.js route fields");
+}
+

@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * Card export button (#1360).
+ *
+ * Default: PNG export at 1080x1440 via `/research/api/cards/export`.
+ * Optional: SVG export when `format="svg"` is specified.
+ * Downloads the rendered card and disables the button while export is in progress.
+ */
+
 import { useState } from "react";
 
 interface CardExportButtonProps {

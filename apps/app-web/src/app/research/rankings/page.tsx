@@ -10,9 +10,14 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
 import {
   normalizePegConvention,
+  normalizeRankingUniverse,
   PEG_CONVENTION_LABELS,
   PEG_GROWTH_CONVENTIONS,
+  projectPegByConvention,
+  RANKING_UNIVERSE_LABELS,
+  RANKING_UNIVERSES,
   type PegGrowthConvention,
+  type RankingUniverse,
   valuationBasisLabel,
 } from "@/contracts/strategyRun";
 
@@ -22,7 +27,7 @@ function buildRankingsHref(params: {
   cursor?: string | null;
   cutoff?: string;
   convention?: PegGrowthConvention;
-  universe?: string;
+  universe?: RankingUniverse;
 }): string {
   const query = new URLSearchParams();
   if (params.cursor) query.set("cursor", params.cursor);
@@ -46,7 +51,7 @@ export default async function RankingsPage({
   if (!principal) redirect("/login?from=%2Fresearch%2Frankings");
   const params = await searchParams;
   const convention = normalizePegConvention(params.convention);
-  const selectedUniverse = params.universe === "qqq" ? "qqq" : "topt";
+  const selectedUniverse = normalizeRankingUniverse(params.universe);
   const state = await loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
   const names = await loadEntityDisplayMap();
   // #1235: one run, one definition, one basis. Under definition 1.0.0 the gap divides P/GP.
@@ -113,7 +118,7 @@ export default async function RankingsPage({
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
             Universe Scope:
           </span>
-          {(["topt", "qqq"] as const).map((univ) => {
+          {RANKING_UNIVERSES.map((univ) => {
             const active = univ === selectedUniverse;
             return (
               <Link
@@ -131,7 +136,7 @@ export default async function RankingsPage({
                     : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200"
                 }`}
               >
-                {univ === "qqq" ? "QQQ (Nasdaq-100)" : "TOPT (Top-100)"}
+                {RANKING_UNIVERSE_LABELS[univ]}
               </Link>
             );
           })}
@@ -172,12 +177,11 @@ export default async function RankingsPage({
               </thead>
               <tbody>
                 {state.data.rows.map((row) => {
-                  const rowPeg = convention === "historical_cagr" ? row.peg : null;
-                  const rowPegRank = convention === "historical_cagr" ? row.pegRank : null;
-                  const pegReasons =
-                    convention === "historical_cagr"
-                      ? (row.pegReasonCodes ?? [])
-                      : [`growth_convention_unsourced:${convention}`];
+                  const {
+                    peg: rowPeg,
+                    pegRank: rowPegRank,
+                    pegReasonCodes: pegReasons,
+                  } = projectPegByConvention(row, convention);
                   return (
                     <tr key={row.issuerId} className="border-t border-border">
                       <td className="px-4 py-3">{row.rank ?? "—"}</td>

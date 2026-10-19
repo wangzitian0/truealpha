@@ -1,8 +1,11 @@
 /**
- * Xiaohongshu Card Renderer (1080x1440 3:4 portrait) — see #372 / #44.
+ * Xiaohongshu card generation for research rankings and entity deep-dives (#372 / #44 / #1360).
  *
- * Provides deterministic SVG and JSON card generation for research rankings,
- * embedding immutable cutoff, governed run lineage, and strict research-risk attribution.
+ * Outputs:
+ * - PNG at 1080x1440 (3:4 portrait) via `next/og` (`ImageResponse`).
+ * - Deterministic SVG (`image/svg+xml`) and JSON metadata payload.
+ *
+ * Persists exported binary cards to `/research/library` via `PostgresDocumentsRepository`.
  */
 
 import React from "react";
@@ -12,6 +15,7 @@ import {
   formatPercentFromFraction,
   formatRatio,
   formatSignedRatio,
+  formatTierLabel,
   formatUsdMagnitude,
 } from "@/client/format";
 import { type AccessContext, type ValuationBasis, valuationBasisLabel } from "@/contracts/strategyRun";
@@ -23,6 +27,7 @@ export const XHS_CARD_WIDTH = 1080;
 export const XHS_CARD_HEIGHT = 1440;
 export const CARD_TEMPLATE_VERSION = "card_template.v1";
 export const CARD_SCHEMA_VERSION = "research_card.v1";
+export const CARD_EXPORT_CACHE_CONTROL = "public, max-age=300" as const;
 
 export interface RankingCardItem {
   rank: number | null;
@@ -52,6 +57,46 @@ function escapeXml(unsafe: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+function gapHexColor(valuationGap: string | null): string {
+  const gapVal = Number(valuationGap);
+  if (Number.isNaN(gapVal) || gapVal === 0) return "#94A3B8";
+  return gapVal > 0 ? "#10B981" : "#F43F5E";
+}
+
+interface FormattedRankingRow {
+  issuerId: string;
+  displayName: string;
+  rankStr: string;
+  tierStr: string;
+  gapColor: string;
+  formattedGap: string;
+  formattedMultiple: string;
+  formattedPeg: string;
+  formattedConf: string;
+}
+
+function prepareRankingCardViewModel(
+  data: RankingCardData,
+  fallbackGlyph: string,
+): { basisLabel: string; rows: FormattedRankingRow[] } {
+  const displayItems = data.items.slice(0, 7);
+  const basisLabel = valuationBasisLabel(
+    data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null,
+  );
+  const rows = displayItems.map((item) => ({
+    issuerId: item.issuerId,
+    displayName: item.displayName,
+    rankStr: item.rank !== null ? `#${item.rank}` : fallbackGlyph,
+    tierStr: item.tier ?? fallbackGlyph,
+    gapColor: gapHexColor(item.valuationGap),
+    formattedGap: formatSignedRatio(item.valuationGap) ?? fallbackGlyph,
+    formattedMultiple: formatRatio(item.currentMultiple) ?? fallbackGlyph,
+    formattedPeg: formatRatio(item.peg) ?? fallbackGlyph,
+    formattedConf: formatRatio(item.confidence) ?? fallbackGlyph,
+  }));
+  return { basisLabel, rows };
 }
 
 export function buildRankingCardJson(data: RankingCardData) {
@@ -87,23 +132,13 @@ export function buildRankingCardJson(data: RankingCardData) {
 }
 
 export function renderRankingCardSvg(data: RankingCardData): string {
-  const displayItems = data.items.slice(0, 7); // Best fit for 1080x1440 layout
-  // #1235: one run, one basis. The column and the gap name the multiple the gap divides.
-  const basisLabel = valuationBasisLabel(data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null);
+  const { basisLabel, rows } = prepareRankingCardViewModel(data, "—");
   const startY = 360;
   const rowHeight = 110;
 
-  const rowsSvg = displayItems
-    .map((item, idx) => {
+  const rowsSvg = rows
+    .map((row, idx) => {
       const y = startY + idx * rowHeight;
-      const rankStr = item.rank !== null ? `#${item.rank}` : "—";
-      const gapVal = Number(item.valuationGap);
-      const gapColor =
-        isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
-      const formattedGap = formatSignedRatio(item.valuationGap) ?? "—";
-      const formattedPs = formatRatio(item.currentMultiple) ?? "—";
-      const formattedPeg = formatRatio(item.peg) ?? "—";
-      const formattedConf = formatRatio(item.confidence) ?? "—";
 
       return `
     <!-- Row ${idx + 1} -->
@@ -111,27 +146,27 @@ export function renderRankingCardSvg(data: RankingCardData): string {
       <rect width="960" height="96" rx="16" fill="#131B2E" stroke="#1E293B" stroke-width="1.5"/>
       <!-- Rank Badge -->
       <circle cx="56" cy="48" r="28" fill="${idx < 3 ? "#1E293B" : "#0F172A"}" stroke="${idx === 0 ? "#F59E0B" : idx === 1 ? "#94A3B8" : idx === 2 ? "#D97706" : "#334155"}" stroke-width="2"/>
-      <text x="56" y="55" font-size="20" font-weight="700" fill="${idx === 0 ? "#F59E0B" : idx === 1 ? "#F1F5F9" : idx === 2 ? "#F59E0B" : "#94A3B8"}" text-anchor="middle">${escapeXml(rankStr)}</text>
+      <text x="56" y="55" font-size="20" font-weight="700" fill="${idx === 0 ? "#F59E0B" : idx === 1 ? "#F1F5F9" : idx === 2 ? "#F59E0B" : "#94A3B8"}" text-anchor="middle">${escapeXml(row.rankStr)}</text>
       
       <!-- Issuer Name & ID -->
-      <text x="110" y="44" font-size="24" font-weight="600" fill="#F8FAFC">${escapeXml(item.displayName)}</text>
-      <text x="110" y="68" font-size="16" font-family="monospace" fill="#64748B">${escapeXml(item.issuerId)}</text>
+      <text x="110" y="44" font-size="24" font-weight="600" fill="#F8FAFC">${escapeXml(row.displayName)}</text>
+      <text x="110" y="68" font-size="16" font-family="monospace" fill="#64748B">${escapeXml(row.issuerId)}</text>
 
       <!-- Tier Badge -->
       <rect x="360" y="32" width="70" height="32" rx="8" fill="#1E293B" />
-      <text x="395" y="53" font-size="14" font-weight="500" fill="#38BDF8" text-anchor="middle">${escapeXml(item.tier ?? "—")}</text>
+      <text x="395" y="53" font-size="14" font-weight="500" fill="#38BDF8" text-anchor="middle">${escapeXml(row.tierStr)}</text>
 
       <!-- Current multiple of the valuation basis -->
-      <text x="500" y="55" font-size="20" font-family="monospace" fill="#E2E8F0" text-anchor="middle">${escapeXml(formattedPs)}</text>
+      <text x="500" y="55" font-size="20" font-family="monospace" fill="#E2E8F0" text-anchor="middle">${escapeXml(row.formattedMultiple)}</text>
 
       <!-- Valuation Gap -->
-      <text x="660" y="55" font-size="22" font-family="monospace" font-weight="700" fill="${gapColor}" text-anchor="middle">${escapeXml(formattedGap)}</text>
+      <text x="660" y="55" font-size="22" font-family="monospace" font-weight="700" fill="${row.gapColor}" text-anchor="middle">${escapeXml(row.formattedGap)}</text>
 
       <!-- PEG -->
-      <text x="800" y="55" font-size="18" font-family="monospace" fill="#CBD5E1" text-anchor="middle">${escapeXml(formattedPeg)}</text>
+      <text x="800" y="55" font-size="18" font-family="monospace" fill="#CBD5E1" text-anchor="middle">${escapeXml(row.formattedPeg)}</text>
 
       <!-- Confidence -->
-      <text x="900" y="55" font-size="18" font-family="monospace" fill="#94A3B8" text-anchor="middle">${escapeXml(formattedConf)}</text>
+      <text x="900" y="55" font-size="18" font-family="monospace" fill="#94A3B8" text-anchor="middle">${escapeXml(row.formattedConf)}</text>
     </g>`;
     })
     .join("\n");
@@ -228,12 +263,33 @@ export interface EntityCardData {
   confidence: string | null;
 }
 
-function formatTierLabel(tier: string | null): string {
-  if (!tier) return "—";
-  if (tier === "large_model_native") return "Large Model Native";
-  if (tier === "tech") return "Tech";
-  if (tier === "traditional") return "Traditional";
-  return tier;
+interface FormattedEntityViewModel {
+  gapColor: string;
+  formattedGap: string;
+  formattedMultiple: string;
+  basisLabel: string;
+  formattedPeg: string;
+  formattedGppe: string;
+  formattedConf: string;
+  tierText: string;
+  displayThemes: Array<{ theme: string; themeShare: string | null }>;
+}
+
+function prepareEntityCardViewModel(
+  data: EntityCardData,
+  fallbackGlyph: string,
+): FormattedEntityViewModel {
+  return {
+    gapColor: gapHexColor(data.valuationGap),
+    formattedGap: formatSignedRatio(data.valuationGap) ?? fallbackGlyph,
+    formattedMultiple: formatRatio(data.currentMultiple) ?? fallbackGlyph,
+    basisLabel: valuationBasisLabel(data.valuationBasis),
+    formattedPeg: formatRatio(data.peg) ?? fallbackGlyph,
+    formattedGppe: formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : fallbackGlyph),
+    formattedConf: formatRatio(data.confidence) ?? fallbackGlyph,
+    tierText: formatTierLabel(data.tier),
+    displayThemes: data.themes.slice(0, 4),
+  };
 }
 
 /**
@@ -281,18 +337,17 @@ export function buildEntityCardJson(data: EntityCardData) {
 }
 
 export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
-  const gapVal = Number(data.valuationGap);
-  const gapColor =
-    isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
-  const formattedGap = formatSignedRatio(data.valuationGap) ?? "—";
-  const formattedPs = formatRatio(data.currentMultiple) ?? "—";
-  const basisLabel = valuationBasisLabel(data.valuationBasis);
-  const formattedPeg = formatRatio(data.peg) ?? "—";
-  const formattedGppe = formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : "—");
-  const formattedConf = formatRatio(data.confidence) ?? "—";
-  const tierText = formatTierLabel(data.tier);
-
-  const displayThemes = data.themes.slice(0, 4);
+  const {
+    gapColor,
+    formattedGap,
+    formattedMultiple: formattedPs,
+    basisLabel,
+    formattedPeg,
+    formattedGppe,
+    formattedConf,
+    tierText,
+    displayThemes,
+  } = prepareEntityCardViewModel(data, "—");
   const themesSvg =
     displayThemes.length > 0
       ? displayThemes
@@ -440,25 +495,13 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
 const h = React.createElement;
 
 export async function renderRankingCardPng(data: RankingCardData): Promise<Buffer> {
-  const displayItems = data.items.slice(0, 7);
-  const basisLabel = valuationBasisLabel(
-    data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null,
-  );
+  const { basisLabel, rows } = prepareRankingCardViewModel(data, "-");
 
-  const rowNodes = displayItems.map((item, idx) => {
-    const rankStr = item.rank !== null ? `#${item.rank}` : "-";
-    const gapVal = Number(item.valuationGap);
-    const gapColor =
-      Number.isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
-    const formattedGap = formatSignedRatio(item.valuationGap) ?? "-";
-    const formattedMultiple = formatRatio(item.currentMultiple) ?? "-";
-    const formattedPeg = formatRatio(item.peg) ?? "-";
-    const formattedConf = formatRatio(item.confidence) ?? "-";
-
-    return h(
+  const rowNodes = rows.map((row, idx) =>
+    h(
       "div",
       {
-        key: `${item.issuerId}-${idx}`,
+        key: `${row.issuerId}-${idx}`,
         style: {
           display: "flex",
           flexDirection: "row",
@@ -490,7 +533,7 @@ export async function renderRankingCardPng(data: RankingCardData): Promise<Buffe
             fontWeight: 700,
           },
         },
-        rankStr,
+        row.rankStr,
       ),
       h(
         "div",
@@ -502,8 +545,8 @@ export async function renderRankingCardPng(data: RankingCardData): Promise<Buffe
             marginLeft: "16px",
           },
         },
-        h("div", { style: { fontSize: 22, fontWeight: 700, color: "#F8FAFC" } }, item.displayName),
-        h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "4px" } }, item.issuerId),
+        h("div", { style: { fontSize: 22, fontWeight: 700, color: "#F8FAFC" } }, row.displayName),
+        h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "4px" } }, row.issuerId),
       ),
       h(
         "div",
@@ -521,12 +564,12 @@ export async function renderRankingCardPng(data: RankingCardData): Promise<Buffe
             fontWeight: 600,
           },
         },
-        item.tier ?? "-",
+        row.tierStr,
       ),
       h(
         "div",
         { style: { width: "110px", textAlign: "center", fontSize: 20, color: "#E2E8F0" } },
-        formattedMultiple,
+        row.formattedMultiple,
       ),
       h(
         "div",
@@ -536,23 +579,23 @@ export async function renderRankingCardPng(data: RankingCardData): Promise<Buffe
             textAlign: "center",
             fontSize: 22,
             fontWeight: 700,
-            color: gapColor,
+            color: row.gapColor,
           },
         },
-        formattedGap,
+        row.formattedGap,
       ),
       h(
         "div",
         { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#CBD5E1" } },
-        formattedPeg,
+        row.formattedPeg,
       ),
       h(
         "div",
         { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#94A3B8" } },
-        formattedConf,
+        row.formattedConf,
       ),
-    );
-  });
+    ),
+  );
 
   const tree = h(
     "div",
@@ -691,21 +734,10 @@ export async function renderRankingCardPng(data: RankingCardData): Promise<Buffe
 }
 
 export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise<Buffer> {
-  const gapVal = Number(data.valuationGap);
-  const gapColor =
-    Number.isNaN(gapVal) || gapVal === 0 ? "#94A3B8" : gapVal > 0 ? "#10B981" : "#F43F5E";
-  const formattedGap = formatSignedRatio(data.valuationGap) ?? "-";
-  const formattedMultiple = formatRatio(data.currentMultiple) ?? "-";
-  const basisLabel = valuationBasisLabel(data.valuationBasis);
-  const formattedPeg = formatRatio(data.peg) ?? "-";
-  const formattedGppe = formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : "-");
-  const formattedConf = formatRatio(data.confidence) ?? "-";
-  const tierText = formatTierLabel(data.tier);
-
-  const displayThemes = data.themes.slice(0, 4);
+  const vm = prepareEntityCardViewModel(data, "-");
   const themeNodes =
-    displayThemes.length > 0
-      ? displayThemes.map((t, idx) =>
+    vm.displayThemes.length > 0
+      ? vm.displayThemes.map((t, idx) =>
           h(
             "div",
             {
@@ -823,7 +855,7 @@ export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise
               fontWeight: 600,
             },
           },
-          tierText,
+          vm.tierText,
         ),
       ),
       h(
@@ -853,12 +885,12 @@ export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise
           h(
             "div",
             { style: { fontSize: 16, color: "#94A3B8", marginTop: "12px" } },
-            `Current ${basisLabel}: ${formattedMultiple}`,
+            `Current ${vm.basisLabel}: ${vm.formattedMultiple}`,
           ),
           h(
             "div",
-            { style: { fontSize: 24, fontWeight: 700, color: gapColor, marginTop: "8px" } },
-            `Valuation Gap (${basisLabel}): ${formattedGap}`,
+            { style: { fontSize: 24, fontWeight: 700, color: vm.gapColor, marginTop: "8px" } },
+            `Valuation Gap (${vm.basisLabel}): ${vm.formattedGap}`,
           ),
         ),
         h(
@@ -878,7 +910,7 @@ export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise
           h(
             "div",
             { style: { fontSize: 28, fontWeight: 700, color: "#38BDF8", marginTop: "14px" } },
-            `PEG: ${formattedPeg}`,
+            `PEG: ${vm.formattedPeg}`,
           ),
           h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "6px" } }, "Historical CAGR"),
         ),
@@ -902,12 +934,12 @@ export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise
           "div",
           { style: { display: "flex", flexDirection: "column" } },
           h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "LABOR EFFICIENCY · MODULE 2"),
-          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC", marginTop: "10px" } }, formattedGppe),
+          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC", marginTop: "10px" } }, vm.formattedGppe),
         ),
         h(
           "div",
           { style: { fontSize: 15, color: "#94A3B8" } },
-          `Branch: ${data.operatingBranch ?? "-"} · Conf: ${formattedConf}`,
+          `Branch: ${data.operatingBranch ?? "-"} · Conf: ${vm.formattedConf}`,
         ),
       ),
       h(
@@ -1014,6 +1046,35 @@ async function persistCardDocument(
   }
 }
 
+async function buildBinaryCardResponse(options: {
+  body: BodyInit;
+  bytes: Buffer;
+  artifactContentType: "image/svg+xml" | "image/png";
+  headerContentType: "image/svg+xml; charset=utf-8" | "image/png";
+  filename: string;
+  persist: boolean;
+  documents: DocumentsRepository;
+  context: AccessContext;
+  artifactId: string;
+}): Promise<Response> {
+  const docId = options.persist
+    ? await persistCardDocument(
+        options.documents,
+        options.context,
+        options.artifactId,
+        options.bytes,
+        options.artifactContentType,
+      )
+    : null;
+  const headers: Record<string, string> = {
+    "Content-Type": options.headerContentType,
+    "Content-Disposition": `attachment; filename="${options.filename}"`,
+    "Cache-Control": "public, max-age=300",
+  };
+  if (docId) headers["X-Research-Document-Id"] = docId;
+  return new Response(options.body, { status: 200, headers });
+}
+
 export interface CardExportRouteDeps {
   resolvePrincipal?: () => Promise<{ context: AccessContext } | null>;
   adapter?: MartAdapterLike;
@@ -1084,43 +1145,34 @@ export async function handleCardExportGet(
     }
 
     const artifactId = `card:entity:${toStableToken(state.data.issuerId)}:${toStableToken(cardData.cutoffAt)}`;
+    const fileStem = `truealpha-card-entity-${state.data.issuerId.replace(/[:]/g, "-")}`;
 
     if (format === "svg") {
       const svg = renderEntityDeepDiveCardSvg(cardData);
-      const filename = `truealpha-card-entity-${state.data.issuerId.replace(/[:]/g, "-")}.svg`;
-      const docId = persist
-        ? await persistCardDocument(
-            documents,
-            principal.context,
-            artifactId,
-            Buffer.from(svg, "utf8"),
-            "image/svg+xml",
-          )
-        : null;
-      const headers: Record<string, string> = {
-        "Content-Type": "image/svg+xml; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Cache-Control": "public, max-age=300",
-      };
-      if (docId) headers["X-Research-Document-Id"] = docId;
-      return new Response(svg, { status: 200, headers });
+      return buildBinaryCardResponse({
+        body: svg,
+        bytes: Buffer.from(svg, "utf8"),
+        artifactContentType: "image/svg+xml",
+        headerContentType: "image/svg+xml; charset=utf-8",
+        filename: `${fileStem}.svg`,
+        persist,
+        documents,
+        context: principal.context,
+        artifactId,
+      });
     }
 
     const png = await renderEntityDeepDiveCardPng(cardData);
-    const filename = `truealpha-card-entity-${state.data.issuerId.replace(/[:]/g, "-")}.png`;
-    const docId = persist
-      ? await persistCardDocument(documents, principal.context, artifactId, png, "image/png")
-      : null;
-    const headers: Record<string, string> = {
-      "Content-Type": "image/png",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Cache-Control": "public, max-age=300",
-    };
-    if (docId) headers["X-Research-Document-Id"] = docId;
-
-    return new Response(new Uint8Array(png), {
-      status: 200,
-      headers,
+    return buildBinaryCardResponse({
+      body: new Uint8Array(png),
+      bytes: png,
+      artifactContentType: "image/png",
+      headerContentType: "image/png",
+      filename: `${fileStem}.png`,
+      persist,
+      documents,
+      context: principal.context,
+      artifactId,
     });
   }
 
@@ -1161,46 +1213,33 @@ export async function handleCardExportGet(
   }
 
   const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}`;
+  const fileStem = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}`;
 
   if (format === "svg") {
     const svg = renderRankingCardSvg(cardData);
-    const filename = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}.svg`;
-    const docId = persist
-      ? await persistCardDocument(
-          documents,
-          principal.context,
-          artifactId,
-          Buffer.from(svg, "utf8"),
-          "image/svg+xml",
-        )
-      : null;
-    const headers: Record<string, string> = {
-      "Content-Type": "image/svg+xml; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Cache-Control": "public, max-age=300",
-    };
-    if (docId) headers["X-Research-Document-Id"] = docId;
-
-    return new Response(svg, {
-      status: 200,
-      headers,
+    return buildBinaryCardResponse({
+      body: svg,
+      bytes: Buffer.from(svg, "utf8"),
+      artifactContentType: "image/svg+xml",
+      headerContentType: "image/svg+xml; charset=utf-8",
+      filename: `${fileStem}.svg`,
+      persist,
+      documents,
+      context: principal.context,
+      artifactId,
     });
   }
 
   const png = await renderRankingCardPng(cardData);
-  const filename = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}.png`;
-  const docId = persist
-    ? await persistCardDocument(documents, principal.context, artifactId, png, "image/png")
-    : null;
-  const headers: Record<string, string> = {
-    "Content-Type": "image/png",
-    "Content-Disposition": `attachment; filename="${filename}"`,
-    "Cache-Control": "public, max-age=300",
-  };
-  if (docId) headers["X-Research-Document-Id"] = docId;
-
-  return new Response(new Uint8Array(png), {
-    status: 200,
-    headers,
+  return buildBinaryCardResponse({
+    body: new Uint8Array(png),
+    bytes: png,
+    artifactContentType: "image/png",
+    headerContentType: "image/png",
+    filename: `${fileStem}.png`,
+    persist,
+    documents,
+    context: principal.context,
+    artifactId,
   });
 }

@@ -173,3 +173,40 @@ export function decodeRouteParam(id: string): string {
     return id;
   }
 }
+
+/** Canonical tier key for palette and badge lookups (#1360). */
+export function tierKey(
+  tier: string | null | undefined,
+): "lm-native" | "tech" | "traditional" | "unknown" {
+  const normalized = (tier ?? "").trim().toLowerCase();
+  if (
+    normalized === "large_model_native" ||
+    normalized === "large model native" ||
+    normalized === "lm-native"
+  ) {
+    return "lm-native";
+  }
+  if (normalized === "tech" || normalized === "tech_enabled" || normalized === "tech-enabled") {
+    return "tech";
+  }
+  if (normalized === "traditional") {
+    return "traditional";
+  }
+  return "unknown";
+}
+
+/** Human-readable display label for a three-tier valuation classification (#1360). */
+export function formatTierLabel(tier: string | null | undefined): string {
+  if (!tier || tier.trim() === "") return "—";
+  switch (tierKey(tier)) {
+    case "lm-native":
+      return "Large Model Native";
+    case "tech":
+      return "Tech";
+    case "traditional":
+      return "Traditional";
+    default:
+      return tier;
+  }
+}
+
