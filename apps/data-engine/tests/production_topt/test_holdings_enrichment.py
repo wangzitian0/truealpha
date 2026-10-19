@@ -353,4 +353,3 @@ def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(con
         ("etf:series:S-TEST-COMPANY-CIK", ea_isin),
     ).fetchone()
     assert row == (company_cik, "EA", "listing:xnas:ea")
-
