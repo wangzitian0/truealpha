@@ -503,7 +503,7 @@ export default async function EntityDetailPage({
                         <th scope="row" className="px-4 py-3 font-medium text-white">
                           {row.cutoffAt}
                         </th>
-                        <td className="px-4 py-3 font-mono">
+                        <td className="px-4 py-3 font-mono" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
                           {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
                           {row.capitalAdjustedLaborEfficiency !== null && (
                             <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
@@ -511,19 +511,22 @@ export default async function EntityDetailPage({
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3 font-mono">
+                        <td className="px-4 py-3 font-mono" title={row.currentPriceToSales ?? undefined}>
                           {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
                         </td>
-                        <td className="px-4 py-3 font-mono">
+                        <td className="px-4 py-3 font-mono" title={row.currentMultiple ?? undefined}>
                           {row.currentMultiple
                             ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
-                            : "—"}
+                            : formatCell(null)}
                         </td>
                         <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
-                        <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}>
+                        <td
+                          className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}
+                          title={row.valuationGap ?? undefined}
+                        >
                           {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
                         </td>
-                        <td className="px-4 py-3 font-mono">
+                        <td className="px-4 py-3 font-mono" title={rowProjectedPeg ?? undefined}>
                           {formatRatio(rowProjectedPeg) ?? formatCell(rowProjectedPeg)}
                         </td>
                         <td className="px-4 py-3">

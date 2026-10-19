@@ -19,6 +19,7 @@
  * multi-fund tranche's problem.
  */
 
+import { formatRatio } from "@/client/format";
 import type { ValuationBasis } from "@/contracts/strategyRun";
 import { withMartReadonly } from "./db";
 import type { MartClientLike } from "./topt-gppe-repository";
@@ -166,7 +167,7 @@ const FUND_COVERAGE_SQL = `
 /** The masses arrive as exact numerics the factor measured and the database stored
  * (review on #699 — a JS float accumulator drifts); formatting is the only conversion. */
 function pct(value: unknown): string {
-  return typeof value === "string" ? Number(value).toFixed(2) : "0.00";
+  return (typeof value === "string" ? formatRatio(value) : null) ?? "0.00";
 }
 
 type ConsolidationRow = {
@@ -210,7 +211,7 @@ export async function loadFundValuation(
     const consolidated = await client.query(FUND_CONSOLIDATION_SQL, [joinRunId]);
     for (const row of consolidated.rows) {
       consolidations.set(String(row.fund_id), {
-        weightedGap: typeof row.weighted_gap === "string" ? Number(row.weighted_gap).toFixed(2) : null,
+        weightedGap: typeof row.weighted_gap === "string" ? formatRatio(row.weighted_gap) : null,
         weightedGapBasis:
           row.valuation_basis === "price_to_gross_profit" || row.valuation_basis === "price_to_sales"
             ? row.valuation_basis

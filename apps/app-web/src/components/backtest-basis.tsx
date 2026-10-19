@@ -5,7 +5,7 @@
  */
 
 import type { BacktestRunRecord } from "@/server/mart/backtest-repository";
-import { formatPercentFromFraction } from "@/client/format";
+import { formatCell, formatPercentFromFraction } from "@/client/format";
 
 const PRICE_BASIS_LABELS: Record<string, string> = {
   unadjusted_open_explicit_splits:
@@ -56,7 +56,7 @@ export function benchmarkNeverFilled(run: BacktestRunRecord): string[] {
 }
 
 function percent(value: number | null): string {
-  return (value !== null ? formatPercentFromFraction(String(value)) : null) ?? "—";
+  return formatCell(value !== null ? formatPercentFromFraction(String(value)) : null);
 }
 
 export function BacktestBasis({ run }: { run: BacktestRunRecord }) {

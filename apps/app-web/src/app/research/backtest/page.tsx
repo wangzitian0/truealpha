@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { listBacktestRuns } from "@/server/mart/backtest-repository";
-import { formatPercentFromFraction } from "@/client/format";
+import { formatCell, formatPercentFromFraction, formatRatio } from "@/client/format";
 import { BacktestLimitations, runLimitations } from "@/components/backtest-basis";
 
 export const dynamic = "force-dynamic";
@@ -81,20 +81,35 @@ export default async function BacktestListPage() {
                       <BacktestLimitations run={r} />
                     </details>
                   </td>
-                  <td className="px-4 py-3 text-right font-mono font-medium text-emerald-400">
-                    {r.cagr_monthly !== null ? formatPercentFromFraction(String(r.cagr_monthly)) : "—"}
+                  <td
+                    className="px-4 py-3 text-right font-mono font-medium text-emerald-400"
+                    title={r.cagr_monthly !== null ? String(r.cagr_monthly) : undefined}
+                  >
+                    {formatCell(r.cagr_monthly !== null ? formatPercentFromFraction(String(r.cagr_monthly)) : null)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-gray-300">
-                    {r.benchmark_cagr !== null ? formatPercentFromFraction(String(r.benchmark_cagr)) : "—"}
+                  <td
+                    className="px-4 py-3 text-right font-mono text-gray-300"
+                    title={r.benchmark_cagr !== null ? String(r.benchmark_cagr) : undefined}
+                  >
+                    {formatCell(r.benchmark_cagr !== null ? formatPercentFromFraction(String(r.benchmark_cagr)) : null)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono">
-                    {r.sharpe_daily !== null ? r.sharpe_daily.toFixed(2) : "—"}
+                  <td
+                    className="px-4 py-3 text-right font-mono"
+                    title={r.sharpe_daily !== null ? String(r.sharpe_daily) : undefined}
+                  >
+                    {formatCell(r.sharpe_daily !== null ? formatRatio(String(r.sharpe_daily)) : null)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-rose-400">
-                    {r.max_dd_daily !== null ? formatPercentFromFraction(String(r.max_dd_daily)) : "—"}
+                  <td
+                    className="px-4 py-3 text-right font-mono text-rose-400"
+                    title={r.max_dd_daily !== null ? String(r.max_dd_daily) : undefined}
+                  >
+                    {formatCell(r.max_dd_daily !== null ? formatPercentFromFraction(String(r.max_dd_daily)) : null)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-gray-400">
-                    {r.turnover_monthly !== null ? r.turnover_monthly.toFixed(2) : "—"}
+                  <td
+                    className="px-4 py-3 text-right font-mono text-gray-400"
+                    title={r.turnover_monthly !== null ? String(r.turnover_monthly) : undefined}
+                  >
+                    {formatCell(r.turnover_monthly !== null ? formatRatio(String(r.turnover_monthly)) : null)}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span

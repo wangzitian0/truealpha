@@ -574,7 +574,7 @@ export default async function AdminDatahubPage() {
             <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
               <div>
                 <dt className="text-gray-500">target run</dt>
-                <dd className="font-mono">{shortRun(head.target_run_id)}</dd>
+                <dd className="font-mono" title={head.target_run_id}>{shortRun(head.target_run_id)}</dd>
               </div>
               <div>
                 <dt className="text-gray-500">capture availability</dt>
@@ -749,7 +749,9 @@ export default async function AdminDatahubPage() {
                     <td className="pr-4 font-mono">
                       {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : "—"}
                     </td>
-                    <td className="pr-4 font-mono text-gray-400">{call.run_key ? shortRun(call.run_key) : "—"}</td>
+                    <td className="pr-4 font-mono text-gray-400" title={call.run_key ?? undefined}>
+                      {call.run_key ? shortRun(call.run_key) : "—"}
+                    </td>
                     <td className="text-gray-400">{call.error ?? "—"}</td>
                   </tr>
                 ))}
@@ -798,7 +800,7 @@ export default async function AdminDatahubPage() {
           <tbody>
             {stats.runs.map((run) => (
               <tr key={run.run_id} className="border-t border-border">
-                <td className="pr-4 font-mono">{shortRun(run.run_id)}</td>
+                <td className="pr-4 font-mono" title={run.run_id}>{shortRun(run.run_id)}</td>
                 <td className="pr-4 font-mono">{run.universe_id}</td>
                 <td className="pr-4 text-gray-400">{run.cutoff}</td>
                 <td className="pr-4">
