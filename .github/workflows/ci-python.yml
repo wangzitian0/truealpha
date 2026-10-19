@@ -66,8 +66,8 @@ jobs:
       - run: python3 tools/reachability_ratchet.py --check
       - run: python3 tools/complexity_gate.py --check
       - run: python3 tools/sql_literal_gate.py
-      - run: uv run ruff check apps libs
-      - run: uv run ruff format --check apps libs
+      - run: uv run ruff check apps common
+      - run: uv run ruff format --check apps common
       - run: uv run mypy
       - run: uv run python common/contracts/conformance/export_issue58.py --check
       # #759 environment manifests: fresh against the settings models and past the

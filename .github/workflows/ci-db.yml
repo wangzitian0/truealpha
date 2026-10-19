@@ -105,7 +105,7 @@ jobs:
             else
               while IFS= read -r ref; do
                 if grep -qE "psql|ON_ERROR_STOP" "$ref"; then hosted=1; break; fi
-              done < <(grep -rlF -- "$name" libs apps tools --include="*.py" --include="*.ts" 2>/dev/null || true)
+              done < <(grep -rlF -- "$name" common apps tools --include="*.py" --include="*.ts" 2>/dev/null || true)
             fi
             if [ "$hosted" -eq 0 ]; then
               echo "::error::db/tests/$name has no executing host — give it a real runner or delete it"
