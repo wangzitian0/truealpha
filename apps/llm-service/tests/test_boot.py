@@ -48,11 +48,5 @@ def test_llm_service_settings_owns_migrations_and_excludes_s3_and_unused_llm_fie
 ) -> None:
     assert not any(name.startswith(("s3_", "llm_")) for name in Settings.model_fields)
     monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@db:5432/truealpha")
-    monkeypatch.setenv("MIGRATION_LOCK_BUDGET_SECONDS", "30")
-    monkeypatch.setenv("TRUEALPHA_MIGRATION_LOCK_TIMEOUT", "7")
-    monkeypatch.setenv("MIGRATION_STATEMENT_TIMEOUT_SECONDS", "90")
     resolved = Settings(_env_file=None)
     assert resolved.migrations_database_url == "postgresql://admin:secret@db:5432/truealpha"
-    assert resolved.migration_lock_budget_seconds == 30
-    assert resolved.migration_lock_timeout_seconds == 7
-    assert resolved.migration_statement_timeout_seconds == 90

@@ -184,20 +184,6 @@ def fetching_runs(instance: dg.DagsterInstance, since: datetime) -> list[dg.RunR
     return candidates
 
 
-def first_fetching_run(instance: dg.DagsterInstance, since: datetime) -> dg.RunRecord | None:
-    """The earliest live-pipeline run created at or after `since` that had to fetch."""
-    candidates = fetching_runs(instance, since)
-    if not candidates:
-        return None
-    successful = [c for c in candidates if c.dagster_run.status == dg.DagsterRunStatus.SUCCESS]
-    if successful:
-        return min(successful, key=lambda r: _as_utc(r.create_timestamp))
-    in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
-    if in_progress:
-        return min(in_progress, key=lambda r: _as_utc(r.create_timestamp))
-    return candidates[0]
-
-
 def capture_run_of(instance: dg.DagsterInstance, run_id: str) -> str | None:
     """The capture run a successful tick wrote, from its output metadata."""
     records = instance.get_records_for_run(run_id=run_id, of_type=dg.DagsterEventType.STEP_OUTPUT).records

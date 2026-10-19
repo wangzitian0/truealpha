@@ -82,7 +82,7 @@ jobs:
       - uses: ./.github/actions/setup-uv
       - name: Install the pinned SDK contract and the workspace
         # --all-packages, not --no-install-workspace: three later steps run
-        # tools/*.py that import `truealpha_runtime`, and #585 moved the shared
+        # tools/*.py that import `truealpha_runtime` or `infra2_sdk`, and #585 moved the shared
         # "what release is this environment serving" read into that workspace
         # package. With the workspace excluded, `Confirm the deployed release is
         # healthy` died at IMPORT time on the v0.0.22 production deploy —
@@ -325,7 +325,7 @@ jobs:
           # the deployed release is actually live -- not just that something answers.
           # Staging has no stable public URL yet (#11); scoped to prod only for now.
           # The job's env is dev-group-only (--no-install-workspace, line ~49), but
-          # health_check.py imports truealpha_runtime.deployed_release — every prod
+          # health_check.py imports infra2_sdk.deploy (and truealpha_runtime) — every prod
           # release since that import has FAILED at this step on ModuleNotFoundError
           # while the deploy itself succeeded (v0.0.22 runs 32033840681/32035117182:
           # the web shipped, the gate lied). --package installs the runtime member

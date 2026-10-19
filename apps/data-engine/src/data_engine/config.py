@@ -153,7 +153,9 @@ class Settings(RuntimeSettings):
     # silent fallback between the two: a deployed tick that cannot record its
     # vendor calls logs every unrecorded row at ERROR rather than pretending.
     # `Literal` so a misspelt value fails at startup instead of behaving like 'postgres'.
-    external_call_ledger: Literal["postgres", "off"] = Field(default="postgres", json_schema_extra={"source": "code"})
+    external_call_ledger: Literal["postgres", "off"] = Field(
+        default="postgres", json_schema_extra={"source": "code", "group": "runtime"}
+    )
 
     # The filing-extraction model provider (#70 scope 1, owner decision 2026-09-07: the
     # Zhipu GLM coding plan). Empty key = no provider seated: the loop keeps every
@@ -174,10 +176,8 @@ class Settings(RuntimeSettings):
 
 
 settings = Settings()
-DataEngineSettings = Settings
 
 __all__ = [
-    "DataEngineSettings",
     "RuntimeEnvKey",
     "Settings",
     "settings",

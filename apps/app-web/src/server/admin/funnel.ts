@@ -17,7 +17,7 @@ import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository
 import { MartToptGppeRepository, type MartClientLike } from "@/server/mart/topt-gppe-repository";
 import type { ToptGppeRepositoryLike } from "@/server/topt-quality";
 import type { AccessContext } from "@/contracts/strategyRun";
-import type { HeadFreshness } from "@/contracts/serviceObjectives";
+import { resolveHeadFreshness, type HeadFreshness } from "@/contracts/serviceObjectives";
 import type { ReadState } from "@/server/read-state";
 
 export interface FunnelLayer {
@@ -75,7 +75,7 @@ export async function loadQualityFunnel(
         [runId],
       );
       const ptr = await client.query(
-        "select age_hours as age, freshness, limit_hours, availability " +
+        "select environment, universe_id, age_hours as age, freshness, limit_hours, availability " +
           // Scope L5 to the governed TOPT head (matching MartToptGppeRepository.POINTER_HEAD_SQL).
           // Without a WHERE filter, `order by universe_id` picked `canary-topt3` first (#1363).
           "from mart.served_head " +
@@ -90,7 +90,11 @@ export async function loadQualityFunnel(
           ? null
           : {
               ageHours: num(ptrRow.age),
-              freshness: (typeof ptrRow.freshness === "string" ? ptrRow.freshness : null) as HeadFreshness | null,
+              freshness: resolveHeadFreshness(
+                typeof ptrRow.freshness === "string" ? ptrRow.freshness : null,
+                typeof ptrRow.universe_id === "string" ? ptrRow.universe_id : "",
+                typeof ptrRow.environment === "string" ? ptrRow.environment : null,
+              ),
               limitHours: num(ptrRow.limit_hours),
               availability: typeof ptrRow.availability === "string" ? ptrRow.availability : null,
             },

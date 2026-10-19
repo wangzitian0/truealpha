@@ -2,9 +2,9 @@
 `data_engine.dagster_defs`; the behaviour is unchanged, only the file moved).
 
 Each tick drives one universe through the generic capture executor and its
-per-semantic adapters, freezes + materializes, persists the quality report and
-advances that universe's governed pointer only if the report meets its declared
-service objectives (#536). TOPT additionally seeds the strategy inputs and runs the
+per-semantic adapters, freezes + materializes, persists the quality report, advances
+that universe's governed pointer, and records any unmet service objectives for
+`/admin/datahub` observability (#536). TOPT additionally seeds the strategy inputs and runs the
 frozen strategy (#27/#171). No fixture data is seeded anywhere in this lane (#429 I2).
 
 Hermeticity: no database or network work at import; every op opens its connection

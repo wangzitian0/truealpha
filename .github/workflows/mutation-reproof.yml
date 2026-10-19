@@ -55,7 +55,6 @@ on:
       - "apps/data-engine/src/data_engine/lanes/quality.py"
       - "apps/data-engine/src/data_engine/quality/nightly_verdicts.py"
       - "apps/data-engine/tests/test_nightly_verdicts.py"
-      - "db/apply_migrations.sh"
       - "db/local_target.sh"
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
       - "common/contracts/src/truealpha_contracts/fiscal_period.py"

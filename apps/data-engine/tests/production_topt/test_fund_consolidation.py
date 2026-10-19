@@ -515,3 +515,56 @@ def test_every_tick_declares_whether_it_consolidates() -> None:
     `build_tick` reads)."""
     for tick in capture.TICKS:
         assert isinstance(tick.consolidate_funds, bool), f"{tick.key} does not declare consolidate_funds"
+
+
+def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> None:
+    """#1359 AC3: when staging.fund_holding_facts retains both a legacy parse and a newer
+    reparse (e.g. nport-holdings:2) for the same holding line in a vintage, mart.fund_holdings
+    selects only the newest reparse so weights and lines are never double-counted."""
+    fund_id = "etf:series:S000088434-DEDUP-TEST"
+    connection.execute(
+        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'etf', 'iShares Top 20 U.S. Stocks ETF') "
+        "on conflict (id) do nothing",
+        (fund_id,),
+    )
+    for entity_id in ("company:isin:US67066G1040", "company:cik:1045810"):
+        connection.execute(
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'NVIDIA Corp.') "
+            "on conflict (id) do nothing",
+            (entity_id,),
+        )
+    for kind, value in (("isin", "US67066G1040"), ("ticker", "NVDA")):
+        connection.execute(
+            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
+            "valid_time, transaction_time, confidence, source, raw_ref) "
+            "values ('company:cik:1045810', %s, %s, daterange(%s, null), %s, 1.0, 'test', 'raw.fetches:217') "
+            "on conflict do nothing",
+            (kind, value, KNOWABLE_FILING.date(), KNOWABLE_FILING),
+        )
+    # Simulate the deployed staging index that permitted a second reparse row with a new id.
+    connection.execute("drop index if exists staging.uq_fund_holding_line_vintage")
+    for holding_id, raw_ref in (
+        ("company:isin:US67066G1040", "raw.fetches:216"),
+        ("company:cik:1045810", "raw.fetches:217"),
+    ):
+        connection.execute(
+            """
+            insert into staging.fund_holding_facts
+                (fund_id, holding_id, holding_name, report_period, transaction_time,
+                 isin, cusip, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
+            values (%s, %s, 'NVIDIA Corp.', '2026-03-31', %s, 'US67066G1040', '67066G104', 100, 160127, 16.01272878741, 1.0, %s)
+            """,
+            (fund_id, holding_id, KNOWABLE_FILING, raw_ref),
+        )
+
+    rows = connection.execute(
+        "select holding_id, percent_of_net_assets, raw_ref from mart.fund_holdings where fund_id = %s",
+        (fund_id,),
+    ).fetchall()
+    assert rows == [("company:cik:1045810", Decimal("16.01272878741"), "raw.fetches:217")]
+
+    coverage = connection.execute(
+        "select lines, resolved_lines, total_weight_pct, resolved_weight_pct from mart.fund_holdings_coverage where fund_id = %s",
+        (fund_id,),
+    ).fetchone()
+    assert coverage == (1, 1, Decimal("16.01272878741"), Decimal("16.01272878741"))

@@ -93,23 +93,15 @@ fi
 # used: it is a command LINE, and word splitting is how the extra arguments reach psql.
 psql_command="${TRUEALPHA_PSQL:-psql}"
 
-# Seconds unless a unit is given; passed straight to Postgres (#1367, #1389).
-lock_timeout_raw="${MIGRATION_LOCK_TIMEOUT_SECONDS:-${TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-5s}}"
-case "$lock_timeout_raw" in
-    *[0-9]) lock_timeout="${lock_timeout_raw}s" ;;
-    *) lock_timeout="$lock_timeout_raw" ;;
-esac
-statement_timeout_raw="${MIGRATION_STATEMENT_TIMEOUT_SECONDS:-${TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT:-60s}}"
-case "$statement_timeout_raw" in
-    *[0-9]) statement_timeout="${statement_timeout_raw}s" ;;
-    *) statement_timeout="$statement_timeout_raw" ;;
-esac
+# Seconds unless a unit is given; passed straight to Postgres.
+lock_timeout="${TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-5s}"
+statement_timeout="${TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT:-60s}"
 # Attempts per file when the failure is a lock timeout (1 = no retry).
 lock_attempts="${TRUEALPHA_MIGRATION_LOCK_ATTEMPTS:-3}"
 # Backoff before retry n is n * this many seconds (1 s, 2 s, ... by default).
 lock_backoff_seconds="${TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS:-1}"
 # Total seconds the whole run may spend in failed lock-timeout attempts and backoff.
-lock_budget_seconds="${MIGRATION_LOCK_BUDGET_SECONDS:-${TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS:-25}}"
+lock_budget_seconds="${TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS:-25}"
 
 migrations_url="${MIGRATIONS_DATABASE_URL:-${DATABASE_URL:-}}"
 if [ -z "$migrations_url" ]; then

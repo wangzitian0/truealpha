@@ -112,6 +112,8 @@ const TEST_CONTEXT: AccessContext = {
               return {
                 rows: [
                   {
+                    environment: "production",
+                    universe_id: "universe:topt-us-2026-03-31",
                     age: 36.0,
                     freshness: "stale",
                     limit_hours: 192.0,
@@ -149,10 +151,46 @@ const TEST_CONTEXT: AccessContext = {
   const ptrQuery = capturedQueries.find((q) => q.sql.includes("from mart.served_head"));
   assert(
     ptrQuery !== undefined &&
+      ptrQuery.sql.includes("environment, universe_id, age_hours as age") &&
       ptrQuery.sql.includes("coalesce(run_id, head_run_id) = $1") &&
       ptrQuery.sql.includes("universe_id like 'universe:topt-%'") &&
       ptrQuery.params?.[0] === runId,
     "L5 pointer query scopes to the governed TOPT run/universe instead of picking canary-topt3 alphabetically (#1363)",
+  );
+
+  // Unscheduled staging head with raw freshness='stale' resolves to 'manual' -> status='ok' via resolveHeadFreshness
+  const manualStagingOutcome = await loadQualityFunnel(
+    { context: TEST_CONTEXT, principalKind: "administrator" },
+    {
+      gppeRepo: { latest: async () => gppeReport },
+      strategyRepo: { getLatest: async () => ({ decisions: [] } as never) },
+      runWithMartClient: async (fn) =>
+        fn({
+          query: async (sql: string) => {
+            if (sql.includes("from mart.served_head")) {
+              return {
+                rows: [
+                  {
+                    environment: "staging",
+                    universe_id: "universe:qqq-us-t5",
+                    age: 120.0,
+                    freshness: "stale",
+                    limit_hours: 72.0,
+                    availability: "available",
+                  },
+                ],
+              };
+            }
+            return { rows: [{ total: 0, complete: 0 }] };
+          },
+        }),
+    },
+  );
+  assert(manualStagingOutcome.kind === "ready", "manual staging head returns ready");
+  const manualL5 = manualStagingOutcome.data.layers.find((l) => l.key === "L5");
+  assert(
+    manualL5 !== undefined && manualL5.status === "ok",
+    "unscheduled staging head with raw freshness='stale' resolves to 'manual' and grades L5 status 'ok'",
   );
 }
 
