@@ -102,6 +102,7 @@ export const DECISIONS_SQL = `
          d.current_price_to_sales, d.target_price_to_sales,
          d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,
          d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
+         d.peg_reason_codes,
          d.labor_efficiency_metric,
          -- #615-adjacent, and init.md's reason for point-in-time in the first
          -- place: "every step downstream has to be traceable back to the
@@ -325,6 +326,7 @@ export interface DecisionProvenance {
 	universe_sha256: string | null;
 	gppe_definition_sha256: string | null;
 	tier_definition_sha256: string | null;
+	peg_reason_codes?: readonly string[];
 }
 
 export function provenanceFromRow(
@@ -338,6 +340,9 @@ export function provenanceFromRow(
 		universe_sha256: textOrNull(row.universe_sha256),
 		gppe_definition_sha256: textOrNull(row.gppe_definition_sha256),
 		tier_definition_sha256: textOrNull(row.tier_definition_sha256),
+		peg_reason_codes: Array.isArray(row.peg_reason_codes)
+			? row.peg_reason_codes.map(String)
+			: [],
 	};
 }
 

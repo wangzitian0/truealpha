@@ -256,6 +256,22 @@ async function seedTraceLineage(client: PoolClient, run: CanonRun, decision: Can
         sha256Hex(`member:${identity.entityId}`),
       ],
     );
+    await client.query(
+      `insert into mart.issuer_analyst_ratings
+         (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count,
+          confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
+       values ($1, $2, $3, 4.35, 18, 12, 5, 1, 0.88, $4, 'origin:moomoo:v1', 'available', 'verified', 'accepted')
+       on conflict (run_id, issuer_id) do nothing`,
+      [run.strategy_run_id, identity.entityId, PREVIEW_CUTOFF, ["target_price:195.00", "consensus:buy"]],
+    );
+    await client.query(
+      `insert into mart.issuer_supply_chain_exposure
+         (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count,
+          max_partner_share, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
+       values ($1, $2, $3, 0.72, 6, 3, 3, 0.34, 0.85, $4, 'graph:kg-edges:v1', 'available', 'verified', 'accepted')
+       on conflict (run_id, issuer_id) do nothing`,
+      [run.strategy_run_id, identity.entityId, PREVIEW_CUTOFF, ["supplier:tsmc", "customer:msft"]],
+    );
   }
   const captureRunId = `capture-run:${hex()}`;
   const matchedIssuer = Object.values(PREVIEW_ISSUERS).find((item) => item.entityId === decision.issuer_id);

@@ -63,6 +63,8 @@ export interface MartAdapterLike {
   traceView: StrategyRunReadAdapter["traceView"];
   entityThemePurity?: StrategyRunReadAdapter["entityThemePurity"];
   entityGppeDetail?: StrategyRunReadAdapter["entityGppeDetail"];
+  entityAnalystRatings?: StrategyRunReadAdapter["entityAnalystRatings"];
+  entitySupplyChainExposure?: StrategyRunReadAdapter["entitySupplyChainExposure"];
 }
 
 async function guard<T>(
@@ -129,14 +131,20 @@ export async function loadEntityDetail(
   return guard<EntityDetail>(context, async (mart, ctx) => {
     const detail = await mart.entityDetail(ctx, issuerId);
     if (detail === null) return { kind: "empty" };
-    const themes = mart.entityThemePurity ? await mart.entityThemePurity(ctx, issuerId) : [];
-    const gppeDetail = mart.entityGppeDetail ? await mart.entityGppeDetail(ctx, issuerId) : null;
+    const [themes, gppeDetail, analystRatings, supplyChainExposure] = await Promise.all([
+      mart.entityThemePurity ? mart.entityThemePurity(ctx, issuerId) : Promise.resolve([]),
+      mart.entityGppeDetail ? mart.entityGppeDetail(ctx, issuerId) : Promise.resolve(null),
+      mart.entityAnalystRatings ? mart.entityAnalystRatings(ctx, issuerId) : Promise.resolve(null),
+      mart.entitySupplyChainExposure ? mart.entitySupplyChainExposure(ctx, issuerId) : Promise.resolve(null),
+    ]);
     return {
       kind: "ready",
       data: {
         ...detail,
         themes,
         gppeDetail,
+        analystRatings,
+        supplyChainExposure,
       },
     };
   }, adapter);

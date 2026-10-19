@@ -3,7 +3,12 @@ import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { CardExportButton } from "@/components/card-export-button";
 import { laborEfficiencyLabels, UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
-import { valuationBasisLabel } from "@/contracts/strategyRun";
+import {
+  normalizePegConvention,
+  PEG_CONVENTION_LABELS,
+  PEG_GROWTH_CONVENTIONS,
+  valuationBasisLabel,
+} from "@/contracts/strategyRun";
 import { loadEntityDetail } from "@/server/dashboard";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -43,10 +48,18 @@ function decodeIssuerId(id: string): string {
   }
 }
 
-export default async function EntityDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EntityDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ convention?: string }>;
+}) {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fentities");
   const { id } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const convention = normalizePegConvention(resolvedSearchParams.convention);
   const issuerId = decodeIssuerId(id);
   const state = await loadEntityDetail(principal.context, issuerId);
   const names = await loadEntityDisplayMap();
@@ -58,6 +71,8 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
   const latestRow = sortedRows[0];
   const gppeDetail = state.kind === "ready" ? state.data.gppeDetail : null;
   const themes = state.kind === "ready" ? state.data.themes ?? [] : [];
+  const analystRatings = state.kind === "ready" ? state.data.analystRatings ?? null : null;
+  const supplyChainExposure = state.kind === "ready" ? state.data.supplyChainExposure ?? null : null;
 
   // #1176: the published `gppe` column is the uniform metric; the strategy value carries the name the
   // strategy used. Both are shown, each with its name, and neither is shown bare.
@@ -70,6 +85,12 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
   const basisLabel = valuationBasisLabel(latestRow?.valuationBasis ?? null);
   const operatingBranch = gppeDetail?.operatingBranch ?? null;
   const capitalAdjustedGrossProfit = gppeDetail?.capitalAdjustedGrossProfit ?? null;
+  const displayPeg = convention === "historical_cagr" ? (latestRow?.peg ?? null) : null;
+  const displayPegRank = convention === "historical_cagr" ? (latestRow?.pegRank ?? null) : null;
+  const displayPegReasonCodes =
+    convention === "historical_cagr"
+      ? (latestRow?.pegReasonCodes ?? [])
+      : [`growth_convention_unsourced:${convention}`];
 
   return (
     <section aria-labelledby="entity-heading" className="space-y-6">
@@ -79,7 +100,10 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
             <h1 id="entity-heading" className="text-2xl font-bold tracking-tight text-white md:text-3xl">
               {displayName}
             </h1>
-            <span className="rounded-md border border-border bg-card px-2.5 py-0.5 font-mono text-xs text-gray-400">
+            <span
+              className="rounded-md border border-border bg-card px-2.5 py-0.5 font-mono text-xs text-gray-400"
+              data-evidence={issuerId}
+            >
               {issuerId}
             </span>
             {latestRow?.tier && (
@@ -94,7 +118,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
             )}
           </div>
           <p className="mt-2 text-sm text-gray-400">
-            Entity 360° deep dive: multi-factor valuation, labor efficiency, growth, and theme purity.
+            Entity 360° deep dive: multi-factor valuation, labor efficiency, growth, analyst consensus, supply-chain exposure, and theme purity.
           </p>
         </div>
 
@@ -187,34 +211,231 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
             </div>
 
             {/* Card 3: Growth (Module 1) */}
-            <div className="rounded-xl border border-border bg-card p-5">
+            <div className="rounded-xl border border-border bg-card p-5" data-testid="module-1-peg-card">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
                   Growth / PEG (Module 1)
                 </span>
                 <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-gray-400">
-                  Historical CAGR
+                  {PEG_CONVENTION_LABELS[convention]}
                 </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5" data-testid="entity-peg-convention-selector">
+                {PEG_GROWTH_CONVENTIONS.map((item) => {
+                  const active = item === convention;
+                  const href =
+                    item === "historical_cagr"
+                      ? `/research/entities/${encodeURIComponent(issuerId)}`
+                      : `/research/entities/${encodeURIComponent(issuerId)}?convention=${encodeURIComponent(item)}`;
+                  return (
+                    <Link
+                      key={item}
+                      href={href}
+                      data-peg-convention={item}
+                      aria-current={active ? "page" : undefined}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition ${
+                        active
+                          ? "border border-sky-500 bg-sky-950/70 text-sky-300"
+                          : "border border-border bg-slate-900 text-gray-400 hover:text-gray-200"
+                      }`}
+                    >
+                      {PEG_CONVENTION_LABELS[item]}
+                    </Link>
+                  );
+                })}
               </div>
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs text-gray-400">PEG Ratio</div>
                   <div className="mt-1 font-mono text-2xl font-bold text-sky-400">
-                    {formatRatio(latestRow?.peg ?? null) ?? "—"}
+                    {formatRatio(displayPeg) ?? "—"}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-400">PEG Rank</div>
                   <div className="mt-1 font-mono text-2xl font-bold text-gray-300">
-                    {latestRow?.pegRank !== null && latestRow?.pegRank !== undefined ? `#${latestRow.pegRank}` : "—"}
+                    {displayPegRank !== null && displayPegRank !== undefined ? `#${displayPegRank}` : "—"}
                   </div>
                 </div>
               </div>
-              <div className="mt-4 border-t border-border/60 pt-3">
+              <div className="mt-4 border-t border-border/60 pt-3 space-y-1">
                 <div className="text-xs text-gray-400">
-                  Convention: Recency-weighted historical growth (historical CAGR)
+                  Convention: {PEG_CONVENTION_LABELS[convention]} ({convention})
                 </div>
+                {displayPegReasonCodes.length > 0 && (
+                  <div className="font-mono text-[11px] text-amber-400" data-testid="entity-peg-reason-codes">
+                    Reason codes: {displayPegReasonCodes.join(", ")}
+                  </div>
+                )}
               </div>
+            </div>
+          </div>
+
+          {/* Module 4 & Module 3 Two-Column Reader Section */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Module 4: Analyst Ratings & Consensus */}
+            <div className="rounded-xl border border-border bg-card p-5" data-testid="module-4-analyst-ratings">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold text-gray-200">
+                    Analyst Ratings &amp; Consensus (Module 4)
+                  </h2>
+                  <p className="mt-0.5 text-xs text-gray-400">
+                    Point-in-time consensus rating, target price, and analyst rating breakdown from{" "}
+                    <code className="font-mono text-gray-300">mart.issuer_analyst_ratings</code>.
+                  </p>
+                </div>
+                {analystRatings && (
+                  <AvailabilityBadge status={analystRatings.availabilityStatus as "available" | "unavailable"} />
+                )}
+              </div>
+
+              {analystRatings ? (
+                <div className="mt-4 space-y-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Consensus Rating (1–5)</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m4-consensus-rating">
+                        {formatRatio(analystRatings.consensusRating) ?? cell(analystRatings.consensusRating)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Target Price</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-white" data-testid="m4-target-price">
+                        {analystRatings.targetPrice
+                          ? `$${formatRatio(analystRatings.targetPrice) ?? analystRatings.targetPrice}`
+                          : "Not disclosed"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Analysts Covered</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-gray-200" data-testid="m4-analysts-count">
+                        {analystRatings.analystsCount}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 text-center font-mono text-xs" data-testid="m4-rating-breakdown">
+                    <div className="rounded border border-emerald-900/60 bg-emerald-950/30 px-2 py-1.5 text-emerald-300">
+                      Buy: <span className="font-bold">{analystRatings.buyCount}</span>
+                    </div>
+                    <div className="rounded border border-amber-900/60 bg-amber-950/30 px-2 py-1.5 text-amber-300">
+                      Hold: <span className="font-bold">{analystRatings.holdCount}</span>
+                    </div>
+                    <div className="rounded border border-rose-900/60 bg-rose-950/30 px-2 py-1.5 text-rose-300">
+                      Sell: <span className="font-bold">{analystRatings.sellCount}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border/60 pt-3 text-xs text-gray-400 space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Extractor: <span className="font-mono text-gray-300" data-testid="m4-extractor">{analystRatings.extractor}</span>
+                      </span>
+                      <span>
+                        Confidence: <span className="font-mono text-gray-300">{formatRatio(analystRatings.confidence) ?? "—"}</span>
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Cutoff: <span className="font-mono text-gray-300">{analystRatings.cutoff}</span>
+                      </span>
+                      <span>
+                        Evidence: <span className="font-mono text-gray-300">{analystRatings.sourceEvidenceStatus}</span>
+                      </span>
+                    </div>
+                    {analystRatings.reasonCodes.length > 0 && (
+                      <div className="font-mono text-[11px] text-gray-500" data-testid="m4-reason-codes">
+                        Reason codes: {analystRatings.reasonCodes.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-gray-500">
+                  No analyst ratings materialization recorded for this issuer.
+                </p>
+              )}
+            </div>
+
+            {/* Module 3: Supply-Chain Exposure & Scenario Graph */}
+            <div className="rounded-xl border border-border bg-card p-5" data-testid="module-3-supply-chain">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold text-gray-200">
+                    Supply-Chain Exposure &amp; Scenario Graph (Module 3)
+                  </h2>
+                  <p className="mt-0.5 text-xs text-gray-400">
+                    Materialized supply-chain partner graph and scenario exposure from{" "}
+                    <code className="font-mono text-gray-300">mart.issuer_supply_chain_exposure</code>.
+                  </p>
+                </div>
+                {supplyChainExposure && (
+                  <AvailabilityBadge status={supplyChainExposure.availabilityStatus as "available" | "unavailable"} />
+                )}
+              </div>
+
+              {supplyChainExposure ? (
+                <div className="mt-4 space-y-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Scenario Exposure Score</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m3-exposure-score">
+                        {formatRatio(supplyChainExposure.exposureScore) ?? cell(supplyChainExposure.exposureScore)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Direct Partners</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-white" data-testid="m3-direct-partners">
+                        {supplyChainExposure.directPartners}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
+                      <div className="text-xs text-gray-400">Max Partner Share</div>
+                      <div className="mt-1 font-mono text-xl font-bold text-gray-200" data-testid="m3-max-partner-share">
+                        {formatPercentFromFraction(supplyChainExposure.maxPartnerShare) ?? cell(supplyChainExposure.maxPartnerShare)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-center font-mono text-xs" data-testid="m3-partner-edges">
+                    <div className="rounded border border-sky-900/60 bg-sky-950/30 px-2 py-1.5 text-sky-300">
+                      Upstream Suppliers: <span className="font-bold" data-testid="m3-suppliers-count">{supplyChainExposure.suppliersCount}</span>
+                    </div>
+                    <div className="rounded border border-indigo-900/60 bg-indigo-950/30 px-2 py-1.5 text-indigo-300">
+                      Downstream Customers: <span className="font-bold" data-testid="m3-customers-count">{supplyChainExposure.customersCount}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border/60 pt-3 text-xs text-gray-400 space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Extractor: <span className="font-mono text-gray-300" data-testid="m3-extractor">{supplyChainExposure.extractor}</span>
+                      </span>
+                      <span>
+                        Confidence: <span className="font-mono text-gray-300">{formatRatio(supplyChainExposure.confidence) ?? "—"}</span>
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Cutoff: <span className="font-mono text-gray-300">{supplyChainExposure.cutoff}</span>
+                      </span>
+                      <span>
+                        Validation: <span className="font-mono text-gray-300">{supplyChainExposure.factorValidationStatus}</span>
+                      </span>
+                    </div>
+                    {supplyChainExposure.reasonCodes.length > 0 && (
+                      <div className="font-mono text-[11px] text-gray-500" data-testid="m3-reason-codes">
+                        Scenario / edge provenance: {supplyChainExposure.reasonCodes.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-gray-500">
+                  No supply-chain exposure materialization recorded for this issuer.
+                </p>
+              )}
             </div>
           </div>
 
@@ -290,7 +511,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                     <th scope="col" className="px-4 py-3">Valuation multiple</th>
                     <th scope="col" className="px-4 py-3">Tier</th>
                     <th scope="col" className="px-4 py-3">Valuation Gap</th>
-                    <th scope="col" className="px-4 py-3">PEG</th>
+                    <th scope="col" className="px-4 py-3">PEG ({PEG_CONVENTION_LABELS[convention]})</th>
                     <th scope="col" className="px-4 py-3">Availability</th>
                     <th scope="col" className="px-4 py-3">Trace</th>
                   </tr>
@@ -322,7 +543,9 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                         {formatSignedRatio(row.valuationGap) ?? cell(row.valuationGap)}
                       </td>
                       <td className="px-4 py-3 font-mono">
-                        {formatRatio(row.peg ?? null) ?? cell(row.peg)}
+                        {convention === "historical_cagr"
+                          ? (formatRatio(row.peg ?? null) ?? cell(row.peg))
+                          : "—"}
                       </td>
                       <td className="px-4 py-3">
                         <AvailabilityBadge status={row.availability} />
@@ -331,6 +554,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                         <Link
                           href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
                           className="font-mono text-xs text-gray-400 hover:text-accent"
+                          data-evidence={row.traceId}
                         >
                           {row.traceId}
                         </Link>

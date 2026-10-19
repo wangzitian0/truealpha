@@ -129,6 +129,7 @@ export interface RankingRow {
 	// ranking.
 	peg: string | null;
 	pegRank: number | null;
+	pegReasonCodes?: readonly string[];
 	confidence: string | null;
 	availability: Availability;
 	traceId: string;
@@ -204,6 +205,39 @@ export interface ComparisonRow {
 	provenance: Provenance;
 }
 
+export interface AnalystRatingsDetail {
+	runId: string;
+	cutoff: string;
+	consensusRating: string | null;
+	targetPrice: string | null;
+	analystsCount: number;
+	buyCount: number;
+	holdCount: number;
+	sellCount: number;
+	confidence: string | null;
+	reasonCodes: string[];
+	extractor: string;
+	availabilityStatus: string;
+	sourceEvidenceStatus: string;
+	factorValidationStatus: string;
+}
+
+export interface SupplyChainExposureDetail {
+	runId: string;
+	cutoff: string;
+	exposureScore: string | null;
+	directPartners: number;
+	suppliersCount: number;
+	customersCount: number;
+	maxPartnerShare: string | null;
+	confidence: string | null;
+	reasonCodes: string[];
+	extractor: string;
+	availabilityStatus: string;
+	sourceEvidenceStatus: string;
+	factorValidationStatus: string;
+}
+
 export interface EntityDetail {
 	issuerId: string;
 	rows: readonly ComparisonRow[];
@@ -228,6 +262,8 @@ export interface EntityDetail {
 		availabilityStatus: string;
 		reasonCodes: string[];
 	} | null;
+	analystRatings?: AnalystRatingsDetail | null;
+	supplyChainExposure?: SupplyChainExposureDetail | null;
 }
 
 export interface TraceLink {
@@ -807,6 +843,11 @@ export class StrategyRunReadAdapter {
 			targetWeight: decision.target_weight,
 			peg: decision.peg ?? null,
 			pegRank: decision.peg_rank ?? null,
+			pegReasonCodes:
+				inputs?.peg_reason_codes ??
+				(decision as { peg_reason_codes?: readonly string[] })
+					.peg_reason_codes ??
+				[],
 			confidence: decision.confidence,
 			availability: status,
 			traceId: traceId(
@@ -848,8 +889,10 @@ export class StrategyRunReadAdapter {
 			peg: decision.peg ?? null,
 			pegRank: decision.peg_rank ?? null,
 			pegReasonCodes:
+				inputs?.peg_reason_codes ??
 				(decision as { peg_reason_codes?: readonly string[] })
-					.peg_reason_codes ?? [],
+					.peg_reason_codes ??
+				[],
 			confidence: decision.confidence,
 			availability: status,
 			traceId: traceId(
@@ -1016,7 +1059,7 @@ export class StrategyRunReadAdapter {
 		}>
 	> {
 		try {
-			return await withMartReadonly(async (client) => {
+			return await this.runWithClient(async (client) => {
 				const result = await client.query(
 					`select theme_id,
 					        theme,
@@ -1095,7 +1138,7 @@ export class StrategyRunReadAdapter {
 		reasonCodes: string[];
 	} | null> {
 		try {
-			return await withMartReadonly(async (client) => {
+			return await this.runWithClient(async (client) => {
 				const result = await client.query(
 					`select gppe::text as gppe,
 					        operating_branch,
@@ -1135,6 +1178,160 @@ export class StrategyRunReadAdapter {
 			});
 		} catch (error) {
 			console.error("entityGppeDetail error:", error);
+			return null;
+		}
+	}
+
+	async entityAnalystRatings(
+		_context: AccessContext,
+		issuerId: string,
+	): Promise<AnalystRatingsDetail | null> {
+		try {
+			return await this.runWithClient(async (client) => {
+				const result = await client.query(
+					`select r.run_id,
+					        to_char(r.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+					        r.consensus_rating::text as consensus_rating,
+					        coalesce(
+					            to_jsonb(r) ->> 'target_price',
+					            (select substring(rc from '^target_price:([0-9.]+)$')
+					             from unnest(r.reason_codes) as rc
+					             where rc like 'target_price:%'
+					             limit 1)
+					        ) as target_price,
+					        r.analysts_count,
+					        r.buy_count,
+					        r.hold_count,
+					        r.sell_count,
+					        r.confidence::text as confidence,
+					        r.reason_codes,
+					        r.extractor,
+					        coalesce(r.availability_status, 'unavailable') as availability_status,
+					        coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
+					        coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
+					 from mart.issuer_analyst_ratings r
+					 where r.issuer_id = $1
+					    or r.issuer_id in (
+					        select entity_id::text from mart.entity_identity where legacy_id = $1
+					    )
+					 order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
+					 limit 1`,
+					[issuerId],
+				);
+				if (result.rows.length === 0) return null;
+				const row = result.rows[0];
+				const reasonCodes = Array.isArray(row.reason_codes)
+					? row.reason_codes.map(String)
+					: [];
+				const targetFromReason = reasonCodes
+					.find((code) => code.startsWith("target_price:"))
+					?.slice("target_price:".length);
+				const rawTarget =
+					row.target_price !== null && row.target_price !== undefined
+						? String(row.target_price)
+						: targetFromReason ?? null;
+				return {
+					runId: String(row.run_id ?? ""),
+					cutoff: String(row.cutoff ?? ""),
+					consensusRating:
+						row.consensus_rating !== null && row.consensus_rating !== undefined
+							? String(row.consensus_rating)
+							: null,
+					targetPrice: rawTarget,
+					analystsCount:
+						typeof row.analysts_count === "number" ? row.analysts_count : 0,
+					buyCount: typeof row.buy_count === "number" ? row.buy_count : 0,
+					holdCount: typeof row.hold_count === "number" ? row.hold_count : 0,
+					sellCount: typeof row.sell_count === "number" ? row.sell_count : 0,
+					confidence:
+						row.confidence !== null && row.confidence !== undefined
+							? String(row.confidence)
+							: null,
+					reasonCodes,
+					extractor: String(row.extractor ?? "origin:moomoo:v1"),
+					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					sourceEvidenceStatus: String(
+						row.source_evidence_status ?? "degraded",
+					),
+					factorValidationStatus: String(
+						row.factor_validation_status ?? "not_evaluated",
+					),
+				};
+			});
+		} catch (error) {
+			console.error("entityAnalystRatings error:", error);
+			return null;
+		}
+	}
+
+	async entitySupplyChainExposure(
+		_context: AccessContext,
+		issuerId: string,
+	): Promise<SupplyChainExposureDetail | null> {
+		try {
+			return await this.runWithClient(async (client) => {
+				const result = await client.query(
+					`select s.run_id,
+					        to_char(s.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+					        s.exposure_score::text as exposure_score,
+					        s.direct_partners,
+					        s.suppliers_count,
+					        s.customers_count,
+					        s.max_partner_share::text as max_partner_share,
+					        s.confidence::text as confidence,
+					        s.reason_codes,
+					        s.extractor,
+					        coalesce(s.availability_status, 'unavailable') as availability_status,
+					        coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
+					        coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
+					 from mart.issuer_supply_chain_exposure s
+					 where s.issuer_id = $1
+					    or s.issuer_id in (
+					        select entity_id::text from mart.entity_identity where legacy_id = $1
+					    )
+					 order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
+					 limit 1`,
+					[issuerId],
+				);
+				if (result.rows.length === 0) return null;
+				const row = result.rows[0];
+				return {
+					runId: String(row.run_id ?? ""),
+					cutoff: String(row.cutoff ?? ""),
+					exposureScore:
+						row.exposure_score !== null && row.exposure_score !== undefined
+							? String(row.exposure_score)
+							: null,
+					directPartners:
+						typeof row.direct_partners === "number" ? row.direct_partners : 0,
+					suppliersCount:
+						typeof row.suppliers_count === "number" ? row.suppliers_count : 0,
+					customersCount:
+						typeof row.customers_count === "number" ? row.customers_count : 0,
+					maxPartnerShare:
+						row.max_partner_share !== null &&
+						row.max_partner_share !== undefined
+							? String(row.max_partner_share)
+							: null,
+					confidence:
+						row.confidence !== null && row.confidence !== undefined
+							? String(row.confidence)
+							: null,
+					reasonCodes: Array.isArray(row.reason_codes)
+						? row.reason_codes.map(String)
+						: [],
+					extractor: String(row.extractor ?? "graph:kg-edges:v1"),
+					availabilityStatus: String(row.availability_status ?? "unavailable"),
+					sourceEvidenceStatus: String(
+						row.source_evidence_status ?? "degraded",
+					),
+					factorValidationStatus: String(
+						row.factor_validation_status ?? "not_evaluated",
+					),
+				};
+			});
+		} catch (error) {
+			console.error("entitySupplyChainExposure error:", error);
 			return null;
 		}
 	}

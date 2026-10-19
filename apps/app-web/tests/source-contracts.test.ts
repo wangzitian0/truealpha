@@ -399,6 +399,18 @@ console.log(
 			"provenance",
 			"the input vintages are the point; a row that carries them and shows none is the old page",
 		],
+		[
+			"analystRatings",
+			"Module 4 analyst ratings returned by loadEntityDetail must render on /research/entities/[id] (#1360 AC1)",
+		],
+		[
+			"supplyChainExposure",
+			"Module 3 supply-chain exposure returned by loadEntityDetail must render on /research/entities/[id] (#1360 AC2)",
+		],
+		[
+			"pegReasonCodes",
+			"Module 1 PEG reason codes returned by the read model must render on rankings and entity surfaces (#1360 AC3)",
+		],
 	] as const) {
 		// Any reading position counts: `row.provenance` and
 		// `const { provenance } = row` are both reads, and the first version of
