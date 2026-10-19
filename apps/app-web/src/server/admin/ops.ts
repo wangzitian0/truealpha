@@ -12,25 +12,14 @@
  * with an empty list.
  */
 
-import { Pool, type PoolClient } from "pg";
+import type { PoolClient } from "pg";
+import { getPool } from "../auth/db";
 import type { ReadState } from "@/server/read-state";
 
-let pool: Pool | null = null;
 let testClientOverride: Pick<PoolClient, "query"> | null = null;
 
 export function __setTestOpsClient(overrideClient: Pick<PoolClient, "query"> | null): void {
   testClientOverride = overrideClient;
-}
-
-function getPool(): Pool {
-  if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set");
-    }
-    pool = new Pool({ connectionString });
-  }
-  return pool;
 }
 
 export async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) => Promise<T>): Promise<T> {

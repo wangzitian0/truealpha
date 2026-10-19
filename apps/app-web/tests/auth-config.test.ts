@@ -15,11 +15,13 @@ function assert(condition: unknown, message: string): asserts condition {
 function run() {
   const originalSecret = process.env.SECRET_KEY;
   const originalEnv = process.env.NODE_ENV;
+  const originalAppEnv = process.env.APP_ENV;
   const originalExpiry = process.env.ACCESS_TOKEN_EXPIRE_MINUTES;
 
   try {
     // --- development: no SECRET_KEY set falls back to a dev default, does not throw ---
     delete process.env.SECRET_KEY;
+    delete process.env.APP_ENV;
     (process.env as Record<string, string | undefined>).NODE_ENV = "development";
     const devConfig = loadAuthConfig();
     assert(devConfig.secret.length > 0, "dev config must still produce a usable secret");
@@ -34,6 +36,17 @@ function run() {
       threw = true;
     }
     assert(threw, "production with no SECRET_KEY must throw, not fall back to a hardcoded default");
+
+    // --- deployed APP_ENV (staging/preview/production) also refuses missing SECRET_KEY ---
+    delete (process.env as Record<string, string | undefined>).NODE_ENV;
+    process.env.APP_ENV = "staging";
+    let threwOnAppEnv = false;
+    try {
+      loadAuthConfig();
+    } catch {
+      threwOnAppEnv = true;
+    }
+    assert(threwOnAppEnv, "deployed APP_ENV with no SECRET_KEY must throw");
 
     // --- production with the dev default explicitly pasted must also throw (#447):
     // .env.example promises "refuses to start a production session on the dev
@@ -68,6 +81,8 @@ function run() {
     const env = process.env as Record<string, string | undefined>;
     if (originalEnv === undefined) delete env.NODE_ENV;
     else env.NODE_ENV = originalEnv;
+    if (originalAppEnv === undefined) delete env.APP_ENV;
+    else env.APP_ENV = originalAppEnv;
     if (originalExpiry === undefined) delete process.env.ACCESS_TOKEN_EXPIRE_MINUTES;
     else process.env.ACCESS_TOKEN_EXPIRE_MINUTES = originalExpiry;
   }

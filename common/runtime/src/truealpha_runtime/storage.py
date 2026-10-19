@@ -14,7 +14,7 @@ from infra2_sdk.runtime.s3 import (
 )
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
-from truealpha_runtime.config import RuntimeSettings, runtime_settings
+from truealpha_runtime.config import RuntimeSettings
 
 
 def _unconfigured(name: str) -> RuntimeError:
@@ -33,7 +33,7 @@ class S3RawObjectStore:
     """
 
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
-        self.settings = settings or runtime_settings
+        self.settings = settings or RuntimeSettings()
         self.bucket = self.settings.s3_bucket
         self.s3_settings = self.settings.to_s3_settings()
         self._has_injected_client = client is not None

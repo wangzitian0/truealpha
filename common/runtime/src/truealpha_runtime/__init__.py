@@ -12,8 +12,8 @@ from truealpha_runtime.config import (
     CoreRuntimeSettings,
     EnvironmentTier,
     RuntimeSettings,
+    database_url_field,
     resolve_environment_tier,
-    runtime_settings,
 )
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST, Dependency, DependencyManifest
 from truealpha_runtime.storage import S3RawObjectStore, StorageError
@@ -32,7 +32,7 @@ __all__ = [
     "RuntimeSettings",
     "S3RawObjectStore",
     "StorageError",
+    "database_url_field",
     "resolve_environment_tier",
     "run_dependency_checks",
-    "runtime_settings",
 ]

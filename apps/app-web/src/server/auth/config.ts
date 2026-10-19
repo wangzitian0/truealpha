@@ -15,9 +15,14 @@ export interface AuthConfig {
   cookieName: string;
 }
 
+const DEPLOYED_APP_ENVS = new Set(["production", "staging", "preview"]);
+
 export function loadAuthConfig(): AuthConfig {
   const secretKey = process.env.SECRET_KEY;
-  const isProduction = process.env.NODE_ENV === "production";
+  const appEnv = (process.env.APP_ENV ?? "").trim().toLowerCase();
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test" && DEPLOYED_APP_ENVS.has(appEnv));
 
   if (!secretKey && isProduction) {
     throw new Error(

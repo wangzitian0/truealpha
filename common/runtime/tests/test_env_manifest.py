@@ -144,7 +144,8 @@ def test_llm_service_manifest_excludes_s3_and_unused_llm_variables_and_declares_
 
 
 def test_app_web_manifest_declares_every_process_env_variable_read_by_server_code() -> None:
-    """#1367: every process.env reader in apps/app-web/src must have a matching manifest entry."""
+    """#1367, #1375 (G2): app-web server code and required-env.manifest.json match bidirectionally,
+    and apps/app-web/src/server defines a single shared pg.Pool and DATABASE_URL reader."""
     raw = json.loads((ROOT / "apps/app-web/required-env.manifest.json").read_text(encoding="utf-8"))
     manifest = EnvironmentManifest.from_dict(raw)
     declared = {field.env for field in manifest.fields}
@@ -160,7 +161,94 @@ def test_app_web_manifest_declares_every_process_env_variable_read_by_server_cod
             if name:
                 read_in_src.add(name)
 
-    assert read_in_src <= declared, f"undeclared app-web env vars: {sorted(read_in_src - declared)}"
+    assert read_in_src == declared, (
+        f"app-web env drift: undeclared={sorted(read_in_src - declared)}, "
+        f"unused_in_src={sorted(declared - read_in_src)}"
+    )
+
+    pool_creations = 0
+    db_url_reads = 0
+    for path in (ROOT / "apps/app-web/src/server").rglob("*.ts*"):
+        text = path.read_text(encoding="utf-8")
+        pool_creations += len(re.findall(r"\bnew\s+Pool\s*\(", text))
+        db_url_reads += len(re.findall(r"process\.env\.DATABASE_URL\b", text))
+    assert pool_creations == 1, f"expected 1 pg.Pool construction in app-web/src/server, found {pool_creations}"
+    assert db_url_reads == 1, f"expected 1 DATABASE_URL read in app-web/src/server, found {db_url_reads}"
+
+
+def test_app_web_s3_contract_matches_python_runtime_settings() -> None:
+    """#1375 (G3): S3 metadata in app-web's manifest and fallback defaults in object-store.ts
+    match Python RuntimeSettings."""
+    from truealpha_runtime import RuntimeSettings
+
+    web_raw = json.loads((ROOT / "apps/app-web/required-env.manifest.json").read_text(encoding="utf-8"))
+    web_by_env = {field.env: field for field in EnvironmentManifest.from_dict(web_raw).fields}
+    de_by_env = {field.env: field for field in env_manifest.load("apps/data-engine/required-env.generated.json").fields}
+
+    shared_s3_vars = (
+        "S3_ENDPOINT",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "S3_BUCKET",
+        "S3_REGION",
+        "S3_RAW_PREFIX",
+        "S3_CONNECT_TIMEOUT_SECONDS",
+    )
+    for name in shared_s3_vars:
+        web_f = web_by_env[name]
+        de_f = de_by_env[name]
+        assert (web_f.source, web_f.group, web_f.injected, web_f.empty_ok, web_f.sensitive) == (
+            de_f.source,
+            de_f.group,
+            de_f.injected,
+            de_f.empty_ok,
+            de_f.sensitive,
+        ), name
+
+    object_store_text = (ROOT / "apps/app-web/src/server/documents/object-store.ts").read_text(encoding="utf-8")
+    for required_var in ("S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+        assert f'requireEnv("{required_var}")' in object_store_text
+
+    str_defaults = dict(re.findall(r'env\(\s*"(S3_[A-Z0-9_]+)"\s*,\s*"([^"]+)"\s*\)', object_store_text))
+    assert str_defaults["S3_BUCKET"] == RuntimeSettings.model_fields["s3_bucket"].default
+    assert str_defaults["S3_REGION"] == RuntimeSettings.model_fields["s3_region"].default
+    assert str_defaults["S3_RAW_PREFIX"] == RuntimeSettings.model_fields["s3_raw_prefix"].default
+
+    int_defaults = {
+        name: int(val)
+        for name, val in re.findall(r'envPositiveSeconds\(\s*"(S3_[A-Z0-9_]+)"\s*,\s*(\d+)\s*\)', object_store_text)
+    }
+    assert (
+        int_defaults["S3_CONNECT_TIMEOUT_SECONDS"] == RuntimeSettings.model_fields["s3_connect_timeout_seconds"].default
+    )
+
+
+def test_apply_migrations_sh_defaults_match_llm_service_settings() -> None:
+    """#1375 (G3): migration timeout defaults in db/apply_migrations.sh match llm_service.config.Settings."""
+    from llm_service.config import Settings as LlmSettings
+
+    script = (ROOT / "db/apply_migrations.sh").read_text(encoding="utf-8")
+    lock_timeout_match = re.search(
+        r"\$\{TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-\$\{MIGRATION_LOCK_TIMEOUT_SECONDS:-(\d+)s\}\}",
+        script,
+    )
+    statement_timeout_match = re.search(
+        r"\$\{TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT:-\$\{MIGRATION_STATEMENT_TIMEOUT_SECONDS:-(\d+)s\}\}",
+        script,
+    )
+    lock_budget_match = re.search(
+        r"\$\{TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS:-\$\{MIGRATION_LOCK_BUDGET_SECONDS:-(\d+)\}\}",
+        script,
+    )
+    assert lock_timeout_match is not None
+    assert statement_timeout_match is not None
+    assert lock_budget_match is not None
+
+    assert int(lock_timeout_match.group(1)) == LlmSettings.model_fields["migration_lock_timeout_seconds"].default
+    assert (
+        int(statement_timeout_match.group(1)) == LlmSettings.model_fields["migration_statement_timeout_seconds"].default
+    )
+    assert int(lock_budget_match.group(1)) == LlmSettings.model_fields["migration_lock_budget_seconds"].default
 
 
 def test_env_example_contains_no_undeclared_variables() -> None:

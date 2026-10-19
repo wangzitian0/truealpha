@@ -6,9 +6,9 @@
  * Server-only; never import into a client component.
  */
 
-import { Pool, type PoolClient } from "pg";
+import type { PoolClient } from "pg";
+import { getPool } from "../auth/db";
 
-let pool: Pool | null = null;
 let testClientOverride: Pick<PoolClient, "query"> | null = null;
 
 /** Test seam (mirrors documents/object-store's __setTestClient): lets a test
@@ -17,17 +17,6 @@ let testClientOverride: Pick<PoolClient, "query"> | null = null;
  * database (#469). Never set outside tests. */
 export function __setTestClient(overrideClient: Pick<PoolClient, "query"> | null): void {
   testClientOverride = overrideClient;
-}
-
-function getPool(): Pool {
-  if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set");
-    }
-    pool = new Pool({ connectionString });
-  }
-  return pool;
 }
 
 /** Runs `fn` on a client that has assumed `mart_readonly` for this session.
