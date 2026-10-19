@@ -336,7 +336,7 @@ export default async function AdminDatahubPage() {
                             <div className="flex items-center gap-2">
                               <span className="font-mono font-bold text-accent">{q.question.toUpperCase()}</span>
                               <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] uppercase font-mono text-zinc-400 bg-zinc-800 border border-zinc-700">
-                                {q.scope ?? (q.question === "q5" ? "fund" : "issuer")}
+                                {q.scope}
                               </span>
                             </div>
                             <div className="mt-1 text-xs text-gray-300 max-w-xs">{q.text}</div>

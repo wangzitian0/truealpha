@@ -17,7 +17,8 @@ import { getPool } from "../auth/db";
 import {
   type HeadFreshness,
   REGISTERED_RAW_SOURCE_FILTER,
-  isHeadScheduled,
+  UTC_DAY_START_SQL,
+  resolveHeadFreshness,
 } from "../../contracts/serviceObjectives";
 import type { ReadState } from "@/server/read-state";
 
@@ -151,17 +152,15 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
           row.environment !== null && row.environment !== undefined
             ? String(row.environment)
             : null;
-        const scheduled = isHeadScheduled(universeId, environment);
-        const rawFreshness = row.freshness
-          ? (String(row.freshness) as HeadFreshness)
-          : undefined;
         return {
           universeId,
           targetRunId: String(row.target_run_id),
           sequence: Number(row.sequence),
           advancedAt: new Date(row.advanced_at).toISOString(),
           ageHours: row.age_hours !== null && row.age_hours !== undefined ? Number(row.age_hours) : null,
-          freshness: rawFreshness ? (scheduled ? rawFreshness : "manual") : undefined,
+          freshness: row.freshness
+            ? resolveHeadFreshness(String(row.freshness), universeId, environment)
+            : undefined,
           availability: row.availability ? (String(row.availability) as "available" | "unavailable") : undefined,
           stalenessReason: row.staleness_reason ? String(row.staleness_reason) : null,
         };
@@ -191,7 +190,7 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
 
       const quotaResult = await client.query(
         "select source, count(*)::int as fetches from raw.fetches " +
-          `where fetched_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc') and ${REGISTERED_RAW_SOURCE_FILTER} group by source order by fetches desc`,
+          `where fetched_at >= ${UTC_DAY_START_SQL} and ${REGISTERED_RAW_SOURCE_FILTER} group by source order by fetches desc`,
       );
       const quotaToday = quotaResult.rows.map((row) => ({
         source: String(row.source),

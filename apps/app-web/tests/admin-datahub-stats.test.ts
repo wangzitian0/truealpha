@@ -218,9 +218,10 @@ const confidenceRows = [
       // sources stub first fed them SourceStatRow shapes while the count-only
       // assertion stayed green (review on #678).
       if (typeof sql === "string" && sql.includes("as check")) {
+        const checkMatch = sql.match(/select\s+'([^']+)'\s+as\s+check/i);
         return {
           rows: [
-            { check: sql.slice(20, 44), verdict: "pass", detail: "stubbed" },
+            { check: checkMatch?.[1] ?? "unknown", verdict: "pass", detail: "stubbed" },
           ],
         } as never;
       }
@@ -546,9 +547,35 @@ const confidenceRows = [
       sourcesSql.includes("-[0-9]{8}T[0-9]{4}$"),
     "SOURCES_SQL filters out legacy run-suffixed source strings (#1362)",
   );
+  const trafficSql = capturedSqls.find(
+    (s) => s.includes("from staging.api_call_ledger l") && s.includes("group by l.source"),
+  );
+  const capacityTdSql = capturedSqls.find((s) =>
+    s.includes("'twelvedata budget (this env, today utc)' as check"),
+  );
+  const recentCallsSql = capturedSqls.find(
+    (s) => s.includes("from staging.api_call_ledger l") && s.includes("limit 40"),
+  );
+  assert(
+    trafficSql !== undefined &&
+      trafficSql.includes("at time zone 'utc'") &&
+      trafficSql.includes("f.payload_sha256 = l.payload_sha256 and f.source = l.source"),
+    "TRAFFIC_SQL uses explicit UTC day boundary and joins raw.fetches by payload_sha256 and source (#1363)",
+  );
+  assert(
+    capacityTdSql !== undefined && capacityTdSql.includes("at time zone 'utc'"),
+    "CAPACITY_TD_SQL uses explicit UTC day boundary (#1363)",
+  );
+  assert(
+    recentCallsSql !== undefined &&
+      recentCallsSql.includes("at time zone 'utc'") &&
+      recentCallsSql.includes("f.payload_sha256 = l.payload_sha256 and f.source = l.source"),
+    "RECENT_CALLS_SQL formats called_at in UTC and joins raw.fetches by payload_sha256 and source (#1363)",
+  );
 
   __setTestOpsClient(null);
 }
 
 console.log("#641 admin datahub stats loader passed");
+
 

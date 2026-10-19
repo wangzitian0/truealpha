@@ -79,11 +79,12 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
                 stats[(market, "owner_plate", "fail")] += 1
                 print(f"  {code}.owner_plate: absent from batched response — will retry next run")
                 continue
-            raw_store.insert_json_fetch(
+            raw_store.insert_fetch(
                 conn,
                 source=DataSource.MOOMOO,
                 source_record_id=f"owner_plate:{code}",
-                payload=rows,
+                body=mm.canonical_moomoo_bytes(rows),
+                content_type="application/json",
                 fetched_at=datetime.now(UTC),
                 metadata={"batched": True},
             )

@@ -14,8 +14,10 @@
 
 import { withMartReadonly } from "@/server/mart/db";
 import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository";
-import { MartToptGppeRepository } from "@/server/mart/topt-gppe-repository";
+import { MartToptGppeRepository, type MartClientLike } from "@/server/mart/topt-gppe-repository";
+import type { ToptGppeRepositoryLike } from "@/server/topt-quality";
 import type { AccessContext } from "@/contracts/strategyRun";
+import type { HeadFreshness } from "@/contracts/serviceObjectives";
 import type { ReadState } from "@/server/read-state";
 
 export interface FunnelLayer {
@@ -35,41 +37,67 @@ export interface FunnelPrincipal {
 export type FunnelOutcome =
   ReadState<{ runId: string; layers: FunnelLayer[] }>;
 
+export interface FunnelDeps {
+  gppeRepo?: ToptGppeRepositoryLike;
+  strategyRepo?: Pick<MartStrategyRunRepository, "getLatest">;
+  runWithMartClient?: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T>;
+}
+
+const DEFAULT_POINTER_LIMIT_HOURS = 48;
+const MIN_BAR_RATIO = 0.04;
+
 function num(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function loadQualityFunnel(principal: FunnelPrincipal | null): Promise<FunnelOutcome> {
+export async function loadQualityFunnel(
+  principal: FunnelPrincipal | null,
+  deps: FunnelDeps = {},
+): Promise<FunnelOutcome> {
   if (principal === null || principal.principalKind !== "administrator") {
     return { kind: "denied" };
   }
+  const gppeRepo = deps.gppeRepo ?? new MartToptGppeRepository();
+  const strategyRepo = deps.strategyRepo ?? new MartStrategyRunRepository();
+  const runWithMartClient = deps.runWithMartClient ?? withMartReadonly;
+
   try {
-    const gppe = await new MartToptGppeRepository().latest();
+    const gppe = await gppeRepo.latest();
     if (!("cells" in gppe)) return { kind: "unavailable", reason: gppe.reason };
     const runId = gppe.run_id;
     const quality = (gppe.quality ?? {}) as Record<string, unknown>;
 
-    const [coverage, pointerAgeHours] = await withMartReadonly(async (client) => {
+    const [coverage, pointerHead] = await runWithMartClient(async (client) => {
       const cov = await client.query(
         "select count(*)::int as total, sum((present_count = required_count)::int)::int as complete " +
           "from mart.strategy_input_coverage where run_id = $1",
         [runId],
       );
       const ptr = await client.query(
-        "select age_hours as age " +
-          // Per universe, not collapsed: `order by sequence desc limit 1` reported one
-          // universe's age and hid the rest, so a pipeline that stopped advancing looked
-          // identical to one that never ran.
-          "from mart.served_head order by universe_id",
+        "select age_hours as age, freshness, limit_hours, availability " +
+          // Scope L5 to the governed TOPT head (matching MartToptGppeRepository.POINTER_HEAD_SQL).
+          // Without a WHERE filter, `order by universe_id` picked `canary-topt3` first (#1363).
+          "from mart.served_head " +
+          "where coalesce(run_id, head_run_id) = $1 or universe_id like 'universe:topt-%' " +
+          "order by (coalesce(run_id, head_run_id) = $1) desc, advanced_at desc limit 1",
+        [runId],
       );
+      const ptrRow = ptr.rows[0];
       return [
         { total: Number(cov.rows[0]?.total ?? 0), complete: Number(cov.rows[0]?.complete ?? 0) },
-        ptr.rows.length === 0 ? null : Number(ptr.rows[0].age),
+        ptrRow === undefined
+          ? null
+          : {
+              ageHours: num(ptrRow.age),
+              freshness: (typeof ptrRow.freshness === "string" ? ptrRow.freshness : null) as HeadFreshness | null,
+              limitHours: num(ptrRow.limit_hours),
+              availability: typeof ptrRow.availability === "string" ? ptrRow.availability : null,
+            },
       ] as const;
     });
 
-    const strategy = await new MartStrategyRunRepository().getLatest(
+    const strategy = await strategyRepo.getLatest(
       "large_model_value_v0",
       principal.context,
     );
@@ -81,11 +109,27 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
     const freshness = num(quality.freshness);
     const gppeAvailable = gppe.cells.filter((cell) => cell.availability === "available").length;
 
+    const pointerAgeHours = pointerHead?.ageHours ?? null;
+    const pointerLimitHours =
+      pointerHead?.limitHours && pointerHead.limitHours > 0
+        ? pointerHead.limitHours
+        : DEFAULT_POINTER_LIMIT_HOURS;
+    const pointerStatus: FunnelLayer["status"] =
+      pointerHead === null || pointerAgeHours === null || pointerHead.availability === "unavailable"
+        ? "crit"
+        : pointerHead.freshness === "fresh" || pointerHead.freshness === "manual"
+          ? "ok"
+          : pointerHead.freshness === "stale"
+            ? "warn"
+            : pointerAgeHours <= pointerLimitHours
+              ? "ok"
+              : "warn";
+
     const layers: FunnelLayer[] = [
       {
         key: "L1",
         title: "Capture",
-        headline: `${num(quality.available_count) ?? "?"} / ${num(quality.requested_count) ?? "?"} cells`,
+        headline: `${num(quality.available_count) ?? "?"} / ${num(quality.requested_count) ?? gppe.requested_count ?? "?"} cells`,
         ratio: availability,
         status: availability === null ? "muted" : availability >= 1 ? "ok" : availability >= 0.9 ? "warn" : "crit",
         detail: `freshness ${freshness ?? "?"} · reconciliation ${num(quality.independent_reconciliation) ?? "?"}`,
@@ -127,7 +171,7 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
         key: "L4",
         title: "Strategy",
         headline: `${decisions.length} evaluated → ${ranked} ranked → ${selected} selected`,
-        ratio: decisions.length === 0 ? null : Math.max(selected / Math.max(decisions.length, 1), 0.04),
+        ratio: decisions.length === 0 ? null : Math.max(selected / Math.max(decisions.length, 1), MIN_BAR_RATIO),
         status: decisions.length === 0 ? "crit" : "ok",
         detail: "claim ceiling: preview — selection narrowing is by design, not data loss",
       },
@@ -135,8 +179,11 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
         key: "L5",
         title: "Consumption",
         headline: pointerAgeHours === null ? "no pointer" : `pointer ${pointerAgeHours.toFixed(1)}h old`,
-        ratio: pointerAgeHours === null ? null : Math.max(0.04, Math.min(1, 1 - pointerAgeHours / 48)),
-        status: pointerAgeHours === null ? "crit" : pointerAgeHours <= 26 ? "ok" : "warn",
+        ratio:
+          pointerAgeHours === null
+            ? null
+            : Math.max(MIN_BAR_RATIO, Math.min(1, 1 - pointerAgeHours / pointerLimitHours)),
+        status: pointerStatus,
         detail: "mart.served_head — web/MCP/chat resolve the same governed run",
       },
     ];

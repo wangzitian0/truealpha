@@ -16,8 +16,9 @@ import {
   type HeadFreshness,
   NON_CANARY_UNIVERSE_WHERE,
   REGISTERED_RAW_SOURCE_FILTER,
+  UTC_DAY_START_SQL,
   isCanaryUniverse,
-  isHeadScheduled,
+  resolveHeadFreshness,
 } from "../../contracts/serviceObjectives";
 import { withOpsReader } from "./ops";
 
@@ -103,7 +104,7 @@ export interface RecentCallRow {
 export interface QuestionCoverageQuestion {
   question: string;
   text: string;
-  scope?: string;
+  scope: string;
   column: string | null;
   tracking_issue: string;
   answered: number;
@@ -467,7 +468,7 @@ const CAPACITY_TD_SQL = `
            || (count(*) filter (where not ok))::int || ' failed requests)' as detail
   from staging.api_call_ledger
   where source = 'twelvedata'
-    and called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+    and called_at >= ${UTC_DAY_START_SQL}
 `;
 
 // #729: traffic, per source, today (UTC). Timestamps are rendered in UTC explicitly —
@@ -485,10 +486,10 @@ const TRAFFIC_SQL = `
          to_char(max(l.called_at) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as last_call,
          (select e.error from staging.api_call_ledger e
            where e.source = l.source and not e.ok
-             and e.called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+             and e.called_at >= ${UTC_DAY_START_SQL}
            order by e.called_at desc limit 1) as last_error
   from staging.api_call_ledger l
-  where l.called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+  where l.called_at >= ${UTC_DAY_START_SQL}
   group by l.source
   order by calls desc, l.source
 `;
@@ -624,15 +625,11 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
           !isCanaryUniverse(row.universe_id) &&
           corroborationRatio !== null &&
           corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
-        const scheduled = isHeadScheduled(row.universe_id, row.environment);
-        const rawFreshness = (row.freshness ?? "unknown") as
-          | "fresh"
-          | "stale"
-          | "manual"
-          | "unknown";
-        const freshness: "fresh" | "stale" | "manual" | "unknown" = scheduled
-          ? rawFreshness
-          : "manual";
+        const freshness: HeadFreshness = resolveHeadFreshness(
+          row.freshness,
+          row.universe_id,
+          row.environment,
+        );
         const isFreshnessDegraded =
           freshness !== "fresh" && freshness !== "manual";
 
