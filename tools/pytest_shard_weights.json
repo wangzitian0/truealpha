@@ -190,7 +190,6 @@
     "libs/runtime/tests/test_app_layer_aggregation.py": 0.1,
     "libs/runtime/tests/test_auto_release.py": 1.33,
     "libs/runtime/tests/test_boot.py": 0.0,
-    "libs/runtime/tests/test_check_pr_ready.py": 0.0,
     "libs/runtime/tests/test_checks.py": 0.33,
     "libs/runtime/tests/test_ci_workflows.py": 4.02,
     "libs/runtime/tests/test_complexity_gate.py": 0.87,
