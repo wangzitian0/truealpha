@@ -47,6 +47,8 @@ _ANNUAL_MINIMUM_DAYS = 350
 
 # Wider than the adapter's frozen mapping on purpose — see the module docstring. An
 # oracle that only knows the tags we already declared cannot reveal a tag we missed.
+# It holds every revenue concept of the ruleset too. `tests/test_revenue_concepts.py`
+# states each concept beyond the ruleset and its reason (#1379).
 _REVENUE_CONCEPTS = (
     "Revenues",
     "RevenueFromContractWithCustomerExcludingAssessedTax",

@@ -1,0 +1,148 @@
+{
+ "_fixture": {
+  "source": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001535527.json",
+  "read_on": "2026-10-19",
+  "source_sha256": "a71a92f1f11bd3032271ca55be7a7770a96a846ec809f925829ef952fd5f3fa1",
+  "source_bytes": 1965294,
+  "note": "Each row is a verbatim copy of a source row. The fixture keeps only the rows that 'kept' names.",
+  "kept": {
+   "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax": "10-K rows, fp FY, years that end 2025-01-31 and 2026-01-31",
+   "us-gaap:GrossProfit": "10-K rows, fp FY, years that end 2025-01-31 and 2026-01-31",
+   "us-gaap:Assets": "the 10-K row at 2026-01-31 and the 10-Q row at 2026-07-31",
+   "dei:EntityCommonStockSharesOutstanding": "the 10-Q row at 2026-08-20"
+  }
+ },
+ "cik": 1535527,
+ "entityName": "CrowdStrike Holdings, Inc.",
+ "facts": {
+  "us-gaap": {
+   "RevenueFromContractWithCustomerIncludingAssessedTax": {
+    "label": "Revenue from Contract with Customer, Including Assessed Tax",
+    "description": "Amount, including tax collected from customer, of revenue from satisfaction of performance obligation by transferring promised good or service to customer. Tax collected from customer is tax assessed by governmental authority that is both imposed on and concurrent with specific revenue-producing transaction, including, but not limited to, sales, use, value-added and excise.",
+    "units": {
+     "USD": [
+      {
+       "start": "2024-02-01",
+       "end": "2025-01-31",
+       "val": 3953624000,
+       "accn": "0001535527-25-000009",
+       "fy": 2024,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2025-03-10"
+      },
+      {
+       "start": "2024-02-01",
+       "end": "2025-01-31",
+       "val": 3953624000,
+       "accn": "0001535527-26-000010",
+       "fy": 2026,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2026-03-05",
+       "frame": "CY2024"
+      },
+      {
+       "start": "2025-02-01",
+       "end": "2026-01-31",
+       "val": 4812005000,
+       "accn": "0001535527-26-000010",
+       "fy": 2026,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2026-03-05",
+       "frame": "CY2025"
+      }
+     ]
+    }
+   },
+   "GrossProfit": {
+    "label": "Gross Profit",
+    "description": "Aggregate revenue less cost of goods and services sold or operating expenses directly attributable to the revenue generation activity.",
+    "units": {
+     "USD": [
+      {
+       "start": "2024-02-01",
+       "end": "2025-01-31",
+       "val": 2962143000,
+       "accn": "0001535527-25-000009",
+       "fy": 2024,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2025-03-10"
+      },
+      {
+       "start": "2024-02-01",
+       "end": "2025-01-31",
+       "val": 2963452000,
+       "accn": "0001535527-26-000010",
+       "fy": 2026,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2026-03-05",
+       "frame": "CY2024"
+      },
+      {
+       "start": "2025-02-01",
+       "end": "2026-01-31",
+       "val": 3593076000,
+       "accn": "0001535527-26-000010",
+       "fy": 2026,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2026-03-05",
+       "frame": "CY2025"
+      }
+     ]
+    }
+   },
+   "Assets": {
+    "label": "Assets",
+    "description": "Sum of the carrying amounts as of the balance sheet date of all assets that are recognized. Assets are probable future economic benefits obtained or controlled by an entity as a result of past transactions or events.",
+    "units": {
+     "USD": [
+      {
+       "end": "2026-01-31",
+       "val": 11086684000,
+       "accn": "0001535527-26-000010",
+       "fy": 2026,
+       "fp": "FY",
+       "form": "10-K",
+       "filed": "2026-03-05"
+      },
+      {
+       "end": "2026-07-31",
+       "val": 12025001000,
+       "accn": "0001535527-26-000031",
+       "fy": 2027,
+       "fp": "Q2",
+       "form": "10-Q",
+       "filed": "2026-08-27",
+       "frame": "CY2026Q2I"
+      }
+     ]
+    }
+   }
+  },
+  "dei": {
+   "EntityCommonStockSharesOutstanding": {
+    "label": "Entity Common Stock, Shares Outstanding",
+    "description": "Indicate number of shares or other units outstanding of each of registrant's classes of capital or common stock or other ownership interests, if and as stated on cover of related periodic report. Where multiple classes or units exist define each class/interest by adding class of stock items such as Common Class A [Member], Common Class B [Member] or Partnership Interest [Member] onto the Instrument [Domain] of the Entity Listings, Instrument.",
+    "units": {
+     "shares": [
+      {
+       "end": "2026-08-20",
+       "val": 1023934842,
+       "accn": "0001535527-26-000031",
+       "fy": 2027,
+       "fp": "Q2",
+       "form": "10-Q",
+       "filed": "2026-08-27",
+       "frame": "CY2026Q3I"
+      }
+     ]
+    }
+   }
+  }
+ }
+}

@@ -151,3 +151,15 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # observation reuse never crosses a vintage (#788) — the first v10 tick recaptures every
 # cell rather than reusing a bar-less v9 observation. The financial-fact and identity
 # payloads are unchanged in value; they take v10 because the identity is shared (header).
+
+# No vintage for a concept-list edit (#1379). `revenue` gained
+# `RevenueFromContractWithCustomerIncludingAssessedTax`, and the ruleset moved to
+# production-topt-concepts:v3. The parse code and the payload keys did not change. The ruleset
+# is content-addressed, and `sec_financial_adapter.build_route` writes its hash into
+# `mapping_version` (`production-topt-live-map:v10+<hash>`). So a figure under the new rules
+# names other rules than the old figure, and it is not a restatement. A governed pointer
+# advance makes the same edit with no deploy and no vintage (#496). A parser bump would also
+# fail the nightly runs after a deploy. `strategy_history.latest_financial_observations` reads
+# only the current vintage. The 20:07 projection and the 21:45 backtest would then resolve no
+# issuer before the 22:15 tick writes the new vintage. The v6 -> v7 bump for `ProfitLoss` also
+# changed what a null meant. A ruleset edit alone does not change it.
