@@ -19,6 +19,7 @@
  * parses an id.
  */
 
+import { formatIssuerLabel } from "@/client/format";
 import { withMartReadonly } from "@/server/mart/db";
 
 export interface EntityDisplay {
@@ -75,10 +76,14 @@ export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>
   return map;
 }
 
-/** `TICKER · Name` when both known; ticker alone when the KG has no name;
- * the raw id when the issuer is not in the resolution view at all. */
+/** `TICKER · Name` when both known; ticker or name alone when only one is known;
+ * human-readable identifier fallback via `formatIssuerLabel` when absent from the view. */
 export function entityLabel(issuerId: string, map: Map<string, EntityDisplay>): string {
   const entry = map.get(issuerId);
-  if (!entry || !entry.ticker || entry.ticker.trim() === "") return issuerId;
-  return entry.displayName ? `${entry.ticker} · ${entry.displayName}` : entry.ticker;
+  const ticker = entry?.ticker?.trim() ?? "";
+  const displayName = entry?.displayName?.trim() ?? "";
+  if (ticker && displayName) return `${ticker} · ${displayName}`;
+  if (ticker) return ticker;
+  if (displayName) return displayName;
+  return formatIssuerLabel(issuerId) ?? issuerId;
 }

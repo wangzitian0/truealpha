@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { formatShortSha } from "@/client/format";
 import type { RankingRow } from "@/server/mart/research-read";
 
 /** What a published number was computed FROM, on the surface rather than in an audit.
@@ -56,8 +57,16 @@ export function ProvenanceCell({ row }: { row: RankingRow }) {
 					</div>
 				))}
 				<Field label="Universe" value={p.universeVersion} />
-				<Field label="GPPE def" value={shorten(p.gppeDefinitionSha256)} />
-				<Field label="Tier def" value={shorten(p.tierDefinitionSha256)} />
+				<Field
+					label="GPPE def"
+					value={p.gppeDefinitionSha256 ? formatShortSha(p.gppeDefinitionSha256) : null}
+					title={p.gppeDefinitionSha256}
+				/>
+				<Field
+					label="Tier def"
+					value={p.tierDefinitionSha256 ? formatShortSha(p.tierDefinitionSha256) : null}
+					title={p.tierDefinitionSha256}
+				/>
 			</dl>
 			<Link
 				href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
@@ -69,19 +78,21 @@ export function ProvenanceCell({ row }: { row: RankingRow }) {
 	);
 }
 
-function Field({ label, value }: { label: string; value: string | null }) {
+function Field({
+	label,
+	value,
+	title,
+}: {
+	label: string;
+	value: string | null;
+	title?: string | null;
+}) {
 	return (
 		<div className="flex gap-2">
 			<dt className="w-20 shrink-0 text-gray-600">{label}</dt>
-			<dd className={value === null ? "text-amber-500" : ""}>
+			<dd className={value === null ? "text-amber-500" : ""} title={title ?? undefined}>
 				{value ?? "unknown"}
 			</dd>
 		</div>
 	);
-}
-
-/** A 64-character digest in a table cell is noise; the first 12 identify it and
- *  the full value stays available on hover for anyone comparing two runs. */
-function shorten(sha: string | null): string | null {
-	return sha === null ? null : sha.slice(0, 12);
 }

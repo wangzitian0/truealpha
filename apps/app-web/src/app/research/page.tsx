@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
+	formatCell,
 	formatPercentFromFraction,
 	formatRatio,
 	formatSignedRatio,
@@ -142,27 +143,30 @@ export default async function ResearchOverviewPage() {
 										>
 											{entityLabel(decision.issuer_id, names)}
 										</th>
-										<td className="px-4 py-3">{decision.tier ?? "—"}</td>
+										<td className="px-4 py-3">{formatCell(decision.tier)}</td>
 										<td
 											className="px-4 py-3 tabular-nums"
 											title={currentMultipleOf(decision) ?? undefined}
 										>
-											{formatRatio(currentMultipleOf(decision)) ?? "—"}
+											{formatCell(formatRatio(currentMultipleOf(decision)))}
 										</td>
 										<td
 											className="px-4 py-3 tabular-nums"
 											title={targetMultipleOf(decision) ?? undefined}
 										>
-											{formatRatio(targetMultipleOf(decision)) ?? "—"}
+											{formatCell(formatRatio(targetMultipleOf(decision)))}
 										</td>
 										<td
 											className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
 											title={decision.valuation_gap ?? undefined}
 										>
-											{formatSignedRatio(decision.valuation_gap) ?? "—"}
+											{formatCell(formatSignedRatio(decision.valuation_gap))}
 										</td>
-										<td className="px-4 py-3 tabular-nums">
-											{formatPercentFromFraction(decision.target_weight) ?? "—"}
+										<td
+											className="px-4 py-3 tabular-nums"
+											title={decision.target_weight ?? undefined}
+										>
+											{formatCell(formatPercentFromFraction(decision.target_weight))}
 										</td>
 										<td className="px-4 py-3">
 											<Link
@@ -213,7 +217,7 @@ export default async function ResearchOverviewPage() {
 							<ul className="mt-2 space-y-1">
 								{usability.excluded.map((item) => (
 									<li key={item.issuer_id}>
-										<span className="font-medium text-gray-200">
+										<span className="font-medium text-gray-200" title={item.issuer_id}>
 											{entityLabel(item.issuer_id, names)}
 										</span>
 										{item.exclusion_reason && (

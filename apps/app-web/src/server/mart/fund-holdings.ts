@@ -8,6 +8,7 @@
  * behalf, this module never names a staging table.
  */
 
+import { formatRatio } from "@/client/format";
 import { withMartReadonly } from "./db";
 
 export type FundHoldingRow = {
@@ -86,7 +87,7 @@ export async function loadFundHoldings(): Promise<FundHoldingsVintage[]> {
   }
   for (const vintage of byFund.values()) {
     const sum = vintage.lines.reduce((total, line) => total + (line.weightPct ? Number(line.weightPct) : 0), 0);
-    vintage.weightSumPct = sum.toFixed(2);
+    vintage.weightSumPct = formatRatio(String(sum)) ?? "0.00";
   }
   return [...byFund.values()].sort((a, b) => a.fundName.localeCompare(b.fundName));
 }

@@ -35,8 +35,10 @@ import {
   formatUsdMagnitude,
   signColor,
 } from "../src/client/format";
+import { ProvenanceCell } from "../src/components/provenance-cell";
 import { TraceInputsTable } from "../src/components/trace-inputs-table";
-import { traceInputsFromLineage } from "../src/server/mart/research-read";
+import { entityLabel, type EntityDisplay } from "../src/server/mart/entity-resolution";
+import { traceInputsFromLineage, type RankingRow } from "../src/server/mart/research-read";
 
 const bunTestModuleId = "bun:test";
 const { mock } = (await import(bunTestModuleId)) as {
@@ -83,14 +85,18 @@ mock.module("@/components/card-export-button", () => ({
   CardExportButton: () => createElement("button", { type: "button" }, "Export Card"),
 }));
 
+mock.module("@/components/trigger-run-button", () => ({
+  TriggerRunButton: () => createElement("button", { type: "button" }, "Trigger run"),
+}));
+
 mock.module("@/server/mart/entity-resolution", () => ({
   loadEntityDisplayMap: async () =>
-    new Map([
-      ["issuer:cik:0000104169", { ticker: "WMT", name: "WALMART INC", label: "WMT · WALMART INC" }],
-      ["issuer:brk", { ticker: "BRK.B", name: "BERKSHIRE HATHAWAY", label: "BRK.B" }],
-      ["issuer:aapl", { ticker: "AAPL", name: "APPLE INC", label: "AAPL · APPLE INC" }],
+    new Map<string, EntityDisplay>([
+      ["issuer:cik:0000104169", { ticker: "WMT", displayName: "WALMART INC" }],
+      ["issuer:brk", { ticker: "BRK.B", displayName: null }],
+      ["issuer:aapl", { ticker: "AAPL", displayName: "APPLE INC" }],
     ]),
-  entityLabel: (id: string, map: Map<string, { label: string }>) => map.get(id)?.label ?? id,
+  entityLabel,
 }));
 
 mock.module("@/server/dashboard", () => ({
@@ -200,7 +206,41 @@ mock.module("@/server/admin/funnel", () => ({
 }));
 
 mock.module("@/server/admin/ops", () => ({
-  loadOpsOverview: async () => ({ kind: "ready" as const, data: { quotaToday: [] } }),
+  RUNS_EMPTY_MESSAGE: "No runs recorded yet.",
+  RUNS_UNAVAILABLE_MESSAGE: "Run history unavailable.",
+  loadOpsOverview: async () => ({
+    kind: "ready" as const,
+    data: {
+      runs: [
+        {
+          runId: "1234567890abcdef1234567890abcdef",
+          jobName: "topt_live_pipeline",
+          status: "SUCCESS",
+          createdAt: "2026-10-18T22:15:00Z",
+          durationSeconds: 185,
+        },
+      ],
+      pointers: [
+        {
+          universeId: "topt-core",
+          targetRunId: "capture-run:1234567890abcdef",
+          sequence: 7,
+          advancedAt: "2026-10-18T22:20:00Z",
+          ageHours: 0.5,
+          freshness: "fresh" as const,
+          availability: "available" as const,
+        },
+      ],
+      dataEngine: {
+        gitSha: "4cf7291deadbeef0123456789",
+        imageDigest: "sha256:00f7",
+        runId: "capture-run:1234567890abcdef",
+        createdAt: "2026-10-18T22:15:00Z",
+      },
+      appGitSha: "a30d19e000000000000000000",
+      quotaToday: [],
+    },
+  }),
 }));
 
 mock.module("@/server/strategy-page", () => ({
@@ -318,6 +358,7 @@ mock.module("@/server/mart/fund-valuation", () => ({
 
 const { default: ComparePage } = await import("../src/app/research/compare/page");
 const { default: AdminUniversesPage } = await import("../src/app/admin/universes/page");
+const { default: AdminOverviewPage } = await import("../src/app/admin/page");
 const { default: ToptQualityPage } = await import("../src/app/admin/quality/page");
 const { default: TracePage } = await import("../src/app/research/trace/page");
 const { AppChrome } = await import("../src/components/app-chrome");
@@ -351,7 +392,7 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(compareHtml.includes(">0.88<") && compareHtml.includes('title="0.8812"'), "ComparePage must render 0.88 with raw title");
 }
 
-// --- AC2: /admin/universes and TraceInputsTable number formatting (rendered SSR components) ---
+// --- AC2: /admin/universes, /admin, ProvenanceCell, and TraceInputsTable formatting (rendered SSR components) ---
 {
   assert(formatUsdMagnitude("5525648000000") === "$5.53T", "5525648000000 must format as $5.53T");
   assert(formatUsdMagnitude("4912984755200") === "$4.91T", "4912984755200 must format as $4.91T");
@@ -365,6 +406,42 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(universesHtml.includes(">$5.53T<"), `AdminUniversesPage must render $5.53T: ${universesHtml}`);
   assert(universesHtml.includes('title="5525648000000"'), "AdminUniversesPage must preserve raw 5525648000000 in title");
   assert(universesHtml.includes("abcdef012345…"), "AdminUniversesPage must render truncated mapping sha256");
+
+  const adminOverviewHtml = renderToStaticMarkup(await AdminOverviewPage());
+  assert(
+    adminOverviewHtml.includes(">4cf7291deadb…<") &&
+      adminOverviewHtml.includes("app a30d19e00000…") &&
+      adminOverviewHtml.includes(">1234567890ab…<") &&
+      adminOverviewHtml.includes('title="1234567890abcdef1234567890abcdef"'),
+    `AdminOverviewPage must format git/run digests via formatShortSha and preserve runId in title: ${adminOverviewHtml}`,
+  );
+  assert(
+    adminOverviewHtml.includes(">30m ago<"),
+    `AdminOverviewPage must format pointer.ageHours=0.5 via formatElapsedHours as 30m ago: ${adminOverviewHtml}`,
+  );
+
+  const provenanceRow = {
+    issuerId: "issuer:aapl",
+    cutoffAt: "2026-10-18T00:00:00Z",
+    provenance: {
+      operatingPeriodEnd: "2026-09-30",
+      revenuePeriodEnd: "2026-09-30",
+      sharesPeriodEnd: "2026-09-30",
+      universeVersion: "v1",
+      gppeDefinitionSha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      tierDefinitionSha256: null,
+    },
+  } as unknown as RankingRow;
+  const provenanceHtml = renderToStaticMarkup(createElement(ProvenanceCell, { row: provenanceRow }));
+  assert(
+    provenanceHtml.includes(">abcdef012345…<") &&
+      provenanceHtml.includes('title="abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"'),
+    `ProvenanceCell must format SHA-256 via formatShortSha and preserve full digest in title: ${provenanceHtml}`,
+  );
+  assert(
+    provenanceHtml.includes("text-amber-500") && provenanceHtml.includes(">unknown<"),
+    "ProvenanceCell must render unknown in amber when a definition digest is null",
+  );
 
   const uuidListing = "3dc96dda-763e-5379-bf95-2f729b3ed6da";
   const lineage = [
@@ -398,8 +475,32 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(html.includes("Listing: Listing #3dc96dda"), "TraceInputsTable must render human-readable UUID listing label");
 }
 
-// --- AC3: Human-readable labels on /admin/quality, /research/trace, and AppChrome (rendered SSR components) ---
+// --- AC3: Human-readable labels on entityLabel, /admin/quality, /research/trace, and AppChrome ---
 {
+  const displayMap = new Map<string, EntityDisplay>([
+    ["issuer:wmt", { ticker: "WMT", displayName: "WALMART INC" }],
+    ["issuer:brk", { ticker: "BRK.B", displayName: null }],
+    ["issuer:name-only", { ticker: "", displayName: "NAME ONLY CORP" }],
+  ]);
+  assert(entityLabel("issuer:wmt", displayMap) === "WMT · WALMART INC", "entityLabel must join ticker and displayName");
+  assert(entityLabel("issuer:brk", displayMap) === "BRK.B", "entityLabel must return ticker when displayName is null");
+  assert(
+    entityLabel("issuer:name-only", displayMap) === "NAME ONLY CORP",
+    "entityLabel must preserve displayName when ticker is blank",
+  );
+  assert(
+    entityLabel("issuer:cik:0000104169", displayMap) === "CIK 0000104169",
+    "entityLabel must delegate unmapped CIK fallback to formatIssuerLabel",
+  );
+  assert(
+    entityLabel("issuer:lei:HWUPKR0MPOU8FGXBT394", displayMap) === "LEI HWUPKR0MPOU8…",
+    "entityLabel must delegate unmapped LEI fallback to formatIssuerLabel",
+  );
+  assert(
+    entityLabel("3dc96dda-763e-5379-bf95-2f729b3ed6da", displayMap) === "Issuer #3dc96dda",
+    "entityLabel must delegate unmapped UUID fallback to formatIssuerLabel",
+  );
+
   assert(formatListingLabel("listing:xnas:aapl") === "AAPL (XNAS)", "listing:xnas:aapl must format as AAPL (XNAS)");
   assert(
     formatListingLabel("listing:xnys:brk.b") === "BRK.B (XNYS)",
@@ -451,7 +552,7 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   );
 }
 
-// --- AC4: Whitespace hygiene on /research, /research/themes, and /research/strategy (rendered SSR visibleText) ---
+// --- AC4: Whitespace hygiene and title parity on /research, /research/themes, /research/strategy, and /research/holdings ---
 {
   const researchHtml = renderToStaticMarkup(await ResearchOverviewPage());
   const researchText = visibleText(researchHtml);
@@ -462,6 +563,14 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(
     researchText.includes("BRK.B missing_gross_profit_fact") && !researchText.includes("BRK.Bmissing_"),
     `/research visibleText must separate ticker and exclusion_reason badge with a space: ${researchText}`,
+  );
+  assert(
+    researchHtml.includes('title="0.5000"') && researchHtml.includes(">50%<"),
+    `/research must preserve raw target_weight in title and format 50%: ${researchHtml}`,
+  );
+  assert(
+    researchHtml.includes('title="issuer:brk"'),
+    "/research excluded disclosure must preserve raw issuer_id in title",
   );
 
   const themesHtml = renderToStaticMarkup(await ThemesPage());
@@ -477,6 +586,20 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(
     themesHtml.includes(">0.88<") && themesHtml.includes('title="0.8765"'),
     "/research/themes must format confidence with formatRatio and preserve raw confidence in title",
+  );
+  assert(
+    themesHtml.includes(">62.5%<") &&
+      themesHtml.includes('title="0.6250"') &&
+      themesHtml.includes(">85%<") &&
+      themesHtml.includes('title="0.8500"'),
+    `/research/themes must format themeShare and classifiedShare via formatPercentFromFraction with raw titles: ${themesHtml}`,
+  );
+  assert(
+    themesHtml.includes(">abcdef012345…<") &&
+      themesHtml.includes('title="abcdef0123456789abcdef0123456789"') &&
+      themesHtml.includes('title="125000000000"') &&
+      themesHtml.includes('title="200000000000"'),
+    `/research/themes must format definitionSha256 via formatShortSha and preserve raw revenue strings in title: ${themesHtml}`,
   );
 
   const strategyHtml = renderToStaticMarkup(await StrategyRunsPage());
@@ -504,12 +627,14 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
     "src/app/research/compare/page.tsx",
     "src/app/admin/quality/page.tsx",
     "src/app/admin/universes/page.tsx",
+    "src/app/admin/page.tsx",
     "src/app/research/themes/page.tsx",
     "src/app/research/trace/page.tsx",
     "src/app/research/page.tsx",
     "src/app/research/strategy/page.tsx",
     "src/app/research/holdings/page.tsx",
     "src/components/trace-inputs-table.tsx",
+    "src/components/provenance-cell.tsx",
     "src/components/app-chrome.tsx",
   ];
 
@@ -520,16 +645,32 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
       `${relativePath} must not define a local cell() helper; import formatCell from @/client/format`,
     );
     assert(
-      !/function\s+shortSha\s*\(/.test(source),
-      `${relativePath} must not define a local shortSha() helper; import formatShortSha from @/client/format`,
+      !/function\s+(?:shortSha|shorten)\s*\(/.test(source),
+      `${relativePath} must not define a local shortSha()/shorten() helper; import formatShortSha from @/client/format`,
     );
     assert(
-      !/function\s+format(?:Ratio|Pct)\s*\(/.test(source),
-      `${relativePath} must not define a local formatRatio/formatPct helper; import from @/client/format`,
+      !/function\s+(?:formatRatio|formatPct|pct)\s*\(/.test(source),
+      `${relativePath} must not define a local formatRatio/formatPct/pct helper; import from @/client/format`,
+    );
+    assert(
+      !/\.slice\(\s*0\s*,\s*12\s*\)/.test(source),
+      `${relativePath} must not inline .slice(0, 12); use formatShortSha from @/client/format`,
     );
     assert(
       !/Number\s*\(\s*row\.confidence\s*\)\s*\.toFixed/.test(source),
       `${relativePath} must not inline Number(row.confidence).toFixed; use formatRatio from @/client/format`,
+    );
+    assert(
+      !/formatIssuerLabel\s*\([^)]*entityLabel\s*\(/.test(source),
+      `${relativePath} must not wrap entityLabel() in formatIssuerLabel(); entityLabel() is the single upstream entry point`,
+    );
+  }
+
+  for (const martLoader of ["src/server/mart/fund-holdings.ts"]) {
+    const source = readAppFile(martLoader);
+    assert(
+      !/\.toFixed\s*\(\s*2\s*\)/.test(source),
+      `${martLoader} must not inline .toFixed(2); use formatRatio from @/client/format`,
     );
   }
 }
