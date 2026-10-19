@@ -7,7 +7,7 @@ redaction — see "A note on masked-looking fields" below), captured
 reflect the network/IP conditions the real ingestion pipeline will see).
 
 Purpose: ground schema design and data-quality profiling for `db/migrations`
-and `libs/factors` in real payloads before building the `raw.fetches` + MinIO
+and `common/factors` in real payloads before building the `raw.fetches` + MinIO
 ingestion pipeline (Phase -1 reconnaissance; see `init.md` "Current Baseline and Next Gate"). Not refreshed by CI;
 re-run the scripts in `../scripts/` manually to recapture a new snapshot.
 
@@ -79,7 +79,7 @@ Verified working end-to-end for all 4 tickers.
 - **`EntityNumberOfEmployees` XBRL tag is absent for all 4 issuers** — headcount
   is not machine-readable via XBRL for this universe; module 2's
   gross-profit-per-employee factor must go through the LLM-extraction path
-  (`libs/factors/shared/extraction.py`) reading `filings/*.html`, not staging
+  (`common/factors/shared/extraction.py`) reading `filings/*.html`, not staging
   data pulled straight from company-facts.
 - **Headcount is genuinely ambiguous even in prose**: DDOG's 10-K states 3,600
   (sales & marketing), 3,900 (R&D), and 8,100 (total) employees in three
@@ -141,7 +141,7 @@ Verified working end-to-end for all 4 tickers.
   graph** (checked via the proto definitions, not called): nodes are named industry
   segments with an optional `plateId` (sector), not stock codes. It does not give
   "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
-  (`libs/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
+  (`common/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
   not a shortcut moomoo replaces.
 - Ledger-recorded calls this capture run: 57 (the `api_call_ledger` is throttle and
   audit infrastructure, not a monthly quota).

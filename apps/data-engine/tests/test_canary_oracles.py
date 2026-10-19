@@ -25,8 +25,8 @@ _WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_
 
 
 def _runtime_pyproject_pin() -> str:
-    """The pin as the workspace source declares it (libs/runtime/pyproject.toml)."""
-    runtime = tomllib.loads((REPOSITORY_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8"))
+    """The pin as the workspace source declares it (common/runtime/pyproject.toml)."""
+    runtime = tomllib.loads((REPOSITORY_ROOT / "common/runtime/pyproject.toml").read_text(encoding="utf-8"))
     pins = [item for item in runtime["project"]["dependencies"] if item.startswith("infra2-sdk")]
     assert len(pins) == 1, pins
     match = _WHEEL_PIN.search(pins[0])

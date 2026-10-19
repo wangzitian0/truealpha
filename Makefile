@@ -148,13 +148,13 @@ test:
 	uv run pytest
 
 test-fast:
-	uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests/test_checks.py
+	uv run pytest common/contracts/tests common/factors/tests common/runtime/tests/test_checks.py
 
 smoke: lint typecheck contract-conformance test-fast
 	@echo "✅ Inner-loop smoke checks passed"
 
 contract-conformance:
-	uv run python libs/contracts/conformance/export_issue58.py --check
+	uv run python common/contracts/conformance/export_issue58.py --check
 	# Runs every apps/app-web/tests/*.test.ts file, mirroring ci-web.yml (#373 found a
 	# hardcoded list here had silently stopped running 5 of them: conversations/documents
 	# validation, and now #433's topt tests — a hardcoded list drifts every time a test

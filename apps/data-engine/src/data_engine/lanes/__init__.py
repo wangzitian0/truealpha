@@ -11,7 +11,7 @@ is a defect the same test turns red on, so a lane cannot exist half-wired.
 
 A lane that records nightly verdicts (#876) also declares their names in a module-level
 `NIGHTLY_VERDICTS`; `nightly_verdict_names()` is the union, and
-`libs/runtime/tests/test_nightly_verdicts.py` holds it equal to the set
+`common/runtime/tests/test_nightly_verdicts.py` holds it equal to the set
 `tools/nightly_verdicts.py` watches.
 """
 

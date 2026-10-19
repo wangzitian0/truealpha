@@ -15,7 +15,7 @@ judge yet, `release_fetch_proof` before its first proving run); on ANY exception
 What a verdict is named: the check, plus the universe for per-universe checks
 (`theme_purity@topt`). A lane declares every name it can record in its module-level
 `NIGHTLY_VERDICTS`; `data_engine.lanes.nightly_verdict_names()` is their union, and
-`libs/runtime/tests/test_nightly_verdicts.py` holds that union equal to the set the tool
+`common/runtime/tests/test_nightly_verdicts.py` holds that union equal to the set the tool
 watches (`tools/nightly_verdicts.json`), so a check cannot be recorded and go unwatched. A
 run whose name the lane does not declare — a manual run over a universe no schedule ticks —
 is not a nightly check and records nothing.

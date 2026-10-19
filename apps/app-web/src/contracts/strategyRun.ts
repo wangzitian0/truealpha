@@ -530,7 +530,7 @@ const FIXTURE_PATH = join(
 	process.cwd(),
 	"..",
 	"..",
-	"libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+	"common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
 );
 
 /**

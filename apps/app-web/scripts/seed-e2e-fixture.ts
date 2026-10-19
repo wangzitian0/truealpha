@@ -13,7 +13,7 @@
  *    for `member` and `administrator`, which is what the route-group gates
  *    (#371/#493) discriminate on.
  *
- * 2. **The frozen twin-parity canon** (`libs/contracts/conformance/
+ * 2. **The frozen twin-parity canon** (`common/contracts/conformance/
  *    strategy_run_parity.json`, #482) into `mart.strategy_runs` /
  *    `mart.strategy_decisions`, verbatim. Deliberately NOT invented rows: that
  *    file is already the contract both language consumers assert against, so
@@ -92,11 +92,11 @@ export const E2E_PRINCIPALS = [
 /** Resolved from this file, not from the process cwd, so the seeder works
  * whether it is invoked from `apps/app-web` or the repository root. */
 const CANON_URL = new URL(
-  "../../../libs/contracts/conformance/strategy_run_parity.json",
+  "../../../common/contracts/conformance/strategy_run_parity.json",
   import.meta.url,
 );
 const PREVIEW_URL = new URL(
-  "../../../libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+  "../../../common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
   import.meta.url,
 );
 const PREVIEW_CUTOFF = "2026-03-31T23:59:59Z";

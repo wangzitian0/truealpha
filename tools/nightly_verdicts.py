@@ -19,7 +19,7 @@ which escalates a red run to an issue — fails when an expected check's newest 
     or a staging that releases several times a day would forgive a check that never ticks).
 
 Which checks are expected is declared once, in `tools/nightly_verdicts.json`, and
-`libs/runtime/tests/test_nightly_verdicts.py` holds that set equal to what the lanes record.
+`common/runtime/tests/test_nightly_verdicts.py` holds that set equal to what the lanes record.
 The set is read AS THE DEPLOYED RELEASE DECLARED IT (`git show <release>:tools/...`): a check
 added on main is not demanded of a production release that lags by design and does not run
 it yet, and a release that predates the file bounds nothing. When the release cannot be

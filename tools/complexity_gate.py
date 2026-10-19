@@ -24,7 +24,7 @@ DEFAULT_THRESHOLD = 20
 
 SCAN_DIRS = (
     ROOT / "apps",
-    ROOT / "libs",
+    ROOT / "common",
     ROOT / "tools",
 )
 

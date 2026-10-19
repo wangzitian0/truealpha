@@ -44,7 +44,7 @@
       "function": "peg",
       "kind": "base",
       "module": 1,
-      "module_path": "libs/factors/src/factors/base/peg.py",
+      "module_path": "common/factors/src/factors/base/peg.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult",
       "inputs": [
         "price",
@@ -56,7 +56,7 @@
       "function": "gross_profit_per_employee",
       "kind": "base",
       "module": 2,
-      "module_path": "libs/factors/src/factors/base/gross_profit_per_employee.py",
+      "module_path": "common/factors/src/factors/base/gross_profit_per_employee.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult",
       "inputs": [
         "gross_profit",
@@ -68,42 +68,42 @@
       "function": "supply_chain_exposure",
       "kind": "base",
       "module": 3,
-      "module_path": "libs/factors/src/factors/base/supply_chain_exposure.py",
+      "module_path": "common/factors/src/factors/base/supply_chain_exposure.py",
       "signature": "(partners: Sequence[SupplyChainPartner], *, entity_id: str, as_of: datetime, supplies_to_edges_exist: bool) -> SupplyChainExposure"
     },
     "analyst_track_record": {
       "function": "analyst_track_record",
       "kind": "base",
       "module": 4,
-      "module_path": "libs/factors/src/factors/base/analyst_track_record.py",
+      "module_path": "common/factors/src/factors/base/analyst_track_record.py",
       "signature": "(ratings: Sequence[AnalystRatingItem], *, entity_id: str, as_of: datetime) -> AnalystTrackRecord"
     },
     "etf_virtual_company": {
       "function": "consolidate_fund",
       "kind": "base",
       "module": 5,
-      "module_path": "libs/factors/src/factors/base/etf_virtual_company.py",
+      "module_path": "common/factors/src/factors/base/etf_virtual_company.py",
       "signature": "(lines: Sequence[HoldingLine], *, fund_id: str, as_of: datetime, definition: EtfConsolidationDefinition) -> FundConsolidation"
     },
     "registered_semantic_probe": {
       "function": "registered_semantic_probe",
       "kind": "base",
       "module": 6,
-      "module_path": "libs/factors/src/factors/base/registered_semantic_probe.py",
+      "module_path": "common/factors/src/factors/base/registered_semantic_probe.py",
       "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-semantic-probe') -> FactorOutputDraft"
     },
     "theme_purity": {
       "function": "theme_purity",
       "kind": "base",
       "module": 6,
-      "module_path": "libs/factors/src/factors/base/theme_purity.py",
+      "module_path": "common/factors/src/factors/base/theme_purity.py",
       "signature": "(segments: Sequence[ThemeSegment], *, entity_id: str, theme: str, as_of: datetime, consolidated_revenue: Decimal | None, partition_residual: Decimal = _ZERO, confidence: Decimal = _ZERO, minimum_classified_share: Decimal = _ZERO) -> ThemePurity"
     },
     "price_to_gross_profit": {
       "function": "price_to_gross_profit",
       "kind": "feeder",
       "module": 7,
-      "module_path": "libs/factors/src/factors/base/price_to_gross_profit.py",
+      "module_path": "common/factors/src/factors/base/price_to_gross_profit.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult",
       "inputs": [
         "price",
@@ -115,7 +115,7 @@
       "function": "price_to_sales",
       "kind": "feeder",
       "module": 7,
-      "module_path": "libs/factors/src/factors/base/price_to_sales.py",
+      "module_path": "common/factors/src/factors/base/price_to_sales.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult",
       "inputs": [
         "price",
@@ -127,7 +127,7 @@
       "function": "three_tier_valuation",
       "kind": "composite",
       "module": 7,
-      "module_path": "libs/factors/src/factors/composite/three_tier_valuation.py",
+      "module_path": "common/factors/src/factors/composite/three_tier_valuation.py",
       "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: LargeModelValueV0Definition) -> FactorResult"
     }
   }

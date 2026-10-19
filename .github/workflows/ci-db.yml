@@ -141,7 +141,7 @@ jobs:
       # db/roles.sql on this same server and diffs the two catalogs, so nothing here has
       # to be kept fresh when a migration lands. What this step proves is that the check
       # runs in CI and is green on a database that did run the chain; that it can go RED
-      # is proved by libs/runtime/tests/test_schema_drift.py, which breaks a database on
+      # is proved by common/runtime/tests/test_schema_drift.py, which breaks a database on
       # purpose (#939's staging.market_prices_daily shape among them) and asserts the
       # tool names what broke. Green here after three replays and a seeded contract row
       # also says replay left the schema where the chain puts it.

@@ -14,7 +14,7 @@ description: >-
 #      It gave up after 3 tries in 64 s with "Unexpected HTTP response: 504"
 #      (run 38246259896, job python / gates).
 # Each workflow that installs uv calls this action, so the numbers below
-# exist once. libs/runtime/tests/test_setup_uv_retry.py states the rules and runs them.
+# exist once. common/runtime/tests/test_setup_uv_retry.py states the rules and runs them.
 
 inputs:
   enable-cache:

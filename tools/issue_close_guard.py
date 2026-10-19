@@ -36,8 +36,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from infra2_sdk.deploy import HttpGet, default_http_get
-from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
+from infra2_sdk.deploy import HttpGet, ReleaseIdentityError, default_http_get, read_deployed_release
 
 REPO = "wangzitian0/truealpha"
 # Rule 6 asks whether a capability is deployed, so the question is what staging

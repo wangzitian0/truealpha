@@ -10,7 +10,7 @@ A mart row carries two status columns that a writer must not guess:
 Two layers guard this.
 
 1. A static scan bans the string literal `accepted` in the data-engine source.
-   Only `status_dimensions.py` may name it. The validation module lives in `libs/factors`,
+   Only `status_dimensions.py` may name it. The validation module lives in `common/factors`,
    outside the scanned tree.
 2. A run of each writer on a recording connection. The test binds the INSERT column
    list to the bound parameters. It compares each status column with the status source.

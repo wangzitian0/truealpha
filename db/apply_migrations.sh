@@ -13,7 +13,7 @@
 # three CI copies, the Makefile and the compose initdb hook bounded no lock and set no
 # statement timeout; the VPS copy alone passed `-q`; and `-v app_service_db_password`
 # and MIGRATIONS_DATABASE_URL reached call site 4 and nothing else. Four more copies
-# lived in the test suite. `libs/runtime/tests/test_migration_applier.py` fails if a
+# lived in the test suite. `common/runtime/tests/test_migration_applier.py` fails if a
 # second chain loop appears anywhere in the tree.
 #
 # REPLAY IS NOT A REPAIR PATH. The chain holds 113 `alter table` and 162 `drop <object>`
@@ -53,7 +53,7 @@
 # committed. Two things stop that from recurring:
 #
 #   * the migrations only take a lock when the catalog says there is something to change
-#     (libs/runtime/tests/test_migration_boot_locks.py replays the chain while another
+#     (common/runtime/tests/test_migration_boot_locks.py replays the chain while another
 #     session holds a lock on every table and view), and
 #   * this runner bounds every wait. Each session runs with lock_timeout and
 #     statement_timeout. A file that times out on a LOCK is retried from its first
@@ -183,7 +183,7 @@ report_lock_holders() {
 # One file, one session.
 #
 # --no-password: a DSN with missing/wrong credentials must fail fast, not hang the
-# container on an interactive password prompt (same guard libs/contracts' db-contract
+# container on an interactive password prompt (same guard common/contracts' db-contract
 # test runners already use for the identical psql-against-DATABASE_URL pattern).
 # app_service_db_password: db/roles.sql applies it to app_service_login when set and
 # non-empty (#432); every other migration file ignores an unused psql variable.

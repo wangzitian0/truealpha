@@ -90,7 +90,7 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
     # topt_gppe reads the governed capture head, which this transaction does not seed; on a
     # database with no accepted production run it answers a typed Unavailable, and the walk
     # below covers whatever it does answer. Its own cell translation has real coverage in
-    # libs/contracts/tests/test_topt_read.py (#954).
+    # common/contracts/tests/test_topt_read.py (#954).
     "topt_gppe": {},
     "company_360_profile": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
     "theme_purity_leaderboard": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},

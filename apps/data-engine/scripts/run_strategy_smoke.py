@@ -50,7 +50,7 @@ OUTPUT_MARKDOWN = "strategy_smoke.md"
 # (and its TypeScript port under apps/app-web/src/contracts) reads at runtime.
 # It excludes `generated_at` so its bytes are stable across regenerations, and
 # it is only refreshed when this script reproduces the golden fixture exactly.
-CANONICAL_FIXTURE_PATH = REPOSITORY_ROOT / "libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"
+CANONICAL_FIXTURE_PATH = REPOSITORY_ROOT / "common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"
 
 
 def main() -> int:

@@ -44,7 +44,7 @@ const TEST_CONTEXT: AccessContext = {
 };
 
 const FIXTURE = JSON.parse(
-  readFileSync(join(process.cwd(), "..", "..", "libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"), "utf8"),
+  readFileSync(join(process.cwd(), "..", "..", "common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"), "utf8"),
 ) as { corpus_sha256: string; decisions: Record<string, string | number | boolean | null>[] };
 
 function emptyReport(): StrategyRunReport {

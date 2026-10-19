@@ -1,0 +1,144 @@
+"""Module: issuer price-to-sales (P/S), simplified v0 preview.
+
+price_to_sales = (price * shares_outstanding) / revenue
+
+P/S is not one of init.md Section 7's seven questions on its own; it is the market-value
+input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per
+employee into the tier valuation gap. It registers `module=7` for that reason -- a base
+factor that exists to feed module 7 rather than answer an independent question (#770;
+previously mis-registered `module=6`, which collides with module 6's own pure-blood
+screening and was recorded as a known error in init.md before this fix).
+`common/factors/tests/test_module_identity.py` is the standing check now.
+
+This is a **simplified preview** of a fuller computation. Dual-class
+share-class aggregation, per-listing multi-currency FX conversion, and
+quarterly/fiscal-year revenue-window completeness checks were proven by the S5
+tiny kernel of the retired batch machine (#161, closed; the kernel was removed
+with that machine in #791 and git history holds it) and are deliberately not
+ported here yet — the flat `Fact` interface (one scalar
+value per metric) has no place to carry multiple listings/securities per
+issuer. Single-listing, reporting-currency-only issuers get a correct number
+from this module; dual-class issuers need the richer S5-style aggregation,
+which is real future work once factor inputs carry per-component structure
+(tracked alongside the Gate-1 execution-spine migration, not attempted here).
+
+`data_availability` is "unverified" even on success, matching
+`gross_profit_per_employee`'s deliberate choice: neither factor is fed by an
+accepted capture/snapshot pipeline yet in this preview round.
+
+The formula is also expressed as a matrix-compatible AST expression
+(`PRICE_TO_SALES_EXPRESSION_DEFINITION`), the same shape as
+`gross_profit_per_employee`'s: pure Mul/Div arithmetic over
+`truealpha_contracts.ast`, no new node types needed — closes #21 criterion 3's
+remaining gap for this factor. Unlike `three_tier_valuation` (module 7), whose
+band lookup is genuinely branching logic and stays native Decimal Python by
+the test-time Polars oracle's own documented design (`common/factors/tests/support/expression_oracle`), this factor
+was always pure arithmetic.
+"""
+
+from collections.abc import Sequence
+from datetime import datetime
+from decimal import Decimal
+
+from truealpha_contracts.ast import Div, Feature, Mul
+
+from factors.registry import factor
+from factors.types import Fact, FactorResult, UnitFamily
+
+_REQUIRED_METRICS = ("price", "shares_outstanding", "revenue")
+
+#: `(price * shares_outstanding) / revenue` as a `truealpha_contracts.ast`
+#: expression. Feature names are the panel column names the compiler resolves
+#: with `pl.col(...)`, matching the metrics the Decimal path consumes.
+PRICE_TO_SALES_EXPRESSION_DEFINITION = Div(
+    left=Mul(left=Feature(name="price"), right=Feature(name="shares_outstanding")),
+    right=Feature(name="revenue"),
+)
+
+_MISSING_REASON = {
+    "price": "missing_market_value_input",
+    "shares_outstanding": "missing_market_value_input",
+    "revenue": "missing_revenue_fact",
+}
+
+
+def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
+    # Facts already reflect one PIT-resolved vintage per metric; a factor never
+    # re-selects among candidates (init.md Section 6) — take the sole match.
+    # Mirrors gross_profit_per_employee._find: source fusion never silently
+    # picks the most recently supplied row (CLAUDE.md architecture red line).
+    matches = [f for f in facts if f.entity_id == entity_id and f.metric == metric]
+    if len(matches) > 1:
+        raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")
+    return matches[0] if matches else None
+
+
+@factor("price_to_sales", kind="feeder", module=7, inputs=("price", "shares_outstanding", "revenue"))
+def price_to_sales(
+    facts: Sequence[Fact],
+    *,
+    entity_id: str,
+    as_of: datetime,
+) -> FactorResult:
+    price_fact = _find(facts, entity_id, "price")
+    shares_fact = _find(facts, entity_id, "shares_outstanding")
+    revenue_fact = _find(facts, entity_id, "revenue")
+
+    flags: list[str] = []
+    if price_fact is None or price_fact.value is None:
+        flags.append(_MISSING_REASON["price"])
+    if shares_fact is None or shares_fact.value is None:
+        flags.append(_MISSING_REASON["shares_outstanding"])
+    if revenue_fact is None or revenue_fact.value is None:
+        flags.append(_MISSING_REASON["revenue"])
+    if flags:
+        return FactorResult(
+            factor="price_to_sales",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal(0),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=sorted(set(flags)),
+        )
+
+    assert price_fact is not None and shares_fact is not None and revenue_fact is not None
+    assert price_fact.value is not None and shares_fact.value is not None and revenue_fact.value is not None
+
+    if price_fact.value <= 0 or shares_fact.value <= 0:
+        return FactorResult(
+            factor="price_to_sales",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal(0),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=["nonpositive_market_value"],
+        )
+
+    if revenue_fact.value <= 0:
+        return FactorResult(
+            factor="price_to_sales",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal(0),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=["nonpositive_revenue"],
+        )
+
+    market_cap = price_fact.value * shares_fact.value
+    value = market_cap / revenue_fact.value
+    confidence = min(price_fact.confidence, shares_fact.confidence, revenue_fact.confidence)
+    return FactorResult(
+        factor="price_to_sales",
+        entity_id=entity_id,
+        value=value,
+        unit_family=UnitFamily.RATIO,
+        confidence=confidence,
+        as_of=as_of,
+        data_availability="unverified",
+    )

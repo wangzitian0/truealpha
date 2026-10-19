@@ -25,7 +25,7 @@ on:
   # the ~2-4 min re-proof at review time instead. The path list is the exact
   # union of tools/mutations.json's file+guard sets, NOT a directory glob: a
   # glob would put this job on most PRs' critical path and undo D3's 3-minute
-  # wall. libs/runtime/tests/test_ci_workflows.py fails when the manifest
+  # wall. common/runtime/tests/test_ci_workflows.py fails when the manifest
   # names a file this list misses, so the filter cannot rot silently.
   pull_request:
     paths:
@@ -55,24 +55,24 @@ on:
       - "apps/data-engine/tests/test_nightly_verdicts.py"
       - "db/local_target.sh"
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
-      - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
-      - "libs/contracts/src/truealpha_contracts/question_requirements.py"
-      - "libs/contracts/tests/test_fiscal_period.py"
-      - "libs/runtime/tests/test_health_check.py"
-      - "libs/factors/src/factors/base/peg.py"
-      - "libs/factors/src/factors/composite/strategy_evaluator.py"
-      - "libs/factors/src/factors/forest/registry.py"
-      - "libs/factors/tests/forest/test_gppe_tree.py"
-      - "libs/runtime/tests/test_ci_workflows.py"
-      - "libs/runtime/tests/test_cut_release.py"
-      - "libs/runtime/tests/test_escalate_issue.py"
-      - "libs/runtime/tests/test_migration_chain.py"
-      - "libs/runtime/tests/test_migration_applier.py"
-      - "libs/runtime/tests/test_nightly_verdicts.py"
-      - "libs/runtime/tests/test_output_invariants.py"
-      - "libs/runtime/tests/test_pytest_shard.py"
-      - "libs/runtime/tests/test_scheduler_liveness.py"
-      - "libs/runtime/tests/test_walk_evidence.py"
+      - "common/contracts/src/truealpha_contracts/fiscal_period.py"
+      - "common/contracts/src/truealpha_contracts/question_requirements.py"
+      - "common/contracts/tests/test_fiscal_period.py"
+      - "common/runtime/tests/test_health_check.py"
+      - "common/factors/src/factors/base/peg.py"
+      - "common/factors/src/factors/composite/strategy_evaluator.py"
+      - "common/factors/src/factors/forest/registry.py"
+      - "common/factors/tests/forest/test_gppe_tree.py"
+      - "common/runtime/tests/test_ci_workflows.py"
+      - "common/runtime/tests/test_cut_release.py"
+      - "common/runtime/tests/test_escalate_issue.py"
+      - "common/runtime/tests/test_migration_chain.py"
+      - "common/runtime/tests/test_migration_applier.py"
+      - "common/runtime/tests/test_nightly_verdicts.py"
+      - "common/runtime/tests/test_output_invariants.py"
+      - "common/runtime/tests/test_pytest_shard.py"
+      - "common/runtime/tests/test_scheduler_liveness.py"
+      - "common/runtime/tests/test_walk_evidence.py"
       - "tools/check_factor_contract.py"
       - "tools/cut_release.sh"
       - "tools/escalate_issue.py"

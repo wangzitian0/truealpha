@@ -174,7 +174,7 @@ REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
     "tools/schema_drift.py": "prose in a docstring, no query",
 }
-SCANNED_ROOTS = ("apps", "libs", "tools")
+SCANNED_ROOTS = ("apps", "common", "tools")
 SCANNED_SUFFIXES = {".py", ".ts", ".tsx", ".sql", ".sh"}
 SKIPPED_DIRECTORIES = {"tests", "node_modules", ".venv", "__pycache__", ".next"}
 PRICE_TABLE_NAMES = ("market_prices_daily", "market_prices_monthly")
@@ -203,7 +203,7 @@ def test_the_scan_finds_a_new_file_that_names_a_price_table(tmp_path: Path) -> N
     ignored = tmp_path / "apps" / "app-web" / "tests" / "prices.test.ts"
     ignored.parent.mkdir(parents=True)
     ignored.write_text("staging.market_prices_monthly", encoding="utf-8")
-    (tmp_path / "libs").mkdir()
+    (tmp_path / "common").mkdir()
     (tmp_path / "tools").mkdir()
 
     assert _files_naming_a_price_table(tmp_path) == {"apps/app-web/lib/prices.ts"}

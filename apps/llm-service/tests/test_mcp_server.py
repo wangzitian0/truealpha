@@ -84,7 +84,7 @@ async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
 async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None:
     """Proves the tool's wiring/serialization only -- an injected fake, not
     PostgresToptGppeRepository's own SQL/row-materialization. That class has its
-    own real-Postgres coverage in libs/contracts/tests/test_topt_read.py; a
+    own real-Postgres coverage in common/contracts/tests/test_topt_read.py; a
     previous version of this test's name (test_topt_gppe_reads_the_mart_repository
     _not_a_fixture) implied it covered that class's DB logic, which it never did
     -- see truealpha#462, where that misleading name was part of how #461's

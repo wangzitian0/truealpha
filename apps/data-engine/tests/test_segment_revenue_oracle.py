@@ -33,9 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_TREES = (
     REPO_ROOT / "apps" / "data-engine" / "src",
     REPO_ROOT / "apps" / "llm-service" / "src",
-    REPO_ROOT / "libs" / "contracts" / "src",
-    REPO_ROOT / "libs" / "factors" / "src",
-    REPO_ROOT / "libs" / "runtime" / "src",
+    REPO_ROOT / "common" / "contracts" / "src",
+    REPO_ROOT / "common" / "factors" / "src",
+    REPO_ROOT / "common" / "runtime" / "src",
     # Deployed host scripts and tools run against the migrated schema too (#1237).
     REPO_ROOT / "apps" / "data-engine" / "scripts",
     REPO_ROOT / "tools",

@@ -6,7 +6,7 @@
  * revenue masses are `factors.base.theme_purity`'s outputs materialized into
  * `mart.issuer_theme_purity` by the weekly standards lane. init.md §1 rule 2 confines this
  * layer to deterministic within-row reformatting, and a purity is a ratio across a set of
- * segment rows — a metric, and metrics live in libs/factors.
+ * segment rows — a metric, and metrics live in common/factors.
  *
  * The one thing this file must not do is rank on something it computed. It orders by the
  * stored `theme_share` and shows `unclassifiedRevenue` beside it, because a share of 0.60
