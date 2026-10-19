@@ -15,13 +15,14 @@ from __future__ import annotations
 import dagster as dg
 import pytest
 from data_engine.lanes import triggers
-from data_engine.lanes.capture import CANARY_JOB_NAME, TICK_BY_JOB
-from data_engine.lanes.triggers import boot_canary_forces_fetch, boot_canary_sensor
+from data_engine.lanes.capture import CANARY_JOB_NAME, TICK_BY_JOB, TOPT_LIVE_JOB_NAME
+from data_engine.lanes.triggers import BOOT_CANARY_TAG, boot_canary_forces_fetch, boot_canary_sensor
 
 DIGEST = "sha256:" + "7" * 64
 OTHER = "sha256:" + "8" * 64
 CONFIG = "a" * 64
 TICK = TICK_BY_JOB[CANARY_JOB_NAME]
+TOPT_TICK = TICK_BY_JOB[TOPT_LIVE_JOB_NAME]
 
 
 def _evaluate(context: dg.SensorEvaluationContext) -> list:
@@ -43,13 +44,19 @@ def _deploy(
     monkeypatch.setattr(triggers.settings, "app_env", app_env)
 
 
-def _launch(cursor: str | None = None) -> tuple[dg.RunRequest, str]:
-    """Evaluate once and return the request plus the cursor the daemon would store."""
+def _launch_all(cursor: str | None = None) -> tuple[list[dg.RunRequest], str]:
+    """Evaluate once and return all yielded RunRequests plus the cursor the daemon would store."""
     context = dg.build_sensor_context(cursor=cursor)
-    (request,) = _evaluate(context)
-    assert isinstance(request, dg.RunRequest), request
+    requests = _evaluate(context)
+    assert requests and all(isinstance(r, dg.RunRequest) for r in requests), requests
     assert context.cursor is not None
-    return request, context.cursor
+    return requests, context.cursor
+
+
+def _launch(cursor: str | None = None) -> tuple[dg.RunRequest, str]:
+    """Evaluate once and return the canary request plus the cursor the daemon would store."""
+    requests, stored = _launch_all(cursor)
+    return requests[0], stored
 
 
 def _skipped(cursor: str | None) -> dg.SkipReason:
@@ -64,7 +71,7 @@ def _forced(request: dg.RunRequest) -> bool:
 
 def test_a_build_with_a_digest_launches_the_canary_once(monkeypatch: pytest.MonkeyPatch) -> None:
     _deploy(monkeypatch, digest=DIGEST, git_sha="v0.0.47")
-    request, cursor = _launch()
+    (request,), cursor = _launch_all()
     assert request.run_key == f"boot:{DIGEST}:deploy-1" and request.job_name == TICK.job_name
     executed_at = request.run_config["ops"][TICK.op_name]["config"]["executed_at"]
     assert executed_at.endswith("+00:00")
@@ -76,17 +83,27 @@ def test_a_build_with_a_digest_launches_the_canary_once(monkeypatch: pytest.Monk
 
 
 def test_staging_forces_a_fresh_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Owner decision 2026-09-17: a staging deploy proves a newly enabled source with
-    real vendor bytes. Red before: the sensor never set `force_fetch`."""
-    _deploy(monkeypatch, digest=DIGEST, app_env="staging")
-    request, _ = _launch()
-    assert _forced(request) is True
+    """Owner decision 2026-09-17 + #1322: a staging deploy proves a newly enabled source
+    with real vendor bytes on the canary, and also launches an unforced TOPT tick so
+    every staging batch deployment recomputes the 20-issuer strategy run."""
+    _deploy(monkeypatch, digest=DIGEST, git_sha="v0.2.0", app_env="staging")
+    requests, _ = _launch_all()
+    assert len(requests) == 2
+    canary_req, topt_req = requests
+    assert canary_req.job_name == TICK.job_name
+    assert _forced(canary_req) is True
+    assert canary_req.tags.get(BOOT_CANARY_TAG) == DIGEST
+    assert topt_req.job_name == TOPT_TICK.job_name
+    assert topt_req.run_key == f"boot:{DIGEST}:deploy-1:topt"
+    assert topt_req.run_config["ops"][TOPT_TICK.op_name]["config"]["force_fetch"] is False
+    assert BOOT_CANARY_TAG not in topt_req.tags
+    assert topt_req.tags["truealpha/build"] == "v0.2.0"
 
 
 @pytest.mark.parametrize("app_env", ["production", "prod", " Production "])
 def test_production_keeps_the_unforced_canary(monkeypatch: pytest.MonkeyPatch, app_env: str) -> None:
     _deploy(monkeypatch, digest=DIGEST, app_env=app_env)
-    request, _ = _launch()
+    (request,), _ = _launch_all()
     assert request.run_key == f"boot:{DIGEST}:deploy-1"
     assert _forced(request) is False
 
@@ -94,7 +111,7 @@ def test_production_keeps_the_unforced_canary(monkeypatch: pytest.MonkeyPatch, a
 @pytest.mark.parametrize("app_env", ["stg", "qa", "preview", "staging-2", ""])
 def test_an_unknown_environment_does_not_force(monkeypatch: pytest.MonkeyPatch, app_env: str) -> None:
     _deploy(monkeypatch, digest=DIGEST, app_env=app_env)
-    request, _ = _launch()
+    (request,), _ = _launch_all()
     assert _forced(request) is False
 
 

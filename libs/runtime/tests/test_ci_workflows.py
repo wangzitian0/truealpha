@@ -877,15 +877,11 @@ def test_auto_release_triggers_only_after_a_green_push_to_main() -> None:
 
 
 def test_auto_release_is_debounced_for_twenty_minutes_before_it_re_reads_head() -> None:
-    """Owner constraint: a burst of merges batches into one release. The wait
-    itself is a plain sleep; what makes it a DEBOUNCE rather than a blind delay
-    is that `tools/auto_release.py` re-reads main HEAD from the GitHub API
-    afterwards and defers to a later push's own run if one landed
-    (test_auto_release.py's reason-1 tests) — this test only pins the
-    workflow's own half: the wait is exactly 20 minutes, and it runs before the
-    checkout that will see whatever landed during it."""
+    """Owner constraint (#1322): a burst of merges batches into one release after a
+    3-minute quiet period. The wait runs before the checkout so `tools/auto_release.py`
+    re-reads main HEAD fresh afterwards."""
     quiet = step_text(AUTO_RELEASE, "Quiet period")
-    assert "sleep 1200" in quiet, "1200s = 20 min; test_auto_release.py's tick-window tests use the same constant"
+    assert "sleep 180" in quiet, "180s = 3 min debounce (#1322)"
     release_steps = job(AUTO_RELEASE, "release")["steps"]
     names = [s.get("name") for s in release_steps]
     checkout_index = next(
@@ -1021,7 +1017,7 @@ def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> Non
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     concurrency = workflow["concurrency"]
     assert concurrency["group"] == "auto-release-staging"
-    assert concurrency["cancel-in-progress"] is True
+    assert concurrency["cancel-in-progress"] is False
 
 
 def test_auto_release_has_only_the_permissions_it_needs() -> None:
@@ -1414,7 +1410,7 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
 
     The shared rule source publishes this repository's `AGENTS.md` and skills, so a PR
     that touches only those paths is the normal case, not an edge. A test in this file
-    reads every one of them: `skills/` is a scan root, the symlink-only roots and the
+    reads every one of them: `skills/` is a scan root, the mirror-only roots and the
     publish record are excluded on premises asserted here, and `AGENTS.md` (with
     `CLAUDE.md` linking to it) is a root file.
 
@@ -1422,7 +1418,7 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
     entry can name a directory that does not exist yet.
     """
     python = _changes_filters()["python"]
-    published = [f"{root}/**" for root in ("skills", *_SYMLINK_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)] + [
+    published = [f"{root}/**" for root in ("skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)] + [
         "AGENTS.md",
         "CLAUDE.md",
     ]
@@ -2105,10 +2101,11 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
 #: already had were both "a place the walk cannot reach", found by review rather than by
 #: the guard. A new top-level directory now fails this test until someone classifies it.
 #: The excluded roots whose exclusion rests on a premise rather than on their contents
-#: being out of scope outright: each is safe only while everything in it resolves into one
-#: of QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
-#: and the assertion cannot drift apart (#1006 review).
-_SYMLINK_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
+#: being out of scope outright: each is safe only while everything in it is swept through
+#: another path -- a symlink into one of QLIB_SCAN_ROOTS, or a published copy that repeats a
+#: file there byte for byte. Used BY the tuple below, not merely named beside it, so the
+#: exclusion and the assertion cannot drift apart (#1006 review).
+_MIRROR_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
 #: Excluded on the same kind of premise: it holds one JSON record and nothing else.
 _RECORD_ONLY_EXCLUDED_ROOT = ".ws-publish"
 
@@ -2121,15 +2118,16 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # inside one breaks the record rather than removing a dependency.
     "governance",
     # Where agent hosts look for this repository's skills: `.claude/skills` (Claude Code,
-    # #1003) and `.agents/skills` (Codex). Every entry under them is a symlink resolving
-    # INTO A SCANNED ROOT -- today every one lands in `skills/`, but the safety argument is
-    # the general one, and it is the general one that
-    # test_every_symlink_only_root_entry_resolves_into_a_scanned_root asserts. The content
-    # is therefore swept through its real path, once rather than twice. That premise is the
-    # whole reason the exclusion is safe: a real file added here later would otherwise be
-    # silently out of scope, which is the exact shape of the two holes this guard has
-    # already had.
-    *_SYMLINK_ONLY_EXCLUDED_ROOTS,
+    # #1003) and `.agents/skills` (Codex). Every entry under them is either a symlink
+    # resolving INTO A SCANNED ROOT, or a published copy of a file under `skills/` (dev_env
+    # #319 replaced the symlinks with copies; #1336). The safety argument is the general
+    # one, and it is the general one that
+    # test_every_mirror_only_root_entry_is_scanned_through_its_source asserts. The content
+    # is therefore swept through its source, once rather than twice. That premise is the
+    # whole reason the exclusion is safe: a file added here that no scanned file repeats
+    # would otherwise be silently out of scope, which is the exact shape of the two holes
+    # this guard has already had.
+    *_MIRROR_ONLY_EXCLUDED_ROOTS,
     # The record the shared rule source writes when it publishes `AGENTS.md` and the
     # skills (#1018): output paths and their hashes. It names files and runs nothing; the
     # files it names are swept where they live -- `AGENTS.md` as a root file, the skills
@@ -2707,17 +2705,20 @@ def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
     )
 
 
-@pytest.mark.parametrize("excluded_root", _SYMLINK_ONLY_EXCLUDED_ROOTS)
-def test_every_symlink_only_root_entry_resolves_into_a_scanned_root(excluded_root: str) -> None:
-    """Each of these roots is excluded on one premise: everything in it is a symlink that
-    resolves into one of QLIB_SCAN_ROOTS. This asserts the premise, in those terms -- not
-    in terms of `skills/`, which is merely where every link happens to land today.
+@pytest.mark.parametrize("excluded_root", _MIRROR_ONLY_EXCLUDED_ROOTS)
+def test_every_mirror_only_root_entry_is_scanned_through_its_source(excluded_root: str) -> None:
+    """Each of these roots is excluded on one premise: everything in it is swept through
+    another path. An entry is a symlink that resolves into one of QLIB_SCAN_ROOTS, or a
+    published copy: the shared rule source writes `<root>/skills/<path>` as a byte copy of
+    `skills/<path>` (dev_env #319, #1336). This asserts the premise, in those terms.
 
     Without it the exclusion is a hole waiting for its first real file, which is how both of
     this guard's previous holes were shaped -- a place the walk could not reach, found by
     review rather than by the guard. Confirmed red by pointing one of the symlinks at a
-    directory outside the scan roots.
+    directory outside the scan roots, by changing one byte of a copy, by adding a copy that
+    has no source, and by adding a file outside `<root>/skills/`.
     """
+    assert "skills" in QLIB_SCAN_ROOTS, "published copies are swept through skills/, which must stay a scan root"
     listing = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", excluded_root],
         capture_output=True,
@@ -2732,18 +2733,21 @@ def test_every_symlink_only_root_entry_resolves_into_a_scanned_root(excluded_roo
     )
 
     scanned = {(REPO_ROOT / root).resolve() for root in QLIB_SCAN_ROOTS}
+    copy_prefix = f"{excluded_root}/skills/"
     escapes: list[str] = []
     for entry in entries:
         path = REPO_ROOT / entry
-        if not path.is_symlink():
-            escapes.append(f"{entry} is a real file, not a symlink")
+        if path.is_symlink():
+            target = path.resolve()
+            if not any(target == root or root in target.parents for root in scanned):
+                escapes.append(f"{entry} -> {target} resolves outside every scanned root")
             continue
-        target = path.resolve()
-        if not any(target == root or root in target.parents for root in scanned):
-            escapes.append(f"{entry} -> {target} resolves outside every scanned root")
+        source = REPO_ROOT / "skills" / entry[len(copy_prefix) :] if entry.startswith(copy_prefix) else None
+        if source is None or not source.is_file() or source.read_bytes() != path.read_bytes():
+            escapes.append(f"{entry} is a real file that no file under skills/ repeats byte for byte")
     assert not escapes, (
         f"{excluded_root}/ is excluded from the Qlib sweep only because everything "
-        f"in it is scanned through its real path. These are not: {escapes}. Either move them under "
+        f"in it is scanned through its source. These are not: {escapes}. Either move them under "
         f"a scan root or move {excluded_root} into QLIB_SCAN_ROOTS."
     )
 

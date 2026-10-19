@@ -52,7 +52,7 @@ class NightlyBacktestConfig(dg.Config):
 
 
 def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
-    """RUNNING in production and staging, STOPPED in any other environment."""
+    """RUNNING in production (including the `prod` alias) and staging, STOPPED in any other environment."""
     return (
         dg.DefaultScheduleStatus.RUNNING
         if app_env.strip().lower() in SCHEDULED_ENVIRONMENTS

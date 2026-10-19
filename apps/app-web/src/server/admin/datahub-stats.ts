@@ -373,6 +373,7 @@ const HEADS_SQL = `
   select h.universe_id, h.sequence, h.advanced_at::text as advanced_at,
          coalesce(h.run_id, h.head_run_id) as target_run_id,
          q.payload->>'availability' as availability,
+         h.availability as head_availability,
          (select count(*)::int from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)) c
            where c.value->>'outcome' = 'agreed') as agreed_cells,
          (select count(*)::int
@@ -417,12 +418,15 @@ const REUSE_SQL = `
            || count(*) || ' runs' as detail
   from mart.topt_capture_status where cutoff > now() - interval '24 hours'
 `;
+const NON_CANARY_UNIVERSE_WHERE =
+  "s.universe_id not like 'universe:canary%' and s.universe_id not like 'canary%'";
 const PLAUSIBILITY_SQL = `
   select 'plausibility oracle' as check,
          case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,
          coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail
   from mart.datahub_quality_report q
   join mart.topt_capture_status s using (run_id)
+  where ${NON_CANARY_UNIVERSE_WHERE}
   order by s.cutoff desc limit 1
 `;
 const CORROBORATION_SQL = `
@@ -435,6 +439,7 @@ const CORROBORATION_SQL = `
            (select count(*) from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)))::int as cells
     from mart.datahub_quality_report q
     join mart.topt_capture_status s using (run_id)
+    where ${NON_CANARY_UNIVERSE_WHERE}
     order by s.cutoff desc limit 1
   ) newest
 `;
@@ -546,6 +551,7 @@ interface FactorGrade {
 }
 
 interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
+  head_availability?: string | null;
   factor_availability: Record<string, FactorGrade>;
 }
 
@@ -588,12 +594,19 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
       heads: heads.rows.map((row: HeadDbRow) => {
-        const availNum = row.availability ? parseFloat(row.availability) : null;
+        const parsedAvail =
+          row.availability !== null && row.availability !== undefined
+            ? parseFloat(row.availability)
+            : Number.NaN;
+        const availNum = Number.isNaN(parsedAvail) ? null : parsedAvail;
+        const headWithheld =
+          row.head_availability !== undefined
+            ? row.head_availability !== "available"
+            : availNum === null && row.availability !== "available";
         const isAvailDegraded =
-          availNum !== null &&
-          availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability;
-        const hasCorroboration =
-          row.total_cells !== null && row.total_cells > 0;
+          (availNum !== null &&
+            availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability) ||
+          headWithheld;
         const corroborationRatio =
           row.total_cells !== null && row.total_cells > 0 && row.agreed_cells !== null
             ? row.agreed_cells / row.total_cells
@@ -601,17 +614,41 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         const isCorroborationDegraded =
           corroborationRatio !== null &&
           corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
+        const freshness = (row.freshness ?? "unknown") as
+          | "fresh"
+          | "stale"
+          | "unknown";
+        const isFreshnessDegraded = freshness !== "fresh";
 
         const degraded_reasons: string[] = [];
-        if (isAvailDegraded && availNum !== null) {
-          degraded_reasons.push(
-            `availability (${(availNum * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_availability * 100).toFixed(0)}%)`,
-          );
+        if (isAvailDegraded) {
+          if (
+            availNum !== null &&
+            availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability
+          ) {
+            degraded_reasons.push(
+              `availability (${(availNum * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_availability * 100).toFixed(0)}%)`,
+            );
+          } else {
+            const withheldLabel =
+              row.head_availability && row.head_availability !== "available"
+                ? row.head_availability
+                : row.availability && row.availability !== "available"
+                  ? row.availability
+                  : "unavailable";
+            degraded_reasons.push(`availability (${withheldLabel})`);
+          }
         }
         if (isCorroborationDegraded && corroborationRatio !== null) {
           degraded_reasons.push(
             `corroboration (${(corroborationRatio * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share * 100).toFixed(0)}%)`,
           );
+        }
+        if (isFreshnessDegraded) {
+          const detail = row.staleness_reason
+            ? `${freshness}: ${row.staleness_reason}`
+            : freshness;
+          degraded_reasons.push(`freshness (${detail})`);
         }
         const is_degraded = degraded_reasons.length > 0;
 
@@ -623,7 +660,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
           availability: row.availability,
           agreed_cells: row.agreed_cells,
           total_cells: row.total_cells,
-          freshness: (row.freshness ?? "unknown") as "fresh" | "stale" | "unknown",
+          freshness,
           age_hours:
             row.age_hours !== null && row.age_hours !== undefined
               ? Number(row.age_hours)

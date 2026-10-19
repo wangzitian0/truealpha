@@ -13,6 +13,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { PREVIEW_ISSUERS } from "../scripts/seed-e2e-fixture";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -42,6 +43,26 @@ for (const id of RAW_IDS) {
   assert(match?.[0] === id, `walk-tree's raw-id guard misses ${id} (matched ${String(match?.[0])})`);
 }
 
+// #1322: all 5 golden replay issuers must have both UUID and LEI legacyId shapes caught by ID_PATTERN,
+// and their resolved ticker/display labels must pass without tripping ID_PATTERN.
+const previewEntries = Object.entries(PREVIEW_ISSUERS);
+assert(previewEntries.length === 5, `expected 5 golden preview issuers, found ${previewEntries.length}`);
+for (const [key, identity] of previewEntries) {
+  assert(
+    ID_PATTERN.test(identity.entityId),
+    `preview issuer ${key} entityId ${identity.entityId} is not caught by ID_PATTERN`,
+  );
+  assert(
+    ID_PATTERN.test(identity.legacyId),
+    `preview issuer ${key} legacyId ${identity.legacyId} is not caught by ID_PATTERN`,
+  );
+  const resolvedLabel = `${identity.ticker} · ${identity.displayName}`;
+  assert(
+    !ID_PATTERN.test(resolvedLabel),
+    `preview issuer ${key} resolved label "${resolvedLabel}" trips ID_PATTERN`,
+  );
+}
+
 // What a first screen legitimately shows must not trip it.
 const DISPLAYED = [
   "AAPL · Apple Inc.",
@@ -54,8 +75,12 @@ for (const text of DISPLAYED) {
   assert(!ID_PATTERN.test(text), `walk-tree's raw-id guard flags ordinary text: ${text}`);
 }
 
-// #987 Anti-puppet check against GREEN-WHILE-EMPTY: walk-tree must verify populated table rows.
+// #987 / #1322 Anti-puppet check against GREEN-WHILE-EMPTY: walk-tree must verify populated table rows
+// and 5 resolved preview tickers on /research/strategy.
 assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for GREEN-WHILE-EMPTY table states");
 assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
+assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 golden preview tickers");
 
-console.log(`walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${DISPLAYED.length} display strings pass, anti-empty check verified`);
+console.log(
+  `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty check verified`,
+);

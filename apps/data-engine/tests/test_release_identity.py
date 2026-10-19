@@ -9,6 +9,7 @@ manifest declared them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -17,7 +18,6 @@ import pytest
 from data_engine import release_identity
 from data_engine.config import Settings
 from infra2_sdk.runtime.config_schema import manifest_config_fingerprint
-from infra2_sdk.runtime.identity import canonical_sha256 as estate_canonical_sha256
 from truealpha_contracts.common import canonical_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -142,13 +142,14 @@ def test_the_identity_keeps_the_shape_infra2_asserts_before_it_deploys() -> None
     assert int(identity.content_sha256, 16) > 0
 
 
-def test_this_repositorys_canonical_hash_is_the_estates() -> None:
-    """`truealpha_contracts.common.canonical_sha256` and
-    `infra2_sdk.runtime.identity.canonical_sha256` must agree on the release payload: infra2
-    hashes release identities with the SDK's, this repository mints them with its own, and a
-    divergence would mean two systems disagreeing about what one release is called."""
+def test_this_repositorys_canonical_hash_matches_wire_format() -> None:
+    """`truealpha_contracts.common.canonical_sha256` must match the canonical JSON SHA-256
+    wire format (sorted keys, compact separators, ASCII escaping) on the release payload."""
     payload = _measure().payload
-    assert canonical_sha256(payload) == estate_canonical_sha256(payload)
+    expected = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    assert canonical_sha256(payload) == expected
 
 
 def test_the_identity_is_no_longer_the_hash_of_a_constant() -> None:
@@ -176,18 +177,46 @@ def test_the_release_ref_comes_from_settings_not_from_the_process_environment(
     )
 
 
-def test_the_settings_model_resolves_the_names_the_compose_actually_injects(
+def test_the_settings_model_resolves_canonical_sdk_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`truealpha/truealpha/20.data_engine/compose.yaml` sets the TRUEALPHA_-prefixed names;
-    the manifest and the model must speak those, not tidier ones nothing injects."""
+    """Settings resolves canonical SDK environment variables and constructs canonical identity."""
     digest = "sha256:" + "d" * 64
-    monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", digest)
-    monkeypatch.setenv("TRUEALPHA_RELEASE_MANIFEST_ID", CONSTANT_ERA_ID)
+    release_id = "release-manifest:" + "e" * 64
+    config_sha = "a" * 64
+    monkeypatch.setenv("IMAGE_DIGEST", digest)
+    monkeypatch.setenv("RELEASE_ID", release_id)
     monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
-    monkeypatch.setenv("TRUEALPHA_CONFIGURATION_SHA256", "a" * 64)
+    monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
+    monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@127.0.0.1:5432/truealpha")
+    monkeypatch.setenv("MIGRATION_LOCK_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("LLM_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
     assert settings.data_engine_image_digest == digest
-    assert settings.release_manifest_id == CONSTANT_ERA_ID
+    assert settings.release_manifest_id == release_id
     assert settings.capture_approved_by == "zitian"
-    assert settings.configuration_sha256 == "a" * 64
+    assert settings.configuration_sha256 == config_sha
+    assert settings.migrations_database_url == "postgresql://admin:secret@127.0.0.1:5432/truealpha"
+    assert settings.migration_lock_timeout_seconds == 10
+    assert settings.llm_model == "glm-5.3-flash"
+
+    identity = settings.to_runtime_identity()
+    assert identity.service_name == "data-engine"
+    assert identity.image_digest == digest
+    assert identity.release_id == release_id
+    assert identity.configuration_sha256 == config_sha
+
+    pg = settings.to_postgres_settings()
+    assert pg.migrations_dsn == "postgresql://admin:secret@127.0.0.1:5432/truealpha"
+    assert pg.migration_lock_timeout_seconds == 10
+
+    llm = settings.to_llm_settings()
+    assert llm.provider == settings.llm_provider
+    assert llm.primary_model == "glm-5.3-flash"
+
+
+def test_to_llm_settings_fails_closed_when_model_is_empty() -> None:
+    """Empty llm_model fails closed with ValueError (#1039)."""
+    settings = Settings(_env_file=None, llm_model="")
+    with pytest.raises(ValueError, match="primary_model must be non-empty"):
+        settings.to_llm_settings()

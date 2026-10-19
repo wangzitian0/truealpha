@@ -1834,3 +1834,194 @@ def test_every_materialized_row_carries_the_three_status_dimensions(connection) 
     # snapshot returns the same ids (the existing idempotence test) and re-derives the same columns.
     repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert [item.result_id for item in repeated] == [item.result_id for item in results]
+
+
+def _member_rows_for_probe(
+    *,
+    confidence: Decimal = Decimal("0.92"),
+    shares_outstanding: str = "10000000",
+    shares_period_end: str | None = "2026-01-20",
+    financial_vintage: dict[str, Any] | None = None,
+) -> dict[str, _ObservationRow]:
+    coordinates = ("issuer:cik:0001045810", "security:figi:NVDA", "listing:xnas:nvda", "NVDA")
+    financial_payload = _normalized_payload(coordinates, "financial-fact", financial_vintage=financial_vintage)
+    financial_payload["shares_outstanding"] = shares_outstanding
+    if shares_period_end is not None:
+        financial_payload["shares_period_end"] = shares_period_end
+    rows: dict[str, _ObservationRow] = {}
+    for ordinal, semantic_type in enumerate(SEMANTIC_TYPES):
+        payload = (
+            financial_payload if semantic_type == "financial-fact" else _normalized_payload(coordinates, semantic_type)
+        )
+        knowable_at = (
+            datetime(2026, 2, 1, tzinfo=UTC) if semantic_type == "financial-fact" else datetime(2026, 3, 31, tzinfo=UTC)
+        )
+        rows[semantic_type] = _ObservationRow(
+            obligation_id=f"capture-list-obligation:{ordinal + 10:064x}",
+            listing_id=coordinates[2],
+            semantic_type=semantic_type,
+            observation_id=f"normalized-observation:{ordinal + 10:064x}",
+            confidence=confidence,
+            freshness=MetricFreshness.FRESH,
+            knowable_at=knowable_at,
+            payload=payload,
+        )
+    return rows
+
+
+def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() -> None:
+    """#1255: when `(financial.vintage or {}).get("gross_profit", {}).get("is_revenue_proxy", False)`
+    is True, `_snapshot_member` caps `gross_profit` confidence and the financial cell
+    confidence at `0.85` while leaving non-proxy rows untouched."""
+    control_rows = _member_rows_for_probe(
+        confidence=Decimal("0.92"),
+        financial_vintage={"gross_profit": {"is_revenue_proxy": False}},
+    )
+    control_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", control_rows)
+    assert control_member.gross_profit is not None
+    assert control_member.gross_profit.confidence == Decimal("0.92")
+    assert {cell.confidence for cell in control_member.cell_inputs} == {Decimal("0.92")}
+
+    proxy_rows = _member_rows_for_probe(
+        confidence=Decimal("0.92"),
+        financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
+    )
+    proxy_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", proxy_rows)
+    assert proxy_member.gross_profit is not None
+    assert proxy_member.gross_profit.confidence == Decimal("0.85")
+    fin_cell = next(
+        cell for cell in proxy_member.cell_inputs if cell.input_id == proxy_rows["financial-fact"].observation_id
+    )
+    assert fin_cell.confidence == Decimal("0.85")
+
+    # Lower observation confidence (< 0.85) stays at its lower bound (min rule).
+    low_rows = _member_rows_for_probe(
+        confidence=Decimal("0.70"),
+        financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
+    )
+    low_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", low_rows)
+    assert low_member.gross_profit is not None
+    assert low_member.gross_profit.confidence == Decimal("0.70")
+
+    # Null vintage entry ({"gross_profit": None}) does not raise AttributeError and leaves confidence uncapped.
+    null_vintage_rows = _member_rows_for_probe(
+        confidence=Decimal("0.92"),
+        financial_vintage={"gross_profit": None},
+    )
+    null_vintage_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", null_vintage_rows)
+    assert null_vintage_member.gross_profit is not None
+    assert null_vintage_member.gross_profit.confidence == Decimal("0.92")
+
+    # SSOT guard: top-level `gross_profit_is_revenue_proxy` is rejected by `extra="forbid"`;
+    # `vintage["gross_profit"]["is_revenue_proxy"]` is the single source of truth (#1255).
+    from pydantic import ValidationError
+
+    duplicate_key_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
+    duplicate_key_rows["financial-fact"].payload["gross_profit_is_revenue_proxy"] = True
+    with pytest.raises(ValidationError):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", duplicate_key_rows)
+
+
+def test_snapshot_member_accepts_listing_reused_price_with_foreign_issuer_id() -> None:
+    """#1333 / #1352: `market-price` is reused across universes by `(listing, session_date)`,
+    so a price payload carrying a foreign `issuer_id` / `instrument_id` (e.g., LEI vs CIK)
+    must materialize cleanly under the target run's `listing.issuer_id` as long as
+    `price.listing_id == listing.listing_id`. Mismatched `price.listing_id` or mismatched
+    `financial.issuer_id` must still raise `ValueError`."""
+    reused_price_rows = _member_rows_for_probe()
+    reused_price_rows["market-price"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
+    reused_price_rows["market-price"].payload["instrument_id"] = "instrument:us67066g1040"
+    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", reused_price_rows)
+    assert member.issuer_id == "issuer:cik:0001045810"
+    assert member.listing_id == "listing:xnas:nvda"
+
+    wrong_price_listing_rows = _member_rows_for_probe()
+    wrong_price_listing_rows["market-price"].payload["listing_id"] = "listing:xnas:aapl"
+    with pytest.raises(ValueError, match="normalized payload identities disagree"):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_price_listing_rows)
+
+    wrong_financial_issuer_rows = _member_rows_for_probe()
+    wrong_financial_issuer_rows["financial-fact"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
+    with pytest.raises(ValueError, match="normalized payload identities disagree"):
+        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_financial_issuer_rows)
+
+
+def test_snapshot_member_aligns_stock_split_via_live_on_close_basis() -> None:
+    """#1277: `_snapshot_member` calls `share_basis.live_on_close_basis` to adjust
+    `shares_outstanding` for any split with `ex_date` in `(basis_date, close_session]`."""
+    from data_engine.datahub.share_basis import SplitHistory
+    from factors.backtest.corporate_actions import SplitEvent
+
+    rows = _member_rows_for_probe(
+        shares_outstanding="10000000",
+        shares_period_end="2026-01-20",
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(
+                filed=date(2026, 2, 1),
+                own_date=date(2026, 1, 20),
+                accession="0001045810-26-000001",
+            )
+        },
+    )
+    history = SplitHistory(
+        symbol="NVDA",
+        events=(SplitEvent("NVDA", date(2026, 3, 2), 10, 1),),
+        first_session=date(2025, 12, 1),
+        last_session=date(2026, 3, 31),
+        last_unadjusted_close=Decimal("40"),
+    )
+    member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda",
+        rows,
+        histories=(history,),
+    )
+    assert member.shares_outstanding.value == Decimal("100000000")
+    assert member.shares_outstanding.knowable_at == datetime(2026, 3, 31, tzinfo=UTC)
+
+
+def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_confidence(
+    connection,
+) -> None:
+    """#1277 + #1255: end-to-end `freeze_snapshot` -> `materialize` adjusts NVDA's
+    pre-split share count by 10x when `staging.market_prices_daily` records a 10:1 split
+    between the filing date (`2026-03-02`) and the close session (`2026-04-01`), and caps
+    revenue-proxy gross profit confidence at `0.85`."""
+    from split_series_seed import store_daily_series
+
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection,
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20)),
+            "gross_profit": {"is_revenue_proxy": True},
+        },
+    )
+    close_session = (CUTOFF - timedelta(minutes=58)).astimezone(UTC).date()
+    ex_date = date(2026, 3, 16)
+
+    def _nvda_shape(day: date) -> tuple[Decimal, Decimal]:
+        return (Decimal("400") if day < ex_date else Decimal("40"), Decimal("40"))
+
+    def _flat_shape(_day: date) -> tuple[Decimal, Decimal]:
+        return (Decimal("40"), Decimal("40"))
+
+    for symbol in DEFAULT_TOPT_SYMBOLS:
+        shape = _nvda_shape if symbol == "NVDA" else _flat_shape
+        store_daily_series(connection, symbol, shape, first=date(2026, 1, 2), last=close_session)
+
+    repository = PostgresToptCoreRepository(connection)
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    by_listing = {item.listing_id: item for item in results}
+
+    nvda_member = next(m for m in snapshot.members if m.listing_id == "listing:xnas:nvda")
+    aapl_member = next(m for m in snapshot.members if m.listing_id == "listing:xnas:aapl")
+    assert nvda_member.shares_outstanding.value == Decimal("100000000")
+    assert aapl_member.shares_outstanding.value == Decimal("10000000")
+    assert nvda_member.gross_profit is not None and nvda_member.gross_profit.confidence == Decimal("0.85")
+
+    nvda_result = by_listing["listing:xnas:nvda"]
+    aapl_result = by_listing["listing:xnas:aapl"]
+    assert nvda_result.current_ps == Decimal("40")
+    assert aapl_result.current_ps == Decimal("4")
+    assert nvda_result.confidence == Decimal("0.85")
+    assert aapl_result.confidence == Decimal("0.85")

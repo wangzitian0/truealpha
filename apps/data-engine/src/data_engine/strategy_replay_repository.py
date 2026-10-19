@@ -20,9 +20,9 @@ existing row matches rather than trusting it blindly -- append-only rows are
 immutable evidence, so a genuine identity collision with different content is
 a bug to raise on, not paper over.
 
-`CLAIM_CEILING = "preview"` matches `core_strategy_replay.py`'s own framing
-(fixture-sourced facts, no BacktestDataGateway yet) -- this writer persists
-exactly what the replay claims to be, not more.
+`CLAIM_CEILING = "preview"` is the default for fixture-sourced replays
+(`core_strategy_replay.py`); callers bound to a governed PIT snapshot pass
+their own `claim_ceiling` so this writer persists the exact ceiling claimed.
 """
 
 from __future__ import annotations
@@ -38,14 +38,18 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 from data_engine.core_strategy_replay import CORPUS_SHA256, Decision
 from data_engine.datahub.production_topt.status_dimensions import (
     decision_availability_status,
-    factor_validation_status_for,
+    statuses_without_raw_pointer,
 )
 
 CLAIM_CEILING = "preview"
 
 
 def _run_payload(
-    definition: LargeModelValueV0Definition, *, executed_at: datetime, snapshot_id: str | None = None
+    definition: LargeModelValueV0Definition,
+    *,
+    executed_at: datetime,
+    snapshot_id: str | None = None,
+    claim_ceiling: str = CLAIM_CEILING,
 ) -> dict[str, Any]:
     # #955: when bound to a PIT snapshot, corpus_sha256 reflects the actual inputs
     # consumed by that cutoff's replay rather than the static fixture constant.
@@ -55,7 +59,7 @@ def _run_payload(
         "strategy_version": definition.definition_version,
         "definition_content_sha256": definition.content_sha256,
         "corpus_sha256": corpus_sha,
-        "claim_ceiling": CLAIM_CEILING,
+        "claim_ceiling": claim_ceiling,
         "executed_at": executed_at.isoformat(),
     }
     # Included only when set so existing fixture/preview runs keep their identity;
@@ -71,8 +75,14 @@ def write_strategy_run(
     *,
     executed_at: datetime,
     snapshot_id: str | None = None,
+    claim_ceiling: str = CLAIM_CEILING,
 ) -> str:
-    payload = _run_payload(definition, executed_at=executed_at, snapshot_id=snapshot_id)
+    payload = _run_payload(
+        definition,
+        executed_at=executed_at,
+        snapshot_id=snapshot_id,
+        claim_ceiling=claim_ceiling,
+    )
     content_sha256 = canonical_sha256(payload)
     run_id = f"strategy-run:{content_sha256}"
     inserted = connection.execute(
@@ -91,7 +101,7 @@ def write_strategy_run(
             definition.definition_version,
             definition.content_sha256,
             payload["corpus_sha256"],
-            CLAIM_CEILING,
+            payload["claim_ceiling"],
             executed_at,
             snapshot_id,
         ),
@@ -112,21 +122,20 @@ def write_strategy_decision(
     *,
     strategy_run_id: str,
     definition: LargeModelValueV0Definition | None = None,
+    source_evidence_status: InputEvidenceStatus | None = None,
 ) -> str:
     payload = {"strategy_run_id": strategy_run_id, **decision.to_json()}
     # #747 (§8): the three dimensions, written by this producer and not part of the identity.
-    # Source evidence is `degraded` by construction today: the replay reads
-    # `staging.strategy_backtest_inputs`, which carries knowable_at but no raw pointer
-    # (#530 items 5–6); it flips to `verified` when the inputs resolve from the vintage plane.
+    # When no raw pointer chain is supplied, statuses_without_raw_pointer resolves the
+    # honest evidence and validation statuses (#1116, #434).
     availability_status = decision_availability_status(
         eligible=decision.eligible,
         exclusion_reason=decision.exclusion_reason,
         value_present=decision.capital_adjusted_labor_efficiency is not None,
     )
-    source_evidence_status = InputEvidenceStatus.DEGRADED
-    factor_validation_status = factor_validation_status_for(
-        () if definition is None else (f"{definition.strategy_id}:{definition.content_sha256}",)
-    )
+    definition_ids = () if definition is None else (f"{definition.strategy_id}:{definition.content_sha256}",)
+    default_evidence, factor_validation_status = statuses_without_raw_pointer(definition_ids)
+    resolved_evidence_status = default_evidence if source_evidence_status is None else source_evidence_status
     content_sha256 = canonical_sha256(payload)
     decision_id = f"strategy-decision:{content_sha256}"
     cutoff_at = datetime.fromisoformat(decision.cutoff_at.replace("Z", "+00:00"))
@@ -164,7 +173,7 @@ def write_strategy_decision(
             decision.peg_rank,
             list(decision.peg_reason_codes),
             availability_status.value,
-            source_evidence_status.value,
+            resolved_evidence_status.value,
             factor_validation_status.value,
             decision.labor_efficiency_metric,
             decision.current_price_to_gross_profit,
@@ -205,15 +214,29 @@ def write_replay(
     *,
     executed_at: datetime,
     snapshot_id: str | None = None,
+    claim_ceiling: str = CLAIM_CEILING,
+    source_evidence_status: InputEvidenceStatus | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Persist one full replay: one `strategy_runs` row, one `strategy_decisions`
     row per decision. Idempotent -- replaying identical decisions against the
     same definition and executed_at reproduces the same run/decision IDs.
     ``snapshot_id`` binds the run to the exact captured PIT inputs (#395)."""
 
-    run_id = write_strategy_run(connection, definition, executed_at=executed_at, snapshot_id=snapshot_id)
+    run_id = write_strategy_run(
+        connection,
+        definition,
+        executed_at=executed_at,
+        snapshot_id=snapshot_id,
+        claim_ceiling=claim_ceiling,
+    )
     decision_ids = tuple(
-        write_strategy_decision(connection, decision, strategy_run_id=run_id, definition=definition)
+        write_strategy_decision(
+            connection,
+            decision,
+            strategy_run_id=run_id,
+            definition=definition,
+            source_evidence_status=source_evidence_status,
+        )
         for decision in decisions
     )
     return run_id, decision_ids

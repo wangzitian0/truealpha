@@ -57,11 +57,10 @@ permissions:
 
 concurrency:
   group: auto-release-staging
-  # #860: A newer commit to main renders any in-flight debounce sleep obsolete —
-  # tools/auto_release.py will refuse to release any commit that is no longer HEAD.
-  # Setting cancel-in-progress: true immediately terminates superseded runners,
-  # saving 20 runner minutes per merge burst and restarting the debounce timer for HEAD.
-  cancel-in-progress: true
+  # #1322: Do not cancel an in-flight Staging batch release when a later PR merges.
+  # Queued runs wake after the active batch finishes and re-read main HEAD via
+  # tools/auto_release.py, coalescing subsequent merges into the next batch.
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -73,11 +72,9 @@ jobs:
     timeout-minutes: 75
     steps:
       - name: Quiet period
-        # 20 minutes (owner decision 2026-09-17, #860): batches a burst of
-        # merges into one release instead of one tag per PR. Held against
-        # tools/auto_release.py's own tick-window tests in
-        # test_auto_release.py — 1200s = 20 * 60.
-        run: sleep 1200
+        # 3 minutes (#1322): batches a burst of merges into one release without
+        # holding staging idle for 20 minutes.
+        run: sleep 180
 
       - name: Require a push credential GitHub's own token cannot provide
         # #940: `tools/cut_release.sh`'s `git push origin $TAG` a few steps

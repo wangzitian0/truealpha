@@ -5,10 +5,12 @@ continuous, explainable score and shows how it responds to source independence,
 freshness, semantic quality, lineage, completeness, and conflict. It is not a
 Production threshold or a claim that the full TOPT universe is calibrated.
 
-Status 2026-10-12 (#1239): the evaluator, the report builder, and their tests
-were deleted, because no deployed path called them. This document keeps the
-formula and the sensitivity table as a design reference. The DTOs remain in
-`libs/contracts`.
+Status 2026-10-19 (#1333 / #1352): `libs/factors/src/factors/confidence.py`
+(`evaluate_continuous_confidence` and `verify_confidence_calibration_report`) is
+called by `apps/data-engine/src/data_engine/datahub/confidence_report.py` on
+every governed head to compute deterministic `0-1` `confidence` and `0-100`
+`score_100` alongside each cell's consensus band. The DTOs live in
+`libs/contracts/src/truealpha_contracts/confidence.py`.
 
 Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
@@ -48,9 +50,10 @@ score_100 = 100 * confidence
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
 report are content-addressed in the DTOs of `libs/contracts`. The formula
-implementation and the report verifier were deleted. A new implementation
-belongs in `libs/factors`, so computation stays out of the contracts and
-application layers. It must use `Decimal` and reject binary floats.
+implementation (`evaluate_continuous_confidence`) and the report verifier
+(`verify_confidence_calibration_report`) live in `libs/factors/src/factors/confidence.py`,
+so computation stays out of the contracts and application layers. It uses `Decimal`
+and rejects binary floats.
 Freshness, availability, applicability, quality state, and reason codes remain
 separate queryable facts rather than being replaced by this scalar.
 

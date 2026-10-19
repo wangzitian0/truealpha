@@ -399,3 +399,35 @@ def test_no_function_body_is_duplicated_across_two_modules() -> None:
         "these function bodies are identical in shape across modules; give them one "
         f"definition or say why they must stay apart: {sorted(cross_file)}"
     )
+
+
+def test_canonical_sha256_is_defined_once_and_utf8_byte_equivalent() -> None:
+    """#1291: `canonical_sha256` has two statements, below the four-statement AST guard threshold.
+    Verify that `common.py` defines `canonical_sha256` once across `_SOURCE_ROOTS`.
+    Verify that `canonical_sha256` equals the sha256 of the canonical JSON: sorted keys, compact
+    separators, and non-ASCII text escaped (`ensure_ascii=True`). The unicode sample makes the test
+    fail when the escaping changes."""
+    import hashlib
+    import json
+
+    definitions: list[str] = []
+    for root in _SOURCE_ROOTS:
+        for path in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name.lstrip("_") == "canonical_sha256"
+                ):
+                    definitions.append(f"{path.relative_to(_REPO_ROOT).as_posix()}::{node.name}")
+
+    assert definitions == ["libs/contracts/src/truealpha_contracts/common.py::canonical_sha256"]
+
+    samples = [
+        {"b": 2, "a": 1},
+        {"nested": ["alpha", "beta"], "unicode": "café — 東京 — 🚀"},
+    ]
+    for sample in samples:
+        explicit_utf8 = hashlib.sha256(
+            json.dumps(sample, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+        assert canonical_sha256(sample) == explicit_utf8

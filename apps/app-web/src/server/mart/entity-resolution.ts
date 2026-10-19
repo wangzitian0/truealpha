@@ -26,22 +26,27 @@ export interface EntityDisplay {
   displayName: string | null;
 }
 
+// #1327: this statement evaluates mart.entity_identity once, not once for each display row.
+// The view calls staging.entity_survivor() for each alias row and for each identity row.
+// A lateral lookup for each display row ran the view's final join again for every row.
+// On production, 234 display rows took 15.8 s to 30.7 s that way, against 2.7 s for one evaluation.
+// The cast entity_id::text blocks every index, so no lookup for each row can be cheap.
+//
+// The view's staging.kg_entities join can match one entity twice: by UUID and by legacy id.
+// A plain join would then return that display row twice. DISTINCT ON keeps one row for each
+// entity. The smallest legacy_id wins, and NULL sorts last.
+// tests/mart-entity-display-map.test.ts seeds this case.
+export const ENTITY_DISPLAY_SQL = `select r.issuer_id, r.ticker, r.display_name, ei.legacy_id
+       from mart.entity_display_resolution r
+       left join (
+         select distinct on (e.entity_id::text) e.entity_id::text as issuer_id, e.legacy_id
+         from mart.entity_identity e
+         order by e.entity_id::text, e.legacy_id
+       ) ei on ei.issuer_id = r.issuer_id`;
+
 export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>> {
   const rows = await withMartReadonly(async (client) => {
-    const result = await client.query(
-      // LATERAL ... limit 1 rather than a plain join, for the reason
-      // strategy-run-repository.ts documents: mart.entity_identity's
-      // staging.kg_entities join can match one entity twice, and a display
-      // lookup must never multiply the rows it is decorating.
-      `select r.issuer_id, r.ticker, r.display_name, ei.legacy_id
-       from mart.entity_display_resolution r
-       left join lateral (
-         select ei.legacy_id
-         from mart.entity_identity ei
-         where ei.entity_id::text = r.issuer_id
-         limit 1
-       ) ei on true`,
-    );
+    const result = await client.query(ENTITY_DISPLAY_SQL);
     return result.rows as {
       issuer_id: string;
       ticker: string;

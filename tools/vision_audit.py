@@ -22,6 +22,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 
+from datahub_freshness import is_head_scheduled  # noqa: E402
 from nightly_verdicts import HealthReport, read_report  # noqa: E402
 
 
@@ -42,6 +43,75 @@ class VisionAuditReport:
     all_passed: bool
     gates: list[GateAuditResult]
     nightly_verdicts_summary: dict[str, Any]
+    status: str = "fail"
+    served_head_freshness: str = "fresh"
+
+
+def _assess_served_head_freshness(
+    report: Any,
+    *,
+    environment: str = "production",
+) -> tuple[bool, str]:
+    """Verify that mart.served_head.freshness == 'fresh' across scheduled governed pointers (#54, #1299).
+
+    Every scheduled pointer in `report.governed_pointers` must carry `freshness == 'fresh'` and
+    `availability == 'available'`. Manual-only lanes in an environment (#1256) do not fail the
+    check. An empty list, missing `governed_pointers`, or 'unknown' pointer state fails closed.
+    """
+    pointers = getattr(report, "governed_pointers", None)
+    if pointers is None or pointers == "unknown" or not isinstance(pointers, list) or not pointers:
+        return False, "mart.served_head.freshness=unknown (no governed pointers)"
+    stale: list[str] = []
+    scheduled_seen = 0
+    for entry in pointers:
+        if not isinstance(entry, dict):
+            stale.append(str(entry))
+            continue
+        universe = str(entry.get("universe_id", "?"))
+        if not is_head_scheduled(universe, environment):
+            continue
+        scheduled_seen += 1
+        freshness = str(entry.get("freshness", "fresh"))
+        availability = str(entry.get("availability", "available"))
+        if freshness != "fresh" or availability != "available":
+            stale.append(f"{universe}:{freshness}/{availability}")
+    if stale:
+        return False, f"mart.served_head.freshness!=fresh ({', '.join(stale)})"
+    if scheduled_seen == 0:
+        return False, "mart.served_head.freshness=unknown (no scheduled governed pointers)"
+    return True, "mart.served_head.freshness == 'fresh'"
+
+
+def _finalize_vision_report(
+    *,
+    env: str,
+    resolved_url: str,
+    release_sha: str | None,
+    gates: list[GateAuditResult],
+    verdicts_summary: dict[str, Any],
+    heads_fresh: bool,
+    freshness_detail: str,
+) -> VisionAuditReport:
+    if not heads_fresh and gates:
+        last = gates[-1]
+        gates[-1] = GateAuditResult(
+            gate_id=last.gate_id,
+            title=last.title,
+            status="OPEN",
+            verified=False,
+            evidence=f"{last.evidence} [{freshness_detail}]",
+        )
+    all_passed = all(g.verified for g in gates) and heads_fresh
+    return VisionAuditReport(
+        target_env=env,
+        health_url=resolved_url,
+        release=release_sha,
+        all_passed=all_passed,
+        gates=gates,
+        nightly_verdicts_summary=verdicts_summary,
+        status="pass" if all_passed else "fail",
+        served_head_freshness="fresh" if heads_fresh else freshness_detail,
+    )
 
 
 def audit_vision(
@@ -63,10 +133,12 @@ def audit_vision(
             v.check: {"ok": v.ok, "summary": v.summary, "ran_at": v.ran_at.isoformat()} for v in verdicts_list
         }
         release_sha = report.release
+        heads_fresh, freshness_detail = _assess_served_head_freshness(report, environment=env)
     except Exception as exc:  # noqa: BLE001
         verdicts_by_check = {}
         verdicts_summary = {"error": str(exc)}
         release_sha = None
+        heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
 
     gates: list[GateAuditResult] = []
 
@@ -155,15 +227,14 @@ def audit_vision(
         )
     )
 
-    all_passed = all(g.verified for g in gates)
-
-    return VisionAuditReport(
-        target_env=env,
-        health_url=resolved_url,
-        release=release_sha,
-        all_passed=all_passed,
+    return _finalize_vision_report(
+        env=env,
+        resolved_url=resolved_url,
+        release_sha=release_sha,
         gates=gates,
-        nightly_verdicts_summary=verdicts_summary,
+        verdicts_summary=verdicts_summary,
+        heads_fresh=heads_fresh,
+        freshness_detail=freshness_detail,
     )
 
 
@@ -198,10 +269,12 @@ def main() -> int:
         print(
             json.dumps(
                 {
+                    "status": report.status,
                     "target_env": report.target_env,
                     "health_url": report.health_url,
                     "release": report.release,
                     "all_passed": report.all_passed,
+                    "served_head_freshness": report.served_head_freshness,
                     "gates": [asdict(g) for g in report.gates],
                     "nightly_verdicts_summary": report.nightly_verdicts_summary,
                 },

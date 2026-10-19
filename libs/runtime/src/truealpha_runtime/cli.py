@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from truealpha_runtime.checks import run_dependency_checks
-from truealpha_runtime.config import DeploymentSettings, RuntimeSettings
+from truealpha_runtime.config import RuntimeSettings
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST
 
 
@@ -13,7 +13,6 @@ def main() -> int:
     parser.add_argument("--live", action="store_true", help="probe PostgreSQL, KG tables, and object storage")
     args = parser.parse_args()
     settings = RuntimeSettings()
-    DeploymentSettings()
     required = DEPENDENCY_MANIFEST.required_for(settings.environment_tier)
     print(f"runtime tier={settings.environment_tier.value} required={','.join(sorted(required))}")
     if not args.live:

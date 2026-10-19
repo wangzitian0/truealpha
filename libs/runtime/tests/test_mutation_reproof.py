@@ -117,3 +117,23 @@ def test_a_caught_mutation_passes(capsys) -> None:  # noqa: ANN001
     )
     assert _module.run(mutations=[caught]) == 0
     assert "caught   probe" in capsys.readouterr().out
+
+
+def test_a_guard_skipping_under_the_db_write_gate_is_reported_as_inert(capsys) -> None:  # noqa: ANN001
+    """#1284 A3: when a mutation guard skips under the #1197/#1280 DB write gate and exits 0,
+    mutation_reproof must name that it skipped under the DB write gate instead of proving the property."""
+    skipped = _module.Mutation(
+        id="db-skipped",
+        guard="somewhere",
+        file="tools/mutations.json",
+        find="mutations",
+        replace="mutations",
+        command=(
+            "python3",
+            "-c",
+            "import sys; sys.stderr.write('UserWarning: DB-backed test skipped: set CI=true or ALLOW_CLEAR_TEST=1\\n')",
+        ),
+        cwd=".",
+    )
+    assert _module.run(mutations=[skipped]) == 1
+    assert "skipped under the DB write gate instead of proving the property" in capsys.readouterr().err

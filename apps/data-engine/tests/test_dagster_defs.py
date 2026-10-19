@@ -23,6 +23,7 @@ from pathlib import Path
 
 import dagster as dg
 import psycopg
+import pytest
 from data_engine import dagster_defs
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
@@ -40,8 +41,8 @@ from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 
 def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
     """`dagster -m data_engine.dagster_defs` resolves `defs`; it must build with no
-    database and be exactly what the registered lanes declare — no job listed by name
-    anywhere in the root (#731), and the fixture canary NOT part of it (#429 I2)."""
+    database and be the exact union of what the registered lanes declare —
+    and the fixture canary NOT part of it (#429 I2)."""
     assert isinstance(defs, dg.Definitions)
     lanes = lane_definitions()
     assert set(lanes) == set(LANE_MODULES)
@@ -668,3 +669,356 @@ def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick(
     assert config["executed_at"] == tick.isoformat()
     assert dg.validate_run_config(lane.strategy_history_pipeline_job, request.run_config)
     assert "datetime.now" not in inspect.getsource(lane)
+
+
+# -- #67 / #1281: multi-universe and staggered standards plane schedules ----------------------
+
+
+def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_production() -> None:
+    """#67 A1/A2: `defs` registers non-overlapping staggered UTC schedules for `topt`, `qqq`, `sp500`,
+    `canary`, and the 4 Standards Plane schedules (`nport_monthly_schedule`, `13f_quarterly_schedule`,
+    `form4_daily_schedule`, `10k_annual_schedule`). `topt`, `qqq`, and `canary` are RUNNING in
+    production/prod; the SP500 schedules (#1310) and the 4 unimplemented per-form Standards Plane
+    schedules stay registered and STOPPED until their budgets and per-form filters exist."""
+    from data_engine.datahub.confidence_report import _universe_source
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
+    from data_engine.lanes import standards, universe_refresh
+
+    active_universe_keys = {"topt", "qqq", "sp500", "canary"}
+    # #1310 / #67: the SP500 tick and constituent refresh stay registered and STOPPED until #206 /
+    # a Twelve Data budget and valid constituent endpoint exist; the 4 staggered Standards Plane
+    # schedules stay STOPPED until per-form standard implementations exist in ALL_STANDARDS.
+    stopped_universe_keys = {"sp500"}
+    stopped_schedule_names = {
+        "sp500_live_schedule",
+        "sp500_universe_refresh_schedule",
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    }
+    declared_tick_keys = {tick.key for tick in capture.TICKS}
+    assert active_universe_keys == declared_tick_keys
+    assert not hasattr(capture, "ALL_TICKS")
+    assert not hasattr(universe_refresh, "active_universe_sources")
+    assert not hasattr(standards, "extended_defs")
+
+    assert {"qqq", "sp500", "canary"} == set(UNIVERSE_SOURCES)
+    assert UNIVERSE_SOURCES["sp500"].head_kind == "universe-list:sp500"
+    assert _universe_source("universe-list:sp500") == UNIVERSE_SOURCES["sp500"]
+
+    for env in ("production", "prod", " PRODUCTION "):
+        prod_defs = dagster_defs.build_definitions(env)
+        for key in active_universe_keys:
+            assert capture.is_universe_scheduled(key, env) is (key not in stopped_universe_keys), (key, env)
+
+        expected_schedules = {
+            "topt_live_schedule": "15 22 * * *",
+            "qqq_live_schedule": "20 23 * * *",
+            "sp500_live_schedule": capture.SP500_LIVE_CRON,
+            "sp500_universe_refresh_schedule": universe_refresh.SP500_UNIVERSE_REFRESH_CRON,
+            "canary_daily_schedule": "47 23 * * *",
+            "nport_monthly_schedule": standards.NPORT_MONTHLY_CRON,
+            "13f_quarterly_schedule": standards.THIRTEENF_QUARTERLY_CRON,
+            "form4_daily_schedule": standards.FORM4_DAILY_CRON,
+            "10k_annual_schedule": standards.TENK_ANNUAL_CRON,
+        }
+        seen_crons: dict[str, str] = {}
+        for schedule_name, expected_cron in expected_schedules.items():
+            schedule = prod_defs.get_schedule_def(schedule_name)
+            expected_status = (
+                dg.DefaultScheduleStatus.STOPPED
+                if schedule_name in stopped_schedule_names
+                else dg.DefaultScheduleStatus.RUNNING
+            )
+            assert schedule.default_status == expected_status, (schedule_name, env)
+            assert schedule.execution_timezone == "UTC", schedule_name
+            assert isinstance(schedule.cron_schedule, str)
+            if schedule_name != "topt_live_schedule":
+                assert schedule.cron_schedule == expected_cron, schedule_name
+            assert schedule.cron_schedule not in seen_crons, (
+                f"{schedule_name} collides on cron {schedule.cron_schedule!r} with {seen_crons[schedule.cron_schedule]}"
+            )
+            seen_crons[schedule.cron_schedule] = schedule_name
+
+        # Check all (hour, minute) pairs across the 9 schedules are distinct so no two fire at the same UTC minute.
+        hour_minute_slots: dict[tuple[int, int], str] = {}
+        for schedule_name in expected_schedules:
+            schedule = prod_defs.get_schedule_def(schedule_name)
+            minute_str, hour_str = str(schedule.cron_schedule).split()[:2]
+            slot = (int(hour_str), int(minute_str))
+            assert slot not in hour_minute_slots, (
+                f"{schedule_name} shares UTC (hour, minute) {slot} with {hour_minute_slots[slot]}"
+            )
+            hour_minute_slots[slot] = schedule_name
+
+    # Outside production, production-only schedules default to STOPPED while TOPT and canary stay RUNNING.
+    # The SP500 tick schedule is STOPPED in staging too (#1310).
+    staging_defs = dagster_defs.build_definitions("staging")
+    assert capture.is_universe_scheduled("sp500", "staging") is False
+    for prod_only_name in (
+        "qqq_live_schedule",
+        "sp500_live_schedule",
+        "sp500_universe_refresh_schedule",
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    ):
+        assert staging_defs.get_schedule_def(prod_only_name).default_status == dg.DefaultScheduleStatus.STOPPED
+
+
+def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatch) -> None:
+    """Every newly registered schedule builds valid RunRequests and the SP500 tick op invokes
+    `run_topt_pipeline` read-only with its existing signature."""
+    tick = datetime(2026, 10, 15, 1, 15, tzinfo=UTC)
+    context = dg.build_schedule_context(scheduled_execution_time=tick)
+
+    sp500_req = dagster_defs.sp500_live_schedule(context)
+    assert sp500_req.run_key == tick.isoformat()
+    assert sp500_req.run_config["ops"]["run_sp500_live_tick"]["config"] == {
+        "executed_at": tick.isoformat(),
+        "force_fetch": False,
+    }
+    assert dg.validate_run_config(dagster_defs.sp500_live_pipeline_job, sp500_req.run_config)
+
+    refresh_req = dagster_defs.sp500_universe_refresh_schedule(context)
+    assert refresh_req.run_key == f"sp500:{tick.isoformat()}"
+
+    assert dagster_defs.nport_monthly_schedule.job.name == "universe_refresh_pipeline"
+    for schedule in (
+        dagster_defs.thirteenf_quarterly_schedule,
+        dagster_defs.form4_daily_schedule,
+        dagster_defs.tenk_annual_schedule,
+    ):
+        assert schedule.job.name == "standard_backfill_pipeline", schedule.name
+
+    for schedule in (
+        dagster_defs.nport_monthly_schedule,
+        dagster_defs.thirteenf_quarterly_schedule,
+        dagster_defs.form4_daily_schedule,
+        dagster_defs.tenk_annual_schedule,
+    ):
+        requests = list(schedule.evaluate_tick(context).run_requests)
+        assert requests, schedule.name
+        for req in requests:
+            assert req.run_key and schedule.name in req.run_key
+
+    calls: list[dict] = []
+    _capturing_tick(monkeypatch, calls)
+    op_ctx = dg.build_op_context()
+    dagster_defs.run_sp500_live_tick(op_ctx, ToptLiveTickConfig(executed_at=TICK))
+    assert len(calls) == 1
+    assert calls[0]["universe_head_kind"] == "universe-list:sp500"
+    assert calls[0]["label_prefix"] == "production-sp500"
+    assert calls[0]["force_fetch"] is False
+
+
+def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transactions(monkeypatch) -> None:
+    """While `SP500_SCHEDULE_STATUS` is STOPPED, `_refresh_universes` skips `sp500` (both constituent
+    refresh and `IVV` N-PORT capture) and gives each active universe its own connection so one
+    constituent failure never rolls back another universe's published list."""
+    import psycopg
+    from data_engine.datahub.production_topt import holdings_enrichment, nport_holdings
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
+    from data_engine.lanes import universe_refresh
+
+    commits: list[int] = []
+    conn_counter = 0
+
+    class _FakeConn:
+        def __init__(self, cid: int) -> None:
+            self.cid = cid
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self) -> None:
+            commits.append(self.cid)
+
+    def fake_connect(_dsn: str):
+        nonlocal conn_counter
+        conn_counter += 1
+        return _FakeConn(conn_counter)
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    nport_calls: list[str] = []
+    monkeypatch.setattr(
+        nport_holdings, "capture_fund_holdings", lambda conn, ticker: nport_calls.append(ticker) or f"ok:{ticker}"
+    )
+    monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda conn, api_key="": "enriched")
+
+    refreshed: list[str] = []
+
+    def fake_refresh_and_publish(conn, source, *, report_date, note, openfigi_api_key=""):
+        refreshed.append(source.etf)
+        if source.etf == "qqq":
+            raise ValueError("simulated qqq endpoint failure")
+        return f"published:{source.etf}:{report_date}"
+
+    ctx = dg.build_op_context()
+    with pytest.raises(RuntimeError, match=r"^Universe refresh failed for: constituents:qqq$"):
+        universe_refresh._refresh_universes(ctx, UNIVERSE_SOURCES, latest_quarter_end, fake_refresh_and_publish)
+
+    # SP500 was skipped completely while STOPPED; canary still refreshed and committed despite qqq failing.
+    assert refreshed == ["qqq", "canary"]
+    assert nport_calls == ["QQQ"]
+    assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
+
+
+# -- #1310: the SP500 schedule stays STOPPED until a Twelve Data budget exists for it ---------------------
+
+#: Every failure below shows this text, so a person who flips the SP500 status reads the reason first.
+SP500_STOPPED_BECAUSE = (
+    "#1310: one SP500 tick needs about 1,000 Twelve Data credits. Production owns 480 credits a day. "
+    "Keep the SP500 schedule STOPPED until a declared Twelve Data budget for the SP500 tick exists."
+)
+
+
+def _schedule_rows(definitions: dg.Definitions) -> dict[str, tuple[str, str]]:
+    """Schedule name -> (job name, default status name) for each schedule in `definitions`."""
+    return {
+        schedule.name: (schedule.job_name, schedule.default_status.name) for schedule in definitions.schedules or ()
+    }
+
+
+def _running_sp500_schedules(rows: dict[str, tuple[str, str]]) -> list[str]:
+    """Names of the RUNNING schedules that launch the SP500 job, whatever the schedule is called."""
+    return sorted(
+        name
+        for name, (job_name, status) in rows.items()
+        if job_name == dagster_defs.SP500_LIVE_JOB_NAME and status == dg.DefaultScheduleStatus.RUNNING.name
+    )
+
+
+@pytest.mark.parametrize("app_env", ["production", "prod", "staging"])
+def test_the_sp500_schedule_is_stopped_in_every_environment_and_its_job_stays_registered(app_env: str) -> None:
+    """#1310: the definitions builder registers the SP500 schedule as STOPPED in every environment.
+    The job stays registered. An operator can still launch `sp500_live_pipeline` by hand."""
+    built = dagster_defs.build_definitions(app_env)
+
+    sp500_row = _schedule_rows(built).get("sp500_live_schedule")
+    assert sp500_row == (dagster_defs.SP500_LIVE_JOB_NAME, "STOPPED"), SP500_STOPPED_BECAUSE
+    assert dagster_defs.SP500_LIVE_JOB_NAME in {job.name for job in built.jobs or ()}
+
+
+def test_the_sp500_universe_has_no_schedule_in_any_environment_and_the_qqq_rule_is_unchanged() -> None:
+    """#1310: freshness checks skip a head whose lane has no running schedule. SP500 has none.
+    QQQ keeps its rule: scheduled in production, manual in staging."""
+    for environment in ("production", "prod", "staging"):
+        assert capture.is_universe_scheduled("sp500", environment) is False, (environment, SP500_STOPPED_BECAUSE)
+        assert capture.is_universe_scheduled("universe-list:sp500", environment) is False, environment
+        assert capture.is_head_scheduled("universe:sp500-us-2026-09-30", environment) is False, (
+            environment,
+            SP500_STOPPED_BECAUSE,
+        )
+    for environment, scheduled in (("production", True), ("prod", True), ("staging", False)):
+        assert capture.is_universe_scheduled("qqq", environment) is scheduled, environment
+        assert capture.is_head_scheduled("universe:qqq-us-2026-09-30", environment) is scheduled, environment
+
+
+def test_issue_1310_no_running_production_schedule_launches_the_sp500_tick() -> None:
+    """#1310: the SP500 tick must not run by schedule while staging and production share one Twelve Data key.
+    The test finds each RUNNING production schedule by the job it launches, not by its name."""
+    rows = _schedule_rows(dagster_defs.build_definitions("production"))
+
+    # The scan is not empty: the production rule still runs the other captures.
+    assert rows["topt_live_schedule"][1] == "RUNNING"
+    assert rows["qqq_live_schedule"][1] == "RUNNING"
+    assert _running_sp500_schedules(rows) == [], SP500_STOPPED_BECAUSE
+
+
+def test_issue_1310_the_deployed_module_loads_the_sp500_schedule_stopped_under_production(tmp_path: Path) -> None:
+    """The production daemon runs `-m data_engine.dagster_defs`. That module binds each tick's default
+    status when it loads. It does not call `build_definitions`. A new interpreter with APP_ENV=production
+    loads the same module. It reports the schedules that the production daemon registers."""
+    import os
+    import subprocess
+    import sys
+
+    probe = (
+        "import json\n"
+        "from data_engine import dagster_defs\n"
+        "rows = {s.name: [s.job_name, s.default_status.name] for s in dagster_defs.defs.schedules}\n"
+        "print(json.dumps(rows))\n"
+    )
+    finished = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=tmp_path,  # A temporary directory holds no `.env` file for the settings to read.
+        env={**os.environ, "APP_ENV": "production"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert finished.returncode == 0, finished.stderr
+    rows = {name: (job, status) for name, (job, status) in json.loads(finished.stdout.splitlines()[-1]).items()}
+
+    # The probe ran as production: the other captures and core weekly schedules are RUNNING.
+    assert rows["topt_live_schedule"][1] == "RUNNING" and rows["qqq_live_schedule"][1] == "RUNNING", rows
+    assert rows["universe_refresh_schedule"][1] == "RUNNING", rows
+    assert rows["standard_backfill_schedule"][1] == "RUNNING", rows
+    assert rows["sp500_live_schedule"][1] == "STOPPED", SP500_STOPPED_BECAUSE
+    assert rows["sp500_universe_refresh_schedule"][1] == "STOPPED", SP500_STOPPED_BECAUSE
+    for plane_schedule in (
+        "nport_monthly_schedule",
+        "13f_quarterly_schedule",
+        "form4_daily_schedule",
+        "10k_annual_schedule",
+    ):
+        assert rows[plane_schedule][1] == "STOPPED", (plane_schedule, rows[plane_schedule])
+    assert _running_sp500_schedules(rows) == [], SP500_STOPPED_BECAUSE
+
+
+def test_a_stale_sp500_head_does_not_fail_the_deploy_pointer_freshness_check(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#1310: an operator may launch the SP500 job by hand. Its head then ages with no schedule behind it.
+    The deploy check reports that head as manual. A QQQ head of the same age fails, as before."""
+    from truealpha_runtime.testing import load_tool
+
+    freshness = load_tool("datahub_freshness")
+    now = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
+    url = "https://truealpha.example/api/health"
+
+    def health(universe_id: str):
+        head = {"universe_id": universe_id, "advanced_at": (now - timedelta(hours=100)).isoformat(), "age_hours": 100.0}
+        body = json.dumps({"status": "ok", "git_sha": "v0.2.0", "governed_pointers": [head]})
+        return lambda _url: (200, body)
+
+    sp500_code = freshness.check_pointer_freshness(
+        url, environment="production", http_get=health("universe:sp500-us-2026-09-30"), now=now
+    )
+    assert sp500_code == 0, SP500_STOPPED_BECAUSE
+    assert "universe:sp500-us-2026-09-30 100.0 h (manual)" in capsys.readouterr().out
+    qqq_code = freshness.check_pointer_freshness(
+        url, environment="production", http_get=health("universe:qqq-us-2026-09-30"), now=now
+    )
+    assert qqq_code == 1
+    assert "universe:qqq-us-2026-09-30" in capsys.readouterr().err
+
+
+def test_a_stale_sp500_head_is_not_reported_by_the_nightly_served_head_check() -> None:
+    """#1310: the nightly report-surface proof reads `stale_served_heads`.
+    That check skips a head whose lane has no running schedule. A QQQ head of the same age stays in the report."""
+    from data_engine.lanes.quality import stale_served_heads
+
+    stale_rows = [
+        ("universe:qqq-us-2026-09-30", "stale", "available", "older than 72 hours"),
+        ("universe:sp500-us-2026-09-30", "stale", "available", "older than 72 hours"),
+    ]
+
+    class Result:
+        def fetchall(self) -> list[tuple[str, str, str, str]]:
+            return stale_rows
+
+    class Connection:
+        def execute(self, _sql: str) -> Result:
+            return Result()
+
+    assert stale_served_heads(Connection(), environment="production") == [
+        "universe:qqq-us-2026-09-30 freshness=stale availability=available (older than 72 hours)"
+    ], SP500_STOPPED_BECAUSE

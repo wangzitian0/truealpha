@@ -5,7 +5,6 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from infra2_sdk.runtime.s3 import (
-    S3Settings,
     create_s3_client,
     is_not_found,
     read_object_bytes,
@@ -36,23 +35,7 @@ class S3RawObjectStore:
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or runtime_settings
         self.bucket = self.settings.s3_bucket
-        # Built from RuntimeSettings' already-resolved values, NOT S3Settings.from_env()
-        # — from_env() re-reads os.environ with the SDK's own defaults/required-ness
-        # (S3_BUCKET is required there), which differ from RuntimeSettings' Pydantic
-        # local-dev defaults (e.g. s3_bucket="truealpha-raw" when unset) and would
-        # break local dev. addressing_style="path" stays forced (MinIO doesn't support
-        # virtual-hosted-style routing) rather than left to S3Settings' env-driven
-        # default of None.
-        self.s3_settings = S3Settings(
-            bucket=self.settings.s3_bucket,
-            endpoint_url=self._require_endpoint(),
-            access_key_id=self.settings.s3_access_key,
-            secret_access_key=self.settings.s3_secret_key.get_secret_value(),
-            region_name=self.settings.s3_region,
-            addressing_style="path",
-            connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-            read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
-        )
+        self.s3_settings = self.settings.to_s3_settings()
         self.client = client or create_s3_client(self.s3_settings)
 
     def _require_endpoint(self) -> str:

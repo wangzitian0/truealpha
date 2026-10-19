@@ -8,14 +8,13 @@ self-contained so a historical release never depends on the latest registry.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.data_quality import DataDomain
 
 _OPEN_ID_SUFFIX = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
@@ -41,11 +40,6 @@ type IdentifierTypeId = Annotated[
 type RegistryVersion = Annotated[str, StringConstraints(pattern=_VERSION_PATTERN)]
 type Sha256 = Annotated[str, StringConstraints(pattern=_SHA256_PATTERN)]
 type ComponentKey = Annotated[str, StringConstraints(pattern=_COMPONENT_KEY_PATTERN)]
-
-
-def _canonical_sha256(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 class IdentifierNamespaceKind(StrEnum):
@@ -84,7 +78,7 @@ class SourceRegistryEntry(BaseModel):
 
     @property
     def content_sha256(self) -> str:
-        return _canonical_sha256(self.model_dump(mode="json"))
+        return canonical_sha256(self.model_dump(mode="json"))
 
     @property
     def source_registry_entry_id(self) -> str:
@@ -131,7 +125,7 @@ class SemanticTypeRegistryEntry(BaseModel):
 
     @property
     def content_sha256(self) -> str:
-        return _canonical_sha256(self.model_dump(mode="json"))
+        return canonical_sha256(self.model_dump(mode="json"))
 
     @property
     def semantic_type_registry_entry_id(self) -> str:
@@ -173,7 +167,7 @@ class IdentifierTypeRegistryEntry(BaseModel):
 
     @property
     def content_sha256(self) -> str:
-        return _canonical_sha256(self.model_dump(mode="json"))
+        return canonical_sha256(self.model_dump(mode="json"))
 
     @property
     def identifier_type_registry_entry_id(self) -> str:
@@ -254,13 +248,13 @@ class RegistrySnapshot(BaseModel):
         object.__setattr__(self, "required_type_ids", required_type_ids)
         object.__setattr__(self, "required_identifier_type_ids", required_identifier_type_ids)
 
-        source_hash = _canonical_sha256(
+        source_hash = canonical_sha256(
             {"entries": [entry.model_dump(mode="json") for entry in sources]},
         )
-        semantic_type_hash = _canonical_sha256(
+        semantic_type_hash = canonical_sha256(
             {"entries": [entry.model_dump(mode="json") for entry in semantic_types]},
         )
-        identifier_type_hash = _canonical_sha256(
+        identifier_type_hash = canonical_sha256(
             {"entries": [entry.model_dump(mode="json") for entry in identifier_types]},
         )
         self._bind_content_address(
@@ -295,7 +289,7 @@ class RegistrySnapshot(BaseModel):
                 }
             )
         payload = self.model_dump(mode="json", exclude=excluded_payload_fields)
-        expected_hash = _canonical_sha256(payload)
+        expected_hash = canonical_sha256(payload)
         expected_id = f"registry-snapshot:{expected_hash}"
         if self.content_sha256 and self.content_sha256 != expected_hash:
             raise ValueError("content_sha256 does not match canonical registry content")

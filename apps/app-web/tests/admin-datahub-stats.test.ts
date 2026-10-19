@@ -370,4 +370,117 @@ const confidenceRows = [
   __setTestOpsClient(null);
 }
 
+// #434 / #1237 / #1272: stale or withheld heads must set is_degraded=true and
+// PLAUSIBILITY_SQL / CORROBORATION_SQL must exclude canary% runs.
+{
+  const capturedSqls: string[] = [];
+  const staleAndWithheldHeads = [
+    {
+      universe_id: "universe:qqq-us-2026-06-30",
+      sequence: 1,
+      advanced_at: "2026-09-21 17:48:00+00",
+      target_run_id: "capture-run:" + "a".repeat(64),
+      availability: "1.0000",
+      head_availability: "available",
+      agreed_cells: 102,
+      total_cells: 102,
+      freshness: "stale",
+      age_hours: 537.5,
+      limit_hours: 192.0,
+      staleness_reason: "older_than_8d",
+      factor_availability: {},
+    },
+    {
+      universe_id: "universe:sp500-us-2026-06-30",
+      sequence: 2,
+      advanced_at: "2026-09-01 00:00:00+00",
+      target_run_id: "capture-run:" + "b".repeat(64),
+      availability: "1.0000",
+      head_availability: "unavailable",
+      agreed_cells: 500,
+      total_cells: 500,
+      freshness: "stale",
+      age_hours: 750.0,
+      limit_hours: 192.0,
+      staleness_reason: "older_than_30d",
+      factor_availability: {},
+    },
+    {
+      universe_id: "universe:withheld-direct",
+      sequence: 3,
+      advanced_at: "2026-09-01 00:00:00+00",
+      target_run_id: "capture-run:" + "c".repeat(64),
+      availability: "unavailable",
+      agreed_cells: 20,
+      total_cells: 20,
+      freshness: "fresh",
+      age_hours: 10.0,
+      limit_hours: 72.0,
+      staleness_reason: null,
+      factor_availability: {},
+    },
+  ];
+
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      capturedSqls.push(sql);
+      if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
+        return { rows: [] } as never;
+      if (typeof sql === "string" && sql.includes("served_head"))
+        return { rows: staleAndWithheldHeads } as never;
+      if (typeof sql === "string" && sql.includes("as check"))
+        return {
+          rows: [{ check: "stub", verdict: "pass", detail: "stubbed" }],
+        } as never;
+      if (typeof sql === "string" && sql.includes("api_call_ledger"))
+        return { rows: [] } as never;
+      if (typeof sql === "string" && sql.includes("question_coverage_report"))
+        return { rows: [] } as never;
+      if (typeof sql === "string" && sql.includes("raw.fetches"))
+        return { rows: [] } as never;
+      return { rows: [] } as never;
+    },
+  } as never);
+
+  const stats = await loadDatahubStats();
+  assert(
+    stats.heads[0].is_degraded === true &&
+      stats.heads[0].degraded_reasons.some((r) => r.includes("freshness")),
+    "stale head with 1.0000 capture availability and 100% corroboration is still degraded",
+  );
+  assert(
+    stats.heads[1].is_degraded === true &&
+      stats.heads[1].is_avail_degraded === true &&
+      stats.heads[1].degraded_reasons.some((r) => r.includes("availability")),
+    "withheld head (head_availability !== 'available') is degraded on availability",
+  );
+  assert(
+    stats.heads[2].is_degraded === true &&
+      stats.heads[2].is_avail_degraded === true,
+    "head with non-numeric 'unavailable' availability is degraded",
+  );
+
+  const plausibilitySql = capturedSqls.find((s) =>
+    s.includes("'plausibility oracle' as check"),
+  );
+  const corroborationSql = capturedSqls.find((s) =>
+    s.includes("'price corroboration' as check"),
+  );
+  assert(
+    plausibilitySql !== undefined &&
+      plausibilitySql.toLowerCase().includes("not like") &&
+      plausibilitySql.toLowerCase().includes("canary%"),
+    "PLAUSIBILITY_SQL filters out synthetic canary% universes",
+  );
+  assert(
+    corroborationSql !== undefined &&
+      corroborationSql.toLowerCase().includes("not like") &&
+      corroborationSql.toLowerCase().includes("canary%"),
+    "CORROBORATION_SQL filters out synthetic canary% universes",
+  );
+
+  __setTestOpsClient(null);
+}
+
 console.log("#641 admin datahub stats loader passed");
+

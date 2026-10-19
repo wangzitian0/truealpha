@@ -476,27 +476,129 @@ INVARIANTS: tuple[Invariant, ...] = (
     Invariant(
         id="extraction-citations-resolve",
         claim=(
-            "a landed extraction fact's citation must resolve to captured bytes in raw.fetches — "
-            "a fact citing raw.fetches:N where row N does not exist is unevidenced data (#735, #70)"
+            "every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, "
+            "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
         ),
         violations="""
+            with eligible as (
+                select distinct g.cik
+                from staging.issuer_headcount_facts g
+                where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1')
+                  and (
+                      substring(g.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is not null
+                      or (
+                          g.source = '10k-extraction'
+                          and substring(g.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                      )
+                  )
+                  and substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is not null
+                  and g.knowable_at <> '2026-01-01T00:00:00Z'::timestamptz
+                  and (g.knowable_at at time zone 'UTC')::date
+                      = substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                  and (
+                      g.source <> '10k-extraction'
+                      or (
+                          substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is not null
+                          and exists (
+                              select 1 from raw.fetches r
+                              where r.id = substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                          )
+                      )
+                  )
+            )
             select
                 f.id::text,
                 f.cik::text,
                 f.source,
-                substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') as cited_raw_id
+                coalesce(
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),
+                    'missing-accession'
+                ) as cited_accession,
+                coalesce(
+                    substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'),
+                    'none'
+                ) as cited_raw_id
             from staging.issuer_headcount_facts f
-            where f.source = '10k-extraction'
-              and (
-                  substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
-                  or not exists (
-                      select 1 from raw.fetches r
-                      where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
-                  )
+            where (
+                f.source = 'curated-10k-2025'
+                or (
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null
+                    and not (
+                        f.source = '10k-extraction'
+                        and substring(f.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                    )
+                )
+                or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null
+                or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                or (f.knowable_at at time zone 'UTC')::date
+                   <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                or (
+                    f.source = '10k-extraction'
+                    and (
+                        substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
+                        or not exists (
+                            select 1 from raw.fetches r
+                            where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                        )
+                    )
+                )
+            )
+            and not (
+                (
+                    f.source = 'curated-10k-2025'
+                    or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                    or f.evidence_ref like '%#70 supersedes%'
+                )
+                and exists (select 1 from eligible e where e.cik = f.cik)
+            )
+        """,
+        population="""
+            select count(*) from staging.issuer_headcount_facts
+        """,
+    ),
+    Invariant(
+        id="quality-report-matches-core-results",
+        claim=(
+            "for every governed head in mart.served_head, the gross_profit_per_employee complete_subjects "
+            "count in mart.datahub_quality_report equals the available count in mart.topt_core_results (#1299, #1227)"
+        ),
+        violations="""
+            select
+                h.universe_id,
+                coalesce(h.run_id, h.head_run_id) as run_id,
+                coalesce(
+                    (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
+                    -1
+                )::text as report_complete_subjects,
+                (
+                    select count(*)::int
+                    from mart.topt_core_results r
+                    where r.run_id = coalesce(h.run_id, h.head_run_id)
+                      and r.availability = 'available'
+                )::text as core_available_results
+            from mart.served_head h
+            left join lateral (
+                select payload
+                from mart.datahub_quality_report
+                where run_id = coalesce(h.run_id, h.head_run_id)
+                order by created_at desc
+                limit 1
+            ) q on true
+            where h.factor_id = 'gross_profit_per_employee'
+              and coalesce(
+                  (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
+                  -1
+              ) <> (
+                  select count(*)::int
+                  from mart.topt_core_results r
+                  where r.run_id = coalesce(h.run_id, h.head_run_id)
+                    and r.availability = 'available'
               )
         """,
         population="""
-            select count(*) from staging.issuer_headcount_facts where source = '10k-extraction'
+            select count(*)
+            from mart.served_head h
+            where h.factor_id = 'gross_profit_per_employee'
         """,
     ),
 )

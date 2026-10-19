@@ -1927,90 +1927,424 @@ def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_v
     assert abs(result.value - Decimal("227476.20")) <= Decimal("0.01")
 
 
-def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_exists() -> None:
-    """#1265: multi-class issuers like Visa report CommonStockSharesOutstanding per share class
-    under `segment` (`CommonClassAMember`, `CommonClassB1Member`, `CommonClassB2Member`,
-    `CommonClassCMember`) with no unsegmented total. Distinct segments at the same
-    `(end, filed, accn)` sum into the total share count; if an unsegmented total is also
-    present in the same filing, the unsegmented total wins without double-counting."""
-    segmented_facts = {
+def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_revenue_proxy_under_533() -> None:
+    """#1263 + #533: XOM holdco CIK 2115436 reports balance-sheet Assets and CommonStockSharesOutstanding,
+    while predecessor CIK 34088 reports Revenues and NetIncomeLoss without us-gaap GrossProfit or
+    CostOfGoodsAndServicesSold (crude oil purchases use custom xom: extension tags). Merging via the
+    signed predecessor restores revenue and net_income, while SIC 2911 (`revenue_proxy_allowed=False`)
+    keeps `gross_profit=None` so Petroleum Refining never substitutes revenue for gross profit."""
+    holdco_doc = {
         "facts": {
             "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 464482000000,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
                 "CommonStockSharesOutstanding": {
                     "units": {
                         "shares": [
                             {
-                                "end": "2025-09-30",
-                                "val": 1682000000,
-                                "accn": "0001403161-25-000089",
-                                "fy": 2025,
-                                "fp": "FY",
-                                "form": "10-K",
-                                "filed": "2025-11-06",
-                                "segment": "us-gaap:CommonClassAMember",
-                            },
-                            {
-                                "end": "2025-09-30",
-                                "val": 4830000,
-                                "accn": "0001403161-25-000089",
-                                "fy": 2025,
-                                "fp": "FY",
-                                "form": "10-K",
-                                "filed": "2025-11-06",
-                                "segment": "v:CommonClassB1Member",
-                            },
-                            {
-                                "end": "2025-09-30",
-                                "val": 120000000,
-                                "accn": "0001403161-25-000089",
-                                "fy": 2025,
-                                "fp": "FY",
-                                "form": "10-K",
-                                "filed": "2025-11-06",
-                                "segment": "v:CommonClassB2Member",
-                            },
-                            {
-                                "end": "2025-09-30",
-                                "val": 9370000,
-                                "accn": "0001403161-25-000089",
-                                "fy": 2025,
-                                "fp": "FY",
-                                "form": "10-K",
-                                "filed": "2025-11-06",
-                                "segment": "us-gaap:CommonClassCMember",
-                            },
+                                "end": "2026-06-30",
+                                "val": 4111911960,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
                         ]
                     }
-                }
+                },
             }
         }
     }
-    bundle = build_bundle(segmented_facts, date(2026, 1, 15), OperatingBranch.NON_FINANCIAL)
-    assert bundle.shares_outstanding == Decimal("1816200000")
-    assert bundle.shares_period_end == date(2025, 9, 30)
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                332238000000,
+                                "2026-02-18",
+                                accn="0000034088-26-000017",
+                            )
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                28844000000,
+                                "2026-02-18",
+                                accn="0000034088-26-000017",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    cutoff = date(2026, 9, 2)
+    holdco_bundle = build_bundle(holdco_doc, cutoff, OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"cik":2115436}')
+    pred_bundle = build_bundle(pred_doc, cutoff, OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"cik":34088}')
 
-    # When an unsegmented total is also reported in the same filing, it wins without adding segments.
-    with_unsegmented = {
+    def fetcher(cik: int, _cutoff: date, _branch: OperatingBranch) -> FinancialFactsBundle:
+        return holdco_bundle if cik == 2115436 else pred_bundle
+
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=cutoff,
+        issuer_id="e0f10530-9f50-5bf0-a4c6-2c41763d1209",
+        instrument_id="f8a00530-9f50-5bf0-a4c6-2c41763d1209",
+        listing_id="a1b20530-9f50-5bf0-a4c6-2c41763d1209",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+        predecessor_signed=True,
+        revenue_proxy_allowed=False,
+        ticker="XOM",
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    payload = outcome.record.payload
+    assert payload["revenue"] == "332238000000"
+    assert payload["net_income"] == "28844000000"
+    assert payload["total_assets"] == "464482000000"
+    assert payload["shares_outstanding"] == "4111911960"
+    assert payload["gross_profit"] is None
+    assert "gross_profit" not in payload["vintage"]
+    assert payload["vintage"]["revenue"]["document"] == "companyfacts:CIK0000034088"
+    assert payload["vintage"]["total_assets"]["document"] == "companyfacts:CIK0002115436"
+
+
+def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_exists() -> None:
+    """#1265: when an issuer reports CommonStockSharesOutstanding or EntityCommonStockSharesOutstanding
+    only with per-class `segment` dimensions and no unsegmented total for that period, the per-class
+    figures in the same filing are summed into `shares_outstanding` with `shares_basis="multi_class_sum"`.
+    When an unsegmented total is also present, the unsegmented total wins (`shares_basis="point_in_time"`)."""
+    from data_engine.datahub.production_topt.sec_financial_adapter import (
+        SHARES_MULTI_CLASS_SUM,
+        SHARES_POINT_IN_TIME,
+    )
+
+    facts = _facts()
+    facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
+    facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
+        "units": {
+            "shares": [
+                {
+                    "end": "2026-07-16",
+                    "val": 1704112694,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "us-gaap:CommonClassAMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 2180148,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "v:ClassB1CommonStockMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 67498601,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "v:ClassB2CommonStockMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 10637091,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": " us-gaap:CommonClassCMember ",
+                    },
+                },
+            ]
+        }
+    }
+    cutoff = date(2026, 8, 17)
+    bundle = build_bundle(facts, cutoff, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1784428534")
+    assert bundle.shares_basis == SHARES_MULTI_CLASS_SUM
+    assert bundle.shares_period_end == date(2026, 7, 16)
+
+    item = _work_item("f" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=cutoff,
+        issuer_id="issuer:lei:V",
+        instrument_id="security:cusip:V",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    outcome = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        lambda _cik, _cutoff, _branch: bundle,
+    ).fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    validated = FinancialFactPayload.model_validate(outcome.record.payload)
+    assert validated.shares_outstanding == Decimal("1784428534")
+    assert validated.shares_basis == SHARES_MULTI_CLASS_SUM
+
+    facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"].append(
+        {
+            "end": "2026-07-16",
+            "val": 2000000000,
+            "accn": "0001403161-26-000046",
+            "fy": 2026,
+            "fp": "Q3",
+            "form": "10-Q",
+            "filed": "2026-07-23",
+        }
+    )
+    bundle_with_total = build_bundle(facts, cutoff, OperatingBranch.NON_FINANCIAL)
+    assert bundle_with_total.shares_outstanding == Decimal("2000000000")
+    assert bundle_with_total.shares_basis == SHARES_POINT_IN_TIME
+
+
+def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_refuses_dual_par_brk() -> None:
+    """#1265: SEC companyfacts strips dimensional segments from Visa's cover-page share facts,
+    leaving only a stale 2010 `dei` entry. `sec_financial_fetcher` enriches companyfacts from the
+    latest periodic iXBRL filing when all share classes share a single par value ($0.0001 for Visa),
+    while refusing Berkshire Hathaway's dual-par Class A ($5) + Class B ($0.0033) shares (#529)."""
+    from contextlib import nullcontext
+
+    from data_engine.datahub.production_topt.sec_financial_adapter import SHARES_MULTI_CLASS_SUM
+    from data_engine.datahub.standards import filing_extraction
+    from data_engine.datahub.standards.filing_extraction import FilingDocument, multi_class_share_entries
+    from data_engine.sources import sec
+
+    visa_html = b"""
+    <html><body>
+      <ix:header><ix:resources>
+        <xbrli:context id="c_a">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b1">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">v:ClassB1CommonStockMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b2">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">v:ClassB2CommonStockMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_c">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassCMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+      </ix:resources></ix:header>
+      <ix:nonFraction contextRef="c_a" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">1,691,833,241</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">4,830,173</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">120,257,385</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">4,822,010</ix:nonFraction>
+      <ix:nonFraction contextRef="c_a" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+    </body></html>
+    """
+
+    visa_facts = _facts()
+    visa_facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
+    visa_facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
+        "units": {
+            "shares": [
+                {
+                    "end": "2010-01-27",
+                    "val": 469280842,
+                    "accn": "0001193125-10-020952",
+                    "fy": 2010,
+                    "fp": "Q1",
+                    "form": "10-Q",
+                    "filed": "2010-02-03",
+                }
+            ]
+        }
+    }
+    visa_doc = FilingDocument(
+        cik=1403161,
+        accession="000140316125000089",
+        form="10-K",
+        filing_date=date(2025, 11, 6),
+        primary_document="v-20250930.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1403161/000140316125000089/v-20250930.htm",
+        body=visa_html,
+    )
+
+    orig_facts = sec.fetch_company_facts_response
+    orig_client = sec.client
+    orig_periodic = filing_extraction.latest_periodic_filing
+    sec.fetch_company_facts_response = lambda _cik: (b"{}", visa_facts)  # type: ignore[assignment]
+    sec.client = lambda: nullcontext(object())  # type: ignore[assignment]
+    filing_extraction.latest_periodic_filing = lambda *_a, **_kw: visa_doc  # type: ignore[assignment]
+    try:
+        bundle = sec_financial_fetcher(1403161, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = orig_facts  # type: ignore[assignment]
+        sec.client = orig_client  # type: ignore[assignment]
+        filing_extraction.latest_periodic_filing = orig_periodic  # type: ignore[assignment]
+
+    assert bundle.shares_outstanding == Decimal("1821742809")
+    assert bundle.shares_basis == SHARES_MULTI_CLASS_SUM
+    assert bundle.shares_period_end == date(2025, 10, 29)
+
+    brk_html = b"""
+    <html><body>
+      <ix:header><ix:resources>
+        <xbrli:context id="c_a_inst">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2026-02-17</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b_inst">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassBMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2026-02-17</xbrli:instant></xbrli:period>
+        </xbrli:context>
+      </ix:resources></ix:header>
+      <ix:nonFraction contextRef="c_a_inst" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">488,450</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b_inst" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">1,408,035,161</ix:nonFraction>
+      <ix:nonFraction contextRef="c_a_inst" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="2">5</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b_inst" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0033</ix:nonFraction>
+    </body></html>
+    """
+    brk_doc = FilingDocument(
+        cik=1067983,
+        accession="000106798326000010",
+        form="10-K",
+        filing_date=date(2026, 2, 28),
+        primary_document="brka-20251231.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1067983/000106798326000010/brka-20251231.htm",
+        body=brk_html,
+    )
+    assert multi_class_share_entries(brk_doc) == []
+
+
+def test_revenue_proxy_sets_is_revenue_proxy_on_gross_profit_vintage_only_when_used() -> None:
+    """#1255: when an approved no-COGS issuer (Visa) resolves `gross_profit` from the revenue proxy,
+    `payload["vintage"]["gross_profit"]["is_revenue_proxy"]` is True while `FinancialFactPayload`
+    (`extra="forbid"`) validates cleanly. Direct or derived `gross_profit` never sets `is_revenue_proxy`."""
+    no_cogs_facts = {
         "facts": {
             "us-gaap": {
-                "CommonStockSharesOutstanding": {
+                "Revenues": {
                     "units": {
-                        "shares": [
-                            *segmented_facts["facts"]["us-gaap"]["CommonStockSharesOutstanding"]["units"]["shares"],
+                        "USD": [
+                            _annual(
+                                "2025-09-30",
+                                "2024-10-01",
+                                40000000000,
+                                "2025-11-06",
+                                accn="0001403161-25-000089",
+                            )
+                        ]
+                    }
+                },
+                "Assets": {
+                    "units": {
+                        "USD": [
                             {
                                 "end": "2025-09-30",
-                                "val": 1800000000,
+                                "val": 99627000000,
                                 "accn": "0001403161-25-000089",
                                 "fy": 2025,
                                 "fp": "FY",
                                 "form": "10-K",
                                 "filed": "2025-11-06",
-                            },
+                            }
                         ]
                     }
-                }
-            }
+                },
+            },
+            "dei": {},
         }
     }
-    bundle_unsegmented = build_bundle(with_unsegmented, date(2026, 1, 15), OperatingBranch.NON_FINANCIAL)
-    assert bundle_unsegmented.shares_outstanding == Decimal("1800000000")
+    cutoff = date(2026, 3, 31)
+    proxy_bundle = build_bundle(no_cogs_facts, cutoff, OperatingBranch.NON_FINANCIAL)
+    assert proxy_bundle.gross_profit_is_revenue_proxy is True
+
+    item = _work_item("1" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=cutoff,
+        issuer_id="issuer:lei:V",
+        instrument_id="security:cusip:V",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        revenue_proxy_allowed=True,
+    )
+    outcome = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        lambda _cik, _cutoff, _branch: proxy_bundle,
+    ).fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    payload = outcome.record.payload
+    assert payload["gross_profit"] == "40000000000"
+    assert payload["vintage"]["gross_profit"]["is_revenue_proxy"] is True
+    validated = FinancialFactPayload.model_validate(payload)
+    assert validated.vintage is not None
+    assert validated.vintage["gross_profit"]["is_revenue_proxy"] is True
+
+    direct_bundle = build_bundle(_facts(), cutoff, OperatingBranch.NON_FINANCIAL)
+    assert direct_bundle.gross_profit_is_revenue_proxy is False
+    item_direct = _work_item("2" * 64)
+    outcome_direct = SecFinancialFactAdapter(
+        {item_direct.work_item_id: target},
+        lambda _cik, _cutoff, _branch: direct_bundle,
+    ).fetch(item_direct)
+    assert isinstance(outcome_direct, FetchSuccess)
+    assert "is_revenue_proxy" not in outcome_direct.record.payload["vintage"]["gross_profit"]

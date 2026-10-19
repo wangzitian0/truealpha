@@ -35,16 +35,15 @@ def test_every_secret_declares_a_producer() -> None:
 
 
 def test_data_engine_manifest_declares_the_identity_the_deployment_injects() -> None:
-    """#784: the three release-identity values reach the process from infra2's compose under
-    these exact names. Declared here so the deployment can be reconciled against the manifest
-    and so `truealpha_runtime.boot.assert_environment` can require them — before #784 they
-    were read straight out of `os.environ` and appeared in no contract at all."""
+    """#784, #1321: the three release-identity values reach the process under canonical names.
+    Declared here so the deployment can be reconciled against the manifest and so
+    `truealpha_runtime.boot.assert_environment` can require them."""
     manifest = env_manifest.load("apps/data-engine/required-env.generated.json")
     by_env = {field.env: field for field in manifest.fields}
     for name, source in (
-        ("TRUEALPHA_RELEASE_MANIFEST_ID", "release"),
-        ("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "release"),
-        ("TRUEALPHA_CONFIGURATION_SHA256", "release"),
+        ("RELEASE_ID", "release"),
+        ("IMAGE_DIGEST", "release"),
+        ("CONFIGURATION_SHA256", "release"),
         ("TRUEALPHA_CAPTURE_APPROVED_BY", "decision"),
     ):
         field = by_env[name]
@@ -57,7 +56,9 @@ def test_data_engine_manifest_carries_the_datahub_vendor_keys() -> None:
     by_env = {field.env: field for field in manifest.fields}
     for name in ("TWELVE_DATA_API_KEY", "OPENFIGI_API_KEY"):
         assert (by_env[name].source, by_env[name].scope, by_env[name].empty_ok) == ("human", "project", True)
-    assert by_env["SEC_USER_AGENT"].source == "human" and by_env["SEC_USER_AGENT"].injected
+    for name in ("SEC_USER_AGENT", "LLM_MODEL"):
+        field = by_env[name]
+        assert (field.source, field.injected, field.empty_ok, field.scope) == ("code", False, False, "env"), name
     assert by_env["GIT_COMMIT_SHA"].source == "release" and by_env["GIT_COMMIT_SHA"].injected
     assert by_env["DATABASE_URL"].provided_by == "truealpha/postgres:POSTGRES_PASSWORD"
     assert by_env["DATABASE_URL"].composed_env == ("TA_POSTGRES_PORT",)
@@ -113,7 +114,10 @@ def test_the_release_identity_tool_refuses_to_speak_for_an_unnamed_build(capsys)
 
 def test_validate_env_reports_missing_injected_values(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("RELEASE_ID", raising=False)
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     assert env_manifest.main(["--validate-env", "apps/data-engine/required-env.generated.json"]) == 1
     out = capsys.readouterr().out
-    assert "missing: SEC_USER_AGENT" in out and "missing: GIT_COMMIT_SHA" in out
+    assert "missing: RELEASE_ID" in out and "missing: GIT_COMMIT_SHA" in out
+    assert "missing: SEC_USER_AGENT" not in out and "missing: LLM_MODEL" not in out

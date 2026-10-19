@@ -36,10 +36,9 @@ DELETED_DATA_ENGINE_QUALITY_MODULES = (
     "strategy_samples",
 )
 
-DELETED_FACTORS_MODULES = (
-    "confidence",
-    "composite.registered_composite_probe",
-)
+# `factors.confidence` was restored in #1352 and wired into the deployed
+# `data_engine.datahub.confidence_report` (#1333).
+DELETED_FACTORS_MODULES = ("composite.registered_composite_probe",)
 
 DELETED_SCRIPTS = (
     "datahub_quality_report.py",

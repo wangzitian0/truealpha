@@ -92,6 +92,8 @@ def test_a_payload_that_yields_no_number_is_not_usable() -> None:
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "gross_profit": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "headcount": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "total_assets": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "revenue": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "shares_outstanding": None})
 
 
 def test_an_unparseable_or_absent_payload_is_not_usable() -> None:
@@ -225,6 +227,153 @@ def test_an_insurance_branch_payload_grades_available() -> None:
     }
     assert _has_usable_value("financial-fact", payload) is True
     assert _has_usable_value("financial-fact", {**payload, "gross_profit": None}) is False
+
+
+def test_financial_fact_usability_matches_topt_core_availability_across_branches_and_fields() -> None:
+    """SSOT guard (#434): `_has_usable_value('financial-fact', ...)` and `compute_topt_core`
+    must agree on every `OperatingBranch` and every nullable field of `FinancialFactPayload`.
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from data_engine.datahub.production_topt.materialization import (
+        PostgresToptCoreRepository,
+        ToptCoreSnapshot,
+        _ObservationRow,
+    )
+    from factors.production_topt import (
+        GppeV0Definition,
+        MetricAvailability,
+        MetricFreshness,
+        compute_topt_core,
+        compute_topt_gppe,
+    )
+    from truealpha_contracts.strategy import load_live_strategy_definition
+
+    cutoff = datetime(2026, 8, 14, 21, 0, tzinfo=UTC)
+    gppe_def = GppeV0Definition(risk_free_rate=Decimal("0.04"))
+    tier_def = load_live_strategy_definition()
+    identity_payload = {
+        "issuer_id": "issuer:lei:5493000C01ZX7D35SD85",
+        "instrument_id": "security:cusip:084670702",
+        "listing_id": "listing:xnys:brk.b",
+        "ticker": "BRK.B",
+    }
+    price_payload = {
+        "issuer_id": "issuer:lei:5493000C01ZX7D35SD85",
+        "instrument_id": "security:cusip:084670702",
+        "listing_id": "listing:xnys:brk.b",
+        "currency": "USD",
+        "close": "400",
+    }
+    complete_financial = {
+        "issuer_id": "issuer:lei:5493000C01ZX7D35SD85",
+        "instrument_id": "security:cusip:084670702",
+        "listing_id": "listing:xnys:brk.b",
+        "currency": "USD",
+        "gross_profit": "80000000",
+        "pre_provision_profit": "75000000",
+        "total_assets": "200000000",
+        "headcount": "392400",
+        "revenue": "100000000",
+        "shares_outstanding": "10000000",
+        "net_income": "50000000",
+        "stockholders_equity": "120000000",
+        "preferred_stock_value": "0",
+        "goodwill": "1000000",
+        "intangible_assets_net_excluding_goodwill": "500000",
+        "financial_assets": "10000000",
+        "financial_returns": "500000",
+    }
+    nullable_fields = (
+        None,
+        "gross_profit",
+        "pre_provision_profit",
+        "total_assets",
+        "headcount",
+        "revenue",
+        "shares_outstanding",
+        "net_income",
+        "stockholders_equity",
+        "preferred_stock_value",
+        "goodwill",
+        "intangible_assets_net_excluding_goodwill",
+        "financial_assets",
+        "financial_returns",
+    )
+
+    for branch in OperatingBranch:
+        for missing_field in nullable_fields:
+            fin_payload = {**complete_financial, "operating_branch": branch.value}
+            if missing_field is not None:
+                fin_payload[missing_field] = None
+            by_type = {
+                "listing-identity": _ObservationRow(
+                    obligation_id="ob:1",
+                    listing_id="listing:xnys:brk.b",
+                    semantic_type="listing-identity",
+                    observation_id="normalized-observation:" + "a" * 64,
+                    confidence=Decimal("1.00"),
+                    freshness=MetricFreshness.FRESH,
+                    knowable_at=cutoff,
+                    payload=identity_payload,
+                ),
+                "universe-membership": _ObservationRow(
+                    obligation_id="ob:2",
+                    listing_id="listing:xnys:brk.b",
+                    semantic_type="universe-membership",
+                    observation_id="normalized-observation:" + "b" * 64,
+                    confidence=Decimal("1.00"),
+                    freshness=MetricFreshness.FRESH,
+                    knowable_at=cutoff,
+                    payload=identity_payload,
+                ),
+                "market-price": _ObservationRow(
+                    obligation_id="ob:3",
+                    listing_id="listing:xnys:brk.b",
+                    semantic_type="market-price",
+                    observation_id="normalized-observation:" + "c" * 64,
+                    confidence=Decimal("1.00"),
+                    freshness=MetricFreshness.FRESH,
+                    knowable_at=cutoff,
+                    payload=price_payload,
+                ),
+                "financial-fact": _ObservationRow(
+                    obligation_id="ob:4",
+                    listing_id="listing:xnys:brk.b",
+                    semantic_type="financial-fact",
+                    observation_id="normalized-observation:" + "d" * 64,
+                    confidence=Decimal("1.00"),
+                    freshness=MetricFreshness.FRESH,
+                    knowable_at=cutoff,
+                    payload=fin_payload,
+                ),
+            }
+            member = PostgresToptCoreRepository._snapshot_member("listing:xnys:brk.b", by_type)
+            snapshot = ToptCoreSnapshot(
+                run_id="capture-run:" + "1" * 64,
+                release_manifest_id="release-manifest:" + "2" * 64,
+                universe_id="universe:topt-us-2026-03-31",
+                universe_version="v1",
+                universe_sha256="3" * 64,
+                cutoff=cutoff,
+                members=(member,),
+            )
+            (factor_input,) = snapshot.factor_inputs()
+            gppe_res = compute_topt_gppe(
+                factor_input,
+                invocation_id="topt-gppe-invocation:" + "4" * 64,
+                gppe_definition=gppe_def,
+            )
+            core_res = compute_topt_core(
+                factor_input,
+                gppe_res,
+                invocation_id="topt-core-invocation:" + "5" * 64,
+                definition=tier_def,
+            )
+            core_available = core_res.availability == MetricAvailability.AVAILABLE
+            report_usable = _has_usable_value("financial-fact", fin_payload)
+            assert report_usable is core_available, (branch, missing_field, report_usable, core_available)
 
 
 def _fact(**overrides):

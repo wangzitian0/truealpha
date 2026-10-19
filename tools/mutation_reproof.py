@@ -34,6 +34,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from truealpha_runtime.testing import DB_SKIP_GATE_MARKERS
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("mutations.json")
 # Per mutation, not per job. Without it a single hanging guard exhausts the
@@ -68,6 +70,13 @@ def load(path: Path = MANIFEST) -> list[Mutation]:
         )
         for entry in raw["mutations"]
     ]
+
+
+_SKIP_GATE_MARKERS = DB_SKIP_GATE_MARKERS
+
+
+def _skipped_under_db_gate(output: str) -> bool:
+    return any(marker in output for marker in _SKIP_GATE_MARKERS)
 
 
 def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
@@ -109,6 +118,9 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
         target.write_text(original, encoding="utf-8")
     if result.returncode != 0:
         return True, ""
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    if _skipped_under_db_gate(combined_output):
+        return False, "the guard skipped under the DB write gate instead of proving the property"
     return False, "the guard passed with the property broken"
 
 

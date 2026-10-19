@@ -228,11 +228,10 @@ _SOURCE_BY_PARSER = SOURCE_BY_PARSER
 
 # What "a usable value" means for each requested semantic. The payload contracts are the
 # ones the mart itself parses (`materialization._snapshot_member`), and the financial-fact
-# requirement is the one the factor itself consumes
-# (`factors.production_topt.core.compute_topt_gppe`: the capital charge, the denominator,
-# and the branch's operating numerator). Reading the same fields is what stops the report
-# and the page disagreeing about one run — the report used to answer 84/84 for a tick the
-# mart scored 19 available / 1 unavailable.
+# requirement covers the five core inputs (`total_assets`, `headcount`, the branch's
+# operating numerator, `revenue`, and `shares_outstanding`) that `mart.topt_core_results`
+# requires. The report and the page read the same five fields so they agree on one run —
+# the report used to answer 84/84 for a tick the mart scored 19 available / 1 unavailable.
 _IDENTITY_SEMANTICS = RELEASE_SEMANTICS
 # Mirrors `compute_topt_gppe`'s dispatch exactly: FINANCIAL scores through
 # pre-provision profit, every other branch through gross profit (the insurance
@@ -305,7 +304,16 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
         if semantic_type == "financial-fact":
             fact = FinancialFactPayload.model_validate(payload)
             numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
-            return all(value is not None for value in (fact.total_assets, fact.headcount, numerator))
+            return all(
+                value is not None
+                for value in (
+                    fact.total_assets,
+                    fact.headcount,
+                    numerator,
+                    fact.revenue,
+                    fact.shares_outstanding,
+                )
+            )
     except ValidationError:
         return False
     return False
