@@ -13,6 +13,10 @@
  */
 
 import { readFileSync } from "node:fs";
+import {
+  SWEEP_RUN_SOURCE_PATTERN as CANONICAL_SWEEP_PATTERN,
+  SWEEP_RUN_SOURCE_REGEX_SOURCE,
+} from "../src/contracts/serviceObjectives";
 import { PREVIEW_ISSUERS } from "../scripts/seed-e2e-fixture";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -84,16 +88,20 @@ assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 
 // #1362 / #1363: SWEEP_RUN_SOURCE_PATTERN in walk-tree.mjs must match serviceObjectives.ts and catch timestamped sweep sources.
 const sweepLiteral = source.match(/const SWEEP_RUN_SOURCE_PATTERN =\s*\/(.+)\/([a-z]*);/);
 assert(sweepLiteral !== null, "e2e/walk-tree.mjs no longer declares SWEEP_RUN_SOURCE_PATTERN as a regex literal");
+assert(
+  sweepLiteral[1] === SWEEP_RUN_SOURCE_REGEX_SOURCE,
+  `walk-tree.mjs SWEEP_RUN_SOURCE_PATTERN (${sweepLiteral[1]}) drifted from serviceObjectives.ts (${SWEEP_RUN_SOURCE_REGEX_SOURCE})`,
+);
 const SWEEP_RUN_SOURCE_PATTERN = new RegExp(sweepLiteral[1], sweepLiteral[2]);
 for (const sweepName of ["yfinance-20260725T0527", "moomoo-fundamentals-20260903T2059"]) {
   assert(
-    SWEEP_RUN_SOURCE_PATTERN.test(sweepName),
+    SWEEP_RUN_SOURCE_PATTERN.test(sweepName) && CANONICAL_SWEEP_PATTERN.test(sweepName),
     `SWEEP_RUN_SOURCE_PATTERN misses timestamped sweep source ${sweepName}`,
   );
 }
 for (const registeredSource of ["moomoo", "twelvedata", "sec-edgar", "yfinance"]) {
   assert(
-    !SWEEP_RUN_SOURCE_PATTERN.test(registeredSource),
+    !SWEEP_RUN_SOURCE_PATTERN.test(registeredSource) && !CANONICAL_SWEEP_PATTERN.test(registeredSource),
     `SWEEP_RUN_SOURCE_PATTERN falsely flags registered source ${registeredSource}`,
   );
 }
@@ -101,3 +109,4 @@ for (const registeredSource of ["moomoo", "twelvedata", "sec-edgar", "yfinance"]
 console.log(
   `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty & sweep-source checks verified`,
 );
+

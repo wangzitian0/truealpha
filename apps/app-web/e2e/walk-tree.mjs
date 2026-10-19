@@ -263,7 +263,7 @@ async function assertFunnelSaysSomething(page, path, problems, role) {
   }
 }
 
-const SWEEP_RUN_SOURCE_PATTERN = /-\d{8}T\d{4}$/;
+const SWEEP_RUN_SOURCE_PATTERN = /-[0-9]{8}T[0-9]{4}$/;
 
 /** #1363 / #1362 / #1277: /admin/datahub renders the plant health overview, question coverage
  * matrix, external call ledger traffic, and registered sources without leaking per-run sweep

@@ -55,3 +55,39 @@ def test_get_history_kline_hashes_bars_without_page_req_key():
     recorded = ledger._load()["calls"][-1]
     assert recorded["payload_sha256"] == hashlib.sha256(golden_raw).hexdigest()
     assert recorded["byte_length"] == len(golden_raw)
+
+
+def test_sweep_owner_plate_uses_canonical_moomoo_bytes(monkeypatch):
+    import importlib.util
+    from collections import Counter
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "sweep_moomoo_fundamentals.py"
+    spec = importlib.util.spec_from_file_location("sweep_moomoo_fundamentals", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    captured_fetches: list[dict] = []
+    monkeypatch.setattr(module.raw_store, "already_fetched", lambda conn, **kw: False)
+    monkeypatch.setattr(
+        module.raw_store,
+        "insert_fetch",
+        lambda conn, **kw: captured_fetches.append(kw) or 1,
+    )
+    monkeypatch.setattr(
+        module.mm,
+        "get_owner_plate",
+        lambda ctx, chunk, caller: [{"code": "US.NVDA", "plate_code": "US.BK2010"}],
+    )
+
+    class _Conn:
+        def commit(self):
+            pass
+
+    stats: Counter = Counter()
+    module.sweep_owner_plate(_Conn(), object(), ["US.NVDA"], stats)
+    assert len(captured_fetches) == 1
+    assert captured_fetches[0]["source_record_id"] == "owner_plate:US.NVDA"
+    assert captured_fetches[0]["body"] == mm.canonical_moomoo_bytes([{"code": "US.NVDA", "plate_code": "US.BK2010"}])
+    assert stats[("US", "owner_plate", "ok")] == 1

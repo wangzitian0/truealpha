@@ -49,11 +49,12 @@ function assert(condition: unknown, message: string): asserts condition {
         };
       }
       if (sql.includes("served_head")) {
-        // Two universes, canary first as Postgres orders them: the loader must keep both.
+        // Universes in alphabetical order: canary, topt-core, and an unscheduled staging QQQ head.
         return {
           rows: [
-            { universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z", age_hours: 12.5, freshness: "fresh", availability: "available" },
-            { universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z", age_hours: 4.2, freshness: "fresh", availability: "available" },
+            { environment: "production", universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z", age_hours: 12.5, freshness: "fresh", availability: "available" },
+            { environment: "production", universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z", age_hours: 4.2, freshness: "fresh", availability: "available" },
+            { environment: "staging", universe_id: "universe:qqq-us-t5", target_run_id: "capture-run:q".padEnd(20, "q"), sequence: 1, advanced_at: "2026-07-10T22:19:00Z", age_hours: 170.0, freshness: "stale", availability: "available", staleness_reason: "older_than_3d" },
           ],
         };
       }
@@ -73,12 +74,18 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   assert(queries[0] === "set role app_ops_reader", "the ops role must be assumed first");
   assert(outcome.data.runs !== "unavailable" && outcome.data.runs[0].durationSeconds === 252, "duration = end - start");
-  assert(outcome.data.pointers.length === 2, "one pointer row per universe, none collapsed");
+  assert(outcome.data.pointers.length === 3, "one pointer row per universe, none collapsed");
   assert(
     outcome.data.pointers[1].universeId === "topt-core" && outcome.data.pointers[1].sequence === 7,
     "the core universe survives next to the canary",
   );
   assert(outcome.data.pointers[1].ageHours === 4.2 && outcome.data.pointers[1].freshness === "fresh", "age and freshness passed through");
+  assert(
+    outcome.data.pointers[2].universeId === "universe:qqq-us-t5" &&
+      outcome.data.pointers[2].freshness === "manual" &&
+      outcome.data.pointers[2].stalenessReason === "older_than_3d",
+    "unscheduled staging universe:qqq-% head is downgraded to manual freshness (#1359, #1363)",
+  );
   assert(outcome.data.dataEngine !== null && outcome.data.dataEngine.gitSha === "4cf7291deadbeef", "data-engine build shape");
   assert(outcome.data.quotaToday[0].source === "twelve-data" && outcome.data.quotaToday[0].fetches === 21, "quota shape");
   const quotaSql = queries.find((q) => q.includes("from raw.fetches"));

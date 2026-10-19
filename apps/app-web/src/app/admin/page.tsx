@@ -76,9 +76,24 @@ export default async function AdminOverviewPage() {
         )}
         {pointers.map((pointer) => (
           <div key={pointer.universeId} className="rounded-lg border border-border bg-card px-4 py-3">
-            <dt className="text-xs uppercase tracking-wide text-gray-500">
-              Pointer · {pointer.universeId}
-            </dt>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-xs uppercase tracking-wide text-gray-500">
+                Pointer · {pointer.universeId}
+              </dt>
+              {(pointer.freshness || pointer.availability === "unavailable") && (
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
+                    pointer.availability === "unavailable" || pointer.freshness === "stale"
+                      ? "bg-rose-950/60 text-rose-400 border-rose-800"
+                      : pointer.freshness === "manual"
+                        ? "bg-zinc-800 text-zinc-300 border-zinc-700"
+                        : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
+                  }`}
+                >
+                  {pointer.availability === "unavailable" ? "unavailable" : pointer.freshness}
+                </span>
+              )}
+            </div>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
               {pointer.ageHours !== null && pointer.ageHours !== undefined
                 ? `${formatElapsedHours(pointer.ageHours)} ago`
@@ -86,6 +101,7 @@ export default async function AdminOverviewPage() {
             </dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
               seq {pointer.sequence} · {pointer.targetRunId}
+              {pointer.stalenessReason ? ` · ${pointer.stalenessReason}` : ""}
             </p>
           </div>
         ))}
