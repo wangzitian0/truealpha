@@ -10,30 +10,6 @@ error -- names, never values.
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping
-from pathlib import Path
+from infra2_sdk.manifests import assert_environment
 
-from infra2_sdk.manifests import validate_env
-
-
-def assert_environment(
-    manifest_path: str | Path, *, environ: Mapping[str, str] | None = None, require_injected: bool
-) -> None:
-    """Raise RuntimeError naming every variable `manifest_path` declares and `environ` lacks.
-
-    `require_injected` is the deployed-tier rule: values the deployment injects (release
-    identity, `APP_ENV`, the object-store endpoint) are required there and tolerated
-    absent on a laptop or in CI, where nothing injects them. An empty value counts as
-    absent. A manifest the image does not ship is its own red, named as such, because a
-    missing file must never read as a clean bill.
-    """
-    path = Path(manifest_path)
-    if not path.is_file():
-        raise RuntimeError(f"environment manifest {path} is not in the image; boot validation cannot run (#759)")
-    missing = validate_env(path, os.environ if environ is None else environ, require_injected=require_injected)
-    if missing:
-        raise RuntimeError(
-            f"environment lacks {len(missing)} value(s) {path} declares: {', '.join(missing)} "
-            f"-- names only; the deployment must inject them (#759)"
-        )
+__all__ = ["assert_environment"]
