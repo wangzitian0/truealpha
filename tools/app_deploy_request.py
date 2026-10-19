@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -19,6 +20,7 @@ SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
 CONTRACT_VERSION = 1
 _REPO_LABEL = "TrueAlpha"
+_STAGING_RUN_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/actions/runs/[1-9][0-9]*\Z")
 _SUPPORTED_DEPLOY_TYPES = (
     DeployType.PREVIEW_TAG.value,
     DeployType.STAGING.value,
@@ -32,6 +34,7 @@ __all__ = [
     "DeployType",
     "SERVICE",
     "SOURCE_REPOSITORY",
+    "_STAGING_RUN_PATH_RE",
     "canonical_json",
     "main",
     "render_request",

@@ -35,7 +35,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from infra2_sdk.refs import MANIFEST_ACCEPT, short_sha
+from infra2_sdk.refs import MANIFEST_ACCEPT, SHORT_SHA_LENGTH, short_sha  # noqa: F401
 
 #: A transient registry answer is retried this many times in total before it is a failure.
 ATTEMPTS = 3

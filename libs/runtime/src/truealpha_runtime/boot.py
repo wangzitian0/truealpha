@@ -13,4 +13,3 @@ from __future__ import annotations
 from infra2_sdk.manifests import assert_environment
 
 __all__ = ["assert_environment"]
-

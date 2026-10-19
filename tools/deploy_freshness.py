@@ -81,7 +81,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment", default="")
     parser.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--warn-only", action="store_true", default=False, help="Emit warning and exit 0 on age exceedance")
+    parser.add_argument(
+        "--warn-only", action="store_true", default=False, help="Emit warning and exit 0 on age exceedance"
+    )
     return parser
 
 

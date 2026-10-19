@@ -48,5 +48,3 @@ __all__ = [
     "identity_from_body",
     "read_deployed_release",
 ]
-
-
