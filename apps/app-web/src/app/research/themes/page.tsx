@@ -1,18 +1,15 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { formatCell, formatRatio } from "@/client/format";
+import { formatCell, formatPercentFromFraction, formatRatio, formatShortSha } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
 
 export const dynamic = "force-dynamic";
 
-function pct(value: string | null): string {
-  return value === null ? "—" : `${(Number(value) * 100).toFixed(1)}%`;
-}
-
 /** Absolute currency as the plane holds it (63,887,000,000), printed the way a filing does. */
 function millions(value: string): string {
+  if (!value || value.trim() === "") return "—";
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
   return `${(amount / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -56,8 +53,11 @@ export default async function ThemesPage() {
             <div>
               <h2 className="text-lg font-semibold">{group.theme}</h2>
               <p className="text-xs text-gray-500">
-                Definition {group.definitionVersion} ({group.definitionSha256.slice(0, 12)}) · run {group.runId} ·
-                cutoff {group.cutoff}
+                Definition {group.definitionVersion} (
+                <span className="font-mono" title={group.definitionSha256}>
+                  {formatShortSha(group.definitionSha256)}
+                </span>
+                ) · run {group.runId} · cutoff {group.cutoff}
               </p>
             </div>
             <div className="overflow-x-auto rounded-xl border border-border">
@@ -80,44 +80,53 @@ export default async function ThemesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {group.rows.map((row, index) => (
-                    <tr key={row.issuerId} className="border-t border-border">
-                      <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
-                      <th scope="row" className="px-4 py-3 font-medium">
-                        <Link
-                          href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
-                          className="text-accent hover:underline"
-                          title={row.issuerId}
-                        >
-                          {entityLabel(row.issuerId, names)}
-                        </Link>
-                      </th>
-                      <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
-                        {row.themeShare === null ? (
-                          <span className="text-gray-500">refused</span>
-                        ) : (
-                          pct(row.themeShare)
-                        )}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums">{pct(classifiedShare(row))}</td>
-                      <td className="px-4 py-3 tabular-nums">{millions(row.inThemeRevenue)}</td>
-                      <td className="px-4 py-3 tabular-nums">{millions(row.consolidatedRevenue)}</td>
-                      <td className="px-4 py-3 tabular-nums">{row.segments}</td>
-                      <td className="px-4 py-3">{row.periodEnd}</td>
-                      <td className="px-4 py-3 tabular-nums" title={row.confidence}>
-                        {formatCell(formatRatio(row.confidence))}
-                      </td>
-                      <td className="px-4 py-3 text-xs">
-                        <span title={row.extractor}>{row.availabilityStatus}</span>
-                        {row.reasonCodes.length > 0 && (
-                          <>
-                            {" "}
-                            <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {group.rows.map((row, index) => {
+                    const classified = classifiedShare(row);
+                    return (
+                      <tr key={row.issuerId} className="border-t border-border">
+                        <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
+                        <th scope="row" className="px-4 py-3 font-medium">
+                          <Link
+                            href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
+                            className="text-accent hover:underline"
+                            title={row.issuerId}
+                          >
+                            {entityLabel(row.issuerId, names)}
+                          </Link>
+                        </th>
+                        <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
+                          {row.themeShare === null ? (
+                            <span className="text-gray-500">refused</span>
+                          ) : (
+                            formatCell(formatPercentFromFraction(row.themeShare))
+                          )}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums" title={classified ?? undefined}>
+                          {formatCell(formatPercentFromFraction(classified))}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>
+                          {millions(row.inThemeRevenue)}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>
+                          {millions(row.consolidatedRevenue)}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums">{row.segments}</td>
+                        <td className="px-4 py-3">{row.periodEnd}</td>
+                        <td className="px-4 py-3 tabular-nums" title={row.confidence}>
+                          {formatCell(formatRatio(row.confidence))}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          <span title={row.extractor}>{row.availabilityStatus}</span>
+                          {row.reasonCodes.length > 0 && (
+                            <>
+                              {" "}
+                              <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

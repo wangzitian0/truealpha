@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { formatIssuerLabel } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadTrace } from "@/server/dashboard";
 import { GovernedRunNotice, TraceInputsTable } from "@/components/trace-inputs-table";
@@ -50,7 +49,7 @@ export default async function TracePage({
           <div>
             <dt className="text-gray-500">Subject / cutoff</dt>
             <dd title={state.data.issuerId} suppressHydrationWarning>
-              <span>{formatIssuerLabel(state.data.issuerId, entityLabel(state.data.issuerId, names))}</span>{" "}
+              <span>{entityLabel(state.data.issuerId, names)}</span>{" "}
               <code
                 data-evidence="true"
                 className="ml-1 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400"

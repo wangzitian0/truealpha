@@ -5,6 +5,7 @@
  * re-checks anyway (re-authorization per request, house style).
  */
 
+import { formatShortSha } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { loadOpsOverview, RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/server/admin/ops";
@@ -12,9 +13,13 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
+function formatElapsedHours(hours: number): string {
+  return hours < 1 ? `${Math.round(hours * 60)}m` : `${hours.toFixed(1)}h`;
+}
+
 function hoursSince(iso: string): string {
   const hours = (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  return hours < 1 ? `${Math.round(hours * 60)}m` : `${hours.toFixed(1)}h`;
+  return formatElapsedHours(hours);
 }
 
 export default async function AdminOverviewPage() {
@@ -76,9 +81,7 @@ export default async function AdminOverviewPage() {
             </dt>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
               {pointer.ageHours !== null && pointer.ageHours !== undefined
-                ? pointer.ageHours < 1
-                  ? `${Math.round(pointer.ageHours * 60)}m ago`
-                  : `${pointer.ageHours.toFixed(1)}h ago`
+                ? `${formatElapsedHours(pointer.ageHours)} ago`
                 : "—"}
             </dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
@@ -89,12 +92,12 @@ export default async function AdminOverviewPage() {
         <div className="rounded-lg border border-border bg-card px-4 py-3">
           <dt className="text-xs uppercase tracking-wide text-gray-500">Data engine build</dt>
           <dd className="mt-1 truncate text-lg font-semibold tabular-nums" title={dataEngine?.imageDigest}>
-            {dataEngine === null ? "unknown" : dataEngine.gitSha.slice(0, 12)}
+            {dataEngine === null ? "unknown" : formatShortSha(dataEngine.gitSha)}
           </dd>
           <p className="mt-1 truncate text-xs text-gray-500" title={dataEngine?.runId}>
             {dataEngine === null
               ? "no run has recorded its build yet"
-              : `newest run ${hoursSince(dataEngine.createdAt)} ago · app ${appGitSha.slice(0, 12)}`}
+              : `newest run ${hoursSince(dataEngine.createdAt)} ago · app ${formatShortSha(appGitSha)}`}
           </p>
         </div>
         {quotaToday.map((entry) => (
@@ -142,7 +145,9 @@ export default async function AdminOverviewPage() {
             ) : (
               runs.map((run) => (
                 <tr key={run.runId} className="border-t border-border">
-                  <td className="px-4 py-3 font-mono text-xs">{run.runId.slice(0, 12)}…</td>
+                  <td className="px-4 py-3 font-mono text-xs" title={run.runId}>
+                    {formatShortSha(run.runId)}
+                  </td>
                   <td className="px-4 py-3">{run.jobName}</td>
                   <td className="px-4 py-3">{run.status}</td>
                   <td className="px-4 py-3 tabular-nums">{run.createdAt}</td>
