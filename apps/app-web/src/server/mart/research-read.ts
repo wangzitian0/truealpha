@@ -1332,7 +1332,19 @@ function numberOrZero(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+const AVAILABILITY_VALUES: ReadonlySet<Availability> = new Set<Availability>([
+	"available",
+	"unavailable",
+	"stale",
+	"excluded",
+	"low_confidence",
+	"error",
+]);
+
 export function toAvailabilityStatus(value: unknown): Availability {
-	return value === "available" ? "available" : "unavailable";
+	return typeof value === "string" &&
+		AVAILABILITY_VALUES.has(value as Availability)
+		? (value as Availability)
+		: "unavailable";
 }
 

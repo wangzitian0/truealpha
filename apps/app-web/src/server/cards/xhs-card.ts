@@ -1069,7 +1069,7 @@ async function buildBinaryCardResponse(options: {
   const headers: Record<string, string> = {
     "Content-Type": options.headerContentType,
     "Content-Disposition": `attachment; filename="${options.filename}"`,
-    "Cache-Control": "public, max-age=300",
+    "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
   };
   if (docId) headers["X-Research-Document-Id"] = docId;
   return new Response(options.body, { status: 200, headers });
@@ -1139,7 +1139,7 @@ export async function handleCardExportGet(
       return NextResponse.json(buildEntityCardJson(cardData), {
         status: 200,
         headers: {
-          "Cache-Control": "public, max-age=300",
+          "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
         },
       });
     }
@@ -1207,7 +1207,7 @@ export async function handleCardExportGet(
     return NextResponse.json(buildRankingCardJson(cardData), {
       status: 200,
       headers: {
-        "Cache-Control": "public, max-age=300",
+        "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
       },
     });
   }
