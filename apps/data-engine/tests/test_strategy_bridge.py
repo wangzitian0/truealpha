@@ -162,6 +162,45 @@ def test_seed_strategy_inputs_zeroes_confidence_on_period_mismatch() -> None:
         assert insert_params[4] == Decimal("0.00"), f"Expected 0.00 confidence on mismatch, got {insert_params[4]}"
 
 
+class _RunConnection(_FakeConnection):
+    """`_FakeConnection`, and the run's listing-identity tickers for the ticker query of the seed."""
+
+    def __init__(self, select_rows: list[tuple], tickers: list[tuple[str, str]]) -> None:
+        super().__init__(select_rows)
+        self._tickers = tickers
+        self.ticker_reads = 0
+
+    def execute(self, sql: str, params: tuple = ()) -> _FakeCursor:
+        if "->> 'ticker'" in sql:
+            self.ticker_reads += 1
+            return _FakeCursor(self._tickers)
+        return super().execute(sql, params)
+
+
+def test_the_seed_takes_the_close_of_the_primary_class_whatever_the_listing_ids() -> None:
+    """#1347: the live seed takes `last_close` from one listing of each issuer. Production listing ids
+    are entity UUIDs that no literal names, so the old rule took the lowest listing id. Red on that
+    rule: the GOOG listing holds the lower id here, and the seed wrote the GOOG close."""
+    import data_engine.datahub.strategy_bridge as strategy_bridge
+
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    issuer = "00000000-1347-5000-8000-000000000000"
+    goog, googl = "10000000-0000-5000-8000-000000000000", "90000000-0000-5000-8000-000000000000"
+    rows = [
+        ("market-price", "0.9", {"issuer_id": issuer, "listing_id": goog, "close": "100.00"}, cutoff),
+        ("market-price", "0.9", {"issuer_id": issuer, "listing_id": googl, "close": "101.00"}, cutoff),
+    ]
+    for ordered in (rows, list(reversed(rows))):
+        fake = _RunConnection(ordered, [(goog, "GOOG"), (googl, "GOOGL")])
+
+        written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test", cutoff=cutoff)
+
+        assert written == 1
+        ((issuer_id, _cutoff, input_key, value, *_rest),) = fake.inserts
+        assert (issuer_id, input_key, value) == (issuer, "last_close", "101.00"), "the GOOGL close, never GOOG's"
+        assert fake.ticker_reads == 1, "the seed reads the run's tickers once"
+
+
 def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> None:
     """#1333 / #1352: when a `market-price` observation is reused by `(listing, session_date)`
     from a run that keyed the issuer under another namespace (e.g., `issuer:lei:...`),

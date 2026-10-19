@@ -64,12 +64,11 @@ from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 
 from data_engine import raw_store
 from data_engine.datahub.canonical_issuer import (
-    PRIMARY_LISTING_IDS,
-    SECONDARY_LISTING_IDS,
-    stored_entity_of,
+    ConflictingPredecessorError as ConflictingPredecessorError,
 )
 from data_engine.datahub.canonical_issuer import (
-    ConflictingPredecessorError as ConflictingPredecessorError,
+    stored_entity_of,
+    ticker_sort_key,
 )
 from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
@@ -370,18 +369,23 @@ def load_stored_company_facts(
 
 # -- stored issuer lineage --------------------------------------------------------------
 
+# The newest financial-fact observation of each listing of each entity, newest listing first.
 _LATEST_FINANCIAL_SQL = """
-select distinct on (named.entity_id) named.entity_id, p.normalized_payload, v.source_record_id
-from unnest(%s::text[], %s::text[]) as named (issuer_id, entity_id)
-join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = named.issuer_id
-join staging.capture_normalized_observations o on o.observation_id = p.observation_id
-join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-where o.semantic_type = 'financial-fact'
-  and o.parser_version = %s
-order by named.entity_id,
-         (p.normalized_payload ->> 'listing_id' = any(%s)) desc,
-         (p.normalized_payload ->> 'listing_id' = any(%s)) asc,
-         o.recorded_at desc, o.knowable_at desc, o.observation_id desc
+select entity_id, normalized_payload, source_record_id
+from (
+    select distinct on (named.entity_id, p.normalized_payload ->> 'listing_id')
+           named.entity_id, p.normalized_payload, v.source_record_id,
+           p.normalized_payload ->> 'listing_id' as listing_id, o.recorded_at, o.knowable_at
+    from unnest(%s::text[], %s::text[]) as named (issuer_id, entity_id)
+    join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = named.issuer_id
+    join staging.capture_normalized_observations o on o.observation_id = p.observation_id
+    join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+    where o.semantic_type = 'financial-fact'
+      and o.parser_version = %s
+    order by named.entity_id, p.normalized_payload ->> 'listing_id',
+             o.recorded_at desc, o.knowable_at desc, o.observation_id desc
+) newest
+order by entity_id, recorded_at desc, knowable_at desc, listing_id
 """
 
 
@@ -389,22 +393,33 @@ def latest_financial_observations(
     connection: psycopg.Connection[Any],
     ids_by_entity: Mapping[str, Sequence[str]],
     *,
+    known_at: datetime,
     parser_version: str = PARSER_VERSION,
 ) -> dict[str, tuple[dict[str, Any], str]]:
-    """Per entity, the payload and source record id of the newest financial-fact observation
-    recorded under any of the entity's ids (#1257: a legacy id and the entity UUID name one issuer)."""
+    """Per entity, the payload and source record id of the financial-fact observation of its preferred listing.
+
+    The candidates are the observations recorded under any of the entity's ids (#1257: a legacy id and
+    the entity UUID name one issuer). The ticker of each listing selects the listing (``ticker_sort_key``,
+    #1347). ``_ticker_of`` reads that ticker at ``known_at``. The primary share class comes first, then
+    the ticker text. Inside one ticker the newest observation wins, then the lower listing id.
+    An observation id never selects between two listings. One tick writes every listing of an issuer
+    with one ``recorded_at`` and one ``knowable_at``, so that order changed from tick to tick.
+    """
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
     rows = connection.execute(
         _LATEST_FINANCIAL_SQL,
-        (
-            [issuer_id for issuer_id, _ in pairs],
-            [entity_id for _, entity_id in pairs],
-            parser_version,
-            sorted(PRIMARY_LISTING_IDS),
-            sorted(SECONDARY_LISTING_IDS),
-        ),
+        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], parser_version),
     ).fetchall()
-    return {str(entity_id): (dict(payload), str(record_id)) for entity_id, payload, record_id in rows}
+    candidates: dict[str, list[tuple[dict[str, Any], str]]] = {}
+    for entity_id, payload, record_id in rows:
+        candidates.setdefault(str(entity_id), []).append((dict(payload), str(record_id)))
+    # `min` keeps the first of equal keys, and the rows of one entity come newest first.
+    return {
+        entity_id: min(
+            found, key=lambda item: ticker_sort_key(_ticker_of(str(item[0]["listing_id"]), connection, known_at))
+        )
+        for entity_id, found in candidates.items()
+    }
 
 
 def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, known_at: datetime | None) -> str | None:
@@ -522,6 +537,7 @@ def canonical_history_issuers(
     observations = latest_financial_observations(
         connection,
         {entity: sorted({entity, *ids}) for entity, ids in ids_by_entity.items()},
+        known_at=known_at,
         parser_version=parser_version,
     )
     issuers: list[HistoryIssuer] = []

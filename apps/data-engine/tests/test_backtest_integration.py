@@ -34,8 +34,11 @@ from financial_lineage_seed import (  # noqa: E402
     MemoryStore,
     Observed,
     SeededIssuer,
+    ShareClass,
+    backfill_issuer,
     mint_issuer,
     seed_financial_lineage,
+    seed_tick,
 )
 
 Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
@@ -803,11 +806,8 @@ def test_a_stale_periodic_series_and_a_stale_recorded_only_input_do_not_exclude(
 UNPRICED_LINEAGE_AT = datetime(2024, 2, 3, tzinfo=UTC)
 
 
-def test_a_selected_symbol_without_stored_bars_stays_cash_and_the_limitations_name_its_cutoffs(seeded) -> None:
-    """#1265. Staging, v0.1.11: the strategy selected GOOG at two cutoffs, and the store held no GOOG bar.
-    Half of the portfolio stayed cash, and the stored limitations named only the benchmark side. Red
-    on the code before the fix: no limitation names T1265N or its cutoffs."""
-    connection = seeded["connection"]
+def _seed_unpriced_issuer(connection: psycopg.Connection) -> SeededIssuer:
+    """Issuer g (T1265N): the cheapest issuer at each cutoff, so each cutoff selects it. No bar is stored."""
     issuer = mint_issuer(
         connection, lei=_lei("g"), mic="XNAS", ticker="T1265N", cik=758_000 + ord("g"), known_at=MINTED_AT
     )
@@ -826,15 +826,53 @@ def test_a_selected_symbol_without_stored_bars_stays_cash_and_the_limitations_na
         store=MemoryStore(),
         cutoff=UNPRICED_LINEAGE_AT,
     )
-    # The cheapest issuer at each cutoff, so each cutoff selects it. No bar of T1265N is stored.
     _seed_inputs(connection, {"g": issuer}, {cutoff: {"g": "0.5"} for cutoff in (Q1, Q2, Q3)})
+    return issuer
+
+
+def _seed_flat_series(connection: psycopg.Connection, symbol: str, *, skip: frozenset[date] = frozenset()) -> None:
+    """Flat unadjusted and split-adjusted bars of one symbol on each fixture session that `skip` omits."""
+    bars = [
+        PriceBarRecord(symbol, day, Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(1000))
+        for day in _sessions()
+        if day not in skip
+    ]
+    insert_market_prices_daily(connection, bars, adjust="none")
+    insert_market_prices_daily(connection, bars, adjust="splits")
+
+
+def test_a_selected_symbol_without_any_bar_stops_the_run_and_names_its_cutoffs(seeded) -> None:
+    """#1347, decision 4. Production, 2026-10-15: the run selected GOOG, the store held no GOOG bar, and
+    47% of the portfolio stayed cash for three months while the run reported success. Red on the code
+    before the fix: the run succeeded. Now the nightly op fails with the symbol and its cutoffs, writes
+    no run, and records a red verdict."""
+    connection = seeded["connection"]
+    _seed_unpriced_issuer(connection)
+    runs_before = connection.execute("select count(*) from mart.backtest_runs").fetchone()[0]
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_op()
+
+    assert str(raised.value) == "no daily bars for selected symbols: T1265N (2024-03-31, 2024-06-30, 2024-09-30)"
+    assert seeded["verdicts"][-1][0] is False
+    assert connection.execute("select count(*) from mart.backtest_runs").fetchone()[0] == runs_before
+
+
+def test_a_selected_symbol_without_an_open_on_its_fill_session_stays_cash_and_the_limitations_name_it(
+    seeded,
+) -> None:
+    """#1265, kept by #1347: T1265N has bars, but none on 2024-04-01, the fill session of Q1. That weight
+    stays cash at Q1 only. The run succeeds, and its limitations name the symbol and the cutoff."""
+    connection = seeded["connection"]
+    _seed_unpriced_issuer(connection)
+    _seed_flat_series(connection, "T1265N", skip=frozenset({date(2024, 4, 1)}))
 
     outcome = _run_backtest(connection)
 
     assert outcome.inserted is True, "the run does not fail for an unfilled selection"
     payload = _run_row(connection, outcome.run_id)["metrics_payload"]
     assert all("T1265N" in entry["weights"] for entry in payload["cutoffs"]), "each cutoff must select g"
-    assert [entry["unfilled_symbols"] for entry in payload["cutoffs"]] == [["T1265N"], ["T1265N"], ["T1265N"]]
+    assert [entry["unfilled_symbols"] for entry in payload["cutoffs"]] == [["T1265N"], [], []]
     cash = connection.execute(
         "select cash_weight from mart.backtest_valuations where run_id = %s and resolution = '1D' "
         "and valuation_date = '2024-04-01'",
@@ -842,6 +880,59 @@ def test_a_selected_symbol_without_stored_bars_stays_cash_and_the_limitations_na
     ).fetchone()[0]
     assert Decimal("0.45") < cash < Decimal("0.55"), f"the half weight of T1265N stays cash: {cash}"
     assert (
-        "The strategy selected T1265N at 2024-03-31, 2024-06-30, 2024-09-30, but no open existed on the fill "
-        "session, so the weight it could not buy stayed cash."
+        "The strategy selected T1265N at 2024-03-31, but no open existed on the fill session, so the weight it "
+        "could not buy stayed cash."
     ) in payload["limitations"]
+
+
+# -- #1347: the ticker of a two-class issuer ------------------------------------------------------
+
+#: Alphabet as the universe corpus keys it: Class A trades as GOOGL (the primary class), Class C as GOOG.
+ALPHABET_CLASSES = (ShareClass("GOOGL", "02079K305"), ShareClass("GOOG", "02079K107"))
+#: The legacy capture that the entity backfill reads, and a later tick under the entity UUIDs.
+ALPHABET_BACKFILLED_AT = datetime(2024, 1, 5, tzinfo=UTC)
+ALPHABET_TICK = datetime(2024, 2, 1, tzinfo=UTC)
+
+
+@pytest.fixture
+def alphabet(connection, request: pytest.FixtureRequest) -> dict[str, Any]:
+    """`seeded`, and Alphabet minted by `staging.entity_backfill()` from its legacy ids, as production
+    minted it. The backfill runs before `seeded`, so it reads the Alphabet capture only."""
+    store = MemoryStore()
+    issuer = backfill_issuer(
+        connection,
+        lei="5493006MHB84DD0ZWV18",
+        mic="XNAS",
+        classes=ALPHABET_CLASSES,
+        cik=1_652_044,
+        known_at=ALPHABET_BACKFILLED_AT,
+        store=store,
+    )
+    return {**request.getfixturevalue("seeded"), "alphabet": issuer, "alphabet_store": store}
+
+
+@pytest.mark.parametrize("larger_id", ["GOOGL", "GOOG"])
+def test_the_run_binds_the_primary_class_of_a_two_class_issuer_for_either_observation_id_order(
+    alphabet, larger_id: str
+) -> None:
+    """#1347. Production, 2026-10-15: one tick wrote the GOOGL and GOOG listings with one recorded_at and
+    one knowable_at. The order fell to observation_id, and the run bound GOOG. Red on the code before
+    the fix when GOOG holds the larger observation id: GOOG is selected and never fills."""
+    connection, issuer = alphabet["connection"], alphabet["alphabet"]
+    seed_tick(
+        connection,
+        issuer,
+        legacy=False,
+        knowable_at=ALPHABET_TICK,
+        larger_id_ticker=larger_id,
+        store=alphabet["alphabet_store"],
+    )
+    _seed_inputs(connection, {"alphabet": issuer}, {cutoff: {"alphabet": "0.5"} for cutoff in (Q1, Q2, Q3)})
+    _seed_flat_series(connection, "GOOGL")  # The price store holds GOOGL bars and no GOOG bar, as production does.
+
+    outcome = _run_backtest(connection)
+
+    payload = _run_row(connection, outcome.run_id)["metrics_payload"]
+    assert [issuer.canonical_issuer_id, "GOOGL", "non_financial"] in payload["binding"]["issuers"]
+    assert all("GOOGL" in entry["weights"] for entry in payload["cutoffs"]), "each cutoff must select Alphabet"
+    assert [entry["unfilled_symbols"] for entry in payload["cutoffs"]] == [[], [], []]
