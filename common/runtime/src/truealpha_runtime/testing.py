@@ -66,7 +66,7 @@ def load_tool(name: str) -> ModuleType:
     # AttributeError from dataclasses._is_type.
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module
+    return sys.modules.get(spec.name, module)
 
 
 def skip_or_fail(reason: str) -> None:

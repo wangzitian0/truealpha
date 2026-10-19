@@ -172,7 +172,7 @@ REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
-    "tools/schema_drift.py": "prose in a docstring, no query",
+    "common/runtime/src/truealpha_tools/schema_drift.py": "prose in a docstring, no query",
 }
 SCANNED_ROOTS = ("apps", "common", "tools")
 SCANNED_SUFFIXES = {".py", ".ts", ".tsx", ".sql", ".sh"}

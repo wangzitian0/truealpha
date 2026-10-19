@@ -102,8 +102,10 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
 )
 
 #: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
-_IMAGE_COPY = Path("/app/tools/output_invariants.py")
-_REPO_COPY = Path(__file__).resolve().parents[5] / "tools" / "output_invariants.py"
+_IMAGE_COPY = Path("/app/common/runtime/src/truealpha_tools/output_invariants.py")
+_REPO_COPY = (
+    Path(__file__).resolve().parents[5] / "common" / "runtime" / "src" / "truealpha_tools" / "output_invariants.py"
+)
 
 
 def _suite_path() -> Path:

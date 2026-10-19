@@ -331,7 +331,7 @@ def test_the_walk_checks_out_the_released_tag_not_whatever_main_has_become() -> 
 def test_the_sender_and_the_contract_agree_on_whose_staging_run_counts() -> None:
     """infra2#571 blocker 2: the sender required an infra2 receiver-run URL while
     infra2's verifier required this repo's own staging run."""
-    cli = (REPO_ROOT / "tools/app_deploy_request.py").read_text(encoding="utf-8")
+    cli = (REPO_ROOT / "common/runtime/src/truealpha_tools/app_deploy_request.py").read_text(encoding="utf-8")
     assert '_STAGING_RUN_PATH_RE = re.compile(r"\\A/wangzitian0/truealpha/actions/runs/' in cli
     workflow = source(RELEASE)
     assert "https://github.com/wangzitian0/truealpha/actions/runs/" in workflow
@@ -1183,14 +1183,34 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
         for member in ("apps/data-engine", "apps/llm-service", "common/contracts", "common/factors", "common/runtime")
     } | {"truealpha_runtime", "truealpha_contracts", "data_engine", "factors"}
 
-    def imports(script: Path) -> set[str]:
+    tools_src = REPO_ROOT / "common/runtime/src/truealpha_tools"
+
+    def imports(script: Path, seen: set[Path] | None = None) -> set[str]:
+        seen = set() if seen is None else seen
+        seen.add(script)
         tree = ast.parse(script.read_text(encoding="utf-8"))
         names: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                names.update(alias.name.split(".")[0] for alias in node.names)
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    if top == "truealpha_tools" and "." in alias.name:
+                        sub = tools_src / f"{alias.name.split('.')[1]}.py"
+                        if sub.is_file() and sub not in seen:
+                            names |= imports(sub, seen)
+                    else:
+                        names.add(top)
             elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                names.add(node.module.split(".")[0])
+                top = node.module.split(".")[0]
+                if top == "truealpha_tools":
+                    parts = node.module.split(".")
+                    candidates = [parts[1]] if len(parts) > 1 else [alias.name for alias in node.names]
+                    for cand in candidates:
+                        sub = tools_src / f"{cand}.py"
+                        if sub.is_file() and sub not in seen:
+                            names |= imports(sub, seen)
+                else:
+                    names.add(top)
         return names
 
     offenders = []
@@ -1249,22 +1269,38 @@ def _module_level_imports(tool: str, seen: set[str] | None = None) -> set[str]:
     The walk reads the code that runs at start: top-level statements and the `__main__` block.
     It skips function bodies and `if TYPE_CHECKING:` bodies, because that code does not run at start.
     It skips a `try` body whose handler catches an import failure, because that import is optional.
-    A module in `tools/` is not an install. The walk follows it into its own imports.
+    A module in `tools/` or `common/runtime/src/truealpha_tools/` is not an external install.
+    The walk follows it into its own imports.
     """
     seen = set() if seen is None else seen
     seen.add(tool)
     tools_dir = REPO_ROOT / "tools"
+    tools_src = REPO_ROOT / "common/runtime/src/truealpha_tools"
     names: set[str] = set()
+    subtools: set[str] = set()
 
     def visit(body: list[ast.stmt]) -> None:
         for node in body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if isinstance(node, ast.Import):
-                names.update(alias.name.split(".")[0] for alias in node.names)
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    if top == "truealpha_tools" and "." in alias.name:
+                        subtools.add(alias.name.split(".")[1])
+                    else:
+                        names.add(top)
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
-                    names.add(node.module.split(".")[0])
+                    top = node.module.split(".")[0]
+                    if top == "truealpha_tools":
+                        parts = node.module.split(".")
+                        if len(parts) > 1:
+                            subtools.add(parts[1])
+                        else:
+                            subtools.update(alias.name for alias in node.names)
+                    else:
+                        names.add(top)
             elif isinstance(node, ast.If) and "TYPE_CHECKING" in {
                 getattr(node.test, "id", None),
                 getattr(node.test, "attr", None),
@@ -1288,8 +1324,15 @@ def _module_level_imports(tool: str, seen: set[str] | None = None) -> set[str]:
                     if isinstance(child, list):
                         visit(child)
 
-    visit(ast.parse((tools_dir / f"{tool}.py").read_text(encoding="utf-8")).body)
+    source_file = tools_dir / f"{tool}.py"
+    if not source_file.is_file():
+        source_file = tools_src / f"{tool}.py"
+    visit(ast.parse(source_file.read_text(encoding="utf-8")).body)
     needed: set[str] = set()
+    for sub in subtools:
+        if (tools_src / f"{sub}.py").is_file() and f"truealpha_tools.{sub}" not in seen:
+            seen.add(f"truealpha_tools.{sub}")
+            visit(ast.parse((tools_src / f"{sub}.py").read_text(encoding="utf-8")).body)
     for name in names:
         if (tools_dir / f"{name}.py").is_file() or (tools_dir / name / "__init__.py").is_file():
             if name not in seen:

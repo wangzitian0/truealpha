@@ -79,6 +79,14 @@ on:
       - "common/runtime/tests/test_pytest_shard.py"
       - "common/runtime/tests/test_scheduler_liveness.py"
       - "common/runtime/tests/test_walk_evidence.py"
+      - "common/runtime/src/truealpha_tools/check_factor_contract.py"
+      - "common/runtime/src/truealpha_tools/escalate_issue.py"
+      - "common/runtime/src/truealpha_tools/mutation_reproof.py"
+      - "common/runtime/src/truealpha_tools/nightly_verdicts.py"
+      - "common/runtime/src/truealpha_tools/output_invariants.py"
+      - "common/runtime/src/truealpha_tools/pytest_shard.py"
+      - "common/runtime/src/truealpha_tools/scheduler_liveness.py"
+      - "common/runtime/src/truealpha_tools/walk_evidence.py"
       - "tools/check_factor_contract.py"
       - "tools/cut_release.sh"
       - "tools/escalate_issue.py"
@@ -165,7 +173,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tools
+          sparse-checkout: |
+            tools
+            common/runtime/src/truealpha_tools
           persist-credentials: false
       - name: File or update the tracking issue
         env:
@@ -205,7 +215,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tools
+          sparse-checkout: |
+            tools
+            common/runtime/src/truealpha_tools
           persist-credentials: false
       - name: Resolve the tracking issue
         env:

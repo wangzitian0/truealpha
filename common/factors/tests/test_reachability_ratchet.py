@@ -29,7 +29,7 @@ def _tool():
     assert spec.loader is not None
     sys.modules["reachability_ratchet"] = module
     spec.loader.exec_module(module)
-    return module
+    return sys.modules["reachability_ratchet"]
 
 
 @pytest.fixture(scope="module")
