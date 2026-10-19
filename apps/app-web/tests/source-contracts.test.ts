@@ -488,12 +488,29 @@ console.log(
 	for (const file of listFiles(join(process.cwd(), "src"))) {
 		const code = withoutComments(readFileSync(file, "utf8"));
 		assert(
-			!/\bfunction\s+cell\s*\(/.test(code),
+			!/\b(?:function\s+cell\s*\(|(?:const|let|var)\s+cell\s*=)/.test(code),
 			`${file} defines a duplicate local cell() helper; import formatCell from @/client/format`,
+		);
+		if (!file.endsWith("format.ts")) {
+			assert(
+				!/\b(?:function\s+(?:formatTierLabel|tierLabel)\s*\(|(?:const|let|var)\s+(?:formatTierLabel|tierLabel)\s*=)/.test(
+					code,
+				),
+				`${file} defines a duplicate local tierLabel/formatTierLabel helper; import formatTierLabel from @/client/format`,
+			);
+		}
+	}
+
+	for (const file of listFiles(join(process.cwd(), "src/app/research"))) {
+		const code = withoutComments(readFileSync(file, "utf8"));
+		assert(
+			!/\b(?:const|let|var)\s+STRATEGY_ID\s*=/.test(code) &&
+				!code.includes('"large_model_value_v0"'),
+			`${file} hardcodes the dashboard strategy ID; import DASHBOARD_STRATEGY_ID from @/server/mart/research-read`,
 		);
 	}
 	console.log(
-		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell is SSOT",
+		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell/formatTierLabel/DASHBOARD_STRATEGY_ID are SSOT",
 	);
 }
 

@@ -9,18 +9,18 @@
  * only.
  */
 
+import Link from "next/link";
 import { exclusionLabel } from "@/contracts/exclusion-reasons";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
+import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
-const STRATEGY_ID = "large_model_value_v0";
-
 export default async function CoveragePage() {
   const principal = await getServerPrincipal();
-  const outcome = await loadStrategyRunPage(principal, STRATEGY_ID);
+  const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
 
   if (outcome.kind !== "ready") {
     return (
@@ -72,8 +72,14 @@ export default async function CoveragePage() {
           <tbody>
             {decisions.map((decision) => (
               <tr key={decision.issuer_id} className="border-t border-border">
-                <th scope="row" className="px-4 py-3 font-medium" title={decision.issuer_id}>
-                  {entityLabel(decision.issuer_id, names)}
+                <th scope="row" className="px-4 py-3 font-medium">
+                  <Link
+                    href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
+                    className="text-accent hover:underline"
+                    title={decision.issuer_id}
+                  >
+                    {entityLabel(decision.issuer_id, names)}
+                  </Link>
                 </th>
                 <td className="px-4 py-3">
                   {decision.exclusion_reason === null ? (

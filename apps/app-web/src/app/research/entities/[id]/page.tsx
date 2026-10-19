@@ -481,7 +481,7 @@ export default async function EntityDetailPage({
             </h2>
             <div className="overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-left text-sm">
-                <caption className="sr-only">{resolvedIssuerId} across cutoffs</caption>
+                <caption className="sr-only">{displayName} across cutoffs</caption>
                 <thead className="bg-card text-xs uppercase text-gray-500">
                   <tr>
                     <th scope="col" className="px-4 py-3">Cutoff</th>

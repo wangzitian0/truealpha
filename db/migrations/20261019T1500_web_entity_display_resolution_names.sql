@@ -16,12 +16,13 @@ with entity_tickers as (
     select distinct on (entity_id)
         entity_id,
         case
-            when scheme = 'mic-ticker' then split_part(value, ':', 2)
+            when scheme = 'mic-ticker' then upper(split_part(value, ':', 2))
             when scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'
             then upper(split_part(value, ':', 3))
         end as ticker
     from staging.entity_aliases
-    where scheme in ('mic-ticker', 'legacy-id')
+    where (scheme = 'mic-ticker' and nullif(btrim(split_part(value, ':', 2)), '') is not null)
+       or (scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$')
     order by entity_id, (scheme = 'mic-ticker') desc, confidence desc, transaction_time desc, alias_id desc
 ),
 latest_members as (
@@ -71,9 +72,10 @@ issuer_names as (
 issuer_legacy_ids as (
     select distinct on (entity_id)
         entity_id,
-        value as legacy_id
+        btrim(value) as legacy_id
     from staging.entity_aliases
     where scheme = 'legacy-id'
+      and nullif(btrim(value), '') is not null
     order by entity_id, confidence desc, transaction_time desc, alias_id desc
 ),
 constituent_names as (
@@ -118,7 +120,7 @@ left join issuer_legacy_ids il on il.entity_id = rt.issuer_uuid
 left join staging.kg_entities e on e.id = rt.issuer_id
 left join staging.kg_entities e_legacy on e_legacy.id = il.legacy_id
 left join issuer_names inam on inam.entity_id = rt.issuer_uuid
-left join constituent_names cn on cn.ticker = rt.ticker
+left join constituent_names cn on cn.ticker = upper(rt.ticker)
 order by rt.issuer_id;
 $view$;
 begin

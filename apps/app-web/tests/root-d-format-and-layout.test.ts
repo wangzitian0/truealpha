@@ -32,6 +32,7 @@ import {
   formatRatio,
   formatShortSha,
   formatSignedRatio,
+  formatTierLabel,
   formatUsdMagnitude,
   signColor,
 } from "../src/client/format";
@@ -379,6 +380,10 @@ const { default: HoldingsPage } = await import("../src/app/research/holdings/pag
   assert(signColor("0.4200") === "text-emerald-400", "positive valuationGap must use text-emerald-400");
   assert(formatCell(null) === "—", "formatCell(null) must render em-dash");
   assert(formatShortSha("abcdef0123456789") === "abcdef012345…", "formatShortSha must truncate to 12 chars");
+  assert(formatTierLabel("large_model_native") === "Large Model Native", "formatTierLabel must format large_model_native");
+  assert(formatTierLabel("tech") === "Tech", "formatTierLabel must format tech");
+  assert(formatTierLabel("traditional") === "Traditional", "formatTierLabel must format traditional");
+  assert(formatTierLabel(null) === "—" && formatTierLabel(undefined) === "—", "formatTierLabel must render em-dash for nullish");
 
   const compareHtml = renderToStaticMarkup(await ComparePage({ searchParams: Promise.resolve({}) }));
   assert(compareHtml.includes("$3.38M"), `ComparePage must render $3.38M: ${compareHtml}`);

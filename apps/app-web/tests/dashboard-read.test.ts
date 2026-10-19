@@ -357,6 +357,51 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
   const traceFromUuid = await loadTrace(TEST_CONTEXT, uuidCoord, cutoff, crossCoordAdapter);
   assert(traceFromUuid.kind === "ready", `expected ready trace for UUID coordinate, got ${traceFromUuid.kind}`);
   assert(traceFromUuid.data.issuerId === legacyCoord, `expected trace issuerId ${legacyCoord}`);
+
+  const reverseForwardedIds: Record<string, string> = {};
+  const reverseCoordAdapter = new StrategyRunReadAdapter(
+    repositoryReturning({
+      ...emptyReport(),
+      decisions: [{ ...decisionRow, issuer_id: uuidCoord }],
+    }),
+    async (fn) =>
+      fn({
+        query: async (sql: string, params?: readonly unknown[]) => {
+          if (sql.includes("select entity_id::text as entity_id")) {
+            return { rows: [{ entity_id: uuidCoord, legacy_id: legacyCoord }] };
+          }
+          if (sql.includes("from mart.issuer_theme_purity")) {
+            reverseForwardedIds.themePurity = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.topt_gppe_results")) {
+            reverseForwardedIds.gppeDetail = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.issuer_analyst_ratings")) {
+            reverseForwardedIds.analystRatings = String(params?.[0] ?? "");
+          } else if (sql.includes("from mart.issuer_supply_chain_exposure")) {
+            reverseForwardedIds.supplyChainExposure = String(params?.[0] ?? "");
+          }
+          return { rows: [] };
+        },
+      }),
+  );
+  const detailFromLegacy = await loadEntityDetail(TEST_CONTEXT, legacyCoord, reverseCoordAdapter);
+  assert(detailFromLegacy.kind === "ready", `expected ready for legacy coordinate, got ${detailFromLegacy.kind}`);
+  assert(
+    detailFromLegacy.data.issuerId === uuidCoord && detailFromLegacy.data.rows.length === 1,
+    `expected canonical issuerId ${uuidCoord}, got ${detailFromLegacy.data.issuerId}`,
+  );
+  for (const [loader, receivedId] of Object.entries(reverseForwardedIds)) {
+    assert(
+      receivedId === uuidCoord,
+      `loadEntityDetail must forward resolved ${uuidCoord} to ${loader}, got ${receivedId}`,
+    );
+  }
+  assert(
+    Object.keys(reverseForwardedIds).length === 4,
+    `expected all 4 detail loaders to run with resolved UUID issuerId, got ${JSON.stringify(reverseForwardedIds)}`,
+  );
+  const traceFromLegacy = await loadTrace(TEST_CONTEXT, legacyCoord, cutoff, reverseCoordAdapter);
+  assert(traceFromLegacy.kind === "ready", `expected ready trace for legacy coordinate, got ${traceFromLegacy.kind}`);
+  assert(traceFromLegacy.data.issuerId === uuidCoord, `expected trace issuerId ${uuidCoord}`);
 }
 
 console.log("#370/#371 dashboard read loaders + adapter states passed");

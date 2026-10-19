@@ -426,6 +426,40 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   }
 }
 
+/** #1358: Follow the first entity detail link from `/research/rankings` in the populated state so
+ * `/research/entities/[id]` (which is excluded from `livePages` because its route pattern contains `[`)
+ * is exercised in every populated e2e walk. */
+async function assertEntityDetailRenders(page, path, problems) {
+  if (path !== "/research/rankings" || DATA_STATE !== "populated") return;
+
+  const href = await page
+    .locator('a[href^="/research/entities/"]')
+    .first()
+    .getAttribute("href", { timeout: 15000 })
+    .catch(() => null);
+  if (href === null) {
+    problems.push("entity-detail: /research/rankings offers no /research/entities/[id] link in the populated state");
+    return;
+  }
+
+  const response = await gotoStable(page, `${BASE}${href}`);
+  const status = response ? response.status() : null;
+  if (status === null || status >= 400) {
+    problems.push(`entity-detail: ${href} answered HTTP ${status}`);
+    return;
+  }
+  const section = page.locator('section[aria-labelledby="entity-heading"]');
+  try {
+    await section.locator("#entity-heading").waitFor({ state: "visible", timeout: 15000 });
+  } catch {
+    problems.push(`entity-detail: #entity-heading is not visible on ${href}`);
+    return;
+  }
+  await assertNoVisibleRawIds(page, href, problems);
+  const leak = (await section.innerText()).match(/\bundefined\b|\[object Object\]|\bNaN\b/);
+  if (leak) problems.push(`entity-detail: ${href} shows "${leak[0]}"`);
+}
+
 /** Navigate deterministically, and survive a saturated host without hiding a real outage.
  *
  * `waitUntil: "networkidle"` was the previous wait everywhere here. Playwright's own docs
@@ -472,7 +506,8 @@ async function checkRoute(page, path, role, pageErrors = []) {
   await assertCurrentNavLink(page, path, problems);
   await assertFunnelSaysSomething(page, path, problems, role);
   await assertDatahubPlantHealth(page, path, problems, role);
-  // Last, because it navigates away from this page.
+  // Last, because these navigate away from this page.
+  await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
   for (const err of pageErrors) {
     problems.push(`pageerror: ${err}`);

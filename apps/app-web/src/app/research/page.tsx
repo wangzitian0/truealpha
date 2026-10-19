@@ -23,6 +23,7 @@ import {
 	entityLabel,
 	loadEntityDisplayMap,
 } from "@/server/mart/entity-resolution";
+import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { describeServedRunAge } from "./served-run-age";
 
@@ -32,7 +33,7 @@ export default async function ResearchOverviewPage() {
 	const principal = await getServerPrincipal();
 	if (!principal) redirect("/login?from=%2Fresearch");
 	const state = await loadOverview(principal.context);
-	const strategy = await loadStrategyRunPage(principal, "large_model_value_v0");
+	const strategy = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
 	const names = await loadEntityDisplayMap();
 	const usability = summarizeUniverseUsability(
 		strategy.kind === "ready" ? strategy.report.decisions : [],
@@ -139,9 +140,14 @@ export default async function ResearchOverviewPage() {
 										<th
 											scope="row"
 											className="px-4 py-3 font-medium"
-											title={decision.issuer_id}
 										>
-											{entityLabel(decision.issuer_id, names)}
+											<Link
+												href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
+												className="text-accent hover:underline"
+												title={decision.issuer_id}
+											>
+												{entityLabel(decision.issuer_id, names)}
+											</Link>
 										</th>
 										<td className="px-4 py-3">{formatCell(decision.tier)}</td>
 										<td
