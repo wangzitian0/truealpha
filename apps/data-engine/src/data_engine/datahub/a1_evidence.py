@@ -1,26 +1,17 @@
-"""Bind a captured run to its release manifest and advance the governed pointer
-*only when the run's quality report meets the accepted service objectives*
-(#378 / #429 P2 / #536).
+"""Bind a captured run to its release manifest, advance the governed pointer, and
+record unmet service objectives as degraded status (#378 / #429 P2 / #536).
 
 Called by the deployed pipeline after the quality report persists. The capture executor
 already appended this run's own evidence — the run node plus every raw-fetch and
 normalized-observation node it produced — so this step adds only what capture cannot
 know: the release-manifest node and the `bound_to` edge, then advances
 ``mart.current_pointer`` so consumers resolve the head through
-``mart.current_pointer_head`` (init.md rule 26) instead of an ORDER BY.
+``mart.served_head`` / ``mart.current_pointer_head`` (init.md rule 26) instead of an ORDER BY.
 
-#536: the advance used to be guarded by retry idempotency alone. The report was built
-and persisted two statements earlier in the same transaction and its numbers were never
-read, so a run that corroborated nothing still became the head App, MCP and `/chat`
-serve — three consecutive Production heads did exactly that. The advance is now gated on
-``ACCEPTED_SERVICE_OBJECTIVES``, the thresholds `docs/datahub-service-demand.md` already
-declares.
-
-A refused advance is a first-class outcome, not an exception. The run, its report and its
-evidence nodes still persist — that is the record of the bad day, and discarding it would
-destroy what explains the stall. Only the governed head stays put, so consumers keep
-serving the last accepted run and the stuck head becomes the visible signal
-(`topt-gppe-repository.ts` already falls back, and the funnel view reports pointer age).
+Under the strong-dashboard weak-gate policy, the governed pointer advances monotonically
+so consumers serve fresh data at cutoff, while ``unmet_objectives`` grades the run against
+``ACCEPTED_SERVICE_OBJECTIVES`` (`docs/datahub-service-demand.md`) and records any unmet
+objectives on the registration and quality report for `/admin/datahub` observability.
 """
 
 from __future__ import annotations

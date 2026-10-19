@@ -139,6 +139,16 @@ def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
         raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
 
 
+def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) -> Cell:
+    """Classify one observed cell as answered or unavailable with a deterministic reason."""
+    if status == "available" and value is not None:
+        return Cell(str(subject_id), True)
+    if status == "available" and value is None:
+        return Cell(str(subject_id), False, "null_metric_value")
+    reason = (list(reason_codes or []) or [status or UNRECORDED_REASON])[0]
+    return Cell(str(subject_id), False, str(reason))
+
+
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
         """
@@ -152,13 +162,7 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
         subject_id, availability_status, availability, reason_codes = row[:4]
         gppe_val = row[4] if len(row) > 4 else Decimal("1")
         status = availability_status or availability  # rows written before #747 carry only `availability`
-        if status == "available" and gppe_val is not None:
-            cells.append(Cell(str(subject_id), True))
-        elif status == "available" and gppe_val is None:
-            cells.append(Cell(str(subject_id), False, "null_metric_value"))
-        else:
-            reason = (list(reason_codes or []) or [status or UNRECORDED_REASON])[0]
-            cells.append(Cell(str(subject_id), False, str(reason)))
+        cells.append(_classify_cell(subject_id, status, reason_codes, gppe_val))
     return tuple(cells)
 
 
@@ -218,13 +222,7 @@ def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     for row in rows:
         fund_id, availability_status, reason_codes = row[:3]
         gap_val = row[3] if len(row) > 3 else Decimal("1")
-        if availability_status == "available" and gap_val is not None:
-            cells.append(Cell(str(fund_id), True))
-        elif availability_status == "available" and gap_val is None:
-            cells.append(Cell(str(fund_id), False, "null_metric_value"))
-        else:
-            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
-            cells.append(Cell(str(fund_id), False, str(reason)))
+        cells.append(_classify_cell(fund_id, availability_status, reason_codes, gap_val))
     return tuple(cells)
 
 
@@ -254,13 +252,11 @@ def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
         subject = str(issuer_id)
         if answered.get(subject) and answered[subject].answered:
             continue
-        if availability_status == "available" and share_val is not None:
-            answered[subject] = Cell(subject, True)
-        elif availability_status == "available" and share_val is None:
-            answered.setdefault(subject, Cell(subject, False, "null_metric_value"))
+        cell = _classify_cell(subject, availability_status, reason_codes, share_val)
+        if cell.answered:
+            answered[subject] = cell
         else:
-            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
-            answered.setdefault(subject, Cell(subject, False, str(reason)))
+            answered.setdefault(subject, cell)
     return tuple(answered[key] for key in sorted(answered))
 
 
@@ -273,17 +269,10 @@ def supply_chain_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
         """,
         (run_id,),
     ).fetchall()
-    cells = []
-    for row in rows:
-        issuer_id, availability_status, reason_codes, score = row
-        if availability_status == "available" and score is not None:
-            cells.append(Cell(str(issuer_id), True))
-        elif availability_status == "available" and score is None:
-            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
-        else:
-            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
-            cells.append(Cell(str(issuer_id), False, str(reason)))
-    return tuple(cells)
+    return tuple(
+        _classify_cell(issuer_id, availability_status, reason_codes, score)
+        for issuer_id, availability_status, reason_codes, score in rows
+    )
 
 
 def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
@@ -295,17 +284,10 @@ def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell
         """,
         (run_id,),
     ).fetchall()
-    cells = []
-    for row in rows:
-        issuer_id, availability_status, reason_codes, rating = row
-        if availability_status == "available" and rating is not None:
-            cells.append(Cell(str(issuer_id), True))
-        elif availability_status == "available" and rating is None:
-            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
-        else:
-            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
-            cells.append(Cell(str(issuer_id), False, str(reason)))
-    return tuple(cells)
+    return tuple(
+        _classify_cell(issuer_id, availability_status, reason_codes, rating)
+        for issuer_id, availability_status, reason_codes, rating in rows
+    )
 
 
 def classify_question(

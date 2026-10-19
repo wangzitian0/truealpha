@@ -75,12 +75,12 @@ class _Tables:
             self._rows = [(self.strategy, "strategy-run:x")] if self.strategy else []
         elif "from mart.issuer_theme_purity" in text and "group by run_id" in text:
             self._rows = [(self.themes, NOW)] if self.themes else []
+        elif "from mart.question_coverage_report" in text:
+            self._rows = list(self.coverage)
         elif "from mart.current_pointer_head" in text or "from mart.served_head" in text:
             self._rows = [(self.holdings,)] if self.holdings else []
         elif "from mart.fund_virtual_company" in text:
             self._rows = [(self.funds,)]
-        elif "from mart.question_coverage_report" in text:
-            self._rows = list(self.coverage)
         elif "from staging.issuer_segment_revenue_facts" in text:
             self._rows = [(self.partitions,)]
         else:
@@ -687,20 +687,38 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
     assert count == (len(THEMES),), "one fill row for each governed theme"
 
 
-def _typescript_query(name: str) -> str:
-    """The text of a `const <name> = ...;` query of the App's theme reader, with `$1` as `%s`."""
+def _typescript_query(name: str, rel_path: str = "apps/app-web/src/server/mart/theme-purity.ts") -> str:
+    """The text of a `const <name> = ...;` query in `rel_path`, with `$1` as `%s`."""
     import re
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/mart/theme-purity.ts").read_text()
+    source = (Path(__file__).resolve().parents[3] / rel_path).read_text()
     match = re.search(rf"const {name} = `(?P<sql>.*?)`;", source, re.S)
-    assert match is not None, f"theme-purity.ts no longer declares {name}"
+    assert match is not None, f"{rel_path} no longer declares {name}"
     return match.group("sql").replace("$1", "%s")
 
 
 def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
     """The proof names `LATEST_RUN_SQL` as the reader it mirrors. A change to one text must change both."""
     assert " ".join(_typescript_query("LATEST_RUN_SQL").split()) == " ".join(surface_proof._THEMES_HEAD_SQL.split())
+
+
+def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() -> None:
+    """`surface_proof` mirrors `fund-valuation.ts` `QQQ_POINTER_HEAD_SQL` and `datahub-stats.ts`
+    `QUESTION_COVERAGE_SQL`; guard both so a filter added on one side cannot drift from the other."""
+    holdings_ts = " ".join(
+        _typescript_query("QQQ_POINTER_HEAD_SQL", "apps/app-web/src/server/mart/fund-valuation.ts").split()
+    )
+    holdings_py = " ".join(surface_proof._HOLDINGS_HEAD_SQL.replace("%%", "%").split())
+    assert holdings_ts == holdings_py
+
+    coverage_ts = " ".join(
+        _typescript_query("QUESTION_COVERAGE_SQL", "apps/app-web/src/server/admin/datahub-stats.ts").split()
+    )
+    coverage_py = " ".join(surface_proof._COVERAGE_HEAD_SQL.split())
+    assert coverage_ts.startswith("select distinct on (universe_id) ")
+    assert coverage_py.startswith("select distinct on (universe_id) ")
+    assert coverage_ts.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
 
 
 def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
