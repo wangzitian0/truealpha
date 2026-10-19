@@ -30,8 +30,7 @@ import {
   PEG_GROWTH_CONVENTIONS,
   type AccessContext,
 } from "../src/contracts/strategyRun";
-import { handleCardExportGet } from "../src/app/research/api/cards/export/route";
-import { XHS_CARD_HEIGHT, XHS_CARD_WIDTH } from "../src/server/cards/xhs-card";
+import { handleCardExportGet, XHS_CARD_HEIGHT, XHS_CARD_WIDTH } from "../src/server/cards/xhs-card";
 import { loadEntityDetail, loadRanking } from "../src/server/dashboard";
 import {
   assertStableId,
@@ -289,6 +288,12 @@ const TEST_CONTEXT: AccessContext = {
   assert(
     libraryPageSource.includes("data-evidence={document.documentId}"),
     "AC4: /research/library/page.tsx must wrap document.documentId in data-evidence so UUIDs pass walk-tree.mjs",
+  );
+  const routeModule = await import("../src/app/research/api/cards/export/route");
+  const exportedKeys = Object.keys(routeModule).sort();
+  assert(
+    exportedKeys.join(",") === "GET,dynamic",
+    `AC4: route.ts must export only valid Next.js Route fields (GET,dynamic), got ${exportedKeys.join(",")}`,
   );
 }
 
