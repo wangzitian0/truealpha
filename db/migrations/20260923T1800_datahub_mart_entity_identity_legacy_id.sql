@@ -18,7 +18,7 @@ with active_aliases as (
         alias.value,
         row_number() over (
             partition by staging.entity_survivor(alias.entity_id, 'infinity'), alias.scheme
-            order by alias.confidence desc, alias.transaction_time desc
+            order by alias.confidence desc, alias.transaction_time desc, alias.alias_id desc
         ) as rn
     from staging.entity_aliases alias
     where staging.entity_alias_valid_to(alias.alias_id, 'infinity') is null
@@ -56,7 +56,15 @@ issuer_tickers as (
       on dt.survivor_id = r_listed.to_entity_id
     where r_issues.relation_type = 'issues'
       and dt.ticker is not null
-    order by r_issues.from_entity_id, r_issues.transaction_time desc
+    order by r_issues.from_entity_id,
+             case
+                 when dt.ticker = 'GOOGL' then 0
+                 when dt.ticker = 'GOOG' then 2
+                 else 1
+             end,
+             r_issues.transaction_time desc,
+             dt.ticker asc,
+             r_issues.relation_id desc
 ),
 instrument_tickers as (
     select distinct on (r_listed.from_entity_id)
@@ -67,7 +75,10 @@ instrument_tickers as (
       on dt.survivor_id = r_listed.to_entity_id
     where r_listed.relation_type = 'listed_as'
       and dt.ticker is not null
-    order by r_listed.from_entity_id, r_listed.transaction_time desc
+    order by r_listed.from_entity_id,
+             r_listed.transaction_time desc,
+             dt.ticker asc,
+             r_listed.relation_id desc
 ),
 direct_names as (select survivor_id, value as name from latest_by_scheme where scheme = 'name'),
 legacy_aliases as (
@@ -101,7 +112,15 @@ issuer_listings as (
       on dl.survivor_id = r_listed.to_entity_id
     where r_issues.relation_type = 'issues'
       and dl.listing_id is not null
-    order by r_issues.from_entity_id, r_issues.transaction_time desc
+    order by r_issues.from_entity_id,
+             case
+                 when dl.listing_id = 'listing:xnas:googl' then 0
+                 when dl.listing_id = 'listing:xnas:goog' then 2
+                 else 1
+             end,
+             r_issues.transaction_time desc,
+             dl.listing_id asc,
+             r_issues.relation_id desc
 )
 select
     e.entity_id,

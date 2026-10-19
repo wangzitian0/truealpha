@@ -158,6 +158,8 @@ def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
 
 
 def _parse_edgar_cik(body: bytes) -> int | None:
+    if b"<feed" in body and b"<entry>" not in body:
+        return None
     match = re.search(rb"CIK=(\d{4,10})", body)
     return int(match.group(1)) if match else None
 

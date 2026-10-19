@@ -188,6 +188,18 @@ def test_the_edgar_atom_cik_parses() -> None:
         _parse_edgar_cik(b'<link href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000004904&amp;type=10-K"/>')
         == 4904
     )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><entry><link href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000004904&amp;type=10-K"/></entry></feed>'
+        )
+        == 4904
+    )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><link rel="alternate" href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001821349&amp;type=10-K"/></feed>'
+        )
+        is None
+    )
     assert _parse_edgar_cik(b"<feed>no cik here</feed>") is None
 
 

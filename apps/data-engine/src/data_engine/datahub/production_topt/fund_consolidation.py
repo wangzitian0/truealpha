@@ -53,6 +53,10 @@ from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
 left join (
     select coalesce(ei.listing_id, c.listing_id) as listing_id,
+           coalesce(
+               case when ei_issuer.cik is not null then 'issuer:cik:' || lpad(ei_issuer.cik, 10, '0') end,
+               c.issuer_id
+           ) as issuer_cik_entity,
            c.valuation_gap,
            c.availability,
            c.confidence,
@@ -70,9 +74,12 @@ left join (
       on status.result_id = c.result_id
     left join mart.entity_identity ei
       on ei.entity_id::text = c.listing_id
+    left join mart.entity_identity ei_issuer
+      on ei_issuer.entity_id::text = c.issuer_id
     where c.run_id = %(run_id)s
 ) core
   on core.listing_id = h.listing_id
+  or (starts_with(h.issuer_entity, 'issuer:cik:') and core.issuer_cik_entity = h.issuer_entity)
 order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name
 """
 
