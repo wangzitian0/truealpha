@@ -208,6 +208,7 @@ def test_evaluate_red_when_capture_stamped_by_different_digest() -> None:
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == RED
     assert "its capture is stamped by" in proof.summary
+    connection.execute.assert_called_with(release_fetch_proof.IDENTITY_SQL, ("capture-run-xyz",))
 
 
 def test_evaluate_ok_when_all_origins_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,8 +483,10 @@ def test_fetched_by_origin_aggregates_counts_and_filters_none() -> None:
     class FakeConnection:
         def __init__(self, rows: list[tuple[str, str, int]]) -> None:
             self._rows = rows
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
         def execute(self, query: str, params: tuple[Any, ...]) -> FakeCursor:
+            self.calls.append((query, params))
             return FakeCursor(self._rows)
 
     rows = [
@@ -494,6 +497,7 @@ def test_fetched_by_origin_aggregates_counts_and_filters_none() -> None:
     fake_conn = FakeConnection(rows)
     result = fetched_by_origin(fake_conn, "cap-1")  # type: ignore[arg-type]
     assert result == {"yahoo-chart:v1": 10, "twelve-data:v1": 20}
+    assert fake_conn.calls == [(release_fetch_proof.FETCHED_SQL, ("cap-1",))]
 
 
 def test_evaluate_recovers_when_earlier_run_had_missing_origins_but_later_run_succeeds(

@@ -103,6 +103,7 @@ _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_i
 _COVERAGE_HEAD_SQL = """
 select distinct on (universe_id) universe_id, run_id, payload
 from mart.question_coverage_report
+where universe_id in (select universe_id from mart.served_head)
 order by universe_id, created_at desc
 """
 #: What the theme lane had to work with, for a MISMATCH line on an empty table: the accepted
