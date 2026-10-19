@@ -465,6 +465,11 @@ async function walkRoutes(browser, { role, email, password }) {
   page.on("pageerror", (error) => {
     pageErrors.push(error.message || String(error));
   });
+  page.on("console", (msg) => {
+    if (msg.type() === "error" && /Minified React error #\d+|Hydration failed|hydration mismatch/i.test(msg.text())) {
+      pageErrors.push(`console.error: ${msg.text()}`);
+    }
+  });
 
   let failures = 0;
   for (const path of livePages) {

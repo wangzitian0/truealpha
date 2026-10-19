@@ -15,6 +15,7 @@ import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resoluti
 import { unvisitedReasonText } from "@/server/mart/theme-purity";
 import {
   decodeRouteParam,
+  formatCell,
   formatPercentFromFraction,
   formatRatio,
   formatSignedRatio,
@@ -23,10 +24,6 @@ import {
 } from "@/client/format";
 
 export const dynamic = "force-dynamic";
-
-function cell(value: string | null | undefined): string {
-  return value ?? "—";
-}
 
 function tierLabel(tier: string | null | undefined): string {
   if (!tier) return "—";
@@ -183,7 +180,7 @@ export default async function EntityDetailPage({
                         {label.metric}
                       </div>
                       <div className="mt-1 font-mono text-2xl font-bold text-white" title={label.value}>
-                        {formatUsdMagnitude(label.value) ?? cell(label.value)}
+                        {formatUsdMagnitude(label.value) ?? formatCell(label.value)}
                       </div>
                     </div>
                   ))
@@ -193,7 +190,7 @@ export default async function EntityDetailPage({
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400">Cap-Adj Gross Profit</span>
                   <span className="font-mono text-gray-300" title={capitalAdjustedGrossProfit ?? undefined}>
-                    {formatUsdMagnitude(capitalAdjustedGrossProfit) ?? cell(capitalAdjustedGrossProfit)}
+                    {formatUsdMagnitude(capitalAdjustedGrossProfit) ?? formatCell(capitalAdjustedGrossProfit)}
                   </span>
                 </div>
               </div>
@@ -285,7 +282,7 @@ export default async function EntityDetailPage({
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Consensus Rating (1–5)</div>
                       <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m4-consensus-rating">
-                        {formatRatio(analystRatings.consensusRating) ?? cell(analystRatings.consensusRating)}
+                        {formatRatio(analystRatings.consensusRating) ?? formatCell(analystRatings.consensusRating)}
                       </div>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
@@ -370,7 +367,7 @@ export default async function EntityDetailPage({
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Scenario Exposure Score</div>
                       <div className="mt-1 font-mono text-xl font-bold text-sky-400" data-testid="m3-exposure-score">
-                        {formatRatio(supplyChainExposure.exposureScore) ?? cell(supplyChainExposure.exposureScore)}
+                        {formatRatio(supplyChainExposure.exposureScore) ?? formatCell(supplyChainExposure.exposureScore)}
                       </div>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
@@ -382,7 +379,7 @@ export default async function EntityDetailPage({
                     <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
                       <div className="text-xs text-gray-400">Max Partner Share</div>
                       <div className="mt-1 font-mono text-xl font-bold text-gray-200" data-testid="m3-max-partner-share">
-                        {formatPercentFromFraction(supplyChainExposure.maxPartnerShare) ?? cell(supplyChainExposure.maxPartnerShare)}
+                        {formatPercentFromFraction(supplyChainExposure.maxPartnerShare) ?? formatCell(supplyChainExposure.maxPartnerShare)}
                       </div>
                     </div>
                   </div>
@@ -512,7 +509,7 @@ export default async function EntityDetailPage({
                         {row.cutoffAt}
                       </th>
                       <td className="px-4 py-3 font-mono">
-                        {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? cell(row.capitalAdjustedLaborEfficiency)}
+                        {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
                         {row.capitalAdjustedLaborEfficiency !== null && (
                           <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
                             {row.laborEfficiencyMetric ?? UNRECORDED_METRIC}
@@ -520,7 +517,7 @@ export default async function EntityDetailPage({
                         )}
                       </td>
                       <td className="px-4 py-3 font-mono">
-                        {formatRatio(row.currentPriceToSales) ?? cell(row.currentPriceToSales)}
+                        {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
                       </td>
                       <td className="px-4 py-3 font-mono">
                         {row.currentMultiple
@@ -529,11 +526,11 @@ export default async function EntityDetailPage({
                       </td>
                       <td className="px-4 py-3">{tierLabel(row.tier)}</td>
                       <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`}>
-                        {formatSignedRatio(row.valuationGap) ?? cell(row.valuationGap)}
+                        {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
                       </td>
                       <td className="px-4 py-3 font-mono">
                         {convention === "historical_cagr"
-                          ? (formatRatio(row.peg ?? null) ?? cell(row.peg))
+                          ? (formatRatio(row.peg ?? null) ?? formatCell(row.peg))
                           : "—"}
                       </td>
                       <td className="px-4 py-3">

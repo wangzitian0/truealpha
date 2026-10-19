@@ -5,7 +5,7 @@ import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { formatRatio, formatSignedRatio, signColor } from "@/client/format";
+import { formatCell, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
 import {
@@ -17,10 +17,6 @@ import {
 } from "@/contracts/strategyRun";
 
 export const dynamic = "force-dynamic";
-
-function cell(value: string | null): string {
-  return value ?? "—";
-}
 
 function buildRankingsHref(params: {
   cursor?: string | null;
@@ -196,33 +192,33 @@ export default async function RankingsPage({
                           {entityLabel(row.issuerId, names)}
                         </Link>
                       </th>
-                      <td className="px-4 py-3">{cell(row.tier)}</td>
+                      <td className="px-4 py-3">{formatCell(row.tier)}</td>
                       <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
-                        {cell(formatRatio(row.currentPriceToSales))}
+                        {formatCell(formatRatio(row.currentPriceToSales))}
                       </td>
                       <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
-                        {cell(formatRatio(row.currentMultiple))}
+                        {formatCell(formatRatio(row.currentMultiple))}
                       </td>
                       <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
-                        {cell(formatRatio(row.targetMultiple))}
+                        {formatCell(formatRatio(row.targetMultiple))}
                       </td>
                       <td
                         className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}
                         title={row.valuationGap ?? undefined}
                       >
-                        {cell(formatSignedRatio(row.valuationGap))}
+                        {formatCell(formatSignedRatio(row.valuationGap))}
                       </td>
                       <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
-                        <div>{cell(formatRatio(rowPeg))}</div>
+                        <div>{formatCell(formatRatio(rowPeg))}</div>
                         {rowPeg === null && pegReasons.length > 0 && (
                           <div className="mt-0.5 font-mono text-[11px] text-amber-400" data-testid="peg-reason-codes">
                             {pegReasons.join(", ")}
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-3 tabular-nums">{cell(rowPegRank?.toString() ?? null)}</td>
+                      <td className="px-4 py-3 tabular-nums">{formatCell(rowPegRank?.toString() ?? null)}</td>
                       <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                        {cell(formatRatio(row.confidence))}
+                        {formatCell(formatRatio(row.confidence))}
                       </td>
                       <td className="px-4 py-3">
                         <AvailabilityBadge status={row.availability} />

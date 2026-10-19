@@ -432,22 +432,23 @@ console.log(
 }
 
 // ---------------------------------------------------------------------------
-// #1358: one route-segment decoder across all [id] pages, and one bidirectional
-// issuer-coordinate SQL predicate across mart detail loaders.
+// #1358: one route-segment decoder across all dynamic [param]/page.tsx routes,
+// one bidirectional issuer-coordinate SQL predicate across mart detail loaders,
+// and no local cell() helper anywhere in src/.
 // ---------------------------------------------------------------------------
 {
-	const dynamicPages = listFiles(join(process.cwd(), "src/app")).filter(
-		(file) => file.includes("[id]") && file.endsWith("page.tsx"),
+	const dynamicPages = listFiles(join(process.cwd(), "src/app")).filter((file) =>
+		/\[[^\]]+\]\/page\.tsx$/.test(file),
 	);
 	assert(
 		dynamicPages.length >= 3,
-		`expected at least 3 [id]/page.tsx routes, found ${dynamicPages.length}`,
+		`expected at least 3 dynamic [param]/page.tsx routes, found ${dynamicPages.length}`,
 	);
 	for (const file of dynamicPages) {
 		const code = executableCode(readFileSync(file, "utf8"));
 		assert(
 			code.includes("decodeRouteParam("),
-			`${file} must decode its dynamic [id] segment with decodeRouteParam() from @/client/format (#1358)`,
+			`${file} must decode its dynamic route segment with decodeRouteParam() from @/client/format (#1358)`,
 		);
 		assert(
 			!code.includes("decodeURIComponent("),
@@ -464,15 +465,26 @@ console.log(
 		"entityAnalystRatings",
 		"entitySupplyChainExposure",
 	] as const) {
-		const body = researchReadRaw
-			.split(`async ${method}(`, 2)[1]
-			.split(/\n\tasync |\n\}\s*$/, 2)[0];
+		const parts = researchReadRaw.split(`async ${method}(`, 2);
+		assert(
+			parts.length === 2,
+			`${method}() not found in src/server/mart/research-read.ts`,
+		);
+		const body = parts[1].split(/\n\tasync |\n\}\s*$/, 2)[0];
 		assert(
 			body.includes("this.bidirectionalIssuerPredicate("),
 			`${method}() must use this.bidirectionalIssuerPredicate() rather than inlining a one-way identity query (#1358)`,
 		);
 	}
+
+	for (const file of listFiles(join(process.cwd(), "src"))) {
+		const code = withoutComments(readFileSync(file, "utf8"));
+		assert(
+			!/\bfunction\s+cell\s*\(/.test(code),
+			`${file} defines a duplicate local cell() helper; import formatCell from @/client/format`,
+		);
+	}
 	console.log(
-		"ok  every [id]/page.tsx uses decodeRouteParam and detail loaders use bidirectionalIssuerPredicate",
+		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell is SSOT",
 	);
 }

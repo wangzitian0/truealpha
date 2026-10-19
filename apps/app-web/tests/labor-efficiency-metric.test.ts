@@ -103,5 +103,19 @@ assertSameJson(
   "scale-4 publishedGppe and scale-2 rounded strategyValue of the same metric collapse to one entry",
 );
 
-console.log("labor-efficiency-metric: 7 checks passed");
+// 8. Blank/whitespace strings are not parsed as numeric 0 and never falsely deduplicate against "0".
+assertSameJson(
+  laborEfficiencyLabels({
+    publishedGppe: "0",
+    strategyValue: "   ",
+    strategyMetric: PUBLISHED_GPPE_METRIC,
+  }),
+  [
+    { metric: PUBLISHED_GPPE_METRIC, value: "0" },
+    { metric: PUBLISHED_GPPE_METRIC, value: "   " },
+  ],
+  "whitespace strategyValue must not coerce to 0 and collapse into publishedGppe 0",
+);
+
+console.log("labor-efficiency-metric: 8 checks passed");
 
