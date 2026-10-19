@@ -36,10 +36,17 @@ export interface EntityDisplay {
 // A plain join would then return that display row twice. DISTINCT ON keeps one row for each
 // entity. The smallest legacy_id wins, and NULL sorts last.
 // tests/mart-entity-display-map.test.ts seeds this case.
-export const ENTITY_DISPLAY_SQL = `select r.issuer_id, r.ticker, r.display_name, ei.legacy_id
+export const ENTITY_DISPLAY_SQL = `select r.issuer_id,
+       coalesce(nullif(btrim(r.ticker), ''), nullif(btrim(ei.current_ticker), '')) as ticker,
+       coalesce(nullif(btrim(r.display_name), ''), nullif(btrim(ei.name), '')) as display_name,
+       ei.legacy_id
        from mart.entity_display_resolution r
        left join (
-         select distinct on (e.entity_id::text) e.entity_id::text as issuer_id, e.legacy_id
+         select distinct on (e.entity_id::text)
+                e.entity_id::text as issuer_id,
+                e.current_ticker,
+                e.name,
+                e.legacy_id
          from mart.entity_identity e
          order by e.entity_id::text, e.legacy_id
        ) ei on ei.issuer_id = r.issuer_id`;

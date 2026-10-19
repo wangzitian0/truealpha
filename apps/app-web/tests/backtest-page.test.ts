@@ -95,9 +95,22 @@ try {
     assert(detail.includes(item), `the detail page lost the limitation: ${item}`);
   }
 
+  // #1358 AC1: Next.js passes percent-encoded dynamic segment params when the id contains ':'.
+  const encodedDetail = renderToStaticMarkup(
+    await BacktestDetailPage({ params: Promise.resolve({ id: encodeURIComponent(runId) }) }),
+  );
+  assert(
+    encodedDetail.includes('data-price-basis="unadjusted_open_explicit_splits"'),
+    "BacktestDetailPage must decode percent-encoded run_id params without throwing notFound()",
+  );
+
   // The list page shows the basis and the ceiling for each run, and no VectorBT claim.
   const list = renderToStaticMarkup(await BacktestListPage());
   assert(list.includes(runId), "the list page lost the inserted run");
+  assert(
+    list.includes(`/research/backtest/${encodeURIComponent(runId)}`),
+    "the list page must percent-encode run_id in the detail link href",
+  );
   assert(list.includes('data-claim-ceiling="price_return_no_dividends"'), "the list page lost the claim ceiling");
   assert(!/vectorbt/i.test(list), "the list page names VectorBT");
   assert(list.includes("Limitations (2)"), "the list page lost the count of limitations");

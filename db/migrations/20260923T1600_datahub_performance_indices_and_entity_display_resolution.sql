@@ -168,16 +168,13 @@ left join staging.kg_entities e on e.id = lm.issuer_id
 order by lm.issuer_id;
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_display_resolution') is null
-       or pg_get_viewdef(to_regclass('mart.entity_display_resolution'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20261019T1500_web_entity_display_resolution_names.sql redefines
+    -- mart.entity_display_resolution later in the chain (#1358) and owns its definition and comment.
+    -- Replacing it here would replace the view twice on every boot replay, so this definition
+    -- creates the view only on a database that has none.
+    if to_regclass('mart.entity_display_resolution') is null then
         execute 'create or replace view mart.entity_display_resolution as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 
-comment on view mart.entity_display_resolution is
-    '#987: issuer -> ticker/display_name for consumer rendering with fast entity_aliases lookup supporting both UUID entities and legacy string IDs.';

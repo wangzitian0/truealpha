@@ -14,6 +14,7 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { unvisitedReasonText } from "@/server/mart/theme-purity";
 import {
+  decodeRouteParam,
   formatPercentFromFraction,
   formatRatio,
   formatSignedRatio,
@@ -35,19 +36,6 @@ function tierLabel(tier: string | null | undefined): string {
   return tier;
 }
 
-/** Next.js does NOT decode a dynamic route segment for us here (verified
- * live against this app's Next.js version — see #373/#424's PR discussion):
- * an encodeURIComponent'd link leaves the raw percent-encoded string in
- * params.id. Malformed percent-encoding (e.g. `/entities/%E0`) must not
- * 500 the route. */
-function decodeIssuerId(id: string): string {
-  try {
-    return decodeURIComponent(id);
-  } catch {
-    return id;
-  }
-}
-
 export default async function EntityDetailPage({
   params,
   searchParams,
@@ -60,10 +48,11 @@ export default async function EntityDetailPage({
   const { id } = await params;
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const convention = normalizePegConvention(resolvedSearchParams.convention);
-  const issuerId = decodeIssuerId(id);
+  const issuerId = decodeRouteParam(id);
   const state = await loadEntityDetail(principal.context, issuerId);
+  const resolvedIssuerId = state.kind === "ready" ? state.data.issuerId : issuerId;
   const names = await loadEntityDisplayMap();
-  const displayName = entityLabel(issuerId, names);
+  const displayName = entityLabel(resolvedIssuerId, names);
 
   const sortedRows = state.kind === "ready"
     ? state.data.rows.slice().sort((a, b) => b.cutoffAt.localeCompare(a.cutoffAt))
@@ -102,9 +91,9 @@ export default async function EntityDetailPage({
             </h1>
             <span
               className="rounded-md border border-border bg-card px-2.5 py-0.5 font-mono text-xs text-gray-400"
-              data-evidence={issuerId}
+              data-evidence={resolvedIssuerId}
             >
-              {issuerId}
+              {resolvedIssuerId}
             </span>
             {latestRow?.tier && (
               <span className="rounded-md border border-sky-800 bg-sky-950/60 px-2.5 py-0.5 text-xs font-semibold text-sky-400">
@@ -122,7 +111,7 @@ export default async function EntityDetailPage({
           </p>
         </div>
 
-        <CardExportButton issuerId={issuerId} />
+        <CardExportButton issuerId={resolvedIssuerId} />
       </div>
 
       <ReadStateNotice state={state} />
@@ -189,7 +178,7 @@ export default async function EntityDetailPage({
                   <div className="font-mono text-2xl font-bold text-white">—</div>
                 ) : (
                   laborLabels.map((label) => (
-                    <div key={label.metric} className="mt-2 first:mt-0">
+                    <div key={`${label.metric}:${label.value}`} className="mt-2 first:mt-0">
                       <div className="font-mono text-xs text-gray-400" data-testid="labor-metric-name">
                         {label.metric}
                       </div>
@@ -225,8 +214,8 @@ export default async function EntityDetailPage({
                   const active = item === convention;
                   const href =
                     item === "historical_cagr"
-                      ? `/research/entities/${encodeURIComponent(issuerId)}`
-                      : `/research/entities/${encodeURIComponent(issuerId)}?convention=${encodeURIComponent(item)}`;
+                      ? `/research/entities/${encodeURIComponent(resolvedIssuerId)}`
+                      : `/research/entities/${encodeURIComponent(resolvedIssuerId)}?convention=${encodeURIComponent(item)}`;
                   return (
                     <Link
                       key={item}
@@ -502,7 +491,7 @@ export default async function EntityDetailPage({
             </h2>
             <div className="overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-left text-sm">
-                <caption className="sr-only">{issuerId} across cutoffs</caption>
+                <caption className="sr-only">{resolvedIssuerId} across cutoffs</caption>
                 <thead className="bg-card text-xs uppercase text-gray-500">
                   <tr>
                     <th scope="col" className="px-4 py-3">Cutoff</th>

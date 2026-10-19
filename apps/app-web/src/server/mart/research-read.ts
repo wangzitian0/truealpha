@@ -955,15 +955,61 @@ export class StrategyRunReadAdapter {
 		);
 	}
 
+	/**
+	 * Resolves a route issuer coordinate (UUID or legacy_id) to the coordinate carried by
+	 * the strategy run's decisions via `mart.entity_identity`. Returns `issuerId` without
+	 * querying Postgres when `decisions` already contains `issuerId` or is empty.
+	 */
+	private async resolveDecisionIssuerId(
+		issuerId: string,
+		decisions: readonly StrategyRunDecision[],
+	): Promise<string> {
+		if (
+			decisions.length === 0 ||
+			decisions.some((decision) => decision.issuer_id === issuerId)
+		) {
+			return issuerId;
+		}
+		try {
+			const result = await this.runWithClient((client) =>
+				client.query(
+					`select entity_id::text as entity_id, legacy_id
+					 from mart.entity_identity
+					 where entity_id::text = $1 or legacy_id = $1`,
+					[issuerId],
+				),
+			);
+			const candidates = new Set<string>();
+			for (const row of result.rows) {
+				if (typeof row.entity_id === "string" && row.entity_id.length > 0) {
+					candidates.add(row.entity_id);
+				}
+				if (typeof row.legacy_id === "string" && row.legacy_id.length > 0) {
+					candidates.add(row.legacy_id);
+				}
+			}
+			const matched = decisions.find((decision) =>
+				candidates.has(decision.issuer_id),
+			);
+			return matched ? matched.issuer_id : issuerId;
+		} catch {
+			return issuerId;
+		}
+	}
+
 	async entityDetail(
 		context: AccessContext,
 		issuerId: string,
 	): Promise<EntityDetail | null> {
 		const report = await this.report(context);
+		const resolvedIssuerId = await this.resolveDecisionIssuerId(
+			issuerId,
+			report.decisions,
+		);
 		const provenance =
 			report.provenance ?? new Map<string, DecisionProvenance>();
 		const rows = report.decisions
-			.filter((decision) => decision.issuer_id === issuerId)
+			.filter((decision) => decision.issuer_id === resolvedIssuerId)
 			.slice()
 			.sort((a, b) =>
 				a.cutoff_at < b.cutoff_at ? -1 : a.cutoff_at > b.cutoff_at ? 1 : 0,
@@ -977,7 +1023,7 @@ export class StrategyRunReadAdapter {
 				),
 			);
 		if (rows.length === 0) return null;
-		return { issuerId, rows };
+		return { issuerId: resolvedIssuerId, rows };
 	}
 
 	async traceView(
@@ -986,8 +1032,12 @@ export class StrategyRunReadAdapter {
 		cutoffAt: string,
 	): Promise<TraceView | null> {
 		const report = await this.report(context);
+		const resolvedIssuerId = await this.resolveDecisionIssuerId(
+			issuerId,
+			report.decisions,
+		);
 		const decision = report.decisions.find(
-			(d) => d.issuer_id === issuerId && d.cutoff_at === cutoffAt,
+			(d) => d.issuer_id === resolvedIssuerId && d.cutoff_at === cutoffAt,
 		);
 		if (decision === undefined) return null;
 		const lineage = await this.readTraceLineage(
@@ -995,17 +1045,22 @@ export class StrategyRunReadAdapter {
 			decision,
 		);
 		return {
-			traceId: traceId(report.source, issuerId, cutoffAt, report.corpus_sha256),
+			traceId: traceId(
+				report.source,
+				resolvedIssuerId,
+				cutoffAt,
+				report.corpus_sha256,
+			),
 			strategyId: report.strategy_id,
 			source: report.source,
-			issuerId,
+			issuerId: resolvedIssuerId,
 			cutoffAt,
 			corpusSha256: report.corpus_sha256,
 			links: [
 				{
 					kind: "materialized_output",
 					label: "Strategy decision",
-					reference: `${report.strategy_id}:${issuerId}:${cutoffAt}`,
+					reference: `${report.strategy_id}:${resolvedIssuerId}:${cutoffAt}`,
 				},
 				{
 					kind: "snapshot",
@@ -1040,6 +1095,10 @@ export class StrategyRunReadAdapter {
 			listingId: lineageText(row.listing_id, "result listing_id"),
 			lineage: row.lineage,
 		};
+	}
+
+	private bidirectionalIssuerPredicate(column: string): string {
+		return `${column} = $1 or ${column} in (select entity_id::text from mart.entity_identity where legacy_id = $1) or ${column} in (select legacy_id from mart.entity_identity where entity_id::text = $1 and legacy_id is not null)`;
 	}
 
 	async entityThemePurity(
@@ -1084,10 +1143,7 @@ export class StrategyRunReadAdapter {
 					            case when p.partition_id is null
 					                 then coalesce(p.reason_codes[1], 'unvisited') end as unvisited_reason
 					     from mart.issuer_theme_purity p
-					     where p.issuer_id = $1
-					        or p.issuer_id in (
-					            select entity_id::text from mart.entity_identity where legacy_id = $1
-					        )
+					     where ${this.bidirectionalIssuerPredicate("p.issuer_id")}
 					     -- A row with a segment partition comes first. A newer fill row (an issuer
 					     -- without a partition, #1117) must not hide an older real row.
 					     order by p.theme_id, (p.partition_id is null), p.cutoff desc, p.created_at desc
@@ -1146,10 +1202,7 @@ export class StrategyRunReadAdapter {
 					        coalesce(availability_status, availability, 'unavailable') as availability_status,
 					        reason_codes
 					 from mart.topt_gppe_results
-					 where issuer_id = $1
-					    or issuer_id in (
-					        select entity_id::text from mart.entity_identity where legacy_id = $1
-					    )
+					 where ${this.bidirectionalIssuerPredicate("issuer_id")}
 					 order by cutoff desc, created_at desc
 					 limit 1`,
 					[issuerId],
@@ -1210,10 +1263,7 @@ export class StrategyRunReadAdapter {
 					        coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
 					        coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
 					 from mart.issuer_analyst_ratings r
-					 where r.issuer_id = $1
-					    or r.issuer_id in (
-					        select entity_id::text from mart.entity_identity where legacy_id = $1
-					    )
+					 where ${this.bidirectionalIssuerPredicate("r.issuer_id")}
 					 order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
 					 limit 1`,
 					[issuerId],
@@ -1285,10 +1335,7 @@ export class StrategyRunReadAdapter {
 					        coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
 					        coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
 					 from mart.issuer_supply_chain_exposure s
-					 where s.issuer_id = $1
-					    or s.issuer_id in (
-					        select entity_id::text from mart.entity_identity where legacy_id = $1
-					    )
+					 where ${this.bidirectionalIssuerPredicate("s.issuer_id")}
 					 order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
 					 limit 1`,
 					[issuerId],

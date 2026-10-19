@@ -430,3 +430,49 @@ console.log(
 		"ok  every display field the read model returns reaches a surface",
 	);
 }
+
+// ---------------------------------------------------------------------------
+// #1358: one route-segment decoder across all [id] pages, and one bidirectional
+// issuer-coordinate SQL predicate across mart detail loaders.
+// ---------------------------------------------------------------------------
+{
+	const dynamicPages = listFiles(join(process.cwd(), "src/app")).filter(
+		(file) => file.includes("[id]") && file.endsWith("page.tsx"),
+	);
+	assert(
+		dynamicPages.length >= 3,
+		`expected at least 3 [id]/page.tsx routes, found ${dynamicPages.length}`,
+	);
+	for (const file of dynamicPages) {
+		const code = executableCode(readFileSync(file, "utf8"));
+		assert(
+			code.includes("decodeRouteParam("),
+			`${file} must decode its dynamic [id] segment with decodeRouteParam() from @/client/format (#1358)`,
+		);
+		assert(
+			!code.includes("decodeURIComponent("),
+			`${file} defines a local decodeURIComponent wrapper instead of using decodeRouteParam() (#1358)`,
+		);
+	}
+
+	const researchReadRaw = withoutComments(
+		readFileSync(join(process.cwd(), "src/server/mart/research-read.ts"), "utf8"),
+	);
+	for (const method of [
+		"entityThemePurity",
+		"entityGppeDetail",
+		"entityAnalystRatings",
+		"entitySupplyChainExposure",
+	] as const) {
+		const body = researchReadRaw
+			.split(`async ${method}(`, 2)[1]
+			.split(/\n\tasync |\n\}\s*$/, 2)[0];
+		assert(
+			body.includes("this.bidirectionalIssuerPredicate("),
+			`${method}() must use this.bidirectionalIssuerPredicate() rather than inlining a one-way identity query (#1358)`,
+		);
+	}
+	console.log(
+		"ok  every [id]/page.tsx uses decodeRouteParam and detail loaders use bidirectionalIssuerPredicate",
+	);
+}

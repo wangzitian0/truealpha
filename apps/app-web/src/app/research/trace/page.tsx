@@ -41,17 +41,15 @@ export default async function TracePage({
         <dl className="space-y-4 rounded-xl border border-border bg-card p-5 text-sm">
           <div>
             <dt className="text-gray-500">Trace ID</dt>
-            <dd className="font-mono text-xs text-gray-200">{state.data.traceId}</dd>
+            <dd data-evidence="true" className="font-mono text-xs text-gray-200">{state.data.traceId}</dd>
           </div>
           <div>
             <dt className="text-gray-500">Strategy / source</dt>
-            <dd>
-              {state.data.strategyId} — {state.data.source}
-            </dd>
+            <dd>{`${state.data.strategyId} — ${state.data.source}`}</dd>
           </div>
           <div>
             <dt className="text-gray-500">Subject / cutoff</dt>
-            <dd title={state.data.issuerId}>
+            <dd title={state.data.issuerId} suppressHydrationWarning>
               <span>{formatIssuerLabel(state.data.issuerId, entityLabel(state.data.issuerId, names))}</span>{" "}
               <code
                 data-evidence="true"
@@ -59,7 +57,7 @@ export default async function TracePage({
               >
                 {state.data.issuerId}
               </code>{" "}
-              @ {state.data.cutoffAt}
+              {`@ ${state.data.cutoffAt}`}
             </dd>
           </div>
           <div>
@@ -75,8 +73,8 @@ export default async function TracePage({
                 {state.data.links.map((link) => (
                   <li key={link.kind} className="flex flex-wrap items-baseline gap-2">
                     <span className="rounded border border-border px-2 py-0.5 text-xs text-gray-400">{link.kind}</span>
-                    <span className="text-gray-300">{link.label}:</span>
-                    <span className="font-mono text-xs text-gray-400">{link.reference ?? "not exposed"}</span>
+                    <span className="text-gray-300">{`${link.label}:`}</span>
+                    <span data-evidence="true" className="font-mono text-xs text-gray-400">{link.reference ?? "not exposed"}</span>
                   </li>
                 ))}
               </ul>
