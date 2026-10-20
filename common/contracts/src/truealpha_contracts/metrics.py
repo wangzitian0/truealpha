@@ -185,6 +185,12 @@ _SPECS = (
         source_priority=(DataSource.YAHOO, DataSource.TWELVE_DATA, DataSource.MOOMOO),
         description="Unadjusted close price (module 6 price-to-sales market-value input).",
     ),
+    MetricSpec(
+        name="consensus_profit_growth",
+        unit_family=UnitFamily.PERCENTAGE,
+        source_priority=(DataSource.MOOMOO, DataSource.SEC),
+        description="Annual profit growth rate in percentage points for consensus-convention PEG (#1354).",
+    ),
 )
 
 

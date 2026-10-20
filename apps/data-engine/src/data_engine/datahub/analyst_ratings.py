@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from numbers import Real
 from typing import Any
@@ -312,6 +312,79 @@ def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+def _fetch_rating_enrichment(
+    ctx: Any, code: str, *, as_of: datetime
+) -> tuple[list[AnalystRatingItem], bool, dict[date, Decimal]]:
+    from data_engine.datahub.production_topt.moomoo_origin import parse_valuation_profit_growth
+    from data_engine.sources.moomoo import get_rating_summary, get_valuation_detail
+
+    summary_items: list[AnalystRatingItem] = []
+    if hasattr(ctx, "get_research_rating_summary"):
+        try:
+            summary_payload = get_rating_summary(ctx, code, caller="capture_ticker_analyst_ratings")
+            summary_items = parse_rating_summary(summary_payload, as_of=as_of)
+        except Exception:  # noqa: BLE001
+            summary_items = []
+    has_valuation = False
+    profit_growth: dict[date, Decimal] = {}
+    if hasattr(ctx, "get_valuation_detail"):
+        try:
+            val_payload = get_valuation_detail(ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings")
+            has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
+            if isinstance(val_payload, Mapping):
+                profit_growth = parse_valuation_profit_growth(val_payload, cutoff=as_of.date())
+        except Exception:  # noqa: BLE001
+            has_valuation = False
+            profit_growth = {}
+    return summary_items, has_valuation, profit_growth
+
+
+def _enrich_consensus_row(
+    consensus_row: dict[str, Any],
+    *,
+    company_id: str,
+    summary_items: list[AnalystRatingItem],
+    has_valuation: bool,
+    profit_growth: Mapping[date, Decimal],
+) -> None:
+    if not (summary_items or has_valuation):
+        return
+    agreement = min(item.confidence for item in summary_items) if summary_items else Decimal("0.90")
+    cont = evaluate_continuous_confidence(
+        _CONFIDENCE_POLICY,
+        ContinuousConfidenceInput(
+            case_id=f"consensus:{company_id}",
+            sources=(
+                SourceConfidenceEvidence(
+                    provider_id="origin:moomoo-ratings:v1",
+                    origin_group_id="lineage:moomoo",
+                    independence_weight=Decimal("1"),
+                    successful_outcome_mass=Decimal("40"),
+                    failed_outcome_mass=Decimal("0"),
+                    freshness=Decimal("1"),
+                    sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
+                    transport_integrity=Decimal("1"),
+                    evidence_ids=(f"consensus:{company_id}",),
+                    reason_codes=("vendor_timestamp",),
+                ),
+            ),
+            agreement=agreement,
+            semantic_mapping_quality=Decimal("1"),
+            lineage_completeness=Decimal("1"),
+            required_component_completeness=Decimal("1"),
+        ),
+    )
+    consensus_row["confidence"] = cont.confidence
+    if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
+        consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "vendor_timestamp"]
+    if profit_growth:
+        consensus_row["profit_growth_by_period"] = {
+            end.isoformat(): str(rate) for end, rate in sorted(profit_growth.items())
+        }
+        if "valuation_profit_growth" not in consensus_row["reason_codes"]:
+            consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "valuation_profit_growth"]
+
+
 def _ticker_row(
     ctx: Any,
     *,
@@ -333,28 +406,11 @@ def _ticker_row(
         return _fetch_error_row(company_id, open_error), failure
     code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
     try:
-        from data_engine.sources.moomoo import (
-            get_analyst_consensus,
-            get_rating_summary,
-            get_valuation_detail,
-        )
+        from data_engine.sources.moomoo import get_analyst_consensus
 
         payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
         consensus_row = _consensus_row(payload, company_id)
-        summary_items: list[AnalystRatingItem] = []
-        if hasattr(ctx, "get_research_rating_summary"):
-            try:
-                summary_payload = get_rating_summary(ctx, code, caller="capture_ticker_analyst_ratings")
-                summary_items = parse_rating_summary(summary_payload, as_of=as_of)
-            except Exception:  # noqa: BLE001
-                summary_items = []
-        has_valuation = False
-        if hasattr(ctx, "get_valuation_detail"):
-            try:
-                val_payload = get_valuation_detail(ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings")
-                has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
-            except Exception:  # noqa: BLE001
-                has_valuation = False
+        summary_items, has_valuation, profit_growth = _fetch_rating_enrichment(ctx, code, as_of=as_of)
     except Exception as exc:
         failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
         log.error(
@@ -380,35 +436,13 @@ def _ticker_row(
                 "reason_codes": [*rec.result.flags, "vendor_timestamp"],
             }, None
         return analyst_track_record([], entity_id=company_id, as_of=as_of), None
-    if summary_items or has_valuation:
-        agreement = min(item.confidence for item in summary_items) if summary_items else Decimal("0.90")
-        cont = evaluate_continuous_confidence(
-            _CONFIDENCE_POLICY,
-            ContinuousConfidenceInput(
-                case_id=f"consensus:{company_id}",
-                sources=(
-                    SourceConfidenceEvidence(
-                        provider_id="origin:moomoo-ratings:v1",
-                        origin_group_id="lineage:moomoo",
-                        independence_weight=Decimal("1"),
-                        successful_outcome_mass=Decimal("40"),
-                        failed_outcome_mass=Decimal("0"),
-                        freshness=Decimal("1"),
-                        sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
-                        transport_integrity=Decimal("1"),
-                        evidence_ids=(f"consensus:{company_id}",),
-                        reason_codes=("vendor_timestamp",),
-                    ),
-                ),
-                agreement=agreement,
-                semantic_mapping_quality=Decimal("1"),
-                lineage_completeness=Decimal("1"),
-                required_component_completeness=Decimal("1"),
-            ),
-        )
-        consensus_row["confidence"] = cont.confidence
-        if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
-            consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "vendor_timestamp"]
+    _enrich_consensus_row(
+        consensus_row,
+        company_id=company_id,
+        summary_items=summary_items,
+        has_valuation=has_valuation,
+        profit_growth=profit_growth,
+    )
     return consensus_row, None
 
 
