@@ -98,17 +98,17 @@ assert(
 const refused = summarizeUniverseUsability([
   ...sampleDecisions.slice(0, 19),
   {
-    issuer_id: "MU",
+    issuer_id: "NVDA",
     outcome: "excluded",
     eligible: false,
-    exclusion_reason: "plausibility_refused_independent_reference",
+    exclusion_reason: "plausibility_refused_node_sign_policy",
   },
 ]);
 assert(refused.usableCount === 17 && refused.excludedCount === 3, "the refused issuer is excluded, not dropped");
-const mu = refused.excluded.find((e) => e.issuer_id === "MU");
+const nvda = refused.excluded.find((e) => e.issuer_id === "NVDA");
 assert(
-  mu?.exclusion_reason === "plausibility_refused_independent_reference" &&
-    mu.label.startsWith("Refused by the plausibility gate"),
+  nvda?.exclusion_reason === "plausibility_refused_node_sign_policy" &&
+    nvda.label.startsWith("Refused by the plausibility gate"),
   "a plausibility refusal must render its own label on the Today page",
 );
 

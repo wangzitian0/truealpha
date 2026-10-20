@@ -38,7 +38,6 @@ from data_engine.datahub.production_topt.market_price_adapter import (
 )
 from data_engine.datahub.production_topt.release_derived_adapter import ReleaseDerivedAdapter, ReleaseDerivedRecord
 from data_engine.datahub.production_topt.sec_financial_adapter import (
-    FinancialFactCorroboratingOrigin,
     FinancialFactsBundle,
     SecFinancialFactAdapter,
     SecTarget,
@@ -91,14 +90,6 @@ _MAIN_DECISIONS_SQL = """
       on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
     where d.strategy_run_id = %s
     order by d.cutoff_at, d.issuer_id
-"""
-_MAIN_GATE_ROWS_SQL = """
-    select r.listing_id, p.value as last_close
-    from mart.topt_core_results r
-    left join staging.strategy_backtest_inputs p
-      on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
-    where r.run_id = %s
-    order by r.listing_id
 """
 _MAIN_PEG_RUN_SQL = """
     select s.strategy_run_id
@@ -170,7 +161,6 @@ def _offline_routes(
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
     cutoff_date: date | None = None,
     bundle: Callable[[str, OperatingBranch], FinancialFactsBundle] = lambda _ticker, branch: _bundle(branch),
-    financial_origins: tuple[FinancialFactCorroboratingOrigin, ...] = (),
 ) -> dict[str, SourceFetchPort]:
     # The settled session (#530 item 1), matching build_route's context.price_cutoff_date
     # -- not the tick's own run clock. A caller with a differently-partitioned corpus
@@ -203,7 +193,6 @@ def _offline_routes(
                 operating_branch=(
                     OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL
                 ),
-                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -239,7 +228,6 @@ def _offline_routes(
         sec_targets,
         lambda cik, cutoff, branch: bundle(ticker_by_cik[cik], branch),
         headcount_extractor=PostgresHeadcountExtractor(connection),
-        corroborating_origins=financial_origins,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 
@@ -443,10 +431,6 @@ def _served_identity(reader, entity_id: str) -> str:
     return str(row[0])
 
 
-def _gate_closes(reader, sql: str, run_id: str) -> list[tuple[str, Decimal | None]]:
-    return [(str(listing), close) for listing, close in reader.execute(sql, (run_id,)).fetchall()]
-
-
 def test_a_forced_run_fetches_every_obligation_despite_fresh_observations(tick_database_url, monkeypatch) -> None:
     """#874, the issue's own evidence: a same-day re-run reused the 03:38Z canary's observations."""
     fetched: list[tuple[str, str, str]] = []
@@ -622,7 +606,6 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
 
 def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(tick_database_url, monkeypatch) -> None:
     """#877's live defect, confirmed: a forced TOPT tick shares the scheduled tick's cutoff."""
-    from data_engine.datahub.production_topt import plausibility_gate
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
@@ -649,8 +632,6 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
         )
         main_decisions = reader.execute(_MAIN_DECISIONS_SQL, (forced["strategy_run_id"],)).fetchall()
         assert len(main_decisions) == 40 and len({issuer for issuer, *_ in main_decisions}) == 20
-        main_gate = _gate_closes(reader, _MAIN_GATE_ROWS_SQL, forced["capture_run_id"])
-        assert len(main_gate) == 40 and {close for _listing, close in main_gate} == {Decimal("40"), Decimal("41.5")}
         main_peg_runs = [row[0] for row in reader.execute(_MAIN_PEG_RUN_SQL, (cutoff,)).fetchall()[:2]]
         assert set(main_peg_runs) == {scheduled["strategy_run_id"], forced["strategy_run_id"]}
 
@@ -663,11 +644,6 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
         reader.execute("set session_replication_role = origin")
         latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
         assert (latest[0], latest[3]) == (forced["strategy_run_id"], True)
-
-        forced_gate = plausibility_gate._rows(reader, forced["capture_run_id"])
-        scheduled_gate = plausibility_gate._rows(reader, scheduled["capture_run_id"])
-        assert len(forced_gate) == 20 and {row.last_close for row in forced_gate} == {Decimal("41.5")}
-        assert len(scheduled_gate) == 20 and {row.last_close for row in scheduled_gate} == {Decimal("40")}
 
         peg = peg_cells(reader, run_id=forced["capture_run_id"])
         assert len(peg) == 20

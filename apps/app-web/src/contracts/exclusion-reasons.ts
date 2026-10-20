@@ -30,8 +30,6 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   // #1235: definition 1.0.0 divides market value by gross profit.
   nonpositive_gross_profit: "Reported gross profit is zero or negative, so P/GP has no value",
   // #1323 / #1443: the plausibility gate refused this issuer; the run published the others.
-  plausibility_refused_independent_reference:
-    "Refused by the plausibility gate: the revenue or gross profit disagrees with an independent source beyond the policy's limit",
   plausibility_refused_node_sign_policy:
     "Refused by the plausibility gate: the sign of the operating metric breaks its definition",
 };
