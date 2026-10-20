@@ -31,13 +31,24 @@ compute_logs:
 telemetry:
   enabled: false
 
-# Run monitoring (#1271). A container restart kills the run process, and the run record
-# stays STARTED for ever: the default run launcher cannot check the health of a run process.
-# The daemon ends a run that exceeds max_runtime_seconds. The longest real run in 30 days was
-# 63 minutes (qqq_live_pipeline), so 3 hours leaves room for growth. Dagster 1.13 keeps run
-# monitoring off and the limit at 0 (no limit) unless this block sets them.
+# Run launcher (#1442). Each run is a child process of the code server, and a container
+# restart kills it. MonitoredRunLauncher asks the code server whether it still executes a
+# STARTED run, so the run monitor marks a lost run failed at its next poll. It also writes
+# each job's maximum runtime, derived from measured run times in the environment contract,
+# to the run tag dagster/max_runtime.
+run_launcher:
+  module: data_engine.run_launcher
+  class: MonitoredRunLauncher
+
+# Run monitoring (#1271, #1442). The daemon checks every STARTED run each poll_interval_seconds.
+# It fails a run whose worker is lost, and a run past its dagster/max_runtime tag.
+# max_runtime_seconds bounds only a run without that tag: a run of a job that the environment
+# contract lists as unmeasured or does not list, and a run launched before this launcher.
+# test_dagster_instance_config.py holds it above the margin times every measured success.
+# Dagster 1.13 keeps run monitoring off and the limit at 0 (no limit) unless this block sets them.
 run_monitoring:
   enabled: true
+  poll_interval_seconds: 120
   max_runtime_seconds: 10800
 
 # Tick retention (#1072). Three sensors poll every 30 seconds. Each poll that does no work

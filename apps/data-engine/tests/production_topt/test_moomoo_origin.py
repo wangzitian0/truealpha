@@ -726,3 +726,24 @@ def test_parse_valuation_profit_growth_filters_annual_periods_by_cutoff() -> Non
     }
     parsed = origin_module.parse_valuation_profit_growth(valuation, cutoff=date(2025, 6, 30))
     assert parsed == {date(2024, 12, 31): Decimal("24.5")}
+
+
+def test_parse_annual_financials_attaches_consensus_profit_growth_from_valuation_detail() -> None:
+    income, balance = _statements("DDOG")
+    valuation = {
+        "profit_growth_rate": {
+            "profit_data": [
+                {
+                    "period_str": "2025/FY",
+                    "financial_quarter": 4,
+                    "report_date_str": "2025-12-31",
+                    "profit_growth_rate": 24.5,
+                }
+            ]
+        }
+    }
+    raw = canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation})
+    assertion = parse_annual_financials(raw, cutoff=_CUTOFF)
+    assert assertion is not None
+    assert assertion.by_period_end[date(2025, 12, 31)]["consensus_profit_growth"] == Decimal("24.5")
+    assert assertion.values.get("consensus_profit_growth") == Decimal("24.5")

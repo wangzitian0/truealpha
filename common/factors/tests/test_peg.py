@@ -25,6 +25,7 @@ _UNIT_FAMILY = {
     "net_income": UnitFamily.CURRENCY,
     "price": UnitFamily.PER_SHARE,
     "shares_outstanding": UnitFamily.COUNT,
+    "consensus_profit_growth": UnitFamily.PERCENTAGE,
 }
 
 
@@ -229,3 +230,34 @@ def test_the_polars_expression_reproduces_the_decimal_peg() -> None:
     vectorised = compiled["factor_value"].to_list()[0]
 
     assert vectorised == pytest.approx(float(native.value), rel=1e-9)
+
+
+def test_analyst_consensus_convention_computes_peg_when_consensus_profit_growth_is_present() -> None:
+    """#1354: when consensus_profit_growth is provided, ANALYST_CONSENSUS computes PEG
+    (market_cap / net_income / consensus_rate_pct) and caps confidence at min(consumed)."""
+    facts = [
+        *_inputs(*_STEADY),
+        _fact(
+            "consensus_profit_growth",
+            "25.0",
+            period="FY2025:FY:2025-01-01:2025-12-31",
+            confidence="0.72",
+        ),
+    ]
+    result = _call(facts, convention=GrowthConvention.ANALYST_CONSENSUS)
+    # multiple = (100 * 1000) / 200 = 500; consensus_rate_pct = 25.0 -> PEG = 20.0
+    assert result.value == Decimal("20")
+    assert result.confidence == Decimal("0.72")
+    assert "growth_convention:analyst_consensus" in result.flags
+    assert "period_end:2025-12-31" in result.flags
+
+
+def test_analyst_consensus_convention_refuses_non_positive_growth() -> None:
+    facts = [
+        *_inputs(*_STEADY),
+        _fact("consensus_profit_growth", "-5.0", confidence="0.80"),
+    ]
+    result = _call(facts, convention=GrowthConvention.ANALYST_CONSENSUS)
+    assert result.value is None
+    assert "non_positive_growth" in result.flags
+    assert "growth_convention:analyst_consensus" in result.flags

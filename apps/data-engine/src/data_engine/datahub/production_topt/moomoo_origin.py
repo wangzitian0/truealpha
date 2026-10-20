@@ -405,6 +405,9 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         return None
     income: Mapping[str, Any] = payload["income"] if isinstance(payload.get("income"), Mapping) else {}
     balance: Mapping[str, Any] = payload["balance_sheet"] if isinstance(payload.get("balance_sheet"), Mapping) else {}
+    valuation: Mapping[str, Any] = (
+        payload["valuation_detail"] if isinstance(payload.get("valuation_detail"), Mapping) else {}
+    )
     by_period: dict[date, dict[str, Decimal | None]] = {}
     for statement, fields, annual_only in (
         (income, INCOME_FIELDS, True),
@@ -414,6 +417,8 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
             if end > cutoff:
                 continue
             by_period.setdefault(end, {}).update(values)
+    for end, growth_rate in parse_valuation_profit_growth(valuation, cutoff=cutoff).items():
+        by_period.setdefault(end, {})["consensus_profit_growth"] = growth_rate
     if not by_period:
         return None
     fiscal_years = [
@@ -421,10 +426,13 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
     ]
     newest = max(fiscal_years) if fiscal_years else max(by_period)
     currency, standards = _statement_meta(income) or _statement_meta(balance) or ("USD", None)
+    headline_values = {name: by_period[newest].get(name) for name in (*INCOME_FIELDS, *BALANCE_SHEET_FIELDS)}
+    if "consensus_profit_growth" in by_period[newest]:
+        headline_values["consensus_profit_growth"] = by_period[newest]["consensus_profit_growth"]
     return FinancialFactAssertion(
         raw_bytes=raw_bytes,
         period_end=newest,
-        values={name: by_period[newest].get(name) for name in (*INCOME_FIELDS, *BALANCE_SHEET_FIELDS)},
+        values=headline_values,
         by_period_end=by_period,
         # Served now, asserted for periods that have ended: knowable at the cutoff.
         knowable_at=datetime.combine(cutoff, datetime.min.time(), tzinfo=UTC),
