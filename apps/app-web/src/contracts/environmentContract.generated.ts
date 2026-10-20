@@ -21,7 +21,7 @@ export interface SentinelMemberContract {
 }
 
 export const ENVIRONMENT_CONTRACT_VERSION = "1.2.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "bcb2f08aa02003b8e9aafc4da257b75395caf809f7134219e7214b7fed153dd9" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "d082e7d69b2b998f1ff091f418d8b5f85a27fc3be26550ae7e96775d84d6cb08" as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   {

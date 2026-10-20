@@ -19,7 +19,8 @@ Every job runs in the in-process executor (#1467). The code server container hol
 and every run process in one memory cgroup. The default executor starts one more process per step,
 and each process that imports this module holds the size that the contract measured. One process per run is the premise of
 `code_server_capacity` in `environment_contract.v1.json`, which derives the run queue limit of
-`dagster.yaml`. No job has two steps that gain from running at the same time.
+`dagster.yaml`. The jobs are linear chains, except `output_invariants_check`: its two independent
+steps wait for the same condition and work for seconds, so one after the other costs seconds.
 
 `dagster.yaml` loads the run launcher by module name (#1442). The import of
 `MonitoredRunLauncher` below makes that module statically reachable too, and
@@ -136,17 +137,17 @@ __all__ = [
 init_telemetry()
 
 
-def _in_process(definitions: dg.Definitions) -> dg.Definitions:
+def with_in_process_executor(definitions: dg.Definitions) -> dg.Definitions:
     """Return `definitions` with the in-process executor as the default executor of every job (#1467)."""
     return dg.Definitions.merge(definitions, dg.Definitions(executor=dg.in_process_executor))
 
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
     """Build the deployable Dagster Definitions across all registered lanes (#731, #67)."""
-    return _in_process(dg.Definitions.merge(*lane_definitions(app_env).values()))
+    return with_in_process_executor(dg.Definitions.merge(*lane_definitions(app_env).values()))
 
 
-defs = _in_process(dg.Definitions.merge(*lane_definitions().values()))
+defs = with_in_process_executor(dg.Definitions.merge(*lane_definitions().values()))
 
 
 # -- retired fixture canary (tests only; never deployed) -------------------------------

@@ -124,7 +124,7 @@ class MeasuredProcessMemory(_StrictFrozenModel):
     environment: EnvironmentKey
     method: str = Field(min_length=1)
     grpc_server_hwm_mib: float = Field(gt=0)
-    run_process_hwm_mib: float = Field(gt=0)
+    spawned_process_hwm_mib: float = Field(gt=0)
     source: str = Field(min_length=1)
 
 
@@ -148,7 +148,7 @@ class CodeServerCapacity(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _process_covers_the_measurement_and_two_runs_fit(self) -> Self:
-        observed = max(self.measured.grpc_server_hwm_mib, self.measured.run_process_hwm_mib)
+        observed = max(self.measured.grpc_server_hwm_mib, self.measured.spawned_process_hwm_mib)
         if self.process_mib < observed:
             raise ValueError(f"process_mib {self.process_mib} is below the measured peak of {observed} MiB")
         if self.max_concurrent_runs < 2:

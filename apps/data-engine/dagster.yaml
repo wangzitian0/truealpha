@@ -60,7 +60,8 @@ run_monitoring:
 # which holds the ceiling, the utilization limit and the measured size of one process.
 # test_run_capacity.py holds this file equal to the value that the contract derives.
 # A job that waits for other runs (tag truealpha/waits_for_runs) holds a slot while it waits.
-# The tag limit is one below max_concurrent_runs, so the run that it waits for always finds a slot.
+# The tag limit is one below max_concurrent_runs, so the waiting runs never hold every slot.
+# A run that does not wait always holds one slot, finishes, and passes it to the next queued run.
 # The queue does not start a run that exceeds a limit and starts the next one.
 run_queue:
   max_concurrent_runs: 3

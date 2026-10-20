@@ -94,7 +94,7 @@ def boot_canary_forces_fetch(app_env: str) -> bool:
     return app_env.strip().lower() == "staging"
 
 
-def _boot_deployment() -> str:
+def boot_deployment() -> str:
     """The deployment this process belongs to: image digest plus configuration hash.
 
     `TRUEALPHA_CONFIGURATION_SHA256` is infra2's hash over the data-engine compose
@@ -140,7 +140,7 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
     and skip.
 
     One run per deployment (#885 item 8). A deployment is the image digest plus the
-    configuration hash (`_boot_deployment`). The cursor records the last deployment
+    configuration hash (`boot_deployment`). The cursor records the last deployment
     and its ordinal. When the deployment changes, the ordinal goes up by one and the
     run key is `boot:<digest>:deploy-<ordinal>`. Before #885 the key was
     `boot:<digest>`. Dagster dedupes a sensor's run keys against every run it ever
@@ -175,7 +175,7 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
     if not digest.startswith("sha256:"):
         yield dg.SkipReason("no data-engine image digest in the environment (local/CI)")
         return
-    deployment = _boot_deployment()
+    deployment = boot_deployment()
     last_deployment, last_ordinal = _boot_cursor(context.cursor)
     if last_deployment == deployment:
         yield dg.SkipReason(f"boot canary already requested for {digest[:19]}… (deploy {last_ordinal})")

@@ -182,7 +182,7 @@ _BASE_CAPACITY: dict[str, object] = {
         "environment": "staging",
         "method": "test",
         "grpc_server_hwm_mib": 229.5,
-        "run_process_hwm_mib": 213.3,
+        "spawned_process_hwm_mib": 213.3,
         "source": "test",
     },
 }

@@ -2,36 +2,51 @@
 
 Every Dagster run executes inside the code server container, in the same memory cgroup as the
 gRPC server. On 2026-10-20 the kernel killed processes of that cgroup five times. Each kill left
-a run `STARTED` for ever, and no check had read the cgroup. This module reads three facts from
+a run `STARTED` for ever, and no check had read the cgroup. This module reads these facts from
 inside the container and judges them against the capacity that `code_server_capacity` declares in
 `environment_contract.v1.json`:
 
 * `memory.events` `oom_kill`: the kernel killed a process of the cgroup;
 * `memory.peak`: the most memory the cgroup held since the container started;
-* `memory.max`: the ceiling that the container really has.
+* `memory.max`: the ceiling that the container really has;
+* the identity of the container: the boot id of the host and the start ticks of its first process.
 
-A verdict is red on any of these:
+The kernel counters belong to the container. A deploy or a crash replaces the container, and the
+new cgroup starts at zero. A check that reads the counters once a night loses every kill and every
+peak that a replaced container held. So a sensor (`sample`, every few minutes) folds each reading
+into a `Tracker`: the totals of kills, unplanned restarts and new peaks above the limit over the
+life of all containers. A deploy then loses at most one sampling interval. The nightly check folds
+its own reading in, and judges the growth of the totals since the last nightly check (`Baseline`).
+The sensor and the nightly check each write one key of the run storage, so neither overwrites the
+other.
 
-* a fact is unreadable. Unknown is red, never OK (#28 V3);
+The nightly verdict is red on any of these:
+
+* a fact is unreadable, or the stored state is unreadable or lower than the last check saw.
+  Unknown is red, never OK (#28 V3);
 * `memory.max` is `max` (no ceiling) or below the declared ceiling. The run limit of `dagster.yaml`
   derives from the declared ceiling, so a lower real ceiling breaks the premise of the limit;
-* `oom_kill` rose since the last check. The first check counts every kill of the container;
-* the peak is above `utilization_limit` of `memory.max` (70%, rule of #1418);
-* the container restarted since the last check and the release did not change. The kernel may
-  kill the server process itself. The container then restarts with a new cgroup, and the counter
-  of the new cgroup does not show the kill. A deploy restarts the container too, but it changes
-  the release.
+* `oom_kill` rose in any container since the last check. The first check counts every kill of
+  the container;
+* the peak of a container rose above `utilization_limit` of `memory.max` since the last check. A
+  peak that the last check already judged does not count again: `memory.peak` is a high-water mark
+  of the whole container life;
+* the container was replaced without a change of the deployment. The kernel may kill the server
+  process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
+  does not show the kill. A deploy replaces the container too, but it changes the deployment.
 
-The last check's facts are the baseline. They live in the key-value table of the Dagster run
-storage, not in the verdict summary, which is published on `/health` and carries counts only.
-`memory.peak` counts page cache that the cgroup holds, as the kernel does when it decides on a kill.
+Only a tick-tagged run (the schedule) moves the baseline. A manual run shows the growth since the
+last scheduled check and consumes nothing. A re-execution of a scheduled tick returns the verdict
+that the tick already has.
+
+`memory.peak` counts page cache that the cgroup holds. The summary shows counts and sizes only,
+because the verdict is published on `/health`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -45,24 +60,29 @@ log = logging.getLogger(__name__)
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 #: The process table of the container. Its first process is the code server.
 PROC_ROOT = Path("/proc")
-#: The key of the baseline in the key-value table of the Dagster run storage.
+#: The keys in the key-value table of the Dagster run storage. Each has one writer.
+TRACKER_KEY = "truealpha/runtime_shape/tracker"
 BASELINE_KEY = "truealpha/runtime_shape/baseline"
 
 MIB = 1024 * 1024
+
+
+class StateUnreadable(Exception):
+    """A value in the run storage is not the state that this module wrote."""
 
 
 @dataclass(frozen=True)
 class Reading:
     """What the cgroup says now. A field is None when it could not be read.
 
-    `memory_max` is None with `unlimited` True when the file says `max` (no ceiling). `started` is the
-    start second of the first process of the container, in whole seconds since the epoch."""
+    `memory_max` is None with `unlimited` True when the file says `max` (no ceiling).
+    `container` names the container: the boot id of the host and the start ticks of its first process."""
 
     memory_max: int | None = None
     unlimited: bool = False
     memory_peak: int | None = None
     oom_kill: int | None = None
-    started: int | None = None
+    container: str | None = None
 
     @property
     def unreadable(self) -> tuple[str, ...]:
@@ -71,31 +91,93 @@ class Reading:
             ("memory.max", self.memory_max is None and not self.unlimited),
             ("memory.peak", self.memory_peak is None),
             ("memory.events", self.oom_kill is None),
-            ("process start time", self.started is None),
+            ("container identity", self.container is None),
         )
         return tuple(name for name, is_missing in missing if is_missing)
 
 
 @dataclass(frozen=True)
-class Baseline:
-    """The facts of the last check that the next check compares with."""
+class Container:
+    """The container that the last sample saw, with the counters it showed."""
 
+    id: str
+    deployment: str
     oom_kill: int
-    started: int
-    release: str
+    peak: int
+
+
+@dataclass(frozen=True)
+class Tracker:
+    """Totals over the life of all containers. Written by the sampler only."""
+
+    container: Container | None = None
+    kills: int = 0
+    restarts_same_deployment: int = 0
+    restarts_new_deployment: int = 0
+    peaks_over_limit: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> Baseline | None:
-        """None for a value that is not a baseline. The check then treats the container as never checked."""
+    def from_json(cls, raw: str) -> Tracker:
         try:
             data = json.loads(raw)
-            return cls(oom_kill=int(data["oom_kill"]), started=int(data["started"]), release=str(data["release"]))
-        except (ValueError, KeyError, TypeError):
-            log.warning("the runtime shape baseline is not readable; treating the container as never checked")
-            return None
+            container = data["container"]
+            return cls(
+                container=None
+                if container is None
+                else Container(
+                    id=str(container["id"]),
+                    deployment=str(container["deployment"]),
+                    oom_kill=int(container["oom_kill"]),
+                    peak=int(container["peak"]),
+                ),
+                kills=int(data["kills"]),
+                restarts_same_deployment=int(data["restarts_same_deployment"]),
+                restarts_new_deployment=int(data["restarts_new_deployment"]),
+                peaks_over_limit=int(data["peaks_over_limit"]),
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise StateUnreadable("the runtime shape tracker is not readable") from exc
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """The totals that the last scheduled check saw, and the verdict it gave. Written by that check only."""
+
+    kills: int
+    restarts_same_deployment: int
+    restarts_new_deployment: int
+    peaks_over_limit: int
+    tick: str
+    red: tuple[str, ...]
+    summary: str
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), sort_keys=True)
+
+    @classmethod
+    def from_json(cls, raw: str) -> Baseline:
+        try:
+            data = json.loads(raw)
+            return cls(
+                kills=int(data["kills"]),
+                restarts_same_deployment=int(data["restarts_same_deployment"]),
+                restarts_new_deployment=int(data["restarts_new_deployment"]),
+                peaks_over_limit=int(data["peaks_over_limit"]),
+                tick=str(data["tick"]),
+                red=tuple(str(item) for item in data["red"]),
+                summary=str(data["summary"]),
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise StateUnreadable("the runtime shape baseline is not readable") from exc
+
+
+#: The totals before the first scheduled check: nothing was counted yet.
+_NO_CHECK_YET = Baseline(
+    kills=0, restarts_same_deployment=0, restarts_new_deployment=0, peaks_over_limit=0, tick="", red=(), summary=""
+)
 
 
 @dataclass(frozen=True)
@@ -104,8 +186,6 @@ class Judgement:
 
     red: tuple[str, ...]
     summary: str
-    #: What the next check compares with. None when this check could not read the facts it needs.
-    baseline: Baseline | None = None
     facts: Mapping[str, int | float] = field(default_factory=dict)
 
 
@@ -119,17 +199,17 @@ def _events(text: str) -> dict[str, int]:
     return {name: int(value) for name, value in pairs}
 
 
-def _start_second(proc_root: Path) -> int:
-    """Start second of the first process: boot time plus the `starttime` ticks of `/proc/1/stat`.
+def _container_id(proc_root: Path) -> str:
+    """Boot id of the host plus the start ticks of the first process: neither depends on the wall clock.
 
     The process name in `stat` may hold spaces and brackets, so the fields count from the last `)`."""
+    boot_id = _read_text(proc_root / "sys" / "kernel" / "random" / "boot_id")
     stat = _read_text(proc_root / "1" / "stat")
     fields_after_name = stat[stat.rindex(")") + 2 :].split()
     start_ticks = int(fields_after_name[19])  # field 22 of the line, counting the pid as field 1
-    boot_time = next(
-        int(line.split()[1]) for line in _read_text(proc_root / "stat").splitlines() if line.startswith("btime ")
-    )
-    return boot_time + start_ticks // os.sysconf("SC_CLK_TCK")
+    if not boot_id:
+        raise ValueError("empty boot id")
+    return f"{boot_id}:{start_ticks}"
 
 
 def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Reading:
@@ -138,7 +218,7 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
     unlimited = False
     memory_peak: int | None = None
     oom_kill: int | None = None
-    started: int | None = None
+    container: str | None = None
 
     try:
         raw_max = _read_text(cgroup_root / "memory.max")
@@ -155,12 +235,47 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
     except (OSError, ValueError, KeyError):
         pass
     try:
-        started = _start_second(proc_root)
-    except (OSError, ValueError, IndexError, StopIteration):
+        container = _container_id(proc_root)
+    except (OSError, ValueError, IndexError):
         pass
 
     return Reading(
-        memory_max=memory_max, unlimited=unlimited, memory_peak=memory_peak, oom_kill=oom_kill, started=started
+        memory_max=memory_max, unlimited=unlimited, memory_peak=memory_peak, oom_kill=oom_kill, container=container
+    )
+
+
+def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeServerCapacity) -> Tracker:
+    """Add one reading to the totals. A reading with a missing fact adds nothing."""
+    if reading.oom_kill is None or reading.memory_peak is None or reading.container is None or reading.unreadable:
+        return tracker
+    previous = tracker.container
+    kills, same, new = tracker.kills, tracker.restarts_same_deployment, tracker.restarts_new_deployment
+    if previous is not None and previous.id == reading.container:
+        kills += max(reading.oom_kill - previous.oom_kill, 0)
+        peak_is_new = reading.memory_peak > previous.peak
+    else:
+        # A new container starts new counters, so all of its kills and its whole peak came after the last sample.
+        kills += reading.oom_kill
+        peak_is_new = True
+        if previous is not None and previous.deployment == deployment:
+            same += 1
+        elif previous is not None:
+            new += 1
+    over = tracker.peaks_over_limit
+    if (
+        peak_is_new
+        and reading.memory_max is not None
+        and reading.memory_peak > capacity.utilization_limit * reading.memory_max
+    ):
+        over += 1
+    return Tracker(
+        container=Container(
+            id=reading.container, deployment=deployment, oom_kill=reading.oom_kill, peak=reading.memory_peak
+        ),
+        kills=kills,
+        restarts_same_deployment=same,
+        restarts_new_deployment=new,
+        peaks_over_limit=over,
     )
 
 
@@ -177,66 +292,136 @@ def _ceiling_findings(reading: Reading, capacity: CodeServerCapacity) -> list[st
     return []
 
 
-def _same_container(reading: Reading, baseline: Baseline | None) -> bool:
-    return baseline is not None and reading.started is not None and baseline.started == reading.started
-
-
-def _restart_findings(reading: Reading, baseline: Baseline | None, release: str) -> list[str]:
-    """A restart without a new release may be the kill of the server process, which resets its own counter."""
-    restarted = baseline is not None and reading.started is not None and not _same_container(reading, baseline)
-    if restarted and baseline is not None and baseline.release == release:
-        return ["the code server restarted without a release change; its OOM counter restarted too"]
+def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
+    """Totals only grow. A total below the last check's means the state was lost or reset."""
+    if baseline is None:
+        return []
+    shrunk = (
+        tracker.kills < baseline.kills
+        or tracker.restarts_same_deployment < baseline.restarts_same_deployment
+        or tracker.restarts_new_deployment < baseline.restarts_new_deployment
+        or tracker.peaks_over_limit < baseline.peaks_over_limit
+    )
+    if shrunk:
+        return ["the runtime shape state is lower than at the last check: it was reset, so kills may be unseen"]
     return []
 
 
-def _kills_since_the_last_check(reading: Reading, baseline: Baseline | None) -> int | None:
-    """The kills that came after the last check. A new container starts a new counter, so all its kills are new."""
-    if reading.oom_kill is None:
-        return None
-    counted_before = baseline.oom_kill if baseline is not None and _same_container(reading, baseline) else 0
-    return max(reading.oom_kill - counted_before, 0)
+def judge(
+    reading: Reading,
+    *,
+    tracker: Tracker,
+    baseline: Baseline | None,
+    capacity: CodeServerCapacity,
+    problems: tuple[str, ...] = (),
+) -> Judgement:
+    """Judge the growth of the totals since the last check, and the facts of this reading.
 
-
-def judge(reading: Reading, *, baseline: Baseline | None, release: str, capacity: CodeServerCapacity) -> Judgement:
-    """Judge one reading against the last check and the declared capacity."""
-    red: list[str] = []
-    facts: dict[str, int | float] = {}
+    `tracker` already holds this reading. `problems` are findings of the caller (an unreadable state)."""
+    red: list[str] = list(problems)
     if reading.unreadable:
         red.append(f"unreadable: {', '.join(reading.unreadable)}")
     red += _ceiling_findings(reading, capacity)
-    red += _restart_findings(reading, baseline, release)
+    red += _state_findings(tracker, baseline)
 
-    kills = _kills_since_the_last_check(reading, baseline)
-    if kills is not None:
-        facts["oom_kill_since_last_check"] = kills
-        if kills > 0:
-            red.append(f"{kills} OOM kill(s) since the last check")
+    before = baseline or _NO_CHECK_YET
+    kills = max(tracker.kills - before.kills, 0)
+    same = max(tracker.restarts_same_deployment - before.restarts_same_deployment, 0)
+    new = max(tracker.restarts_new_deployment - before.restarts_new_deployment, 0)
+    peaks = max(tracker.peaks_over_limit - before.peaks_over_limit, 0)
+    facts: dict[str, int | float] = {"oom_kills": kills, "unplanned_restarts": same, "peaks_over_limit": peaks}
 
     peak = ""
     if reading.memory_peak is not None and reading.memory_max is not None:
         share = reading.memory_peak / reading.memory_max
         facts["peak_share"] = round(share, 3)
         peak = f"peak {_mib(reading.memory_peak)} of {_mib(reading.memory_max)} MiB ({share:.0%})"
-        if share > capacity.utilization_limit:
-            red.append(f"{peak}; the limit is {capacity.utilization_limit:.0%}")
+    if kills:
+        red.append(f"{kills} OOM kill(s) since the last check")
+    if same:
+        red.append(
+            f"the code server was replaced {same} time(s) without a deployment change; its OOM counter restarted"
+        )
+    if peaks:
+        red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
 
-    new_baseline = (
-        Baseline(oom_kill=reading.oom_kill, started=reading.started, release=release)
-        if reading.oom_kill is not None and reading.started is not None
-        else None
-    )
     # The verdict is published on /health: counts and sizes only, never a path or an error text.
-    summary = "; ".join(red) if red else f"no OOM kill since the last check; {peak}"
-    if not red and baseline is not None and reading.started is not None and not _same_container(reading, baseline):
-        summary += "; the container restarted with a new release"
-    return Judgement(red=tuple(red), summary=summary, baseline=new_baseline, facts=facts)
+    if red:
+        summary = "; ".join(red)
+    else:
+        summary = f"no OOM kill and no unplanned restart since the last check; {peak}"
+        if new:
+            summary += f"; replaced {new} time(s) by a new deployment"
+    return Judgement(red=tuple(red), summary=summary, facts=facts)
+
+
+def _load(instance: dg.DagsterInstance, key: str) -> str | None:
+    return instance.run_storage.get_cursor_values({key}).get(key)
+
+
+def load_tracker(instance: dg.DagsterInstance) -> Tracker | None:
+    """The totals, or None when no sample was taken. Raises `StateUnreadable` for a value that is not a tracker."""
+    raw = _load(instance, TRACKER_KEY)
+    return None if raw is None else Tracker.from_json(raw)
 
 
 def load_baseline(instance: dg.DagsterInstance) -> Baseline | None:
-    """The baseline that the last check saved, or None when no check ran or the value is unreadable."""
-    raw = instance.run_storage.get_cursor_values({BASELINE_KEY}).get(BASELINE_KEY)
+    """The last scheduled check, or None when none ran. Raises `StateUnreadable` for a value that is not a baseline."""
+    raw = _load(instance, BASELINE_KEY)
     return None if raw is None else Baseline.from_json(raw)
 
 
-def save_baseline(instance: dg.DagsterInstance, baseline: Baseline) -> None:
-    instance.run_storage.set_cursor_values({BASELINE_KEY: baseline.to_json()})
+def sample(
+    instance: dg.DagsterInstance, *, deployment: str, capacity: CodeServerCapacity, reading: Reading | None = None
+) -> Tracker:
+    """Fold the current reading into the stored totals. A stored value that is not a tracker restarts the totals.
+
+    The next scheduled check sees totals below its baseline and goes red, so the loss is not hidden."""
+    try:
+        tracker = load_tracker(instance) or Tracker()
+    except StateUnreadable:
+        log.warning("the runtime shape tracker is not readable; the totals restart")
+        tracker = Tracker()
+    folded = fold(tracker, read() if reading is None else reading, deployment=deployment, capacity=capacity)
+    instance.run_storage.set_cursor_values({TRACKER_KEY: folded.to_json()})
+    return folded
+
+
+def check(
+    instance: dg.DagsterInstance,
+    *,
+    tick: str | None,
+    deployment: str,
+    capacity: CodeServerCapacity,
+    reading: Reading | None = None,
+) -> Judgement:
+    """The nightly judgement. Only a run with a `tick` moves the baseline; a repeat of the same tick repeats its verdict."""
+    reading = read() if reading is None else reading
+    problems: list[str] = []
+    try:
+        tracker = load_tracker(instance)
+    except StateUnreadable:
+        problems.append("the runtime shape tracker is not readable")
+        tracker = None
+    try:
+        baseline = load_baseline(instance)
+    except StateUnreadable:
+        problems.append("the runtime shape baseline is not readable")
+        baseline = None
+    if tick is not None and baseline is not None and baseline.tick == tick:
+        return Judgement(red=baseline.red, summary=baseline.summary)
+
+    folded = fold(tracker or Tracker(), reading, deployment=deployment, capacity=capacity)
+    judgement = judge(reading, tracker=folded, baseline=baseline, capacity=capacity, problems=tuple(problems))
+    if tick is not None:
+        saved = Baseline(
+            kills=folded.kills,
+            restarts_same_deployment=folded.restarts_same_deployment,
+            restarts_new_deployment=folded.restarts_new_deployment,
+            peaks_over_limit=folded.peaks_over_limit,
+            tick=tick,
+            red=judgement.red,
+            summary=judgement.summary,
+        )
+        instance.run_storage.set_cursor_values({BASELINE_KEY: saved.to_json()})
+    return judgement

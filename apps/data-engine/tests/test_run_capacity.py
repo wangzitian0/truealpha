@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ import yaml
 from dagster._core.errors import DagsterInvalidConfigError
 from dagster._core.instance.config import dagster_instance_config
 from dagster._core.instance.ref import InstanceRef
-from data_engine.dagster_defs import build_definitions, defs
+from data_engine.dagster_defs import build_definitions, defs, with_in_process_executor
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
 from truealpha_contracts.environment_contract import CodeServerCapacity, load_environment_contract
 
@@ -126,29 +127,107 @@ def test_every_deployed_job_runs_in_one_process() -> None:
     assert offenders == {scope: [] for scope in deployed}
 
 
-def test_the_root_default_executor_is_the_in_process_executor() -> None:
-    """A job without its own executor takes the default of the root Definitions (a job added later)."""
-    repository = defs.get_repository_def()
+@dg.op
+def _probe_op() -> None:
+    return None
 
-    assert repository.get_all_jobs(), "no job to inspect"
-    assert {job.executor_def.name for job in repository.get_all_jobs()} == {"in_process"}
+
+@dg.job
+def _probe_job() -> None:
+    """A job without an executor of its own, as a lane author would add one."""
+    _probe_op()
+
+
+def test_a_job_without_an_executor_of_its_own_takes_the_in_process_executor_from_the_root() -> None:
+    """The control resolves to Dagster's default; the root helper turns it into the in-process executor."""
+    control = dg.Definitions(jobs=[_probe_job]).resolve_all_job_defs()
+    deployed = with_in_process_executor(dg.Definitions(jobs=[_probe_job])).resolve_all_job_defs()
+
+    assert [job.executor_def.name for job in control] == ["multi_or_in_process_executor"]
+    assert [job.executor_def.name for job in deployed] == ["in_process"]
 
 
 # --- the jobs that wait for other runs -------------------------------------------------
 
 
+def _reaches(function: types.FunctionType, name: str, seen: set[types.CodeType] | None = None) -> bool:
+    """Whether `function` refers to `name`, itself or through functions of its own package that it names.
+
+    The code object holds every global name the function uses, its nested functions and its lambdas."""
+    seen = set() if seen is None else seen
+    return _code_reaches(function.__code__, function.__globals__, function.__module__.split(".")[0], name, seen)
+
+
+def _code_reaches(
+    code: types.CodeType, namespace: dict[str, Any], package: str, name: str, seen: set[types.CodeType]
+) -> bool:
+    if code in seen:
+        return False
+    seen.add(code)
+    if name in code.co_names:
+        return True
+    if any(
+        isinstance(const, types.CodeType) and _code_reaches(const, namespace, package, name, seen)
+        for const in code.co_consts
+    ):
+        return True
+    return any(
+        isinstance(target := namespace.get(referenced), types.FunctionType)
+        and target.__module__.split(".")[0] == package
+        and _code_reaches(target.__code__, target.__globals__, package, name, seen)
+        for referenced in code.co_names
+    )
+
+
 def _jobs_that_wait() -> set[str]:
-    """The jobs with an op whose function calls `_await_settled`, found by the names its code refers to."""
+    """The jobs with an op whose function reaches `_await_settled`, directly or through a helper."""
     return {
         job.name
         for job in defs.resolve_all_job_defs()
         for node in job.graph.nodes
-        if "_await_settled" in node.definition.compute_fn.decorated_fn.__code__.co_names
+        if _reaches(node.definition.compute_fn.decorated_fn, "_await_settled")
     }
 
 
 def _jobs_with_the_waiting_tag() -> set[str]:
     return {job.name for job in defs.resolve_all_job_defs() if job.tags.get(WAITS_FOR_RUNS_TAG) == "true"}
+
+
+def _waits() -> None:
+    _await_settled()
+
+
+def _waits_through_a_helper() -> None:
+    _helper()
+
+
+def _helper() -> None:
+    _await_settled()
+
+
+def _waits_in_a_lambda() -> None:
+    (lambda: _await_settled())()
+
+
+def _does_not_wait() -> None:
+    _helper_that_does_not_wait()
+
+
+def _helper_that_does_not_wait() -> None:
+    return None
+
+
+def _await_settled() -> None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("function", "waits"),
+    [(_waits, True), (_waits_through_a_helper, True), (_waits_in_a_lambda, True), (_does_not_wait, False)],
+    ids=lambda value: getattr(value, "__name__", str(value)),
+)
+def test_the_scan_follows_a_wait_through_a_helper_and_a_lambda(function: types.FunctionType, waits: bool) -> None:
+    assert _reaches(function, "_await_settled") is waits
 
 
 def test_the_scan_for_waiting_jobs_finds_the_two_jobs_that_wait_today() -> None:

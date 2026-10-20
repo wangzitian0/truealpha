@@ -25,8 +25,9 @@ itself. Production's boot canary reuses the night's observations, so nothing els
 a promoted release's fetch path works.
 
 The fifth is the runtime shape of the code server (`quality.runtime_shape`, #1467): whether the
-memory cgroup that holds every run and the gRPC server saw an OOM kill, or a peak above 70% of its
-ceiling. The run reads the cgroup of the container it executes in, which is the code server's.
+memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, or a new
+peak above 70% of its ceiling. The run reads the cgroup of the container it executes in, which is the
+code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
@@ -50,6 +51,7 @@ from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
+from data_engine.lanes.triggers import boot_deployment
 from data_engine.quality import runtime_shape, surface_proof
 from data_engine.quality.nightly_verdicts import (
     TICK_TAG,
@@ -370,7 +372,9 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
 @dg.job(name=OUTPUT_INVARIANTS_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
 def output_invariants_job() -> None:
     # Two independent verdicts in one nightly run: the numbers are possible (the suite), and
-    # every surface serves the head the pointer names (the proof). Neither waits on the other.
+    # every surface serves the head the pointer names (the proof). Neither depends on the other, and a
+    # failure of one does not stop the other. The in-process executor runs them one after the other;
+    # the second wait for a settled universe ends at once when the first saw every universe settle.
     run_output_invariants()
     run_report_surface_proof()
 
@@ -568,23 +572,20 @@ def release_fetch_proof_schedule(context: dg.ScheduleEvaluationContext) -> dg.Ru
 
 @dg.op
 def run_runtime_shape(context: dg.OpExecutionContext) -> str:
-    """Read the memory cgroup of this container and judge it against the declared capacity (#1467).
+    """Judge the memory cgroup of this container against the declared capacity (#1467).
 
     The run executes in the code server container, so the cgroup it reads is the one that holds the gRPC
-    server and every other run. A fact that cannot be read is a red verdict, never a green one."""
-    with verdict(
-        RUNTIME_SHAPE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
-    ) as outcome:
-        release = (settings.data_engine_image_digest or "").strip() or "unversioned"
-        judgement = runtime_shape.judge(
-            runtime_shape.read(),
-            baseline=runtime_shape.load_baseline(context.instance),
-            release=release,
+    server and every other run. The sensor `runtime_shape_sampler` keeps the totals between two checks, so
+    a container that a deploy replaced still counts. A fact that cannot be read is a red verdict, never a
+    green one."""
+    tick = tick_of(context)
+    with verdict(RUNTIME_SHAPE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+        judgement = runtime_shape.check(
+            context.instance,
+            tick=tick.isoformat() if tick is not None else None,
+            deployment=boot_deployment(),
             capacity=load_environment_contract().code_server_capacity,
         )
-        # The baseline is saved before a red run raises: the next check must count the kills after this one.
-        if judgement.baseline is not None:
-            runtime_shape.save_baseline(context.instance, judgement.baseline)
         context.log.info(f"runtime shape: {judgement.summary}")
         context.add_output_metadata({"red": len(judgement.red), **judgement.facts})
         outcome.summary = judgement.summary
@@ -607,6 +608,31 @@ def runtime_shape_job() -> None:
 def runtime_shape_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
+RUNTIME_SHAPE_SAMPLER_NAME = "runtime_shape_sampler"
+RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS = 300
+
+
+@dg.sensor(
+    name=RUNTIME_SHAPE_SAMPLER_NAME,
+    minimum_interval_seconds=RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def runtime_shape_sampler_sensor(context: dg.SensorEvaluationContext):
+    """Fold the memory cgroup of the code server into the totals of `runtime_shape` (#1467).
+
+    Dagster evaluates a sensor inside the code server process, so the cgroup it reads is the one that holds
+    every run. A deploy replaces the container and its counters; this sensor keeps what the old container
+    showed, with a loss of at most one interval. It launches no run."""
+    tracker = runtime_shape.sample(
+        context.instance,
+        deployment=boot_deployment(),
+        capacity=load_environment_contract().code_server_capacity,
+    )
+    yield dg.SkipReason(
+        f"sampled: {tracker.kills} OOM kill(s) and {tracker.peaks_over_limit} peak(s) over the limit so far"
+    )
 
 
 OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
@@ -668,5 +694,5 @@ defs = dg.Definitions(
         release_fetch_proof_schedule,
         runtime_shape_schedule,
     ],
-    sensors=[output_invariants_on_advance_sensor],
+    sensors=[output_invariants_on_advance_sensor, runtime_shape_sampler_sensor],
 )
