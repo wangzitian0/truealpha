@@ -1581,7 +1581,12 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
 
     executed_at = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
     run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
-        connection, cutoff=CUTOFF, executed_at=executed_at, risk_free_rate=Decimal("0.05"), capture_run_id=run.run_id
+        connection,
+        cutoff=CUTOFF,
+        executed_at=executed_at,
+        risk_free_rate=Decimal("0.05"),
+        capture_run_id=run.run_id,
+        plausibility_refusals={},
     )
     assert decision_count == 20
     assert snapshot_id.startswith("strategy-snapshot:")
@@ -1642,7 +1647,12 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
     )
     first_executed = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
     run_strategy_replay_for_cutoff(
-        connection, cutoff=CUTOFF, executed_at=first_executed, risk_free_rate=Decimal("0.05"), capture_run_id=run.run_id
+        connection,
+        cutoff=CUTOFF,
+        executed_at=first_executed,
+        risk_free_rate=Decimal("0.05"),
+        capture_run_id=run.run_id,
+        plausibility_refusals={},
     )
 
     context = AccessContext(
@@ -1681,6 +1691,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
         executed_at=first_executed + timedelta(minutes=5),
         risk_free_rate=Decimal("0.05"),
         capture_run_id=run.run_id,
+        plausibility_refusals={},
     )
     second = reader.get_latest(strategy_id="large_model_value_v0", context=context)
     assert isinstance(second, StrategyRunReport)

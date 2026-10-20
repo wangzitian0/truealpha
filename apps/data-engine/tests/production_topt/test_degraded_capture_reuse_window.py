@@ -63,14 +63,6 @@ _MAIN_DECISIONS_SQL = """
     where d.strategy_run_id = %s
     order by d.cutoff_at, d.issuer_id
 """
-_MAIN_GATE_ROWS_SQL = """
-    select r.listing_id, p.value as last_close
-    from mart.topt_core_results r
-    left join staging.strategy_backtest_inputs p
-      on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
-    where r.run_id = %s
-    order by r.listing_id
-"""
 
 
 @pytest.fixture(scope="module")
@@ -311,10 +303,6 @@ def _served_identity(reader, entity_id: str) -> str:
     return str(row[0])
 
 
-def _gate_closes(reader, sql: str, run_id: str) -> list[tuple[str, Decimal | None]]:
-    return [(str(listing), close) for listing, close in reader.execute(sql, (run_id,)).fetchall()]
-
-
 def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch: bool = False, accept: bool) -> dict:
     import dagster as dg
     from data_engine.datahub import a1_evidence
@@ -374,7 +362,6 @@ def _key_topt_like_the_planes(monkeypatch) -> dict[str, tuple[str, str]]:
 )
 def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_database_url, monkeypatch) -> None:
     """#877 H1 and H3 together, in the world where TOPT and QQQ key an issuer alike."""
-    from data_engine.datahub.production_topt import plausibility_gate
 
     # #530 item 1: this test shares one `day` across two DIFFERENT fixed corpuses whose
     # real partitions match neither -- default corpus.v1.json is 2026-03-31,
@@ -460,14 +447,6 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         shared_issuers = {issuer for issuer, _instrument in shared.values()}
         assert len(shared_issuers) == 12
         assert len(main_decisions) == 20 + len(shared_issuers)
-        main_qqq_gate = dict(_gate_closes(reader, _MAIN_GATE_ROWS_SQL, qqq.run_id))
-        aapl_listing = plan.coordinates["listing:xnas:aapl"][2]
-        assert main_qqq_gate[aapl_listing] == Decimal("40"), "main read TOPT's price into the QQQ run"
-
-        qqq_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, qqq.run_id)}
-        topt_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, topt["capture_run_id"])}
-        assert qqq_gate[aapl_listing] == Decimal("50") and set(qqq_gate.values()) == {Decimal("50")}
-        assert topt_gate[aapl_listing] == Decimal("40") and len(topt_gate) == 20
         topt_confidence = _core_confidence(reader, topt["capture_run_id"])
         aapl_served = _served_identity(reader, aapl_issuer)
 
@@ -485,7 +464,6 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
     the TOPT leg is forced so that it holds its own price. The two runs stay distinct.
     The #1019 scenario is the test above, which keeps its own `xfail`.
     """
-    from data_engine.datahub.production_topt import plausibility_gate
 
     # Both legs date their bar as production does (#530 item 1, #1060): `as_of` (-> valid_from)
     # is the settled session of the tick, 2026-07-15. That day follows both corpus anchors
@@ -553,14 +531,6 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
         shared_issuers = {issuer for issuer, _instrument in shared.values()}
         assert len(shared_issuers) == 12
         assert len(main_decisions) == 20 + len(shared_issuers)
-        main_qqq_gate = dict(_gate_closes(reader, _MAIN_GATE_ROWS_SQL, qqq.run_id))
-        aapl_listing = plan.coordinates["listing:xnas:aapl"][2]
-        assert main_qqq_gate[aapl_listing] == Decimal("40"), "main read TOPT's price into the QQQ run"
-
-        qqq_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, qqq.run_id)}
-        topt_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, topt["capture_run_id"])}
-        assert qqq_gate[aapl_listing] == Decimal("50") and set(qqq_gate.values()) == {Decimal("50")}
-        assert topt_gate[aapl_listing] == Decimal("40") and len(topt_gate) == 20
         topt_confidence = _core_confidence(reader, topt["capture_run_id"])
         aapl_served = _served_identity(reader, aapl_issuer)
 

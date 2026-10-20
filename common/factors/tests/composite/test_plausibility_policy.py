@@ -1,127 +1,54 @@
-"""#544 acceptance 1: each invariant fails against a synthetic run reproducing the real
-defect it targets. Four named cases, each the production shape that shipped green.
+"""#544 acceptance 1: each rule fails against a synthetic run reproducing the real defect it
+targets.
 
 v2 (#528): the sign rule judges the metric-forest node's declared policy instead of v1's
-"a financial branch cannot be negative", which contradicted the definition it judged."""
+"a financial branch cannot be negative", which contradicted the definition it judged.
+
+v4 (#1443): no rule reads the previous accepted run."""
 
 from __future__ import annotations
 
-from datetime import date
+import inspect
 from decimal import Decimal
 
 import pytest
 from factors.composite import plausibility_policy as policy
-from factors.composite.plausibility_policy import Row, Thresholds, evaluate, sign_signals
+from factors.composite.plausibility_policy import Row, evaluate, sign_signals
 from factors.forest import IssuerClass, SignPolicy, published_node
+from truealpha_contracts.strategy import ExclusionReason
 
 D = Decimal
 
 
-def row(
-    listing: str,
-    op: str | None,
-    ps: str | None,
-    *,
-    branch: str = "non_financial",
-    close: str | None = None,
-    availability: str = "available",
-    revenue_period_end: date | None = None,
-) -> Row:
+def row(listing: str, op: str | None, *, branch: str = "non_financial", availability: str = "available") -> Row:
     return Row(
         listing_id=listing,
         operating_branch=branch,
         availability=availability,
         operating_efficiency=D(op) if op is not None else None,
-        current_ps=D(ps) if ps is not None else None,
-        last_close=D(close) if close is not None else None,
-        revenue_period_end=revenue_period_end,
     )
 
 
-# The 2026-09-06 production head, abbreviated: NVDA is the universe maximum.
+# The 2026-09-06 production head, abbreviated.
 PREVIOUS = [
-    row("listing:xnas:nvda", "3272605", "25.71", close="180"),
-    row("listing:xnas:meta", "1804263", "7.74", close="750"),
-    row("listing:xnys:ma", "751418", "15.55", close="560"),
-    row("listing:xnys:jpm", "600000", "5.23", branch="financial", close="300"),
+    row("listing:xnas:nvda", "3272605"),
+    row("listing:xnas:meta", "1804263"),
+    row("listing:xnys:ma", "751418"),
+    row("listing:xnys:jpm", "600000", branch="financial"),
 ]
-
-
-def test_xom_above_the_universe_maximum_is_caught() -> None:
-    """#533: XOM 4,984,153 above NVIDIA's 4,746,260, revenue used as gross profit."""
-    current = [*PREVIOUS, row("listing:xnys:xom", "4984153", "1.5", close="110")]
-    (violation,) = evaluate(current, PREVIOUS)
-    assert violation.rule == policy.RULE_UNIVERSE_MAX and violation.listing_id == "listing:xnys:xom"
-    # 1.5x the maximum is the ceiling: NVDA growing 40% on its own is not a defect
-    grown = [row("listing:xnas:nvda", "4500000", "25.71", close="180")]
-    assert evaluate(grown, PREVIOUS) == []
-
-
-def test_ma_price_to_sales_collapsing_on_a_flat_price_is_caught() -> None:
-    """#533: MA current_price_to_sales 15.55 → 2.17 with no price move of that size."""
-    current = [row("listing:xnys:ma", "751418", "2.17", close="558")]
-    (violation,) = evaluate(current, PREVIOUS)
-    assert violation.rule == policy.RULE_VALUATION_MOVE and violation.listing_id == "listing:xnys:ma"
-    # the same move explained by the price is not a defect
-    explained = [row("listing:xnys:ma", "751418", "2.17", close="80")]
-    assert evaluate(explained, PREVIOUS) == []
-    # no price on one side: the rule cannot judge and stays silent
-    silent = [row("listing:xnys:ma", "751418", "2.17")]
-    assert evaluate(silent, PREVIOUS) == []
-
-
-# #1236: the production refusal of 2026-10-09, with MU's real values. Micron filed its FY2026
-# 10-K on 2026-10-09 (accession 0000723125-26-000023): revenue 133,188,000,000 for the year
-# ending 2026-09-03, against 37,378,000,000 for the year ending 2025-08-28 (SEC companyconcept).
-MU_BEFORE = row(
-    "listing:xnas:mu",
-    "154102",
-    "31.29837341569479372893145700679544",
-    close="1035.84",
-    revenue_period_end=date(2025, 8, 28),
-)
-
-
-def test_a_new_fiscal_year_explains_a_valuation_move() -> None:
-    """#1236: MU's price-to-sales fell 3.58x on a flat price because its revenue moved to a
-    new fiscal year. v2 refused every tick from 2026-10-09; v3 accepts the move."""
-    after = row(
-        "listing:xnas:mu",
-        "154102",
-        "8.741286641048743130011712766915938",
-        close="1029.00",
-        revenue_period_end=date(2026, 9, 3),
-    )
-    assert evaluate([after], [MU_BEFORE]) == []
-
-
-def test_a_valuation_move_on_the_same_or_an_older_revenue_period_is_still_caught() -> None:
-    """The fiscal-year explanation needs a LATER period. The same move on the same period is a
-    revenue or share-count error; a period that moves back is the #529/#533 stale-filing shape."""
-    for period in (date(2025, 8, 28), date(2010, 12, 31), None):
-        after = row(
-            "listing:xnas:mu",
-            "154102",
-            "8.741286641048743130011712766915938",
-            close="1029.00",
-            revenue_period_end=period,
-        )
-        (violation,) = evaluate([after], [MU_BEFORE])
-        assert violation.rule == policy.RULE_VALUATION_MOVE and violation.listing_id == "listing:xnas:mu"
-        assert "revenue period end did not advance" in violation.detail
 
 
 def test_a_negative_bank_metric_is_a_declared_signal_not_a_violation() -> None:
     """#528: JPM at -514,726 is what GPPE v0.2.0 (#59) defines as a valid low signal. v1
     refused it under an expiring exemption; v2 accepts it and names it."""
-    jpm = row("listing:xnys:jpm", "-514726", "5.23", branch="financial", close="300")
-    assert evaluate([jpm], PREVIOUS) == []
+    jpm = row("listing:xnys:jpm", "-514726", branch="financial")
+    assert evaluate([jpm]) == []
     (signal,) = sign_signals([jpm])
     assert signal.rule == policy.RULE_NODE_SIGN_POLICY and signal.listing_id == "listing:xnys:jpm"
     assert "sign-is-signal" in signal.detail and "-514,726.00" in signal.detail
     # the same holds for every class the node declares, and an unavailable row is not judged
-    assert sign_signals([row("listing:xnas:tsla", "-1", "14", close="300")])
-    assert sign_signals([row("listing:xnys:jpm", "-1", "5", branch="financial", availability="unavailable")]) == []
+    assert sign_signals([row("listing:xnas:tsla", "-1")])
+    assert sign_signals([row("listing:xnys:jpm", "-1", branch="financial", availability="unavailable")]) == []
     # a non-negative value says nothing
     assert sign_signals(PREVIOUS) == []
 
@@ -138,50 +65,49 @@ def strict_financial(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_sign_the_node_forbids_is_caught(strict_financial: None) -> None:
     """The rule is only as strict as the definition: where a node forbids a negative value,
     the v1 shape is caught exactly as before."""
-    current = [row("listing:xnys:jpm", "-514726", "5.23", branch="financial", close="300")]
-    (violation,) = evaluate(current, PREVIOUS)
+    current = [row("listing:xnys:jpm", "-514726", branch="financial")]
+    (violation,) = evaluate(current)
     assert violation.rule == policy.RULE_NODE_SIGN_POLICY and violation.listing_id == "listing:xnys:jpm"
     assert "must-be-non-negative" in violation.detail
     assert sign_signals(current) == []
     # the non-financial class still declares a signal, and an unavailable row is not judged
-    assert evaluate([row("listing:xnas:tsla", "-1", "14", close="300")], PREVIOUS) == []
-    assert (
-        evaluate([row("listing:xnys:jpm", "-1", "5", branch="financial", availability="unavailable")], PREVIOUS) == []
-    )
+    assert evaluate([row("listing:xnas:tsla", "-1")]) == []
+    assert evaluate([row("listing:xnys:jpm", "-1", branch="financial", availability="unavailable")]) == []
 
 
 def test_a_value_for_a_class_the_node_does_not_declare_is_caught() -> None:
     """No policy vouches for a branch the forest does not know, whatever the sign."""
-    current = [row("listing:xnys:new", "10", "5", branch="sovereign_fund", close="300")]
-    (violation,) = evaluate(current, PREVIOUS)
+    (violation,) = evaluate([row("listing:xnys:new", "10", branch="sovereign_fund")])
     assert violation.rule == policy.RULE_NODE_SIGN_POLICY and "no policy for this issuer class" in violation.detail
 
 
 def test_an_empty_eligible_set_is_caught() -> None:
     """#527: 100 % excluded decisions, or an L2 complete count of zero, recorded SUCCESS."""
-    all_excluded = evaluate(PREVIOUS, PREVIOUS, outcomes={"excluded": 20}, l2_complete=0)
+    all_excluded = evaluate(PREVIOUS, outcomes={"excluded": 20}, l2_complete=0)
     assert [v.rule for v in all_excluded] == [policy.RULE_EMPTY_ELIGIBLE, policy.RULE_EMPTY_ELIGIBLE]
-    assert evaluate(PREVIOUS, PREVIOUS, outcomes={"selected": 2, "excluded": 18}, l2_complete=17) == []
+    assert evaluate(PREVIOUS, outcomes={"selected": 2, "excluded": 18}, l2_complete=17) == []
     # a tick without a strategy passes nothing here and is not judged
-    assert evaluate(PREVIOUS, PREVIOUS) == []
+    assert evaluate(PREVIOUS) == []
     # #544: outcomes={} (a strategy run that produced 0 decisions) must not be exempted
-    assert [v.rule for v in evaluate(PREVIOUS, PREVIOUS, outcomes={}, l2_complete=5)] == [policy.RULE_EMPTY_ELIGIBLE]
+    assert [v.rule for v in evaluate(PREVIOUS, outcomes={}, l2_complete=5)] == [policy.RULE_EMPTY_ELIGIBLE]
     assert [v.rule for v in policy.empty_eligible_set({}, 5)] == [policy.RULE_EMPTY_ELIGIBLE]
 
 
-def test_the_first_accepted_run_has_no_previous_to_regress_against() -> None:
-    current = [row("listing:xnas:nvda", "3272605", "25.71", close="180")]
-    assert evaluate(current, []) == []
+def test_no_rule_reads_the_previous_run() -> None:
+    """#1443 acceptance 2: no refusal names "moved Nx versus the previous run". The policy takes no
+    previous run, and a row carries nothing a previous run could be compared with."""
+    assert "previous" not in inspect.signature(evaluate).parameters
+    assert set(Row.__dataclass_fields__) == {"listing_id", "operating_branch", "availability", "operating_efficiency"}
+    for deleted in ("universe_max_regression", "unexplained_valuation_move", "Thresholds"):
+        assert not hasattr(policy, deleted), deleted
 
 
-def test_the_policy_is_v3_with_v1_thresholds_and_named_rules() -> None:
-    assert policy.POLICY_VERSION == "v3"
-    assert Thresholds() == Thresholds(D("1.5"), D("2"), D("1.4"))
-    assert set(policy.RULES) == {
-        "universe-max-regression",
-        "unexplained-valuation-move",
-        "node-sign-policy",
-        "empty-eligible-set",
+def test_the_policy_is_v4_with_named_rules() -> None:
+    assert policy.POLICY_VERSION == "v4"
+    assert set(policy.RULES) == {"node-sign-policy", "empty-eligible-set"}
+    # #1323: the issuer rule names the exclusion reason its refused decision carries
+    assert policy.EXCLUSION_REASON == {
+        policy.RULE_NODE_SIGN_POLICY: ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY
     }
     # the gate judges the published column the forest ties to GPPE v0.2.0 (#1176: the uniform node)
     assert published_node(policy.JUDGED_TABLE, policy.JUDGED_COLUMN).key == "gppe_uniform_charge_v0"

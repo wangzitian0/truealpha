@@ -1,15 +1,15 @@
-"""The plausibility gate on a tick (#544): judge this run's published rows against
-the plausibility policy (v3 since #1236) and the previous accepted run, in the tick's own
-transaction, before the pointer advances.
+"""The plausibility gate on a tick (#544): judge this run's published rows against the
+plausibility policy (v4 since #1443), in the tick's own transaction, before the pointer advances.
 
-`lanes/capture.py` calls `judge_run` after materialization (and after the strategy
-replay when the tick runs one). A violation that is not exempted fails the Dagster run;
-the transaction rolls back with it, so nothing of the refused run is materialised and
-`mart.current_pointer` stays on the previous accepted run — the behaviour the pointer
-design already implies. Exemptions come from the same file the nightly suite reads
-(`tools/output_invariant_exemptions.json`, issue + expiry): `node-sign-policy` is judged
-under the suite's entry of the same id because it is the same question judged earlier. An
-expired exemption is no exemption.
+`lanes/capture.py` calls `judge_issuers` right after materialization, before anything consumes
+the run. An issuer refusal that is not exempted names one listing: a tick that runs the strategy
+excludes that issuer's decision with the refusal's reason, and every tick publishes the others
+(#1323). The only run refusal is `judge_strategy`'s empty eligible set: it fails the Dagster run,
+the transaction rolls back with it, and `mart.current_pointer` stays on the previous accepted run.
+The gate reads no other run (#1443). Exemptions come from the same file the nightly suite reads
+(`tools/output_invariant_exemptions.json`, issue + expiry): `node-sign-policy` is judged under the
+suite's entry of the same id because it is the same question judged earlier. An expired
+exemption is no exemption.
 
 A negative value whose forest node declares `sign-is-signal` is not a violation, and it is
 not silent either: `Verdict.signals` carries it and `lines()` prints it on every tick (#528).
@@ -18,22 +18,24 @@ not silent either: `Verdict.signals` carries it and `lines()` prints it on every
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from factors.composite.plausibility_policy import (
+    EXCLUSION_REASON,
     POLICY_VERSION,
     RULE_NODE_SIGN_POLICY,
     Row,
     Violation,
-    evaluate,
+    empty_eligible_set,
+    node_sign_policy,
     sign_signals,
 )
-
-from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
+from truealpha_contracts.strategy import ExclusionReason
 
 #: The nightly suite's exemption file, as the image carries it (Dockerfile) or in the repo.
 _EXEMPTIONS_IMAGE = Path("/app/tools/output_invariant_exemptions.json")
@@ -41,46 +43,11 @@ _EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invar
 #: Gate rule -> nightly invariant whose exemption also defers the gate.
 _SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 
-# `last_close` is the price the run's own core result was computed from: the market-price
-# observation among the result's `input_observation_ids` for the result's own listing (a
-# dual-class issuer's result carries one per class). It used to be joined from
-# `staging.strategy_backtest_inputs` on (issuer_id, cutoff), which has no run at all
-# (#877): a forced tick (#874) or a re-published tick seeds a second vintage at the same
-# cutoff and every row came back once per vintage, with either run's price; and a QQQ or
-# canary result read TOPT's seeded price for an issuer the two universes key alike. The
-# run's own observation is what `current_ps` was computed from, so a forced correction of
-# a price is judged against the price it corrected, not against the run it replaced.
 _ROWS_SQL = """
-    select r.listing_id, r.operating_branch, r.availability, r.operating_efficiency, r.current_ps,
-           price.last_close, r.revenue_period_end
+    select r.listing_id, r.issuer_id, r.operating_branch, r.availability, r.operating_efficiency
     from mart.topt_core_results r
-    left join lateral (
-        select (payload.normalized_payload->>'close')::numeric as last_close
-        from staging.capture_normalized_observations observation
-        join staging.capture_observation_payloads payload using (observation_id)
-        where observation.observation_id = any(r.input_observation_ids)
-          and observation.semantic_type = 'market-price'
-          and payload.normalized_payload->>'listing_id' = r.listing_id
-    ) price on true
     where r.run_id = %s
     order by r.listing_id
-"""
-
-# The previous accepted run for the SAME universe: the head is keyed by universe
-# (check_factor_contract), and a canary head must never stand in for the core's.
-# The full governed key (review on #764): (environment, universe_id, universe_version,
-# factor_id). The environment literal is the one every head consumer carries today —
-# #756 measures it; until then this stays in step with POINTER_HEAD_SQL and
-# tools/output_invariants.GOVERNED_HEAD rather than diverging from them.
-_PREVIOUS_HEAD_SQL = """
-    select head.target_run_id
-    from mart.current_pointer_head head
-    where head.environment = (select environment from mart.environment_identity)
-      and head.factor_id = %s
-      and head.universe_id = %s
-      and head.universe_version = %s
-    order by head.advanced_at desc
-    limit 1
 """
 
 _OUTCOMES_SQL = """
@@ -94,44 +61,63 @@ _OUTCOMES_SQL = """
 @dataclass(frozen=True)
 class Verdict:
     policy_version: str
-    previous_run_id: str | None
-    violations: tuple[Violation, ...]
+    #: Issuer refusals in force: the tick excludes each refused issuer and publishes the others.
+    refusals: tuple[Violation, ...]
+    #: Run refusals: the tick fails and its transaction rolls back.
+    run_refusals: tuple[Violation, ...]
     deferred: tuple[tuple[Violation, str], ...]
     #: Negative values their node declares `sign-is-signal`: accepted, and printed by name.
     signals: tuple[Violation, ...] = ()
+    #: listing id -> issuer id of every judged row, so a refusal reaches the issuer's decision.
+    issuers: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
-        return bool(self.violations)
+        """True when the whole run is refused. An issuer refusal alone never refuses the run."""
+        return bool(self.run_refusals)
+
+    def excluded_issuers(self) -> dict[str, ExclusionReason]:
+        """issuer id -> exclusion reason for every refused listing, first refusal first."""
+        excluded: dict[str, ExclusionReason] = {}
+        for violation in self.refusals:
+            if violation.listing_id is None:
+                raise ValueError(f"issuer refusal without a listing: {violation}")
+            excluded.setdefault(self.issuers[violation.listing_id], EXCLUSION_REASON[violation.rule])
+        return excluded
 
     def lines(self) -> list[str]:
-        out = [f"plausibility policy {self.policy_version}: previous accepted run {self.previous_run_id or '(none)'}"]
+        out = [f"plausibility policy {self.policy_version}"]
         for signal in self.signals:
             out.append(f"  SIGNAL   {signal.rule} {signal.listing_id or ''}: {signal.detail} — a declared low signal")
         for violation, note in self.deferred:
             out.append(f"  DEFERRED {violation.rule} {violation.listing_id or ''}: {violation.detail} — {note}")
-        for violation in self.violations:
-            out.append(f"  REFUSED  {violation.rule} {violation.listing_id or ''}: {violation.detail}")
-        if not self.violations and not self.deferred:
-            out.append("  ok: every published row is physically possible against the previous accepted run")
+        for violation in self.refusals:
+            out.append(
+                f"  EXCLUDED {violation.rule} {violation.listing_id or ''}: {violation.detail} — refused as "
+                f"{EXCLUSION_REASON[violation.rule].value}; the run publishes the other listings"
+            )
+        for violation in self.run_refusals:
+            out.append(f"  REFUSED  {violation.rule}: {violation.detail}")
+        if not self.refusals and not self.run_refusals and not self.deferred:
+            out.append("  ok: every published row respects its definition")
         return out
 
 
-def _rows(connection: Any, run_id: str) -> list[Row]:
-    return [
-        Row(
-            listing_id=str(listing_id),
-            operating_branch=str(branch),
-            availability=str(availability),
-            operating_efficiency=Decimal(str(op)) if op is not None else None,
-            current_ps=Decimal(str(ps)) if ps is not None else None,
-            last_close=Decimal(str(close)) if close is not None else None,
-            revenue_period_end=revenue_period_end,
+def _rows(connection: Any, run_id: str) -> tuple[list[Row], dict[str, str]]:
+    """The run's published rows, and the issuer id of each listing."""
+    rows: list[Row] = []
+    issuers: dict[str, str] = {}
+    for listing_id, issuer_id, branch, availability, op in connection.execute(_ROWS_SQL, (run_id,)).fetchall():
+        rows.append(
+            Row(
+                listing_id=str(listing_id),
+                operating_branch=str(branch),
+                availability=str(availability),
+                operating_efficiency=Decimal(str(op)) if op is not None else None,
+            )
         )
-        for listing_id, branch, availability, op, ps, close, revenue_period_end in connection.execute(
-            _ROWS_SQL, (run_id,)
-        ).fetchall()
-    ]
+        issuers[str(listing_id)] = str(issuer_id)
+    return rows, issuers
 
 
 def _exemptions(path: Path | None = None, today: date | None = None) -> dict[str, str]:
@@ -152,7 +138,51 @@ def _exemptions(path: Path | None = None, today: date | None = None) -> dict[str
     return live
 
 
-_RUN_UNIVERSE_SQL = "select universe_id, universe_version from staging.topt_core_snapshots where run_id = %s"
+def judge_issuers(
+    connection: Any,
+    *,
+    run_id: str,
+    exemptions_path: Path | None = None,
+    today: date | None = None,
+) -> Verdict:
+    """The policy's issuer rules over this run's published rows. Never excludes, advances or
+    refuses anything itself: the caller excludes `Verdict.excluded_issuers()` and turns
+    `Verdict.refused` into the Dagster failure that rolls the tick back."""
+    current, issuers = _rows(connection, run_id)
+    live = _exemptions(exemptions_path, today)
+    refusals: list[Violation] = []
+    deferred: list[tuple[Violation, str]] = []
+    for violation in node_sign_policy(current):
+        shared = _SHARED_EXEMPTION.get(violation.rule)
+        note = live.get(shared) if shared else None
+        if note:
+            deferred.append((violation, note))
+        else:
+            refusals.append(violation)
+    return Verdict(
+        policy_version=POLICY_VERSION,
+        refusals=tuple(refusals),
+        run_refusals=(),
+        deferred=tuple(deferred),
+        signals=tuple(sign_signals(current)),
+        issuers=issuers,
+    )
+
+
+def judge_strategy(
+    connection: Any, verdict: Verdict, *, strategy_run_id: str | None, l2_complete: int | None
+) -> Verdict:
+    """`verdict` plus the empty-eligible-set rule over the strategy run the tick wrote with the
+    verdict's exclusions (#527). None for both means the tick ran no strategy."""
+    outcomes = (
+        {
+            str(outcome): int(count)
+            for outcome, count in connection.execute(_OUTCOMES_SQL, (strategy_run_id,)).fetchall()
+        }
+        if strategy_run_id
+        else None
+    )
+    return replace(verdict, run_refusals=(*verdict.run_refusals, *empty_eligible_set(outcomes, l2_complete)))
 
 
 def judge_run(
@@ -164,34 +194,6 @@ def judge_run(
     exemptions_path: Path | None = None,
     today: date | None = None,
 ) -> Verdict:
-    """The plausibility policy over this run's published rows against the previous accepted
-    run of the same universe. Never advances or refuses anything itself: the caller turns
-    `Verdict.refused` into the Dagster failure that rolls the tick back."""
-    current = _rows(connection, run_id)
-    universe = connection.execute(_RUN_UNIVERSE_SQL, (run_id,)).fetchone()
-    if universe is None:
-        raise RuntimeError(f"run {run_id} has no frozen snapshot; the gate judges materialized runs only")
-    universe_id, universe_version = str(universe[0]), str(universe[1])
-    previous_row = connection.execute(_PREVIOUS_HEAD_SQL, (POINTER_FACTOR_ID, universe_id, universe_version)).fetchone()
-    previous_run_id = str(previous_row[0]) if previous_row and previous_row[0] != run_id else None
-    previous = _rows(connection, previous_run_id) if previous_run_id else []
-    outcomes = (
-        {
-            str(outcome): int(count)
-            for outcome, count in connection.execute(_OUTCOMES_SQL, (strategy_run_id,)).fetchall()
-        }
-        if strategy_run_id
-        else None
-    )
-    found = evaluate(current, previous, outcomes=outcomes, l2_complete=l2_complete)
-    live = _exemptions(exemptions_path, today)
-    violations: list[Violation] = []
-    deferred: list[tuple[Violation, str]] = []
-    for violation in found:
-        shared = _SHARED_EXEMPTION.get(violation.rule)
-        note = live.get(shared) if shared else None
-        if note:
-            deferred.append((violation, note))
-        else:
-            violations.append(violation)
-    return Verdict(POLICY_VERSION, previous_run_id, tuple(violations), tuple(deferred), tuple(sign_signals(current)))
+    """`judge_issuers` and `judge_strategy` in one call, for a run whose strategy is already written."""
+    verdict = judge_issuers(connection, run_id=run_id, exemptions_path=exemptions_path, today=today)
+    return judge_strategy(connection, verdict, strategy_run_id=strategy_run_id, l2_complete=l2_complete)

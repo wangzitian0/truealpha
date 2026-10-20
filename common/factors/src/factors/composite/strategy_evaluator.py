@@ -660,6 +660,7 @@ def evaluate_cutoff(
     risk_free_rate: Decimal,
     labor_efficiency_by_class: Mapping[IssuerClass | None, LaborEfficiencyMetric] | None = None,
     forest: Forest = FOREST,
+    plausibility_refusals: Mapping[str, ExclusionReason] = MappingProxyType({}),
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id.
@@ -670,7 +671,11 @@ def evaluate_cutoff(
     is resolved through `forest` if present, otherwise `LABOR_EFFICIENCY_BY_CLASS` is used.
 
     An issuer is excluded with `stale_required_input` when any required input became knowable more
-    than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255)."""
+    than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255).
+
+    `plausibility_refusals` maps an issuer id to the reason the plausibility gate refused its
+    published row (#1323). That issuer is excluded with the reason before ranking, so the other
+    issuers are ranked and weighted without it."""
     resolved_binding: Mapping[IssuerClass | None, LaborEfficiencyMetric]
     if labor_efficiency_by_class is not None:
         resolved_binding = labor_efficiency_by_class
@@ -680,7 +685,9 @@ def evaluate_cutoff(
         resolved_binding = LABOR_EFFICIENCY_BY_CLASS
 
     decisions = [
-        _evaluate_issuer(
+        _excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id], confidence=None)
+        if issuer.issuer_id in plausibility_refusals
+        else _evaluate_issuer(
             issuer,
             definition=definition,
             risk_free_rate=risk_free_rate,

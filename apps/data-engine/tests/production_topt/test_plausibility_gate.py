@@ -1,7 +1,9 @@
 """#544 acceptance 2 and 5, against a real materialized run: the gate reads this run's
-published rows and the previous accepted head, refuses a run the policy rejects, defers
-what the nightly suite's exemption file defers, and judges the empty eligible set here.
-#528: the sign rule reads the metric forest, and a declared low signal is shown, not refused."""
+published rows, refuses what the policy rejects, defers what the nightly suite's exemption
+file defers, and judges the empty eligible set here.
+#528: the sign rule reads the metric forest, and a declared low signal is shown, not refused.
+#1443: the gate reads no other run. #1323: an issuer refusal names one listing and does not
+refuse the run."""
 
 from __future__ import annotations
 
@@ -9,7 +11,6 @@ import json
 import os
 import sys
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -17,10 +18,11 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
-from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY, RULE_UNIVERSE_MAX
+from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
 from factors.forest import IssuerClass, SignPolicy, published_node
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.strategy import ExclusionReason
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
@@ -95,131 +97,15 @@ def _exemptions(tmp_path: Path, expires: str) -> Path:
     return path
 
 
-def test_a_plausible_run_against_its_own_predecessor_passes(connection, tmp_path) -> None:
+def test_a_plausible_run_passes(connection, tmp_path) -> None:
     run_id, snapshot = _materialized_run(connection)
     _point_head_at(connection, run_id, snapshot)
     verdict = plausibility_gate.judge_run(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 8)
     )
-    # the head IS this run: no previous, nothing to regress against, nothing negative
-    assert verdict.previous_run_id is None and not verdict.refused and verdict.deferred == ()
+    # nothing negative, nothing refused
+    assert not verdict.refused and verdict.refusals == () and verdict.deferred == ()
     assert verdict.lines()[-1].strip().startswith("ok:")
-
-
-def _register_previous_run(connection, snapshot, *, sequence: int = 0) -> str:
-    """A previous accepted run for the same universe, as the pointer sees it: an evidence
-    node the head can target. Its published rows are supplied by the test (the seed
-    helper can freeze one corpus per transaction), the current run's rows are real."""
-    sha = canonical_sha256({"previous-run-for": snapshot.snapshot_id})
-    run_id = f"capture-run:{sha}"
-    connection.execute(
-        """
-        insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, recorded_at)
-        values (%s, 'capture_run', %s, current_date, clock_timestamp(), clock_timestamp())
-        """,
-        (run_id, sha),
-    )
-    _point_head_at(connection, run_id, snapshot, sequence=sequence)
-    return run_id
-
-
-def test_xoms_shape_is_refused_against_the_previous_accepted_run(connection, tmp_path, monkeypatch) -> None:
-    """#533 replayed: one issuer's operating metric above 1.5x the previous accepted
-    universe maximum. The previous accepted run is the head of the SAME universe, resolved
-    through mart.current_pointer_head; its rows are the 2026-09-06 production shape."""
-    from factors.composite.plausibility_policy import Row
-
-    current_run_id, snapshot = _materialized_run(connection)
-    previous_run_id = _register_previous_run(connection, snapshot)
-    real_rows = plausibility_gate._rows
-    previous_rows = [
-        Row("listing:xnas:nvda", "non_financial", "available", Decimal("3272605"), Decimal("25.71"), Decimal("180")),
-        Row("listing:xnas:meta", "non_financial", "available", Decimal("1804263"), Decimal("7.74"), Decimal("750")),
-    ]
-    monkeypatch.setattr(
-        plausibility_gate,
-        "_rows",
-        lambda conn, run_id: previous_rows if run_id == previous_run_id else real_rows(conn, run_id),
-    )
-    _bypass_append_only(connection)
-    connection.execute(
-        "update mart.topt_core_results set operating_efficiency = 4984153, availability = 'available' "
-        "where run_id = %s and listing_id = 'listing:xnys:xom'",
-        (current_run_id,),
-    )
-    verdict = plausibility_gate.judge_run(
-        connection, run_id=current_run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 8)
-    )
-    assert verdict.previous_run_id == previous_run_id
-    assert [(v.rule, v.listing_id) for v in verdict.violations] == [(RULE_UNIVERSE_MAX, "listing:xnys:xom")]
-    assert any("REFUSED" in line for line in verdict.lines())
-    # the same current rows with XOM inside the ceiling pass against the same head
-    connection.execute(
-        "update mart.topt_core_results set operating_efficiency = 4000000 where run_id = %s and listing_id = 'listing:xnys:xom'",
-        (current_run_id,),
-    )
-    assert not plausibility_gate.judge_run(
-        connection, run_id=current_run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 8)
-    ).refused
-
-
-def test_a_new_fiscal_year_is_read_from_the_runs_own_row(connection, tmp_path, monkeypatch) -> None:
-    """#1236 through the deployed path: `_rows` must carry `revenue_period_end` from
-    mart.topt_core_results, or the policy cannot see a new fiscal year and refuses the tick, as
-    it did for MU every night from 2026-10-09. The previous row has a 3.58x higher P/S on the
-    same price; only the revenue period decides the verdict."""
-    from datetime import timedelta
-
-    from factors.composite.plausibility_policy import RULE_VALUATION_MOVE, Row
-
-    current_run_id, snapshot = _materialized_run(connection)
-    previous_run_id = _register_previous_run(connection, snapshot)
-    real_rows = plausibility_gate._rows
-    # The seed's financial payload carries no period end; production fills it on every
-    # available row (2026-10-12: TOPT 34/34, QQQ 273/273). Set MU's as its FY2026 10-K did.
-    _bypass_append_only(connection)
-    connection.execute(
-        "update mart.topt_core_results set revenue_period_end = date '2026-09-03' "
-        "where run_id = %s and listing_id = 'listing:xnas:mu'",
-        (current_run_id,),
-    )
-    current = {row.listing_id: row for row in real_rows(connection, current_run_id)}
-    mu = current["listing:xnas:mu"]
-    # Preconditions, so the verdict below cannot pass on a row the rule skips.
-    assert mu.availability == "available"
-    assert mu.current_ps is not None and mu.last_close is not None
-    assert mu.revenue_period_end is not None
-
-    def previous_mu(revenue_period_end) -> list[Row]:
-        return [
-            Row(
-                mu.listing_id,
-                mu.operating_branch,
-                "available",
-                mu.operating_efficiency,
-                mu.current_ps * Decimal("3.58"),
-                mu.last_close,
-                revenue_period_end,
-            )
-        ]
-
-    def judge(previous_rows: list[Row]):
-        monkeypatch.setattr(
-            plausibility_gate,
-            "_rows",
-            lambda conn, run_id: previous_rows if run_id == previous_run_id else real_rows(conn, run_id),
-        )
-        return plausibility_gate.judge_run(
-            connection,
-            run_id=current_run_id,
-            exemptions_path=_exemptions(tmp_path, "2000-01-01"),
-            today=date(2026, 10, 12),
-        )
-
-    older_year = judge(previous_mu(mu.revenue_period_end - timedelta(days=371)))
-    assert RULE_VALUATION_MOVE not in {violation.rule for violation in older_year.violations}
-    same_year = judge(previous_mu(mu.revenue_period_end))
-    assert (RULE_VALUATION_MOVE, "listing:xnas:mu") in {(v.rule, v.listing_id) for v in same_year.violations}
 
 
 def _jpm_negative(connection, run_id: str) -> None:
@@ -269,10 +155,15 @@ def test_a_sign_the_node_forbids_is_refused_unless_an_unexpired_exemption_defers
     expired = plausibility_gate.judge_run(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2026-09-16"), today=date(2026, 9, 17)
     )
-    assert expired.refused and [(v.rule, v.listing_id) for v in expired.violations] == [
-        (RULE_NODE_SIGN_POLICY, "listing:xnys:jpm")
-    ]
-    assert "must-be-non-negative" in expired.violations[0].detail
+    # #1323: the refusal names JPM and excludes its issuer; it does not refuse the run
+    assert [(v.rule, v.listing_id) for v in expired.refusals] == [(RULE_NODE_SIGN_POLICY, "listing:xnys:jpm")]
+    assert "must-be-non-negative" in expired.refusals[0].detail
+    assert not expired.refused
+    assert expired.excluded_issuers() == {
+        expired.issuers["listing:xnys:jpm"]: ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY
+    }
+    (line,) = [line for line in expired.lines() if line.startswith("  EXCLUDED")]
+    assert "listing:xnys:jpm" in line and "plausibility_refused_node_sign_policy" in line
 
 
 def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, tmp_path) -> None:
@@ -285,7 +176,7 @@ def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, 
         exemptions_path=_exemptions(tmp_path, "2000-01-01"),
         today=date(2026, 9, 8),
     )
-    assert verdict.refused and [v.rule for v in verdict.violations] == [RULE_EMPTY_ELIGIBLE]
+    assert verdict.refused and [v.rule for v in verdict.run_refusals] == [RULE_EMPTY_ELIGIBLE]
     # #544: a strategy run with zero published decisions must also be refused
     empty_strategy_verdict = plausibility_gate.judge_run(
         connection,
@@ -295,43 +186,6 @@ def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, 
         exemptions_path=_exemptions(tmp_path, "2000-01-01"),
         today=date(2026, 9, 8),
     )
-    assert empty_strategy_verdict.refused and [v.rule for v in empty_strategy_verdict.violations] == [
+    assert empty_strategy_verdict.refused and [v.rule for v in empty_strategy_verdict.run_refusals] == [
         RULE_EMPTY_ELIGIBLE
     ]
-
-
-def test_the_price_a_row_is_judged_by_is_its_own_runs(connection) -> None:
-    """#877: the gate joined `last_close` from `staging.strategy_backtest_inputs` on
-    (issuer_id, cutoff), a table with no run. Another run's seed at the same cutoff — a
-    forced re-run (#874), a re-published tick, or another universe keyed alike — made every
-    row come back once per vintage, carrying either run's price. The price is now the
-    market-price observation the row's own core result was computed from."""
-    run_id, _snapshot = _materialized_run(connection)
-    own = plausibility_gate._rows(connection, run_id)
-    assert len(own) == 20
-    # The seeded fixture's close is 40 on every listing (test_materialization's payloads).
-    assert {row.last_close for row in own} == {Decimal("40")}
-
-    # A foreign seed for every issuer at this run's cutoff, at another price.
-    connection.execute(
-        """
-        insert into staging.strategy_backtest_inputs (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
-        select distinct issuer_id, cutoff, 'last_close', 97, 0.9, cutoff
-        from mart.topt_core_results where run_id = %s
-        """,
-        (run_id,),
-    )
-    assert plausibility_gate._rows(connection, run_id) == own
-    # The run-less join on the same rows: this run seeded no strategy input, so every row
-    # carried the foreign price as its own.
-    unscoped = connection.execute(
-        """
-        select r.listing_id, p.value
-        from mart.topt_core_results r
-        left join staging.strategy_backtest_inputs p
-          on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
-        where r.run_id = %s
-        """,
-        (run_id,),
-    ).fetchall()
-    assert len(unscoped) == 20 and {value for _listing, value in unscoped} == {Decimal("97")}

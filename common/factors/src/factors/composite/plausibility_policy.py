@@ -1,37 +1,29 @@
-"""Plausibility policy (#544, v3 since #1236): is a published factor physically possible?
+"""Plausibility policy (#544, v4 since #1443): is a published factor physically possible?
 
-Four defects reached production in 2026-07 with every gate green — XOM's operating metric
-above NVIDIA's (a revenue proxy), MA's price-to-sales down 7x on a flat price (a share
-count), JPM's negative bank metric (a uniform capital charge), V valued on a 2010 share
-count — and each was found by re-deriving from the vendor by hand. Every other gate in
-this repository compares the system against something the same process authored. This
-one compares a run against physical reality and against the previous accepted run, in
-the tick's own transaction, and fails the run instead of materialising a row nobody would
-believe on sight.
+The gate runs in the tick's own transaction and judges each published row against its
+definition. Whether a published value is right is a question for an independent answer: the
+sentinel known answers check that every night on a sample (#1416 E4). Strong dashboards, weak
+gates (AGENTS.md rule 4).
 
-The thresholds are a versioned policy (owner decision 2026-09-07, recorded on #544), not
-constants: a change is a new version with its own row on the issue, never a silent edit. Rule
-ids are stable so exemptions (`tools/output_invariant_exemptions.json`, issue + expiry) can
-name them; `node-sign-policy` shares the nightly suite's invariant of the same id because it
-is the same question judged at a different time.
+The rules are a versioned policy (owner decision 2026-09-07, recorded on #544): a change is a
+new version, never a silent edit. Rule ids are stable so exemptions
+(`tools/output_invariant_exemptions.json`, issue + expiry) can name them; `node-sign-policy`
+shares the nightly suite's invariant of the same id because it is the same question judged at a
+different time.
 
-v2 (#528): v1's `sign-per-branch` asserted that a financial or insurance issuer's operating
-metric cannot be negative, while the definition it judged (GPPE v0.2.0, frozen by #59) says a
-negative value is a valid low signal for every issuer. The two could not both hold, and v1
-held only under an expiring exemption. v2 judges each published value against the sign
-policy its metric-forest node declares (`factors.forest`): a value a node forbids is refused,
-a value published for a class the node does not declare is refused, and a negative value the
-node declares `sign-is-signal` passes and is reported by name on every tick (`sign_signals`).
-The other three rules and every threshold are unchanged.
+v2 (#528): each published value is judged against the sign policy its metric-forest node
+declares (`factors.forest`). A value a node forbids is refused, a value published for a class
+the node does not declare is refused, and a negative value the node declares `sign-is-signal`
+passes and is reported by name on every tick (`sign_signals`).
 
-v3 (#1236): `unexplained-valuation-move` accepts a valuation move that a new fiscal year
-explains. MU filed its FY2026 10-K on 2026-10-09 with revenue 133.188B against FY2025's
-37.378B; price-to-sales fell 3.58x on a flat price, and v2 refused every tick from then on,
-because the previous accepted run cannot advance while the tick is refused. A move is now
-explained when the row's revenue period end is later than the previous row's. A revenue period
-that stays or moves back, or a share period change alone, still does not explain it: MA and V
-moved on a 2010 share count (#533, #529), which is an older period, not a newer one. Thresholds
-are unchanged.
+v4 (#1443, #1323): v1 to v3 also compared each run with the previous accepted run. That
+reference is our own earlier output, so it protected whatever was published first. It accepted
+MU's price-to-sales of 31.30 and then refused the correction to 8.74 on every TOPT tick from
+2026-10-09 to 2026-10-12, which froze the governed head. v4 deletes the two rules that read the
+previous run (`universe-max-regression`, `unexplained-valuation-move`). The source now refuses
+the shapes they caught: a share count older than 730 days (#529), and revenue used as gross
+profit where the industry does not allow it (#533). A refusal names one issuer: the caller
+excludes that issuer and publishes the others (#1323). Only an empty eligible set refuses the run.
 
 Pure functions over plain rows, so the same policy can judge a synthetic run in a test,
 a live tick in the data engine, and a historical replay in the backtest (#758 H4).
@@ -39,38 +31,29 @@ a live tick in the data engine, and a historical replay in the backtest (#758 H4
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
 from decimal import Decimal
+
+from truealpha_contracts.strategy import ExclusionReason
 
 from factors.forest import SignFinding, judge_sign, published_node
 
-POLICY_VERSION = "v3"
+POLICY_VERSION = "v4"
 
-RULE_UNIVERSE_MAX = "universe-max-regression"
-RULE_VALUATION_MOVE = "unexplained-valuation-move"
 RULE_NODE_SIGN_POLICY = "node-sign-policy"
 RULE_EMPTY_ELIGIBLE = "empty-eligible-set"
-RULES = (RULE_UNIVERSE_MAX, RULE_VALUATION_MOVE, RULE_NODE_SIGN_POLICY, RULE_EMPTY_ELIGIBLE)
+RULES = (RULE_NODE_SIGN_POLICY, RULE_EMPTY_ELIGIBLE)
+
+#: The exclusion reason a refused issuer's strategy decision carries, one per issuer rule.
+EXCLUSION_REASON: Mapping[str, ExclusionReason] = {
+    RULE_NODE_SIGN_POLICY: ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY,
+}
 
 #: The published table the gate reads (`plausibility_gate._ROWS_SQL`); `Row.operating_efficiency`
 #: is its `operating_efficiency` column, and the forest says which node that column carries.
 JUDGED_TABLE = "mart.topt_core_results"
 JUDGED_COLUMN = "operating_efficiency"
-
-
-@dataclass(frozen=True)
-class Thresholds:
-    """Unchanged since v1. Recorded on #544; bump `POLICY_VERSION` with any change."""
-
-    universe_max_factor: Decimal = Decimal("1.5")
-    valuation_move_ratio: Decimal = Decimal("2")
-    #: A price move of at least this ratio "explains" a valuation move of
-    #: `valuation_move_ratio` — the square root of 2, i.e. half the move in log terms.
-    price_move_floor: Decimal = Decimal("1.4")
-
-
-THRESHOLDS = Thresholds()
 
 
 @dataclass(frozen=True)
@@ -81,13 +64,6 @@ class Row:
     operating_branch: str
     availability: str
     operating_efficiency: Decimal | None
-    current_ps: Decimal | None
-    #: The price behind `current_ps` at this cutoff; None when the run carries no price
-    #: for the issuer (then rule 2 cannot judge it and says so).
-    last_close: Decimal | None = None
-    #: The period end of the revenue behind `current_ps`. A later period than the previous
-    #: row's is a new fiscal year, which explains a valuation move (v3, #1236).
-    revenue_period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -99,77 +75,6 @@ class Violation:
 
 def _available(rows: list[Row]) -> list[Row]:
     return [row for row in rows if row.availability == "available"]
-
-
-def universe_max_regression(
-    current: list[Row], previous: list[Row], thresholds: Thresholds = THRESHOLDS
-) -> list[Violation]:
-    """The top operating metric may not exceed the previous accepted run's universe
-    maximum by more than `universe_max_factor` (#533: XOM at 4,984,153 above NVIDIA)."""
-    prior = [row.operating_efficiency for row in _available(previous) if row.operating_efficiency is not None]
-    if not prior:
-        return []
-    ceiling = max(prior) * thresholds.universe_max_factor
-    return [
-        Violation(
-            RULE_UNIVERSE_MAX,
-            row.listing_id,
-            f"operating metric {row.operating_efficiency:,.0f} exceeds {thresholds.universe_max_factor}x the previous "
-            f"accepted run's universe maximum {max(prior):,.0f}",
-        )
-        for row in _available(current)
-        if row.operating_efficiency is not None and row.operating_efficiency > ceiling
-    ]
-
-
-def _ratio(now: Decimal, before: Decimal) -> Decimal | None:
-    if now <= 0 or before <= 0:
-        return None
-    return now / before if now >= before else before / now
-
-
-def unexplained_valuation_move(
-    current: list[Row], previous: list[Row], thresholds: Thresholds = THRESHOLDS
-) -> list[Violation]:
-    """An issuer's price-to-sales may not move more than `valuation_move_ratio` run over
-    run unless its price moved at least `price_move_floor` (#533 MA 15.55 → 2.17 on a
-    flat price; #529 V on a 2010 share count), or its revenue period end is later than the
-    previous row's (#1236: MU's FY2026 10-K). Without a price on both sides the rule cannot
-    judge and stays silent — a missing measurement is not evidence either way."""
-    before = {row.listing_id: row for row in _available(previous)}
-    violations: list[Violation] = []
-    for row in _available(current):
-        prior = before.get(row.listing_id)
-        if prior is None or row.current_ps is None or prior.current_ps is None:
-            continue
-        move = _ratio(row.current_ps, prior.current_ps)
-        if move is None or move <= thresholds.valuation_move_ratio:
-            continue
-        if row.last_close is None or prior.last_close is None:
-            continue
-        price_move = _ratio(row.last_close, prior.last_close)
-        if price_move is not None and price_move >= thresholds.price_move_floor:
-            continue
-        if _new_fiscal_year(row, prior):
-            continue
-        violations.append(
-            Violation(
-                RULE_VALUATION_MOVE,
-                row.listing_id,
-                f"price-to-sales moved {move:.2f}x ({prior.current_ps} → {row.current_ps}) while the price moved "
-                f"{(price_move or Decimal(1)):.2f}x ({prior.last_close} → {row.last_close}) and the revenue period "
-                f"end did not advance ({prior.revenue_period_end} → {row.revenue_period_end}); a valuation move that "
-                f"large without a price move or a new fiscal year is a share-count or revenue error",
-            )
-        )
-    return violations
-
-
-def _new_fiscal_year(row: Row, prior: Row) -> bool:
-    """True when the row's revenue period end is later than the previous row's."""
-    if row.revenue_period_end is None or prior.revenue_period_end is None:
-        return False
-    return row.revenue_period_end > prior.revenue_period_end
 
 
 def _sign_findings(current: list[Row]) -> list[SignFinding]:
@@ -189,7 +94,7 @@ def _describe(finding: SignFinding, branch: str) -> str:
 def node_sign_policy(current: list[Row]) -> list[Violation]:
     """A published operating metric must respect the sign policy of the forest node it
     carries: negative where the node is `must-be-non-negative`, or any value for an issuer
-    class the node does not declare, is refused (#528)."""
+    class the node does not declare, is refused (#528). Each refusal names one issuer."""
     branches = {row.listing_id: row.operating_branch for row in current}
     return [
         Violation(RULE_NODE_SIGN_POLICY, finding.subject, _describe(finding, branches[finding.subject]))
@@ -212,7 +117,7 @@ def sign_signals(current: list[Row]) -> list[Violation]:
 def empty_eligible_set(outcomes: dict[str, int] | None, l2_complete: int | None) -> list[Violation]:
     """A strategy run whose decisions are all excluded, or whose L2 complete count is
     zero, publishes nothing and must not be recorded as SUCCESS (#527). None means the
-    tick ran no strategy, which is not this rule's business."""
+    tick ran no strategy, which is not this rule's business. This is the only run refusal."""
     violations: list[Violation] = []
     if l2_complete is not None and l2_complete == 0:
         violations.append(
@@ -236,16 +141,9 @@ def empty_eligible_set(outcomes: dict[str, int] | None, l2_complete: int | None)
 
 def evaluate(
     current: list[Row],
-    previous: list[Row],
     *,
     outcomes: dict[str, int] | None = None,
     l2_complete: int | None = None,
-    thresholds: Thresholds = THRESHOLDS,
 ) -> list[Violation]:
-    """Every violation of the policy for a run, judged against the previous accepted run."""
-    return [
-        *universe_max_regression(current, previous, thresholds),
-        *unexplained_valuation_move(current, previous, thresholds),
-        *node_sign_policy(current),
-        *empty_eligible_set(outcomes, l2_complete),
-    ]
+    """Every refusal of a run: the issuer refusals, then the run refusals. None reads another run."""
+    return [*node_sign_policy(current), *empty_eligible_set(outcomes, l2_complete)]
