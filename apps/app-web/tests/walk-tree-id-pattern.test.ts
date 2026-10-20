@@ -87,8 +87,9 @@ assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 
 assert(
   !source.includes("el.remove()") &&
     !source.includes("el.replaceWith(") &&
-    source.includes('el.hasAttribute("data-evidence")'),
-  "walk-tree.mjs must inspect visible text without mutating [data-evidence] DOM nodes so React hydration does not fail with #418",
+    source.includes('el.hasAttribute("data-evidence")') &&
+    source.includes('[data-sign-out][data-hydrated="true"]'),
+  "walk-tree.mjs must wait for client hydration in gotoStable and inspect visible text without mutating [data-evidence] DOM nodes so React hydration does not fail with #418",
 );
 
 // #1362 / #1363: SWEEP_RUN_SOURCE_PATTERN in walk-tree.mjs must match serviceObjectives.ts and catch timestamped sweep sources.
