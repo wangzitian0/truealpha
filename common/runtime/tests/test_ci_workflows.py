@@ -1327,10 +1327,16 @@ def _module_level_imports(tool: str, seen: set[str] | None = None) -> set[str]:
         source_file = tools_src / f"{tool}.py"
     visit(ast.parse(source_file.read_text(encoding="utf-8")).body)
     needed: set[str] = set()
-    for sub in subtools:
-        if (tools_src / f"{sub}.py").is_file() and f"truealpha_tools.{sub}" not in seen:
-            seen.add(f"truealpha_tools.{sub}")
-            visit(ast.parse((tools_src / f"{sub}.py").read_text(encoding="utf-8")).body)
+    # A worklist, not `for sub in subtools`: a visited module can import another
+    # truealpha_tools module, which adds to `subtools` while the walk reads it (#1412:
+    # reachability_ratchet -> import_graph raised "Set changed size during iteration").
+    walked: set[str] = set()
+    while pending := sorted(subtools - walked):
+        for sub in pending:
+            walked.add(sub)
+            if (tools_src / f"{sub}.py").is_file() and f"truealpha_tools.{sub}" not in seen:
+                seen.add(f"truealpha_tools.{sub}")
+                visit(ast.parse((tools_src / f"{sub}.py").read_text(encoding="utf-8")).body)
     for name in names:
         if (tools_dir / f"{name}.py").is_file() or (tools_dir / name / "__init__.py").is_file():
             if name not in seen:
