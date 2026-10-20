@@ -168,28 +168,46 @@ def _mib(value: int) -> int:
     return round(value / MIB)
 
 
+def _ceiling_findings(reading: Reading, capacity: CodeServerCapacity) -> list[str]:
+    """The real ceiling must exist and must not be below the ceiling that the run limit assumed."""
+    if reading.unlimited:
+        return ["memory.max is max: the container has no memory ceiling"]
+    if reading.memory_max is not None and reading.memory_max < capacity.ceiling_mib * MIB:
+        return [f"memory.max {_mib(reading.memory_max)} MiB is below the declared ceiling {capacity.ceiling_mib} MiB"]
+    return []
+
+
+def _same_container(reading: Reading, baseline: Baseline | None) -> bool:
+    return baseline is not None and reading.started is not None and baseline.started == reading.started
+
+
+def _restart_findings(reading: Reading, baseline: Baseline | None, release: str) -> list[str]:
+    """A restart without a new release may be the kill of the server process, which resets its own counter."""
+    restarted = baseline is not None and reading.started is not None and not _same_container(reading, baseline)
+    if restarted and baseline is not None and baseline.release == release:
+        return ["the code server restarted without a release change; its OOM counter restarted too"]
+    return []
+
+
+def _kills_since_the_last_check(reading: Reading, baseline: Baseline | None) -> int | None:
+    """The kills that came after the last check. A new container starts a new counter, so all its kills are new."""
+    if reading.oom_kill is None:
+        return None
+    counted_before = baseline.oom_kill if baseline is not None and _same_container(reading, baseline) else 0
+    return max(reading.oom_kill - counted_before, 0)
+
+
 def judge(reading: Reading, *, baseline: Baseline | None, release: str, capacity: CodeServerCapacity) -> Judgement:
     """Judge one reading against the last check and the declared capacity."""
     red: list[str] = []
     facts: dict[str, int | float] = {}
     if reading.unreadable:
         red.append(f"unreadable: {', '.join(reading.unreadable)}")
-    if reading.unlimited:
-        red.append("memory.max is max: the container has no memory ceiling")
-    elif reading.memory_max is not None and reading.memory_max < capacity.ceiling_mib * MIB:
-        red.append(
-            f"memory.max {_mib(reading.memory_max)} MiB is below the declared ceiling {capacity.ceiling_mib} MiB"
-        )
+    red += _ceiling_findings(reading, capacity)
+    red += _restart_findings(reading, baseline, release)
 
-    same_container = baseline is not None and reading.started is not None and baseline.started == reading.started
-    restarted = baseline is not None and reading.started is not None and not same_container
-    if restarted and baseline is not None and baseline.release == release:
-        red.append("the code server restarted without a release change; its OOM counter restarted too")
-
-    if reading.oom_kill is not None:
-        # A new container starts a new counter, so all of its kills came after the last check.
-        counted_before = baseline.oom_kill if baseline is not None and same_container else 0
-        kills = max(reading.oom_kill - counted_before, 0)
+    kills = _kills_since_the_last_check(reading, baseline)
+    if kills is not None:
         facts["oom_kill_since_last_check"] = kills
         if kills > 0:
             red.append(f"{kills} OOM kill(s) since the last check")
@@ -209,7 +227,7 @@ def judge(reading: Reading, *, baseline: Baseline | None, release: str, capacity
     )
     # The verdict is published on /health: counts and sizes only, never a path or an error text.
     summary = "; ".join(red) if red else f"no OOM kill since the last check; {peak}"
-    if restarted and not red:
+    if not red and baseline is not None and reading.started is not None and not _same_container(reading, baseline):
         summary += "; the container restarted with a new release"
     return Judgement(red=tuple(red), summary=summary, baseline=new_baseline, facts=facts)
 
