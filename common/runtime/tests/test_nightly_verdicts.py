@@ -309,7 +309,7 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
 def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
     """#1131: the lane ticks on weekdays only, so Friday's verdict is the newest one until Monday night.
 
-    The deploy-freshness check reads at 07:00 UTC. On Monday that is 57.75 hours after Friday's
+    The delivery report reads at 07:00 UTC. On Monday that is 57.75 hours after Friday's
     21:15 tick. A check declared with a daily cadence turns that Monday red. The lane failed
     8 times between 2026-09-24 and 2026-10-05 with no check watching it.
     """

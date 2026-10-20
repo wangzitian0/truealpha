@@ -18,9 +18,9 @@ These need no vendor call and no external oracle: pure SQL over materialized
 check people mute.
 
 A new tool rather than a function in an existing one because it asks a different
-question of a different input at a different time: `deploy_freshness.py` and
-`walk_evidence.py` read an HTTP endpoint and git, once per environment, about
-the release; this reads SQL, about the numbers, and runs in two places (ci-web
+question of a different input at a different time: `delivery_report.py` and
+`walk_evidence.py` read an HTTP endpoint and the GitHub API, once per environment,
+about the release; this reads SQL, about the numbers, and runs in two places (ci-web
 against the seeded fixture and the daily gate against production). It also owns
 a file the others have no use for — the exemptions.
 

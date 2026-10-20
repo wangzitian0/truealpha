@@ -100,7 +100,7 @@ jobs:
               - 'tools/**'
               # Same class, one directory over, exposed by #689's own checks:
               # test_ci_workflows.py pins the SHAPE of deploy-release,
-              # deploy-freshness, issue-close-guard and mutation-reproof — and a
+              # delivery-report, issue-close-guard and mutation-reproof — and a
               # PR editing those workflows matched no python filter, so the
               # tests that pin them were exactly the ones that did not run.
               - '.github/workflows/**'

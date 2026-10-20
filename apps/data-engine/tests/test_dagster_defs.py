@@ -973,34 +973,6 @@ def test_issue_1310_the_deployed_module_loads_the_sp500_schedule_stopped_under_p
     assert _running_sp500_schedules(rows) == [], SP500_STOPPED_BECAUSE
 
 
-def test_a_stale_sp500_head_does_not_fail_the_deploy_pointer_freshness_check(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """#1310: an operator may launch the SP500 job by hand. Its head then ages with no schedule behind it.
-    The deploy check reports that head as manual. A QQQ head of the same age fails, as before."""
-    from truealpha_runtime.testing import load_tool
-
-    freshness = load_tool("datahub_freshness")
-    now = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
-    url = "https://truealpha.example/api/health"
-
-    def health(universe_id: str):
-        head = {"universe_id": universe_id, "advanced_at": (now - timedelta(hours=100)).isoformat(), "age_hours": 100.0}
-        body = json.dumps({"status": "ok", "git_sha": "v0.2.0", "governed_pointers": [head]})
-        return lambda _url: (200, body)
-
-    sp500_code = freshness.check_pointer_freshness(
-        url, environment="production", http_get=health("universe:sp500-us-2026-09-30"), now=now
-    )
-    assert sp500_code == 0, SP500_STOPPED_BECAUSE
-    assert "universe:sp500-us-2026-09-30 100.0 h (manual)" in capsys.readouterr().out
-    qqq_code = freshness.check_pointer_freshness(
-        url, environment="production", http_get=health("universe:qqq-us-2026-09-30"), now=now
-    )
-    assert qqq_code == 1
-    assert "universe:qqq-us-2026-09-30" in capsys.readouterr().err
-
-
 def test_a_stale_sp500_head_is_not_reported_by_the_nightly_served_head_check() -> None:
     """#1310: the nightly report-surface proof reads `stale_served_heads`.
     That check skips a head whose lane has no running schedule. A QQQ head of the same age stays in the report."""

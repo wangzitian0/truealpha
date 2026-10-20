@@ -42,3 +42,4 @@ We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板�
 - **Restored Velocity**: Pull requests are no longer held hostage by third-party reviewer hiccups. PR #1198 is unblocked and merged immediately.
 - **Truth Surfaced in Sunlight**: Substantive defects can no longer hide behind green syntactical checks; they are prominently visualized on operational dashboards.
 - **Reduced Noise**: Automated alerts stop creating spurious issue tracker churn for known soak periods, focusing attention on genuine operational breakages.
+- **Release age is a dashboard row** (#1412): `deploy-freshness.yml`, `tools/deploy_freshness.py` and `tools/datahub_freshness.py` are deleted. The daily `delivery-report.yml` shows release age, walk evidence, nightly verdicts and the deploy streak. It opens no issue.

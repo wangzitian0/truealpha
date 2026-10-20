@@ -3,8 +3,8 @@
 -- The release fetch proof (apps/data-engine/src/data_engine/quality/release_fetch_proof.py)
 -- asks whether the deployment's first scheduled or forced tick fetched from every registered
 -- origin. Until that tick has run, the honest answer is neither green nor red. The service's
--- /health reports it as `"ok": null`; tools/nightly_verdicts.py does not page on it, and
--- tools/deploy_freshness.py turns it red once a production release is 26 hours old.
+-- /health reports it as `"ok": null`; tools/nightly_verdicts.py reads it as pending, and
+-- the proof records red when a deployment waits more than 26 hours for its first tick.
 --
 -- Replayed on every boot (#916): the column's nullability is read from the catalog first, so
 -- a replay takes no lock on the table. The first apply is a catalog-only change.

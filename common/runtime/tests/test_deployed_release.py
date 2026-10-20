@@ -3,7 +3,7 @@
 The four copies this replaces disagreed on exactly three points: a body that is
 valid JSON but not an object, an identity of "unknown", and a ref git could read
 as an option. Two validated the ref, three handled the shape, and the one that
-ran daily (deploy-freshness.yml's `curl | jq -r '.git_sha'`) validated nothing.
+ran daily (the walk-evidence step's `curl | jq -r '.git_sha'`, #560) validated nothing.
 Each disagreement is one test here, so the answer is picked in one place.
 """
 

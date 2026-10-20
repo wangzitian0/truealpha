@@ -28,7 +28,7 @@ launch of the same job (launchpad or GraphQL) with an explicit config::
 
 Theme purity and the coverage report record their verdict per universe in
 `mart.nightly_verdicts` (#876 W1) from whichever job ran them; the daily fallback keeps both
-fresh, and deploy-freshness pages on a red, stale or missing one. `NIGHTLY_VERDICTS` below
+fresh, and the delivery report shows a red, stale or missing one. `NIGHTLY_VERDICTS` below
 names what this lane records."""
 
 import json
@@ -909,7 +909,7 @@ HEAD_REPORTS_SENSOR_NAME = "head_reports_on_pointer_advance"
 HEAD_REPORTS_SENSOR_INTERVAL_SECONDS = 30
 #: The daily FALLBACK, 04:00 UTC: after the nightly proof's longest wait for a settling
 #: universe (00:15 + 3 h, `lanes.quality`), so a fallback run is never what the proof waits
-#: on, and before deploy-freshness (07:00) reads the verdicts it keeps fresh. The sensor below
+#: on, and before the delivery report (07:00) reads the verdicts it keeps fresh. The sensor below
 #: is what follows the head; this only heals an advance the sensor missed, and on every other
 #: day finds the reports current and recomputes nothing.
 HEAD_REPORTS_CRON = "0 4 * * *"

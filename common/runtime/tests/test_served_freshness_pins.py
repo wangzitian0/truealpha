@@ -1,12 +1,10 @@
 """The served-freshness limits are stated once, and every copy is pinned to that one (#1062).
 
 The authority is the seed in the migration. `init.md` states the same limits in a table for
-readers, and `tools/datahub_freshness.py` bounds the pointer at the daily limit. A copy that
-drifts from the seed fails here. No database is needed.
+readers. A copy that drifts from the seed fails here. No database is needed.
 
-The workflow copy (`pointer_max_age_hours` in `deploy-freshness.yml`) is pinned to
-`datahub_freshness.MAX_AGE_HOURS` by `test_ci_workflows.py`. This file pins `MAX_AGE_HOURS` to
-the seed. Together the three copies cannot differ.
+The pointer bound has no other copy. The nightly `report_surface_proof` reads the label that
+`mart.served_head` computes from the seed (#1412 deleted the workflow and tool copies).
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from truealpha_runtime.testing import load_tool, read_seed_rows
+from truealpha_runtime.testing import read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
@@ -74,11 +72,6 @@ def test_the_days_column_is_the_hours_column_over_24() -> None:
 def test_no_limit_is_longer_than_thirty_days() -> None:
     assert max(seed().values()) == 720
     assert seed()["withhold"] == 720
-
-
-def test_the_pointer_freshness_tool_bounds_at_the_daily_limit() -> None:
-    tool = load_tool("datahub_freshness")
-    assert tool.MAX_AGE_HOURS == seed()["daily"]
 
 
 def test_the_section_names_the_reason_code_of_every_limit() -> None:

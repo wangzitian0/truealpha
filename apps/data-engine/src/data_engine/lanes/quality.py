@@ -26,7 +26,7 @@ a promoted release's fetch path works.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
-scheduled deploy-freshness workflow pages on a red, stale or missing one. The names a run
+daily delivery report shows a red, stale or missing one. The names a run
 can record are `NIGHTLY_VERDICTS` below.
 """
 
@@ -64,9 +64,9 @@ OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
 OUTPUT_INVARIANTS_CRON = "15 0 * * *"
 #: How long the surface proof waits for a universe to settle, and how often it looks. Three
 #: hours takes the proof past any tick that is merely slow (the verdict still lands hours
-#: before deploy-freshness reads it at 07:00); a tick still running after that is the governed
-#: pointer's freshness check to page on (`tools/datahub_freshness.py`), and the proof names the
-#: universe IN-PROGRESS instead of calling its surfaces wrong.
+#: before the delivery report reads it at 07:00). A tick still running after that leaves its
+#: head to age in `mart.served_head`, and a later proof fails on a stale scheduled head. This
+#: proof names the universe IN-PROGRESS instead of calling its surfaces wrong.
 SURFACE_SETTLE_TIMEOUT = timedelta(hours=3)
 SURFACE_SETTLE_POLL_SECONDS = 60.0
 #: How long after a head's pointer row is written its reports may still be missing without the
@@ -84,13 +84,13 @@ CONFIDENCE_REPORT_CRON = "45 0 * * *"
 CONFIDENCE_REPORT_UNIVERSES = ("universe-list:qqq", "topt")
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
-# 06:00 UTC: after every nightly model caller, an hour before deploy-freshness (07:00) reads
+# 06:00 UTC: after every nightly model caller, an hour before the delivery report (07:00) reads
 # the verdict, so a daemon that is merely slow still lands inside the day's check.
 MODEL_KEY_HEALTH_CRON = "0 6 * * *"
 
 RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 # 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
-# finished, and before deploy-freshness (07:00) reads the verdict. The verdict is pending
+# finished, and before the delivery report (07:00) reads the verdict. The verdict is pending
 # until the deployment's first scheduled or forced tick has finished.
 RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 

@@ -276,8 +276,8 @@ deploy:
 gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
 ```
 
-`tools/walk_evidence.py` (the standing daily check in `deploy-freshness.yml`,
-#560) reads `walk-release.yml`'s runs the same way it used to read
+`tools/walk_evidence.py` (the walk evidence of the daily `delivery-report.yml`,
+#560, #1412) reads `walk-release.yml`'s runs the same way it used to read
 `deploy-release.yml`'s — the evidence question is unchanged, only which run
 answers it moved. `deploy-release.yml`'s own prod evidence gate (a green
 "Deploy staging `<tag>`" run) still proves the deploy; it additionally prints

@@ -65,7 +65,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 RELEASE = "deploy-release.yml"
 WALK = "walk-release.yml"
-FRESHNESS = "deploy-freshness.yml"
+DELIVERY = "delivery-report.yml"
 REPROOF = "mutation-reproof.yml"
 MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
@@ -379,103 +379,39 @@ def test_the_sender_and_the_contract_agree_on_whose_staging_run_counts() -> None
     assert 'staging_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/' not in workflow
 
 
-# --- deploy-freshness --------------------------------------------------------
+# --- delivery-report (#1412 R2 and R3; it replaces deploy-freshness) ---------------
 
 
-def test_the_scheduled_gate_does_not_use_the_dispatch_inputs_context() -> None:
-    """#560: `inputs` belongs to workflow_dispatch and workflow_call; this
-    workflow's PRIMARY trigger is the schedule. A guard whose own expression can
-    fail on its main trigger is the failure mode it exists to prevent."""
-    assert "schedule" in triggers(FRESHNESS), "the freshness gate must not be on-demand only"
-    for name in ("Check ${{ matrix.environment }} freshness",):
-        text = step_text(FRESHNESS, name)
-        assert "github.event.inputs.max_age_days" in text
-        assert "${{ inputs." not in text, "the inputs context is absent on a schedule event"
-
-
-def test_the_freshness_bound_is_per_environment() -> None:
-    """#819: every tag soaks staging while production is promoted only by
-    `cut_release.sh --prod`, so one bound for both legs had production red every
-    day for the lag the release protocol asks for. The matrix carries the bound,
-    the step reads the matrix's value, and the numbers are the ones the tool and
-    the release script document — three files that must not drift."""
-    tool = load_tool("deploy_freshness")
-    matrix = {entry["environment"]: entry for entry in job(FRESHNESS, "freshness")["strategy"]["matrix"]["include"]}
-    assert matrix["staging"]["max_age_days"] == tool.STAGING_MAX_AGE_DAYS
-    assert matrix["production"]["max_age_days"] == tool.PRODUCTION_MAX_AGE_DAYS
-    assert matrix["production"]["max_age_days"] > matrix["staging"]["max_age_days"], (
-        "production lags staging by design; a bound at or below staging's makes deliberate promotion red"
+def test_the_delivery_report_is_a_scheduled_dashboard_not_a_gate() -> None:
+    """ADR A8: the report is a dashboard. It runs daily and on demand, holds no write grant,
+    and opens no issue. A pull_request trigger would make it a merge gate."""
+    on = triggers(DELIVERY)
+    assert set(on) == {"schedule", "workflow_dispatch"}, f"delivery-report triggers on {sorted(on)}"
+    assert on["schedule"] == [{"cron": "0 7 * * *"}], (
+        "the report reads the nightly verdicts at 07:00 UTC, after the last nightly check (06:15 UTC)"
     )
-    text = step_text(FRESHNESS, "Check ${{ matrix.environment }} freshness")
-    assert "matrix.max_age_days" in text, "the step no longer reads the bound from the matrix"
-    # The dispatch input overrides BOTH legs; a non-empty default would flatten
-    # production's bound back to staging's on every manual run.
-    dispatch = triggers(FRESHNESS)["workflow_dispatch"]["inputs"]["max_age_days"]
-    assert not dispatch.get("default"), "a defaulted dispatch input overrides the matrix bounds on every manual run"
-    script = (REPO_ROOT / "tools" / "cut_release.sh").read_text(encoding="utf-8")
-    for phrase in (f"staging {tool.STAGING_MAX_AGE_DAYS} days", f"production {tool.PRODUCTION_MAX_AGE_DAYS} days"):
-        assert phrase in script, f"cut_release.sh's policy header does not say {phrase!r}; the two files disagree"
+    workflow = yaml.safe_load(source(DELIVERY))
+    assert workflow["permissions"] == {"contents": "read", "actions": "read"}
+    assert list(workflow["jobs"]) == ["report"]
+    assert "permissions" not in workflow["jobs"]["report"], "a job-level grant would replace the workflow grant"
+    text = source(DELIVERY)
+    for writer in ("tools/escalate_issue.py", "gh issue", "issues: write"):
+        assert writer not in text, f"the dashboard calls {writer!r}: ADR A8 says it opens no issue"
 
 
-def test_the_governed_pointer_bound_is_the_tools_and_runs_on_both_legs() -> None:
-    """The pointer freshness step reads its bound from the matrix, the matrix carries
-    the tool's number for both environments, and the step runs even after an earlier
-    failure — a frozen head and a stale release are separate facts."""
-    tool = load_tool("datahub_freshness")
-    matrix = {entry["environment"]: entry for entry in job(FRESHNESS, "freshness")["strategy"]["matrix"]["include"]}
-    for environment in ("staging", "production"):
-        assert matrix[environment]["pointer_max_age_hours"] == tool.MAX_AGE_HOURS
-    name = "Check ${{ matrix.environment }} governed pointer freshness"
-    text = step_text(FRESHNESS, name)
-    assert "matrix.pointer_max_age_hours" in text and "tools/datahub_freshness.py" in text
-    step = next(s for s in job(FRESHNESS, "freshness")["steps"] if s.get("name") == name)
-    assert step.get("if") == "always()"
-
-
-def test_the_nightly_verdicts_are_bounded_on_both_legs_after_the_pointer() -> None:
-    """#876: the Dagster nightly checks page through this step, so it must run on every leg,
-    even after an earlier step failed, read the leg's own health endpoint, and resolve the
-    expected checks in the checkout that holds the release tags; and the escalation that
-    files the issue must still come after it."""
-    steps = [s.get("name") for s in job(FRESHNESS, "freshness")["steps"]]
-    name = "Check ${{ matrix.environment }} nightly check verdicts"
-    pointer = "Check ${{ matrix.environment }} governed pointer freshness"
-    escalate = "Escalate a scheduled failure to an issue"
-    assert steps.index(pointer) < steps.index(name) < steps.index(escalate)
-    text = step_text(FRESHNESS, name)
-    assert "tools/nightly_verdicts.py" in text and "matrix.url" in text and "--repo ." in text
-    # The grace for a newly introduced check reads deploy-release runs by their run-name word.
-    assert '--deploy-type "${{ matrix.deploy_type }}"' in text, "without it a new check is red until its first tick"
-    assert "--environment" in text
-    step = next(s for s in job(FRESHNESS, "freshness")["steps"] if s.get("name") == name)
-    assert step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}", "the deploy-run lookup needs the token"
-    assert step.get("if") == "always()", "a stale release must not hide a red nightly check"
-    checkout = next(
-        s for s in job(FRESHNESS, "freshness")["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
-    )
+def test_the_delivery_report_runs_the_tool_with_the_token_and_the_tags() -> None:
+    """The report reads runs, attempts and jobs with the workflow token, and reads the nightly
+    expectations at the served release tag. A shallow checkout has no tags."""
+    report = step(DELIVERY, "Write the delivery report")
+    assert report.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
+    run = str(report["run"])
+    assert "${{" not in run, "an expression is interpolated into the shell; pass it through env"
+    assert run.strip() == "python3 tools/delivery_report.py --repo .", run
+    steps_of = job(DELIVERY, "report")["steps"]
+    checkout = next(s for s in steps_of if str(s.get("uses", "")).startswith("actions/checkout"))
     assert checkout["with"]["fetch-depth"] == 0, "the expected checks are read at the deployed tag"
-
-
-def test_the_evidence_check_passes_a_deploy_type_the_release_can_produce() -> None:
-    """#560: the release run-name is built from `deploy_type` ("prod") while the
-    matrix names environments for humans ("production"). Passing the latter looks
-    for runs that can never exist — red forever, for an unrelated reason."""
-    allowed = set(triggers(RELEASE)["workflow_dispatch"]["inputs"]["deploy_type"]["options"])
-    passed = set(re.findall(r"deploy_type:\s*(\S+)", source(FRESHNESS)))
-    assert passed, "the freshness matrix must carry a deploy_type per environment"
-    assert passed <= allowed, (
-        f"freshness passes {sorted(passed - allowed)}, which the release run-name can never "
-        f"produce (it accepts {sorted(allowed)})"
-    )
-
-
-def test_the_release_identity_is_read_by_the_tool_not_by_shell() -> None:
-    """#585: `curl | jq -r '.git_sha'` was a fourth implementation of the health
-    read and the only one that validated nothing — on "unknown" it produced a
-    true sentence about the wrong question."""
-    text = step_text(FRESHNESS, "Check ${{ matrix.environment }} surface-walk evidence")
-    assert "--url" in text, "the tool reads the identity, with the validation the shell had none of"
-    assert "jq -r '.git_sha'" not in text
+    assert any("git fetch --tags" in str(s.get("run", "")) for s in steps_of)
+    assert not any("uv sync" in str(s.get("run", "")) for s in steps_of), "the report is stdlib-only"
 
 
 # --- escalation lifecycle: open on red, resolve on green (#876) ---------------
@@ -563,67 +499,6 @@ def _assert_calls_the_tool(spec: dict, action: str, where: str) -> None:
     )
     assert "gh issue" not in run, f"{where}: an inline `gh issue` beside the tool is a second lifecycle implementation"
     assert "${{" not in run, f"{where}: an expression is interpolated into the shell; pass it through env"
-
-
-def test_the_freshness_alert_opens_on_red_and_closes_on_a_scheduled_green() -> None:
-    """#876 W3: #818 stayed open two days after staging was fresh again, because
-    the escalation commented and never closed. Both halves go through the tool,
-    under one per-environment title (#687/#688: the legs run in parallel).
-
-    The resolve guard is the load-bearing part: a dispatch with `max_age_days`
-    set is a red-proof or an experiment, and a looser override would be green
-    while the scheduled bound is still red — closing a live alert. So is a
-    dispatch on a branch, whose matrix may carry other bounds.
-    """
-    title = str(job(FRESHNESS, "freshness")["env"]["ESCALATION_TITLE"])
-    assert title == "deploy-freshness is red: ${{ matrix.environment }} failed its standing checks", (
-        f"the freshness title changed to {title!r}: an open issue under the old title is never closed, and a "
-        f"title without the environment lets the parallel legs share one issue (#687/#688)"
-    )
-    escalate = step(FRESHNESS, "Escalate a scheduled failure to an issue")
-    resolve = step(FRESHNESS, "Resolve the issue once the checks are green")
-    _assert_calls_the_tool(escalate, "open", "freshness escalate")
-    _assert_calls_the_tool(resolve, "resolve", "freshness resolve")
-    assert "pull_request" not in triggers(FRESHNESS), "the workflow-level issues grant assumes no PR-triggered code"
-
-    main = "refs/heads/main"
-    closes = [
-        ({"event_name": "schedule", "ref": main}, "the scheduled run"),
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": ""}}},
-            "a dispatch at the matrix bounds",
-        ),
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {}}},
-            "a dispatch with the input omitted",
-        ),
-    ]
-    for github, what in closes:
-        assert _decides(resolve["if"], github), f"{what} is green at the scheduled bounds and must close the alert"
-        assert not _decides(resolve["if"], github, succeeded=False), f"a red {what} closed the alert"
-        assert _decides(escalate["if"], github, succeeded=False), f"a red {what} no longer escalates"
-        assert not _decides(escalate["if"], github), f"a green {what} escalates"
-    never = [
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": "30"}}},
-            "a looser override",
-        ),
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": "0"}}},
-            "a red-proof override",
-        ),
-        (
-            {"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "event": {"inputs": {}}},
-            "a branch dispatch",
-        ),
-        ({"event_name": "schedule", "ref": "refs/heads/feature"}, "a run off main"),
-        ({"event_name": "pull_request", "ref": "refs/pull/1/merge"}, "a pull_request run"),
-        ({"event_name": "push", "ref": main}, "a push run"),
-    ]
-    for github, what in never:
-        assert not _decides(resolve["if"], github), (
-            f"{what} can close the freshness alert while the scheduled bound may still be red"
-        )
 
 
 def test_the_reproof_alert_closes_only_on_a_full_run_of_main() -> None:
@@ -807,7 +682,7 @@ def test_scheduler_liveness_passes_the_cap_through_env_and_installs_what_it_read
 
 
 def test_the_liveness_alert_opens_on_red_and_closes_only_at_the_measured_bounds() -> None:
-    """The deploy-freshness lifecycle, with the cap in place of `max_age_days`: a
+    """The open-and-resolve lifecycle (#876 W3), with the cap as the drill input: a
     capped dispatch is a drill, and must never close a real alert."""
     assert job(LIVENESS, "liveness")["env"]["ESCALATION_TITLE"] == (
         "scheduler-liveness is red: a scheduled workflow stopped ticking"
@@ -863,7 +738,7 @@ def test_every_schedule_in_this_repository_is_one_the_liveness_check_can_read() 
         expressions = tool.schedule_of(path.read_text(encoding="utf-8"))
         if expressions is not None:
             scheduled[path.name] = tool.largest_gap([tool.Cron.parse(item) for item in expressions], now)
-    assert {FRESHNESS, REPROOF, NIGHTLY, LIVENESS} <= set(scheduled), sorted(scheduled)
+    assert {DELIVERY, REPROOF, NIGHTLY, LIVENESS} <= set(scheduled), sorted(scheduled)
 
 
 # --- issue-close-guard -------------------------------------------------------
@@ -1695,7 +1570,7 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
         )
 
     # The same class one directory over, found by #689's own check run: this
-    # very file pins the shape of deploy-release, deploy-freshness,
+    # very file pins the shape of deploy-release, delivery-report,
     # issue-close-guard and mutation-reproof, and a PR editing those workflows
     # matched no python filter — so the tests pinning them were exactly the
     # ones that did not run.
@@ -3007,40 +2882,6 @@ def test_no_code_path_reintroduces_qlib() -> None:
     )
 
 
-def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
-    """A4 C1 (#673). The freshness matrix carries `url` (the health ENDPOINT,
-    what walk_evidence and health_check want) and `base` (what
-    surface_contract builds its own paths from). Handing the probe `url`
-    requests /api/health/api/health and reports the surface down every day —
-    which is what the first draft of this step did, comment and all.
-    """
-    freshness = yaml.safe_load(source(FRESHNESS))["jobs"]["freshness"]
-    for entry in freshness["strategy"]["matrix"]["include"]:
-        assert entry["url"].startswith(entry["base"]), (
-            f"{entry['environment']}: url {entry['url']!r} is not under base {entry['base']!r}, so the "
-            f"two describe different deployments"
-        )
-        assert not entry["base"].endswith("/api/health"), (
-            f"{entry['environment']}: base is a health endpoint, not a base"
-        )
-    # The command line only: the step's own comment explains base-vs-url and
-    # naming both, so scanning the whole block would match the explanation
-    # rather than the invocation.
-    probe = str(step(FRESHNESS, "Check ${{ matrix.environment }} routing shape")["run"])
-    invocation = next(
-        (line for line in probe.splitlines() if "surface_contract.py" in line and not line.strip().startswith("#")),
-        None,
-    )
-    assert invocation is not None, (
-        "the routing-shape step no longer invokes tools/surface_contract.py — the daily probe for "
-        "the four-release redirect class is gone, and a bare next() would have said StopIteration"
-    )
-    assert "matrix.base" in invocation and "matrix.url" not in invocation, (
-        f"the routing probe is invoked as {invocation.strip()!r} — on matrix.url it requests "
-        f"/api/health/api/health and reports a healthy surface as down, every day"
-    )
-
-
 def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> None:
     """#708 measured 2 of 14 main merges colliding and turned `cancel-in-progress`
     on for every event, so main pushes collapse instead of each burst queueing
@@ -3275,20 +3116,6 @@ def test_every_buildx_setup_retries_once_after_a_docker_hub_failure() -> None:
         assert pause.get("if") == "steps.buildx.outcome == 'failure'" and "sleep" in str(pause.get("run", "")), (
             f"{name} retries without a pause — an immediate retry meets the same timeout"
         )
-
-
-def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
-    """tools/walk_evidence.py waits (bounded) for a release caught mid-flight (#876). A wait
-    longer than the freshness job's own timeout would turn "stuck release" into a cancelled
-    job, which reports nothing and escalates nothing."""
-    from datetime import timedelta
-
-    walk_evidence = load_tool("walk_evidence")
-    timeout = job(FRESHNESS, "freshness")["timeout-minutes"]
-    # The checks before that step take well under 5 min; leave them that much.
-    assert walk_evidence.IN_FLIGHT_WAIT <= timedelta(minutes=timeout - 5), (
-        f"walk_evidence may wait {walk_evidence.IN_FLIGHT_WAIT} but the freshness job times out at {timeout} min"
-    )
 
 
 @pytest.mark.parametrize("excluded_root", _MIRROR_ONLY_EXCLUDED_ROOTS)

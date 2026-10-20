@@ -1,6 +1,6 @@
 """Open, or resolve, the one tracking issue a scheduled watchdog owns.
 
-#876 (W3, W12). Before this, `deploy-freshness.yml` and `mutation-reproof.yml`
+#876 (W3, W12). Before this, the deleted `deploy-freshness.yml` (#1412) and `mutation-reproof.yml`
 each carried an inline shell copy of "comment on the open issue with this title,
 or file it" (#680), and neither ever closed anything: #818 sat open two days
 after staging was fresh again, so an open alert stopped meaning "broken now".

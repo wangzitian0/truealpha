@@ -241,7 +241,7 @@ def test_non_object_health_json_is_a_verdict_failure_not_a_crash(
 def test_a_release_identity_git_could_read_as_an_option_never_reaches_git(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The same lesson tools/deploy_freshness.py had to learn: the identifier
+    """The same lesson the release-age check of #560 had to learn: the identifier
     comes from an HTTP response and is handed to git (review)."""
     reached_git = False
 

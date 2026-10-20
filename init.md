@@ -499,8 +499,8 @@ This is a different measure from three others. The capture-time windows in
 `market-price` and 730 days for `financial-fact`. The two-day maximum age in
 `docs/datahub-service-demand.md` is the demand objective of one capture requirement.
 `tools/nightly_verdicts.py` ages each nightly verdict at twice the cadence of its check. None of
-the three changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, equal to the
-`daily` limit.
+the three changes. The nightly `report_surface_proof` fails on a scheduled head that
+`mart.served_head` labels stale, so the pointer is bounded at the `daily` limit.
 
 ---
 
