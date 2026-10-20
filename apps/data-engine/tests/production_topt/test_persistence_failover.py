@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -406,17 +405,10 @@ def _capture(
 
 
 def _output_invariants_tool():
-    """The suite as a module (it is a tool, not a package), registered so its dataclasses
-    resolve their annotations."""
-    import importlib.util
-    import sys
+    """Return the output_invariants suite module."""
+    from truealpha_runtime.testing import load_tool
 
-    path = Path(__file__).resolve().parents[4] / "tools" / "output_invariants.py"
-    spec = importlib.util.spec_from_file_location("output_invariants_under_test", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_tool("output_invariants")
 
 
 class _Borrowed:

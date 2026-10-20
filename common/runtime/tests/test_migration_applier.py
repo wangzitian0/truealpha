@@ -158,7 +158,7 @@ def test_the_detectors_leave_readers_alone() -> None:
     chain without applying it, or the sweep gets an allowlist and the allowlist gets a
     new entry every time someone is in a hurry."""
     readers = (
-        "tools/check_factor_contract.py",
+        "common/runtime/src/truealpha_tools/check_factor_contract.py",
         "common/runtime/tests/test_migration_chain.py",
         "common/runtime/tests/test_migration_vocabularies.py",
         "apps/data-engine/src/data_engine/release_identity.py",
@@ -302,7 +302,7 @@ LOCAL_TARGET = "db/local_target.sh"
 #: creates a reference database beside it and force-drops it again (#990 review). They
 #: must agree on which hosts are this machine, and a second copy of that list is the
 #: defect class #984 exists to remove — the seven appliers differed by less.
-SERVER_WRITERS = ("db/reset_database.sh", "tools/schema_drift.py")
+SERVER_WRITERS = ("db/reset_database.sh", "common/runtime/src/truealpha_tools/schema_drift.py")
 
 #: (dsn, locality). Every spelling the two guards have to get right, including the two
 #: that are local without looking like it: an empty host is libpq's default Unix socket

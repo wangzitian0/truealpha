@@ -101,7 +101,7 @@
     {
       "id": "invariants/head-matches-the-consumer",
       "guard": "common/runtime/tests/test_output_invariants.py",
-      "file": "tools/output_invariants.py",
+      "file": "common/runtime/src/truealpha_tools/output_invariants.py",
       "find": "    select run_id from mart.served_head\n    where factor_id = 'gross_profit_per_employee'\n",
       "replace": "    select run_id from mart.served_head\n",
       "command": [
@@ -213,7 +213,7 @@
     {
       "id": "escalate-issue/a-superstring-title-is-not-the-same-issue",
       "guard": "common/runtime/tests/test_escalate_issue.py",
-      "file": "tools/escalate_issue.py",
+      "file": "common/runtime/src/truealpha_tools/escalate_issue.py",
       "find": "issue.get(\"title\") == title",
       "replace": "title in str(issue.get(\"title\"))",
       "command": [
@@ -229,7 +229,7 @@
     {
       "id": "scheduler-liveness/the-bound-follows-the-measured-gap",
       "guard": "common/runtime/tests/test_scheduler_liveness.py",
-      "file": "tools/scheduler_liveness.py",
+      "file": "common/runtime/src/truealpha_tools/scheduler_liveness.py",
       "find": "    bound = bound_for(gap)\n",
       "replace": "    bound = timedelta(hours=24)\n",
       "command": [
@@ -245,7 +245,7 @@
     {
       "id": "scheduler-liveness/a-workflow-github-will-not-schedule-is-red",
       "guard": "common/runtime/tests/test_scheduler_liveness.py",
-      "file": "tools/scheduler_liveness.py",
+      "file": "common/runtime/src/truealpha_tools/scheduler_liveness.py",
       "find": "    if workflow_state != ACTIVE:\n",
       "replace": "    if workflow_state == \"disabled_manually\":\n",
       "command": [
@@ -261,7 +261,7 @@
     {
       "id": "scheduler-liveness/an-unreadable-listing-is-not-a-pass",
       "guard": "common/runtime/tests/test_scheduler_liveness.py",
-      "file": "tools/scheduler_liveness.py",
+      "file": "common/runtime/src/truealpha_tools/scheduler_liveness.py",
       "find": "        return [Verdict(repo, LISTING, UNVERIFIABLE, f\"cannot verify: {error}\")], 0\n",
       "replace": "        return [], 0\n",
       "command": [
@@ -443,7 +443,7 @@
     {
       "id": "walk-evidence/a-release-in-flight-is-waited-for",
       "guard": "common/runtime/tests/test_walk_evidence.py",
-      "file": "tools/walk_evidence.py",
+      "file": "common/runtime/src/truealpha_tools/walk_evidence.py",
       "find": "    for run in (*deploys, *walks):\n        if run.get(\"status\") != \"completed\":",
       "replace": "    for run in ():\n        if run.get(\"status\") != \"completed\":",
       "command": [
@@ -459,7 +459,7 @@
     {
       "id": "nightly-verdicts/a-stale-verdict-is-red",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
-      "file": "tools/nightly_verdicts.py",
+      "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",
       "find": "        if age > expectation.max_age_hours:\n",
       "replace": "        if False:\n",
       "command": [
@@ -475,7 +475,7 @@
     {
       "id": "nightly-verdicts/a-red-verdict-is-red",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
-      "file": "tools/nightly_verdicts.py",
+      "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",
       "find": "        if not verdict.ok:\n",
       "replace": "        if False:\n",
       "command": [
@@ -491,7 +491,7 @@
     {
       "id": "nightly-verdicts/a-missing-verdict-is-red",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
-      "file": "tools/nightly_verdicts.py",
+      "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",
       "find": "        if verdict is None:\n",
       "replace": "        if verdict is None:\n            continue\n",
       "command": [
@@ -604,7 +604,7 @@
     {
       "id": "nightly-verdicts/the-grace-runs-from-the-first-declaring-deploy",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
-      "file": "tools/nightly_verdicts.py",
+      "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",
       "find": "        return min(served) if complete else None\n",
       "replace": "        return max(served) if complete else None\n",
       "command": [
@@ -620,7 +620,7 @@
     {
       "id": "nightly-verdicts/a-short-listing-gives-no-grace",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
-      "file": "tools/nightly_verdicts.py",
+      "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",
       "find": "        return min(served) if complete else None\n",
       "replace": "        return min(served)\n",
       "command": [
@@ -636,7 +636,7 @@
     {
       "id": "pytest-shard/the-packer-uses-measured-seconds",
       "guard": "common/runtime/tests/test_pytest_shard.py",
-      "file": "tools/pytest_shard.py",
+      "file": "common/runtime/src/truealpha_tools/pytest_shard.py",
       "find": "    if key in weights:\n        return weights[key]\n    return float(test_functions(path)) * rate\n",
       "replace": "    return float(test_functions(path)) * rate\n",
       "command": [
@@ -668,7 +668,7 @@
     {
       "id": "invariants/a-declared-signal-is-printed",
       "guard": "common/runtime/tests/test_output_invariants.py",
-      "file": "tools/output_invariants.py",
+      "file": "common/runtime/src/truealpha_tools/output_invariants.py",
       "find": "        signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]\n",
       "replace": "        signalled: set[IssuerClass] = set()\n",
       "command": [
@@ -796,7 +796,7 @@
     {
       "id": "invariants/quality-report-matches-core-results",
       "guard": "common/runtime/tests/test_output_invariants.py",
-      "file": "tools/output_invariants.py",
+      "file": "common/runtime/src/truealpha_tools/output_invariants.py",
       "find": "                from mart.datahub_quality_report\n",
       "replace": "                from mart.served_head\n",
       "command": [

@@ -62,7 +62,9 @@ jobs:
       # workflow_run never executes code from the run it reports on.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tools
+          sparse-checkout: |
+            tools
+            common/runtime/src/truealpha_tools
           persist-credentials: false
 
       - name: File the red-main issue

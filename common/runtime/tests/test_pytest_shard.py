@@ -300,3 +300,29 @@ def test_the_assignment_is_stable_across_calls() -> None:
     first = [pytest_shard.shard(files, index, 3) for index in range(3)]
     second = [pytest_shard.shard(list(reversed(files)), index, 3) for index in range(3)]
     assert first == second, "shard assignment depends on input order — it must depend only on content"
+
+
+def test_every_tools_script_is_a_thin_shim_to_truealpha_tools() -> None:
+    """3-Tier reuse contract (#1340): every `tools/*.py` file is a <= 40-line thin CLI shim
+    that delegates to `common/runtime/src/truealpha_tools/<name>.py`, and no non-test module
+    calls `load_tool(...)` or imports `from tools...`."""
+    tools_dir = REPO_ROOT / "tools"
+    impl_dir = REPO_ROOT / "common" / "runtime" / "src" / "truealpha_tools"
+    scripts = sorted(tools_dir.glob("*.py"))
+    assert len(scripts) >= 25
+    for script in scripts:
+        text = script.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        assert len(lines) <= 40, f"{script.name} has {len(lines)} lines (max 40 for thin CLI shim)"
+        assert f"from truealpha_tools import {script.stem} as _impl" in text, (
+            f"{script.name} must delegate to truealpha_tools.{script.stem}"
+        )
+        assert (impl_dir / script.name).is_file(), f"missing implementation {impl_dir / script.name}"
+
+    for root in (REPO_ROOT / "apps", REPO_ROOT / "common", tools_dir):
+        for py_file in sorted(root.rglob("*.py")):
+            rel = py_file.relative_to(REPO_ROOT).as_posix()
+            if "/tests/" in f"/{rel}" or rel.endswith("/testing.py"):
+                continue
+            source = py_file.read_text(encoding="utf-8")
+            assert "load_tool(" not in source, f"{rel} calls load_tool() in non-test code"

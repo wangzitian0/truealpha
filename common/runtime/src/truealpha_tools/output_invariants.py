@@ -1,0 +1,748 @@
+"""Ask whether a published number is possible at all.
+
+#581. Every gate in this repository compares the system against something the
+same process authored — schemas, contracts, twin canons, route freezes. None
+asks whether a value can be true. Production was publishing
+`listing:xnys:jpm` GPPE = -528,985.79, #528 carried that exact number in its
+title from 2026-07-30, and nothing was red about it.
+
+What a negative published number MEANS is not this file's to decide: the
+metric forest (`factors.forest`, #528) declares a sign policy per node and per
+issuer class, and `node-sign-policy` asserts exactly that (init.md rule 17). A
+value the node forbids fails; a negative value the node declares
+`sign-is-signal` passes and is printed by name (`SIGNAL`) on every run, so a
+declared low signal is never a silent pass.
+
+These need no vendor call and no external oracle: pure SQL over materialized
+`mart`. That is the point — an invariant that depends on the network becomes a
+check people mute.
+
+A new tool rather than a function in an existing one because it asks a different
+question of a different input at a different time: `deploy_freshness.py` and
+`walk_evidence.py` read an HTTP endpoint and git, once per environment, about
+the release; this reads SQL, about the numbers, and runs in two places (ci-web
+against the seeded fixture and the daily gate against production). It also owns
+a file the others have no use for — the exemptions.
+
+Exemptions expire, and that is the load-bearing part. Invariant suites die by
+accumulating `# TODO: exclude JPM`; an exemption here carries an issue and a
+date, and an expired one FAILS. The check cannot be quietly turned off, only
+loudly deferred.
+
+Usage:
+  python tools/output_invariants.py --database-url postgresql://…
+  python tools/output_invariants.py --database-url … --require-coverage
+
+`--require-coverage` fails when an invariant examined zero rows. A guard that
+reports "ok" over an empty set is worse than no guard, and the CI fixture cannot
+populate every plane — so coverage is required where the data is real and merely
+reported where it is not.
+
+Exit codes:
+  0 - every invariant holds (or is exempted and unexpired)
+  1 - an invariant is violated, an exemption has expired, or coverage is missing
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
+
+EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
+
+# Resolve runs the way the CONSUMERS do, not a third way. Review caught all
+# three invariants inventing their own: `order by created_at desc` picked a GPPE
+# run nothing serves (production's pointer targets capture-run:8c49eec8… while
+# the newest row belongs to capture-run:49a1f57e…), and `max()` over
+# current_pointer_head mixed a table that is keyed per (environment,
+# universe_id, universe_version, factor_id). Both were correct only by accident
+# of today's data — one pointer row, one strategy key — and a second factor or
+# strategy would have made them compare across planes silently. That is #462's
+# defect class, which this file exists to guard against.
+#
+# Mirrors apps/app-web/src/server/mart/topt-gppe-repository.ts's GOVERNED_HEAD_SQL.
+# test_output_invariants.py asserts the two stay in step.
+# The universe belongs to the governed key. Without it these invariants measured whichever
+# pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
+# every invariant below silently changed population.
+SERVED_UNIVERSE_PREFIX = "universe:topt-"
+GOVERNED_HEAD = f"""
+    select run_id from mart.served_head
+    where factor_id = 'gross_profit_per_employee'
+      and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
+    order by advanced_at desc limit 1
+"""
+# Mirrors strategy-run-repository.ts (#575): the run the governed capture head resolves
+# to first, recency after — the same ORDER BY text, which test_output_invariants compares
+# to the consumer's. Wrapped so the subquery stays single-column.
+DASHBOARD_STRATEGY = "large_model_value_v0"
+LATEST_STRATEGY_RUN = f"""
+    select strategy_run_id from (
+        select r.strategy_run_id, r.executed_at, r.created_at,
+               exists (select 1 from mart.governed_strategy_run g
+                       where g.strategy_run_id = r.strategy_run_id) as is_governed
+        from mart.strategy_runs r
+        where r.strategy_key = '{DASHBOARD_STRATEGY}'
+        order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc limit 1
+    ) served
+"""
+
+
+def _expected_input_keys() -> tuple[str, ...]:
+    """The keys the strategy consumes: the definition's required inputs plus PEG's
+    ranking inputs, read from the code that consumes them. Before 2026-09-07 this was a
+    literal list that still named `earnings_cagr_3y`, which parser v8 replaced with the
+    per-period net-income series — the invariant failed on production for a key nothing
+    consumed, i.e. the check drifted, not the data (#725 item H)."""
+    try:
+        from data_engine.datahub.strategy_bridge import load_strategy_definition
+        from factors.composite import strategy_evaluator
+
+        peg_keys: tuple[str, ...] = strategy_evaluator._input_keys("peg")
+        return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(peg_keys)))
+    except (
+        ImportError,
+        AttributeError,
+    ):  # the tool also runs where data_engine is not installed (a bare fixture DB job)
+        return (
+            "gross_profit",
+            "headcount",
+            "last_close",
+            "net_income",
+            "revenue",
+            "shares_outstanding",
+            "total_assets",
+        )
+
+
+def _primary_market_price_parser() -> str:
+    """The declared primary origin's parser family for market-price (the registration's
+    first origin); a literal only where the registry is not importable."""
+    try:
+        from data_engine.datahub.production_topt.source_registrations import registration_for
+
+        return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
+    except ImportError:
+        return "production-topt-live-parser"
+
+
+def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
+    """(parser family, fusion rank) for every registered market-price origin vintage, ranked
+    by the fusion policy's `source_priority` (#862: a cell the primary could not serve is
+    served by the next origin in that order); a literal only where the registry is not
+    importable."""
+    try:
+        from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
+        from data_engine.datahub.quality_report import RECONCILIATION_POLICY
+    except ImportError:
+        return (("production-topt-live-parser", 0), ("twelve-data-parser", 1), ("moomoo-kline-parser", 2))
+    market = {origin.origin_id for origin in registration_for("market-price").origins}
+    priority = RECONCILIATION_POLICY.source_priority
+    ranks: dict[str, int] = {}
+    for vintage, (source_id, origin_id, _value_key) in SOURCE_BY_PARSER.items():
+        if origin_id in market and source_id in priority:
+            family, rank = vintage.split(":")[0], priority.index(source_id)
+            ranks[family] = min(rank, ranks.get(family, rank))
+    return tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
+
+
+EXPECTED_INPUT_KEYS = _expected_input_keys()
+PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
+MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
+
+
+@dataclass(frozen=True)
+class Invariant:
+    id: str
+    claim: str
+    #: Rows returned ARE the violations; the query must select enough to act on.
+    violations: str
+    #: How many rows the invariant looked at, so a vacuous pass is visible.
+    population: str
+    #: Rows that hold but must be seen: printed as `SIGNAL`, never a failure.
+    signals: str | None = None
+
+
+#: The published table whose columns the sign policies judge, scoped to the governed head.
+SIGN_POLICY_TABLE = "mart.topt_gppe_results"
+
+
+def _classes(values: set[IssuerClass]) -> str:
+    return ", ".join(f"'{value}'" for value in sorted(member.value for member in values))
+
+
+def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | None]:
+    """(violations, signals) for the published columns of `table`, generated from the forest.
+
+    Violations: a value for an issuer class the column's node declares no policy for; a
+    negative value where the node is `must-be-non-negative` for the row's class; two columns
+    carrying one node with different values; and a sign a registered ratio cannot produce
+    (output and numerator both published, denominator non-negative by policy, so the two
+    signs agree). Signals: a negative value where the node declares `sign-is-signal`."""
+    columns = PUBLISHED_COLUMNS[table]
+    #: node key -> the column judged for it; any further column carrying the node must equal it.
+    judged: dict[str, str] = {}
+    for column, node_key in sorted(columns.items()):
+        judged.setdefault(node_key, column)
+    violations: list[str] = []
+    signals: list[str] = []
+
+    def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
+        """One arm of the union. `published` scopes it to rows where `column` carries a value;
+        an arm whose predicate is itself about NULLs passes False."""
+        node = FOREST.node(node_key)
+        scope = f" and {column} is not null" if published else ""
+        return (
+            f"select listing_id, operating_branch, '{column}' as published_column, "
+            f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy "
+            f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
+        )
+
+    for column, node_key in sorted(columns.items()):
+        first = judged[node_key]
+        if column != first:
+            # A NULL on one side and a value on the other is a disagreement too.
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} is distinct from {first}",
+                    f"same node as {first}, other value",
+                    published=False,
+                )
+            )
+            continue
+        node = FOREST.node(node_key)
+        by_policy = {
+            policy: {c for c, declared in node.sign_policy.items() if declared is policy} for policy in SignPolicy
+        }
+        violations.append(
+            select(
+                column,
+                node_key,
+                f"operating_branch not in ({_classes(set(node.sign_policy))})",
+                "no policy for this class",
+            )
+        )
+        forbidden = by_policy[SignPolicy.MUST_BE_NON_NEGATIVE]
+        if forbidden:
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(forbidden)})",
+                    SignPolicy.MUST_BE_NON_NEGATIVE.value,
+                )
+            )
+        signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]
+        if signalled:
+            signals.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(signalled)})",
+                    SignPolicy.SIGN_IS_SIGNAL.value,
+                )
+            )
+    for tree in FOREST.trees:
+        for decomposition in tree.decompositions:
+            if decomposition.formula_id != "ratio" or decomposition.output not in judged:
+                continue
+            by_pair: dict[tuple[str, str], set[IssuerClass]] = {}
+            for issuer_class, (numerator, denominator) in decomposition.operands.items():
+                policy = FOREST.node(denominator).sign_policy.get(issuer_class)
+                if numerator in judged and policy is SignPolicy.MUST_BE_NON_NEGATIVE:
+                    by_pair.setdefault((numerator, denominator), set()).add(issuer_class)
+            for (numerator, denominator), classes in sorted(by_pair.items()):
+                output_column, numerator_column = judged[decomposition.output], judged[numerator]
+                violations.append(
+                    select(
+                        output_column,
+                        decomposition.output,
+                        # A published output whose numerator is absent is as wrong as a flipped
+                        # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
+                        f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
+                        f"or sign({output_column}) <> sign({numerator_column}))",
+                        f"sign of {numerator_column} over non-negative {denominator}",
+                    )
+                )
+    return "\n union all\n".join(violations), ("\n union all\n".join(signals) if signals else None)
+
+
+_SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
+
+
+INVARIANTS: tuple[Invariant, ...] = (
+    Invariant(
+        id="node-sign-policy",
+        claim=(
+            "a published value respects the sign policy its metric-forest node declares for the "
+            "issuer's class — the definition says what a negative number means, and this asserts "
+            "exactly that (init.md rule 17, #528)"
+        ),
+        violations=_SIGN_VIOLATIONS,
+        population=f"""
+            select count(*) from {SIGN_POLICY_TABLE}
+            where run_id = ({GOVERNED_HEAD})
+        """,
+        signals=_SIGN_SIGNALS,
+    ),
+    Invariant(
+        id="available-means-a-value",
+        claim=(
+            "a cell marked `available` carries a value and a non-zero confidence — "
+            "'available with nothing in it' is a contradiction, not a state"
+        ),
+        violations=f"""
+            select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text
+            from mart.topt_gppe_results
+            where run_id = ({GOVERNED_HEAD})
+              and availability = 'available'
+              and (gppe is null or confidence = 0)
+        """,
+        population=f"""
+            select count(*) from mart.topt_gppe_results
+            where run_id = ({GOVERNED_HEAD})
+              and availability = 'available'
+        """,
+    ),
+    Invariant(
+        id="selected-weights-close",
+        claim="the selected positions of a strategy run sum to a whole portfolio",
+        violations=f"""
+            select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected
+            from mart.strategy_decisions
+            where strategy_run_id = ({LATEST_STRATEGY_RUN})
+              and outcome = 'selected'
+            group by strategy_run_id
+            having abs(sum(target_weight) - 1) > 0.000001
+        """,
+        population=f"""
+            select count(*) from mart.strategy_decisions
+            where strategy_run_id = ({LATEST_STRATEGY_RUN})
+              and outcome = 'selected'
+        """,
+    ),
+    Invariant(
+        id="every-consumed-input-is-populated",
+        claim=(
+            "an input key the strategy consumes must be written for at least one issuer at "
+            "the latest cutoff — a key that is declared, permitted by the 0039 CHECK and "
+            "written for NOBODY is a wiring gap, and it publishes as a missing factor rather "
+            "than an error (#284)"
+        ),
+        # The check that would have caught #284's real defect. `net_income` and
+        # `earnings_cagr_3y` were absent from BOTH environments for as long as they
+        # existed, because the only deployed caller never asked the parser for them.
+        # Every gate stayed green: the keys were declared, the CHECK allowed them, the
+        # payload carried them as nulls, `mart...peg` was simply NULL for all 20 issuers
+        # and the runs reported SUCCESS. Nothing anywhere asked "is this key populated".
+        #
+        # Deliberately not "populated for every issuer": correct refusals are normal and
+        # common (declining earnings, a loss year inside the window, a refused share
+        # count). Zero issuers across a whole cutoff is not a data gap, it is nobody
+        # calling the code.
+        #
+        # The expected list restates migration 0039's CHECK on purpose. A single source
+        # would only prove the list agrees with itself; the value here is a second,
+        # independent statement of what the deployed run is supposed to produce.
+        violations="""
+            with expected(input_key) as (values __EXPECTED_VALUES__
+            ), latest as (
+                select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
+            )
+            select expected.input_key, (select cutoff_at from latest)::text as cutoff_at
+            from expected
+            where exists (select 1 from latest where cutoff_at is not null)
+              and not exists (
+                select 1 from staging.strategy_backtest_inputs i
+                where i.input_key = expected.input_key
+                  and i.cutoff_at = (select cutoff_at from latest)
+              )
+        """,
+        population="""
+            select count(distinct input_key) from staging.strategy_backtest_inputs
+            where cutoff_at = (select max(cutoff_at) from staging.strategy_backtest_inputs)
+        """,
+    ),
+    Invariant(
+        id="fusion-selects-by-priority-not-recency",
+        claim=(
+            "where two sources assert the same obligation, the snapshot selected the "
+            "highest-priority source -- never whichever published later (init.md rule 12)"
+        ),
+        # Population is deliberately the CONTESTED groups only, so this reports EMPTY for
+        # as long as every obligation resolves from a single source. That is the honest
+        # state of fusion today -- unexercised, not proven -- and `--require-coverage`
+        # turns the same query into a failure the moment real data is expected to contest.
+        # An invariant that examined every group would pass forever while proving nothing.
+        # Contested = one obligation carrying observations from more than one parser
+        # family, i.e. two sources asserting the same cell. EVERY contested group is a
+        # violation today, because the selection window ranks by recency alone and has no
+        # source-priority term to break the tie with (deferred on #530). Population is the
+        # contested groups themselves, so this reports EMPTY -- "examined 0 rows, so it
+        # proved nothing" -- for as long as fusion stays unexercised. That is the honest
+        # state; an invariant over ALL groups would pass forever while proving nothing.
+        # What the snapshot SELECTED, not merely what was contested: before 2026-09-07 this
+        # query listed every obligation with two parsers as a violation, which is every
+        # market-price cell once the second origin landed (3,102 on production) — while the
+        # snapshots had selected the primary parser for all of them. The population is the
+        # selected observations on contested obligations; a violation is one whose parser is
+        # not the declared primary for its semantic (the registration's first origin) —
+        # unless the primary could not serve the cell (#862): then the next origin in the
+        # fusion policy's order serves it, and that selection holds only when the payload
+        # declares it (`served_by_failover`), the origin is one the policy ranks, and no
+        # higher-ranked origin asserted the same session on the same obligation.
+        violations="""
+            with ranks(family, rank) as (
+                values __MARKET_PRICE_PARSER_RANKS__
+            ), selected as (
+                -- what consumers see today: the snapshots of the governed heads only, not
+                -- every snapshot ever frozen (review on #750)
+                select s.run_id, sel.observation_id
+                from mart.current_pointer_head head
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+            ), contested as (
+                select uo.capture_obligation_id
+                from staging.capture_observation_obligations uo
+                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
+                group by uo.capture_obligation_id
+                having count(distinct split_part(o.parser_version, ':', 1)) > 1
+            )
+            select selected.run_id, o.semantic_type, split_part(o.parser_version, ':', 1) as selected_parser
+            from selected
+            join staging.capture_normalized_observations o on o.observation_id = selected.observation_id
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+            join staging.capture_observation_obligations uo on uo.observation_id = o.observation_id
+            join contested on contested.capture_obligation_id = uo.capture_obligation_id
+            left join ranks selected_rank on selected_rank.family = split_part(o.parser_version, ':', 1)
+            where o.semantic_type = 'market-price'
+              and split_part(o.parser_version, ':', 1) <> '{PRIMARY_MARKET_PRICE_PARSER}'
+              and (
+                  -- an origin the fusion policy does not rank reached the snapshot
+                  selected_rank.rank is null
+                  -- a substitute the payload does not declare is a silent one (#862)
+                  or p.normalized_payload ->> 'served_by_failover' is null
+                  -- a higher-ranked origin asserted the same session and was passed over
+                  or exists (
+                      select 1
+                      from staging.capture_observation_obligations peer_link
+                      join staging.capture_normalized_observations peer
+                        on peer.observation_id = peer_link.observation_id
+                      join ranks peer_rank on peer_rank.family = split_part(peer.parser_version, ':', 1)
+                      where peer_link.capture_obligation_id = uo.capture_obligation_id
+                        and peer_rank.rank < selected_rank.rank
+                        and (peer.knowable_at at time zone 'UTC')::date = (o.knowable_at at time zone 'UTC')::date
+                  )
+              )
+        """,
+        population="""
+            with selected as (
+                select sel.observation_id
+                from mart.current_pointer_head head
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+            ), contested as (
+                select uo.capture_obligation_id
+                from staging.capture_observation_obligations uo
+                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
+                group by uo.capture_obligation_id
+                having count(distinct split_part(o.parser_version, ':', 1)) > 1
+            )
+            select count(*)
+            from selected
+            join staging.capture_observation_obligations uo on uo.observation_id = selected.observation_id
+            join contested on contested.capture_obligation_id = uo.capture_obligation_id
+        """,
+    ),
+    Invariant(
+        id="extraction-citations-resolve",
+        claim=(
+            "every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, "
+            "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
+        ),
+        violations="""
+            with eligible as (
+                select distinct g.cik
+                from staging.issuer_headcount_facts g
+                where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1')
+                  and (
+                      substring(g.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is not null
+                      or (
+                          g.source = '10k-extraction'
+                          and substring(g.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                      )
+                  )
+                  and substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is not null
+                  and g.knowable_at <> '2026-01-01T00:00:00Z'::timestamptz
+                  and (g.knowable_at at time zone 'UTC')::date
+                      = substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                  and (
+                      g.source <> '10k-extraction'
+                      or (
+                          substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is not null
+                          and exists (
+                              select 1 from raw.fetches r
+                              where r.id = substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                          )
+                      )
+                  )
+            )
+            select
+                f.id::text,
+                f.cik::text,
+                f.source,
+                coalesce(
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),
+                    'missing-accession'
+                ) as cited_accession,
+                coalesce(
+                    substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'),
+                    'none'
+                ) as cited_raw_id
+            from staging.issuer_headcount_facts f
+            where (
+                f.source = 'curated-10k-2025'
+                or (
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null
+                    and not (
+                        f.source = '10k-extraction'
+                        and substring(f.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                    )
+                )
+                or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null
+                or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                or (f.knowable_at at time zone 'UTC')::date
+                   <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                or (
+                    f.source = '10k-extraction'
+                    and (
+                        substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
+                        or not exists (
+                            select 1 from raw.fetches r
+                            where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                        )
+                    )
+                )
+            )
+            and not (
+                (
+                    f.source = 'curated-10k-2025'
+                    or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                    or f.evidence_ref like '%#70 supersedes%'
+                )
+                and exists (select 1 from eligible e where e.cik = f.cik)
+            )
+        """,
+        population="""
+            select count(*) from staging.issuer_headcount_facts
+        """,
+    ),
+    Invariant(
+        id="quality-report-matches-core-results",
+        claim=(
+            "for every governed head in mart.served_head, the gross_profit_per_employee complete_subjects "
+            "count in mart.datahub_quality_report equals the number of listings of the available issuers "
+            "in mart.topt_core_results (#1299, #1227, #1346)"
+        ),
+        # The report counts subjects, and a subject is a listing (raw.capture_obligations.subject_id).
+        # The core writes one result for each issuer. Alphabet has two listings.
+        # For each dual-class issuer, the issuer count is one less than the listing count (#1346).
+        # This check counts the listings of the issuers that have an `available` result.
+        # The core snapshot of the run supplies the listings. Its payload holds one member for each listing.
+        # Do not count the rows of staging.topt_core_snapshot_members. That table holds one row for each issuer.
+        # `exists` counts each listing one time, also when two invocations wrote results for one run.
+        # A payload without members gives 0 listings, so each head with complete facts fails.
+        # Equality stays the rule. An issuer with complete facts and an unavailable result fails its head.
+        # #1309 gives that shape on QQQ: an issuer without a stored daily series is unavailable.
+        violations="""
+            select
+                h.universe_id,
+                coalesce(h.run_id, h.head_run_id) as run_id,
+                coalesce(
+                    (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
+                    -1
+                )::text as report_complete_subjects,
+                core.available_listings::text as core_available_listings,
+                core.available_issuers::text as core_available_issuers
+            from mart.served_head h
+            left join lateral (
+                select payload
+                from mart.datahub_quality_report
+                where run_id = coalesce(h.run_id, h.head_run_id)
+                order by created_at desc
+                limit 1
+            ) q on true
+            cross join lateral (
+                select
+                    count(*)::int as available_listings,
+                    count(distinct member->>'issuer_id')::int as available_issuers
+                from staging.topt_core_snapshots s
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                where s.run_id = coalesce(h.run_id, h.head_run_id)
+                  and exists (
+                      select 1
+                      from mart.topt_core_results r
+                      where r.run_id = s.run_id
+                        and r.issuer_id = member->>'issuer_id'
+                        and r.availability = 'available'
+                  )
+            ) core
+            where h.factor_id = 'gross_profit_per_employee'
+              and coalesce(
+                  (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
+                  -1
+              ) <> core.available_listings
+        """,
+        population="""
+            select count(*)
+            from mart.served_head h
+            where h.factor_id = 'gross_profit_per_employee'
+        """,
+    ),
+)
+
+
+def _render(invariant: Invariant) -> Invariant:
+    """The derived facts enter the SQL as literals, once, here — never at query time."""
+    values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
+    ranks = ", ".join(f"('{family}', {rank})" for family, rank in MARKET_PRICE_PARSER_RANKS)
+    return Invariant(
+        id=invariant.id,
+        claim=invariant.claim,
+        violations=invariant.violations.replace("__EXPECTED_VALUES__", values)
+        .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
+        .replace("__MARKET_PRICE_PARSER_RANKS__", ranks),
+        population=invariant.population,
+        signals=invariant.signals,
+    )
+
+
+INVARIANTS = tuple(_render(invariant) for invariant in INVARIANTS)
+
+
+@dataclass(frozen=True)
+class Exemption:
+    invariant: str
+    issue: str
+    expires: date
+    reason: str
+
+
+def load_exemptions(path: Path = EXEMPTIONS_PATH) -> dict[str, Exemption]:
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    out: dict[str, Exemption] = {}
+    for entry in raw["exemptions"]:
+        out[entry["invariant"]] = Exemption(
+            invariant=entry["invariant"],
+            issue=entry["issue"],
+            expires=date.fromisoformat(entry["expires"]),
+            reason=entry["reason"],
+        )
+    return out
+
+
+def _rows(connection: Any, sql: str) -> list[tuple]:
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        return cursor.fetchall()
+
+
+def check(
+    database_url: str,
+    *,
+    require_coverage: bool = False,
+    today: date | None = None,
+    exemptions: dict[str, Exemption] | None = None,
+    invariants: Sequence[Invariant] = INVARIANTS,
+    connect: Callable[[str], Any] = psycopg.connect,
+) -> int:
+    today = today or date.today()
+    exemptions = load_exemptions() if exemptions is None else exemptions
+    failures: list[str] = []
+
+    with connect(database_url) as connection:
+        for invariant in invariants:
+            population = _rows(connection, invariant.population)[0][0]
+            violations = _rows(connection, invariant.violations)
+            exemption = exemptions.get(invariant.id)
+            if invariant.signals is not None:
+                # Printed whatever the verdict: a declared low signal is accepted, never unseen.
+                for row in _rows(connection, invariant.signals):
+                    print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
+
+            if violations and exemption and exemption.expires >= today:
+                print(
+                    f"  DEFERRED {invariant.id}: {len(violations)} violation(s), exempt until "
+                    f"{exemption.expires} under {exemption.issue} — {exemption.reason}"
+                )
+                continue
+            if violations:
+                detail = "; ".join(" ".join(str(field) for field in row) for row in violations[:5])
+                expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
+                failures.append(
+                    f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}."
+                    f"{expired} Offending rows: {detail}"
+                )
+                continue
+            if population == 0:
+                # Nothing was examined, so nothing was proved — including about
+                # any exemption. Judging a waiver stale here would fail the CI
+                # fixture for not containing the production defect it exempts,
+                # which is the vacuity problem pointed the other way.
+                print(f"  EMPTY    {invariant.id}: examined 0 rows, so it proved nothing")
+                if require_coverage:
+                    failures.append(f"{invariant.id}: examined 0 rows where real data was required")
+                continue
+            if exemption:
+                failures.append(
+                    f"{invariant.id}: exempt under {exemption.issue} but no longer violated across "
+                    f"{population} row(s). Remove the exemption — a standing waiver for a fixed "
+                    f"defect hides the next one"
+                )
+                continue
+            print(f"  ok       {invariant.id}: {population} row(s) examined")
+
+    for failure in failures:
+        print(f"invariant failed: {failure}", file=sys.stderr)
+    return 1 if failures else 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--require-coverage", action="store_true")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    return check(args.database_url, require_coverage=args.require_coverage)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
