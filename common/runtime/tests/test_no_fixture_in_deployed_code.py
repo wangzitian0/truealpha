@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 CONSUMPTION_SOURCES = (REPO / "apps" / "llm-service" / "src", REPO / "apps" / "app-web" / "src")
 # An instantiation or call of a Fixture* class; a `class FixtureX(...)` definition is not
@@ -161,6 +163,7 @@ def deployed_closure(entry_points: tuple[str, ...] = DEPLOYED_ENTRY_POINTS) -> d
     return closure
 
 
+@pytest.mark.criterion("R5.E2")
 def test_no_deployed_python_module_imports_or_subclasses_a_fixture() -> None:
     offenders = []
     for module, path in sorted(deployed_closure().items()):
