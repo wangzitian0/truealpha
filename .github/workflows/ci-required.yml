@@ -131,8 +131,15 @@ jobs:
               - '.claude/**'
               - '.agents/**'
               - '.ws-publish/**'
-              - 'AGENTS.md'
-              - 'CLAUDE.md'
+              # #1412: a document starts this lane only when a test reads it, and
+              # test_a_document_selects_the_lanes_that_read_it_and_no_other derives
+              # the readers from the tests. Every top-level markdown file is read:
+              # by the reintroduction sweep, or by name (init.md, vision.md, README.md,
+              # CLAUDE.md). Two files under docs/ are read by name. Other files
+              # under docs/ start no lane.
+              - '*.md'
+              - 'docs/architecture-decisions/A3-source-governance.md'
+              - 'docs/datahub-quality-report.md'
             # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
             # self-termination class) sat on every PR's and every main push's
             # critical path — 151-160s of it, most of the job's own wall time —
@@ -164,6 +171,9 @@ jobs:
               - '.github/actions/**'
               - 'docker-compose.yml'
               - 'tools/**'
+              # Two documents that tests under apps/data-engine/tests read (#1412).
+              - 'README.md'
+              - 'docs/datahub-quality-report.md'
             runtime:
               # #984: ci-runtime executes tools/schema_drift.py against the schema the
               # compose bootstrap produced — the same reason `db` above carries
@@ -188,45 +198,31 @@ jobs:
               - 'common/contracts/conformance/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
+            # No `!` entry stands in these lanes (#1412). This step uses the default
+            # `some` quantifier: a lane starts when ANY entry matches ANY changed file,
+            # and a `!` entry matches every path it does not name. The `!` entries that
+            # #1168 added started all three image builds on every PR, a rules-only PR
+            # included. A test-only or markdown-only change inside an image scope now
+            # builds that image again, as it did before #1168.
             image_app_web:
               - 'apps/app-web/**'
-              - '!apps/app-web/tests/**'
-              - '!apps/app-web/e2e/**'
-              - '!apps/app-web/**/*.md'
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_llm_service:
               - 'apps/llm-service/**'
-              - '!apps/llm-service/tests/**'
-              - '!apps/llm-service/**/*.md'
               - 'apps/data-engine/pyproject.toml'
               - 'common/contracts/**'
-              - '!common/contracts/tests/**'
-              - '!common/contracts/**/*.md'
               - 'common/factors/**'
-              - '!common/factors/tests/**'
-              - '!common/factors/**/*.md'
               - 'common/runtime/**'
-              - '!common/runtime/tests/**'
-              - '!common/runtime/**/*.md'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
             image_data_engine:
               - 'apps/data-engine/**'
-              - '!apps/data-engine/tests/**'
-              - '!apps/data-engine/samples/**'
-              - '!apps/data-engine/**/*.md'
               - 'common/contracts/**'
-              - '!common/contracts/tests/**'
-              - '!common/contracts/**/*.md'
               - 'common/factors/**'
-              - '!common/factors/tests/**'
-              - '!common/factors/**/*.md'
               - 'common/runtime/**'
-              - '!common/runtime/tests/**'
-              - '!common/runtime/**/*.md'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/release-images.yml'

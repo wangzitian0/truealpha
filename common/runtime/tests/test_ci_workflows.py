@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tomllib
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -47,9 +48,12 @@ sys.modules[_SPEC.name] = _contract
 _SPEC.loader.exec_module(_contract)
 
 WorkflowContractError = _contract.WorkflowContractError
+glob_matches = _contract.glob_matches
 job = _contract.job
 job_step = _contract.job_step
 load = _contract.load
+paths_filters = _contract.paths_filters
+selected_lanes = _contract.selected_lanes
 source = _contract.source
 step = _contract.step
 steps = _contract.steps
@@ -458,10 +462,18 @@ class _Context:
         return bool(self._value)
 
 
-def _decides(condition: object, github: dict, *, succeeded: bool = True) -> bool:
+def _decides(
+    condition: object,
+    github: dict,
+    *,
+    succeeded: bool = True,
+    needs: dict | None = None,
+    inputs: dict | None = None,
+) -> bool:
     """Evaluate a job/step `if:` the way the runner would, for the operators these
     watchdog conditions use: `&&`, `||`, `!`, `==`, `!=`, string literals and the
-    status functions. Anything else is refused rather than guessed at.
+    status functions. Anything else is refused rather than guessed at. `needs` and
+    `inputs` are the other two contexts a job gate reads (#1412).
 
     Asserting substrings of a condition proves the text; evaluating it proves the
     decision — a PR run, a branch dispatch or a loosened override must come out
@@ -471,6 +483,7 @@ def _decides(condition: object, github: dict, *, succeeded: bool = True) -> bool
     expression = str(condition).strip() if condition is not None else "true"
     if expression.startswith("${{") and expression.endswith("}}"):
         expression = expression[3:-2].strip()
+    expression = " ".join(expression.split())  # a folded `>-` condition spans lines
     functions = set(re.findall(r"([A-Za-z_]+)\(", expression))
     assert functions <= {"success", "failure", "always", "cancelled"}, f"unsupported functions {functions}"
     assert not re.search(r"!\s*\(", expression), "negating a group is not supported by this evaluator"
@@ -480,6 +493,8 @@ def _decides(condition: object, github: dict, *, succeeded: bool = True) -> bool
     python = python.replace("&&", " and ").replace("||", " or ")
     namespace = {
         "github": _Context(github),
+        "needs": _Context(needs or {}),
+        "inputs": _Context(inputs or {}),
         "success": lambda: succeeded,
         "failure": lambda: not succeeded,
         "always": lambda: True,
@@ -1599,14 +1614,14 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
     A PR that adds some other new top-level directory still skips ci-python; no filter
     entry can name a directory that does not exist yet.
     """
-    python = _changes_filters()["python"]
-    published = [f"{root}/**" for root in ("skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)] + [
-        "AGENTS.md",
-        "CLAUDE.md",
-    ]
-    missing = [entry for entry in published if entry not in python]
+    # Selection, not list membership (#1412): a filter entry can name a root and still miss
+    # a dot-directory file, or reach it through a broader entry such as `*.md`.
+    published = [
+        f"{root}/probe/file.md" for root in ("skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)
+    ] + ["AGENTS.md", "CLAUDE.md"]
+    missing = [path for path in published if "python" not in selected_lanes(REQUIRED, [path])]
     assert not missing, (
-        f"the python filter lacks {missing}: a PR touching only those paths skips ci-python, "
+        f"the python filter does not select {missing}: a PR touching only those paths skips ci-python, "
         f"and `required` reads the skip as success (#1018)"
     )
 
@@ -1654,6 +1669,306 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
             f"pytest testpath {path!r} is outside every python filter entry — PRs touching it "
             f"skip ci-python and merge with that suite never running (#673)"
         )
+
+
+# --- #1412: a pull request that changes only unread documents starts no test lane ------
+#
+# Measured on #1409, a rules-only PR (AGENTS.md, skills/, the two agent mirrors and the
+# publish record): ci-python ran, and so did all three image builds. The image lanes held
+# `!` entries (#1168) that never excluded anything. The paths-filter default quantifier
+# is `some`, and picomatch returns true for every path a negated pattern does not match,
+# so each `!` entry selected the whole repository.
+#
+# The tests below pin four facts:
+#   1. the glob matcher follows picomatch, dot paths included;
+#   2. no `!` entry stands under the default quantifier;
+#   3. a document selects the lanes that run a test which reads it, and no other lane;
+#   4. a PR of unread documents starts only `changes`, `security` and `required`, and the
+#      `required` summary still reports success.
+
+#: What `picomatch(pattern, {dot: true})` returned for each pair. Produced with picomatch
+#: 2.3.1, the version that dorny/paths-filter v3 depends on. Both outcomes are present.
+PICOMATCH_GOLDEN = (
+    ("docs/**", "docs", True),
+    ("docs/**", "docs/a.md", True),
+    ("docs/**", "docs/x/y.md", True),
+    ("docs/**", "docsx/a.md", False),
+    ("docs/**", ".docs/a.md", False),
+    ("docs/**", "docs/.hidden/x", True),
+    (".claude/**", ".claude/skills/prr/SKILL.md", True),
+    (".claude/**", "claude/x", False),
+    ("*.md", "README.md", True),
+    ("*.md", "docs/a.md", False),
+    ("*.md", ".hidden.md", True),
+    ("**/*.md", "a/.b/c.md", True),
+    ("apps/**/*.md", "apps/README.md", True),
+    ("apps/**/*.md", "apps/.x/README.md", True),
+    ("a/*/b", "a/b", False),
+    ("a/**/b", "a/b", True),
+    ("a/**/b", "a/.x/b", True),
+    ("a?c", "a/c", False),
+    ("a?c", "a.c", True),
+    ("*", ".env.example", True),
+    ("*", "a/b", False),
+    ("**", ".a/b", True),
+    ("apps/*", "apps", False),
+    ("apps/*", "apps/.x", True),
+    ("common/runtime/**", "common/runtime", True),
+    ("common/runtime/**", "common/runtime2/x", False),
+    ("uv.lock", "uv.lock.bak", False),
+    ("!apps/app-web/tests/**", "docs/a.md", True),
+    ("!apps/app-web/tests/**", "apps/app-web/tests/a.ts", False),
+)
+
+
+def test_the_glob_matcher_agrees_with_picomatch_including_dot_paths() -> None:
+    """The gate tests below judge a filter with `glob_matches`. If it differs from picomatch,
+    they pass or fail for the wrong reason. The expected values come from picomatch itself,
+    and the pairs include a dot directory, a dot file and a negated pattern."""
+    wrong = [
+        (pattern, path, want) for pattern, path, want in PICOMATCH_GOLDEN if glob_matches(pattern, path) is not want
+    ]
+    assert not wrong, f"glob_matches differs from picomatch 2.3.1 on (pattern, path, picomatch result): {wrong}"
+    outcomes = {want for *_, want in PICOMATCH_GOLDEN}
+    assert outcomes == {True, False}, "the golden pairs must hold a match and a non-match"
+    for unsupported in ("{a,b}/**", "a/[bc]", "a/+(b|c)", "a/!(b)", "a**b", "!!a/**", "/a/**", "./a/**", ""):
+        with pytest.raises(ValueError):
+            glob_matches(unsupported, "a/b")
+    for path in ("", "/a", "a/"):
+        with pytest.raises(ValueError):
+            glob_matches("a/**", path)
+
+
+def test_a_negated_filter_entry_stands_only_under_the_every_quantifier() -> None:
+    """#1168 added `!apps/app-web/tests/**`-style entries to the image lanes so a test-only
+    or markdown-only PR would build no image. The step kept the default quantifier `some`:
+    a lane is selected when ANY entry matches ANY changed file. A `!` entry matches every
+    path it does not name, so it selected every PR. Measured on #1409: a rules-only PR built
+    all three images. `predicate-quantifier: every` makes the entries a conjunction, which a
+    union of scopes cannot use. Exclusions therefore do not belong in a `some` step."""
+    negated = {
+        lane: [entry for entry in patterns if entry.startswith("!")]
+        for quantifier, lanes in paths_filters(REQUIRED)
+        if quantifier == "some"
+        for lane, patterns in lanes.items()
+    }
+    negated = {lane: entries for lane, entries in negated.items() if entries}
+    assert not negated, (
+        f"these lanes hold `!` entries under the default `some` quantifier: {negated}. Each entry "
+        f"selects every path it does not name, so the lane starts on every PR (#1412)"
+    )
+
+
+def test_every_lane_a_job_reads_is_a_lane_the_filter_defines() -> None:
+    """A job gate that reads a lane the filter does not define reads the empty string, and
+    the lane never starts. The tests below start jobs from filter output, so a misspelled
+    lane would make them pass over a job that can no longer run."""
+    defined = {lane for _, lanes in paths_filters(REQUIRED) for lane in lanes}
+    published = set(job(REQUIRED, "changes")["outputs"])
+    read = set(re.findall(r"needs\.changes\.outputs\.(\w+)", source(REQUIRED)))
+    assert read, "no job reads a changes output, so this test checks nothing"
+    assert read <= defined, f"jobs read lanes the filter does not define: {sorted(read - defined)}"
+    assert read <= published, f"jobs read outputs the changes job does not publish: {sorted(read - published)}"
+
+
+_PULL_REQUEST = {"event_name": "pull_request", "ref_type": "branch", "ref": "refs/pull/1/merge"}
+
+
+def _jobs_started_by(paths: list[str]) -> set[str]:
+    """The ci-required jobs that a pull request changing exactly these paths starts.
+
+    Lane outputs come from the real filter. Each job `if:` is judged by `_decides`, so the
+    result follows the workflow text. A merge-queue run forces every lane and is not modelled.
+    """
+    selected = selected_lanes(REQUIRED, paths)
+    defined = {lane for _, lanes in paths_filters(REQUIRED) for lane in lanes}
+    outputs = {lane: "true" if lane in selected else "false" for lane in defined}
+    jobs = load(REQUIRED)["jobs"]
+    needs = {name: {"result": "success", "outputs": outputs if name == "changes" else {}} for name in jobs}
+    return {name for name, spec in jobs.items() if _decides(spec.get("if"), _PULL_REQUEST, needs=needs)}
+
+
+def _run_required_summary(started: set[str], failed: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the `required` job's own script on the results that a PR run would hand it."""
+    import json
+
+    assert shutil.which("jq"), "the required summary calls jq; the CI runner has it, so install it here"
+    results = {
+        name: {"result": "failure" if name == failed else "success" if name in started else "skipped"}
+        for name in job(REQUIRED, "required")["needs"]
+    }
+    script = str(job_step(REQUIRED, "required", "Reject any failed, cancelled, or missing dependency")["run"])
+    return subprocess.run(
+        ["bash", "-e", "-c", script],
+        env={**os.environ, "RESULTS": json.dumps(results)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@cache
+def _tracked_files() -> tuple[str, ...]:
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z"], capture_output=True, text=True, check=True
+    ).stdout
+    tracked = tuple(entry for entry in listing.split("\0") if entry)
+    assert len(tracked) > 100, f"git reports only {len(tracked)} tracked files (GREEN-WHILE-EMPTY)"
+    return tracked
+
+
+@cache
+def _markdown_named_by_tests() -> dict[str, set[str]]:
+    """`{tracked markdown file: the test files that name it in a string constant}`.
+
+    A bare name such as `init.md` means the root file when one is tracked, and otherwise
+    every tracked file of that name. This sees a name written out in the test. It does not
+    see a name built at run time or a tree walk. The walks are listed in `_lanes_that_read`.
+    The test file you are reading is skipped: its constants name files only to assert on
+    them (the Qlib sweep does the same for itself).
+    """
+    markdown = {path for path in _tracked_files() if path.endswith(".md")}
+    testpaths = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"][
+        "ini_options"
+    ]["testpaths"]
+    this_file = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+    named: dict[str, set[str]] = {}
+    for testpath in testpaths:
+        for test_file in sorted((REPO_ROOT / testpath).rglob("*.py")):
+            relative = test_file.relative_to(REPO_ROOT).as_posix()
+            if relative == this_file:
+                continue
+            for node in ast.walk(ast.parse(test_file.read_text(encoding="utf-8"))):
+                if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                    continue
+                if not re.fullmatch(r"[\w./-]+\.md", node.value):
+                    continue
+                if node.value in markdown:
+                    hits = [node.value]
+                elif "/" in node.value:
+                    hits = []
+                else:
+                    hits = [path for path in markdown if path.rsplit("/", 1)[-1] == node.value]
+                for hit in hits:
+                    named.setdefault(hit, set()).add(relative)
+    return named
+
+
+def _lanes_that_read(path: str, named: dict[str, set[str]]) -> set[str]:
+    """The lanes that run a test which reads this document. Empty: no test reads it.
+
+    - Four roots are read by tree walks in this file: the Qlib text sweep reads `skills/`,
+      and the mirror and record tests read `.claude/`, `.agents/` and `.ws-publish/`.
+    - The Qlib sweep reads every top-level file but `init.md` and `vision.md`, and tests
+      name those two.
+    - A test that names a document reads it. A test under `apps/data-engine/tests` runs in
+      the data_engine job as well.
+    """
+    roots = {"skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT}
+    readers = named.get(path, set())
+    lanes: set[str] = set()
+    if path.split("/")[0] in roots or "/" not in path or readers:
+        lanes.add("python")
+    if any(reader.startswith("apps/data-engine/tests/") for reader in readers):
+        lanes.add("data_engine")
+    return lanes
+
+
+def _documents() -> list[str]:
+    """Every tracked file that is a document or a mirror of one: `docs/`, the top-level
+    markdown files, and the four roots that are published copies of the rule source."""
+    roots = {"skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT}
+    return [
+        path
+        for path in _tracked_files()
+        if path.split("/")[0] in roots or (path.endswith(".md") and (path.startswith("docs/") or "/" not in path))
+    ]
+
+
+def _unread_documents() -> list[str]:
+    named = _markdown_named_by_tests()
+    return [path for path in _documents() if not _lanes_that_read(path, named)]
+
+
+def test_a_document_selects_the_lanes_that_read_it_and_no_other() -> None:
+    """#1412: a document that a test reads keeps the lane that runs that test, or a PR
+    could change it, skip the test and break main (#1018). A document that no test reads
+    selects no lane. Named readers today: init.md, vision.md, README.md, CLAUDE.md,
+    docs/datahub-quality-report.md and docs/architecture-decisions/A3-source-governance.md.
+    """
+    named = _markdown_named_by_tests()
+    anchor = "docs/architecture-decisions/A3-source-governance.md"
+    assert "common/runtime/tests/test_init_principles.py" in named.get(anchor, set()), (
+        f"the scan no longer sees test_init_principles.py read {anchor}, so it cannot find readers (GREEN-WHILE-EMPTY)"
+    )
+    documents = _documents()
+    assert len(_unread_documents()) >= 10, f"fewer than 10 unread documents; the document list drifted: {documents}"
+    wrong = {}
+    for path in documents:
+        selected = selected_lanes(REQUIRED, [path])
+        wanted = _lanes_that_read(path, named)
+        if selected != wanted:
+            wrong[path] = f"filter selects {sorted(selected)}; its readers need {sorted(wanted)}"
+    assert not wrong, f"documents whose lanes differ from the lanes of their readers: {wrong}"
+
+
+def test_a_pull_request_that_changes_only_unread_documents_starts_no_test_lane() -> None:
+    """The `required` check stays green: the summary reads a skipped job as success."""
+    unread = _unread_documents()
+    assert unread, "no unread document exists, so this test checks nothing"
+    started = _jobs_started_by(unread)
+    assert started == {"changes", "security", "required"}, (
+        f"a PR of {len(unread)} unread documents starts {sorted(started)}; only the filter, the "
+        f"secret scan and the summary may start (#1412)"
+    )
+    summary = _run_required_summary(started)
+    assert summary.returncode == 0, f"required reports failure for a docs-only PR: {summary.stderr}"
+    # The same script must fail for a failed dependency, or the exit code above proves nothing.
+    assert _run_required_summary(started, failed="security").returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("code_path", "needed"),
+    [
+        ("common/runtime/src/truealpha_runtime/sample.py", {"python", "runtime", "data_engine"}),
+        (".github/workflows/ci-web.yml", {"python", "web"}),
+        ("db/migrations/20261020T0000_sample.sql", {"db", "python", "runtime", "data_engine"}),
+        ("uv.lock", {"python", "runtime", "data_engine"}),
+        ("apps/app-web/package.json", {"web", "image_app_web"}),
+    ],
+)
+def test_code_keeps_its_lanes_when_it_travels_with_unread_documents(code_path: str, needed: set[str]) -> None:
+    unread = _unread_documents()
+    alone = selected_lanes(REQUIRED, [code_path])
+    assert needed <= alone, f"{code_path} selects {sorted(alone)} and lacks {sorted(needed - alone)}"
+    assert selected_lanes(REQUIRED, [code_path, *unread]) == alone, "unread documents changed the lanes of a code PR"
+    jobs_for_lane = {
+        "db": "db",
+        "python": "python",
+        "runtime": "runtime",
+        "web": "web",
+        "image_app_web": "images_build",
+    }
+    started = _jobs_started_by([code_path, *unread])
+    missing = {jobs_for_lane[lane] for lane in needed if lane in jobs_for_lane} - started
+    assert not missing, f"a PR changing {code_path} does not start {sorted(missing)}"
+
+
+@pytest.mark.parametrize(
+    ("path", "images"),
+    [
+        ("apps/app-web/src/app/page.tsx", {"image_app_web"}),
+        ("apps/llm-service/src/llm_service/main.py", {"image_llm_service"}),
+        ("apps/data-engine/src/data_engine/dagster_defs.py", {"image_data_engine"}),
+        ("common/contracts/src/truealpha_contracts/ast.py", {"image_llm_service", "image_data_engine"}),
+        ("uv.lock", {"image_llm_service", "image_data_engine"}),
+    ],
+)
+def test_each_image_lane_selects_only_the_paths_its_image_is_built_from(path: str, images: set[str]) -> None:
+    """The opposite failure to a lane that always starts: a lane that never starts. Each
+    image lane must select its own sources and must leave the other images alone."""
+    image_lanes = {"image_app_web", "image_llm_service", "image_data_engine"}
+    assert selected_lanes(REQUIRED, [path]) & image_lanes == images
 
 
 def test_a_tag_run_attests_instead_of_re_running() -> None:
