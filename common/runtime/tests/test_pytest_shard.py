@@ -314,9 +314,10 @@ def test_every_tools_script_is_a_thin_shim_to_truealpha_tools() -> None:
         text = script.read_text(encoding="utf-8")
         lines = text.splitlines()
         assert len(lines) <= 40, f"{script.name} has {len(lines)} lines (max 40 for thin CLI shim)"
-        assert f"from truealpha_tools import {script.stem} as _impl" in text, (
-            f"{script.name} must delegate to truealpha_tools.{script.stem}"
+        assert f"from truealpha_tools.{script.stem} import main" in text, (
+            f"{script.name} must delegate to truealpha_tools.{script.stem}.main"
         )
+        assert "sys.modules[__name__]" not in text, f"{script.name} must not mutate sys.modules[__name__]"
         assert (impl_dir / script.name).is_file(), f"missing implementation {impl_dir / script.name}"
 
     for root in (REPO_ROOT / "apps", REPO_ROOT / "common", tools_dir):

@@ -13,8 +13,6 @@ guarantee fails here instead of being described here.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
@@ -24,12 +22,9 @@ TOOL = ROOT / "tools" / "reachability_ratchet.py"
 
 
 def _tool():
-    spec = importlib.util.spec_from_file_location("reachability_ratchet", TOOL)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules["reachability_ratchet"] = module
-    spec.loader.exec_module(module)
-    return sys.modules["reachability_ratchet"]
+    from truealpha_runtime.testing import load_tool
+
+    return load_tool("reachability_ratchet")
 
 
 @pytest.fixture(scope="module")
