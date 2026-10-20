@@ -566,6 +566,35 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
     assert unavailable, "the mart must see the missing operating numerator"
     assert report["available_count"] < report["requested_count"], "so must the report"
 
+    # #1346: the two sides use different identifiers. The report names each subject by the
+    # listing id of its capture obligation (`listing:xnas:aapl`). The core snapshot names
+    # each listing by its entity UUID. The identity store maps the UUID to the listing id.
+    # Through that map, the complete subjects of the report are the listings of the
+    # available issuers of the core.
+    complete = report["factor_availability"]["gross_profit_per_employee"]["complete_subject_ids"]
+    row = connection.execute(
+        """
+        select array_agg(identity.listing_id order by identity.listing_id),
+               count(*) filter (where identity.listing_id is null)
+        from staging.topt_core_snapshots s
+        cross join lateral jsonb_array_elements(s.payload->'members') member
+        left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
+        where s.run_id = %s
+          and exists (
+              select 1 from mart.topt_core_results r
+              where r.run_id = s.run_id
+                and r.issuer_id = member->>'issuer_id'
+                and r.availability = 'available'
+          )
+        """,
+        (plan.run_id,),
+    ).fetchone()
+    assert row is not None
+    available_listings, unresolved = row
+    assert unresolved == 0, "each member listing resolves through the identity store"
+    assert len(complete) == 20, "the broken listing is not complete"
+    assert complete == available_listings
+
 
 def test_retrying_the_same_tick_is_idempotent(connection) -> None:
     """Identities derive from (cutoff, version), so a replay reuses every row."""

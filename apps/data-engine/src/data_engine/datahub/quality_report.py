@@ -278,6 +278,11 @@ def _factor_availability(usable_by_subject: dict[str, dict[str, bool]]) -> dict[
         out[factor_id] = {
             "required_semantics": list(required),
             "complete_subjects": len(complete),
+            # #1346: the subject ids behind the count, sorted. A subject id is the listing
+            # id of the capture obligation. The output invariant
+            # `quality-report-matches-core-results` compares this set with the listings of
+            # the available core results, so a mismatch names each listing.
+            "complete_subject_ids": sorted(complete),
             "universe_subjects": len(universe),
             "ratio": str(ratio),
         }
