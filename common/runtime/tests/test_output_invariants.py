@@ -745,3 +745,20 @@ def test_a_head_without_a_core_fails(conn: psycopg.Connection, capsys: pytest.Ca
     code, output = _parity_verdict(conn, capsys)
     assert code == 1, output
     assert f"Offending rows: {universe_id} {run_id} 3 0 0" in output
+
+
+def test_an_unscheduled_manual_qqq_head_on_staging_does_not_fail_scheduled_topt_head(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1346 / #1295: QQQ is manual in staging (#1310 / #1256), so a frozen staging QQQ head
+    must not fail output_invariants while the scheduled TOPT head is healthy."""
+    conn.execute("update mart.environment_identity set environment = 'staging'")
+    _seed_head(conn, "universe:topt-us-2026-03-31", _singles("valued", 3))
+    _seed_head(
+        conn,
+        "universe:qqq-us-2026-09-30",
+        [ALPHABET, _issuer("apple", "aapl"), _issuer("costco", "cost", available=False)],
+    )
+    code, output = _parity_verdict(conn, capsys)
+    assert code == 0, output
+    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output

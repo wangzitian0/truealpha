@@ -205,9 +205,22 @@ const confidenceRows = [
   },
 ];
 
+const nightlyVerdictRows = [
+  {
+    check_name: "output_invariants",
+    ran_at: "2026-10-20 00:15:00Z",
+    ok: true,
+    summary: "ok (26/26 passed)",
+    dagster_run_id: "dagster-run-123",
+    age_hours: 1.5,
+  },
+];
+
 {
   __setTestOpsClient({
     query: async (sql: string) => {
+      if (typeof sql === "string" && sql.includes("nightly_verdicts"))
+        return { rows: nightlyVerdictRows } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: confidenceRows } as never;
       if (typeof sql === "string" && sql.includes("question_coverage_report"))
@@ -243,6 +256,13 @@ const confidenceRows = [
   assert(
     stats.traffic.length === 1 && stats.traffic[0].source === "twelvedata",
     "traffic rows pass through",
+  );
+  assert(
+    stats.nightlyVerdicts.length === 1 &&
+      stats.nightlyVerdicts[0].check_name === "output_invariants" &&
+      stats.nightlyVerdicts[0].ok === true &&
+      stats.nightlyVerdicts[0].summary === "ok (26/26 passed)",
+    "nightly verdicts from mart.nightly_verdicts are surfaced on /admin/datahub (#1346)",
   );
   assert(
     stats.questionCoverage.length === 2,
@@ -457,6 +477,8 @@ const confidenceRows = [
   __setTestOpsClient({
     query: async (sql: string) => {
       capturedSqls.push(sql);
+      if (typeof sql === "string" && sql.includes("nightly_verdicts"))
+        return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("question_coverage_report"))

@@ -141,7 +141,8 @@ vision-audit:
 DIFF_SCOPE = python3 tools/diff_scope.py run $(if $(BASE),--base $(BASE),) $(if $(filter-out 0,$(FULL)),--full,)
 
 lint:
-	@$(DIFF_SCOPE) --entry "make lint" lint
+	uv run ruff check apps common tools
+	uv run ruff format --check apps common tools
 
 format:
 	uv run ruff check apps common tools --fix

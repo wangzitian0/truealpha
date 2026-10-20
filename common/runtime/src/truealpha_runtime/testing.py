@@ -484,7 +484,7 @@ def isolated_test_database(
 
         if not cloned:
             admin_conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-            apply_migration_chain(target_url)
+        apply_migration_chain(target_url)
 
         yield IsolatedDatabase(target_url, name)
     finally:

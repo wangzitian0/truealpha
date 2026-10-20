@@ -611,6 +611,7 @@ INVARIANTS: tuple[Invariant, ...] = (
                   )
             ) core
             where h.factor_id = 'gross_profit_per_employee'
+              and mart.is_head_scheduled(h.universe_id, h.environment)
               and coalesce(
                   (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
                   -1
@@ -620,6 +621,7 @@ INVARIANTS: tuple[Invariant, ...] = (
             select count(*)
             from mart.served_head h
             where h.factor_id = 'gross_profit_per_employee'
+              and mart.is_head_scheduled(h.universe_id, h.environment)
         """,
     ),
 )
