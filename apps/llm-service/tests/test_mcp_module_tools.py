@@ -109,12 +109,15 @@ async def test_no_served_run_is_a_typed_unavailable_answer(database: psycopg.Con
         }
 
 
+_DATABASE_DETAIL = 'connection to server at "10.0.0.5", port 15432 failed: FATAL: role "mart_readonly"'
+
+
 class _FailingModules:
     def supply_chain_exposure(self, issuer_id: str) -> None:
-        raise psycopg.OperationalError("connection refused")
+        raise psycopg.OperationalError(_DATABASE_DETAIL)
 
     def analyst_ratings(self, issuer_id: str) -> None:
-        raise psycopg.OperationalError("connection refused")
+        raise psycopg.OperationalError(_DATABASE_DETAIL)
 
 
 @pytest.mark.anyio
@@ -125,6 +128,10 @@ async def test_a_failed_read_is_a_tool_error_not_an_empty_answer() -> None:
         for name in ("issuer_supply_chain_exposure", "issuer_analyst_ratings"):
             result = await client.call_tool(name, {"request": {"issuer_id": "issuer:any"}})
             assert result.isError is True, f"{name} hid a failed read as an answer"
+            text = " ".join(getattr(block, "text", "") for block in result.content)
+            assert "the mart read failed" in text, text
+            for detail in ("10.0.0.5", "15432", "mart_readonly"):
+                assert detail not in text, f"{name} shows the database detail {detail!r} to the caller"
 
 
 class _NoServedModuleRows:

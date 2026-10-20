@@ -19,11 +19,13 @@ accepted from the client — the tool schema has no role/tenant/tier argument.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict
@@ -173,6 +175,22 @@ def _default_research_report_repository() -> ResearchReadPort:
 def _default_issuer_module_reader() -> IssuerModuleReader:
     """#42: modules 3 and 4, the served-head row only (`issuer_modules_mart`)."""
     return PostgresIssuerModuleReader(database_url=settings.database_url)
+
+
+#: The text of a failed module read. The database detail (host, port, role) goes to the
+#: service log only, never to the caller.
+MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
+
+
+def _module_row(
+    read: Callable[[str], SupplyChainExposure | AnalystRatings | None], issuer_id: str, tool: str
+) -> SupplyChainExposure | AnalystRatings | None:
+    """One module read for a tool. A failed read is a tool error with a fixed text."""
+    try:
+        return read(issuer_id)
+    except psycopg.Error:
+        logger.exception("%s: the mart read failed", tool)
+        raise ToolError(MART_READ_FAILED_MESSAGE) from None
 
 
 def _report_request(request: ResearchReportToolRequest) -> ResearchReportRequest:
@@ -1058,8 +1076,8 @@ def build_mcp_server(
         ),
     )
     def issuer_supply_chain_exposure(request: IssuerModuleToolRequest) -> SupplyChainExposure | IssuerModuleUnavailable:
-        row = active_modules.supply_chain_exposure(request.issuer_id)
-        if row is None:
+        row = _module_row(active_modules.supply_chain_exposure, request.issuer_id, "issuer_supply_chain_exposure")
+        if not isinstance(row, SupplyChainExposure):
             return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="supply_chain_exposure")
         return row
 
@@ -1073,8 +1091,8 @@ def build_mcp_server(
         ),
     )
     def issuer_analyst_ratings(request: IssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
-        row = active_modules.analyst_ratings(request.issuer_id)
-        if row is None:
+        row = _module_row(active_modules.analyst_ratings, request.issuer_id, "issuer_analyst_ratings")
+        if not isinstance(row, AnalystRatings):
             return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="analyst_ratings")
         return row
 
