@@ -84,11 +84,12 @@ for (const text of DISPLAYED) {
 assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for GREEN-WHILE-EMPTY table states");
 assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
 assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 golden preview tickers");
+const navigationSource = readFileSync(new URL("../e2e/navigation.mjs", import.meta.url), "utf8");
 assert(
   !source.includes("el.remove()") &&
     !source.includes("el.replaceWith(") &&
     source.includes('el.hasAttribute("data-evidence")') &&
-    source.includes('[data-sign-out][data-hydrated="true"]'),
+    navigationSource.includes('[data-sign-out][data-hydrated="true"]'),
   "walk-tree.mjs must wait for client hydration in gotoStable and inspect visible text without mutating [data-evidence] DOM nodes so React hydration does not fail with #418",
 );
 
