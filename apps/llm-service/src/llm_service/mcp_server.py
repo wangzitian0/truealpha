@@ -11,9 +11,12 @@ leaderboard), `etf_virtual_company_profile` (#1104's virtual company profile),
 the served-head rows the App shows), and `governed_backtest` (#758's backtest
 execution runs and valuations).
 
-No browser session exists for MCP callers today, so `AccessContext` is
-derived server-side via `AuthenticationMethod.SERVICE_IDENTITY` rather than
-accepted from the client — the tool schema has no role/tenant/tier argument.
+A tool runs only after `mcp_auth.BearerTokenGate` (mounted in `main.py`) accepted the
+caller's bearer token (#42, #1437). The owner holds that token and configures it once in
+Claude Code or Claude Desktop, so an authenticated call maps to the owner principal: this
+trusted adapter builds the `AccessContext` as a delegated MCP context (init.md rules 4 and
+26). Nothing is accepted from the client — the tool schema has no role/tenant/tier
+argument. Each tool call writes one content-free audit log line (`_AuditedFastMCP`).
 """
 
 from __future__ import annotations
@@ -60,8 +63,12 @@ from llm_service.config import settings
 
 logger = logging.getLogger(__name__)
 
+#: The MCP adapter, which acts for the owner on the bearer token (#1437).
 _SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
+#: The one principal that holds the bearer token: the owner (single-user, #1437).
+_OWNER_PRINCIPAL_ID = "principal:owner"
 _SERVICE_TENANT_ID = "tenant:truealpha"
+_DELEGATION_ID = "delegation:mcp-bearer-token"
 _CONTEXT_LIFETIME = timedelta(minutes=5)
 
 #: #1062 / Rule B: consumer queries on run-addressed mart relations read
@@ -144,19 +151,52 @@ class BacktestToolRequest(BaseModel):
     limit: int = 10
 
 
-def _service_access_context() -> AccessContext:
-    """A fresh, short-lived SERVICE_IDENTITY context; never derived from client input."""
+def _owner_access_context() -> AccessContext:
+    """A fresh, short-lived context for the owner, delegated through the MCP adapter.
+
+    Built here, never from client input. The bearer gate admitted the call, and the owner
+    is the only holder of the token (#1437), so the principal is the owner and the adapter
+    is the delegating service.
+    """
     issued_at = datetime.now(UTC)
     return AccessContext(
-        context_id=f"ctx:mcp-service:{issued_at.timestamp()}",
-        principal_id=_SERVICE_PRINCIPAL_ID,
+        context_id=f"ctx:mcp-owner:{issued_at.timestamp()}",
+        principal_id=_OWNER_PRINCIPAL_ID,
         tenant_id=_SERVICE_TENANT_ID,
-        session_id=f"session:mcp-service:{issued_at.timestamp()}",
-        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
-        principal_kind=PrincipalKind.SERVICE,
+        session_id=f"session:mcp-owner:{issued_at.timestamp()}",
+        authentication_method=AuthenticationMethod.DELEGATED_MCP,
+        principal_kind=PrincipalKind.ADMINISTRATOR,
         issued_at=issued_at,
         expires_at=issued_at + _CONTEXT_LIFETIME,
+        delegated_by_service_principal_id=_SERVICE_PRINCIPAL_ID,
+        delegation_id=_DELEGATION_ID,
     )
+
+
+class _AuditedFastMCP(FastMCP):
+    """FastMCP that writes one content-free audit line per tool call (#1437).
+
+    The line names the tool, the principal, the outcome and the duration. It never holds
+    the arguments, the result or the token. FastMCP registers `self.call_tool` as the
+    `tools/call` handler when it is built, so this override is the one entry for every call.
+    """
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        started = datetime.now(UTC)
+        outcome = "error"
+        try:
+            result = await super().call_tool(name, arguments)
+            outcome = "ok"
+            return result
+        finally:
+            elapsed_ms = round((datetime.now(UTC) - started).total_seconds() * 1000)
+            logger.info(
+                "mcp tool call: tool=%s principal=%s outcome=%s duration_ms=%d",
+                name,
+                _OWNER_PRINCIPAL_ID,
+                outcome,
+                elapsed_ms,
+            )
 
 
 def _default_repository() -> StrategyRunReadRepository:
@@ -949,7 +989,7 @@ def build_mcp_server(
     # "/mcp/mcp". Serving at the mount root keeps it a single "/mcp".
     # transport_security: see Settings.mcp_dns_rebinding_protection for why host pinning
     # is off by default for this service-identity-only surface behind Traefik.
-    server = FastMCP(
+    server = _AuditedFastMCP(
         "truealpha-mcp",
         streamable_http_path="/",
         transport_security=TransportSecuritySettings(
@@ -991,7 +1031,7 @@ def build_mcp_server(
         ),
     )
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
-        return active_repository.get_latest(strategy_id=request.strategy_id, context=_service_access_context())
+        return active_repository.get_latest(strategy_id=request.strategy_id, context=_owner_access_context())
 
     @server.tool(
         name="topt_gppe",
@@ -1008,7 +1048,7 @@ def build_mcp_server(
         ),
     )
     def research_report(request: ResearchReportToolRequest) -> ResearchReport:
-        return build_research_report(_report_request(request), active_research, context=_service_access_context())
+        return build_research_report(_report_request(request), active_research, context=_owner_access_context())
 
     @server.tool(
         name="research_report_markdown",
@@ -1020,7 +1060,7 @@ def build_mcp_server(
         ),
     )
     def research_report_markdown(request: ResearchReportToolRequest) -> ResearchReportMarkdown:
-        report = build_research_report(_report_request(request), active_research, context=_service_access_context())
+        report = build_research_report(_report_request(request), active_research, context=_owner_access_context())
         return ResearchReportMarkdown(
             report_id=report.report_id,
             schema_version=report.schema_version,
@@ -1037,7 +1077,7 @@ def build_mcp_server(
         ),
     )
     def research_card(request: ResearchCardToolRequest) -> ResearchCard:
-        report = build_research_report(_report_request(request), active_research, context=_service_access_context())
+        report = build_research_report(_report_request(request), active_research, context=_owner_access_context())
         return build_card(report, request.card_kind, title=request.title)
 
     @server.tool(

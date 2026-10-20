@@ -11,6 +11,7 @@ has never been observed to fail.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -35,10 +36,17 @@ SCENARIOS = {
     "post_not_allowed": {"post_status": 405},
     "endpoint_missing": {"endpoint_status": 404},
     "no_redirect": {"redirect_status": 200},
+    # #42: the shape staging and production answered on 2026-10-20, before the gate.
+    "mcp_open": {"rpc_status": {"initialize": 200, "tools/call": 400}, "endpoint_status": 406},
+    "tools_call_open": {"rpc_status": {"tools/call": 200}},
+    "no_challenge": {"challenge": ""},
+    "no_tool_list": {"no_tool_list": True},
 }
 
 
 SEEN_AGENTS: list[str] = []
+STUB_TOKEN = "stub-token"
+SEEN_RPC: list[tuple[str, str]] = []
 
 
 def build_handler(scenario: dict[str, object], host: str) -> type[BaseHTTPRequestHandler]:
@@ -46,13 +54,35 @@ def build_handler(scenario: dict[str, object], host: str) -> type[BaseHTTPReques
         def log_message(self, *_: object) -> None:  # keep pytest output readable
             return
 
-        def _send(self, status: int, location: str = "") -> None:
+        def _send(
+            self, status: int, location: str = "", challenge: str = "", body: bytes = b"", session: str = ""
+        ) -> None:
             SEEN_AGENTS.append(self.headers.get("User-Agent", ""))
             self.send_response(status)
             if location:
                 self.send_header("Location", location.replace("HOST", host))
-            self.send_header("Content-Length", "0")
+            if challenge:
+                self.send_header("WWW-Authenticate", challenge)
+            if session:
+                self.send_header("Mcp-Session-Id", session)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
+
+        def _authenticated(self, rpc: str) -> None:
+            """The gated endpoint with the right token: a session, then the tool list."""
+            if rpc == "initialize":
+                self._send(200, body=b'{"result": {}}', session="stub-session")
+            elif rpc == "tools/list" and self.headers.get("Mcp-Session-Id") == "stub-session":
+                tools = b'{"result": {}}' if scenario.get("no_tool_list") else b'{"result": {"tools": [{"name": "x"}]}}'
+                self._send(200, body=tools)
+            else:
+                self._send(202 if rpc.startswith("notifications/") else 400)
+
+        def _gated(self, status: int) -> None:
+            """The MCP endpoint: 401 with a Bearer challenge unless the scenario opens it."""
+            challenge = str(scenario.get("challenge", 'Bearer realm="truealpha-mcp"'))
+            self._send(status, challenge=challenge if status == 401 else "")
 
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's contract
             if self.path == "/api/health":
@@ -61,13 +91,22 @@ def build_handler(scenario: dict[str, object], host: str) -> type[BaseHTTPReques
                 status = int(scenario.get("redirect_status", 307))
                 self._send(status, str(scenario.get("redirect_to", "http://HOST/api/mcp/")) if status >= 300 else "")
             elif self.path == "/api/mcp/":
-                self._send(int(scenario.get("endpoint_status", 406)))
+                self._gated(int(scenario.get("endpoint_status", 401)))
             else:
                 self._send(404)
 
         def do_POST(self) -> None:  # noqa: N802
             if self.path == "/api/mcp":
                 self._send(int(scenario.get("post_status", 307)), "http://HOST/api/mcp/")
+            elif self.path == "/api/mcp/":
+                length = int(self.headers.get("Content-Length", "0"))
+                rpc = json.loads(self.rfile.read(length) or b"{}").get("method", "")
+                SEEN_RPC.append((rpc, self.headers.get("Authorization", "")))
+                if self.headers.get("Authorization") == f"Bearer {STUB_TOKEN}":
+                    self._authenticated(rpc)
+                    return
+                statuses = dict(scenario.get("rpc_status", {}))  # type: ignore[call-overload]
+                self._gated(int(statuses.get(rpc, 401)))
             else:
                 self._send(404)
 
@@ -105,6 +144,10 @@ def test_a_healthy_surface_reports_nothing(serve) -> None:  # type: ignore[no-un
         ("post_not_allowed", "the redirect handler covers GET only again"),
         ("endpoint_missing", "the redirect points at nothing"),
         ("no_redirect", "not a redirect"),
+        ("mcp_open", "initialize without a credential answered 200, not 401"),
+        ("mcp_open", "tools/call without a credential answered 400, not 401"),
+        ("tools_call_open", "tools/call without a credential answered 200, not 401"),
+        ("no_challenge", "answered 401 without a Bearer challenge"),
     ],
 )
 def test_each_violated_property_names_itself(serve, scenario: str, expected: str) -> None:  # type: ignore[no-untyped-def]
@@ -248,3 +291,37 @@ def test_a_surface_that_answers_health_and_then_hangs_up_is_still_a_verdict() ->
     assert served[0] == "/api/health" and len(served) >= 2, served
     assert len(failures) == 1
     assert failures[0].startswith("the surface is not serving: ") and "did not answer" in failures[0]
+
+
+def test_the_credential_probe_sends_both_requests_and_no_credential(serve) -> None:  # type: ignore[no-untyped-def]
+    """#42: the verdict is about an UNAUTHENTICATED caller. A probe that sent a token, or
+    that skipped one of the two requests, would pass against an open route."""
+    SEEN_RPC.clear()
+    assert surface_contract.check(serve("healthy")) == []
+    assert sorted(rpc for rpc, _ in SEEN_RPC) == ["initialize", "tools/call"], SEEN_RPC
+    assert all(authorization == "" for _, authorization in SEEN_RPC), SEEN_RPC
+
+
+def test_an_open_mcp_route_fails_the_exit_code_ci_reads(serve) -> None:  # type: ignore[no-untyped-def]
+    """The release walk and the daily freshness run read only the exit code."""
+    assert surface_contract.main([serve("mcp_open")]) == 1
+
+
+def test_the_authenticated_check_needs_a_session_and_a_tool_list(serve, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """#1437 acceptance 3: with the environment token the walk lists the tools (200). A
+    wrong token and a missing tool list each fail, and the token never reaches a message."""
+    base = serve("healthy")
+    assert surface_contract.check_authenticated(base, STUB_TOKEN) == []
+
+    wrong = surface_contract.check_authenticated(base, "not-the-token")
+    assert len(wrong) == 1 and "answered 401" in wrong[0] and "not-the-token" not in wrong[0], wrong
+
+    empty = surface_contract.check_authenticated(serve("no_tool_list"), STUB_TOKEN)
+    assert len(empty) == 1 and "without a tool list" in empty[0], empty
+
+    monkeypatch.setenv(surface_contract.TOKEN_ENV, STUB_TOKEN)
+    assert surface_contract.main(["--authenticated", base]) == 0
+    monkeypatch.setenv(surface_contract.TOKEN_ENV, "not-the-token")
+    assert surface_contract.main(["--authenticated", base]) == 1
+    monkeypatch.delenv(surface_contract.TOKEN_ENV)
+    assert surface_contract.main(["--authenticated", base]) == 2, "no token must not read as a pass"

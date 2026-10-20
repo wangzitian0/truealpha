@@ -243,15 +243,19 @@ async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> 
 
 
 @pytest.mark.anyio
-async def test_context_is_derived_server_side_via_service_identity_and_not_client_supplied() -> None:
+async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client_supplied() -> None:
+    """#1437: the owner holds the bearer token, so a call maps to the owner principal. The
+    adapter builds the context; the client supplies no identity."""
     repository = _RecordingRepository()
     server = build_mcp_server(repository=repository)
     await server.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
 
     assert len(repository.received_contexts) == 1
     context = repository.received_contexts[0]
-    assert context.authentication_method is AuthenticationMethod.SERVICE_IDENTITY
-    assert context.principal_kind is PrincipalKind.SERVICE
+    assert context.authentication_method is AuthenticationMethod.DELEGATED_MCP
+    assert context.principal_kind is PrincipalKind.ADMINISTRATOR
+    assert context.principal_id == "principal:owner"
+    assert context.delegated_by_service_principal_id == "principal:llm-service-mcp"
     assert context.issued_at <= datetime.now(UTC)
     assert context.expires_at - context.issued_at <= timedelta(minutes=5)
 
@@ -820,3 +824,21 @@ def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) ->
 
     assert profile["weighted_valuation_gap"] == "0.4200"
     assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"
+
+
+@pytest.mark.anyio
+async def test_every_tool_call_writes_one_content_free_audit_line(caplog: pytest.LogCaptureFixture) -> None:
+    """#1437: one audit line per call names the tool, the principal and the outcome. It
+    carries no argument value, so a request's content never reaches the log."""
+    server = build_mcp_server(repository=FixtureStrategyRunRepository())
+    secret_argument = "argument-value-that-must-not-be-logged"
+    with caplog.at_level("INFO", logger="llm_service.mcp_server"):
+        await server.call_tool("strategy_run", {"request": {"strategy_id": secret_argument}})
+        with pytest.raises(Exception):  # noqa: B017 - any validation error; the outcome is what is audited
+            await server.call_tool("strategy_run", {"request": {"unknown_field": secret_argument}})
+
+    audit = [record.getMessage() for record in caplog.records if record.getMessage().startswith("mcp tool call:")]
+    assert len(audit) == 2, audit
+    assert "tool=strategy_run" in audit[0] and "principal=principal:owner" in audit[0]
+    assert "outcome=ok" in audit[0] and "outcome=error" in audit[1]
+    assert secret_argument not in caplog.text

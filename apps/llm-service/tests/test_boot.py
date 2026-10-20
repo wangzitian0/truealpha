@@ -31,6 +31,21 @@ def test_a_deployed_boot_refuses_a_missing_injected_value_by_name(monkeypatch: p
     assert "postgresql://" not in str(failure.value), "names only, never values"
 
 
+def test_a_deployed_boot_refuses_a_missing_mcp_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#42: the deployment must inject MCP_BEARER_TOKEN. Every other injected name is
+    present here, so the refusal names the MCP credential alone."""
+    monkeypatch.setenv("GIT_COMMIT_SHA", "abc1234")
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.delenv("MCP_BEARER_TOKEN", raising=False)
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
+    with pytest.raises(RuntimeError) as failure:
+        main.refuse_to_boot_on_a_missing_environment()
+    assert "MCP_BEARER_TOKEN" in str(failure.value)
+    assert "GIT_COMMIT_SHA" not in str(failure.value)
+    monkeypatch.setenv("MCP_BEARER_TOKEN", "test-mcp-token")
+    assert main.refuse_to_boot_on_a_missing_environment() is None
+
+
 def test_a_local_boot_tolerates_what_nothing_injects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="dev"))

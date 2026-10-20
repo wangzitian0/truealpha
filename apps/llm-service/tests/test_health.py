@@ -14,7 +14,11 @@ from llm_service import main
 from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
 from psycopg import sql
+from pydantic import SecretStr
 from truealpha_runtime.testing import db_writes_allowed, isolated_test_database, load_tool
+
+#: A test value for the MCP credential; the deployment generates the real one.
+MCP_TEST_TOKEN = "test-mcp-token"
 
 
 def _stub_no_db_when_unarmed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -540,7 +544,9 @@ def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(mo
     assert verdict == 0
 
 
-def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Three properties in one client, because they were traded for each other.
 
     On production `GET /api/mcp` answered
@@ -564,8 +570,32 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
 
     The request path is /mcp, not /api/mcp — Traefik strips the prefix before
     forwarding, and the redirect rebuilds it by hand.
+
+    #42 adds the credential to the same lifespan: the endpoint answers 200 only to a
+    request with the configured bearer token, and 401 with a Bearer challenge to an
+    `initialize` or a `tools/call` without it or with a wrong one.
     """
     _stub_no_db_when_unarmed(monkeypatch)
+    monkeypatch.setattr(main.settings, "mcp_bearer_token", SecretStr(MCP_TEST_TOKEN))
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"},
+        },
+    }
+    tools_call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "topt_gppe", "arguments": {}},
+    }
+    mcp_headers = {"Accept": "application/json, text/event-stream"}
+    authorized = {**mcp_headers, "Authorization": f"Bearer {MCP_TEST_TOKEN}"}
+    caplog.set_level("DEBUG")
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         # Absorbed from test_app_starts_with_the_mcp_mount_and_serves_health_under
         # _its_lifespan (#348): the MCP session manager is a module-level
@@ -588,20 +618,26 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
             )
             for method in ("GET", "POST", "DELETE")
         }
-        endpoint = client.post(
-            "/mcp/",
-            headers={"Accept": "application/json, text/event-stream"},
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test", "version": "1"},
-                },
-            },
+        endpoint = client.post("/mcp/", headers=authorized, json=initialize)
+        # #1437 acceptance 1: a valid token lists the tools in the session it opened.
+        session = {"mcp-session-id": endpoint.headers.get("mcp-session-id", "")}
+        client.post(
+            "/mcp/", headers={**authorized, **session}, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
         )
+        listed = client.post(
+            "/mcp/", headers={**authorized, **session}, json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+        )
+        listed_without_token = client.post(
+            "/mcp/", headers={**mcp_headers, **session}, json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
+        )
+        refused = {
+            "initialize without a credential": client.post("/mcp/", headers=mcp_headers, json=initialize),
+            "tools/call without a credential": client.post("/mcp/", headers=mcp_headers, json=tools_call),
+            "tools/call with a wrong token": client.post(
+                "/mcp/", headers={**mcp_headers, "Authorization": "Bearer not-the-token"}, json=tools_call
+            ),
+            "GET without a credential": client.get("/mcp/", headers=mcp_headers),
+        }
         untrusted = TestClient(app, client=("203.0.113.7", 50000)).get(
             "/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
         )
@@ -632,6 +668,24 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
+    assert session["mcp-session-id"], "initialize with the token opened no session"
+    assert listed.status_code == 200 and '"strategy_run"' in listed.text, (
+        f"tools/list with the token answers {listed.status_code}: {listed.text[:200]}"
+    )
+    # An open session is not a credential: without the token the same session gets 401.
+    refused["tools/list in an open session without a credential"] = listed_without_token
+    # #1437 acceptance 2: the token reaches no log line and no response body.
+    answers = [endpoint, listed, *refused.values(), *slashless.values(), redirect]
+    assert MCP_TEST_TOKEN not in caplog.text, "the MCP token appears in a log line"
+    assert all(MCP_TEST_TOKEN not in answer.text for answer in answers), "the MCP token appears in a response body"
+    for request, answer in refused.items():
+        assert answer.status_code == 401, (
+            f"{request} answers {answer.status_code}, not 401: the MCP route serves a caller "
+            f"without the credential (init.md rule 21, #42)"
+        )
+        assert answer.headers.get("www-authenticate", "").startswith("Bearer "), (
+            f"{request} carries no Bearer challenge, so a client cannot tell which credential to send"
+        )
     # The redirect is identical for any peer now, so the trust boundary is
     # asserted where it remains observable: Starlette's own redirect_slashes
     # still builds an ABSOLUTE Location, so an unhandled trailing slash shows

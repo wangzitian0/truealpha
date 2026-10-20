@@ -18,6 +18,7 @@ from truealpha_runtime.telemetry import init_telemetry
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.config import settings
+from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import mcp
 
 #: The environment manifest this process boots against (#759). The Dockerfile ships it at
@@ -130,7 +131,13 @@ def mcp_slash(request: Request) -> RedirectResponse:
     return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# Only the MCP mount is behind the credential. /health stays open for the deploy gates,
+# and the slashless redirect above names a fixed path and serves no data. The token is read
+# per request from `settings`, the one object that resolved MCP_BEARER_TOKEN.
+app.mount(
+    "/mcp",
+    BearerTokenGate(mcp.streamable_http_app(), expected_token=lambda: settings.mcp_bearer_token),
+)
 
 
 @app.get("/health")

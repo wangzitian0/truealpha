@@ -290,6 +290,43 @@ def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
     assert "exit 0" not in str(walk.get("run", ""))
 
 
+def test_every_release_walk_probes_the_mcp_credential_gate() -> None:
+    """#42: #728 closed with no deployed probe, and production MCP stayed open. The walk of
+    every staging and production release runs the unauthenticated-401 probe. The probe needs
+    no credential, so it is never skipped with the walk; it runs after a failed walk too, so
+    a broken page does not hide an open MCP route."""
+    spec = step(WALK, "Probe the MCP credential gate")
+    run = str(spec["run"])
+    assert "tools/surface_contract.py" in run and '"$TA_BASE_URL"' in run, run
+    condition = str(spec.get("if", ""))
+    assert "walk_credentials" not in condition, "the probe must not depend on the walk credentials"
+    assert "!cancelled()" in condition, "a failed walk step must not skip the probe"
+    assert "working-directory" not in spec, "tools/surface_contract.py resolves from the repository root"
+    names = [str(item.get("name", "")) for item in job(WALK, "walk")["steps"]]
+    assert names.index("Probe the MCP credential gate") > names.index("Walk the deployed surface")
+    # One definition of the deployed base URL for the walk and the probe.
+    assert "TA_BASE_URL" in job(WALK, "walk")["env"]
+    assert "TA_BASE_URL" not in (step(WALK, "Walk the deployed surface").get("env") or {})
+
+
+def test_the_walk_calls_mcp_with_the_token_of_its_own_environment() -> None:
+    """#1437 acceptance 3: the authenticated half runs only with a configured secret, is
+    skipped (never a success) without one, and picks the token by the walked environment,
+    so a missing production secret cannot fall back to the staging token."""
+    probe = step(WALK, "Is the MCP token of this environment configured")
+    call = step(WALK, "Call the MCP route with the environment token")
+    assert "steps.mcp_token.outputs.ready == 'true'" in str(call["if"])
+    assert "exit 0" not in str(call["run"])
+    assert "--authenticated" in str(call["run"]) and '"$TA_BASE_URL"' in str(call["run"])
+    for spec in (probe, call):
+        env = spec.get("env") or {}
+        assert env.get("STAGING_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_STAGING }}"
+        assert env.get("PROD_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_PROD }}"
+        assert "secrets." not in str(spec.get("run", "")), "a secret is selected in the shell, not in an expression"
+        assert '[ "$DEPLOY_TYPE" = "prod" ]' in str(spec["run"])
+    assert "UNVERIFIED" in str(probe["run"]) and "exit 1" not in str(probe["run"])
+
+
 def test_the_release_lane_is_not_deadlocked_by_a_missing_secret() -> None:
     """#560: failing the run on unconfigured credentials blocked every prod
     release, since prod requires a successful staging run."""

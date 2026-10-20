@@ -98,6 +98,25 @@
       "store_key": ""
     },
     {
+      "field": "mcp_bearer_token",
+      "env": "MCP_BEARER_TOKEN",
+      "aliases": [],
+      "required": false,
+      "injected": true,
+      "has_default": true,
+      "sensitive": true,
+      "group": "mcp",
+      "description": "Bearer token that every request to the MCP route must present",
+      "source": "runtime",
+      "empty_ok": false,
+      "scope": "env",
+      "provided_by": "",
+      "composed_from": "",
+      "mirror_to_1password": true,
+      "ci": "forbidden",
+      "store_key": ""
+    },
+    {
       "field": "mcp_dns_rebinding_protection",
       "env": "MCP_DNS_REBINDING_PROTECTION",
       "aliases": [],
