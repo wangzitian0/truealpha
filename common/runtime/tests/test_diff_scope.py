@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -305,6 +306,16 @@ def worktree(tmp_path_factory: pytest.TempPathFactory) -> object:
 
 ENTRY_POINTS = ("test", "typecheck", "smoke", "check")
 
+#: What an outer `make ... FULL=1` hands to every process below it. CI runs pytest under
+#: `make test-python FULL=1` (#1412 L1): a nested `make` reads FULL=1 back from MAKEFLAGS,
+#: and the diff scope reads FULL and BASE from the environment.
+INHERITED = ("FULL", "BASE", "MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "MAKELEVEL", "DIFF_SCOPE_DRY_RUN")
+
+
+def _entry_env(**values: str) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k not in INHERITED}
+    return {**env, "DIFF_SCOPE_DRY_RUN": "1", **values}
+
 
 @pytest.mark.parametrize("target", ENTRY_POINTS)
 def test_every_make_entry_point_runs_only_what_the_diff_reaches(worktree: Path, target: str) -> None:
@@ -312,8 +323,7 @@ def test_every_make_entry_point_runs_only_what_the_diff_reaches(worktree: Path, 
     # whole suite for real. `make -n` prints the recipe without running it.
     recipe = subprocess.run(["make", "-n", target], cwd=worktree, capture_output=True, text=True, check=True).stdout
     assert "tools/diff_scope.py" in recipe, f"`make {target}` does not go through the diff scope:\n{recipe}"
-    env = {**os.environ, "DIFF_SCOPE_DRY_RUN": "1", "BASE": "HEAD"}
-    env.pop("FULL", None)
+    env = _entry_env(BASE="HEAD")
     result = subprocess.run(["make", "-s", target], cwd=worktree, capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
@@ -330,7 +340,7 @@ def test_every_make_entry_point_runs_only_what_the_diff_reaches(worktree: Path, 
 
 
 def test_full_1_runs_the_whole_suite(worktree: Path) -> None:
-    env = {**os.environ, "DIFF_SCOPE_DRY_RUN": "1"}
+    env = _entry_env()
     result = subprocess.run(
         ["make", "-s", "check", "FULL=1"], cwd=worktree, capture_output=True, text=True, env=env, check=False
     )
@@ -344,7 +354,7 @@ def test_full_1_runs_the_whole_suite(worktree: Path) -> None:
 def test_prepush_runs_only_what_the_diff_reaches(worktree: Path) -> None:
     script = (worktree / "tools/prepush.sh").read_text(encoding="utf-8")
     assert "tools/diff_scope.py" in script, "prepush does not go through the diff scope; running it would start suites"
-    env = {**os.environ, "DIFF_SCOPE_DRY_RUN": "1"}
+    env = _entry_env()
     result = subprocess.run(
         [_bash4(), "tools/prepush.sh", "HEAD"], cwd=worktree, capture_output=True, text=True, env=env, check=False
     )
@@ -352,3 +362,45 @@ def test_prepush_runs_only_what_the_diff_reaches(worktree: Path) -> None:
     pytest_lines = [line for line in planned if "uv run pytest" in line]
     assert len(pytest_lines) == 1 and "common/runtime/tests/test_walk_evidence.py" in pytest_lines[0], result.stdout
     assert "uv run pytest common/runtime/tests " not in pytest_lines[0] + " ", "prepush ran the whole package"
+
+
+def test_mypy_on_a_subset_resolves_sibling_packages_from_source(repo: Path) -> None:
+    """L3 (#1412) found `make typecheck` reporting `factors.*` as untyped: given a subset of
+    files, mypy resolved the other first-party packages from site-packages. The plan names
+    every source root on MYPYPATH, and a real mypy run on the fixture proves it."""
+    # beta.uses_n imports alpha.n, and no file of the alpha package is in the selection.
+    _edit(repo, "pkg/beta/src/beta/uses_n.py")
+    selection = select(repo, "base")
+    [command] = diff_scope.plan(selection, ["typecheck"])
+    assert command.argv[3:] == ("pkg/beta/src/beta/uses_n.py",)
+    roots = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
+    assert dict(command.env) == {"MYPYPATH": os.pathsep.join(roots)}
+    mypy = [sys.executable, "-m", "mypy", "--no-incremental", *command.argv[3:]]
+    without = subprocess.run(mypy, cwd=repo, capture_output=True, text=True, check=False)
+    assert without.returncode != 0 and "alpha" in without.stdout, without.stdout
+    env = {**os.environ, **dict(command.env)}
+    with_path = subprocess.run(mypy, cwd=repo, capture_output=True, text=True, check=False, env=env)
+    assert with_path.returncode == 0, with_path.stdout
+
+
+def test_a_web_step_without_node_modules_names_the_missing_install(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _edit(repo, "apps/app-web/src/lib/c.ts", "export const y = 0;\n")
+    exit_code = diff_scope.run(repo, ["test"], full=False, base="base", dry_run=False, entry="t")
+    assert exit_code == 2
+    assert "apps/app-web/node_modules is missing in this worktree: run `make install`" in capsys.readouterr().err
+
+
+def test_the_entry_points_ignore_an_outer_make_full_run(worktree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI runs these tests under `make test-python FULL=1` (#1412 L1). The outer FULL=1 must
+    not turn the scoped run under test into a whole-repository run."""
+    monkeypatch.setenv("FULL", "1")
+    monkeypatch.setenv("MAKEFLAGS", " -- FULL=1")
+    monkeypatch.setenv("MAKEOVERRIDES", "FULL=1")
+    result = subprocess.run(
+        ["make", "-s", "test"], cwd=worktree, capture_output=True, text=True, env=_entry_env(BASE="HEAD"), check=False
+    )
+    planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
+    assert "diff-scope: FULL=1" not in result.stdout, result.stdout
+    assert any("test_walk_evidence.py" in line for line in planned), planned
