@@ -563,59 +563,130 @@ INVARIANTS: tuple[Invariant, ...] = (
     Invariant(
         id="quality-report-matches-core-results",
         claim=(
-            "for every governed head in mart.served_head, the gross_profit_per_employee complete_subjects "
-            "count in mart.datahub_quality_report equals the number of listings of the available issuers "
-            "in mart.topt_core_results (#1299, #1227, #1346)"
+            "for every scheduled governed head in mart.served_head, the gross_profit_per_employee "
+            "complete_subject_ids in mart.datahub_quality_report are the listings of the available "
+            "issuers in mart.topt_core_results, matched through mart.entity_identity (#1299, #1227, #1346)"
         ),
-        # The report counts subjects, and a subject is a listing (raw.capture_obligations.subject_id).
-        # The core writes one result for each issuer. Alphabet has two listings.
-        # For each dual-class issuer, the issuer count is one less than the listing count (#1346).
-        # This check counts the listings of the issuers that have an `available` result.
-        # The core snapshot of the run supplies the listings. Its payload holds one member for each listing.
-        # Do not count the rows of staging.topt_core_snapshot_members. That table holds one row for each issuer.
-        # `exists` counts each listing one time, also when two invocations wrote results for one run.
-        # A payload without members gives 0 listings, so each head with complete facts fails.
-        # Equality stays the rule. An issuer with complete facts and an unavailable result fails its head.
-        # #1309 gives that shape on QQQ: an issuer without a stored daily series is unavailable.
+        # The two sides use different identifiers (#1346). The report names each subject by the
+        # listing id of its capture obligation (`listing:xnas:goog`). The core snapshot names each
+        # listing by its entity UUID, and the core writes one result for each issuer UUID.
+        # mart.entity_identity maps the UUID of a listing to its listing id. This check compares
+        # the two sets of listing ids. A count comparison cannot name the listing that differs,
+        # and two different sets of one size pass it.
+        # Each row names one head, one finding and one listing:
+        #   report-lists-no-complete-subject-ids     the report has no complete_subject_ids array.
+        #                                            A report persisted before #1346 has none.
+        #   core-listing-not-in-identity-store       a snapshot member has no listing id.
+        #   complete-in-report-not-available-in-core the report counts the listing complete, and
+        #                                            its issuer has no available core result. The
+        #                                            last column gives the core reason codes.
+        #   available-in-core-not-complete-in-report the issuer of the listing has an available
+        #                                            core result, and the report does not count
+        #                                            the listing complete.
+        # `exists` counts a listing one time, also when two invocations wrote results for one run.
+        # #1309 gives the second finding on QQQ: an issuer without a stored daily series is
+        # unavailable. Each head with an empty core snapshot fails when its report has a complete listing.
         violations="""
-            select
-                h.universe_id,
-                coalesce(h.run_id, h.head_run_id) as run_id,
-                coalesce(
-                    (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
-                    -1
-                )::text as report_complete_subjects,
-                core.available_listings::text as core_available_listings,
-                core.available_issuers::text as core_available_issuers
-            from mart.served_head h
-            left join lateral (
-                select payload
-                from mart.datahub_quality_report
-                where run_id = coalesce(h.run_id, h.head_run_id)
-                order by created_at desc
-                limit 1
-            ) q on true
-            cross join lateral (
+            with heads as (
+                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+                from mart.served_head h
+                where h.factor_id = 'gross_profit_per_employee'
+                  and mart.is_head_scheduled(h.universe_id, h.environment)
+            ),
+            reports as (
                 select
-                    count(*)::int as available_listings,
-                    count(distinct member->>'issuer_id')::int as available_issuers
-                from staging.topt_core_snapshots s
+                    heads.universe_id,
+                    heads.run_id,
+                    q.payload->'factor_availability'->'gross_profit_per_employee'->'complete_subject_ids'
+                        as subject_ids
+                from heads
+                left join lateral (
+                    select payload
+                    from mart.datahub_quality_report
+                    where run_id = heads.run_id
+                    order by created_at desc
+                    limit 1
+                ) q on true
+            ),
+            report_listings as (
+                select reports.universe_id, reports.run_id, subject.listing
+                from reports
+                cross join lateral jsonb_array_elements_text(reports.subject_ids) as subject(listing)
+                where jsonb_typeof(reports.subject_ids) = 'array'
+            ),
+            core_listings as (
+                select distinct
+                    heads.universe_id,
+                    heads.run_id,
+                    member->>'listing_id' as member_listing_id,
+                    identity.listing_id as listing,
+                    exists (
+                        select 1
+                        from mart.topt_core_results r
+                        where r.run_id = s.run_id
+                          and r.issuer_id = member->>'issuer_id'
+                          and r.availability = 'available'
+                    ) as available,
+                    coalesce(
+                        (
+                            select array_to_string(r.reason_codes, ',')
+                            from mart.topt_core_results r
+                            where r.run_id = s.run_id
+                              and r.issuer_id = member->>'issuer_id'
+                            order by r.created_at desc
+                            limit 1
+                        ),
+                        'no-core-result'
+                    ) as core_reasons
+                from heads
+                join staging.topt_core_snapshots s on s.run_id = heads.run_id
                 cross join lateral jsonb_array_elements(s.payload->'members') member
-                where s.run_id = coalesce(h.run_id, h.head_run_id)
-                  and exists (
-                      select 1
-                      from mart.topt_core_results r
-                      where r.run_id = s.run_id
-                        and r.issuer_id = member->>'issuer_id'
-                        and r.availability = 'available'
-                  )
-            ) core
-            where h.factor_id = 'gross_profit_per_employee'
-              and mart.is_head_scheduled(h.universe_id, h.environment)
-              and coalesce(
-                  (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
-                  -1
-              ) <> core.available_listings
+                left join mart.entity_identity identity
+                       on identity.entity_id::text = member->>'listing_id'
+            )
+            select universe_id, run_id, 'report-lists-no-complete-subject-ids' as finding,
+                   '-' as listing, '-' as core_reasons
+            from reports
+            where jsonb_typeof(subject_ids) is distinct from 'array'
+            union all
+            select universe_id, run_id, 'core-listing-not-in-identity-store',
+                   member_listing_id, core_reasons
+            from core_listings
+            where listing is null
+            union all
+            select report.universe_id, report.run_id, 'complete-in-report-not-available-in-core',
+                   report.listing,
+                   coalesce(
+                       (
+                           select string_agg(distinct core.core_reasons, ';')
+                           from core_listings core
+                           where core.run_id = report.run_id and core.listing = report.listing
+                       ),
+                       'not-a-core-member'
+                   )
+            from report_listings report
+            where not exists (
+                select 1
+                from core_listings core
+                where core.run_id = report.run_id
+                  and core.listing = report.listing
+                  and core.available
+            )
+            union all
+            select core.universe_id, core.run_id, 'available-in-core-not-complete-in-report',
+                   core.listing, core.core_reasons
+            from core_listings core
+            join reports on reports.run_id = core.run_id
+            where core.available
+              and core.listing is not null
+              and jsonb_typeof(reports.subject_ids) = 'array'
+              and not exists (
+                  select 1
+                  from report_listings report
+                  where report.run_id = core.run_id
+                    and report.listing = core.listing
+              )
+            order by 1, 2, 3, 4
         """,
         population="""
             select count(*)

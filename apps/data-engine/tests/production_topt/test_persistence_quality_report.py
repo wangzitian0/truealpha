@@ -596,6 +596,109 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
     assert complete == available_listings
 
 
+class _Borrowed:
+    """Lend the test's transaction to the tool's `with connect(url) as connection`
+    without letting the exit commit or close it."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+
+    def __enter__(self):
+        return self._connection
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_mismatch(connection, capsys) -> None:
+    """#1346: `quality-report-matches-core-results` runs on rows that the deployed writers
+    wrote: an 84-cell capture with one broken listing, its core snapshot and results, its
+    persisted report and a served pointer. The report and the core agree, so the check holds.
+
+    Then a real mismatch is seeded: a newer report of the same run names the broken listing
+    complete. That is the staging QQQ shape of 2026-10-20 (a report built under an older
+    completeness rule). The check fails and names the listing and its core reason codes."""
+    from truealpha_runtime.testing import load_tool
+
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version="test-1346-parity",
+        object_store=store,
+        broken=_OneBrokenCell(financial_fact_numerator=True),
+    )
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+    quality_report.persist(connection, report)
+    # mart.served_head serves the pointers of this database's own environment.
+    environment = connection.execute("select environment from mart.environment_identity").fetchone()
+    assert environment is not None
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, %s, %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            environment[0],
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    tool = load_tool("output_invariants")
+    parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
+
+    def verdict() -> int:
+        return tool.check(
+            "postgresql://borrowed",
+            require_coverage=True,
+            invariants=(parity,),
+            exemptions={},
+            connect=lambda _url: _Borrowed(connection),
+        )
+
+    assert verdict() == 0, capsys.readouterr()
+    assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
+
+    grade = report["factor_availability"]["gross_profit_per_employee"]
+    subjects = {
+        row[0]
+        for row in connection.execute(
+            "select subject_id from raw.capture_obligations where run_id = %s", (plan.run_id,)
+        ).fetchall()
+    }
+    (victim,) = sorted(subjects - set(grade["complete_subject_ids"]))
+    reasons = connection.execute(
+        """
+        select array_to_string(r.reason_codes, ',')
+        from mart.topt_core_results r
+        join mart.entity_identity identity on identity.entity_id::text = r.listing_id
+        where r.run_id = %s and identity.listing_id = %s
+        """,
+        (plan.run_id, victim),
+    ).fetchone()
+    assert reasons is not None and reasons[0], "the core gives the broken listing a reason code"
+    stale_grade = {
+        **grade,
+        "complete_subjects": grade["complete_subjects"] + 1,
+        "complete_subject_ids": sorted([*grade["complete_subject_ids"], victim]),
+    }
+    stale_availability = {**report["factor_availability"], "gross_profit_per_employee": stale_grade}
+    quality_report.persist(connection, {**report, "factor_availability": stale_availability})
+
+    assert verdict() == 1
+    failure = capsys.readouterr().err
+    assert "quality-report-matches-core-results: 1 violation(s)" in failure
+    assert f"complete-in-report-not-available-in-core {victim} {reasons[0]}" in failure
+
+
 def test_retrying_the_same_tick_is_idempotent(connection) -> None:
     """Identities derive from (cutoff, version), so a replay reuses every row."""
     plan = _capture(connection, version="test-a1-replay")
