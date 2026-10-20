@@ -134,6 +134,17 @@ export function normalizeRankingUniverse(value: unknown): RankingUniverse {
 		: "topt";
 }
 
+/** Checks whether a decision row's universe_version matches the requested ranking universe (#1360). */
+export function matchesRankingUniverse(
+	universeVersion: string | null | undefined,
+	universe: RankingUniverse,
+): boolean {
+	const isQqq =
+		typeof universeVersion === "string" &&
+		universeVersion.toLowerCase().includes("qqq");
+	return universe === "qqq" ? isQqq : !isQqq;
+}
+
 export interface StrategyRunDecision {
 	issuer_id: string;
 	cutoff_at: string;

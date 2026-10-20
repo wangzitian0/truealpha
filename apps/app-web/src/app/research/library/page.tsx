@@ -1,10 +1,9 @@
 /**
- * #373: real persistence. Lists only the authenticated principal's own
- * documents (RLS-enforced, not filtered here; tombstoned documents are
- * excluded by the repository query itself). Creation here is a plain-text
- * "note" document — proves the full create/store/list/tombstone path end
- * to end; #369/#372 report/card artifacts are #46/future scope for what
- * gets persisted as a document.
+ * #373 / #1360: Owner-scoped research document listing (`app.research_documents`).
+ *
+ * Lists only the authenticated principal's own documents (RLS-enforced; tombstoned
+ * documents are excluded by the repository query). Supports creating plain-text
+ * notes and lists exported ranking and entity cards saved by `/research/api/cards/export`.
  */
 
 import Link from "next/link";
@@ -30,8 +29,11 @@ export default async function LibraryPage() {
           Library
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          Owner-scoped, RLS-isolated (#373). Reports/cards persisting here as documents is
-          separate scope — this page proves create/store/list/tombstone end to end.
+          Owner-scoped, RLS-isolated documents (#373). Exported ranking and entity cards from{" "}
+          <Link href="/research/rankings" className="text-accent hover:underline">
+            /research/rankings
+          </Link>{" "}
+          and entity pages save a copy here automatically (#1360).
         </p>
       </div>
 

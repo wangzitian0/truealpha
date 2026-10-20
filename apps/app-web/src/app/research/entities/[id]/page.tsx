@@ -104,7 +104,7 @@ export default async function EntityDetailPage({
           </p>
         </div>
 
-        <CardExportButton issuerId={resolvedIssuerId} />
+        <CardExportButton issuerId={resolvedIssuerId} convention={convention} />
       </div>
 
       <ReadStateNotice state={state} />
