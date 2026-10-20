@@ -24,8 +24,11 @@ and production a run without that identity fails before it writes.
           executed_at: "2026-10-12T21:45:00+00:00"
 """
 
+import json
+
 import dagster as dg
 import psycopg
+from truealpha_contracts.strategy import load_strategy_definition as load_packaged_strategy_definition
 
 from data_engine.config import settings
 from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
@@ -46,9 +49,29 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
 
 
 class NightlyBacktestConfig(dg.Config):
-    """`executed_at` is the tick time (ISO 8601 with a time zone), never the wall clock."""
+    """`executed_at` is the tick time (ISO 8601 with a time zone), never the wall clock.
+    Optional `definition_resource`, `overrides_json`, `start_cutoff` and `end_cutoff` support
+    parameterized and windowed backtests (#1413 B1).
+    """
 
     executed_at: str
+    definition_resource: str | None = None
+    overrides_json: str | None = None
+    start_cutoff: str | None = None
+    end_cutoff: str | None = None
+
+
+def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if config.definition_resource:
+        kwargs["definition"] = load_packaged_strategy_definition(config.definition_resource)
+    if config.overrides_json:
+        kwargs["overrides"] = json.loads(config.overrides_json)
+    if config.start_cutoff:
+        kwargs["start_cutoff"] = tick_from_config(config.start_cutoff)
+    if config.end_cutoff:
+        kwargs["end_cutoff"] = tick_from_config(config.end_cutoff)
+    return kwargs
 
 
 def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
@@ -64,12 +87,13 @@ def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
 def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBacktestConfig) -> None:
     """Backtest large_model_value_v0 over the quarter-end history and persist the run."""
     tick = tick_from_config(config.executed_at)
+    extra_kwargs = _backtest_kwargs_from_config(config)
     with verdict(
         NIGHTLY_BACKTEST_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
         with psycopg.connect(settings.database_url) as connection:
             try:
-                result = run_core_strategy_backtest(connection, tick=tick)
+                result = run_core_strategy_backtest(connection, tick=tick, **extra_kwargs)  # type: ignore[arg-type]
             except BacktestPending as pending:
                 connection.rollback()
                 outcome.pending = True

@@ -37,6 +37,7 @@ from data_engine import raw_store
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, resolve_ruleset
+from data_engine.datahub.production_topt.metric_node_values import materialize_metric_node_values
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.production_topt.status_dimensions import (
     StatusDimensions,
@@ -1061,6 +1062,14 @@ class PostgresToptCoreRepository:
                         ),
                     ),
                 )
+            materialize_metric_node_values(
+                self._connection,
+                factor_inputs=factor_inputs,
+                gppe_definition=gppe_definition,
+                tier_definition_id=definition.strategy_definition_id,
+                periods_by_listing=periods_by_listing,
+                evidence_by_listing=evidence_by_listing,
+            )
         return results
 
     def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:

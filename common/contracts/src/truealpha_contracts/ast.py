@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, model_validator
 
 
 class FactorASTNode(BaseModel):
     """Base class for all factor expression AST nodes."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _dispatch_base_dict(cls, data: Any, handler: Any) -> Any:
+        if cls is FactorASTNode:
+            if isinstance(data, FactorASTNode) and type(data) is not FactorASTNode:
+                return data
+            if isinstance(data, dict):
+                return _coerce_node(data)
+        return handler(data)
 
     def __add__(self, other: Any) -> Add:
         return Add(left=self, right=_coerce_node(other))
@@ -59,6 +69,15 @@ class FactorASTNode(BaseModel):
 def _coerce_node(val: Any) -> FactorASTNode:
     if isinstance(val, FactorASTNode):
         return val
+    if isinstance(val, dict):
+        tag = val.get("type")
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("AST node dict requires a non-empty 'type' tag")
+        node_cls = _AST_NODE_TYPES.get(tag)
+        if node_cls is None:
+            raise ValueError(f"Unknown AST node type tag: {tag!r}")
+        payload = {k: v for k, v in val.items() if k != "type"}
+        return node_cls(**payload)
     if isinstance(val, str):
         return Feature(name=val)
     if isinstance(val, (int, float, Decimal)):
@@ -67,6 +86,7 @@ def _coerce_node(val: Any) -> FactorASTNode:
 
 
 class Feature(FactorASTNode):
+    type: Literal["feature"] = "feature"
     name: str
 
     def __init__(self, name: str | None = None, **data: Any) -> None:
@@ -76,6 +96,7 @@ class Feature(FactorASTNode):
 
 
 class Numeric(FactorASTNode):
+    type: Literal["numeric"] = "numeric"
     value: float | int
 
     def __init__(self, value: float | int | Decimal | None = None, **data: Any) -> None:
@@ -85,8 +106,9 @@ class Numeric(FactorASTNode):
 
 
 class Add(FactorASTNode):
-    left: FactorASTNode
-    right: FactorASTNode
+    type: Literal["add"] = "add"
+    left: SerializeAsAny[FactorASTNode]
+    right: SerializeAsAny[FactorASTNode]
 
     def __init__(self, left: Any = None, right: Any = None, **data: Any) -> None:
         if left is not None and "left" not in data:
@@ -101,8 +123,9 @@ class Add(FactorASTNode):
 
 
 class Sub(FactorASTNode):
-    left: FactorASTNode
-    right: FactorASTNode
+    type: Literal["sub"] = "sub"
+    left: SerializeAsAny[FactorASTNode]
+    right: SerializeAsAny[FactorASTNode]
 
     def __init__(self, left: Any = None, right: Any = None, **data: Any) -> None:
         if left is not None and "left" not in data:
@@ -117,8 +140,9 @@ class Sub(FactorASTNode):
 
 
 class Mul(FactorASTNode):
-    left: FactorASTNode
-    right: FactorASTNode
+    type: Literal["mul"] = "mul"
+    left: SerializeAsAny[FactorASTNode]
+    right: SerializeAsAny[FactorASTNode]
 
     def __init__(self, left: Any = None, right: Any = None, **data: Any) -> None:
         if left is not None and "left" not in data:
@@ -133,8 +157,9 @@ class Mul(FactorASTNode):
 
 
 class Div(FactorASTNode):
-    left: FactorASTNode
-    right: FactorASTNode
+    type: Literal["div"] = "div"
+    left: SerializeAsAny[FactorASTNode]
+    right: SerializeAsAny[FactorASTNode]
 
     def __init__(self, left: Any = None, right: Any = None, **data: Any) -> None:
         if left is not None and "left" not in data:
@@ -149,7 +174,8 @@ class Div(FactorASTNode):
 
 
 class Ref(FactorASTNode):
-    expr: FactorASTNode
+    type: Literal["ref"] = "ref"
+    expr: SerializeAsAny[FactorASTNode]
     n: int = Field(gt=0)
 
     def __init__(self, expr: Any = None, n: int | None = None, **data: Any) -> None:
@@ -163,7 +189,8 @@ class Ref(FactorASTNode):
 
 
 class Mean(FactorASTNode):
-    expr: FactorASTNode
+    type: Literal["mean"] = "mean"
+    expr: SerializeAsAny[FactorASTNode]
     n: int = Field(gt=0)
 
     def __init__(self, expr: Any = None, n: int | None = None, **data: Any) -> None:
@@ -177,7 +204,8 @@ class Mean(FactorASTNode):
 
 
 class Std(FactorASTNode):
-    expr: FactorASTNode
+    type: Literal["std"] = "std"
+    expr: SerializeAsAny[FactorASTNode]
     n: int = Field(gt=0)
 
     def __init__(self, expr: Any = None, n: int | None = None, **data: Any) -> None:
@@ -191,7 +219,8 @@ class Std(FactorASTNode):
 
 
 class Rank(FactorASTNode):
-    expr: FactorASTNode
+    type: Literal["rank"] = "rank"
+    expr: SerializeAsAny[FactorASTNode]
 
     def __init__(self, expr: Any = None, **data: Any) -> None:
         if expr is not None and "expr" not in data:
@@ -199,6 +228,20 @@ class Rank(FactorASTNode):
         elif "expr" in data:
             data["expr"] = _coerce_node(data["expr"])
         super().__init__(**data)
+
+
+_AST_NODE_TYPES: dict[str, type[FactorASTNode]] = {
+    "feature": Feature,
+    "numeric": Numeric,
+    "add": Add,
+    "sub": Sub,
+    "mul": Mul,
+    "div": Div,
+    "ref": Ref,
+    "mean": Mean,
+    "std": Std,
+    "rank": Rank,
+}
 
 
 __all__ = [

@@ -14,11 +14,16 @@ exact snapshot it was computed from.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
-from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING, IssuerInput, evaluate_cutoff
+from factors.composite.strategy_evaluator import (
+    UNIFORM_LABOR_EFFICIENCY_BINDING,
+    IssuerInput,
+    LookAheadError,
+    evaluate_cutoff,
+)
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual
@@ -168,8 +173,15 @@ class StrategyBacktestGateway:
         ).fetchall()
         return [MarketValueVintage(*row) for row in rows]
 
-    def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
-        return issuer_inputs_from_rows(self.rows_at(cutoff_at))
+    def issuer_inputs(self, cutoff_at: str | datetime, *, enforce_pit: bool = False) -> list[IssuerInput]:
+        cutoff_dt: datetime | None = None
+        if enforce_pit:
+            cutoff_dt = (
+                datetime.fromisoformat(cutoff_at.replace("Z", "+00:00")).astimezone(UTC)
+                if isinstance(cutoff_at, str)
+                else cutoff_at.astimezone(UTC)
+            )
+        return issuer_inputs_from_rows(self.rows_at(cutoff_at), cutoff_at=cutoff_dt)
 
     def snapshot_id(self, cutoff_at: str | datetime) -> str:
         return snapshot_id_from_rows(self.rows_at(cutoff_at))
@@ -185,15 +197,24 @@ def combine_snapshot_ids(snapshot_ids: list[str]) -> str:
     return f"strategy-snapshot:{canonical_sha256(snapshot_ids)}"
 
 
-def issuer_inputs_from_rows(rows: Sequence[InputRow]) -> list[IssuerInput]:
+def issuer_inputs_from_rows(
+    rows: Sequence[InputRow],
+    *,
+    cutoff_at: datetime | None = None,
+) -> list[IssuerInput]:
     """The evaluator inputs of the given rows of one cutoff.
 
     Each key also gets the ``knowable_at`` of the row that answers for it (#1255). A scalar row
     answers for itself. For a periodic key, the row of the latest period answers.
+    When ``cutoff_at`` is supplied, any row with ``knowable_at > cutoff_at`` raises ``LookAheadError`` (#1413 D6).
     """
     scalars: dict[str, dict[str, _Observed]] = {}
     periods: dict[str, dict[str, dict[str, _Observed]]] = {}
     for issuer_id, input_key, value, confidence, fiscal_period, knowable_at in rows:
+        if cutoff_at is not None and knowable_at > cutoff_at:
+            raise LookAheadError(
+                f"{issuer_id}: input {input_key!r} has knowable_at {knowable_at.isoformat()} > cutoff {cutoff_at.isoformat()}"
+            )
         observed = _Observed(Decimal(str(value)), Decimal(str(confidence)), knowable_at)
         if fiscal_period is None:
             scalars.setdefault(issuer_id, {})[input_key] = observed

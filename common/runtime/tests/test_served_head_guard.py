@@ -93,6 +93,7 @@ SERVED = (
     # #1241: /research/trace reads the lineage and the input values of the strategy run's capture run.
     "mart.topt_core_meta_info",
     "mart.topt_gppe_results",
+    "mart.metric_node_values",
     "mart.strategy_decisions",
     "mart.strategy_runs",
     "mart.strategy_run_capture",
