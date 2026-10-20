@@ -1,9 +1,9 @@
 # QQQ — ETF research report
 
-- Report ID: `report:415b8ed21fd5ab8937bf538ba9f89bc7546dabbd0044c70d21e3f3c668410ccc`
+- Report ID: `report:2cdf7be38a7dc847926c398cba3317d0da2e18deaa21d96ec58f2935befbd36b`
 - Kind: `etf`
 - Cutoff: `2026-06-30T23:59:59+00:00`
-- Source: `fixture:research_report.v1`
+- Source: `mart:research_report.v1`
 - Schema: `research_report.v1`
 
 ## Invesco QQQ Trust

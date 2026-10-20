@@ -31,7 +31,8 @@ from truealpha_contracts.research_report import (
     ResultValue,
     build_research_report,
 )
-from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+from truealpha_contracts.research_report_mart import MartResearchReadRepository
+from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
 GOLDEN = Path(__file__).parent / "golden_cards"
 CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
@@ -54,9 +55,26 @@ def _context() -> AccessContext:
     )
 
 
+class _NoServedModuleRows:
+    """An issuer-module read with no served row for any issuer."""
+
+    def supply_chain_exposure(self, issuer_id: str) -> None:
+        return None
+
+    def analyst_ratings(self, issuer_id: str) -> None:
+        return None
+
+
+def _repository() -> MartResearchReadRepository:
+    """The deployed reader class over the checked-in strategy run and no module rows."""
+    return MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(), issuer_modules=_NoServedModuleRows()
+    )
+
+
 def _report(kind: ResearchReportKind, targets: tuple[str, ...], cutoff: datetime = CUTOFF) -> ResearchReport:
     request = ResearchReportRequest(report_kind=kind, target_entity_ids=targets, cutoff_at=cutoff)
-    return build_research_report(request, FixtureResearchReadRepository(), context=_context())
+    return build_research_report(request, _repository(), context=_context())
 
 
 def _long_name_report() -> ResearchReport:
@@ -435,4 +453,4 @@ def test_card_module_performs_no_mart_query() -> None:
                 )
                 imported_names.add(alias.asname or alias.name)
     assert "ResearchReadPort" not in imported_names, "research_cards.py must not depend on a read port/repository"
-    assert "FixtureResearchReadRepository" not in imported_names
+    assert "MartResearchReadRepository" not in imported_names

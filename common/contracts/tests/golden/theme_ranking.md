@@ -1,9 +1,9 @@
 # Large-model-value theme ranking
 
-- Report ID: `report:c953cc1d96864c73c8f970fb95ddf34fa2a505806ad14378830fa747a309a037`
+- Report ID: `report:19c3bf8fedaae157d67babc81560d3946a9273be6ab35d7f7298f8d7b1035cbb`
 - Kind: `theme_ranking`
 - Cutoff: `2026-06-30T23:59:59+00:00`
-- Source: `fixture:research_report.v1`
+- Source: `mart:research_report.v1`
 - Schema: `research_report.v1`
 
 ## issuer:nice (rank 1)

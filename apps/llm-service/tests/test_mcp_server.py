@@ -10,9 +10,27 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.research_cards import ResearchCard
 from truealpha_contracts.research_report import ResearchReport
+from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+
+
+class _NoServedModuleRows:
+    """An issuer-module read with no served row for any issuer."""
+
+    def supply_chain_exposure(self, issuer_id: str) -> None:
+        return None
+
+    def analyst_ratings(self, issuer_id: str) -> None:
+        return None
+
+
+def _research_repository() -> MartResearchReadRepository:
+    """The deployed reader class over the checked-in strategy run and no module rows."""
+    return MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(), issuer_modules=_NoServedModuleRows()
+    )
 
 
 class _RecordingRepository:
@@ -120,11 +138,7 @@ async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None
 async def test_research_report_reads_through_the_injected_repository() -> None:
     """#369: the tool assembles over whatever ResearchReadPort it's given — proving the
     deployed path invokes build_research_report at all, independent of #26's writer."""
-    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
-
-    server = build_mcp_server(
-        repository=FixtureStrategyRunRepository(), research_repository=FixtureResearchReadRepository()
-    )
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "research_report",
         {
@@ -143,7 +157,7 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
     # strict model, and only JSON-mode coerces a wire string into datetime/enum/tuple.
     report = ResearchReport.model_validate_json(json.dumps(structured))
     assert report.report_id.startswith("report:")
-    assert report.generated_from == "fixture:research_report.v1"
+    assert report.generated_from == "mart:research_report.v1"
     assert report.subjects[0].subject_id == "issuer:adm"
 
 
@@ -151,11 +165,7 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
 async def test_research_card_renders_from_a_freshly_built_report() -> None:
     """#372/#434 track C: research_card is the renderer's first deployed consumer --
     proves the deployed path invokes build_card at all over a real ResearchReport."""
-    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
-
-    server = build_mcp_server(
-        repository=FixtureStrategyRunRepository(), research_repository=FixtureResearchReadRepository()
-    )
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "research_card",
         {
@@ -183,14 +193,14 @@ def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
     a fixture reader exists only by explicit injection in a test."""
     from llm_service import mcp_server
     from llm_service.mcp_server import _default_research_report_repository
-    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
-    from truealpha_contracts.research_report_mart import MartResearchReadRepository
 
     # #434 exit criterion 3: there is no flag. The default is the mart reader, and the
     # fixture reader is reachable only by explicit injection in a test.
     assert not hasattr(mcp_server.settings, "strategy_run_backend")
-    assert isinstance(_default_research_report_repository(), MartResearchReadRepository)
-    assert FixtureResearchReadRepository is not None  # the test double still exists, for tests
+    default = _default_research_report_repository()
+    assert isinstance(default, MartResearchReadRepository)
+    # #42: the deployed reader inherits nothing from a fixture class.
+    assert not [cls.__name__ for cls in type(default).__mro__ if cls.__name__.startswith("Fixture")]
 
 
 @pytest.mark.anyio

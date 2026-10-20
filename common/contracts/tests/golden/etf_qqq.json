@@ -1,7 +1,7 @@
 {
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from": "fixture:research_report.v1",
-  "report_id": "report:415b8ed21fd5ab8937bf538ba9f89bc7546dabbd0044c70d21e3f3c668410ccc",
+  "generated_from": "mart:research_report.v1",
+  "report_id": "report:2cdf7be38a7dc847926c398cba3317d0da2e18deaa21d96ec58f2935befbd36b",
   "report_kind": "etf",
   "schema_version": "research_report.v1",
   "subjects": [

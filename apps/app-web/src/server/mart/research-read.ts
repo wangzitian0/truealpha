@@ -52,6 +52,17 @@ export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
  */
 export const SERVED_HEAD_SQL = `select run_id, freshness, availability from mart.served_head`;
 
+/**
+ * #42: a module 3 or module 4 read takes only the rows of a run that `mart.served_head`
+ * serves; a withheld head has a null `run_id`. A bare latest is never a read path. The
+ * Python twin (`truealpha_contracts.issuer_modules_mart`, read by the MCP tools and the
+ * research report) applies the same rule, and both halves of
+ * `common/contracts/conformance/issuer_modules_parity.json` prove the same rows.
+ */
+export function servedRunPredicate(column: string): string {
+	return `${column} in (select h.run_id from mart.served_head h where h.run_id is not null)`;
+}
+
 export interface RunIdentity {
 	strategyRunId: string | null;
 	executedAt: string | null;
@@ -439,15 +450,25 @@ export function moduleSourceTable(entry: ModuleCatalogEntry): string {
 	return entry.outputTable ?? DECISION_SOURCE;
 }
 
+/** #42: the output tables whose readers take only served runs (`servedRunPredicate`). */
+const SERVED_RUN_TABLES: ReadonlySet<MartOutputTable> = new Set<MartOutputTable>([
+	"mart.issuer_supply_chain_exposure",
+	"mart.issuer_analyst_ratings",
+]);
+
 /**
  * Counts the newest run in one output table, in one statement. The newest run has the newest
- * cutoff. The theme-purity reader uses the same rule. `table` is a typed constant, never input.
+ * cutoff. The theme-purity reader uses the same rule. For modules 3 and 4 the run must also be
+ * served (#42): the count describes the rows the entity page can show, never a newer unserved
+ * run. `table` is a typed constant, never input.
  */
 export function moduleOutputCountSql(table: MartOutputTable): string {
+	const served = SERVED_RUN_TABLES.has(table) ? `where ${servedRunPredicate("run_id")}` : "";
 	return `
 		with newest as (
 			select run_id
 			from ${table}
+			${served}
 			group by run_id
 			order by max(cutoff) desc
 			limit 1
@@ -1228,6 +1249,7 @@ export class StrategyRunReadAdapter {
 					        coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
 					 from mart.issuer_analyst_ratings r
 					 where ${this.bidirectionalIssuerPredicate("r.issuer_id")}
+					   and ${servedRunPredicate("r.run_id")}
 					 order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
 					 limit 1`,
 					[issuerId],
@@ -1287,6 +1309,7 @@ export class StrategyRunReadAdapter {
 					        coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
 					 from mart.issuer_supply_chain_exposure s
 					 where ${this.bidirectionalIssuerPredicate("s.issuer_id")}
+					   and ${servedRunPredicate("s.run_id")}
 					 order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
 					 limit 1`,
 					[issuerId],

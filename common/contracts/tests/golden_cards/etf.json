@@ -1,8 +1,8 @@
 {
-  "card_id": "card:460a09ea01cf9be822a0f1449f571260e3725f11fe2df030412bdc02f6635090",
+  "card_id": "card:fbc485806c6879dcfccda2e04caa340e9e103b952084369273edbdf82fa04666",
   "card_kind": "etf",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:96f40c82bd452c69f5c46c325839e6d9c71134cd41bb25d5fb0f21df43d72f55",
+  "generated_from_report_id": "report:24460b6ba19b29e7ee104c9313e75ec705e35bf16d06612fb3d1a60722fa8d9e",
   "research_risk_note": "ETF virtual-company view is delayed by public holdings-disclosure lag and is a research hypothesis, not investment advice.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",

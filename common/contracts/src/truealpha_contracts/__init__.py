@@ -302,7 +302,6 @@ from truealpha_contracts.research_report import (
     render_report_json,
     render_report_markdown,
 )
-from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.service_demand import (
     ConfidenceTargetBand,
@@ -367,7 +366,6 @@ from truealpha_contracts.strategy_run import (
     StrategyRunReport,
     StrategyRunUnavailable,
 )
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.topt_read import (
     PostgresToptGppeRepository,
     ToptGppeCell,
@@ -713,8 +711,6 @@ __all__ = [
     "RiskFreeInstrument",
     "RiskFreeRatePolicy",
     "SelectionRule",
-    "FixtureStrategyRunRepository",
-    "FixtureResearchReadRepository",
     "MartResearchReadRepository",
     "CardKind",
     "CardSubject",

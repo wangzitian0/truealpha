@@ -1,0 +1,111 @@
+{
+  "description": "#42: module 3 and module 4 rows of the served head. Both twins (truealpha_contracts.issuer_modules_mart and apps/app-web/src/server/mart/research-read.ts) must return `expected` for `issuer_id`. The unserved run holds a newer, available decoy row: a read that drops the served-head pin returns the decoy.",
+  "issuer_id": "issuer:lei:PARITYMODULES00000001",
+  "served_run_id": "capture-run:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "unserved_run_id": "capture-run:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "pointer": {
+    "pointer_sha256": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "universe_id": "universe:topt-parity-modules",
+    "universe_version": "v1",
+    "factor_id": "gross_profit_per_employee"
+  },
+  "supply_chain_exposure": {
+    "rows": [
+      {
+        "run": "served",
+        "cutoff": "2026-06-30T23:59:59Z",
+        "exposure_score": "0.4200",
+        "direct_partners": 3,
+        "suppliers_count": 2,
+        "customers_count": 1,
+        "max_partner_share": "0.3100",
+        "confidence": "0.7700",
+        "reason_codes": ["edge_confidence_floor"],
+        "extractor": "graph:kg-edges:v1",
+        "availability_status": "available",
+        "source_evidence_status": "verified",
+        "factor_validation_status": "not_evaluated"
+      },
+      {
+        "run": "unserved",
+        "cutoff": "2026-09-30T23:59:59Z",
+        "exposure_score": "0.9900",
+        "direct_partners": 9,
+        "suppliers_count": 5,
+        "customers_count": 4,
+        "max_partner_share": "0.9000",
+        "confidence": "0.9900",
+        "reason_codes": [],
+        "extractor": "graph:kg-edges:v1",
+        "availability_status": "available",
+        "source_evidence_status": "verified",
+        "factor_validation_status": "not_evaluated"
+      }
+    ],
+    "expected": {
+      "run_id": "capture-run:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "cutoff": "2026-06-30T23:59:59Z",
+      "exposure_score": "0.4200",
+      "direct_partners": 3,
+      "suppliers_count": 2,
+      "customers_count": 1,
+      "max_partner_share": "0.3100",
+      "confidence": "0.7700",
+      "reason_codes": ["edge_confidence_floor"],
+      "extractor": "graph:kg-edges:v1",
+      "availability_status": "available",
+      "source_evidence_status": "verified",
+      "factor_validation_status": "not_evaluated"
+    }
+  },
+  "analyst_ratings": {
+    "rows": [
+      {
+        "run": "served",
+        "cutoff": "2026-06-30T23:59:59Z",
+        "consensus_rating": "4.3500",
+        "analysts_count": 20,
+        "buy_count": 14,
+        "hold_count": 5,
+        "sell_count": 1,
+        "confidence": "0.8500",
+        "reason_codes": [],
+        "extractor": "origin:moomoo:v1",
+        "availability_status": "available",
+        "source_evidence_status": "verified",
+        "factor_validation_status": "not_evaluated"
+      },
+      {
+        "run": "unserved",
+        "cutoff": "2026-09-30T23:59:59Z",
+        "consensus_rating": "1.0000",
+        "analysts_count": 3,
+        "buy_count": 0,
+        "hold_count": 0,
+        "sell_count": 3,
+        "confidence": "0.9900",
+        "reason_codes": [],
+        "extractor": "origin:moomoo:v1",
+        "availability_status": "available",
+        "source_evidence_status": "verified",
+        "factor_validation_status": "not_evaluated"
+      }
+    ],
+    "expected": {
+      "run_id": "capture-run:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "cutoff": "2026-06-30T23:59:59Z",
+      "consensus_rating": "4.3500",
+      "target_price": null,
+      "analysts_count": 20,
+      "buy_count": 14,
+      "hold_count": 5,
+      "sell_count": 1,
+      "confidence": "0.8500",
+      "reason_codes": [],
+      "extractor": "origin:moomoo:v1",
+      "availability_status": "available",
+      "source_evidence_status": "verified",
+      "factor_validation_status": "not_evaluated"
+    }
+  }
+}

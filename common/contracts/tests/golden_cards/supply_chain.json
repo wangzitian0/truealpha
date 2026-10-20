@@ -1,8 +1,8 @@
 {
-  "card_id": "card:0f25210b4f654865a90a450411e2868f07f79ab30827dc8c7f9624ccb14f6a8a",
+  "card_id": "card:5a91a8c818ab6f908ced12e6c047f898841f168be4348aa43f3e932e98b5c233",
   "card_kind": "supply_chain",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:6418244b79b70d4d49b44790de80dca4647be8fbf96770040240386e3fcfefaa",
+  "generated_from_report_id": "report:5ae8d10733940b35576ab137677cb3e453ceabdb27e21afc08dd023e73b27803",
   "research_risk_note": "Scenario propagation over a disclosed relationship graph. High edge confidence does not by itself establish a causal effect; this is not causal evidence.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",

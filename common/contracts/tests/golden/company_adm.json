@@ -1,7 +1,7 @@
 {
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from": "fixture:research_report.v1",
-  "report_id": "report:fd6c643e423d6da30a12dfe76d324695e9a37094a2d2aea39336c98c0c60b46f",
+  "generated_from": "mart:research_report.v1",
+  "report_id": "report:f6d213bea83fd9526fa360568ad178de1a0f6863b54fbac32017bbb3e149fa77",
   "report_kind": "company",
   "schema_version": "research_report.v1",
   "subjects": [
@@ -135,33 +135,68 @@
           "availability": "unavailable",
           "notes": [],
           "reason_codes": [
-            "peg_module_not_materialized"
+            "peg_not_recorded"
           ],
-          "results": [],
+          "results": [
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "peg",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "peg_rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
           "section_kind": "peg_conventions",
-          "title": "PEG (switchable conventions)",
-          "validation_status": null
+          "title": "PEG",
+          "validation_status": "not_evaluated"
         },
         {
           "availability": "unavailable",
           "notes": [],
           "reason_codes": [
-            "supply_chain_module_not_materialized"
+            "no_row_in_served_head"
           ],
           "results": [],
           "section_kind": "supply_chain",
-          "title": "Supply-chain scenario exposure",
+          "title": "Supply-chain exposure",
           "validation_status": null
         },
         {
           "availability": "unavailable",
           "notes": [],
           "reason_codes": [
-            "analyst_module_not_materialized"
+            "no_row_in_served_head"
           ],
           "results": [],
           "section_kind": "analyst_history",
-          "title": "Analyst track record",
+          "title": "Analyst consensus",
           "validation_status": null
         },
         {
