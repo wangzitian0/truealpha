@@ -234,17 +234,27 @@ def ensure_environment_identity(
     connection: psycopg.Connection[Any],
     environment: str | CaptureEnvironment,
 ) -> None:
-    """Declare the single authoritative environment identity in mart.environment_identity (#756)."""
+    """Declare the single authoritative environment identity in mart.environment_identity (#756).
+
+    The statement writes the row only when it is missing or names another environment (#1412).
+    A tick runs this first and commits much later, so a write here holds the row until that
+    commit. Any other statement that writes or locks the row waits for it: a second tick, and
+    before #1412 the boot replay of the migration chain (on 2026-10-15 the staging llm
+    container restarted 7 times). When the row already names this environment, the statement
+    reads it and writes nothing. `declared_at` keeps the time the current value was declared.
+    No reader uses it as a per-tick time.
+    """
     env_str = environment.value if isinstance(environment, CaptureEnvironment) else str(environment)
     connection.execute(
         """
         insert into mart.environment_identity (singleton, environment, declared_at)
-        values (true, %s, clock_timestamp())
+        select true, %(environment)s, clock_timestamp()
+        where not exists (select 1 from mart.environment_identity where environment = %(environment)s)
         on conflict (singleton) do update set
             environment = excluded.environment,
             declared_at = excluded.declared_at
         """,
-        (env_str,),
+        {"environment": env_str},
     )
 
 

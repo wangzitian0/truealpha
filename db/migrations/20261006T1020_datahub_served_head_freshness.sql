@@ -20,11 +20,21 @@
 -- To change a listed row, edit the seed in this file in a reviewed change. Do not add a second
 -- migration for the same row: the two files would overwrite each other on every boot.
 --
--- Boot-lock rules (libs/runtime/tests/test_migration_boot_locks.py): on a settled database,
+-- Boot-lock rules (common/runtime/tests/test_migration_boot_locks.py): on a settled database,
 -- every statement here takes only three lock modes on a mart relation.
 -- They are ACCESS SHARE, ROW EXCLUSIVE and SHARE UPDATE EXCLUSIVE. COMMENT ON takes the last one.
--- A seed row is updated only when it differs. Postgres locks the conflicting row before it
--- tests the WHERE clause. That lock is a row lock, not a table lock.
+-- A seed also takes no row lock on a row that already holds its seeded value. An open
+-- transaction can hold a write on such a row, for example a long tick. Each seed is one
+-- statement with three parts:
+--   `seed`      the listed rows, one per line
+--   `restored`  an UPDATE of each row that differs from its listed value
+--   the insert  of each listed row that is missing
+-- An UPDATE tests its WHERE clause on the row version that it can see. A row that already
+-- holds its value does not match, so the UPDATE does not lock it. The insert reads first and
+-- skips a row that exists. The `on conflict do nothing` stays as the guard against a concurrent
+-- insert. Before #1412 the seed was `on conflict do update ... where <the row differs>`.
+-- Postgres locks the conflicting row before it tests that WHERE clause, so each replay waited
+-- for every open transaction that had written a seeded row.
 -- A view is replaced only when its definition differs.
 
 -- 1. The limits.
@@ -37,15 +47,25 @@ create table if not exists mart.freshness_limit (
 comment on table mart.freshness_limit is
     '#1062: Read-time age limits in hours, one row per cadence. Seeded by git. A replay restores each listed value.';
 
+with seed (limit_key, hours) as (
+    values
+        ('daily', 72),
+        ('weekly', 336),
+        ('quarterly', 720),
+        ('withhold', 720)
+),
+restored as (
+    update mart.freshness_limit as present
+       set hours = seed.hours
+      from seed
+     where present.limit_key = seed.limit_key
+       and present.hours is distinct from seed.hours
+)
 insert into mart.freshness_limit (limit_key, hours)
-values
-    ('daily', 72),
-    ('weekly', 336),
-    ('quarterly', 720),
-    ('withhold', 720)
-on conflict (limit_key) do update
-    set hours = excluded.hours
-    where mart.freshness_limit.hours is distinct from excluded.hours;
+select seed.*
+from seed
+where not exists (select 1 from mart.freshness_limit as present where present.limit_key = seed.limit_key)
+on conflict (limit_key) do nothing;
 
 -- 2. The registry: one row per served artifact, each with one cadence.
 -- `wired` is a readiness flag. It is true when an age source is wired for the artifact.
@@ -73,8 +93,8 @@ comment on table mart.served_artifact is
     '#1062: Registry of served artifacts. Each row names the lane that refreshes it and its cadence family.';
 
 -- One row per line. The data-engine registry test reads these lines from this file.
-insert into mart.served_artifact (artifact_key, lane, schedule_name, universe_like, family, served_to, wired)
-values
+with seed (artifact_key, lane, schedule_name, universe_like, family, served_to, wired) as (
+    values
     ('head:topt', 'capture', 'topt_live_schedule', 'universe:topt-%', 'daily', 'consumers', true),
     ('head:qqq', 'capture', 'qqq_live_schedule', 'universe:qqq-%', 'daily', 'consumers', true),
     ('head:sp500', 'capture', 'sp500_live_schedule', 'universe:sp500-%', 'daily', 'consumers', true),
@@ -105,18 +125,28 @@ values
     ('entity-identity', 'entity_identity', null, null, 'weekly', 'consumers', false),
     ('triggers', 'triggers', null, null, 'daily', 'internal', false),
     ('facts:filing-derived', 'capture', null, null, 'quarterly', 'consumers', false)
-on conflict (artifact_key) do update
-    set lane = excluded.lane,
-        schedule_name = excluded.schedule_name,
-        universe_like = excluded.universe_like,
-        family = excluded.family,
-        served_to = excluded.served_to,
-        wired = excluded.wired
-    where (mart.served_artifact.lane, mart.served_artifact.schedule_name, mart.served_artifact.universe_like,
-           mart.served_artifact.family, mart.served_artifact.served_to, mart.served_artifact.wired)
-          is distinct from
-          (excluded.lane, excluded.schedule_name, excluded.universe_like,
-           excluded.family, excluded.served_to, excluded.wired);
+),
+restored as (
+    update mart.served_artifact as present
+       set lane = seed.lane,
+           schedule_name = seed.schedule_name,
+           universe_like = seed.universe_like,
+           family = seed.family,
+           served_to = seed.served_to,
+           wired = seed.wired
+      from seed
+     where present.artifact_key = seed.artifact_key
+       and (present.lane, present.schedule_name, present.universe_like,
+            present.family, present.served_to, present.wired)
+           is distinct from
+           (seed.lane, seed.schedule_name, seed.universe_like,
+            seed.family, seed.served_to, seed.wired)
+)
+insert into mart.served_artifact (artifact_key, lane, schedule_name, universe_like, family, served_to, wired)
+select seed.*
+from seed
+where not exists (select 1 from mart.served_artifact as present where present.artifact_key = seed.artifact_key)
+on conflict (artifact_key) do nothing;
 
 -- 3. The one definition of age and label.
 -- Inputs: the time of the last good refresh, the cadence family and the clock.

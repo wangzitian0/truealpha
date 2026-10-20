@@ -9,12 +9,23 @@ long transaction, and 0017 re-ran `alter column ... set default` (ACCESS EXCLUSI
 change. The healthcheck gave up, deploy_v2's in-service check failed the rollout, and
 the API was down until the backfill committed.
 
-Two properties are asserted here, against a real Postgres:
+The 2026-10-15 staging boot is the row-level form of the same incident (#1412). A forced
+`topt_live_pipeline` tick ran in one transaction for about 14 minutes. Its first statement
+wrote the `mart.environment_identity` row, and the tick held that row write until its first
+commit. The boot replayed `insert ... on conflict (singleton) do nothing` against that row.
+Postgres makes such an insert wait for an open transaction that wrote the conflicting row.
+The replay hit lock_timeout and the container restarted 7 times. A table lock did not cause
+it, so the table-level tests below could not see it.
+
+Three properties are asserted here, against a real Postgres:
 
 * a replay of the whole chain completes while other sessions hold the locks ordinary
   work holds — ROW EXCLUSIVE on every table (an open transaction that inserted a row, for
   the incident's table) and ACCESS SHARE on every view (a reader) — because every
-  migration only takes a lock when the catalog says there is something to change, and
+  migration only takes a lock when the catalog says there is something to change,
+* a replay of the whole chain completes while an open transaction has written every row
+  that the database holds, because a replayed seed statement does not touch a row that
+  already holds its seeded value, and
 * the runner bounds every wait: a lock timeout is retried from the file's first
   statement a bounded number of times and then fails loudly, naming the file and the
   transactions that held the locks; a statement timeout or a SQL error is not retried.
@@ -172,6 +183,110 @@ def test_a_replay_does_not_wait_for_any_writer_or_reader(migrated_database: str)
             holder.execute(sql.SQL("select 1 from {} limit 0").format(sql.SQL(view)))
         completed, elapsed = run_runner(migrated_database, **STRICT)
         holder.rollback()
+    assert completed.returncode == 0, _output(completed)[-4000:]
+    assert "LOCK TIMEOUT" not in _output(completed)
+    assert elapsed < 60, f"replay took {elapsed:.1f}s"
+
+
+# --- row writes: an open transaction that wrote a row the chain seeds ---------------------
+
+#: The tables that the chain itself fills on an empty database. Measured 2026-10-20: a fresh
+#: chain leaves rows in exactly these seven. The holder below finds its tables in the catalog.
+#: This set only proves that the catalog walk reached the seeds, so the test cannot pass while
+#: it holds nothing.
+CHAIN_SEED_TABLES = frozenset(
+    {
+        "mart.environment_identity",
+        "mart.freshness_limit",
+        "mart.served_artifact",
+        "staging.entity_alias_schemes",
+        "staging.entity_kinds",
+        "staging.entity_relation_types",
+        "staging.issuer_cik_predecessors",
+    }
+)
+
+#: The statement that `ensure_environment_identity` ran at the start of every capture tick
+#: before #1412 (apps/data-engine/src/data_engine/datahub/production_topt/composition.py).
+#: The tick then held the row write until its first commit, about 14 minutes later. A tick
+#: that changes the declared environment still writes the row in this way.
+TICK_DECLARATION = """
+insert into mart.environment_identity (singleton, environment, declared_at)
+values (true, %s, clock_timestamp())
+on conflict (singleton) do update set
+    environment = excluded.environment,
+    declared_at = excluded.declared_at
+"""
+
+
+def _write_every_row_again(holder: psycopg.Connection) -> dict[str, int]:
+    """Write every row of every application table again, in the holder's open transaction.
+
+    `update <table> set <column> = <column>` changes no value. Each row still gets a new
+    version that the open transaction owns, and that is the lock an uncommitted write leaves
+    on a row. `select ... for update` is not sufficient: Postgres does not make an
+    `on conflict do nothing` insert wait for a row that is only locked. The append-only
+    triggers refuse an update, so the session sets `session_replication_role = replica`.
+    That setting needs a superuser, which CI and the local podman recipe connect as.
+    Returns the number of rows written, per table that holds rows.
+    """
+    tables = holder.execute(
+        """
+        select format('%%I.%%I', n.nspname, c.relname),
+               (select quote_ident(a.attname)
+                  from pg_attribute as a
+                 where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                   and a.attgenerated = '' and a.attidentity = ''
+                 order by a.attnum
+                 limit 1)
+          from pg_class as c
+          join pg_namespace as n on n.oid = c.relnamespace
+         where n.nspname = any(%s) and c.relkind in ('r', 'p') and not c.relispartition
+         order by 1
+        """,
+        (list(APPLICATION_SCHEMAS),),
+    ).fetchall()
+    holder.execute("set local session_replication_role = replica")
+    written: dict[str, int] = {}
+    for table, column in tables:
+        assert column is not None, f"{table} has no column that an update can name"
+        rows = holder.execute(
+            sql.SQL("update {table} set {column} = {column}").format(table=sql.SQL(table), column=sql.SQL(column))
+        ).rowcount
+        if rows > 0:
+            written[table] = rows
+    return written
+
+
+def test_a_replay_does_not_wait_for_an_open_transaction_that_wrote_every_row(migrated_database: str) -> None:
+    """Every row that the database holds, written again by one open transaction.
+
+    The generic form of the 2026-10-15 staging boot: a seed statement that a later migration
+    adds is held here as soon as it puts a row in the database.
+    """
+    with psycopg.connect(migrated_database) as holder:
+        written = _write_every_row_again(holder)
+        assert CHAIN_SEED_TABLES <= written.keys(), sorted(CHAIN_SEED_TABLES - written.keys())
+        completed, elapsed = run_runner(migrated_database, **STRICT)
+        holder.rollback()
+    assert completed.returncode == 0, _output(completed)[-4000:]
+    assert "LOCK TIMEOUT" not in _output(completed)
+    assert elapsed < 60, f"replay took {elapsed:.1f}s"
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_a_replay_does_not_wait_for_a_tick_that_declared_its_environment(
+    migrated_database: str, environment: str
+) -> None:
+    """The 2026-10-15 staging boot, exactly: the tick's declaration is written and not committed.
+
+    "production" is the value that the chain seeds. The write still makes a new row version,
+    so a replay that touches the row waits for it whether or not the value changed.
+    """
+    with psycopg.connect(migrated_database) as tick:
+        tick.execute(TICK_DECLARATION, (environment,))
+        completed, elapsed = run_runner(migrated_database, **STRICT)
+        tick.rollback()
     assert completed.returncode == 0, _output(completed)[-4000:]
     assert "LOCK TIMEOUT" not in _output(completed)
     assert elapsed < 60, f"replay took {elapsed:.1f}s"

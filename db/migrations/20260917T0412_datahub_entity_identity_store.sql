@@ -30,6 +30,11 @@
 --
 -- Every table is append-only. A merge adds `same_as` and `superseded_by` edges and rewrites
 -- nothing; a wrong alias is ended by a retraction row; the resolver follows the edges.
+--
+-- A boot replays this file. Each of the three seeds reads first and inserts only the missing
+-- rows: an `on conflict do nothing` alone waits for an open transaction that wrote a seeded
+-- row (#1412, common/runtime/tests/test_migration_boot_locks.py). The conflict clause stays as
+-- the guard against a concurrent insert.
 
 -- ---------------------------------------------------------------------------------------
 -- Guards and minting
@@ -144,6 +149,7 @@ from (values
     ('segment', 'entity', false, 'A reportable business segment of an issuer. No writer yet.'),
     ('product', 'entity', false, 'A product or service line. No writer yet.')
 ) as seed (kind, parent_kind, is_abstract, description)
+where not exists (select 1 from staging.entity_kinds as present where present.kind = seed.kind)
 on conflict (kind) do nothing;
 
 -- Is `p_kind` the kind `p_ancestor` or a descendant of it? plpgsql rather than a recursive
@@ -206,7 +212,9 @@ end
 $$;
 
 insert into staging.entity_alias_schemes
-    (scheme, applies_to_kind, is_unique, value_reusable, value_pattern, authority, description) values
+    (scheme, applies_to_kind, is_unique, value_reusable, value_pattern, authority, description)
+select seed.*
+from (values
     ('legacy-id', 'entity', true, false, '^[a-z][a-z0-9-]*:[a-z0-9-]+:\S+$', 'TrueAlpha',
      'A pre-#877 text id (issuer:lei:…, security:figi:…, listing:xnas:aapl). Case-sensitive, stored verbatim.'),
     ('lei', 'organization', true, false, '^[0-9A-Z]{18}[0-9]{2}$', 'GLEIF (ISO 17442)',
@@ -227,6 +235,8 @@ insert into staging.entity_alias_schemes
      'Market-prefixed quote code, for example US.AAPL. No writer yet.'),
     ('name', 'entity', false, true, '^\S(.*\S)?$', 'the asserting source',
      'A display label. Not unique; never resolves an entity.')
+) as seed (scheme, applies_to_kind, is_unique, value_reusable, value_pattern, authority, description)
+where not exists (select 1 from staging.entity_alias_schemes as present where present.scheme = seed.scheme)
 on conflict (scheme) do nothing;
 
 -- Canonical form of a value in a scheme. Identity for anything that is not a recognized
@@ -456,6 +466,9 @@ from (values
     ('split_into', 'entity', 'entity', true, true, 'split_from',
      'A split: from valid_from on, part of the source entity continues as the target.')
 ) as seed (relation_type, domain_kind, range_kind, same_kind, is_identity, inverse_name, description)
+where not exists (
+    select 1 from staging.entity_relation_types as present where present.relation_type = seed.relation_type
+)
 on conflict (relation_type) do nothing;
 
 create table if not exists staging.entity_relations (

@@ -21,8 +21,16 @@ comment on table mart.environment_identity is
 
 -- Seed with 'production' initially if empty, so that existing production/staging readers continue
 -- working until data-engine declares the true capture environment.
+--
+-- A boot replays this file. The insert reads first and writes only when the table is empty.
+-- On 2026-10-15 a capture tick had written this row and held it uncommitted for about 14
+-- minutes. The old `values ... on conflict (singleton) do nothing` waited for that tick, hit
+-- lock_timeout, and the staging llm container restarted 7 times (#1412,
+-- common/runtime/tests/test_migration_boot_locks.py). The conflict clause stays as the guard
+-- against a concurrent insert.
 insert into mart.environment_identity (singleton, environment)
-values (true, 'production')
+select true, 'production'
+where not exists (select 1 from mart.environment_identity)
 on conflict (singleton) do nothing;
 
 -- Redefine mart.governed_strategy_run to read from mart.environment_identity instead of 'production' literal.
