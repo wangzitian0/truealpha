@@ -481,7 +481,9 @@ def _run_deployed_tick(monkeypatch, op, *, spy: list) -> None:
         capture, "run_strategy_replay_for_cutoff", lambda *a, **k: ("strategy-run:" + "d" * 64, 20, "snap:" + "e" * 64)
     )
     monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: PointerRegistration(RUN, 1, ()))
-    monkeypatch.setattr(capture, "judge_run", lambda *a, **k: Verdict("v1", None, (), ()))
+    passing = Verdict("v4", None, (), (), ())
+    monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
+    monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
 
     def _spy(connection, *, run_id, cutoff, **kwargs):
         spy.append((run_id, cutoff))

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 import dagster as dg
 import psycopg
@@ -35,7 +35,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
 from data_engine.datahub.production_topt.fund_consolidation import (
     summary_line as fund_consolidation_summary,
 )
-from data_engine.datahub.production_topt.plausibility_gate import judge_run
+from data_engine.datahub.production_topt.plausibility_gate import Verdict, judge_issuers, judge_strategy
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,
@@ -327,6 +327,18 @@ def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: Corro
         raise
 
 
+def _refuse(context: dg.OpExecutionContext, run_id: str, verdict: Verdict) -> NoReturn:
+    """Log the verdict and fail the tick on a run refusal. The caller's transaction rolls back
+    without a commit."""
+    for line in verdict.lines():
+        context.log.info(line)
+    raise dg.Failure(
+        f"plausibility policy {verdict.policy_version} refused {run_id}: "
+        + "; ".join(f"{v.rule} — {v.detail}" for v in verdict.run_refusals)
+        + " (#544; the tick rolls back and the pointer stays on the previous accepted run)"
+    )
+
+
 def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
     """The one tick body every universe runs: capture → freeze → materialize → report →
     governed pointer, plus the strategy replay where the declaration asks for it."""
@@ -356,6 +368,13 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             label_prefix=tick.label_prefix,
             force_fetch=config.force_fetch,
         )
+        # #1443/#1323: plausibility policy v4, in the same transaction, before anything consumes the
+        # run. An issuer refusal excludes that issuer's decision with a named reason and the run
+        # publishes the others. A run refusal (too large a share refused) raises here; the `with`
+        # unwinds without a commit, so mart.current_pointer stays on the previous accepted run.
+        issuers = judge_issuers(connection, run_id=pipeline.run_id)
+        if issuers.refused:
+            _refuse(context, pipeline.run_id, issuers)
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
@@ -370,6 +389,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 executed_at=cutoff,
                 risk_free_rate=live_risk_free_rate(cutoff),
                 capture_run_id=pipeline.run_id,
+                plausibility_refusals=issuers.excluded_issuers(),
             )
             strategy = {
                 "strategy_inputs_seeded": seeded,
@@ -382,7 +402,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         # #727/#36: the module-5 fund consolidation, in the same transaction as the core
         # rows it weights. Before the pointer gate on purpose — a run whose plausibility
         # is refused rolls this back with everything else, so mart.fund_virtual_company
-        # can never describe a run that was never served.
+        # can never describe a run that was never served. It still weights a holding whose
+        # row an issuer refusal names (#1456).
         fund_consolidation: dict[str, Any] = {}
         if tick.consolidate_funds:
             consolidations = materialize_fund_consolidation(connection, run_id=pipeline.run_id, cutoff=cutoff)
@@ -391,25 +412,19 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 "funds_consolidated": len(consolidations),
                 "funds_refused": sum(1 for item in consolidations if item.result.value is None),
             }
-        # #544: plausibility policy v1, in the same transaction, before the pointer can
-        # advance. A refused run raises here; the `with` unwinds without a commit, so the
-        # transaction rolls back and mart.current_pointer stays on the previous accepted
-        # run — nothing of an implausible run is materialized. Deferred violations (the
-        # nightly suite's exemption file, issue + expiry) are logged and let through.
-        verdict = judge_run(
+        # #544: the run rule that needs the strategy run (an empty eligible set), before the pointer
+        # can advance. Deferred violations (the nightly suite's exemption file, issue + expiry) and
+        # review flags are logged and let through.
+        verdict = judge_strategy(
             connection,
-            run_id=pipeline.run_id,
+            issuers,
             strategy_run_id=strategy.get("strategy_run_id"),
             l2_complete=strategy.get("l2_complete"),
         )
+        if verdict.refused:
+            _refuse(context, pipeline.run_id, verdict)
         for line in verdict.lines():
             context.log.info(line)
-        if verdict.refused:
-            raise dg.Failure(
-                f"plausibility policy {verdict.policy_version} refused {pipeline.run_id}: "
-                + "; ".join(f"{v.rule} {v.listing_id or ''} — {v.detail}" for v in verdict.violations)
-                + " (#544; the tick rolls back and the pointer stays on the previous accepted run)"
-            )
         # #378: register the run on the A1 evidence plane and advance the governed
         # pointer inside the same transaction, so consumers resolve THIS run through
         # mart.current_pointer_head the moment the tick commits. #536: the advance is
@@ -462,6 +477,9 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         )
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,
+        "plausibility_policy": verdict.policy_version,
+        "plausibility_excluded": sorted(f"{violation.rule} {violation.listing_id}" for violation in verdict.refusals),
+        "plausibility_reviews": len(verdict.reviews),
         "quality_report_id": pipeline.quality_report_id,
         "forced_fetch": pipeline.forced_fetch,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],

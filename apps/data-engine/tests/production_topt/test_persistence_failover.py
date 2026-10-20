@@ -517,7 +517,12 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
     governed_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
-        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
+        connection,
+        cutoff=CUTOFF,
+        executed_at=CUTOFF,
+        risk_free_rate=Decimal("0.05"),
+        capture_run_id=plan.run_id,
+        plausibility_refusals={},
     )
     env = connection.execute("select environment from mart.environment_identity").fetchone()[0]
     pointer_sha = canonical_sha256({"probe": plan.run_id})
@@ -629,7 +634,12 @@ def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silen
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
     persist_strategy_input_coverage(connection, plan.run_id, cutoff=CUTOFF)
     bound_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
-        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
+        connection,
+        cutoff=CUTOFF,
+        executed_at=CUTOFF,
+        risk_free_rate=Decimal("0.05"),
+        capture_run_id=plan.run_id,
+        plausibility_refusals={},
     )
     resolved_after = connection.execute(
         "select strategy_run_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)

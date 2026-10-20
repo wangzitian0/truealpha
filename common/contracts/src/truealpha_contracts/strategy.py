@@ -157,6 +157,10 @@ class ExclusionReason(StrEnum):
     #: Definition 1.0.0 divides market value by gross profit. Zero or negative gross
     #: profit gives no P/GP multiple, so the issuer cannot be valued (#1235).
     NONPOSITIVE_GROSS_PROFIT = "nonpositive_gross_profit"
+    #: The plausibility gate refused this issuer's published row, and the tick published the
+    #: others (#1323). One code per issuer rule of the plausibility policy (v4, #1443).
+    PLAUSIBILITY_REFUSED_INDEPENDENT_REFERENCE = "plausibility_refused_independent_reference"
+    PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY = "plausibility_refused_node_sign_policy"
 
 
 class RiskFreeInstrument(StrEnum):

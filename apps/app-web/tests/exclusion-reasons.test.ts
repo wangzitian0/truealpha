@@ -93,6 +93,25 @@ assert(
   "XOM/BRK.B missing_gross_profit_fact label must explain untagged cost of revenue / insurance claims",
 );
 
+// #1323 criterion 3: an issuer the plausibility gate refused reaches the Today page as an excluded
+// issuer with its own label, and the other issuers of the run stay usable.
+const refused = summarizeUniverseUsability([
+  ...sampleDecisions.slice(0, 19),
+  {
+    issuer_id: "MU",
+    outcome: "excluded",
+    eligible: false,
+    exclusion_reason: "plausibility_refused_independent_reference",
+  },
+]);
+assert(refused.usableCount === 17 && refused.excludedCount === 3, "the refused issuer is excluded, not dropped");
+const mu = refused.excluded.find((e) => e.issuer_id === "MU");
+assert(
+  mu?.exclusion_reason === "plausibility_refused_independent_reference" &&
+    mu.label.startsWith("Refused by the plausibility gate"),
+  "a plausibility refusal must render its own label on the Today page",
+);
+
 const todayPageSource = readFileSync(
   join(process.cwd(), "src", "app", "research", "page.tsx"),
   "utf8",

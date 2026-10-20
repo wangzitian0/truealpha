@@ -38,6 +38,7 @@ from data_engine.datahub.production_topt.market_price_adapter import (
 )
 from data_engine.datahub.production_topt.release_derived_adapter import ReleaseDerivedAdapter, ReleaseDerivedRecord
 from data_engine.datahub.production_topt.sec_financial_adapter import (
+    FinancialFactCorroboratingOrigin,
     FinancialFactsBundle,
     SecFinancialFactAdapter,
     SecTarget,
@@ -168,6 +169,8 @@ def _offline_routes(
     price_cutoff: date | None = None,
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
     cutoff_date: date | None = None,
+    bundle: Callable[[str, OperatingBranch], FinancialFactsBundle] = lambda _ticker, branch: _bundle(branch),
+    financial_origins: tuple[FinancialFactCorroboratingOrigin, ...] = (),
 ) -> dict[str, SourceFetchPort]:
     # The settled session (#530 item 1), matching build_route's context.price_cutoff_date
     # -- not the tick's own run clock. A caller with a differently-partitioned corpus
@@ -200,6 +203,7 @@ def _offline_routes(
                 operating_branch=(
                     OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL
                 ),
+                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -230,10 +234,12 @@ def _offline_routes(
         lambda symbol, cutoff: quote(),
         corroborating_origins=corroborating_origins,
     )
+    ticker_by_cik = {cik: ticker for ticker, cik in cik_by_ticker.items()}
     financial = SecFinancialFactAdapter(
         sec_targets,
-        lambda cik, cutoff, branch: _bundle(branch),
+        lambda cik, cutoff, branch: bundle(ticker_by_cik[cik], branch),
         headcount_extractor=PostgresHeadcountExtractor(connection),
+        corroborating_origins=financial_origins,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 

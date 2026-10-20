@@ -220,7 +220,9 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     # production_topt/test_plausibility_gate.py, against a real database).
     from data_engine.datahub.production_topt.plausibility_gate import Verdict
 
-    monkeypatch.setattr(capture, "judge_run", lambda *a, **k: Verdict("v1", None, (), ()))
+    passing = Verdict("v4", None, (), (), ())
+    monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
+    monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
 
 
 def _run_tick(monkeypatch, registration: PointerRegistration):

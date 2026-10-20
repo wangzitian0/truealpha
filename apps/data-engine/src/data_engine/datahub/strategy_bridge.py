@@ -35,7 +35,7 @@ from factors.composite.strategy_evaluator import evaluate_cutoff
 from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
-from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
+from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
@@ -429,6 +429,7 @@ def run_strategy_replay_for_cutoff(
     executed_at: datetime,
     risk_free_rate: Decimal,
     capture_run_id: str,
+    plausibility_refusals: Mapping[str, ExclusionReason],
 ) -> tuple[str, int, str]:
     """Evaluate the frozen strategy over the captured staging inputs for one cutoff and
     persist ``mart.strategy_runs``/``mart.strategy_decisions``. The risk-free rate is the
@@ -438,7 +439,11 @@ def run_strategy_replay_for_cutoff(
     it (#877): a cutoff alone can name two captures since forced ticks (#874) exist, so
     every reader that pairs a decision with a core result, or a strategy run with the
     governed head, resolves through that binding. Required, so a caller cannot publish a
-    strategy run that no capture owns."""
+    strategy run that no capture owns.
+
+    ``plausibility_refusals`` maps an issuer id to the reason the plausibility gate refused
+    its row in this capture (#1323). That issuer's decision is excluded with the reason and the
+    others are ranked without it. Required, so a caller cannot skip the gate's verdict."""
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
     issuer_classes = _issuer_classes_for_run(connection, capture_run_id)
@@ -450,6 +455,7 @@ def run_strategy_replay_for_cutoff(
         definition=definition,
         cutoff_at=cutoff,
         risk_free_rate=risk_free_rate,
+        plausibility_refusals=plausibility_refusals,
     )
     cutoff_key = cutoff.astimezone(UTC).isoformat()
     decisions = sorted(
