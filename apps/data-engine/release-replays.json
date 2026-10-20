@@ -1,0 +1,48 @@
+{
+  "$comment": "#1412 R4. tools/cut_release.sh refuses a release that changes a watched identity unless the release adds a replay entry for it. Add the entry in the PR that changes the identity. Rules: common/runtime/src/truealpha_tools/release_replays.py.",
+  "identities": {
+    "production-topt-parser": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/parser_identity.py",
+      "name": "PARSER_VERSION_HISTORY"
+    },
+    "production-topt-mapping": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/parser_identity.py",
+      "name": "MAPPING_VERSION_HISTORY"
+    },
+    "production-topt-concept-ruleset": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/concept_mapping.py",
+      "name": "DEFAULT_RULESET"
+    },
+    "twelve-data-parser": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "TWELVE_DATA_PARSER_VERSION_HISTORY"
+    },
+    "twelve-data-mapping": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "TWELVE_DATA_MAPPING_VERSION"
+    },
+    "moomoo-kline-parser": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "MOOMOO_KLINE_PARSER_VERSION"
+    },
+    "moomoo-kline-mapping": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "MOOMOO_KLINE_MAPPING_VERSION"
+    },
+    "moomoo-financials-parser": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "MOOMOO_FINANCIALS_PARSER_VERSION"
+    },
+    "moomoo-financials-mapping": {
+      "path": "apps/data-engine/src/data_engine/datahub/production_topt/source_registrations.py",
+      "name": "MOOMOO_FINANCIALS_MAPPING_VERSION"
+    },
+    "strategy-history-projector": {
+      "paths": [
+        "apps/data-engine/src/data_engine/datahub/strategy_history.py",
+        "apps/data-engine/src/data_engine/datahub/share_basis.py"
+      ]
+    }
+  },
+  "replays": []
+}

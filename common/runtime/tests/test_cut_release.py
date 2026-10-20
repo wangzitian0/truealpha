@@ -55,6 +55,24 @@ elif args[:2] == ["api", "graphql"]:
     unresolved = int(os.environ.get("FAKE_UNRESOLVED_THREADS", "0"))
     nodes = [{"isResolved": False, "comments": {"nodes": [{"path": "foo.py", "body": "nit"}]}} for _ in range(unresolved)]
     print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": unresolved, "nodes": nodes}}}}}))
+elif args[0] == "api" and "/actions/" in (args[1] if len(args) > 1 else ""):
+    # #1412 R1: the --prod path reads the staging evidence of the tag through the REST API.
+    # FAKE_GH_RUNS holds the runs of each workflow. The fake ignores the query filters
+    # (branch, created) on purpose: the code under test must apply its own time and SHA rules,
+    # so a stale run in this list is a stale run the script itself has to refuse.
+    path = args[1]
+    runs = json.loads(os.environ.get("FAKE_GH_RUNS", "{}"))
+    if path.endswith("/jobs"):
+        run_id = path.split("/runs/")[1].split("/")[0]
+        print(json.dumps({"jobs": [{"steps": runs.get("jobs", {}).get(run_id, [])}]}))
+    else:
+        workflow = re.search(r"/workflows/([^/]+)/runs", path)
+        kinds = {"ci-required.yml": "ci", "deploy-release.yml": "deploy", "walk-release.yml": "walk"}
+        if workflow is None or workflow.group(1) not in kinds:
+            sys.exit(f"fake gh: unexpected api path {path!r}")
+        # `--paginate --jq '.workflow_runs[]'` prints one run per line.
+        for run in runs.get(kinds[workflow.group(1)], []):
+            print(json.dumps(run))
 elif args[0] == "api" and re.fullmatch(r"repos/[^/]+/[^/]+/commits/[0-9a-f]+/pulls", args[1] if len(args) > 1 else ""):
     # #1022: cut_release.sh resolves a commit's PR via this endpoint instead of
     # guessing from commit-message text — the same SHA->PR fact the ceremony
@@ -65,7 +83,9 @@ elif args[0] == "api" and re.fullmatch(r"repos/[^/]+/[^/]+/commits/[0-9a-f]+/pul
 elif args[:2] == ["run", "list"]:
     workflow = flag("--workflow")
     if workflow == "ci-required.yml":
-        print("101 completed success")
+        # main HEAD's run. Empty is what the real filter prints when main HEAD's run is no
+        # longer among the last 20 ci-required runs (an older tag, #1412).
+        print(os.environ.get("FAKE_MAIN_CI_STATE", "101 completed success"))
     elif workflow == "":
         # The tag's own push run (also what --redeploy checks). Overridable so
         # a test can reproduce #940: a fresh tag whose own ci-required never
@@ -118,11 +138,44 @@ def git_env(cwd: Path) -> dict[str, str]:
     }
 
 
+#: #1412 R4: the one declaration of data replays, read from the release commit.
+DECLARATION = "apps/data-engine/release-replays.json"
+DEMO_PARSER = "apps/data-engine/src/demo/parser_identity.py"
+DEMO_PROJECTOR = "apps/data-engine/src/demo/projector.py"
+PARSER_V1 = 'PARSER_VERSION_HISTORY = ("demo-parser:v1",)\n'
+PARSER_V2 = 'PARSER_VERSION_HISTORY = ("demo-parser:v1", "demo-parser:v2")\n'
+PROJECTOR_V1 = '"""Demo projector."""\n\n\ndef project(shares, close):\n    return shares * close\n'
+
+
+def declaration(*replays: dict[str, str]) -> str:
+    """The throwaway origin's declaration: one parser constant and one projector module."""
+    return json.dumps(
+        {
+            "identities": {
+                "demo-parser": {"path": DEMO_PARSER, "name": "PARSER_VERSION_HISTORY"},
+                "demo-projector": {"paths": [DEMO_PROJECTOR]},
+            },
+            "replays": list(replays),
+        },
+        indent=2,
+    )
+
+
 @dataclass
 class Ceremony:
     root: Path
     work: Path
     merges: dict[str, str]
+
+    def write(self, relative: str, text: str) -> None:
+        """Stage a file for the next commit."""
+        path = self.work / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        git(self.work, "add", relative)
+
+    def remove(self, relative: str) -> None:
+        git(self.work, "rm", "-q", relative)
 
     def commit(self, subject: str, *, pr: str | None = None) -> str:
         git(self.work, "commit", "--allow-empty", "-q", "-m", subject)
@@ -205,6 +258,9 @@ def ceremony(tmp_path: Path) -> Ceremony:
     git(work, "init", "-q", "-b", "main")
     git(work, "remote", "add", "origin", str(origin))
     stage = Ceremony(root=tmp_path, work=work, merges={})
+    stage.write(DECLARATION, declaration())
+    stage.write(DEMO_PARSER, PARSER_V1)
+    stage.write(DEMO_PROJECTOR, PROJECTOR_V1)
     stage.commit("seed (#10)")
     stage.tag("v0.0.1")
     stage.commit("feature (#11)")
@@ -467,6 +523,84 @@ def prod_dispatches(calls: list) -> list[list[str]]:
     return [call for call in workflow_dispatches(calls, "deploy-release.yml") if "deploy_type=prod" in call]
 
 
+def staging_dispatches(calls: list) -> list[list[str]]:
+    return [call for call in workflow_dispatches(calls, "deploy-release.yml") if "deploy_type=staging" in call]
+
+
+# #1412 R1: the staging evidence that GitHub holds for a tag. The run ids differ from the ids
+# the fake `gh run list` returns (202, 303, 404), so a prod dispatch that carries 2020 and 3030
+# carries the evidence, not a run this ceremony started itself.
+EVIDENCE_TAG_RUN = 2020
+EVIDENCE_STAGING_RUN = 3030
+EVIDENCE_WALK_RUN = 4040
+WALK_STEP = "Walk the deployed surface"
+
+
+def ci_run(run_id: int, tag: str, sha: str, created: str, conclusion: str = "success") -> dict[str, object]:
+    return {
+        "id": run_id,
+        "head_branch": tag,
+        "head_sha": sha,
+        "event": "push",
+        "status": "completed",
+        "conclusion": conclusion,
+        "created_at": created,
+        "run_started_at": created,
+        "updated_at": created,
+    }
+
+
+def workflow_run(
+    run_id: int, title: str, started: str, ended: str, *, event: str = "workflow_dispatch", conclusion: str = "success"
+) -> dict[str, object]:
+    return {
+        "id": run_id,
+        "display_title": title,
+        "event": event,
+        "status": "completed",
+        "conclusion": conclusion,
+        "created_at": started,
+        "run_started_at": started,
+        "updated_at": ended,
+        # deploy-release.yml and walk-release.yml run from main, never from the tag.
+        "head_sha": "f" * 40,
+    }
+
+
+def staging_evidence(
+    sha: str,
+    tag: str = "v0.0.2",
+    *,
+    ci: list[dict[str, object]] | None = None,
+    deploys: list[dict[str, object]] | None = None,
+    walks: list[dict[str, object]] | None = None,
+    walk_step: str | None = "success",
+) -> dict[str, str]:
+    """The timeline of v0.2.23 on 2026-10-20: tag CI at 04:05:21, staging deploy 04:09:11 to
+    04:16:30, walk 04:16:33 to 04:18:32 (measured with `gh api`). Each keyword replaces one part."""
+    runs = {
+        "ci": ci if ci is not None else [ci_run(EVIDENCE_TAG_RUN, tag, sha, "2026-10-20T04:05:21Z")],
+        "deploy": deploys
+        if deploys is not None
+        else [
+            workflow_run(EVIDENCE_STAGING_RUN, f"Deploy staging {tag}", "2026-10-20T04:09:11Z", "2026-10-20T04:16:30Z")
+        ],
+        "walk": walks
+        if walks is not None
+        else [
+            workflow_run(
+                EVIDENCE_WALK_RUN,
+                f"Walk Deploy staging {tag}",
+                "2026-10-20T04:16:33Z",
+                "2026-10-20T04:18:32Z",
+                event="workflow_run",
+            )
+        ],
+        "jobs": {str(EVIDENCE_WALK_RUN): [] if walk_step is None else [{"name": WALK_STEP, "conclusion": walk_step}]},
+    }
+    return {"FAKE_GH_RUNS": json.dumps(runs)}
+
+
 def test_prod_without_the_owners_approval_is_refused_before_anything_happens(ceremony: Ceremony) -> None:
     before = ceremony.remote_tags()
 
@@ -545,7 +679,10 @@ def test_a_resumed_prod_promotion_needs_the_approval_too(ceremony: Ceremony, mod
     assert refused.returncode == 2, f"stdout:\n{refused.stdout}\nstderr:\n{refused.stderr}"
     assert not dispatched(refused_calls)
 
-    allowed, allowed_calls = ceremony.run("v0.0.2", mode, "--prod", "--owner-approved-sha", head_sha(ceremony))
+    sha = head_sha(ceremony)
+    allowed, allowed_calls = ceremony.run(
+        "v0.0.2", mode, "--prod", "--owner-approved-sha", sha, extra_env=staging_evidence(sha)
+    )
 
     assert allowed.returncode == 0, f"stdout:\n{allowed.stdout}\nstderr:\n{allowed.stderr}"
     assert len(prod_dispatches(allowed_calls)) == 1
@@ -553,21 +690,20 @@ def test_a_resumed_prod_promotion_needs_the_approval_too(ceremony: Ceremony, mod
 
 def test_prod_with_the_approved_sha_dispatches_prod_carrying_that_sha(ceremony: Ceremony) -> None:
     sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
 
-    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha)
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha, extra_env=staging_evidence(sha))
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     [prod] = prod_dispatches(calls)
     assert f"owner_approved_sha={sha}" in prod, "deploy-release.yml checks the approval again, so it must receive it"
-    [staging] = [call for call in workflow_dispatches(calls, "deploy-release.yml") if "deploy_type=staging" in call]
-    assert not any("owner_approved_sha" in argument for argument in staging), (
-        "staging is not a production deployment and carries no approval"
-    )
+    assert staging_dispatches(calls) == [], "#1412: a promotion never deploys staging again"
 
 
 def test_the_dry_run_checks_the_approval_and_dispatches_nothing(ceremony: Ceremony) -> None:
     """--dry-run is how an agent proves, before asking, that the SHA it holds is the one
-    the ceremony would promote: it runs the same gate and then stops."""
+    the ceremony would promote: it runs the same gate and then stops. Since #1412 it also
+    reads the staging evidence, so a dry run shows that the promotion would be accepted."""
     before = ceremony.remote_tags()
 
     refused, refused_calls = ceremony.run("v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", OTHER_SHA)
@@ -575,13 +711,27 @@ def test_the_dry_run_checks_the_approval_and_dispatches_nothing(ceremony: Ceremo
     assert refused.returncode == 2, f"stdout:\n{refused.stdout}\nstderr:\n{refused.stderr}"
     assert "does not cover this commit" in refused.stderr, refused.stderr
     assert not dispatched(refused_calls)
+    assert ceremony.remote_tags() == before, "a refused dry run must not claim the tag number"
 
-    allowed, allowed_calls = ceremony.run("v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", head_sha(ceremony))
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+    tagged = ceremony.remote_tags()
+    allowed, allowed_calls = ceremony.run(
+        "v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", sha, extra_env=staging_evidence(sha)
+    )
 
     assert allowed.returncode == 0, f"stdout:\n{allowed.stdout}\nstderr:\n{allowed.stderr}"
-    assert "dry run: would tag" in allowed.stdout and "then prod" in allowed.stdout
+    assert "dry run: would promote v0.0.2" in allowed.stdout, allowed.stdout
+    assert f"staging run {EVIDENCE_STAGING_RUN}" in allowed.stdout, allowed.stdout
     assert not dispatched(allowed_calls)
-    assert ceremony.remote_tags() == before, "a dry run must not claim the tag number"
+    assert ceremony.remote_tags() == tagged, "a dry run must not claim or move a tag"
+
+    unverified, unverified_calls = ceremony.run(
+        "v0.0.2", "--prod", "--dry-run", "--owner-approved-sha", sha, extra_env=staging_evidence(sha, walks=[])
+    )
+
+    assert unverified.returncode != 0, "a dry run must refuse what the real promotion would refuse"
+    assert not dispatched(unverified_calls)
 
 
 def test_a_staging_release_still_needs_no_approval_and_prints_the_promotion_rule(ceremony: Ceremony) -> None:
@@ -665,16 +815,285 @@ def test_prod_can_promote_an_existing_ancestor_tag_after_main_has_advanced(cerem
     tag_sha = head_sha(ceremony)
     ceremony.tag("v0.0.2", at=tag_sha)
     later_sha = ceremony.commit("later (#13)")
+    evidence = staging_evidence(tag_sha)
 
-    wrong_approval, wrong_calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", later_sha)
+    wrong_approval, wrong_calls = ceremony.run(
+        "v0.0.2", "--prod", "--owner-approved-sha", later_sha, extra_env=evidence
+    )
     assert wrong_approval.returncode == 2, f"stdout:\n{wrong_approval.stdout}\nstderr:\n{wrong_approval.stderr}"
     assert "does not cover this commit" in wrong_approval.stderr
     assert not dispatched(wrong_calls)
 
-    promoted, promoted_calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", tag_sha)
+    promoted, promoted_calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", tag_sha, extra_env=evidence)
     assert promoted.returncode == 0, f"stdout:\n{promoted.stdout}\nstderr:\n{promoted.stderr}"
     assert f"promoting existing release tag v0.0.2 at ancestor {tag_sha[:8]}" in promoted.stdout
     assert "derived --prs 11,12" in promoted.stdout
     [prod] = prod_dispatches(promoted_calls)
     assert f"owner_approved_sha={tag_sha}" in prod
     assert "reviewed_change_url=https://github.com/wangzitian0/truealpha/pull/12" in prod
+
+
+# --- #1412 R1: production promotes the verified staging tag --------------------------------
+# Before #1412, `--prod` on an existing tag deployed staging again, waited for that walk, and
+# only then deployed production. Staging succeeded at the first try in 0.74 of the runs and
+# production in 0.68, so a production attempt succeeded at the first try about half the time.
+# `--prod` now reads the evidence that GitHub already holds for the commit of the tag and
+# dispatches production alone. It refuses when a fact is missing and never deploys staging.
+
+REDEPLOY_HINT = 'tools/cut_release.sh v0.0.2 --message "..." --redeploy'
+REWALK_HINT = "gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=v0.0.2"
+
+
+def test_prod_promotes_the_verified_staging_tag_without_a_staging_redeploy(ceremony: Ceremony) -> None:
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha, extra_env=staging_evidence(sha))
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert staging_dispatches(calls) == [], "--prod deployed staging again (#1412 R1)"
+    assert workflow_dispatches(calls, "walk-release.yml") == [], "--prod walked staging again (#1412 R1)"
+    [prod] = workflow_dispatches(calls, "deploy-release.yml")
+    assert "deploy_type=prod" in prod and "version_ref=v0.0.2" in prod
+    assert f"staging_run_url=https://github.com/wangzitian0/truealpha/actions/runs/{EVIDENCE_STAGING_RUN}" in prod, (
+        "the prod dispatch must name the staging run that verified this tag"
+    )
+    assert f"source_run_id={EVIDENCE_TAG_RUN}" in prod, "the prod dispatch must name the tag's own green CI run"
+
+
+def test_prod_does_not_wait_for_a_main_run_that_left_the_run_list(ceremony: Ceremony) -> None:
+    """A tag soaks staging for hours or days before the owner approves it. Main HEAD's run of
+    that commit then is no longer among the last 20 ci-required runs, and the main-HEAD wait
+    would spend 15 minutes and fail. The tag's own green CI run is part of the evidence."""
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env={**staging_evidence(sha), "FAKE_MAIN_CI_STATE": ""},
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert len(prod_dispatches(calls)) == 1
+
+
+@pytest.mark.parametrize(
+    ("evidence", "missing", "hint"),
+    [
+        pytest.param({"walks": []}, "Walk Deploy staging v0.0.2", REWALK_HINT, id="no-walk"),
+        pytest.param({"walk_step": "failure"}, "'failure'", REWALK_HINT, id="walk-failed"),
+        # Credentials unconfigured: the walk run succeeds and its walk step is skipped (#560).
+        pytest.param({"walk_step": "skipped"}, "'skipped'", REWALK_HINT, id="walk-skipped"),
+        pytest.param({"walk_step": None}, WALK_STEP, REWALK_HINT, id="walk-without-a-walk-step"),
+        pytest.param(
+            {
+                "walks": [
+                    workflow_run(
+                        EVIDENCE_WALK_RUN, "Walk Deploy staging v0.0.2", "2026-10-20T04:12:00Z", "2026-10-20T04:14:00Z"
+                    )
+                ]
+            },
+            "Walk Deploy staging v0.0.2",
+            REWALK_HINT,
+            id="walk-before-the-deploy-ended",
+        ),
+        pytest.param({"deploys": []}, "Deploy staging v0.0.2", REDEPLOY_HINT, id="no-staging-deploy"),
+        pytest.param(
+            {
+                "deploys": [
+                    workflow_run(
+                        EVIDENCE_STAGING_RUN,
+                        "Deploy staging v0.0.2",
+                        "2026-10-20T04:09:11Z",
+                        "2026-10-20T04:16:30Z",
+                        conclusion="failure",
+                    )
+                ]
+            },
+            "Deploy staging v0.0.2",
+            REDEPLOY_HINT,
+            id="staging-deploy-failed",
+        ),
+        pytest.param(
+            {
+                "deploys": [
+                    workflow_run(
+                        EVIDENCE_STAGING_RUN, "Deploy staging v0.0.2", "2026-10-20T04:09:11Z", "2026-10-20T04:16:30Z"
+                    ),
+                    workflow_run(3031, "Deploy staging v0.0.3", "2026-10-20T04:16:00Z", "2026-10-20T04:25:00Z"),
+                ]
+            },
+            "Deploy staging v0.0.3",
+            REDEPLOY_HINT,
+            id="another-release-deployed-during-the-walk",
+        ),
+        pytest.param({"ci": []}, "ci-required", REDEPLOY_HINT, id="no-tag-ci-run"),
+    ],
+)
+def test_prod_refuses_a_tag_whose_staging_evidence_is_incomplete(
+    ceremony: Ceremony, evidence: dict[str, object], missing: str, hint: str
+) -> None:
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env=staging_evidence(sha, **evidence),
+    )
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert not dispatched(calls), "a refused promotion dispatches nothing: no staging redeploy and no prod deploy"
+    assert missing in result.stderr, result.stderr
+    assert hint in result.stderr, "the refusal must name the command that produces the missing fact"
+
+
+def test_prod_refuses_staging_evidence_from_before_the_tag_named_this_commit(ceremony: Ceremony) -> None:
+    """--auto deletes a tag whose own CI never went green (#940), and a later release can take
+    the same number at another commit. deploy-release.yml and walk-release.yml run from main,
+    so the head_sha of their runs never names the commit of the tag. Only the timeline binds a
+    staging run to the commit: it must start after the tag's own CI run at that commit."""
+    reused_from = ceremony.merges["11"]
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+    evidence = staging_evidence(
+        sha,
+        ci=[
+            ci_run(2019, "v0.0.2", reused_from, "2026-10-19T10:00:00Z"),
+            ci_run(EVIDENCE_TAG_RUN, "v0.0.2", sha, "2026-10-20T04:05:21Z"),
+        ],
+        deploys=[workflow_run(3029, "Deploy staging v0.0.2", "2026-10-19T10:05:00Z", "2026-10-19T10:12:00Z")],
+        walks=[
+            workflow_run(
+                EVIDENCE_WALK_RUN,
+                "Walk Deploy staging v0.0.2",
+                "2026-10-19T10:12:05Z",
+                "2026-10-19T10:14:00Z",
+                event="workflow_run",
+            )
+        ],
+    )
+
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha, extra_env=evidence)
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert not dispatched(calls)
+    assert f"run {EVIDENCE_TAG_RUN}" in result.stderr, "the refusal must name the CI run that anchors the commit"
+    assert REDEPLOY_HINT in result.stderr, result.stderr
+
+
+def test_prod_on_a_tag_that_does_not_exist_is_refused_before_anything_is_tagged(ceremony: Ceremony) -> None:
+    """A production promotion needs a tag that staging verified. A new number has no staging
+    evidence, so --prod refuses it and names the staging release that produces the evidence."""
+    sha = head_sha(ceremony)
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--prod", "--owner-approved-sha", sha, extra_env=staging_evidence(sha))
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "does not exist on origin" in result.stderr, result.stderr
+    assert 'tools/cut_release.sh v0.0.2 --message "..."' in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before, "a refused promotion must not claim the tag number"
+    assert not dispatched(calls)
+
+
+# --- #1412 R4: a release declares its data replays and its rollback tag ---------------------
+# #1270: a projector fix reached main, and the next backtest ran on rows the old projector
+# wrote. A release whose diff changes a parser, mapping or projector identity must name the
+# replay that rebuilds those rows, and its tag records the replays and the rollback tag.
+
+PARSER_V3 = 'PARSER_VERSION_HISTORY = ("demo-parser:v1", "demo-parser:v2", "demo-parser:v3")\n'
+PARSER_REPLAY = {"identity": "demo-parser", "replay": "demo_reparse_job over every stored fetch"}
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "identity"),
+    [
+        pytest.param(DEMO_PARSER, PARSER_V2, "demo-parser", id="parser-version"),
+        pytest.param(
+            DEMO_PROJECTOR,
+            PROJECTOR_V1.replace("shares * close", "shares * close * 10"),
+            "demo-projector",
+            id="projector",
+        ),
+    ],
+)
+def test_a_version_change_without_a_declared_replay_is_refused_before_the_tag_push(
+    ceremony: Ceremony, path: str, text: str, identity: str
+) -> None:
+    ceremony.write(path, text)
+    ceremony.commit("change a data version (#13)")
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert identity in result.stderr and DECLARATION in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before, "an undeclared replay must fail before the tag push claims the number"
+    assert not dispatched(calls)
+
+
+def test_a_declared_replay_lets_the_release_through_and_the_tag_records_it(ceremony: Ceremony) -> None:
+    ceremony.write(DEMO_PARSER, PARSER_V2)
+    ceremony.write(DECLARATION, declaration(PARSER_REPLAY))
+    ceremony.commit("parser v2 with its replay (#13)")
+
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    lines = ceremony.tag_message("v0.0.2").splitlines()
+    assert f"Replay: demo-parser: {PARSER_REPLAY['replay']}" in lines, lines
+    assert "Rollback-Tag: v0.0.1" in lines, lines
+    assert len(staging_dispatches(calls)) == 1
+
+
+def test_a_replay_declared_for_an_earlier_release_does_not_cover_a_new_change(ceremony: Ceremony) -> None:
+    """The declaration file keeps old entries. Only an entry that the base release does not
+    hold belongs to this release; otherwise one old entry would cover every later bump."""
+    ceremony.write(DEMO_PARSER, PARSER_V2)
+    ceremony.write(DECLARATION, declaration(PARSER_REPLAY))
+    ceremony.commit("parser v2 with its replay (#13)")
+    ceremony.tag("v0.0.2")
+    ceremony.write(DEMO_PARSER, PARSER_V3)
+    ceremony.commit("parser v3 (#14)")
+
+    result, calls = ceremony.run("v0.0.3")
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "demo-parser" in result.stderr, result.stderr
+    assert "v0.0.3" not in ceremony.remote_tags()
+    assert not dispatched(calls)
+
+
+def test_comments_and_docstrings_are_not_a_version_change(ceremony: Ceremony) -> None:
+    ceremony.write(
+        DEMO_PROJECTOR,
+        PROJECTOR_V1.replace('"""Demo projector."""', '"""Demo projector, reworded."""') + "# a comment\n",
+    )
+    ceremony.write(DEMO_PARSER, "# The parser vintages, oldest first.\n" + PARSER_V1)
+    ceremony.commit("reword (#13)")
+
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    lines = ceremony.tag_message("v0.0.2").splitlines()
+    assert "Replay: none" in lines and "Rollback-Tag: v0.0.1" in lines, lines
+
+
+def test_a_release_without_its_replay_declaration_is_refused(ceremony: Ceremony) -> None:
+    """A deleted declaration must not turn the check into a silent pass."""
+    ceremony.remove(DECLARATION)
+    ceremony.commit("drop the declaration (#13)")
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert DECLARATION in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before
+    assert not dispatched(calls)

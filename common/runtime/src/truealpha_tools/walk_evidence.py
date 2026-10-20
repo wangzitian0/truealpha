@@ -43,8 +43,12 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from infra2_sdk.deploy import HttpGet, ReleaseIdentityError, default_http_get, read_deployed_release
+# The SDK is imported where the deployed release is read, not here (#1412). `staging_evidence`
+# reuses `find_walk` from `cut_release.sh --prod`, which runs on a bare `python3` without the SDK.
+if TYPE_CHECKING:
+    from infra2_sdk.deploy import HttpGet
 
 WALK_STEP_NAME = "Walk the deployed surface"
 # Query the walk workflow's OWN runs, not every run in the repository: on a
@@ -244,10 +248,14 @@ def resolve_release(url: str, release: str, *, http_get: HttpGet | None = None) 
         return release
     if not url:
         raise MissingWalkEvidence("one of --release or --url is required")
+    from infra2_sdk.deploy import default_http_get, read_deployed_release
+
     return read_deployed_release(url, http_get or default_http_get())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from infra2_sdk.deploy import ReleaseIdentityError
+
     args = _parser().parse_args(argv)
     try:
         release = resolve_release(args.url, args.release)
