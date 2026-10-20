@@ -35,6 +35,7 @@ import psycopg
 from truealpha_contracts.access import AccessContext
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
 from truealpha_contracts.issuer_modules_mart import (
+    NO_SERVED_ROW,
     AnalystRatings,
     IssuerModuleReader,
     PostgresIssuerModuleReader,
@@ -62,8 +63,6 @@ _STRATEGY_FACTOR_VERSION = "large_model_value_v0"
 
 _SUPPLY_CHAIN_TITLE = "Supply-chain exposure"
 _ANALYST_TITLE = "Analyst consensus"
-#: The served head holds no row of the module for this issuer.
-NO_SERVED_ROW = "no_row_in_served_head"
 #: The module read failed; the section says so instead of reading as "no row".
 MART_READ_FAILED = "mart_read_failed"
 #: The served row is later than the report's cutoff: it was not knowable at the cutoff.

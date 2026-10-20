@@ -16,7 +16,7 @@ numeric, never a float.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Final, Literal, Protocol
 
 import psycopg
 from psycopg.rows import dict_row
@@ -120,6 +120,20 @@ class AnalystRatings(_ModuleRow):
     buy_count: int
     hold_count: int
     sell_count: int
+
+
+#: The served head holds no row of the module for the issuer.
+NO_SERVED_ROW: Final = "no_row_in_served_head"
+
+
+class IssuerModuleUnavailable(BaseModel):
+    """The typed answer when the served head holds no row of a module for the issuer."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    issuer_id: str
+    module: Literal["supply_chain_exposure", "analyst_ratings"]
+    reason: Literal["no_row_in_served_head"] = NO_SERVED_ROW
 
 
 class IssuerModuleReader(Protocol):

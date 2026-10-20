@@ -1,12 +1,15 @@
-"""The MCP endpoint — see #348, #758, and #1104.
+"""The MCP endpoint — see #348, #758, #1104 and #42.
 
-Registers eight read-only tools: `strategy_run` (#347's provisional
+Registers eleven read-only tools: `strategy_run` (#347's provisional
 `StrategyRunReadRepository`), `topt_gppe` (#405/#433's TOPT GPPE + quality
 read), `research_report` (#369's deterministic report assembler),
+`research_report_markdown` (#42: the same report rendered by `render_report_markdown`),
 `research_card` (#372's deterministic card renderer), `company_360_profile`
 (#1104's issuer 360 profile), `theme_purity_leaderboard` (#1104's theme purity
 leaderboard), `etf_virtual_company_profile` (#1104's virtual company profile),
-and `governed_backtest` (#758's backtest execution runs and valuations).
+`issuer_supply_chain_exposure` and `issuer_analyst_ratings` (#42: modules 3 and 4,
+the served-head rows the App shows), and `governed_backtest` (#758's backtest
+execution runs and valuations).
 
 No browser session exists for MCP callers today, so `AccessContext` is
 derived server-side via `AuthenticationMethod.SERVICE_IDENTITY` rather than
@@ -16,15 +19,24 @@ accepted from the client — the tool schema has no role/tenant/tier argument.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.issuer_modules_mart import (
+    AnalystRatings,
+    IssuerModuleReader,
+    IssuerModuleUnavailable,
+    PostgresIssuerModuleReader,
+    SupplyChainExposure,
+)
 from truealpha_contracts.research_cards import CardKind, ResearchCard, build_card
 from truealpha_contracts.research_report import (
     ReportSectionKind,
@@ -33,6 +45,7 @@ from truealpha_contracts.research_report import (
     ResearchReportKind,
     ResearchReportRequest,
     build_research_report,
+    render_report_markdown,
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
@@ -78,6 +91,17 @@ class ResearchReportToolRequest(BaseModel):
     title: str | None = None
 
 
+class ResearchReportMarkdown(BaseModel):
+    """A research report rendered as Markdown (#42). `report_id` is the content address of
+    the report the text renders, the same id `research_report` returns for the request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: str
+    schema_version: str
+    markdown: str
+
+
 class ResearchCardToolRequest(ResearchReportToolRequest):
     """The report request this card is built from, plus the card's own kind. `build_card`
     (#372) takes an already-assembled `ResearchReport` and nothing else, so this tool
@@ -85,6 +109,12 @@ class ResearchCardToolRequest(ResearchReportToolRequest):
     it — never queries mart directly and computes no new metric of its own."""
 
     card_kind: CardKind
+
+
+class IssuerModuleToolRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    issuer_id: str
 
 
 class CompanyProfileToolRequest(BaseModel):
@@ -140,6 +170,38 @@ def _default_research_report_repository() -> ResearchReadPort:
     """#369: the research-report reader wraps the same strategy-run source as
     `_default_repository`, so it is the mart reader, always."""
     return MartResearchReadRepository(database_url=settings.database_url)
+
+
+def _default_issuer_module_reader() -> IssuerModuleReader:
+    """#42: modules 3 and 4, the served-head row only (`issuer_modules_mart`)."""
+    return PostgresIssuerModuleReader(database_url=settings.database_url)
+
+
+#: The text of a failed module read. The database detail (host, port, role) goes to the
+#: service log only, never to the caller.
+MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
+
+
+def _module_row(
+    read: Callable[[str], SupplyChainExposure | AnalystRatings | None], issuer_id: str, tool: str
+) -> SupplyChainExposure | AnalystRatings | None:
+    """One module read for a tool. A failed read is a tool error with a fixed text."""
+    try:
+        return read(issuer_id)
+    except psycopg.Error:
+        logger.exception("%s: the mart read failed", tool)
+        raise ToolError(MART_READ_FAILED_MESSAGE) from None
+
+
+def _report_request(request: ResearchReportToolRequest) -> ResearchReportRequest:
+    return ResearchReportRequest(
+        report_kind=request.report_kind,
+        target_entity_ids=request.target_entity_ids,
+        cutoff_at=request.cutoff_at,
+        section_kinds=request.section_kinds,
+        strategy_id=request.strategy_id,
+        title=request.title,
+    )
 
 
 class CompanyProfileReader(Protocol):
@@ -879,6 +941,7 @@ def build_mcp_server(
     theme_purity_reader: ThemePurityLeaderboardReader | None = None,
     etf_profile_reader: EtfProfileReader | None = None,
     backtest_reader: BacktestReader | None = None,
+    issuer_module_reader: IssuerModuleReader | None = None,
 ) -> FastMCP:
     """Builds the MCP server. Caller-supplied repositories are for tests only."""
     # `streamable_http_path="/"`: main.py mounts this app at "/mcp"; FastMCP's own
@@ -914,6 +977,9 @@ def build_mcp_server(
         etf_profile_reader if etf_profile_reader is not None else _default_etf_profile_reader()
     )
     active_backtest: BacktestReader = backtest_reader if backtest_reader is not None else _default_backtest_reader()
+    active_modules: IssuerModuleReader = (
+        issuer_module_reader if issuer_module_reader is not None else _default_issuer_module_reader()
+    )
 
     @server.tool(
         name="strategy_run",
@@ -942,15 +1008,24 @@ def build_mcp_server(
         ),
     )
     def research_report(request: ResearchReportToolRequest) -> ResearchReport:
-        report_request = ResearchReportRequest(
-            report_kind=request.report_kind,
-            target_entity_ids=request.target_entity_ids,
-            cutoff_at=request.cutoff_at,
-            section_kinds=request.section_kinds,
-            strategy_id=request.strategy_id,
-            title=request.title,
+        return build_research_report(_report_request(request), active_research, context=_service_access_context())
+
+    @server.tool(
+        name="research_report_markdown",
+        description=(
+            "Render the research report of a request (the same request as research_report) as "
+            "deterministic Markdown: one table per section with value, period, availability, "
+            "confidence, factor version and trace. Every printed value comes from the report; "
+            "the renderer computes nothing. report_id is the id research_report returns."
+        ),
+    )
+    def research_report_markdown(request: ResearchReportToolRequest) -> ResearchReportMarkdown:
+        report = build_research_report(_report_request(request), active_research, context=_service_access_context())
+        return ResearchReportMarkdown(
+            report_id=report.report_id,
+            schema_version=report.schema_version,
+            markdown=render_report_markdown(report),
         )
-        return build_research_report(report_request, active_research, context=_service_access_context())
 
     @server.tool(
         name="research_card",
@@ -962,15 +1037,7 @@ def build_mcp_server(
         ),
     )
     def research_card(request: ResearchCardToolRequest) -> ResearchCard:
-        report_request = ResearchReportRequest(
-            report_kind=request.report_kind,
-            target_entity_ids=request.target_entity_ids,
-            cutoff_at=request.cutoff_at,
-            section_kinds=request.section_kinds,
-            strategy_id=request.strategy_id,
-            title=request.title,
-        )
-        report = build_research_report(report_request, active_research, context=_service_access_context())
+        report = build_research_report(_report_request(request), active_research, context=_service_access_context())
         return build_card(report, request.card_kind, title=request.title)
 
     @server.tool(
@@ -998,6 +1065,36 @@ def build_mcp_server(
     )
     def etf_virtual_company_profile(request: EtfProfileToolRequest) -> dict[str, Any]:
         return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
+
+    @server.tool(
+        name="issuer_supply_chain_exposure",
+        description=(
+            "Read module 3, the supply-chain exposure of an issuer: exposure score, direct partners, "
+            "supplier and customer counts and the largest partner share, with cutoff, confidence, "
+            "extractor, run_id and reason codes. Only a run that mart.served_head serves is read; the "
+            "App shows the same row. No served row gives a typed unavailable answer."
+        ),
+    )
+    def issuer_supply_chain_exposure(request: IssuerModuleToolRequest) -> SupplyChainExposure | IssuerModuleUnavailable:
+        row = _module_row(active_modules.supply_chain_exposure, request.issuer_id, "issuer_supply_chain_exposure")
+        if not isinstance(row, SupplyChainExposure):
+            return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="supply_chain_exposure")
+        return row
+
+    @server.tool(
+        name="issuer_analyst_ratings",
+        description=(
+            "Read module 4, the analyst consensus of an issuer: consensus rating (1 to 5), analyst count "
+            "and buy, hold and sell counts, with cutoff, confidence, extractor, run_id and reason codes. "
+            "Only a run that mart.served_head serves is read; the App shows the same row. No served row "
+            "gives a typed unavailable answer."
+        ),
+    )
+    def issuer_analyst_ratings(request: IssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
+        row = _module_row(active_modules.analyst_ratings, request.issuer_id, "issuer_analyst_ratings")
+        if not isinstance(row, AnalystRatings):
+            return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="analyst_ratings")
+        return row
 
     @server.tool(
         name="governed_backtest",

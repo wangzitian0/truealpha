@@ -96,6 +96,18 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
     "theme_purity_leaderboard": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},
     "etf_virtual_company_profile": {"request": {"fund_id": "etf:series:S000101292"}},
     "governed_backtest": {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
+    # #42: the same ranking request as research_report; the markdown renders that report.
+    "research_report_markdown": {
+        "request": {
+            "report_kind": "theme_ranking",
+            "target_entity_ids": ["issuer:ranking-scope-unused"],
+            "cutoff_at": _CUTOFF,
+        }
+    },
+    # #42: modules 3 and 4 answer no row here (nothing is seeded for this id); the walk
+    # covers the typed unavailable answer, and test_mcp_module_tools.py covers a served row.
+    "issuer_supply_chain_exposure": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "issuer_analyst_ratings": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
 }
 
 
