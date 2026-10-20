@@ -38,6 +38,8 @@ import json
 import sys
 from pathlib import Path
 
+from truealpha_tools.import_graph import ancestors, edges, module_index, scan
+
 ROOT = Path(__file__).resolve().parents[4]
 #: tree name -> source root. The tree name is also the top-level package it holds,
 #: which is what lets a module be attributed back to its tree for the per-tree count.
@@ -63,45 +65,15 @@ def _tree_of(module: str) -> str:
 
 
 def _modules() -> dict[str, Path]:
-    modules: dict[str, Path] = {}
-    for src in TREES.values():
-        for path in src.rglob("*.py"):
-            parts = list(path.relative_to(src).with_suffix("").parts)
-            if parts[-1] == "__init__":
-                parts = parts[:-1]
-            modules[".".join(parts)] = path
-    return modules
+    return module_index(TREES.values())
 
 
 def _imports(tree: ast.AST, modules: dict[str, Path]) -> set[str]:
-    found: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(PACKAGE_PREFIXES):
-            found.add(node.module)
-            for alias in node.names:
-                # `from package import submodule` — resolving module+name against
-                # the module set is what a naive walker misses (#429's census
-                # under-reported without it).
-                candidate = f"{node.module}.{alias.name}"
-                if candidate in modules:
-                    found.add(candidate)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.startswith(PACKAGE_PREFIXES):
-                    found.add(alias.name)
-    # Registry entry points (#72): a source registration names its route builder as
-    # "data_engine.<module>:<function>", resolved at plan time. That string IS a wiring
-    # — the composition root reaches the adapter through it — so the walk follows it.
-    # Likewise a lane registered by name in `data_engine.lanes.LANE_MODULES` (#731): the
-    # root imports it through `import_module`, so the bare module-name string is the edge.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            module_name, sep, attribute = node.value.partition(":")
-            if sep and module_name in modules and attribute.isidentifier():
-                found.add(module_name)
-            elif not sep and node.value in modules:
-                found.add(node.value)
-    return found
+    """The edge rule is shared with the diff scope (`import_graph.py`, #1412): one definition
+    of "module A depends on module B". It covers `from package import submodule` (#429's
+    census under-reported without it), registry strings "data_engine.<module>:<function>"
+    (#72) and bare lane names in `data_engine.lanes.LANE_MODULES` (#731)."""
+    return edges(scan(tree), PACKAGE_PREFIXES, modules)
 
 
 def unreachable() -> tuple[dict[str, int], list[str]]:
@@ -116,23 +88,18 @@ def unreachable() -> tuple[dict[str, int], list[str]]:
         for path in source.rglob("*.py"):
             roots |= _imports(ast.parse(path.read_text()), modules)
 
-    def with_ancestors(name: str) -> list[str]:
-        # Importing a.b.c executes a/__init__ and a.b/__init__, whose own imports
-        # are alive — a walker that skips ancestors counts modules reachable only
-        # through a package __init__ as dead, and this tool guides deletions
-        # (Copilot Medium on #601).
-        parts = name.split(".")
-        return [".".join(parts[: i + 1]) for i in range(len(parts))]
-
+    # Importing a.b.c executes a/__init__ and a.b/__init__, whose own imports are alive —
+    # a walker that skips ancestors counts modules reachable only through a package
+    # __init__ as dead, and this tool guides deletions (Copilot Medium on #601).
     seen: set[str] = set()
-    stack = [candidate for root in roots for candidate in with_ancestors(root) if candidate in modules]
+    stack = [candidate for root in roots for candidate in ancestors(root) if candidate in modules]
     while stack:
         current = stack.pop()
         if current in seen:
             continue
         seen.add(current)
         for edge in edges.get(current, ()):
-            for candidate in with_ancestors(edge):
+            for candidate in ancestors(edge):
                 if candidate in modules and candidate not in seen:
                     stack.append(candidate)
 
