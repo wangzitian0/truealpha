@@ -364,14 +364,15 @@ def _resolve_listing_mics(
     # 2. Override/enrich with landed QQQ constituents (Nasdaq-100 = xnas)
     if default_mic != "xnas" and upper_tickers:
         try:
-            qqq_rows = connection.execute(
-                """
-                select distinct upper(ticker)
-                from staging.etf_constituent_facts
-                where etf_symbol = 'qqq' and upper(ticker) = any(%s)
-                """,
-                (upper_tickers,),
-            ).fetchall()
+            with connection.transaction():
+                qqq_rows = connection.execute(
+                    """
+                    select distinct upper(ticker)
+                    from staging.etf_constituent_facts
+                    where etf_symbol = 'qqq' and upper(ticker) = any(%s)
+                    """,
+                    (upper_tickers,),
+                ).fetchall()
             for (t,) in qqq_rows:
                 mics[str(t).upper()] = "xnas"
         except Exception:  # noqa: BLE001
@@ -380,20 +381,24 @@ def _resolve_listing_mics(
     # 1. Authoritative KG `staging.entity_aliases` (`scheme = 'mic-ticker'`)
     if upper_tickers:
         try:
-            alias_rows = connection.execute(
-                """
-                select alias_value
-                from staging.entity_aliases
-                where scheme = 'mic-ticker'
-                  and split_part(upper(alias_value), ':', 2) = any(%s)
-                order by known_from desc
-                """,
-                (upper_tickers,),
-            ).fetchall()
+            with connection.transaction():
+                alias_rows = connection.execute(
+                    """
+                    select value
+                    from staging.entity_aliases
+                    where scheme = 'mic-ticker'
+                      and split_part(upper(value), ':', 2) = any(%s)
+                    order by transaction_time desc
+                    """,
+                    (upper_tickers,),
+                ).fetchall()
+            seen_alias: set[str] = set()
             for (alias_val,) in alias_rows:
                 mic_part, _, ticker_part = str(alias_val).partition(":")
-                if mic_part and ticker_part:
-                    mics.setdefault(ticker_part.upper(), mic_part.lower())
+                t_up = ticker_part.upper()
+                if mic_part and t_up and t_up not in seen_alias:
+                    seen_alias.add(t_up)
+                    mics[t_up] = mic_part.lower()
         except Exception:  # noqa: BLE001
             pass
 

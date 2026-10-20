@@ -294,7 +294,17 @@ def test_k6_d4_sp500_resolves_aapl_to_xnas_and_jpm_to_xnys() -> None:
         def fetchall(self) -> list[tuple[Any, ...]]:
             return self._rows
 
+    class _FakeTx:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
     class _FakeConn:
+        def transaction(self) -> _FakeTx:
+            return _FakeTx()
+
         def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _FakeResult:
             if "from staging.etf_constituent_facts" in sql and "select ticker, cik, figi" in sql:
                 return _FakeResult(
