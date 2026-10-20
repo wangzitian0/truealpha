@@ -693,7 +693,10 @@ def run(root: Path, steps: Sequence[str], *, full: bool, base: str, dry_run: boo
         return 2
     exit_code = 0
     for command in commands:
-        shown = " ".join(command.argv[:10]) + (f" ... (+{len(command.argv) - 10})" if len(command.argv) > 10 else "")
+        # A dry run prints the whole command: it is the plan that a caller reads. A real run
+        # shortens a long file list, because the run itself names each file it checks.
+        argv = command.argv
+        shown = " ".join(argv) if dry_run or len(argv) <= 10 else " ".join(argv[:10]) + f" ... (+{len(argv) - 10})"
         print(f"== [{command.step}] {shown}" + (f"  (in {command.cwd})" if command.cwd != "." else ""), flush=True)
         if dry_run:
             continue

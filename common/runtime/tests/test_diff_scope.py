@@ -404,3 +404,13 @@ def test_the_entry_points_ignore_an_outer_make_full_run(worktree: Path, monkeypa
     planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
     assert "diff-scope: FULL=1" not in result.stdout, result.stdout
     assert any("test_walk_evidence.py" in line for line in planned), planned
+
+
+def test_a_dry_run_prints_every_selected_file(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The entry-point tests read the plan from a dry run. #1431 made one change reach more
+    than ten test files, the printed command was cut after ten, and main went red."""
+    (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    assert diff_scope.run(repo, ["test"], full=False, base="base", dry_run=True, entry="t") == 0
+    [line] = [x for x in capsys.readouterr().out.splitlines() if "uv run pytest" in x]
+    selected = select(repo, "base").pytest
+    assert len(selected) > 10 and all(f" {path}" in line for path in selected), line
