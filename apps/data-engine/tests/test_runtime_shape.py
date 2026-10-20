@@ -11,6 +11,7 @@ an unreadable file that reads as zero, or a baseline that is not saved.
 from __future__ import annotations
 
 import functools
+import math
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,12 @@ from truealpha_contracts.environment_contract import CodeServerCapacity, load_en
 CAPACITY: CodeServerCapacity = load_environment_contract().code_server_capacity
 CEILING = CAPACITY.ceiling_mib * MIB
 BOOT = 1_760_000_000
+#: A quarter of the declared ceiling: far below the limit, whatever the contract declares.
+QUIET_PEAK_MIB = CAPACITY.ceiling_mib // 4
+#: The largest whole MiB at or below the utilization limit of the declared ceiling.
+LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * CAPACITY.utilization_limit)
+#: A synthetic capacity for the exact-boundary test: 70% of 2000 MiB is exactly 1400 MiB.
+SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000, "utilization_limit": 0.7})
 TICK = "2026-10-21T06:30:00+00:00"
 TICKS_PER_SECOND = os.sysconf("SC_CLK_TCK")
 #: The reader as the deployed code has it. A test patches the module attribute, never this name.
@@ -36,7 +43,7 @@ def _tree(
     root: Path,
     *,
     memory_max: str | None = str(CEILING),
-    peak: int | None = 400 * MIB,
+    peak: int | None = QUIET_PEAK_MIB * MIB,
     oom_kill: int | None = 0,
     start_ticks: int | None = 100 * TICKS_PER_SECOND,
     command: str = "dagster api grpc",
@@ -63,8 +70,14 @@ def _reading(tmp_path: Path, **tree: Any) -> Reading:
     return runtime_shape.read(cgroup, proc)
 
 
-def _judge(reading: Reading, *, baseline: Baseline | None = None, release: str = "sha256:a") -> runtime_shape.Judgement:
-    return runtime_shape.judge(reading, baseline=baseline, release=release, capacity=CAPACITY)
+def _judge(
+    reading: Reading,
+    *,
+    baseline: Baseline | None = None,
+    release: str = "sha256:a",
+    capacity: CodeServerCapacity = CAPACITY,
+) -> runtime_shape.Judgement:
+    return runtime_shape.judge(reading, baseline=baseline, release=release, capacity=capacity)
 
 
 STARTED = BOOT + 100
@@ -146,10 +159,13 @@ def test_the_deployed_paths_are_the_container_cgroup_and_process_table() -> None
 
 
 def test_a_quiet_night_is_green_and_leaves_the_baseline_of_the_next_check(tmp_path: Path) -> None:
-    verdict = _judge(_reading(tmp_path, peak=400 * MIB, oom_kill=0))
+    verdict = _judge(_reading(tmp_path, peak=QUIET_PEAK_MIB * MIB, oom_kill=0))
 
     assert verdict.red == ()
-    assert verdict.summary == "no OOM kill since the last check; peak 400 of 1536 MiB (26%)"
+    assert verdict.summary == (
+        f"no OOM kill since the last check; peak {QUIET_PEAK_MIB} of {CAPACITY.ceiling_mib} MiB"
+        f" ({QUIET_PEAK_MIB / CAPACITY.ceiling_mib:.0%})"
+    )
     assert verdict.baseline == Baseline(oom_kill=0, started=STARTED, release="sha256:a")
 
 
@@ -205,24 +221,25 @@ def test_a_restart_without_a_new_release_is_red_because_the_kill_of_the_server_l
 
 @pytest.mark.parametrize(
     ("peak_mib", "red"),
-    [(1075, False), (1076, True), (1536, True), (0, False)],
+    [(LIMIT_MIB, False), (LIMIT_MIB + 1, True), (CAPACITY.ceiling_mib, True), (0, False)],
+    ids=["at-the-limit", "one-mib-above", "at-the-ceiling", "nothing"],
 )
-def test_a_peak_above_seventy_percent_of_the_ceiling_is_red(tmp_path: Path, peak_mib: int, red: bool) -> None:
-    """70% of 1536 MiB is 1075.2 MiB. A peak at the limit is green; one MiB above it is red."""
+def test_a_peak_above_the_utilization_limit_of_the_ceiling_is_red(tmp_path: Path, peak_mib: int, red: bool) -> None:
+    """A peak at the limit is green; one MiB above it is red. The limit comes from the declared capacity."""
     verdict = _judge(_reading(tmp_path, peak=peak_mib * MIB))
 
     assert bool(verdict.red) is red
     if red:
-        assert verdict.red[0].startswith(f"peak {peak_mib} of 1536 MiB")
-        assert verdict.red[0].endswith("the limit is 70%")
+        assert verdict.red[0].startswith(f"peak {peak_mib} of {CAPACITY.ceiling_mib} MiB")
+        assert verdict.red[0].endswith(f"the limit is {CAPACITY.utilization_limit:.0%}")
 
 
-def test_a_peak_exactly_at_seventy_percent_of_the_real_ceiling_is_green_and_one_byte_above_is_red(
-    tmp_path: Path,
-) -> None:
-    """The rule is `above 70%`. 1400 MiB of 2000 MiB is exactly 70%."""
-    at_the_limit = _judge(_reading(tmp_path / "a", memory_max=str(2000 * MIB), peak=1400 * MIB))
-    one_byte_above = _judge(_reading(tmp_path / "b", memory_max=str(2000 * MIB), peak=1400 * MIB + 1))
+def test_a_peak_exactly_at_the_limit_of_the_real_ceiling_is_green_and_one_byte_above_is_red(tmp_path: Path) -> None:
+    """The rule is `above` the limit. 70% of 2000 MiB is exactly 1400 MiB (a synthetic capacity)."""
+    at_the_limit = _judge(_reading(tmp_path / "a", memory_max=str(2000 * MIB), peak=1400 * MIB), capacity=SYNTHETIC)
+    one_byte_above = _judge(
+        _reading(tmp_path / "b", memory_max=str(2000 * MIB), peak=1400 * MIB + 1), capacity=SYNTHETIC
+    )
 
     assert at_the_limit.red == ()
     assert len(one_byte_above.red) == 1
@@ -230,16 +247,18 @@ def test_a_peak_exactly_at_seventy_percent_of_the_real_ceiling_is_green_and_one_
 
 
 def test_the_peak_is_judged_against_the_real_ceiling_not_the_declared_one(tmp_path: Path) -> None:
-    """A real ceiling above the declared one makes 1100 MiB 56%: green. 1100 MiB of 1536 MiB is 72%: red."""
-    assert _judge(_reading(tmp_path / "a", memory_max=str(2048 * MIB), peak=1100 * MIB)).red == ()
-    assert _judge(_reading(tmp_path / "b", memory_max=str(1536 * MIB), peak=1100 * MIB)).red != ()
+    """A peak above the limit of the declared ceiling is under the limit of a real ceiling twice as large."""
+    peak = (LIMIT_MIB + 1) * MIB
+    assert _judge(_reading(tmp_path / "a", memory_max=str(2 * CAPACITY.ceiling_mib * MIB), peak=peak)).red == ()
+    assert _judge(_reading(tmp_path / "b", memory_max=str(CAPACITY.ceiling_mib * MIB), peak=peak)).red != ()
 
 
 def test_a_real_ceiling_below_the_declared_one_is_red_for_that_reason(tmp_path: Path) -> None:
-    """Staging held 768 MiB while the run limit assumed 1536 MiB."""
-    verdict = _judge(_reading(tmp_path, memory_max=str(768 * MIB), peak=100 * MIB))
+    """Staging held half of the declared ceiling while the run limit assumed the whole."""
+    half = CAPACITY.ceiling_mib // 2
+    verdict = _judge(_reading(tmp_path, memory_max=str(half * MIB), peak=10 * MIB))
 
-    assert verdict.red == ("memory.max 768 MiB is below the declared ceiling 1536 MiB",)
+    assert verdict.red == (f"memory.max {half} MiB is below the declared ceiling {CAPACITY.ceiling_mib} MiB",)
 
 
 def test_no_ceiling_at_all_is_red(tmp_path: Path) -> None:
@@ -252,7 +271,7 @@ def test_every_reason_is_reported_not_only_the_first(tmp_path: Path) -> None:
     baseline = Baseline(oom_kill=0, started=STARTED, release="sha256:a")
 
     verdict = _judge(
-        _reading(tmp_path, memory_max=str(768 * MIB), peak=768 * MIB, oom_kill=2),
+        _reading(tmp_path, memory_max=str(CEILING // 2), peak=CEILING // 2, oom_kill=2),
         baseline=baseline,
     )
 

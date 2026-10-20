@@ -17,7 +17,7 @@ are also what makes each lane statically reachable for `tools/reachability_ratch
 
 Every job runs in the in-process executor (#1467). The code server container holds the gRPC server
 and every run process in one memory cgroup. The default executor starts one more process per step,
-and each process that imports this module holds about 230 MiB. One process per run is the premise of
+and each process that imports this module holds the size that the contract measured. One process per run is the premise of
 `code_server_capacity` in `environment_contract.v1.json`, which derives the run queue limit of
 `dagster.yaml`. No job has two steps that gain from running at the same time.
 

@@ -1,7 +1,7 @@
 """The demand side of the code server memory: the run queue and the executor (#1467).
 
 The gRPC server and every run process share the memory cgroup of one container. On 2026-10-20 the
-ceiling of 768 MiB was exceeded by three processes per run, and the kernel killed the container with
+ceiling of staging was exceeded by three processes per run, and the kernel killed the container with
 every run in it. These tests hold the demand under the declared capacity:
 
 1. `dagster.yaml` sets the run limit that `code_server_capacity` derives, and the limit fits inside
@@ -88,7 +88,7 @@ def test_one_more_run_than_the_limit_would_pass_the_utilization_limit() -> None:
 
 
 def test_the_default_queue_limit_of_dagster_does_not_fit_the_ceiling(tmp_path: Path) -> None:
-    """Without a `run_queue` block Dagster admits its own default. That demand exceeded the 768 MiB ceiling."""
+    """Without a `run_queue` block Dagster admits its own default. That demand exceeded the ceiling."""
     config = yaml.safe_load(DAGSTER_YAML.read_text(encoding="utf-8"))
     del config["run_queue"]
     (tmp_path / "dagster.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -113,7 +113,7 @@ def test_the_run_queue_leaves_room_for_the_run_that_a_waiting_run_waits_for() ->
 
 
 def test_every_deployed_job_runs_in_one_process() -> None:
-    """The default executor starts a process for every step: the 768 MiB container held three for one job."""
+    """The default executor starts a process for every step: one job held three."""
     assert CAPACITY.processes_per_run == 1
     deployed = _deployed_jobs()
     assert all(len(jobs) >= 15 for jobs in deployed.values()), "the scan found too few jobs to prove anything"
@@ -164,7 +164,7 @@ def test_a_job_that_waits_for_other_runs_has_the_waiting_tag_and_no_other_job_ha
 
 
 def test_the_declared_process_size_covers_a_fresh_import_of_the_composition_root() -> None:
-    """Each run process imports the composition root. The size grows with the image (768 MiB held it in July)."""
+    """Each run process imports the composition root. The size grows with the image."""
     completed = subprocess.run(  # noqa: S603 - the interpreter of this test run, a fixed program
         [sys.executable, "-I", "-c", _PEAK_RSS_PROGRAM], capture_output=True, text=True, check=True, timeout=120
     )

@@ -167,25 +167,48 @@ def test_a_job_declares_exactly_one_valid_run_time_basis(basis: dict[str, object
         JobRunTimeBasis.model_validate(basis)
 
 
+#: A fixed capacity for the tests of the derivation. It does not read the contract, so a new
+#: measurement in the contract cannot change what these tests expect of the formula.
+_BASE_CAPACITY: dict[str, object] = {
+    "description": "test",
+    "ceiling_mib": 1536,
+    "ceiling_source": "test",
+    "utilization_limit": 0.7,
+    "process_mib": 240,
+    "server_processes": 1,
+    "processes_per_run": 1,
+    "measured": {
+        "at": "2026-10-20",
+        "environment": "staging",
+        "method": "test",
+        "grpc_server_hwm_mib": 229.5,
+        "run_process_hwm_mib": 213.3,
+        "source": "test",
+    },
+}
+
+
 def _capacity(**changes: object) -> CodeServerCapacity:
-    """The real code server capacity with `changes` applied, validated again (#1467)."""
-    declared = load_environment_contract().code_server_capacity.model_dump()
-    return CodeServerCapacity.model_validate({**declared, **changes})
+    """The fixed capacity with `changes` applied, validated again (#1467)."""
+    return CodeServerCapacity.model_validate({**_BASE_CAPACITY, **changes})
 
 
-def test_the_run_limit_is_the_runs_that_fit_beside_the_server_inside_the_utilization_limit() -> None:
-    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. Three runs of 240 MiB fit in the other 835 MiB."""
+def test_the_declared_run_limit_is_the_largest_that_fits_inside_the_utilization_limit() -> None:
+    """Whatever the contract declares: the server and `max_concurrent_runs` runs fit, one more run does not."""
     capacity = load_environment_contract().code_server_capacity
+    per_run = capacity.processes_per_run * capacity.process_mib
+    held = capacity.server_processes * capacity.process_mib + capacity.max_concurrent_runs * per_run
 
-    assert capacity.usable_mib == 1075
-    assert capacity.max_concurrent_runs == 3
-    assert capacity.max_waiting_runs == 2
-    held = (
-        capacity.server_processes + capacity.max_concurrent_runs * capacity.processes_per_run
-    ) * capacity.process_mib
-    assert held <= capacity.usable_mib < held + capacity.processes_per_run * capacity.process_mib, (
-        "the limit is the largest one that fits: one more run would pass the utilization limit"
-    )
+    assert capacity.usable_mib <= capacity.ceiling_mib * capacity.utilization_limit
+    assert held <= capacity.usable_mib < held + per_run
+    assert capacity.max_waiting_runs == capacity.max_concurrent_runs - 1 >= 1
+
+
+def test_the_run_limit_of_the_fixed_capacity_is_three() -> None:
+    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. Three runs of 240 MiB fit in the other 835 MiB."""
+    capacity = _capacity()
+
+    assert (capacity.usable_mib, capacity.max_concurrent_runs, capacity.max_waiting_runs) == (1075, 3, 2)
 
 
 @pytest.mark.parametrize(
