@@ -603,38 +603,103 @@ class Command:
     env: tuple[tuple[str, str], ...] = ()
 
 
-def plan(selection: Selection | None, steps: Sequence[str], *, web_tests_all: Sequence[str] = ()) -> list[Command]:
-    """The commands for each step. A `selection` of None means FULL=1: the whole repository."""
-    full = selection is None
-    commands: list[Command] = []
-    for step in steps:
-        if step == "lint":
-            paths: Sequence[str] = FULL_LINT_PATHS if selection is None else selection.lint
-            if paths:
-                commands.append(Command("lint", ("uv", "run", "ruff", "check", *paths)))
-                commands.append(Command("lint", ("uv", "run", "ruff", "format", "--check", *paths)))
-        elif step == "typecheck":
-            if selection is None:
-                commands.append(Command("typecheck", ("uv", "run", "mypy")))
-            elif selection.mypy:
-                mypy_path = (("MYPYPATH", os.pathsep.join(selection.mypy_path)),)
-                commands.append(Command("typecheck", ("uv", "run", "mypy", *selection.mypy), env=mypy_path))
-            if full or (selection is not None and selection.tsc):
-                commands.append(Command("typecheck", ("bun", "run", "typecheck"), WEB_ROOT))
-        elif step == "test":
-            if selection is None:
-                commands.append(Command("test", ("uv", "run", "pytest")))
-            elif selection.pytest:
-                commands.append(Command("test", ("uv", "run", "pytest", *selection.pytest)))
-            for test in web_tests_all if selection is None else selection.bun:
-                relative = str(PurePosixPath(test).relative_to(WEB_ROOT))
-                commands.append(Command("test", ("bun", "run", relative), WEB_ROOT))
-        elif step == "conformance":
-            if full or (selection is not None and selection.conformance):
-                commands.append(Command("conformance", ("uv", "run", "python", CONFORMANCE_CHECK, "--check")))
-        else:
-            raise ValueError(f"unknown step {step!r}: expected lint, typecheck, test or conformance")
-    return commands
+#: Each CI job has one toolchain, so it calls one language half: `make typecheck-python`
+#: in the Python job, `make typecheck-web` in the web job (#1412 L1). The laptop calls the
+#: whole step. One definition serves both.
+STEP_PARTS: dict[str, tuple[str, ...]] = {
+    "lint": ("lint",),
+    "typecheck": ("typecheck-python", "typecheck-web"),
+    "typecheck-python": ("typecheck-python",),
+    "typecheck-web": ("typecheck-web",),
+    "test": ("test-python", "test-web"),
+    "test-python": ("test-python",),
+    "test-web": ("test-web",),
+    "conformance": ("conformance",),
+}
+
+
+def plan(
+    selection: Selection | None,
+    steps: Sequence[str],
+    *,
+    web_tests_all: Sequence[str] = (),
+    pytest_files: Sequence[str] = (),
+) -> list[Command]:
+    """The commands for each step. A `selection` of None means FULL=1: the whole repository.
+
+    `pytest_files` replaces the whole pytest tree in FULL mode: a CI shard runs its own part.
+    """
+    unknown = [step for step in steps if step not in STEP_PARTS]
+    if unknown:
+        raise ValueError(f"unknown step {unknown[0]!r}: expected one of {sorted(STEP_PARTS)}")
+    context = _Plan(selection, web_tests_all, pytest_files)
+    parts = dict.fromkeys(part for step in steps for part in STEP_PARTS[step])
+    return [command for part in parts for command in _PART_COMMANDS[part](context)]
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """What one part needs to build its commands. `selection` is None in FULL mode."""
+
+    selection: Selection | None
+    web_tests_all: Sequence[str]
+    pytest_files: Sequence[str]
+
+
+def _lint(plan_: _Plan) -> list[Command]:
+    paths: Sequence[str] = FULL_LINT_PATHS if plan_.selection is None else plan_.selection.lint
+    if not paths:
+        return []
+    return [
+        Command("lint", ("uv", "run", "ruff", "check", *paths)),
+        Command("lint", ("uv", "run", "ruff", "format", "--check", *paths)),
+    ]
+
+
+def _typecheck_python(plan_: _Plan) -> list[Command]:
+    if plan_.selection is None:
+        return [Command("typecheck-python", ("uv", "run", "mypy"))]
+    mypy = plan_.selection.mypy
+    if not mypy:
+        return []
+    mypy_path = (("MYPYPATH", os.pathsep.join(plan_.selection.mypy_path)),)
+    return [Command("typecheck-python", ("uv", "run", "mypy", *mypy), env=mypy_path)]
+
+
+def _typecheck_web(plan_: _Plan) -> list[Command]:
+    if plan_.selection is None or plan_.selection.tsc:
+        return [Command("typecheck-web", ("bun", "run", "typecheck"), WEB_ROOT)]
+    return []
+
+
+def _test_python(plan_: _Plan) -> list[Command]:
+    if plan_.selection is None:
+        return [Command("test-python", ("uv", "run", "pytest", *plan_.pytest_files))]
+    files = plan_.selection.pytest
+    return [Command("test-python", ("uv", "run", "pytest", *files))] if files else []
+
+
+def _test_web(plan_: _Plan) -> list[Command]:
+    tests = plan_.web_tests_all if plan_.selection is None else plan_.selection.bun
+    return [
+        Command("test-web", ("bun", "run", str(PurePosixPath(test).relative_to(WEB_ROOT))), WEB_ROOT) for test in tests
+    ]
+
+
+def _conformance(plan_: _Plan) -> list[Command]:
+    if plan_.selection is None or plan_.selection.conformance:
+        return [Command("conformance", ("uv", "run", "python", CONFORMANCE_CHECK, "--check"))]
+    return []
+
+
+_PART_COMMANDS = {
+    "lint": _lint,
+    "typecheck-python": _typecheck_python,
+    "typecheck-web": _typecheck_web,
+    "test-python": _test_python,
+    "test-web": _test_web,
+    "conformance": _conformance,
+}
 
 
 def _missing_toolchain(root: Path, commands: Sequence[Command]) -> str | None:
@@ -676,7 +741,18 @@ def _print_selection(selection: Selection) -> None:
         print(f"diff-scope: note: {note}")
 
 
-def run(root: Path, steps: Sequence[str], *, full: bool, base: str, dry_run: bool, entry: str) -> int:
+def run(
+    root: Path,
+    steps: Sequence[str],
+    *,
+    full: bool,
+    base: str,
+    dry_run: bool,
+    entry: str,
+    pytest_files: Sequence[str] = (),
+) -> int:
+    if pytest_files and not full:
+        raise SystemExit("diff-scope: --files names a CI shard and needs --full (FULL=1)")
     started = time.monotonic()
     selection: Selection | None = None
     if full:
@@ -686,7 +762,7 @@ def run(root: Path, steps: Sequence[str], *, full: bool, base: str, dry_run: boo
         _print_selection(selection)
         if not selection.changed:
             print(f"diff-scope: nothing changed against {base}; no check selected. FULL=1 runs everything.")
-    commands = plan(selection, steps, web_tests_all=all_web_tests(root))
+    commands = plan(selection, steps, web_tests_all=all_web_tests(root), pytest_files=pytest_files)
     missing = _missing_toolchain(root, commands)
     if missing and not dry_run:
         print(f"diff-scope: {missing}", file=sys.stderr)
@@ -734,7 +810,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.add_argument("--root", type=Path, default=None)
         command.add_argument("--base", default=os.environ.get("BASE") or DEFAULT_BASE)
         if name == "run":
-            command.add_argument("steps", nargs="+", choices=("lint", "typecheck", "test", "conformance"))
+            command.add_argument("steps", nargs="+", choices=tuple(STEP_PARTS))
+            command.add_argument("--files", nargs="+", default=[], help="pytest files of one CI shard (FULL only)")
             command.add_argument("--full", action="store_true", default=os.environ.get("FULL", "") not in ("", "0"))
             command.add_argument(
                 "--dry-run", action="store_true", default=os.environ.get("DIFF_SCOPE_DRY_RUN", "") not in ("", "0")
@@ -745,7 +822,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "select":
         print(json.dumps(select(root, args.base).as_record(), indent=2, sort_keys=True))
         return 0
-    return run(root, args.steps, full=args.full, base=args.base, dry_run=args.dry_run, entry=args.entry)
+    return run(
+        root,
+        args.steps,
+        full=args.full,
+        base=args.base,
+        dry_run=args.dry_run,
+        entry=args.entry,
+        pytest_files=args.files,
+    )
 
 
 if __name__ == "__main__":

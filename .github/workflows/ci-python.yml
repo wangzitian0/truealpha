@@ -66,10 +66,13 @@ jobs:
       - run: python3 tools/reachability_ratchet.py --check
       - run: python3 tools/complexity_gate.py --check
       - run: python3 tools/sql_literal_gate.py
-      - run: uv run ruff check apps common
-      - run: uv run ruff format --check apps common
-      - run: uv run mypy
-      - run: uv run python common/contracts/conformance/export_issue58.py --check
+      # #1412 L1: the same make targets the laptop runs, with FULL=1. CI and the
+      # Makefile once defined lint twice and the Makefile rotted (it named libs/,
+      # which no longer existed, and nothing ran it). One definition now:
+      # tools/diff_scope.py; a broken target fails this job.
+      - run: make lint FULL=1
+      - run: make typecheck-python FULL=1
+      - run: make contract-conformance FULL=1
       # #759 environment manifests: fresh against the settings models and past the
       # infra2-sdk offline gate. No infrastructure involved.
       - run: uv run python tools/env_manifest.py --check
@@ -144,7 +147,8 @@ jobs:
             exit 1
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          uv run pytest "${FILES[@]}" --durations=0 --durations-min=0
+          # #1412 L1: through the make target the laptop runs; FILES is this shard.
+          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FULL=1 FILES="${FILES[*]}"
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -234,7 +238,8 @@ jobs:
           # file that did not exist yet. Both are log lines only, no time cost, and
           # keeping them on means ANY green run can refresh the shard weights —
           # which is what keeps them from going stale.
-          uv run pytest "${FILES[@]}" --durations=0 --durations-min=0
+          # #1412 L1: through the make target the laptop runs; FILES is this shard.
+          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FULL=1 FILES="${FILES[*]}"
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha

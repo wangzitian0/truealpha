@@ -66,7 +66,9 @@ jobs:
         run: python3 tools/check_app_layer_aggregation.py
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
+      # #1412 L1: the make target the laptop runs (tools/diff_scope.py), with FULL=1.
+      - run: make typecheck-web FULL=1
+        working-directory: .
       - name: Apply the migration chain (populated and empty)
         working-directory: .
         env:
@@ -93,15 +95,15 @@ jobs:
       # honoring the arming variable — the convention is that a skip branch
       # prints a line ending in "— SKIP", and no such line may appear here.
       - name: Run tests (DB-backed tests armed)
+        working-directory: .
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
           TRUEALPHA_REQUIRE_RUNTIME: "1"
         run: |
           set -euo pipefail
-          for f in tests/*.test.ts; do
-            echo "== $f"
-            bun run "$f"
-          done 2>&1 | tee /tmp/ci-web-tests.log
+          # #1412 L1: `make test-web FULL=1` runs every apps/app-web/tests/*.test.ts
+          # file, the same target the laptop runs (tools/diff_scope.py).
+          make test-web FULL=1 2>&1 | tee /tmp/ci-web-tests.log
           if grep -F -- "— SKIP" /tmp/ci-web-tests.log; then
             echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
             exit 1

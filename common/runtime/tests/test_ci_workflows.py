@@ -2812,8 +2812,8 @@ def test_the_split_web_jobs_still_run_every_web_check() -> None:
     # wrong one.
     everything = "\n".join(spec_text(spec) for job in jobs.values() for spec in job["steps"])
     for fragment, what in (
-        ("bun run typecheck", "the TypeScript typecheck"),
-        ("tests/*.test.ts", "the DB-backed test loop (#373: 13 suites once ran nowhere)"),
+        ("make typecheck-web FULL=1", "the TypeScript typecheck"),
+        ("make test-web FULL=1", "the DB-backed test loop (#373: 13 suites once ran nowhere)"),
         ("bun run build", "the production build"),
         ("walk-tree.mjs", "the frozen route-tree walk (#494)"),
         ("check_route_manifest.py", "the route-namespace manifest (#463)"),
@@ -3171,3 +3171,76 @@ def test_ci_python_survives_a_github_504_on_the_infra2_wheel() -> None:
         )
     # GREEN-WHILE-EMPTY guard: four ci-python jobs ran uv sync when #1248 was fixed.
     assert len(synced) >= 4, f"only {synced} run uv sync; four jobs did when #1248 was fixed"
+
+
+# --- #1412 L1: CI runs the make targets the laptop runs -----------------------
+
+#: (workflow, job, exact `run` line). One definition of each check: tools/diff_scope.py
+#: behind the Makefile. The Makefile once named libs/, which no longer existed, and
+#: nothing noticed, because CI defined lint separately and never ran the Makefile.
+CI_MAKE_TARGETS = (
+    (PYTHON, "gates", "make lint FULL=1"),
+    (PYTHON, "gates", "make typecheck-python FULL=1"),
+    (PYTHON, "gates", "make contract-conformance FULL=1"),
+    (WEB, "check", "make typecheck-web FULL=1"),
+)
+
+#: Commands that only the Makefile may spell out. A CI step that runs one of them
+#: directly is a second definition that can drift from what the laptop runs.
+DIRECT_COMMANDS = (
+    "ruff check",
+    "ruff format",
+    "uv run mypy",
+    "bun run typecheck",
+    "export_issue58.py",
+    "uv run pytest",
+)
+
+
+@pytest.mark.parametrize(("workflow", "job_id", "command"), CI_MAKE_TARGETS)
+def test_ci_runs_the_make_target_the_laptop_runs(workflow: str, job_id: str, command: str) -> None:
+    runs = [str(spec.get("run", "")).strip() for spec in job(workflow, job_id).get("steps", [])]
+    assert command in runs, f"{workflow}:{job_id} does not run `{command}`; it runs {runs}"
+
+
+def test_every_test_shard_and_the_web_tests_run_through_make() -> None:
+    shard_jobs = [job_id for job_id, spec in load(PYTHON)["jobs"].items() if "pytest_shard.py" in str(spec)]
+    assert len(shard_jobs) >= 2, f"expected the core and data-engine shard jobs, found {shard_jobs}"
+    for job_id in shard_jobs:
+        text = "\n".join(spec_text(spec) for spec in job(PYTHON, job_id)["steps"])
+        assert 'make test-python FULL=1 FILES="${FILES[*]}"' in text, f"{PYTHON}:{job_id} runs its shard without make"
+    web_tests = spec_text(job_step(WEB, "check", "Run tests (DB-backed tests armed)"))
+    assert "make test-web FULL=1" in web_tests, web_tests
+
+
+def test_no_ci_step_runs_a_check_that_the_makefile_owns() -> None:
+    offenders = []
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("ci-*.yml")):
+        for job_id, spec in load(path.name)["jobs"].items():
+            for index, item in enumerate(spec.get("steps") or []):
+                lines = [line.strip() for line in str(item.get("run", "")).splitlines()]
+                for line in lines:
+                    if line.startswith("#"):
+                        continue
+                    offenders += [f"{path.name}:{job_id}:{index}: {line}" for cmd in DIRECT_COMMANDS if cmd in line]
+    assert not offenders, f"CI defines these checks a second time instead of calling make: {offenders}"
+
+
+@pytest.mark.parametrize(
+    "target", sorted({command.split()[1] for _, _, command in CI_MAKE_TARGETS} | {"test-python", "test-web"})
+)
+def test_each_ci_make_target_runs_the_whole_repository_with_full(target: str) -> None:
+    env = {**os.environ, "DIFF_SCOPE_DRY_RUN": "1"}
+    env.pop("BASE", None)
+    result = subprocess.run(
+        ["make", "-s", target, "FULL=1"], cwd=REPO_ROOT, capture_output=True, text=True, env=env, check=False
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "diff-scope: FULL=1, whole repository" in result.stdout, result.stdout
+    planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
+    assert planned, f"`make {target} FULL=1` planned no command: {result.stdout}"
+    for line in planned:
+        command = line.split("] ", 1)[1].split("  (in ", 1)[0].split()
+        if command[:4] == ["uv", "run", "ruff", "check"]:
+            missing = [p for p in command[4:] if not (REPO_ROOT / p).is_dir()]
+            assert not missing, f"`make {target} FULL=1` lints paths that do not exist: {missing} (the libs/ rot)"

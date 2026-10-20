@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test smoke prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -31,6 +31,7 @@ help:
 	@echo "  make check        lint + typecheck + test + contract-conformance"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
 	@echo "  BASE=<ref>        diff base (default origin/main); FULL=1 whole repository, as CI"
+	@echo "  make typecheck-python|typecheck-web|test-python|test-web  one language half (CI calls these)"
 
 bootstrap:
 	uv sync --all-packages
@@ -154,11 +155,25 @@ format:
 typecheck:
 	@$(DIFF_SCOPE) --entry "make typecheck" typecheck
 
+# CI calls these halves, one per toolchain (#1412 L1): a broken target fails ci-required.
+typecheck-python:
+	@$(DIFF_SCOPE) --entry "make typecheck-python" typecheck-python
+
+typecheck-web:
+	@$(DIFF_SCOPE) --entry "make typecheck-web" typecheck-web
+
 prepush:
 	@tools/prepush.sh $(BASE)
 
 test:
 	@$(DIFF_SCOPE) --entry "make test" test
+
+# FILES=<paths> runs one CI shard (FULL=1 only); tools/pytest_shard.py owns the partition.
+test-python:
+	@$(DIFF_SCOPE) --entry "make test-python" test-python $(if $(FILES),--files $(FILES),)
+
+test-web:
+	@$(DIFF_SCOPE) --entry "make test-web" test-web
 
 smoke:
 	@$(DIFF_SCOPE) --entry "make smoke" lint typecheck test

@@ -353,8 +353,8 @@ def test_full_1_runs_the_whole_suite(worktree: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     planned = [line.split("  (in")[0].rstrip() for line in result.stdout.splitlines() if line.startswith("== [")]
-    assert "== [test] uv run pytest" in planned
-    assert "== [typecheck] uv run mypy" in planned
+    assert "== [test-python] uv run pytest" in planned
+    assert "== [typecheck-python] uv run mypy" in planned
     assert "== [lint] uv run ruff check apps common tools" in planned
 
 
@@ -421,3 +421,23 @@ def test_a_dry_run_prints_every_selected_file(repo: Path, capsys: pytest.Capture
     [line] = [x for x in capsys.readouterr().out.splitlines() if "uv run pytest" in x]
     selected = select(repo, "base").pytest
     assert len(selected) > 10 and all(f" {path}" in line for path in selected), line
+
+
+def test_a_ci_shard_runs_its_own_files_and_needs_full(repo: Path) -> None:
+    """CI runs `make test-python FULL=1 FILES=...` per shard (#1412 L1)."""
+    shard = ["pkg/alpha/tests/test_m.py", "pkg/beta/tests/test_beta.py"]
+    commands = diff_scope.plan(None, ["test-python"], pytest_files=shard)
+    assert [c.argv for c in commands] == [("uv", "run", "pytest", *shard)]
+    with pytest.raises(SystemExit, match="needs --full"):
+        diff_scope.run(repo, ["test-python"], full=False, base="base", dry_run=True, entry="t", pytest_files=shard)
+
+
+def test_the_language_halves_add_up_to_the_whole_step(repo: Path) -> None:
+    _edit(repo, "pkg/alpha/src/alpha/o.py")
+    _edit(repo, "apps/app-web/src/lib/c.ts", "export const y = 0;\n")
+    selection = select(repo, "base")
+    for whole, halves in (("typecheck", ["typecheck-python", "typecheck-web"]), ("test", ["test-python", "test-web"])):
+        assert diff_scope.plan(selection, [whole]) == diff_scope.plan(selection, halves)
+        assert diff_scope.plan(None, [whole], web_tests_all=selection.bun_all) == diff_scope.plan(
+            None, halves, web_tests_all=selection.bun_all
+        )
