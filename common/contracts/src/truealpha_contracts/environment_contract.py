@@ -6,7 +6,8 @@ Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` fr
 from this contract so no environment schedule or vendor share is hand-mirrored.
 
 The contract also holds the measured run times of every deployed Dagster job. The data-engine
-run launcher derives each run's maximum runtime from them (#1442).
+run launcher derives each run's maximum runtime from them (#1442). It holds the memory capacity
+of the Dagster code server, and the data-engine run queue limit derives from it (#1467).
 """
 
 from __future__ import annotations
@@ -112,6 +113,67 @@ class RunTimeBounds(_StrictFrozenModel):
     jobs: Mapping[str, JobRunTimeBasis]
 
 
+#: The owner rule of #1418: planned demand stays at or below 70% of capacity.
+UTILIZATION_CEILING = 0.7
+
+
+class MeasuredProcessMemory(_StrictFrozenModel):
+    """The peak resident memory (``VmHWM``) of the processes of the code server, read once (#1467)."""
+
+    at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    environment: EnvironmentKey
+    method: str = Field(min_length=1)
+    grpc_server_hwm_mib: float = Field(gt=0)
+    run_process_hwm_mib: float = Field(gt=0)
+    source: str = Field(min_length=1)
+
+
+class CodeServerCapacity(_StrictFrozenModel):
+    """The memory of the Dagster code server container and the run limit that follows from it (#1467).
+
+    The gRPC server and every run process share one cgroup. A run executes in one process when its
+    job uses the in-process executor (``processes_per_run`` = 1). Each process that imports
+    ``data_engine.dagster_defs`` holds ``process_mib``. The queue limit is the number of runs that
+    fit beside the server inside ``utilization_limit`` of the ceiling.
+    """
+
+    description: str = Field(min_length=1)
+    ceiling_mib: int = Field(ge=1)
+    ceiling_source: str = Field(min_length=1)
+    utilization_limit: float = Field(gt=0, le=UTILIZATION_CEILING)
+    process_mib: int = Field(ge=1)
+    server_processes: int = Field(ge=1)
+    processes_per_run: int = Field(ge=1)
+    measured: MeasuredProcessMemory
+
+    @model_validator(mode="after")
+    def _process_covers_the_measurement_and_two_runs_fit(self) -> Self:
+        observed = max(self.measured.grpc_server_hwm_mib, self.measured.run_process_hwm_mib)
+        if self.process_mib < observed:
+            raise ValueError(f"process_mib {self.process_mib} is below the measured peak of {observed} MiB")
+        if self.max_concurrent_runs < 2:
+            raise ValueError(
+                f"the ceiling admits {self.max_concurrent_runs} concurrent run(s); a waiting run and the run it waits for need 2"
+            )
+        return self
+
+    @property
+    def usable_mib(self) -> int:
+        """The memory that the processes may hold: ``utilization_limit`` of the ceiling, rounded down."""
+        return math.floor(Decimal(self.ceiling_mib) * Decimal(str(self.utilization_limit)))
+
+    @property
+    def max_concurrent_runs(self) -> int:
+        """The most runs that fit beside the server processes inside ``usable_mib``."""
+        free = self.usable_mib - self.server_processes * self.process_mib
+        return max(free // (self.processes_per_run * self.process_mib), 0)
+
+    @property
+    def max_waiting_runs(self) -> int:
+        """The most runs that may wait for other runs at one time. One slot stays free for the run waited for."""
+        return self.max_concurrent_runs - 1
+
+
 class EnvironmentContract(_StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
@@ -120,6 +182,7 @@ class EnvironmentContract(_StrictFrozenModel):
     environments: Mapping[str, EnvironmentSpec]
     shared_physical_seats: Mapping[str, SharedSeatSpec]
     run_time_bounds: RunTimeBounds
+    code_server_capacity: CodeServerCapacity
 
     @model_validator(mode="after")
     def _validate_sentinels_and_environments(self) -> Self:

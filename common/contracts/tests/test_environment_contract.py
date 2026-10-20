@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.environment_contract import (
+    CodeServerCapacity,
     EnvironmentContract,
     JobRunTimeBasis,
     load_environment_contract,
@@ -164,3 +165,61 @@ def test_max_runtime_is_margin_times_the_longest_success_over_all_environments()
 def test_a_job_declares_exactly_one_valid_run_time_basis(basis: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         JobRunTimeBasis.model_validate(basis)
+
+
+def _capacity(**changes: object) -> CodeServerCapacity:
+    """The real code server capacity with `changes` applied, validated again (#1467)."""
+    declared = load_environment_contract().code_server_capacity.model_dump()
+    return CodeServerCapacity.model_validate({**declared, **changes})
+
+
+def test_the_run_limit_is_the_runs_that_fit_beside_the_server_inside_the_utilization_limit() -> None:
+    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. Three runs of 240 MiB fit in the other 835 MiB."""
+    capacity = load_environment_contract().code_server_capacity
+
+    assert capacity.usable_mib == 1075
+    assert capacity.max_concurrent_runs == 3
+    assert capacity.max_waiting_runs == 2
+    held = (
+        capacity.server_processes + capacity.max_concurrent_runs * capacity.processes_per_run
+    ) * capacity.process_mib
+    assert held <= capacity.usable_mib < held + capacity.processes_per_run * capacity.process_mib, (
+        "the limit is the largest one that fits: one more run would pass the utilization limit"
+    )
+
+
+@pytest.mark.parametrize(
+    ("changes", "runs"),
+    [
+        ({"ceiling_mib": 2048}, 4),
+        ({"ceiling_mib": 1280}, 2),
+        ({"process_mib": 300, "ceiling_mib": 2048}, 3),
+        ({"processes_per_run": 2, "ceiling_mib": 2048}, 2),
+        ({"server_processes": 2, "ceiling_mib": 2048}, 3),
+        ({"utilization_limit": 0.5, "ceiling_mib": 2048}, 3),
+    ],
+)
+def test_the_run_limit_follows_each_input_of_the_derivation(changes: dict[str, object], runs: int) -> None:
+    assert _capacity(**changes).max_concurrent_runs == runs
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"utilization_limit": 0.71},
+        {"utilization_limit": 1.0},
+        {"process_mib": 229},
+        {"ceiling_mib": 768},
+        {"ceiling_mib": 0},
+    ],
+    ids=[
+        "above-the-70-percent-rule",
+        "full-utilization",
+        "below-the-measured-peak",
+        "ceiling-admits-one-run",
+        "no-ceiling",
+    ],
+)
+def test_a_capacity_that_breaks_a_rule_is_refused(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _capacity(**changes)
