@@ -241,12 +241,16 @@ def _await_settled(context: dg.OpExecutionContext) -> None:
         _sleep(SURFACE_SETTLE_POLL_SECONDS)
 
 
-_SERVED_HEAD_FRESHNESS_SQL = """
+#: Every served head. The check counts the scheduled heads, so it reads the fresh ones too.
+_SERVED_HEADS_SQL = """
 select universe_id, freshness, availability, staleness_reason
 from mart.served_head
-where freshness <> 'fresh' or availability <> 'available'
 order by universe_id
 """
+
+#: The finding when an environment serves no scheduled head. Zero heads prove nothing about
+#: freshness: no run was ever governed, or the identity row hides every head (#28 V3).
+NO_SCHEDULED_HEAD = "no scheduled governed head"
 
 
 def stale_served_heads(
@@ -254,26 +258,36 @@ def stale_served_heads(
     *,
     universe_prefix: str = "",
     environment: str | None = None,
+    require_head: bool = False,
 ) -> list[str]:
     """Return every scheduled served head where `mart.served_head.freshness != 'fresh'` or
-    `availability != 'available'` (#1299, #1256, #54)."""
+    `availability != 'available'` (#1299, #1256, #54).
+
+    With `require_head`, zero scheduled heads is also a finding (#28 V3: unknown is not OK).
+    A head with no running schedule in this environment does not count (#1256)."""
     if environment is None:
         try:
             environment = declared_environment(connection)
         except Exception:  # noqa: BLE001 - test doubles that do not answer environment_identity fall back to settings
             environment = settings.app_env
-    rows = connection.execute(_SERVED_HEAD_FRESHNESS_SQL).fetchall()
+    rows = connection.execute(_SERVED_HEADS_SQL).fetchall()
     out: list[str] = []
+    scheduled = 0
     for row in rows:
         universe_id = str(row[0])
         if universe_prefix and not universe_id.startswith(universe_prefix):
             continue
         if not is_head_scheduled(universe_id, environment):
             continue
+        scheduled += 1
         freshness = str(row[1])
         availability = str(row[2])
+        if freshness == "fresh" and availability == "available":
+            continue
         reason = f" ({row[3]})" if len(row) > 3 and row[3] else ""
         out.append(f"{universe_id} freshness={freshness} availability={availability}{reason}")
+    if require_head and not scheduled:
+        out.append(f"{NO_SCHEDULED_HEAD} in {environment}: freshness is not proven (#28 V3)")
     return out
 
 
@@ -301,7 +315,7 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
             now = datetime.now(UTC)
             pending = settling(connection, context.instance, now=now)
             surfaces = prove(connection, executed_at=now, settling=pending)
-            stale_heads = stale_served_heads(connection)
+            stale_heads = stale_served_heads(connection, require_head=True)
         for line in summary_lines(surfaces):
             context.log.info(line)
         failed = [surface for surface in surfaces if surface.mismatched]

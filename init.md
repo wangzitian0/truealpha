@@ -500,7 +500,8 @@ This is a different measure from three others. The capture-time windows in
 `docs/datahub-service-demand.md` is the demand objective of one capture requirement.
 `tools/nightly_verdicts.py` ages each nightly verdict at twice the cadence of its check. None of
 the three changes. The nightly `report_surface_proof` fails on a scheduled head that
-`mart.served_head` labels stale, so the pointer is bounded at the `daily` limit.
+`mart.served_head` labels stale, so the pointer is bounded at the `daily` limit. It also fails
+when the environment serves no scheduled head, because zero heads prove nothing.
 
 ---
 

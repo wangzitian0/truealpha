@@ -9,7 +9,8 @@ name: delivery-report
 #
 # The data-plane checks of deploy-freshness run inside each environment:
 # mart.served_head ages each governed head at read time, and the nightly
-# report_surface_proof fails on a stale scheduled head. The release age, the walk
+# report_surface_proof fails on a stale scheduled head and on zero scheduled
+# heads. The release age, the walk
 # evidence, the nightly verdict watch and the routing probe have no
 # in-environment equivalent, so the report shows them
 # (common/runtime/src/truealpha_tools/delivery_report.py).

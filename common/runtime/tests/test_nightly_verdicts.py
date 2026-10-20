@@ -544,59 +544,74 @@ def test_a_missing_binary_is_no_grace_not_a_crash() -> None:
     assert _module.first_declared_at("model_key_health", run=_git(INTRODUCED)[0], gh_api=no_gh, **kwargs) is None
 
 
-def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#1299, #54: quality.run_report_surface_proof requires mart.served_head.freshness == 'fresh'
-    before outputting '"status": "pass"'."""
-    import dagster as dg
-    import psycopg
+class _ProofConnection:
+    """A connection whose every read answers `rows` (the `mart.served_head` rows the proof reads)
+    and names `environment` as this database's environment. `error` makes every read fail."""
+
+    isolation_level = None
+    read_only = None
+
+    def __init__(self, rows: list[tuple[object, ...]], environment: str = "staging", error: Exception | None = None):
+        self._rows = rows
+        self._environment = environment
+        self._error = error
+
+    def __enter__(self) -> _ProofConnection:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def execute(self, _sql: str, _params: tuple[object, ...] = ()) -> _ProofConnection:
+        if self._error is not None:
+            raise self._error
+        return self
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return (self._environment,)
+
+
+def _patched_proof(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Patch the surface proof's other inputs; return the verdict rows it records."""
     from data_engine.lanes import quality
     from data_engine.quality import nightly_verdicts, surface_proof
 
     recorded: list[dict[str, object]] = []
     monkeypatch.setattr(nightly_verdicts, "record", lambda name, **kw: recorded.append({"check": name, **kw}))
     monkeypatch.setattr(quality, "settling", lambda *_a, **_k: {})
-
     run = "capture-run:" + "a" * 64
     monkeypatch.setattr(
         surface_proof,
         "prove",
         lambda *_a, **_k: (surface_proof.SurfaceVerdict("rankings", "strategy-run-repository.ts", run, run),),
     )
+    return recorded
 
-    class _Conn:
-        isolation_level = None
-        read_only = None
 
-        def __init__(self, rows: list[tuple[object, ...]]) -> None:
-            self._rows = rows
+FRESH_TOPT = ("universe:topt-us-2026-03-31", "fresh", "available", None)
+STALE_MANUAL_QQQ = ("universe:qqq-us-2026-09-30", "stale", "available", "older_than_3d")
 
-        def __enter__(self) -> _Conn:
-            return self
 
-        def __exit__(self, *_exc: object) -> bool:
-            return False
+def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1299, #54: quality.run_report_surface_proof requires mart.served_head.freshness == 'fresh'
+    before outputting '"status": "pass"'."""
+    import dagster as dg
+    import psycopg
+    from data_engine.lanes import quality
 
-        def execute(self, _sql: str, _params: tuple[object, ...] = ()) -> _Conn:
-            return self
+    recorded = _patched_proof(monkeypatch)
 
-        def fetchall(self) -> list[tuple[object, ...]]:
-            return self._rows
-
-        def fetchone(self) -> tuple[object, ...] | None:
-            return ("staging",)
-
-    # 1. Fresh served_head -> returns JSON with "status": "pass"
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _Conn([]))
+    # 1. A fresh scheduled head -> returns JSON with "status": "pass"
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection([FRESH_TOPT]))
     out = quality.run_report_surface_proof(dg.build_op_context())
     assert json.loads(out)["status"] == "pass"
     assert recorded[-1]["ok"] is True
 
-    # 2. Manual-only unscheduled QQQ head in staging -> ignored per #1256
-    monkeypatch.setattr(
-        psycopg,
-        "connect",
-        lambda *_a, **_k: _Conn([("universe:qqq-us-2026-09-30", "stale", "available", "older_than_3d")]),
-    )
+    # 2. Manual-only unscheduled QQQ head in staging, beside a fresh scheduled head -> ignored per #1256
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection([STALE_MANUAL_QQQ, FRESH_TOPT]))
     out_staging = quality.run_report_surface_proof(dg.build_op_context())
     assert json.loads(out_staging)["status"] == "pass"
     assert recorded[-1]["ok"] is True
@@ -605,9 +620,51 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         psycopg,
         "connect",
-        lambda *_a, **_k: _Conn([("universe:topt-us-2026-03-31", "stale", "available", "older_than_3d")]),
+        lambda *_a, **_k: _ProofConnection([("universe:topt-us-2026-03-31", "stale", "available", "older_than_3d")]),
     )
     with pytest.raises(dg.Failure, match="mart.served_head"):
         quality.run_report_surface_proof(dg.build_op_context())
     assert recorded[-1]["ok"] is False
     assert "stale served_head" in str(recorded[-1]["summary"])
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param([], id="no-head-at-all"),
+        pytest.param([STALE_MANUAL_QQQ], id="only-a-head-with-no-schedule-here"),
+    ],
+)
+def test_the_surface_proof_fails_closed_without_a_scheduled_head(
+    monkeypatch: pytest.MonkeyPatch, rows: list[tuple[object, ...]]
+) -> None:
+    """#28 V3: unknown is not OK. Zero scheduled heads in `mart.served_head` proves nothing about
+    freshness: no run was ever governed, or the identity row hides every head (the state that
+    `/api/health` reports as `governed_pointers: "unknown"`). The proof records red."""
+    import dagster as dg
+    import psycopg
+    from data_engine.lanes import quality
+
+    recorded = _patched_proof(monkeypatch)
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection(rows))
+
+    with pytest.raises(dg.Failure, match="no scheduled governed head"):
+        quality.run_report_surface_proof(dg.build_op_context())
+    assert recorded[-1]["ok"] is False
+    assert "no scheduled governed head" in str(recorded[-1]["summary"])
+
+
+def test_the_surface_proof_fails_closed_when_the_served_head_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreadable `mart.served_head` is the other unknown state. The read raises, and the
+    verdict records red."""
+    import dagster as dg
+    import psycopg
+    from data_engine.lanes import quality
+
+    recorded = _patched_proof(monkeypatch)
+    error = psycopg.errors.UndefinedTable("relation mart.served_head does not exist")
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection([], error=error))
+
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        quality.run_report_surface_proof(dg.build_op_context())
+    assert recorded[-1]["ok"] is False

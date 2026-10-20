@@ -10,10 +10,12 @@ success, so the streak reads every attempt.
 
 from __future__ import annotations
 
+import http.server
 import json
 import re
 import subprocess
 import sys
+import threading
 import urllib.parse
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -280,6 +282,87 @@ def test_a_release_that_serves_the_newest_tag_has_no_age() -> None:
     assert age.within_bound is True
 
 
+def _untagged(status: str, ahead_by: int, oldest: str | None) -> FakeGitHub:
+    commits = [{"commit": {"committer": {"date": oldest}}}] if oldest else []
+    body = {"status": status, "ahead_by": ahead_by, "commits": commits}
+    return FakeGitHub(responses={"/repos/wangzitian0/truealpha/compare/v0.2.27...main?per_page=1": body})
+
+
+def test_main_commits_in_no_release_tag_are_counted_with_the_age_of_the_oldest() -> None:
+    """#560: merged work that no tag holds is invisible to every environment. The release age
+    against the newest tag cannot see it, so the report measures it against main."""
+    untagged = dr.untagged_main(TAGS, _untagged("ahead", 5, "2026-10-19T12:00:00Z"), NOW)
+    assert (untagged.newest, untagged.commits, untagged.age) == ("v0.2.27", 5, timedelta(days=1))
+
+
+def test_main_at_the_newest_tag_has_no_untagged_commit() -> None:
+    untagged = dr.untagged_main(TAGS, _untagged("identical", 0, None), NOW)
+    assert (untagged.commits, untagged.age) == (0, None)
+
+
+def test_a_newest_tag_that_main_does_not_hold_is_not_a_count() -> None:
+    with pytest.raises(dr.InputUnavailable, match="diverged"):
+        dr.untagged_main(TAGS, _untagged("diverged", 2, "2026-10-19T12:00:00Z"), NOW)
+
+
+def test_the_release_section_shows_untagged_main_work_or_unknown() -> None:
+    tags = dict.fromkeys(TAGS, "sha")
+    served = {"staging": "v0.2.27", "production": "v0.2.27"}
+
+    measured = dr.release_section(served, tags, _untagged("ahead", 5, "2026-10-19T12:00:00Z"), NOW)
+    unread = dr.release_section(served, tags, FakeGitHub(), NOW)
+
+    assert "Main: 5 commits in no release tag (newer than v0.2.27); the oldest is 24.0 h old." in measured
+    assert any(line.startswith("Main commits in no release tag: unknown (GET ") for line in unread), unread
+
+
+# --- governed heads (moved from the deleted datahub_freshness tool) -----------------------
+
+STAGING_HEALTH = "https://truealpha-staging.truealpha.club/api/health"
+PRODUCTION_HEALTH = "https://truealpha.club/api/health"
+
+
+def _pointer(universe: str, age: float, freshness: str, reason: str | None = None) -> dict[str, object]:
+    return {
+        "universe_id": universe,
+        "advanced_at": "2026-10-20T07:20:41+00:00",
+        "age_hours": age,
+        "freshness": freshness,
+        "limit_hours": 72,
+        "staleness_reason": reason,
+        "availability": "available",
+    }
+
+
+def _health_of(answers: dict[str, object]):
+    def get(url: str) -> tuple[int, str]:
+        answer = answers[url]
+        return (0, "connection refused") if answer is None else (200, json.dumps(answer))
+
+    return get
+
+
+def test_governed_heads_are_listed_and_an_empty_or_unknown_list_is_not_proven() -> None:
+    """The deleted datahub_freshness tool failed on `governed_pointers` "unknown" or an empty list.
+    The report shows each head the environment serves, and names those two states as not proven."""
+    heads = [
+        _pointer("universe:canary-us-2026-06-30", 0.8, "fresh"),
+        _pointer("universe:qqq-us-2026-09-30", 301.2, "stale", "older_than_3d"),
+    ]
+
+    listed = dr.heads_section(_health_of({STAGING_HEALTH: {"governed_pointers": heads}, PRODUCTION_HEALTH: None}))
+    empty = dr.heads_section(_health_of({STAGING_HEALTH: {"governed_pointers": []}, PRODUCTION_HEALTH: {}}))
+    unknown = dr.heads_section(_health_of({STAGING_HEALTH: {"governed_pointers": "unknown"}, PRODUCTION_HEALTH: {}}))
+
+    assert "- staging: 2 governed heads (labels from mart.served_head)" in listed
+    assert "  - universe:canary-us-2026-06-30: 0.8 h, fresh, available" in listed
+    assert "  - universe:qqq-us-2026-09-30: 301.2 h, stale (older_than_3d), available" in listed
+    assert any(line.startswith("- production: unknown (") for line in listed), listed
+    assert "- staging: not proven: no governed head (an empty list)" in empty
+    assert "- production: not proven: the served release predates governed_pointers" in empty
+    assert '- staging: not proven: /api/health reports "unknown"' in unknown
+
+
 # --- R3: tier rates ---------------------------------------------------------------------
 
 
@@ -372,6 +455,61 @@ def test_the_routing_probe_gets_each_base_not_its_health_endpoint(tmp_path: Path
     assert probed == [environment.base for environment in dr.ENVIRONMENTS]
     assert not any(base.endswith("/api/health") for base in probed)
     assert "- staging: the deployed surface holds" in report
+
+
+class _OpenMcpSurface(http.server.BaseHTTPRequestHandler):
+    """A surface whose routing holds and whose MCP endpoint serves a caller with no credential."""
+
+    def _answer(self, status: int, headers: dict[str, str] | None = None, body: bytes = b"") -> None:
+        self.send_response(status)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - the http.server hook name
+        if self.path == "/api/health":
+            self._answer(200, body=b'{"status": "ok"}')
+        elif self.path == "/api/mcp":
+            self._answer(307, {"Location": "/api/mcp/"})
+        else:
+            self._answer(406)
+
+    def do_POST(self) -> None:  # noqa: N802 - the http.server hook name
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/api/mcp":
+            self._answer(307, {"Location": "/api/mcp/"})
+        else:
+            self._answer(200, {"Content-Type": "application/json"}, b'{"jsonrpc": "2.0", "id": 1, "result": {}}')
+
+    def log_message(self, *_args: object) -> None:
+        return None
+
+
+def test_the_routing_section_runs_the_mcp_credential_probe() -> None:
+    """#42, #1437: an MCP endpoint that answers 200 to a caller with no credential is a failure
+    of the routing row. The report runs `surface_contract.check`, the entry that includes the
+    401 probe, not a subset of it."""
+    import inspect
+
+    from truealpha_tools import surface_contract
+
+    assert inspect.signature(dr.build_report).parameters["routing"].default is surface_contract.check
+    assert inspect.signature(dr.routing_section).parameters["routing"].default is surface_contract.check
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _OpenMcpSurface)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        lines = dr.routing_section(environments=[dr.Environment("stub", "staging", base, 3)])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert lines[2] == "- stub: 2 violated:", lines
+    assert any("initialize without a credential answered 200, not 401" in line for line in lines), lines
+    assert any("tools/call without a credential answered 200, not 401" in line for line in lines), lines
 
 
 def test_a_release_in_flight_is_reported_without_a_wait() -> None:

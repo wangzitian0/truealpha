@@ -5,9 +5,9 @@ no issue and blocks no merge. The workflow run is red only when the report canno
 
 The report replaces `deploy-freshness.yml`. The data-plane checks of that workflow run
 inside each environment: `mart.served_head` ages each governed head at read time, and the
-nightly `report_surface_proof` fails on a stale scheduled head. The release age, the walk
-evidence, the nightly verdict watch and the routing probe have no in-environment equivalent,
-so this report shows them.
+nightly `report_surface_proof` fails on a stale scheduled head and on zero scheduled heads.
+The release age, the walk evidence, the nightly verdict watch and the routing probe have no
+in-environment equivalent, so this report shows them.
 
 Sections:
 
@@ -15,11 +15,14 @@ Sections:
    Staging and production count together. `gh run list` shows only the last attempt of a
    run, so the report reads each earlier attempt, and a failed earlier attempt counts.
 2. Release age per environment: the served release against the newest `vX.Y.Z` tag. The
-   bounds (staging 3 days, production 14 days, #819) are shown, not enforced.
-3. Surface walk evidence of the served release (`walk_evidence.in_flight` and `find_walk`).
-4. Nightly check verdicts per environment (`nightly_verdicts`): red, stale or missing.
-5. Routing shape of the real proxy (`surface_contract.check`, A4 C1).
-6. Tier rates over the last ISO weeks (R3): first-run pass rate of `ci-required` on PR
+   bounds (staging 3 days, production 14 days, #819) are shown, not enforced. Main commits
+   that no release tag holds, with the age of the oldest (#560).
+3. Governed heads per environment, as `/api/health` reports them. An empty list or
+   "unknown" is not proven (#28 V3).
+4. Surface walk evidence of the served release (`walk_evidence.in_flight` and `find_walk`).
+5. Nightly check verdicts per environment (`nightly_verdicts`): red, stale or missing.
+6. Routing shape of the real proxy (`surface_contract.check`, A4 C1).
+7. Tier rates over the last ISO weeks (R3): first-run pass rate of `ci-required` on PR
    heads and on main, flake rate, deploy pass rates, each with 3-sigma p-chart limits (S5),
    flake rate per job, lead times, and PRs per production tag.
 
@@ -522,6 +525,38 @@ def release_age(environment: Environment, served: str, tags: Iterable[str], gh: 
     return ReleaseAge(environment, served, newest, behind, ahead, now - oldest)
 
 
+@dataclass(frozen=True)
+class UntaggedMain:
+    newest: str
+    commits: int
+    #: The age of the oldest main commit that no release tag holds; None when there is none.
+    age: timedelta | None
+
+
+def untagged_main(tags: Iterable[str], gh: GhApi, now: datetime) -> UntaggedMain:
+    """Main commits that no release tag holds (#560): merged work that no environment can serve.
+
+    On a linear main every older tag is an ancestor of the newest tag, so the comparison of the
+    newest tag with main counts them. When main does not hold the newest tag, the count is unknown.
+    """
+    newest = newest_tag(tags)
+    if newest is None:
+        raise InputUnavailable("no vX.Y.Z tag is listed")
+    comparison = _json(gh, f"/repos/{REPOSITORY}/compare/{newest}...main?per_page=1")
+    if not isinstance(comparison, dict):
+        raise InputUnavailable(f"the comparison {newest}...main answered no object")
+    status = comparison.get("status")
+    if status not in ("ahead", "identical"):
+        raise InputUnavailable(f"main does not hold {newest} (compare status {status!r}); the count is not provable")
+    ahead = int(comparison["ahead_by"])
+    if ahead == 0:
+        return UntaggedMain(newest, 0, None)
+    oldest = _time(comparison["commits"][0]["commit"]["committer"]["date"])
+    if oldest is None:
+        raise InputUnavailable(f"the comparison {newest}...main names no commit time")
+    return UntaggedMain(newest, ahead, now - oldest)
+
+
 # --- R3: CI tier rates ----------------------------------------------------------------
 
 
@@ -858,6 +893,62 @@ def release_section(
             f"| {environment.name} | {age.served} | {age.newest} | {behind} | {age.commits_behind} | {shown} | "
             f"{bound} | {'yes' if age.within_bound else 'no'} |"
         )
+    return [*lines, "", _untagged_line(tags, gh, now), ""]
+
+
+def _untagged_line(tags: dict[str, str] | Unknown, gh: GhApi, now: datetime) -> str:
+    if isinstance(tags, Unknown):
+        return f"Main commits in no release tag: {tags}."
+    found = _read(partial(untagged_main, tags, gh, now))
+    if isinstance(found, Unknown):
+        return f"Main commits in no release tag: {found}."
+    if found.age is None:
+        return f"Main: every commit is in a release tag ({found.newest})."
+    return (
+        f"Main: {found.commits} commits in no release tag (newer than {found.newest}); "
+        f"the oldest is {_duration(found.age)} old."
+    )
+
+
+def _heads_lines(environment: Environment, get: HttpGet) -> list[str]:
+    status, body = get(environment.health)
+    if status != 200:
+        raise InputUnavailable(f"{environment.health} answered HTTP {status}")
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise InputUnavailable(f"{environment.health} answered no JSON object")
+    if "governed_pointers" not in payload:
+        return [f"- {environment.name}: not proven: the served release predates governed_pointers"]
+    heads = payload["governed_pointers"]
+    if heads == "unknown":
+        return [f'- {environment.name}: not proven: /api/health reports "unknown"']
+    if not isinstance(heads, list):
+        raise InputUnavailable(f"{environment.health} reports governed_pointers of the wrong shape")
+    if not heads:
+        return [f"- {environment.name}: not proven: no governed head (an empty list)"]
+    lines = [f"- {environment.name}: {len(heads)} governed heads (labels from mart.served_head)"]
+    for head in heads:
+        reason = f" ({head['staleness_reason']})" if head.get("staleness_reason") else ""
+        lines.append(
+            f"  - {head['universe_id']}: {float(head['age_hours']):.1f} h, {head['freshness']}{reason}, "
+            f"{head['availability']}"
+        )
+    return lines
+
+
+def heads_section(get: HttpGet) -> list[str]:
+    lines = [
+        "## 3. Governed heads",
+        "",
+        "Each head the environment serves, as `/api/health` reports it. The age and the label come from "
+        '`mart.served_head`; this report computes no age. An empty list or "unknown" proves nothing '
+        "(#28 V3). In each environment the nightly `report_surface_proof` fails on a stale scheduled head "
+        "and on zero scheduled heads.",
+        "",
+    ]
+    for environment in ENVIRONMENTS:
+        found = _read(partial(_heads_lines, environment, get))
+        lines += [f"- {environment.name}: {found}"] if isinstance(found, Unknown) else found
     return [*lines, ""]
 
 
@@ -874,7 +965,7 @@ def _walk_text(environment: Environment, release: str, gh: GhApi, now: datetime)
 
 def walk_section(served: dict[str, str | Unknown], gh: GhApi, now: datetime) -> list[str]:
     lines = [
-        "## 3. Surface walk evidence",
+        "## 4. Surface walk evidence",
         "",
         "| Environment | Serves | Walk of the served release |",
         "|---|---|---|",
@@ -930,7 +1021,7 @@ def _verdict_lines(environment: Environment, get: HttpGet, gh: GhApi, repo: str,
 
 def verdict_section(get: HttpGet, gh: GhApi, repo: str, now: datetime) -> list[str]:
     lines = [
-        "## 4. Nightly check verdicts",
+        "## 5. Nightly check verdicts",
         "",
         "The in-environment checks record a verdict per run (`mart.nightly_verdicts`). A verdict older than "
         "twice its cadence is stale. An environment cannot report its own stopped daemon, so this watch "
@@ -943,9 +1034,13 @@ def verdict_section(get: HttpGet, gh: GhApi, repo: str, now: datetime) -> list[s
     return [*lines, ""]
 
 
-def routing_section(routing: Routing) -> list[str]:
-    lines = ["## 5. Routing shape (A4 C1)", ""]
-    for environment in ENVIRONMENTS:
+def routing_section(
+    routing: Routing = surface_contract.check, environments: Sequence[Environment] = ENVIRONMENTS
+) -> list[str]:
+    """`surface_contract.check` per environment: the routing shape and the MCP credential probe
+    (#42). A violated property is a row, not a page (ADR A8)."""
+    lines = ["## 6. Routing shape and MCP credential (A4 C1, #42)", ""]
+    for environment in environments:
         failures = _read(partial(routing, environment.base))
         if isinstance(failures, Unknown):
             lines.append(f"- {environment.name}: {failures}")
@@ -1049,7 +1144,7 @@ def _flake_jobs(gh: GhApi, records: Sequence[ShaRecord]) -> tuple[dict[str, int]
 
 
 def ci_section(gh: GhApi, history: DeployHistory | Unknown, weeks: Sequence[Week]) -> list[str]:
-    lines = [f"## 6. Tier rates, last {len(weeks)} ISO weeks (R3)", ""]
+    lines = [f"## 7. Tier rates, last {len(weeks)} ISO weeks (R3)", ""]
     ci = _read(lambda: read_ci_history(gh, weeks))
     if isinstance(ci, Unknown):
         lines.append(f"ci-required history: {ci}.")
@@ -1173,6 +1268,7 @@ def build_report(
         "",
         *deploy_section(history),
         *release_section(served, tags, gh, now),
+        *heads_section(get),
         *walk_section(served, gh, now),
         *verdict_section(get, gh, repo, now),
         *routing_section(routing),

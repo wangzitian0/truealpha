@@ -70,11 +70,16 @@ class _Sink:
         # database that has not. A sink that answered nothing here would fail every check that
         # resolves a head, for the wrong reason.
         self._declares_environment = sql.strip() == "select environment from mart.environment_identity"
+        # The surface proof needs one scheduled head to prove anything (#28 V3); this database
+        # serves one fresh TOPT head.
+        self._reads_served_heads = "from mart.served_head" in sql
         if "insert into mart.nightly_verdicts" in sql:
             self.rows.append(params)
         return self
 
     def fetchall(self) -> list:
+        if getattr(self, "_reads_served_heads", False):
+            return [("universe:topt-us-2026-03-31", "fresh", "available", None)]
         return []
 
     def fetchone(self) -> Any:
