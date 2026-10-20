@@ -5,7 +5,8 @@ Inspects the physical developer environment against the repository contracts:
 1. Python version matches .python-version and .tool-versions
 2. uv lockfile and virtual environment consistency
 3. Bun runtime and apps/app-web/node_modules completeness
-4. Local runtime services (Docker, Postgres, MinIO, OpenD) probe
+4. The per-commit hook (T0, #1412): core.hooksPath names the tracked hook directory
+5. Local runtime services (Docker, Postgres, MinIO, OpenD) probe
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
+#: The tracked hook directory. core.hooksPath is relative, so each worktree of a clone
+#: runs its own checked-out hook (#1412 T0).
+HOOKS_DIR = "tools/git-hooks"
 
 
 def check_python_version() -> bool:
@@ -95,6 +99,36 @@ def check_bun_and_web() -> bool:
 
     print("    [OK] Bun runtime and apps/app-web/node_modules complete")
     return True
+
+
+def _hooks_path(root: Path) -> str:
+    result = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip()
+
+
+def check_git_hook(root: Path | None = None) -> bool:
+    """T0 (#1412): a clone without the hook runs no per-commit check at all."""
+    root = root or ROOT
+    hook = root / HOOKS_DIR / "pre-commit"
+    configured = _hooks_path(root)
+    print(f"[*] Per-commit hook: core.hooksPath = {configured or '<unset>'}")
+    if configured != HOOKS_DIR:
+        print(f"    [FAIL] the pre-commit hook is not installed (core.hooksPath must be {HOOKS_DIR}): run make install")
+        return False
+    if not (hook.is_file() and os.access(hook, os.X_OK)):
+        print(f"    [FAIL] {HOOKS_DIR}/pre-commit is missing or not executable")
+        return False
+    print("    [OK] staged files are checked on every commit, in every worktree of this clone")
+    return True
+
+
+def install_git_hook(root: Path | None = None) -> bool:
+    """Point core.hooksPath at the tracked hook directory. Idempotent; the setting is per clone."""
+    root = root or ROOT
+    subprocess.run(["git", "config", "core.hooksPath", HOOKS_DIR], cwd=root, check=True)
+    return check_git_hook(root)
 
 
 def probe_port(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -267,12 +301,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Inspect container reality on VPS via SSH",
     )
     parser.add_argument(
+        "--install-hooks",
+        action="store_true",
+        help="Set core.hooksPath to the tracked per-commit hook directory (T0)",
+    )
+    parser.add_argument(
         "--verify-deploy-ref",
         metavar="REF",
         help="Verify that target release ref/tag contains current HEAD before deploy",
     )
     args = parser.parse_args(argv)
 
+    if args.install_hooks:
+        return 0 if install_git_hook() else 1
     if args.verify_deploy_ref:
         return 0 if check_deploy_provenance(args.verify_deploy_ref) else 1
     if args.remote:
@@ -285,6 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ok = check_python_version() and ok
     ok = check_uv() and ok
     ok = check_bun_and_web() and ok
+    ok = check_git_hook() and ok
     check_local_services()
 
     if ok:

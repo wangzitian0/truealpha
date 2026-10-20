@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# T0, the per-commit tier (#1412): checks the STAGED files only, through
+# .pre-commit-config.yaml (secrets, moomoo trading APIs, ruff on touched files).
+# `make install` sets core.hooksPath to this directory once per clone. Every
+# worktree of the clone then runs its own checked-out copy of this file: no
+# per-worktree step, and no interpreter path that a deleted worktree can break.
+# Budget: p90 5 s per commit (#1412 S1).
+set -euo pipefail
+exec uvx --from "pre-commit==4.2.0" pre-commit run --hook-stage pre-commit
