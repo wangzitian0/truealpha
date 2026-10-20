@@ -8,7 +8,7 @@ This directory holds records, not enforcement. Nothing here gates a merge. CI do
 - `sources/model-provider-zhipu-glm-coding-plan.v1.json`: the admission record of the model provider (`init.md` rule 19).
 - `gate0/issue-60.source-readiness.candidate-v1.json`: the source readiness record. Every source except the model provider is still `missing` there (`init.md` rule 19).
 - `reviews/large_model_value_v0-definition-1.0.0.md`: the owner review of strategy definition 1.0.0 (#1235), with its content hash and the production replay.
-- `freezes/core-path-2026-10-12.md`: the freeze of the non-core areas (#1237): the paths, the baseline, the exit condition, and how to measure it again.
+- `freezes/core-path-2026-10-12.md`: the freeze of the non-core areas (#1237), lifted on 2026-10-20: the paths, the baseline, the exit condition, and how to measure it again.
 
 The readiness record names a predecessor file with a `sha256`. That file is not in the tree. Find it in git history.
 

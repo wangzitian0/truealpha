@@ -127,10 +127,11 @@ answers one question, with the smallest scope that can prove the answer false.
 
 - **Preview proves that the release works.** It boots on the platform, applies its
   migrations and reaches every source.
-- **Staging proves accuracy.** It runs every code path on live data for a small fixed
-  sentinel set, and the dashboards and the sentinel known answers agree.
-- **Production pursues completeness.** It runs the full production universe (`vision.md`)
-  and keeps the accuracy checks of staging.
+- **Staging proves accuracy.** It runs every code path on live data for the TOPT universe
+  plus the sentinel listings outside TOPT, and the dashboards and the sentinel known answers
+  agree.
+- **Production pursues completeness.** It runs the S&P 500 (`vision.md`), the strategy
+  included, and keeps the accuracy checks of staging.
 
 Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime
 names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `staging`,
