@@ -134,7 +134,7 @@ Also update the issue with the same four parts. Search for an existing issue fir
    EOF
    ```
    Removing a tree under a running task corrupts it.
-2. Remove the worktree safely with unlock and force fallbacks:
+2. Remove only the CLI issue worktree `../<repo>_issue<N>_<slug>` (never auto-remove IDE worktrees under `~/.gemini/antigravity/worktrees/`):
    ```bash
    git worktree unlock "../<repo>_issue<N>_<slug>" 2>/dev/null || true
    git worktree remove --force "../<repo>_issue<N>_<slug>" || git worktree prune

@@ -2321,9 +2321,9 @@ def test_qlib_is_not_resolvable_in_this_environment() -> None:
 #: Scanned for a Qlib reintroduction: every top-level directory that holds code, CI or
 #: an executed procedure. `db/` is production code, not data — `apps/llm-service`'s
 #: Dockerfile COPYs it and its CMD runs `db/apply_migrations.sh` on every container boot.
-#: `skills/` holds procedures an agent executes against this repository, one of which is
+#: `.agents/` holds procedures an agent executes against this repository, one of which is
 #: `factor-acceptance`, the very procedure this migration changed.
-QLIB_SCAN_ROOTS = (".github", "apps", "db", "common", "skills", "tools")
+QLIB_SCAN_ROOTS = (".github", ".agents", "apps", "db", "common", "tools")
 #: Top-level directories deliberately NOT scanned. Every other top-level directory must
 #: appear in QLIB_SCAN_ROOTS — asserted below, because the two holes this guard has
 #: already had were both "a place the walk cannot reach", found by review rather than by
@@ -2333,7 +2333,7 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "common", "skills", "tools")
 #: another path -- a symlink into one of QLIB_SCAN_ROOTS, or a published copy that repeats a
 #: file there byte for byte. Used BY the tuple below, not merely named beside it, so the
 #: exclusion and the assertion cannot drift apart (#1006 review).
-_MIRROR_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
+_MIRROR_ONLY_EXCLUDED_ROOTS = (".claude",)
 #: Excluded on the same kind of premise: it holds one JSON record and nothing else.
 _RECORD_ONLY_EXCLUDED_ROOT = ".ws-publish"
 
@@ -2346,10 +2346,10 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # inside one breaks the record rather than removing a dependency.
     "governance",
     # Where agent hosts look for this repository's skills: `.claude/skills` (Claude Code,
-    # #1003) and `.agents/skills` (Codex). Every entry under them is either a symlink
-    # resolving INTO A SCANNED ROOT, or a published copy of a file under `skills/` (dev_env
-    # #319 replaced the symlinks with copies; #1336). The safety argument is the general
-    # one, and it is the general one that
+    # #1003) and `.agents/skills` (Codex). Every entry under `.claude/` is either a symlink
+    # resolving INTO A SCANNED ROOT, or a published copy of a file under `.agents/skills/`
+    # (dev_env #348 unified skill delivery into `.agents/skills`). The safety argument is
+    # the general one, and it is the general one that
     # test_every_mirror_only_root_entry_is_scanned_through_its_source asserts. The content
     # is therefore swept through its source, once rather than twice. That premise is the
     # whole reason the exclusion is safe: a file added here that no scanned file repeats
@@ -2359,7 +2359,7 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The record the shared rule source writes when it publishes `AGENTS.md` and the
     # skills (#1018): output paths and their hashes. It names files and runs nothing; the
     # files it names are swept where they live -- `AGENTS.md` as a root file, the skills
-    # under `skills/`. Safe only while the record is all it holds, which
+    # under `.agents/skills/`. Safe only while the record is all it holds, which
     # test_the_publish_record_root_holds_only_the_record asserts.
     _RECORD_ONLY_EXCLUDED_ROOT,
 )
@@ -2455,7 +2455,7 @@ QLIB_SCAN_MUST_REACH = (
     # Runs on every production container boot (llm-service CMD), and is the shell script
     # a `pip install pyqlib` would be easiest to hide in.
     "db/apply_migrations.sh",
-    "skills/factor-acceptance/SKILL.md",
+    ".agents/skills/factor-acceptance/SKILL.md",
     # A dot-directory that holds code, and the reason the classification rule below
     # waives no directory for being dot-prefixed.
     ".github/workflows/ci-required.yml",
@@ -2946,7 +2946,9 @@ def test_every_mirror_only_root_entry_is_scanned_through_its_source(excluded_roo
     directory outside the scan roots, by changing one byte of a copy, by adding a copy that
     has no source, and by adding a file outside `<root>/skills/`.
     """
-    assert "skills" in QLIB_SCAN_ROOTS, "published copies are swept through skills/, which must stay a scan root"
+    assert ".agents" in QLIB_SCAN_ROOTS, (
+        "published copies are swept through .agents/skills/, so .agents must stay a scan root"
+    )
     listing = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", excluded_root],
         capture_output=True,
@@ -2970,9 +2972,9 @@ def test_every_mirror_only_root_entry_is_scanned_through_its_source(excluded_roo
             if not any(target == root or root in target.parents for root in scanned):
                 escapes.append(f"{entry} -> {target} resolves outside every scanned root")
             continue
-        source = REPO_ROOT / "skills" / entry[len(copy_prefix) :] if entry.startswith(copy_prefix) else None
+        source = REPO_ROOT / ".agents" / "skills" / entry[len(copy_prefix) :] if entry.startswith(copy_prefix) else None
         if source is None or not source.is_file() or source.read_bytes() != path.read_bytes():
-            escapes.append(f"{entry} is a real file that no file under skills/ repeats byte for byte")
+            escapes.append(f"{entry} is a real file that no file under .agents/skills/ repeats byte for byte")
     assert not escapes, (
         f"{excluded_root}/ is excluded from the Qlib sweep only because everything "
         f"in it is scanned through its source. These are not: {escapes}. Either move them under "
