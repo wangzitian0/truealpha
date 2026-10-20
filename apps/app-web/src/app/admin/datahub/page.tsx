@@ -623,6 +623,51 @@ export default async function AdminDatahubPage() {
       </div>
 
       <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold">Standing check verdicts (mart.nightly_verdicts)</h2>
+          <p className="text-sm text-gray-500">
+            In-environment invariants evaluated by Dagster (<span className="font-mono">output_invariants</span> and{" "}
+            <span className="font-mono">report_surface_proof</span>) and surfaced through <span className="font-mono">/api/health</span>.
+            Re-evaluated automatically within 60s when a governed head advances or a new release boots (#1346).
+          </p>
+        </div>
+        {stats.nightlyVerdicts.length === 0 ? (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+            No standing check verdicts recorded in <span className="font-mono">mart.nightly_verdicts</span> yet.
+          </p>
+        ) : (
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="pr-4 font-normal">check</th>
+                <th className="pr-4 font-normal">verdict</th>
+                <th className="pr-4 font-normal">ran at (UTC)</th>
+                <th className="pr-4 font-normal">dagster run</th>
+                <th className="font-normal">summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.nightlyVerdicts.map((v) => (
+                <tr key={v.check_name} className="border-t border-border">
+                  <td className="pr-4 font-mono">{v.check_name}</td>
+                  <td className={`pr-4 font-medium ${v.ok ? "text-emerald-400" : "text-rose-400"}`}>
+                    {v.ok ? "ok" : "fail"}
+                  </td>
+                  <td className="pr-4 text-gray-400">
+                    {v.ran_at}
+                  </td>
+                  <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
+                    {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}
+                  </td>
+                  <td className="font-mono text-xs text-gray-300">{v.summary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">Validation</h2>
         <table className="w-full text-left text-sm">
           <thead>

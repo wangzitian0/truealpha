@@ -72,6 +72,15 @@ export interface ValidationRow {
   detail: string;
 }
 
+/** #1346 / #1227: In-environment standing check verdicts from `mart.nightly_verdicts`. */
+export interface NightlyVerdictRow {
+  check_name: string;
+  ran_at: string;
+  ok: boolean;
+  summary: string;
+  dagster_run_id: string | null;
+}
+
 /** #729: one vendor, today (UTC), from the external call ledger — every request,
  * not only the ones that landed. `landed` counts the ok calls whose response bytes
  * exist in raw.fetches (payload_sha256 join): the traceability the owner asked for. */
@@ -371,6 +380,7 @@ export interface DatahubStats {
   confidence: ConfidenceReportRow[];
   questionCoverage: QuestionCoverageRow[];
   heads: HeadStatusRow[];
+  nightlyVerdicts: NightlyVerdictRow[];
   sources: SourceStatRow[];
   runs: CaptureRunRow[];
   validation: ValidationRow[];
@@ -378,6 +388,16 @@ export interface DatahubStats {
   traffic: TrafficSourceRow[];
   recentCalls: RecentCallRow[];
 }
+
+const NIGHTLY_VERDICTS_SQL = `
+  select check_name,
+         to_char(ran_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as ran_at,
+         ok,
+         summary,
+         dagster_run_id
+  from mart.nightly_verdicts
+  order by check_name
+`;
 
 const HEADS_SQL = `
   select h.environment, h.universe_id, h.sequence, h.advanced_at::text as advanced_at,
@@ -583,6 +603,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       recentCalls,
       questionCoverage,
       confidence,
+      nightlyVerdicts,
     ] = await Promise.all([
       client.query<HeadDbRow>(HEADS_SQL),
       client.query<SourceStatRow>(SOURCES_SQL),
@@ -599,10 +620,18 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<RecentCallRow>(RECENT_CALLS_SQL),
       client.query<QuestionCoverageDbRow>(QUESTION_COVERAGE_SQL),
       client.query<ConfidenceReportDbRow>(CONFIDENCE_REPORT_SQL),
+      client.query<NightlyVerdictRow>(NIGHTLY_VERDICTS_SQL),
     ]);
     return {
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
+      nightlyVerdicts: nightlyVerdicts.rows.map((row) => ({
+        check_name: row.check_name,
+        ran_at: row.ran_at,
+        ok: Boolean(row.ok),
+        summary: row.summary ?? "",
+        dagster_run_id: row.dagster_run_id ?? null,
+      })),
       heads: heads.rows.map((row: HeadDbRow) => {
         const parsedAvail =
           row.availability !== null && row.availability !== undefined

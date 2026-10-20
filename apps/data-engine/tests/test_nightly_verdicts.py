@@ -721,6 +721,39 @@ def test_every_declared_verdict_name_fits_the_column() -> None:
     assert all(nightly_verdicts.is_valid_name(name) for name in nightly_verdict_names())
 
 
+def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When output_invariants is red and a new build or governed head lands, the sensor launches
+    one run per (build, heads) state and skips once that state has been evaluated."""
+
+    class _HeadCursor:
+        def __enter__(self) -> _HeadCursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def execute(self, _sql: str) -> _HeadCursor:
+            return self
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("universe:topt-us-2026-03-31", "capture-run:abc")]
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _HeadCursor())
+    monkeypatch.setattr(settings, "data_engine_image_digest", "sha256:1234567890abcdef")
+    monkeypatch.setattr(quality, "newest_is_red", lambda name: name == "output_invariants")
+
+    ctx = dg.build_sensor_context()
+    items = list(quality.output_invariants_on_advance_sensor(ctx))
+    assert len(items) == 1 and isinstance(items[0], dg.RunRequest)
+    assert items[0].run_key == "heal:sha256:1234567890ab:universe:topt-us-2026-03-31=capture-run:abc"
+
+    # Re-evaluating on the same cursor skips without launching a duplicate run.
+    items_second = list(quality.output_invariants_on_advance_sensor(ctx))
+    assert len(items_second) == 1 and isinstance(items_second[0], dg.SkipReason)
+
+
 # --- persistence (real schema; skips without a local Postgres) ---------------------------
 
 

@@ -46,7 +46,14 @@ from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_en
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.quality import surface_proof
-from data_engine.quality.nightly_verdicts import TICK_TAG, check_name, tick_from_config, tick_of, verdict
+from data_engine.quality.nightly_verdicts import (
+    TICK_TAG,
+    check_name,
+    newest_is_red,
+    tick_from_config,
+    tick_of,
+    verdict,
+)
 from data_engine.sources import gateway
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
@@ -528,6 +535,50 @@ def release_fetch_proof_schedule(context: dg.ScheduleEvaluationContext) -> dg.Ru
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
+OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
+OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
+
+
+@dg.sensor(
+    name=OUTPUT_INVARIANTS_SENSOR_NAME,
+    job=output_invariants_job,
+    minimum_interval_seconds=OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
+    """Re-evaluate `output_invariants_job` when a new build or governed head lands while
+    `output_invariants` or `report_surface_proof` is red (#1346, #1295, #1227).
+
+    Instead of waiting up to 24 hours for the 00:15 UTC cron after a fix deploys or a
+    governed pointer advances, this sensor checks whether the newest verdict is red and,
+    if so, launches one run per `(image_digest, head_run_ids)` state (`run_key`).
+    """
+    build = (settings.data_engine_image_digest or "").strip() or "unversioned"
+    try:
+        with psycopg.connect(settings.database_url) as connection:
+            rows = connection.execute(
+                "select universe_id, coalesce(run_id, head_run_id, '') from mart.served_head order by universe_id"
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - sensor never crashes the daemon on a transient DB blip
+        yield dg.SkipReason(f"cannot read mart.served_head: {type(exc).__name__}")
+        return
+    heads = ",".join(f"{u}={r}" for u, r in rows)
+    state_key = f"heal:{build[:19]}:{heads}"
+    if context.cursor == state_key:
+        yield dg.SkipReason("already evaluated on current build and governed heads")
+        return
+    red = [name for name in (OUTPUT_INVARIANTS_VERDICT, REPORT_SURFACE_VERDICT) if newest_is_red(name)]
+    context.update_cursor(state_key)
+    if not red:
+        yield dg.SkipReason("newest output_invariants and report_surface_proof verdicts are green")
+        return
+    tick = datetime.now(UTC).replace(microsecond=0).isoformat()
+    yield dg.RunRequest(
+        run_key=state_key,
+        tags={TICK_TAG: tick},
+    )
+
+
 defs = dg.Definitions(
     jobs=[output_invariants_job, datahub_confidence_report_job, model_key_health_job, release_fetch_proof_job],
     schedules=[
@@ -536,4 +587,5 @@ defs = dg.Definitions(
         model_key_health_schedule,
         release_fetch_proof_schedule,
     ],
+    sensors=[output_invariants_on_advance_sensor],
 )
