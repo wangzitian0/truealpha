@@ -212,7 +212,6 @@ const nightlyVerdictRows = [
     ok: true,
     summary: "ok (26/26 passed)",
     dagster_run_id: "dagster-run-123",
-    age_hours: 1.5,
   },
 ];
 

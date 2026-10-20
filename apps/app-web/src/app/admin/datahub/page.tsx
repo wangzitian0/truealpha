@@ -654,7 +654,7 @@ export default async function AdminDatahubPage() {
                     {v.ok ? "ok" : "fail"}
                   </td>
                   <td className="pr-4 text-gray-400">
-                    {v.ran_at} ({v.age_hours.toFixed(1)}h ago)
+                    {v.ran_at}
                   </td>
                   <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
                     {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}

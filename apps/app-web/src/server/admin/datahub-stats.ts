@@ -79,7 +79,6 @@ export interface NightlyVerdictRow {
   ok: boolean;
   summary: string;
   dagster_run_id: string | null;
-  age_hours: number;
 }
 
 /** #729: one vendor, today (UTC), from the external call ledger — every request,
@@ -395,8 +394,7 @@ const NIGHTLY_VERDICTS_SQL = `
          to_char(ran_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as ran_at,
          ok,
          summary,
-         dagster_run_id,
-         round((extract(epoch from (now() - ran_at)) / 3600.0)::numeric, 1)::float as age_hours
+         dagster_run_id
   from mart.nightly_verdicts
   order by check_name
 `;
@@ -633,7 +631,6 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         ok: Boolean(row.ok),
         summary: row.summary ?? "",
         dagster_run_id: row.dagster_run_id ?? null,
-        age_hours: Number(row.age_hours ?? 0),
       })),
       heads: heads.rows.map((row: HeadDbRow) => {
         const parsedAvail =
