@@ -6,7 +6,7 @@ help:
 	@echo "Setup:"
 	@echo "  make bootstrap    Full physical bootstrap: uv sync + bun install + doctor"
 	@echo "  make doctor       Verify physical dev_env contracts and dependencies"
-	@echo "  make install      uv sync + bun install + pre-commit hooks"
+	@echo "  make install      uv sync + bun install + the per-commit hook (once per clone)"
 	@echo "  make runtime-up   Start Postgres/KG + MinIO and create the raw bucket"
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
 	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
@@ -33,15 +33,19 @@ help:
 bootstrap:
 	uv sync --all-packages
 	cd apps/app-web && bun install --frozen-lockfile
+	uv run python tools/doctor.py --install-hooks
 	uv run python tools/doctor.py
 
 doctor:
 	uv run python tools/doctor.py
 
+# The per-commit hook (T0, #1412): tools/doctor.py owns the hook path. It sets
+# core.hooksPath once per clone, so every worktree runs its own tracked copy, and
+# `make doctor` fails while it is missing.
 install:
 	uv sync --all-packages
 	cd apps/app-web && bun install
-	uvx pre-commit install 2>/dev/null || true
+	uv run python tools/doctor.py --install-hooks
 
 runtime-up:
 	docker compose up -d --wait postgres minio
