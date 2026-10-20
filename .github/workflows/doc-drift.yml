@@ -1,0 +1,29 @@
+name: doc-drift
+
+# #1410 W1: init.md, vision.md and README.md cite only repository paths and `mart` objects
+# that exist on main, and they hold no "Status 20xx" or "as of 20xx" stamp. On 2026-10-20 they
+# held 22 dead paths, 2 missing mart objects and 5 stamps, and no check saw it.
+# `common/runtime/src/truealpha_tools/doc_drift.py` is the check; its docstring states the rules.
+#
+# A red run is the verdict. It gates no merge, it is not a required check, and it opens no
+# issue (ADR A8). It reads main's tree, not a deployed release: agents and people read the
+# documents on main, and the data-engine image holds no Markdown and no git tree.
+# scheduler-liveness watches this schedule. Manual replay: workflow_dispatch, or run the same
+# command in a checkout.
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  doc-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # Standard library only: no install step.
+      - name: Doc drift on main
+        run: python3 common/runtime/src/truealpha_tools/doc_drift.py --ref HEAD
