@@ -26,7 +26,7 @@ make install        # uv sync + bun install
 make runtime-up     # Postgres/KG + MinIO with schemas/bucket initialized
 cp .env.example .env  # then set SEC_USER_AGENT
 make sample         # capture the checked-in SEC reconnaissance corpus
-make check          # lint + typecheck + test
+make check          # lint + typecheck + test of what the diff reaches; FULL=1 for all
 ```
 
 `make stack-up` additionally builds and starts Web + LLM locally. Application
