@@ -201,8 +201,11 @@ export function tierKey(
 }
 
 /** Human-readable display label for a three-tier valuation classification (#1360). */
-export function formatTierLabel(tier: string | null | undefined): string {
-  if (!tier || tier.trim() === "") return "—";
+export function formatTierLabel(
+  tier: string | null | undefined,
+  fallbackGlyph = "—",
+): string {
+  if (!tier || tier.trim() === "") return fallbackGlyph;
   switch (tierKey(tier)) {
     case "lm-native":
       return "Large Model Native";
@@ -214,4 +217,5 @@ export function formatTierLabel(tier: string | null | undefined): string {
       return tier;
   }
 }
+
 

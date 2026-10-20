@@ -9,15 +9,25 @@
  */
 
 import { useState } from "react";
+import type { PegGrowthConvention, RankingUniverse } from "@/contracts/strategyRun";
 
 interface CardExportButtonProps {
   cutoff?: string;
   issuerId?: string;
   kind?: "ranking" | "entity";
   format?: "png" | "svg";
+  convention?: PegGrowthConvention;
+  universe?: RankingUniverse;
 }
 
-export function CardExportButton({ cutoff, issuerId, kind, format = "png" }: CardExportButtonProps) {
+export function CardExportButton({
+  cutoff,
+  issuerId,
+  kind,
+  format = "png",
+  convention = "historical_cagr",
+  universe = "topt",
+}: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
 
   const handleExport = () => {
@@ -27,6 +37,8 @@ export function CardExportButton({ cutoff, issuerId, kind, format = "png" }: Car
     query.set("kind", effectiveKind);
     if (cutoff) query.set("cutoff", cutoff);
     if (issuerId) query.set("issuer", issuerId);
+    if (convention !== "historical_cagr") query.set("convention", convention);
+    if (!issuerId && universe !== "topt") query.set("universe", universe);
     query.set("format", format);
 
     const ext = format === "svg" ? "svg" : "png";
@@ -48,6 +60,11 @@ export function CardExportButton({ cutoff, issuerId, kind, format = "png" }: Car
       type="button"
       onClick={handleExport}
       disabled={downloading}
+      data-testid="card-export-button"
+      data-export-kind={kind ?? (issuerId ? "entity" : "ranking")}
+      data-export-format={format}
+      data-export-convention={convention}
+      data-export-universe={universe}
       className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-1.5 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
       title="Export 1080x1440 3:4 portrait card for Xiaohongshu"
     >
@@ -73,3 +90,4 @@ export function CardExportButton({ cutoff, issuerId, kind, format = "png" }: Car
     </button>
   );
 }
+

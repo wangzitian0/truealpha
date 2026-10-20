@@ -499,6 +499,12 @@ console.log(
 				`${file} defines a duplicate local tierLabel/formatTierLabel helper; import formatTierLabel from @/client/format`,
 			);
 		}
+		if (!file.endsWith("src/server/mart/research-read.ts")) {
+			assert(
+				!/\bfunction\s+toAvailabilityStatus\s*\(/.test(code),
+				`${file} redefines toAvailabilityStatus(); import toAvailabilityStatus from @/server/mart/research-read (#1360)`,
+			);
+		}
 	}
 
 	for (const file of listFiles(join(process.cwd(), "src/app/research"))) {
@@ -509,8 +515,21 @@ console.log(
 			`${file} hardcodes the dashboard strategy ID; import DASHBOARD_STRATEGY_ID from @/server/mart/research-read`,
 		);
 	}
+
+	for (const relativePath of [
+		"src/app/research/rankings/page.tsx",
+		"src/app/research/entities/[id]/page.tsx",
+	] as const) {
+		const code = withoutComments(
+			readFileSync(join(process.cwd(), relativePath), "utf8"),
+		);
+		assert(
+			!/formatCell\(\s*(?:row|latestRow)\??\.tier\s*\)/.test(code),
+			`${relativePath} formats tier with raw formatCell(*.tier) instead of formatTierLabel(*.tier) (#1360)`,
+		);
+	}
 	console.log(
-		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell/formatTierLabel/DASHBOARD_STRATEGY_ID are SSOT",
+		"ok  every dynamic [param]/page.tsx uses decodeRouteParam, detail loaders use bidirectionalIssuerPredicate, and formatCell/formatTierLabel/toAvailabilityStatus/DASHBOARD_STRATEGY_ID are SSOT",
 	);
 }
 
