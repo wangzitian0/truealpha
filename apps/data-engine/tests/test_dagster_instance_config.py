@@ -6,7 +6,7 @@ check three facts:
 
 1. The installed Dagster accepts the file. An unknown key must fail the load.
 2. The effective tick retention keeps every tick, except skipped sensor ticks.
-3. Run monitoring ends a run that outlives every real run (#1271).
+3. Run monitoring ends a run that outlives every real run (#1271, #1442).
 
 Three sensors poll every 30 seconds. Each poll that does no work writes one `SKIPPED` tick
 to `dagster.job_ticks`. The retention block limits that table.
@@ -26,6 +26,7 @@ from dagster._core.errors import DagsterInvalidConfigError
 from dagster._core.instance.config import dagster_instance_config
 from dagster._core.instance.ref import InstanceRef
 from dagster._core.scheduler.instigation import TickStatus
+from truealpha_contracts.environment_contract import load_environment_contract
 
 DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 
@@ -33,11 +34,10 @@ DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 KEEP = -1
 SKIPPED_SENSOR_TICK_DAYS = 3
 
-#: The longest finished run in the Dagster run store over 30 days, read on 2026-10-14:
-#: `qqq_live_pipeline` on staging, 63 minutes. A run that takes longer is an orphan.
-LONGEST_MEASURED_RUN_SECONDS = 63 * 60
-#: The limit that `dagster.yaml` sets: 3 hours, 2.9 times the longest measured run.
+#: The limit that `dagster.yaml` sets for a run without a `dagster/max_runtime` tag: 3 hours.
 MAX_RUNTIME_SECONDS = 3 * 60 * 60
+#: The fewest run-monitor polls that the shortest bound (contract `floor_minutes`) must span.
+MONITOR_POLLS_PER_FLOOR = 5
 
 
 def _instance_from_the_real_file() -> DagsterInstance:
@@ -119,6 +119,15 @@ def test_an_unknown_retention_key_fails_the_instance_config_load(
         dagster_instance_config(str(tmp_path))
 
 
+def test_the_run_launcher_is_the_class_that_the_composition_root_imports() -> None:
+    """`dagster.yaml` names the launcher by string. The composition root imports the class (#1442)."""
+    from data_engine.dagster_defs import MonitoredRunLauncher
+
+    launcher = yaml.safe_load(DAGSTER_YAML.read_text(encoding="utf-8"))["run_launcher"]
+
+    assert launcher == {"module": MonitoredRunLauncher.__module__, "class": MonitoredRunLauncher.__name__}
+
+
 def test_run_monitoring_is_on_and_ends_a_run_after_the_limit() -> None:
     """A run whose process died with its container stays `STARTED` until the limit ends it (#1271)."""
     instance = _instance_from_the_real_file()
@@ -128,11 +137,27 @@ def test_run_monitoring_is_on_and_ends_a_run_after_the_limit() -> None:
 
 
 def test_the_runtime_limit_leaves_room_for_the_longest_real_run_and_has_a_ceiling() -> None:
-    """The limit must not end a real run. It must still end an orphan within one day."""
+    """The limit must not end a real run. It must still end an orphan within one day.
+
+    The environment contract holds the measured run times (#1442). The limit bounds only a run
+    without a bound of its own, so it must exceed the margin times every measured success.
+    """
+    bounds = load_environment_contract().run_time_bounds
+    longest_success_seconds = 60 * max(
+        times.longest_minutes for basis in bounds.jobs.values() for times in (basis.measured or {}).values()
+    )
     limit = _instance_from_the_real_file().run_monitoring_max_runtime_seconds
 
-    assert limit >= 2 * LONGEST_MEASURED_RUN_SECONDS
+    assert limit >= bounds.margin * longest_success_seconds
     assert limit <= 24 * 60 * 60
+
+
+def test_the_monitor_polls_often_enough_for_the_shortest_bound() -> None:
+    """A lost run fails at the next poll. The shortest bound spans several polls (#1442)."""
+    floor_seconds = 60 * load_environment_contract().run_time_bounds.floor_minutes
+    poll_seconds = _instance_from_the_real_file().run_monitoring_poll_interval_seconds
+
+    assert poll_seconds * MONITOR_POLLS_PER_FLOOR <= floor_seconds
 
 
 def _misspell_max_runtime_seconds(run_monitoring: dict[str, Any]) -> None:
@@ -143,9 +168,13 @@ def _misspell_enabled(run_monitoring: dict[str, Any]) -> None:
     _rename_key(run_monitoring, "enabled", "enable")
 
 
+def _misspell_poll_interval_seconds(run_monitoring: dict[str, Any]) -> None:
+    _rename_key(run_monitoring, "poll_interval_seconds", "poll_interval_second")
+
+
 @pytest.mark.parametrize(
     "mutate",
-    [_misspell_max_runtime_seconds, _misspell_enabled],
+    [_misspell_max_runtime_seconds, _misspell_enabled, _misspell_poll_interval_seconds],
     ids=lambda mutate: mutate.__name__,
 )
 def test_an_unknown_run_monitoring_key_fails_the_instance_config_load(

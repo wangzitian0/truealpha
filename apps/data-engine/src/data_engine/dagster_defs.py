@@ -15,6 +15,10 @@ operator commands and tests that address `data_engine.dagster_defs` working, and
 are also what makes each lane statically reachable for `tools/reachability_ratchet.py`
 (`LANE_MODULES` is resolved by `import_module`, which an AST walk cannot follow).
 
+`dagster.yaml` loads the run launcher by module name (#1442). The import of
+`MonitoredRunLauncher` below makes that module statically reachable too, and
+`test_dagster_instance_config.py` holds the name in `dagster.yaml` equal to this class.
+
 No fixture data is seeded anywhere in the deployed composition (#429 invariant I2);
 the retired fixture-seeded canary lives in `fixture_canary_definitions()` — an
 explicitly named, tests-only composition that is NOT part of the deployed `defs`.
@@ -70,6 +74,7 @@ from data_engine.lanes.universe_refresh import (
     UNIVERSE_REFRESH_JOB_NAME,
     sp500_universe_refresh_schedule,
 )
+from data_engine.run_launcher import MonitoredRunLauncher
 
 __all__ = [
     "CANARY_JOB_NAME",
@@ -78,6 +83,7 @@ __all__ = [
     "FORM4_DAILY_CRON",
     "FORM4_DAILY_SCHEDULE_NAME",
     "LANE_MODULES",
+    "MonitoredRunLauncher",
     "NPORT_MONTHLY_CRON",
     "NPORT_MONTHLY_SCHEDULE_NAME",
     "QQQ_LIVE_JOB_NAME",

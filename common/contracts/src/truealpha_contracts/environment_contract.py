@@ -4,11 +4,15 @@ Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` fr
 ``truealpha_contracts.data``. Both Python lanes and the generated TypeScript module
 (``apps/app-web/src/contracts/environmentContract.generated.ts``) derive their rules
 from this contract so no environment schedule or vendor share is hand-mirrored.
+
+The contract also holds the measured run times of every deployed Dagster job. The data-engine
+run launcher derives each run's maximum runtime from them (#1442).
 """
 
 from __future__ import annotations
 
 import functools
+import math
 from collections.abc import Mapping
 from decimal import Decimal
 from importlib import resources
@@ -60,6 +64,54 @@ class SharedSeatSpec(_StrictFrozenModel):
     allocation_basis: Literal["planned_daily_demand"]
 
 
+class MeasuredRunTimes(_StrictFrozenModel):
+    """The successful runs of one job in one environment over the measurement window."""
+
+    successes: int = Field(ge=1)
+    longest_minutes: float = Field(gt=0)
+
+
+class LiveTickFit(_StrictFrozenModel):
+    """The minutes of one live tick as a linear function of its listing count (#1418)."""
+
+    intercept_minutes: float = Field(gt=0)
+    minutes_per_listing: float = Field(gt=0)
+    source: str = Field(min_length=1)
+
+
+class JobRunTimeBasis(_StrictFrozenModel):
+    """The basis of the maximum runtime of one job. Each job declares exactly one basis.
+
+    ``measured``: the successful runs per environment. ``estimate_tick``: the job never ran, and
+    the live-tick fit at the listing count of this tick gives its run time. ``unmeasured``: the
+    reason why no run time exists; the instance-wide limit of ``dagster.yaml`` bounds the job.
+    """
+
+    measured: Mapping[EnvironmentKey, MeasuredRunTimes] | None = None
+    estimate_tick: TickKey | None = None
+    unmeasured: str | None = None
+
+    @model_validator(mode="after")
+    def _declare_exactly_one_basis(self) -> Self:
+        declared = [name for name in ("measured", "estimate_tick", "unmeasured") if getattr(self, name)]
+        if len(declared) != 1:
+            raise ValueError(f"a job declares exactly one run-time basis, got {declared or 'none'}")
+        return self
+
+
+class RunTimeBounds(_StrictFrozenModel):
+    """The measured run times of every deployed Dagster job and the rule that bounds them (#1442)."""
+
+    description: str = Field(min_length=1)
+    margin: float = Field(gt=1)
+    floor_minutes: float = Field(gt=0)
+    measured_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    window_days: int = Field(ge=1)
+    source: str = Field(min_length=1)
+    live_tick_fit: LiveTickFit
+    jobs: Mapping[str, JobRunTimeBasis]
+
+
 class EnvironmentContract(_StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
@@ -67,6 +119,7 @@ class EnvironmentContract(_StrictFrozenModel):
     sentinels: tuple[SentinelMember, ...]
     environments: Mapping[str, EnvironmentSpec]
     shared_physical_seats: Mapping[str, SharedSeatSpec]
+    run_time_bounds: RunTimeBounds
 
     @model_validator(mode="after")
     def _validate_sentinels_and_environments(self) -> Self:
@@ -78,7 +131,34 @@ class EnvironmentContract(_StrictFrozenModel):
         for required_env in ("preview", "staging", "production"):
             if required_env not in self.environments:
                 raise ValueError(f"environment contract is missing {required_env!r}")
+        for job_name, basis in self.run_time_bounds.jobs.items():
+            if basis.estimate_tick is not None and not self._tick_listings(basis.estimate_tick):
+                raise ValueError(f"{job_name}: no environment declares the tick {basis.estimate_tick!r}")
         return self
+
+    def _tick_listings(self, tick: str) -> list[int]:
+        return [spec.ticks[tick].estimated_listings for spec in self.environments.values() if tick in spec.ticks]
+
+    def max_runtime_seconds(self, job_name: str) -> int | None:
+        """Return the maximum runtime of ``job_name`` in seconds (#1442).
+
+        The bound is ``margin`` times the longest successful run over all measured environments.
+        It is never below ``floor_minutes``. A job that never ran takes the live-tick fit at the
+        largest declared listing count of its tick. The return value is None for a job without
+        an entry or with an ``unmeasured`` basis. The instance-wide limit then bounds the job.
+        """
+        bounds = self.run_time_bounds
+        basis = bounds.jobs.get(job_name)
+        if basis is None or basis.unmeasured is not None:
+            return None
+        if basis.measured is not None:
+            base = max(Decimal(str(times.longest_minutes)) for times in basis.measured.values())
+        else:
+            fit = bounds.live_tick_fit
+            listings = max(self._tick_listings(str(basis.estimate_tick)))
+            base = Decimal(str(fit.intercept_minutes)) + Decimal(str(fit.minutes_per_listing)) * listings
+        minutes = max(Decimal(str(bounds.margin)) * base, Decimal(str(bounds.floor_minutes)))
+        return math.ceil(minutes * 60)
 
     @property
     def content_sha256(self) -> str:
