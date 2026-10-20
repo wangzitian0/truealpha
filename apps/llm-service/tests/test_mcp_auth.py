@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from llm_service.mcp_auth import CHALLENGE, BearerTokenGate, presented_bearer, token_matches
 from pydantic import SecretStr
 from starlette.types import Receive, Scope, Send
+from starlette.websockets import WebSocketDisconnect
 
 TOKEN = "test-mcp-token"
 
@@ -101,3 +102,29 @@ def test_the_comparison_needs_both_sides() -> None:
     assert token_matches(None, SecretStr(TOKEN)) is False
     assert token_matches(TOKEN, None) is False
     assert token_matches("", SecretStr("")) is False
+
+
+class _RecordingWebSocketApp:
+    """Accepts a websocket and counts the connections that reached it."""
+
+    def __init__(self) -> None:
+        self.reached = 0
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        self.reached += 1
+        await receive()
+        await send({"type": "websocket.accept"})
+        await send({"type": "websocket.close", "code": 1000})
+
+
+def test_a_websocket_needs_the_token_too() -> None:
+    """FastMCP serves no websocket today; a later websocket transport must not be open."""
+    inner = _RecordingWebSocketApp()
+    client = TestClient(BearerTokenGate(inner, expected_token=lambda: SecretStr(TOKEN)))
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/"):
+            pass
+    assert inner.reached == 0
+    with client.websocket_connect("/", headers={"Authorization": f"Bearer {TOKEN}"}):
+        pass
+    assert inner.reached == 1

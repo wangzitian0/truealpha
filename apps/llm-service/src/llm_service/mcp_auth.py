@@ -14,6 +14,7 @@ new app. It fails closed: no configured token means no request passes.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from collections.abc import Callable
@@ -44,15 +45,18 @@ def presented_bearer(scope: Scope) -> str | None:
 def token_matches(presented: str | None, expected: SecretStr | None) -> bool:
     """True only when a token is configured and the presented one is equal to it.
 
-    `hmac.compare_digest` takes the same time for every wrong token of a given length, so
-    the answer time does not show how many leading characters matched.
+    Both sides are hashed first and the fixed-length digests are compared with
+    `hmac.compare_digest`, so the answer time shows neither how many leading characters
+    matched nor the length of the configured token.
     """
     if presented is None or expected is None:
         return False
     secret = expected.get_secret_value()
     if not secret:
         return False
-    return hmac.compare_digest(presented.encode("utf-8"), secret.encode("utf-8"))
+    return hmac.compare_digest(
+        hashlib.sha256(presented.encode("utf-8")).digest(), hashlib.sha256(secret.encode("utf-8")).digest()
+    )
 
 
 class BearerTokenGate:
@@ -63,10 +67,14 @@ class BearerTokenGate:
         self._expected_token = expected_token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # Lifespan and other non-HTTP scopes carry no request; FastAPI drives the MCP
-        # session manager from its own lifespan, not through this mount.
-        if scope["type"] != "http" or token_matches(presented_bearer(scope), self._expected_token()):
+        # Only a lifespan scope passes unchecked: it carries no request. HTTP and websocket
+        # scopes both need the token, so a later websocket transport is not open by default.
+        if scope["type"] == "lifespan" or token_matches(presented_bearer(scope), self._expected_token()):
             await self._app(scope, receive, send)
+            return
+        if scope["type"] == "websocket":
+            # A close before accept makes the server answer the handshake with 403.
+            await send({"type": "websocket.close", "code": 1008})
             return
         body = json.dumps(
             {
