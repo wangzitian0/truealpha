@@ -44,6 +44,24 @@
 #   typed it. The owner's presence stays a human fact: an agent passes the SHA only
 #   after the owner approved that SHA.
 #
+# --prod promotes an EXISTING tag that staging already verified, and nothing else (#1412
+#   R1). It reads the staging evidence that GitHub holds for the commit of the tag
+#   (tools/staging_evidence.py: the tag's own green ci-required run, a successful
+#   "Deploy staging <tag>" run that started after it, and a successful walk of that
+#   deploy) and dispatches only the prod deploy. It never deploys staging again: before
+#   #1412 every production attempt paid a second staging deploy, and a production
+#   attempt succeeded at the first try about half the time (0.74 x 0.68). A missing fact
+#   is a refusal that names the command that produces it. A tag that does not exist is
+#   also a refusal: the owner approves a commit with its staging evidence in hand, so a
+#   new number goes to staging first. --dry-run reads the same evidence.
+#
+# Each release declares its data replays and its rollback tag (#1412 R4). Before a new
+#   tag is pushed, tools/release_replays.py compares every version identity that
+#   apps/data-engine/release-replays.json watches (parser, mapping, projector) between the
+#   base release tag and main HEAD. A changed identity without a new replay entry stops
+#   the release before the tag push. The tag annotation records the declared replays
+#   (`Replay:` lines) and the rollback tag (`Rollback-Tag:`, the base release tag).
+#
 # --auto marks the tag as machine-cut (`auto-release-staging.yml`, #860): it
 #   appends `Release-Trigger: auto-staging` to the tag annotation, which is the
 #   only thing `tools/auto_release.py`'s daily cap counts (a hand-cut tag never
@@ -88,7 +106,8 @@
 #
 # Promotion policy (#819) — deploy-freshness.yml and tools/deploy_freshness.py
 # bound the same policy, so the three files must agree:
-#   - every tag soaks staging: the staging deploy below is unconditional;
+#   - every tag soaks staging: each new tag deploys to staging, and --prod promotes
+#     only a tag whose staging deploy and walk are already green (#1412);
 #   - prod moves only with --prod and --owner-approved-sha: the owner approves the
 #     exact SHA and is present, so prod lags staging by design and several tags can
 #     soak before one is promoted;
@@ -381,6 +400,19 @@ if [ "$TAG_EXISTS" = "1" ]; then
   note "$TAG on origin already points at main HEAD ${LOCAL_MAIN:0:8} — this is the same release"
 fi
 
+# #1412 R1: --prod promotes a tag that staging already verified, and it never deploys
+# staging. The evidence is read now, before any PR verification or dispatch, so a tag
+# without it costs seconds. TAG_RUN_ID and STAGING_RUN come from that evidence.
+if [ "$PROD" = "1" ]; then
+  [ "$TAG_EXISTS" = "1" ] \
+    || fail "$TAG does not exist on origin. --prod promotes only a tag that staging already deployed and walked, and it never deploys staging (#1412). Release the tag to staging first: tools/cut_release.sh $TAG --message \"...\""
+  echo "== staging evidence for $TAG at ${LOCAL_MAIN:0:8} =="
+  EVIDENCE=$(python3 "$SCRIPT_DIR/staging_evidence.py" --release "$TAG" --release-sha "$LOCAL_MAIN") \
+    || fail "$TAG at ${LOCAL_MAIN:0:8} is not promotable: its staging evidence is incomplete (the reason is above). --prod never deploys staging (#1412)."
+  read -r TAG_RUN_ID STAGING_RUN WALK_RUN <<<"$EVIDENCE"
+  note "tag ci-required run $TAG_RUN_ID, staging deploy run $STAGING_RUN and walk run $WALK_RUN verify $TAG at ${LOCAL_MAIN:0:8}"
+fi
+
 # 2c. Batching by default (#855 A3, #860): an omitted --prs is derived from
 #     every squash-merge subject between the newest reachable release tag and
 #     main HEAD. This is the cadence change — one release per batch of merged
@@ -397,10 +429,36 @@ fi
 #     verified TAG_EXISTS passes over it: a fresh release keeps counting from
 #     the newest tag, so a main HEAD that is already released still fails here
 #     as nothing to release.
+#     The data-replay check below (#1412 R4) uses the same base tag, so the base
+#     is resolved for an explicit --prs too.
+RESUMED_TAG=""
+[ "$TAG_EXISTS" = "1" ] && RESUMED_TAG="$TAG"
+BASE_TAG=$(newest_release_tag "$LOCAL_MAIN" "$RESUMED_TAG")
+
+# #1412 R4: a new tag declares its data replays and its rollback tag. A changed parser,
+# mapping or projector identity with no new replay entry stops the release here, before
+# the tag push claims a number. The check reads only local git objects, so it runs before
+# the PR derivation and verification below (cheapest check first). An existing tag
+# (resume, redeploy, prod) already carries its trailers, and a tag annotation never changes.
+REPLAY_TRAILERS=""
+if [ "$TAG_EXISTS" = "0" ]; then
+  echo "== declared data replays =="
+  if [ -n "$BASE_TAG" ]; then
+    BASE_COMMIT=$(git ls-remote --tags origin "refs/tags/${BASE_TAG}^{}" | awk '{print $1}')
+    [ -n "$BASE_COMMIT" ] || BASE_COMMIT=$(git ls-remote --tags origin "refs/tags/$BASE_TAG" | awk '{print $1}')
+    REPLAY_TRAILERS=$(python3 "$SCRIPT_DIR/release_replays.py" \
+      --base "$BASE_COMMIT" --base-tag "$BASE_TAG" --release "$LOCAL_MAIN") \
+      || fail "the release from $BASE_TAG to ${LOCAL_MAIN:0:8} does not declare its data replays (the reason is above) — nothing was tagged"
+  else
+    # The first release has no base: nothing ran before it, so it has nothing to replay.
+    REPLAY_TRAILERS="Replay: none
+Rollback-Tag: none"
+  fi
+  echo "$REPLAY_TRAILERS" | sed 's/^/  /'
+fi
+
+# 2c, continued: derive --prs from BASE_TAG.
 if [ -z "$PRS" ]; then
-  RESUMED_TAG=""
-  [ "$TAG_EXISTS" = "1" ] && RESUMED_TAG="$TAG"
-  BASE_TAG=$(newest_release_tag "$LOCAL_MAIN" "$RESUMED_TAG")
   [ -n "$BASE_TAG" ] \
     || fail "no prior vX.Y.Z release tag is reachable from main to derive --prs from — pass --prs explicitly for a first release"
   echo "== deriving --prs: every merge on main since $BASE_TAG =="
@@ -477,6 +535,11 @@ note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 TAG_MESSAGE="$MESSAGE
 
 PRs: $PRS"
+# #1412 R4: the declared replays and the rollback tag, in the same trailer block.
+if [ -n "$REPLAY_TRAILERS" ]; then
+  TAG_MESSAGE="$TAG_MESSAGE
+$REPLAY_TRAILERS"
+fi
 # tools/auto_release.py's daily cap counts exactly this line (AUTO_TRAILER) on
 # a tag's annotation — never the invocation, since only the pushed tag itself
 # survives to the next run's `git for-each-ref`. A hand-cut release never
@@ -490,32 +553,44 @@ fi
 # 4. main HEAD's ci-required is green — the tag inherits this SHA. A freshly
 #    merged HEAD has CI still running; wait bounded instead of failing on the
 #    spot (v0.0.35's first attempt died here five minutes after its merge).
-MAIN_RUN=""
-for _ in $(seq 1 90); do
-  STATE=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
-    --json databaseId,headSha,status,conclusion \
-    -q "[.[]|select(.headSha==\"$LOCAL_MAIN\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
-  case "$STATE" in
-    *"completed success") MAIN_RUN=$(echo "$STATE" | awk '{print $1}'); break ;;
-    *completed*) fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} finished non-green: $STATE" ;;
-  esac
-  sleep 10
-done
-[ -n "$MAIN_RUN" ] || fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} not green after 15 minutes"
-note "main HEAD green (run $MAIN_RUN)"
+#    --prod skips this wait (#1412): the staging evidence already holds the tag's
+#    own green ci-required run at this commit, and that run attests main's green
+#    run. A tag soaks staging for hours or days, so main's run of the commit is
+#    then no longer among the last 20 runs, and this wait would fail.
+if [ "$PROD" != "1" ]; then
+  MAIN_RUN=""
+  for _ in $(seq 1 90); do
+    STATE=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
+      --json databaseId,headSha,status,conclusion \
+      -q "[.[]|select(.headSha==\"$LOCAL_MAIN\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
+    case "$STATE" in
+      *"completed success") MAIN_RUN=$(echo "$STATE" | awk '{print $1}'); break ;;
+      *completed*) fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} finished non-green: $STATE" ;;
+    esac
+    sleep 10
+  done
+  [ -n "$MAIN_RUN" ] || fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} not green after 15 minutes"
+  note "main HEAD green (run $MAIN_RUN)"
+fi
 
 if [ "$DRY" = "1" ]; then
-  if [ "$REDEPLOY" = "1" ]; then
-    echo "== dry run: would redeploy $TAG (already tagged + green) to staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+  if [ "$PROD" = "1" ]; then
+    echo "== dry run: would promote $TAG (${LOCAL_MAIN:0:8}) to prod with staging run $STAGING_RUN and walk run $WALK_RUN — no staging redeploy =="
+  elif [ "$REDEPLOY" = "1" ]; then
+    echo "== dry run: would redeploy $TAG (already tagged + green) to staging =="
   elif [ "$RESUME" = "1" ] && [ "$TAG_EXISTS" = "1" ]; then
-    echo "== dry run: would resume $TAG from the tag ci-required wait, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+    echo "== dry run: would resume $TAG from the tag ci-required wait, deploy staging =="
   else
-    echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG (PRs: $PRS), deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+    echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG (PRs: $PRS), deploy staging =="
   fi
   exit 0
 fi
 
-if [ "$REDEPLOY" = "1" ]; then
+if [ "$PROD" = "1" ]; then
+  # #1412 R1: the tag, its CI and its staging verification already exist. Nothing is
+  # tagged, waited for or deployed to staging; TAG_RUN_ID comes from the evidence.
+  note "--prod: $TAG is already tagged, green and verified on staging — no tag push, no staging deploy"
+elif [ "$REDEPLOY" = "1" ]; then
   # #811: the release is live and its tag CI is green — only the deploy run's
   # gate flaked. Require green here rather than waiting for it; a wait would
   # mask the case where the tag CI was never actually green.
@@ -644,29 +719,8 @@ wait_for_walk() { # $1=staging|prod
   fail "walk run $RUN for $TITLE did not complete within 10 minutes"
 }
 
-echo "== staging =="
-STAGING_RUN=$(deploy staging | tail -1)
-probe "$STAGING_URL"
-note "staging run $STAGING_RUN green (fact 1 of 2)"
-if [ "$AUTO" = "1" ]; then
-  # #945: --auto's deploy dispatch above runs under github.token
-  # (auto-release-staging.yml) — GitHub never cascades a workflow_run trigger
-  # for anything a workflow's own GITHUB_TOKEN set in motion (the same rule
-  # #940 hit one hop earlier, on the tag push itself), so deploy-release.yml's
-  # completion would never fire walk-release.yml's workflow_run trigger and
-  # wait_for_walk below would always burn its full 3-minute budget waiting for
-  # a run that can never appear. Dispatch the walk explicitly instead of
-  # waiting on a cascade this token cannot produce. The non-auto (real
-  # operator PAT) path is unchanged: a real PAT DOES cascade, so dispatching
-  # explicitly here too would walk the same deploy twice.
-  note "--auto: dispatching the staging walk explicitly (github.token does not cascade workflow_run)"
-  gh workflow run walk-release.yml --repo "$REPO" -f deploy_type=staging -f version_ref="$TAG" >/dev/null
-fi
-echo "== staging surface walk =="
-wait_for_walk staging
-note "staging verified: deploy green AND surface walk green for $TAG (fact 2 of 2)"
-
 if [ "$PROD" = "1" ]; then
+  # #1412 R1: STAGING_RUN is the staging run of the evidence, not a new one.
   echo "== prod =="
   PROD_RUN=$(deploy prod \
     -f staging_run_url="https://github.com/$REPO/actions/runs/$STAGING_RUN" \
@@ -675,6 +729,27 @@ if [ "$PROD" = "1" ]; then
   probe "$PROD_URL"
   note "prod run $PROD_RUN"
 else
+  echo "== staging =="
+  STAGING_RUN=$(deploy staging | tail -1)
+  probe "$STAGING_URL"
+  note "staging run $STAGING_RUN green (fact 1 of 2)"
+  if [ "$AUTO" = "1" ]; then
+    # #945: --auto's deploy dispatch above runs under github.token
+    # (auto-release-staging.yml) — GitHub never cascades a workflow_run trigger
+    # for anything a workflow's own GITHUB_TOKEN set in motion (the same rule
+    # #940 hit one hop earlier, on the tag push itself), so deploy-release.yml's
+    # completion would never fire walk-release.yml's workflow_run trigger and
+    # wait_for_walk below would always burn its full 3-minute budget waiting for
+    # a run that can never appear. Dispatch the walk explicitly instead of
+    # waiting on a cascade this token cannot produce. The non-auto (real
+    # operator PAT) path is unchanged: a real PAT DOES cascade, so dispatching
+    # explicitly here too would walk the same deploy twice.
+    note "--auto: dispatching the staging walk explicitly (github.token does not cascade workflow_run)"
+    gh workflow run walk-release.yml --repo "$REPO" -f deploy_type=staging -f version_ref="$TAG" >/dev/null
+  fi
+  echo "== staging surface walk =="
+  wait_for_walk staging
+  note "staging verified: deploy green AND surface walk green for $TAG (fact 2 of 2)"
   echo "staging verified (deploy green AND surface walk green)."
   echo "production needs the owner's approval of release SHA $LOCAL_MAIN. After the owner approves that exact SHA, promote with:"
   echo "  tools/cut_release.sh $TAG --prs \"$PRS\" --message \"...\" --prod --owner-approved-sha <the SHA the owner approved>  # staging_run=$STAGING_RUN"

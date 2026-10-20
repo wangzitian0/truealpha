@@ -196,6 +196,56 @@ approved that SHA in the conversation. A required reviewer on a GitHub
 exist in this repository today (infra2#1035 tracks it), so the check above is
 the only mechanical guard.
 
+## Production promotes the verified staging tag (#1412 R1)
+
+`tools/cut_release.sh <tag> --prod` promotes an existing tag that staging
+already verified. It does not deploy staging again. Before #1412 it did: each
+production attempt paid a second staging deploy, and a production attempt
+succeeded at the first try about 0.74 x 0.68 = 50% of the time.
+
+`tools/staging_evidence.py` reads three facts for the commit that the tag
+names now:
+
+1. The tag's own `ci-required` push run at that commit is green. Its creation
+   time is the anchor.
+2. A successful `Deploy staging <tag>` run started after the anchor.
+   `deploy-release.yml` runs from main, so the `head_sha` of the run never
+   names the tag's commit. A run that started before the anchor deployed what
+   the tag named then: `--auto` deletes a tag whose CI never went green, and a
+   later release can use the number again at another commit.
+3. The newest `Walk Deploy staging <tag>` run created after that deploy
+   completed has a successful walk step (the `walk_evidence.find_walk` rule).
+   No staging deploy of another tag ran between the end of the deploy and the
+   end of the walk, because the walk does not read which release staging
+   serves.
+
+When a fact is missing, `--prod` stops with no dispatch and names the command
+that produces the fact: a walk re-run, or `--redeploy` for a new staging
+deploy. A tag that does not exist is also a refusal. The owner approves a
+commit with its staging evidence in hand, so a new number goes to staging
+first. `--prod --dry-run` reads the same evidence, so an agent can show that
+a promotion will be accepted before it asks the owner.
+
+## A release declares its data replays (#1412 R4)
+
+A changed parser, mapping or projector writes new rows only when it runs
+again. #1270: a projector fix reached main, and the next backtest ran on rows
+that the old projector wrote. `apps/data-engine/release-replays.json` is the
+one declaration. Its `identities` list names each watched version identity.
+Its `replays` list holds one entry for each declared replay.
+
+Before a new tag is pushed, `tools/release_replays.py` compares each identity
+at the base release tag with main HEAD. A changed identity needs a replay
+entry that the base declaration does not hold. The PR that changes the
+identity adds that entry. Without it, the release stops before the tag push,
+on the `--auto` path too. The tag annotation records the declared replays
+(`Replay:` lines, or `Replay: none`) and the rollback tag (`Rollback-Tag:`,
+the base release tag).
+
+Not done yet: staging and production do not run the declared replays
+automatically, and a production promotion does not collect the replays of
+the staging tags that it skips.
+
 ## Staging verification is two facts, not one
 
 Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s
