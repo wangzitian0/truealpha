@@ -119,7 +119,7 @@ def main() -> None:
     print(
         f"universe: {len(codes)} listing lines x {len(endpoints)} endpoints; "
         f"{len(plan)} calls to make (rest already fetched)\n"
-        f"ledger: {used}/{settings.moomoo_monthly_call_budget} used this month; "
+        f"ledger: {used} used this month; "
         f"throttle {settings.moomoo_calls_per_30s}/30s "
         f"=> est. {len(plan) * 30 / settings.moomoo_calls_per_30s / 3600:.1f}h"
     )
@@ -177,7 +177,7 @@ def main() -> None:
         ok = sum(v for k, v in stats.items() if len(k) == 3 and k[0] == market and k[2] == "ok")
         fails = {k[1]: v for k, v in stats.items() if len(k) == 3 and k[0] == market and k[2] == "fail"}
         print(f"  {market}: {ok} ok" + (f", failures: {fails}" if fails else ""))
-    print(f"ledger after run: {calls_this_month()}/{settings.moomoo_monthly_call_budget}")
+    print(f"ledger after run: {calls_this_month()} used this month")
 
 
 if __name__ == "__main__":

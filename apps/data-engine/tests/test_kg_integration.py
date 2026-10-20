@@ -185,10 +185,10 @@ def test_ledger_postgres_backend(conn, monkeypatch):
     # the local json ledger (probe sessions must stay visible to a sweep's
     # gate), and both stores may carry real prior calls on a dev machine.
     before = ledger.calls_this_month()
-    ledger.record("ep", "test", ok=True)
+    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
     ledger.record("ep", "test", ok=False)  # failures count too — they may have spent server-side quota
     assert ledger.calls_this_month() == before + 2
 
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", before + 2)
+    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", len(ledger.kline_distinct_stocks_30d()))
     with pytest.raises(ledger.BudgetExceededError):
-        ledger.gate("ep", "test")
+        ledger.gate("request_history_kline", "test", request_uri="moomoo://US.NEW_STOCK_OVER_QUOTA")

@@ -817,6 +817,47 @@ class IngestionSummary:
     unadjusted_daily_records: list[PriceBarRecord] = field(default_factory=list)
 
 
+def latest_closed_monthly_session(now: datetime) -> date:
+    """Return the last XNYS session of the latest closed calendar month at ``now`` (#1411 K4 D2)."""
+    current_month_end = last_xnys_session_of_month(now.year, now.month)
+    if now >= xnys_session_close_utc(current_month_end):
+        return current_month_end
+    prior_year, prior_month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
+    return last_xnys_session_of_month(prior_year, prior_month)
+
+
+def should_fetch_monthly_series(
+    connection: psycopg.Connection | None,
+    symbol: str,
+    *,
+    now: datetime,
+    adjust: str = DEFAULT_ADJUST,
+) -> bool:
+    """Return True when the monthly series for ``symbol`` needs a Twelve Data ``1month`` fetch (#1411 K4 D2).
+
+    Monthly bars only change when a month closes. Once ``staging.market_prices_monthly`` already
+    holds a bar for ``(symbol, latest_closed_monthly_session(now), adjust)``, mid-month runs
+    skip the ``1month`` request altogether (0 monthly calls).
+    """
+    if connection is None:
+        return True
+    target_month_end = latest_closed_monthly_session(now)
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                select 1
+                from staging.market_prices_monthly
+                where symbol = %s and trading_date = %s and adjust = %s
+                limit 1
+                """,
+                (symbol, target_month_end, adjust),
+            )
+            return cur.fetchone() is None
+    except Exception:  # noqa: BLE001 - fall back to fetching when connection is a test stub
+        return True
+
+
 def ingest_twelve_data_market_prices(
     symbols: Sequence[str] = DEFAULT_TOPT_SYMBOLS,
     client: TwelveDataClient | None = None,
@@ -872,11 +913,12 @@ def ingest_twelve_data_market_prices(
                 parse_daily_bars(symbol, unadjusted_payload, min_date=min_daily_date, now=now_instant)
             )
 
-        # 1 call for monthly
-        monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
-        calls_made += 1
-        monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, now=now_instant)
-        all_monthly_records.extend(monthly_bars)
+        # 1 call for monthly (skipped when the latest closed month is already stored: #1411 K4 D2)
+        if should_fetch_monthly_series(connection, symbol, now=now_instant, adjust=adjust):
+            monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
+            calls_made += 1
+            monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, now=now_instant)
+            all_monthly_records.extend(monthly_bars)
 
     daily_inserted = 0
     unadjusted_daily_inserted = 0

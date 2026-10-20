@@ -52,7 +52,6 @@ from pydantic import Field
 from data_engine.config import settings
 from data_engine.datahub.canonical_issuer import ticker_sort_key
 from data_engine.datahub.market_prices import (
-    DAILY_SERIES,
     DEFAULT_TOPT_SYMBOLS,
     MAX_BAR_LAG_SESSIONS,
     SPLIT_ADJUSTED,
@@ -64,6 +63,7 @@ from data_engine.datahub.market_prices import (
     ingest_daily_series,
 )
 from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, split_history
 from data_engine.lanes.backtest import schedule_status
@@ -75,8 +75,8 @@ QQQ_PRICE_REFRESH_JOB_NAME = "qqq_price_refresh_pipeline"
 QQQ_PRICE_REFRESH_CRON = "35 21 * * 1-5"
 #: The ledger `caller` of this lane's requests. The budget tells this lane's calls from the others by it.
 QQQ_PRICE_CALLER = "qqq_prices.fetch_time_series"
-#: One credit per request, one request per daily series.
-CREDITS_PER_SYMBOL = len(DAILY_SERIES)
+#: Derived from the Twelve Data origin registration (#1411 K1): one credit per daily series request.
+CREDITS_PER_SYMBOL = origin_per_key_cost("twelve-data:v1")
 #: A run after the close of session D serves the ticks of D and of the next `MAX_BAR_LAG_SESSIONS` sessions.
 REFRESH_EVERY_SESSIONS = MAX_BAR_LAG_SESSIONS + 1
 #: The percentage of the environment's daily share that all callers together may plan to spend.

@@ -578,7 +578,6 @@ def opend(monkeypatch, tmp_path):
     with MOOMOO_LEDGER_BACKEND=postgres cannot land fake rows in a real ledger."""
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
     monkeypatch.setattr(mm.settings, "moomoo_opend_host", "opend.test")
     monkeypatch.setattr(mm.settings, "moomoo_opend_port", 11111)
     ledger._recent_calls.clear()
@@ -625,11 +624,11 @@ def test_the_financials_request_is_two_gated_calls(opend) -> None:
     assert ledger.calls_this_month() == 2
 
 
-def test_the_monthly_backstop_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 1)
+def test_the_30d_kline_quota_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:
+    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 1)
     fetcher = MoomooKlineFetcher(OpenDClient())
-    assert fetcher("AAPL", _PARTITION) is not None, "the first call fits the budget"
-    assert fetcher("MSFT", _PARTITION) is None, "the second is refused BEFORE it is spent, and the origin is absent"
+    assert fetcher("AAPL", _PARTITION) is not None, "the first stock fits the 30-day quota"
+    assert fetcher("MSFT", _PARTITION) is None, "the second distinct stock is refused BEFORE it is spent"
     assert ledger.calls_this_month() == 1
     assert len(opend.kline_kwargs) == 1, "a refused call never reached OpenD"
 

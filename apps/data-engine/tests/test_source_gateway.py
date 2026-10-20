@@ -312,8 +312,8 @@ def test_moomoo_failures_reach_the_same_ledger_with_their_error(call_ledger, mon
     from data_engine.sources import moomoo_ledger as ledger
 
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "postgres")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
     monkeypatch.setattr(ledger, "calls_this_month", lambda: 0)
+    monkeypatch.setattr(ledger, "calls_today", lambda **kw: 0)
     monkeypatch.setattr(gateway, "postgres_writer", call_ledger)
     ledger._recent_calls.clear()
 

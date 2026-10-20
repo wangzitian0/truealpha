@@ -63,7 +63,6 @@ def _isolated_moomoo_ledger(tmp_path, monkeypatch):
     """Run the real `_call` wrapper against a throwaway JSON ledger, never the staging table."""
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 1000)
     ledger._recent_calls.clear()
     # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
     # over 25 tickers would run for a minute; the pacing is not what these tests assert.

@@ -28,6 +28,7 @@ import json
 import re
 import time
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, TypedDict
@@ -325,6 +326,85 @@ def refresh_etf_constituents(
     return len(rows)
 
 
+def _resolve_listing_mics(
+    connection: Connection[Any],
+    tickers: Sequence[str],
+    *,
+    default_mic: str,
+) -> dict[str, str]:
+    """Resolve the primary exchange MIC (`xnas` vs `xnys`) per ticker (#1411 K6 D4).
+
+    A multi-exchange index such as `sp500` contains both NYSE and Nasdaq listings.
+    Stamping every constituent with `source.mic` (`xnys`) mints a second listing identity
+    (`listing:xnys:aapl`) for every Nasdaq constituent that already lives under
+    `listing:xnas:aapl` in `qqq` and `topt`.
+
+    Resolution precedence:
+    1. `staging.entity_aliases` where `scheme = 'mic-ticker'` (`<MIC>:<TICKER>`).
+    2. Landed `qqq` constituents in `staging.etf_constituent_facts` (all `xnas`).
+    3. The governed TOPT corpus (`corpus.v1.json`) listing identities.
+    4. Fallback to `default_mic`.
+    """
+    mics: dict[str, str] = {}
+    upper_tickers = [t.upper() for t in tickers]
+
+    # 3. Seed from TOPT corpus first (lowest priority among explicit sources)
+    try:
+        from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+
+        topt_instruments = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["instruments"]
+        for row in topt_instruments:
+            listing_id, ticker = str(row[2]), str(row[3]).upper()
+            parts = listing_id.split(":")
+            if len(parts) == 3 and parts[0] == "listing":
+                mics[ticker] = parts[1].lower()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2. Override/enrich with landed QQQ constituents (Nasdaq-100 = xnas)
+    if default_mic != "xnas" and upper_tickers:
+        try:
+            with connection.transaction():
+                qqq_rows = connection.execute(
+                    """
+                    select distinct upper(ticker)
+                    from staging.etf_constituent_facts
+                    where etf_symbol = 'qqq' and upper(ticker) = any(%s)
+                    """,
+                    (upper_tickers,),
+                ).fetchall()
+            for (t,) in qqq_rows:
+                mics[str(t).upper()] = "xnas"
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 1. Authoritative KG `staging.entity_aliases` (`scheme = 'mic-ticker'`)
+    if upper_tickers:
+        try:
+            with connection.transaction():
+                alias_rows = connection.execute(
+                    """
+                    select value
+                    from staging.entity_aliases
+                    where scheme = 'mic-ticker'
+                      and split_part(upper(value), ':', 2) = any(%s)
+                    order by transaction_time desc
+                    """,
+                    (upper_tickers,),
+                ).fetchall()
+            seen_alias: set[str] = set()
+            for (alias_val,) in alias_rows:
+                mic_part, _, ticker_part = str(alias_val).partition(":")
+                t_up = ticker_part.upper()
+                if mic_part and t_up and t_up not in seen_alias:
+                    seen_alias.add(t_up)
+                    mics[t_up] = mic_part.lower()
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {t: mics.get(t.upper(), default_mic) for t in tickers}
+
+
 def build_denominator(connection: Connection[Any], source: UniverseSource, *, report_date: date) -> dict[str, Any]:
     """The newest landed constituents snapshot, as a self-pinned denominator dict."""
     rows = connection.execute(
@@ -346,11 +426,12 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
     ).fetchall()
     if not rows:
         raise LookupError(f"no landed constituents for {source.etf}; run the refresh first")
+    mics = _resolve_listing_mics(connection, [str(r[0]) for r in rows], default_mic=source.mic)
     instruments = [
         [
             f"issuer:cik:{int(cik):010d}",
             f"security:figi:{figi}",
-            f"listing:{source.mic}:{ticker.lower()}",
+            f"listing:{mics[ticker]}:{ticker.lower()}",
             ticker,
         ]
         for ticker, cik, figi in rows

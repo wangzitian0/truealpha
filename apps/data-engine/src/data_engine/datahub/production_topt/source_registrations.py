@@ -164,9 +164,13 @@ class OriginRegistration:
     parser_versions: tuple[str, ...]
     capacity: CapacityDeclaration | None = None
     ledger_seat: str | None = None
+    per_key_cost: int | None = None
+    as_of_axis: str | None = None
 
     def __post_init__(self) -> None:
         _seat_capacity(self, self.origin_source)
+        if self.per_key_cost is not None and self.per_key_cost <= 0:
+            raise ValueError(f"{self.origin_source}: per_key_cost must be positive, got {self.per_key_cost}")
 
 
 def _seat_capacity(owner: OriginRegistration | SourceRegistration, name: str) -> None:
@@ -210,6 +214,8 @@ class SourceRegistration:
     corroboration_class: str = "B"
     capacity: CapacityDeclaration | None = None
     ledger_seat: str | None = None
+    per_key_cost: int = 0
+    as_of_axis: str = "release"
     #: The observation is a session close: it is knowable only once its session has
     #: settled, so a mid-session bar is not a close (#637) and a reused observation must
     #: be THE settled session's (#635). Declared by the source, applied by generic code.
@@ -218,6 +224,10 @@ class SourceRegistration:
 
     def __post_init__(self) -> None:
         _seat_capacity(self, self.source_id)
+        if self.ledger_seat is not None and self.per_key_cost <= 0:
+            raise ValueError(f"{self.source_id}: vendor registration must declare positive per_key_cost (#1411 K1)")
+        if not self.as_of_axis:
+            raise ValueError(f"{self.source_id}: registration must declare as_of_axis (#1411 K1)")
 
     def entry_payload(self) -> dict[str, Any]:
         """The declared facts, in a canonical shape, so the registration is content-addressed."""
@@ -235,12 +245,16 @@ class SourceRegistration:
                     "parser_versions": list(o.parser_versions),
                     "capacity": _capacity_payload(o.capacity),
                     "ledger_seat": o.ledger_seat,
+                    "per_key_cost": o.per_key_cost,
+                    "as_of_axis": o.as_of_axis,
                 }
                 for o in self.origins
             ],
             "corroboration_class": self.corroboration_class,
             "capacity": _capacity_payload(self.capacity),
             "ledger_seat": self.ledger_seat,
+            "per_key_cost": self.per_key_cost,
+            "as_of_axis": self.as_of_axis,
             "session_bound": self.session_bound,
         }
 
@@ -356,8 +370,8 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
         ),
         # moomoo OpenAPI rate-limits quote endpoints at 60 requests per 30 s EACH and has
         # no call quota (init.md §5, 2026-07-10). `moomoo_ledger` paces 8 per 30 s across
-        # every endpoint — conservative, and the pace the origins actually see — and keeps
-        # MOOMOO_MONTHLY_CALL_BUDGET as its own runaway backstop.
+        # every endpoint — conservative, and the pace the origins actually see — and gates
+        # historical K-lines at 2,000 distinct stocks per rolling 30-day window (#1411 K2).
         "moomoo": CapacityDeclaration(
             calls_per_window=8,
             window_seconds=30,
@@ -417,6 +431,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 # orphaned the warehouse's history once).
                 parser_versions=PARSER_VERSION_HISTORY,
                 ledger_seat="yahoo",
+                per_key_cost=1,
+                as_of_axis="settled_session",
             ),
             OriginRegistration(
                 origin_source="twelve-data:v1",
@@ -425,6 +441,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 parser_versions=TWELVE_DATA_PARSER_VERSION_HISTORY,
                 # One key shared by both environments: the seat's split is declared above.
                 ledger_seat="twelvedata",
+                per_key_cost=2,
+                as_of_axis="settled_session",
             ),
             OriginRegistration(
                 origin_source="twelve-data:v1",
@@ -433,6 +451,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 value_key="price",
                 parser_versions=("twelve-data-parser:v1",),
                 ledger_seat="twelvedata",
+                per_key_cost=2,
+                as_of_axis="settled_session",
             ),
             # Third origin: moomoo OpenD's daily regular-session close, session-bound like
             # Twelve Data (the settled session at/before the price cutoff, never the
@@ -443,11 +463,15 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 value_key=MOOMOO_KLINE_VALUE_KEY,
                 parser_versions=("moomoo-kline-parser:v1", MOOMOO_KLINE_PARSER_VERSION),
                 ledger_seat="moomoo",
+                per_key_cost=1,
+                as_of_axis="settled_session",
             ),
         ),
         corroboration_class="A",
         session_bound=True,
         ledger_seat="yahoo",
+        per_key_cost=1,
+        as_of_axis="settled_session",
         notes=(
             "Yahoo has no published quota; the second origin's capacity is the binding one.",
             "moomoo's historical-candlestick quota is 2,000 distinct stocks per rolling 30-day "
@@ -463,6 +487,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         freshness_max_age={"listing-identity": timedelta(days=365), "universe-membership": timedelta(days=365)},
         route_builder="data_engine.datahub.production_topt.release_derived_adapter:build_route",
         corroboration_class="release",
+        per_key_cost=0,
+        as_of_axis="release",
     ),
     SourceRegistration(
         source_id="sec-company-facts",
@@ -484,6 +510,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 value_key=MOOMOO_FINANCIALS_VALUE_KEY,
                 parser_versions=(MOOMOO_FINANCIALS_PARSER_VERSION,),
                 ledger_seat="moomoo",
+                per_key_cost=2,
+                as_of_axis="accession",
             ),
         ),
         # Stays B until a scheduled staging tick shows the moomoo origin reconciling; the
@@ -491,6 +519,8 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         corroboration_class="B",
         # SEC fair access; the seat's numbers are in `LEDGER_CAPACITIES`.
         ledger_seat="sec",
+        per_key_cost=1,
+        as_of_axis="accession",
         notes=(
             "With MOOMOO_FINANCIALS_ORIGIN_ENABLED, revenue / net_income / gross_profit / "
             "total_assets are value-reconciled against moomoo's statements (class A per field).",
@@ -551,6 +581,15 @@ SEMANTIC_TYPES: tuple[str, ...] = registered_semantic_types()
 RELEASE_SEMANTICS: frozenset[str] = semantic_types_of("release-derived")
 FRESHNESS_WINDOWS: dict[str, timedelta] = freshness_windows()
 SOURCE_BY_PARSER: dict[str, tuple[str, str, str]] = source_by_parser()
+
+
+def origin_per_key_cost(origin_source: str, registrations: Sequence[SourceRegistration] = REGISTRATIONS) -> int:
+    """Return the declared ``per_key_cost`` for ``origin_source`` (#1411 K1)."""
+    for registration in registrations:
+        for origin in registration.origins:
+            if origin.origin_source == origin_source and origin.per_key_cost is not None:
+                return origin.per_key_cost
+    raise LookupError(f"no registered origin named {origin_source!r} declares per_key_cost (#1411 K1)")
 
 
 def configured_origin_sources(semantic_type: str) -> set[str]:

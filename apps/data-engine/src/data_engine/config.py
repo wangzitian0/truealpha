@@ -96,13 +96,6 @@ class Settings(RuntimeSettings):
         default="", json_schema_extra={"source": "code", "empty_ok": True, "group": "moomoo"}
     )
     moomoo_opend_port: int = Field(default=0, json_schema_extra={"source": "code", "group": "moomoo"})
-    # Self-imposed precautionary cap, NOT a real moomoo-side monthly quota —
-    # moomoo's own docs only rate-limit fundamental/quote endpoints (bursts
-    # per 30s); see init.md Section 5's 2026-07-10 correction. Kept as a
-    # defensive runaway backstop / audit trail (init.md Section 1 rule 6),
-    # sized so one full-universe fundamental sweep (~1,200 listing lines x
-    # 9 core endpoints ≈ 11k calls) fits with headroom.
-    moomoo_monthly_call_budget: int = Field(default=20000, json_schema_extra={"source": "code", "group": "moomoo"})
     # Which ledger the gate reads/writes: 'json' (local file, Phase -1 probe
     # scripts) or 'postgres' (staging.api_call_ledger — required for sweeps).
     moomoo_ledger_backend: str = Field(default="json", json_schema_extra={"source": "code", "group": "moomoo"})

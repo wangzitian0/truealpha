@@ -145,6 +145,19 @@ def test_the_last_close_reader_returns_the_unadjusted_bar_only(connection) -> No
     assert last.close == Decimal(UNADJUSTED_CLOSE)
 
 
+def test_twelve_data_origin_reads_unadjusted_bar_only(connection) -> None:
+    """TwelveDataQuoteFetcher._from_price_store filters on adjust = 'none' (#1411 K4 D1)."""
+    from data_engine.datahub.production_topt.twelve_data_origin import TwelveDataQuoteFetcher
+
+    symbol = "T1411TDORIG"
+    trading_date = date(2026, 9, 21)
+    _write_both_series(connection, symbol, trading_date, unadjusted_last=False)
+    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=0, connection=connection)
+    quote = fetcher(symbol, trading_date)
+    assert quote is not None
+    assert quote.close == Decimal(UNADJUSTED_CLOSE)
+
+
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
     "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
@@ -169,6 +182,7 @@ def test_a_reader_cannot_omit_the_adjust_filter(name: str) -> None:
 REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/src/data_engine/datahub/price_series.py": "reader, tested by test_load_daily_series_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
+    "apps/data-engine/src/data_engine/datahub/production_topt/twelve_data_origin.py": "reader (`adjust = 'none'`), tested by test_twelve_data_origin_reads_unadjusted_bar_only",
     "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",

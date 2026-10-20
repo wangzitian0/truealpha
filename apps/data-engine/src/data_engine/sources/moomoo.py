@@ -72,7 +72,7 @@ def canonical_moomoo_bytes(payload) -> bytes:
     return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _call(ctx, endpoint: str, caller: str, fn):
+def _call(ctx, endpoint: str, caller: str, fn, *, request_uri: str | None = None):
     """Gate, throttle, call, record — the one path every moomoo call must go through.
 
     moomoo's SDK return shape isn't uniform: most calls return (ret, data),
@@ -87,7 +87,7 @@ def _call(ctx, endpoint: str, caller: str, fn):
     Re-raised as MoomooConnectionError (chained, original still inspectable
     via __cause__) so every caller-facing failure mode is one exception type.
     """
-    gate(endpoint, caller)
+    gate(endpoint, caller, request_uri=request_uri)
     throttle()
     started = time.monotonic()
     try:
@@ -100,6 +100,7 @@ def _call(ctx, endpoint: str, caller: str, fn):
                 ok=False,
                 error=f"{type(e).__name__}: {e}",
                 duration_ms=int((time.monotonic() - started) * 1000),
+                request_uri=request_uri,
             )
         except Exception as ledger_err:
             # The ledger write failing must neither mask the original SDK error
@@ -128,6 +129,7 @@ def _call(ctx, endpoint: str, caller: str, fn):
             status_code=int(ret) if isinstance(ret, int) else None,
             error=None if ok else str(rest[0] if rest else "unknown error"),
             duration_ms=int((time.monotonic() - started) * 1000),
+            request_uri=request_uri,
             payload_sha256=payload_sha,
             byte_length=byte_length,
         )
@@ -327,7 +329,7 @@ def get_history_kline(
             return (res[0], res[1])
         return res
 
-    bars = _call(ctx, "request_history_kline", caller, _invoke)
+    bars = _call(ctx, "request_history_kline", caller, _invoke, request_uri=f"moomoo://{code}")
     return bars, page_req_key[0]
 
 

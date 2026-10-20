@@ -349,25 +349,6 @@
       "store_key": ""
     },
     {
-      "field": "moomoo_monthly_call_budget",
-      "env": "MOOMOO_MONTHLY_CALL_BUDGET",
-      "aliases": [],
-      "required": false,
-      "injected": false,
-      "has_default": true,
-      "sensitive": false,
-      "group": "moomoo",
-      "description": "",
-      "source": "code",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden",
-      "store_key": ""
-    },
-    {
       "field": "moomoo_ledger_backend",
       "env": "MOOMOO_LEDGER_BACKEND",
       "aliases": [],
