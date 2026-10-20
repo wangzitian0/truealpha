@@ -354,7 +354,7 @@ jobs:
       # longer means "and the walk that happened to run alongside it also
       # passed" (docs/release-protocol.md). Whether the surface was ever
       # walked stays the STANDING question `tools/walk_evidence.py` answers
-      # daily in deploy-freshness.yml, unchanged in spirit from #560: it now
+      # daily in delivery-report.yml, unchanged in spirit from #560: it now
       # reads walk-release.yml's runs instead of this one's.
       #
       # A walk flake now costs a walk re-run

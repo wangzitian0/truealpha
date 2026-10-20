@@ -172,19 +172,19 @@ def health() -> dict[str, Any]:
         "data_engine_image_digest": image_digest,
         # The governed pointer per universe and when it last advanced (#536's gate can
         # withhold it for days with every deploy check green; the admin funnel showed
-        # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
+        # the age but nothing paged). `tools/vision_audit.py` reads this field.
         # Each entry also carries the freshness label, the limit, a reason code and the
         # availability (#1062). `status` stays "ok" for a stale head, because it reports
-        # liveness. The freshness check pages for a frozen head.
+        # liveness. The nightly `report_surface_proof` fails on a stale scheduled head.
         # "unknown" when the read failed. Also "unknown" when heads exist that this database
         # does not serve, because the identity row is missing or names another environment.
         # An empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
         # #876: the newest verdict of each nightly in-environment check (the Dagster quality
         # and head-report jobs, the model-provider key probe), green or red. The runner that
-        # pages cannot reach the database; `tools/nightly_verdicts.py` reads this daily and
-        # fails on a red, stale or missing verdict. "unknown" when the read failed; an empty
-        # list when no check has ever recorded one.
+        # reports cannot reach the database; the delivery report reads this daily with the
+        # rules of `tools/nightly_verdicts.py` and names a red, stale or missing verdict.
+        # "unknown" when the read failed; an empty list when no check has ever recorded one.
         "nightly_verdicts": verdicts,
     }
 
@@ -266,9 +266,8 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                 # (#1062). That view is the one read point. This service computes no head age.
                 rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
                 # An empty answer means "no head yet" only when no environment holds a head. When
-                # one does, the identity row hides every head. Then `pointers` stays "unknown",
-                # the marker that `tools/datahub_freshness.py` fails on. An empty list would
-                # read as a database that has never advanced.
+                # one does, the identity row hides every head. Then `pointers` stays "unknown".
+                # An empty list would read as a database that has never advanced.
                 if rows or connection.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is None:
                     pointers = [
                         {

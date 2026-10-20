@@ -4,7 +4,7 @@
 # v0.0.34's prod deploy: the surface walk timed out on `networkidle` at
 # /research/rankings ~2 min after the container swap, and a rerun on the warm
 # container passed with no code change (run 33356222058), while
-# deploy-freshness had walked the identical app code green on the two
+# the walk had passed on the identical app code on the two
 # preceding days. The health gate before the walk polls llm-service, which is a
 # DIFFERENT container from app-web — nothing was warming the pages the walk
 # opens, so a cold Next.js render plus a cold PG cache spent the whole 30 s

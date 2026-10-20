@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -312,22 +313,18 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
     ]
 
 
-def test_the_freshness_tool_still_reads_the_new_entries(monkeypatch) -> None:
-    """`tools/datahub_freshness.py` reads universe_id, advanced_at and age_hours only. It must
-    parse the richer entries unchanged and judge the head on its own clock."""
+def test_the_vision_audit_reads_the_new_entries(monkeypatch) -> None:
+    """`tools/vision_audit.py` reads `governed_pointers` from this answer. It must parse the
+    richer entries and fail on a stale or withheld scheduled head."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
-    body = TestClient(app).get("/health").text
-    tool = load_tool("datahub_freshness")
-    heads = tool.read_pointers("https://example.invalid/api/health", lambda _url: (200, body))
-    assert [head.universe_id for head in heads] == [row[0] for row in SERVED_ROWS]
-    assert [head.age_hours for head in heads] == [771.0, 311.0, 5.0]
-    reference = datetime(2026, 10, 6, 6, 0, tzinfo=UTC)
-    assert (
-        tool.check_pointer_freshness(
-            "https://example.invalid/api/health", http_get=lambda _url: (200, body), now=reference
-        )
-        == 1
-    )
+    pointers = TestClient(app).get("/health").json()["governed_pointers"]
+    assert [entry["universe_id"] for entry in pointers] == [row[0] for row in SERVED_ROWS]
+    audit = load_tool("vision_audit")
+    fresh, detail = audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers))
+    assert fresh is False
+    assert "universe:canary-us-2026-06-30:stale/unavailable" in detail
+    assert "universe:qqq-us-2026-06-30:stale/available" in detail
+    assert "universe:topt-us-2026-03-31" not in detail
 
 
 def test_a_head_list_never_runs_the_environments_read(monkeypatch) -> None:
@@ -357,15 +354,15 @@ def test_an_unreadable_environments_view_reports_unknown_not_an_empty_list(monke
     assert TestClient(app).get("/health").json()["governed_pointers"] == "unknown"
 
 
-def test_the_freshness_tool_fails_on_unknown_pointers(monkeypatch) -> None:
-    """The marker is the one `tools/datahub_freshness.py` already fails on, with a clear text."""
+def test_the_vision_audit_fails_closed_on_unknown_pointers(monkeypatch) -> None:
+    """The marker "unknown" fails the reader that consumes it, with a clear text."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=[(1,)]))
-    body = TestClient(app).get("/health").text
-    tool = load_tool("datahub_freshness")
-    url = "https://example.invalid/api/health"
-    with pytest.raises(tool.PointerFreshnessFailure, match="could not read its governed pointers"):
-        tool.read_pointers(url, lambda _url: (200, body))
-    assert tool.check_pointer_freshness(url, http_get=lambda _url: (200, body)) == 1
+    pointers = TestClient(app).get("/health").json()["governed_pointers"]
+    audit = load_tool("vision_audit")
+    assert audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers)) == (
+        False,
+        "mart.served_head.freshness=unknown (no governed pointers)",
+    )
 
 
 #: The real `psycopg.connect`, kept before any test replaces it. A fixture that runs its teardown
@@ -531,17 +528,17 @@ QQQ_ROLL = (
 
 def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(monkeypatch, clone) -> None:
     """#1320: the retired QQQ head made the Production freshness check fail every day from
-    2026-10-09. The endpoint lists the live version only. The tool that pages reads this answer."""
+    2026-10-09. The endpoint lists the live version only. The vision audit reads this answer."""
     payload = health_of(monkeypatch, clone(QQQ_ROLL))
     assert [(entry["universe_id"], entry["freshness"]) for entry in payload["governed_pointers"]] == [
         ("universe:qqq-us-2026-09-30", "fresh")
     ]
-    tool = load_tool("datahub_freshness")
-    body = json.dumps(payload)
-    verdict = tool.check_pointer_freshness(
-        "https://example.invalid/api/health", environment="production", http_get=lambda _url: (200, body)
+    audit = load_tool("vision_audit")
+    report = SimpleNamespace(governed_pointers=payload["governed_pointers"])
+    assert audit._assess_served_head_freshness(report, environment="production") == (
+        True,
+        "mart.served_head.freshness == 'fresh'",
     )
-    assert verdict == 0
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(

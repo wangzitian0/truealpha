@@ -104,16 +104,16 @@
 # one-line re-run instead of re-dispatching the whole deploy:
 #   gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
 #
-# Promotion policy (#819) — deploy-freshness.yml and tools/deploy_freshness.py
-# bound the same policy, so the three files must agree:
+# Promotion policy (#819). The daily delivery report (tools/delivery_report.py)
+# shows the same policy, so the two files must agree:
 #   - every tag soaks staging: each new tag deploys to staging, and --prod promotes
 #     only a tag whose staging deploy and walk are already green (#1412);
 #   - prod moves only with --prod and --owner-approved-sha: the owner approves the
 #     exact SHA and is present, so prod lags staging by design and several tags can
 #     soak before one is promoted;
-#   - the daily freshness check bounds that lag at staging 3 days and
-#     production 14 days. Past the bound the leg is red and files an issue
-#     (#680); the answer is a --prod run, not a wider bound.
+#   - the daily delivery report shows that lag against staging 3 days and
+#     production 14 days. Past the bound its row reads "no"; the answer is a
+#     --prod run, not a wider bound. The report files no issue (ADR A8).
 set -euo pipefail
 
 REPO="wangzitian0/truealpha"

@@ -163,38 +163,6 @@
       "cwd": "."
     },
     {
-      "id": "workflow-contract/freshness-alert-closes-only-on-a-scheduled-run-of-main",
-      "guard": "common/runtime/tests/test_ci_workflows.py",
-      "file": ".github/workflows/deploy-freshness.yml",
-      "find": "        if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days))\n",
-      "replace": "        if: success()\n",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "common/runtime/tests/test_ci_workflows.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
-      "id": "workflow-contract/a-looser-freshness-override-cannot-close-the-alert",
-      "guard": "common/runtime/tests/test_ci_workflows.py",
-      "file": ".github/workflows/deploy-freshness.yml",
-      "find": "(github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days)",
-      "replace": "github.event_name == 'workflow_dispatch'",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "common/runtime/tests/test_ci_workflows.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
       "id": "workflow-contract/main-health-reports-only-push-runs",
       "guard": "common/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/main-health.yml",
@@ -853,6 +821,38 @@
         "--no-sync",
         "pytest",
         "common/runtime/tests/test_runtime.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "delivery-report/a-failed-earlier-attempt-breaks-the-streak",
+      "guard": "common/runtime/tests/test_delivery_report.py",
+      "file": "common/runtime/src/truealpha_tools/delivery_report.py",
+      "find": "        # The run list shows the last attempt only. Each earlier attempt was a real deploy try.\n        for number in range(1, last):\n",
+      "replace": "        # The run list shows the last attempt only. Each earlier attempt was a real deploy try.\n        for number in range(1, 1):\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_delivery_report.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "quality/zero-scheduled-heads-is-not-proven",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
+      "file": "apps/data-engine/src/data_engine/lanes/quality.py",
+      "find": "    if require_head and not scheduled:\n",
+      "replace": "    if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_nightly_verdicts.py",
         "-q"
       ],
       "cwd": "."

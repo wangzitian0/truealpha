@@ -6,8 +6,9 @@ Until #876 a red run was a row in `dagster.runs` and nothing else, and a daemon 
 ticking was indistinguishable from a quiet night — the model key sat revoked in production
 until a human read the call ledger (#832). Each check now appends its verdict, green or red,
 to `mart.nightly_verdicts`; `/api/health` reports the newest verdict per check
-(`nightly_verdicts`), and this check — a step of the scheduled deploy-freshness workflow,
-which escalates a red run to an issue — fails when an expected check's newest verdict is:
+(`nightly_verdicts`), and this check fails when an expected check's newest verdict is
+one of the cases below. The daily delivery report (`delivery_report.py`, #1412) runs
+these rules for each environment and shows the result; it opens no issue (ADR A8):
 
   * red (`ok` false): the check ran and failed;
   * stale (older than twice the check's cadence): the schedule stopped ticking, or the job
@@ -43,8 +44,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from infra2_sdk.deploy import HttpGet, default_http_get
+# The SDK is imported where the default HTTP client is built, not here (#1412). The delivery
+# report reuses this module on a bare `python3` without the SDK.
+if TYPE_CHECKING:
+    from infra2_sdk.deploy import HttpGet
 
 GhApi = Callable[[str], str]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
@@ -366,7 +371,10 @@ def check_nightly_verdicts(
     now: datetime | None = None,
     first_declared: FirstDeclared | None = None,
 ) -> int:
-    http_get = http_get or default_http_get()
+    if http_get is None:
+        from infra2_sdk.deploy import default_http_get
+
+        http_get = default_http_get()
     reader = reader or git_release_reader()
     name = environment or url
     try:

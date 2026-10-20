@@ -1,0 +1,48 @@
+name: delivery-report
+
+# #1412 R2 and R3: one daily dashboard of the delivery path. It replaces
+# deploy-freshness.yml.
+#
+# ADR A8 ("strong dashboards, weak gates"): the report is a dashboard, not a gate.
+# It opens no issue and blocks no merge. A red row is information for the reader.
+# This run is red only when the report itself cannot run.
+#
+# The data-plane checks of deploy-freshness run inside each environment:
+# mart.served_head ages each governed head at read time, and the nightly
+# report_surface_proof fails on a stale scheduled head and on zero scheduled
+# heads. The release age, the walk
+# evidence, the nightly verdict watch and the routing probe have no
+# in-environment equivalent, so the report shows them
+# (common/runtime/src/truealpha_tools/delivery_report.py).
+
+on:
+  schedule:
+    # 07:00 UTC daily: after the nightly in-environment checks (00:15 to 06:15 UTC)
+    # record their verdicts.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The report reads this repository's workflow runs, attempts and jobs.
+  actions: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history and tags: the nightly expectations are read at the served
+      # release tag (nightly_verdicts.git_release_reader).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --tags --force origin
+      # The report is stdlib-only and needs no `uv sync`. Python 3.12 is its floor.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write the delivery report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/delivery_report.py --repo .

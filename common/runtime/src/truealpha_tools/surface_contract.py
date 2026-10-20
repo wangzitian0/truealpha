@@ -219,8 +219,8 @@ def _check(base: str) -> list[str]:
     """Every violated property, named. Empty means the surface holds.
 
     Deliberately NOT a version check. `tools/health_check.py` owns "is the
-    expected release live" — it polls, it takes an expected version, and
-    deploy-freshness already runs it per environment. This owns a different
+    expected release live": it polls and it takes an expected version. The
+    daily delivery report runs this probe per environment. This owns a different
     question that nothing else asks: does the proxy topology behave. The one
     health call below is a precondition, not a duplicate assertion: if the app
     is not serving at all, the three routing verdicts would be noise.

@@ -12,9 +12,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import dagster as dg
@@ -68,11 +70,16 @@ class _Sink:
         # database that has not. A sink that answered nothing here would fail every check that
         # resolves a head, for the wrong reason.
         self._declares_environment = sql.strip() == "select environment from mart.environment_identity"
+        # The surface proof needs one scheduled head to prove anything (#28 V3); this database
+        # serves one fresh TOPT head.
+        self._reads_served_heads = "from mart.served_head" in sql
         if "insert into mart.nightly_verdicts" in sql:
             self.rows.append(params)
         return self
 
     def fetchall(self) -> list:
+        if getattr(self, "_reads_served_heads", False):
+            return [("universe:topt-us-2026-03-31", "fresh", "available", None)]
         return []
 
     def fetchone(self) -> Any:
@@ -705,10 +712,12 @@ def test_the_deployed_probe_retries_transient_429_before_succeeding(monkeypatch,
 
 
 def test_the_probe_is_scheduled_daily_before_the_watchdog_reads_it() -> None:
-    """deploy-freshness reads the verdicts at 07:00 UTC."""
+    """The delivery report reads the verdicts at the hour of its own cron (07:00 UTC)."""
+    workflow = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "delivery-report.yml"
+    (report_hour,) = re.findall(r'cron: "0 (\d+) \* \* \*"', workflow.read_text(encoding="utf-8"))
     schedule = quality.defs.get_schedule_def("model_key_health_schedule")
     minute, hour, *rest = schedule.cron_schedule.split()
-    assert rest == ["*", "*", "*"] and int(hour) < 7
+    assert rest == ["*", "*", "*"] and int(hour) < int(report_hour)
     assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING
     tick = datetime(2026, 9, 16, int(hour), int(minute), tzinfo=UTC)
     request = schedule(dg.build_schedule_context(scheduled_execution_time=tick))

@@ -4,8 +4,8 @@
 -- report, the daily head reports, the model-provider key probe) run inside the environment's
 -- own daemon; a red run was a row in dagster.runs and nothing else, and a daemon that stopped
 -- ticking was indistinguishable from a quiet one. Each check now appends its verdict here —
--- green AND red — and the service's /health reports the newest row per check, so the scheduled
--- deploy-freshness workflow (tools/nightly_verdicts.py) can page on a red, a stale, or a missing
+-- green AND red — and the service's /health reports the newest row per check, so the daily
+-- delivery report (with the rules of tools/nightly_verdicts.py) shows a red, a stale, or a missing
 -- verdict from a runner that cannot reach this database.
 --
 -- Append-only: a re-run appends a new row; the newest (ran_at, recorded_at) per check is the

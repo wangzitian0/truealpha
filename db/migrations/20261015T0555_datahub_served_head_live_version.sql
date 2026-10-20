@@ -3,7 +3,7 @@
 -- Problem: 20261006T1020 keeps one served row per governed key. A universe roll adds a new
 -- universe_id, for example universe:qqq-us-2026-06-30 -> universe:qqq-us-2026-09-30.
 -- The old head never advances again. Past its limit it reads stale, for ever.
--- /api/health, deploy-freshness, Gate #54 and the nightly checks then report a frozen lane.
+-- /api/health, the freshness checks, Gate #54 and the nightly checks then report a frozen lane.
 --
 -- Rule: the family of a head is its universe_id without a trailing -YYYY-MM-DD.
 -- A universe_id with no trailing date is its own family.

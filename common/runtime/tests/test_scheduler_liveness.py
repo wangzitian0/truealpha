@@ -61,7 +61,7 @@ INFRA2_OPS_CHECKS = (
     "27 8 * * *",
 )
 ESTATE = [
-    pytest.param(("0 7 * * *",), DAY, id="truealpha-deploy-freshness"),
+    pytest.param(("0 7 * * *",), DAY, id="truealpha-delivery-report"),
     pytest.param(("0 6 * * 1",), 7 * DAY, id="truealpha-mutation-reproof"),
     pytest.param(("0 5 * * *",), DAY, id="truealpha-nightly-dagster-liveness"),
     pytest.param(INFRA2_OPS_CHECKS, HOUR, id="infra2-ops-checks-union"),

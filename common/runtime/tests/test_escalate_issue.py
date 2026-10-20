@@ -104,8 +104,8 @@ def test_a_superstring_title_is_a_different_issue(body: str) -> None:
 
 def test_a_prefix_title_is_a_different_issue_too(body: str) -> None:
     """The mirror case: the search for a longer title can surface the shorter one."""
-    gh = FakeGh([{"number": 901, "title": "deploy-freshness is red"}])
-    title = "deploy-freshness is red: staging failed its standing checks"
+    gh = FakeGh([{"number": 901, "title": "scheduler-liveness is red"}])
+    title = "scheduler-liveness is red: a scheduled workflow stopped ticking"
     assert _module.escalate(title, body, repo=REPO, gh=gh) == 0
     assert [call[:2] for call in gh.writes()] == [["issue", "create"]]
 

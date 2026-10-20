@@ -4,7 +4,7 @@ The quality and standards lanes run inside the environment's own Dagster daemon,
 this module a red run was a row in `dagster.runs` that nobody was paged for; a daemon that
 stopped ticking was indistinguishable from a quiet night. Each check now appends one row to
 `mart.nightly_verdicts` per run, the service's `/health` reports the newest row per check,
-and `tools/nightly_verdicts.py` (deploy-freshness, daily) goes red on a verdict that is red,
+and `tools/nightly_verdicts.py` (in the daily delivery report) names a verdict that is red,
 stale, or missing.
 
 `verdict()` wraps a check's body. On a normal exit it records `ok = true` with the summary

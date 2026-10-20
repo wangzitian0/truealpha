@@ -24,8 +24,8 @@ run-name: >-
 # `deploy-release.yml`'s own green now means "deployed and healthy" — it no
 # longer means "and the walk that ran alongside it also passed"
 # (docs/release-protocol.md). Whether the surface was ever walked stays the
-# STANDING question `tools/walk_evidence.py` answers daily in
-# deploy-freshness.yml; it now reads THIS workflow's runs (keyed by
+# STANDING question that the daily delivery report answers with
+# `tools/walk_evidence.py`; it reads THIS workflow's runs (keyed by
 # deploy_type + release) instead of deploy-release.yml's.
 #
 # Credentials still decide whether the walk RUNS, never whether it lies:
@@ -82,7 +82,7 @@ jobs:
             DEPLOY_TYPE="${BASH_REMATCH[1]}"
             VERSION_REF="${BASH_REMATCH[2]}"
           else
-            # deploy-freshness.yml's own matrix only ever judges staging and
+            # The delivery report only ever judges staging and
             # production (never `preview/tag`), so a title this cannot parse
             # is not a release this walk covers. Skip cleanly rather than
             # failing a run whose correct behaviour is to do nothing.
@@ -126,8 +126,8 @@ jobs:
       # #560 (W4): unconfigured credentials do NOT fail this run — the release
       # is still deployed and healthy, proven by deploy-release.yml's own
       # gates. Whether the surface was ever walked is a STANDING question,
-      # answered daily by tools/walk_evidence.py in deploy-freshness.yml,
-      # which stays red until a deployed release has a successful walk.
+      # answered daily by the delivery report with tools/walk_evidence.py,
+      # which shows the walk as missing until a deployed release has a successful walk.
       # Credentials decide whether the walk RUNS. It must not run-and-pretend:
       # an unconfigured walk that exits 0 gives the step a `success`
       # conclusion, and tools/walk_evidence.py reads exactly that — so the
@@ -148,7 +148,7 @@ jobs:
             echo "ready=false" >>"$GITHUB_OUTPUT"
             echo "::error::post-release surface verification is UNCONFIGURED — this release is \
           deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
-          E2E_WALK_MEMBER_EMAIL. deploy-freshness reports this daily until a deployed release \
+          E2E_WALK_MEMBER_EMAIL. The delivery report shows this daily until a deployed release \
           has a successful walk (#560)."
             {
               echo "### Surface walk: UNVERIFIED"
@@ -208,7 +208,7 @@ jobs:
       # no install (standard library only), so it runs on every release, also
       # when the walk credentials are absent or the walk failed. A red probe
       # makes this run red, and tools/cut_release.sh then refuses the
-      # production step. deploy-freshness.yml runs the same probe every day.
+      # production step. delivery-report.yml runs the same probe every day.
       - name: Probe the MCP credential gate
         if: ${{ !cancelled() }}
         run: python3 tools/surface_contract.py "$TA_BASE_URL"
