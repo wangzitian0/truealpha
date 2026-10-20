@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -352,3 +353,31 @@ def test_prepush_runs_only_what_the_diff_reaches(worktree: Path) -> None:
     pytest_lines = [line for line in planned if "uv run pytest" in line]
     assert len(pytest_lines) == 1 and "common/runtime/tests/test_walk_evidence.py" in pytest_lines[0], result.stdout
     assert "uv run pytest common/runtime/tests " not in pytest_lines[0] + " ", "prepush ran the whole package"
+
+
+def test_mypy_on_a_subset_resolves_sibling_packages_from_source(repo: Path) -> None:
+    """L3 (#1412) found `make typecheck` reporting `factors.*` as untyped: given a subset of
+    files, mypy resolved the other first-party packages from site-packages. The plan names
+    every source root on MYPYPATH, and a real mypy run on the fixture proves it."""
+    # beta.uses_n imports alpha.n, and no file of the alpha package is in the selection.
+    _edit(repo, "pkg/beta/src/beta/uses_n.py")
+    selection = select(repo, "base")
+    [command] = diff_scope.plan(selection, ["typecheck"])
+    assert command.argv[3:] == ("pkg/beta/src/beta/uses_n.py",)
+    roots = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
+    assert dict(command.env) == {"MYPYPATH": os.pathsep.join(roots)}
+    mypy = [sys.executable, "-m", "mypy", "--no-incremental", *command.argv[3:]]
+    without = subprocess.run(mypy, cwd=repo, capture_output=True, text=True, check=False)
+    assert without.returncode != 0 and "alpha" in without.stdout, without.stdout
+    env = {**os.environ, **dict(command.env)}
+    with_path = subprocess.run(mypy, cwd=repo, capture_output=True, text=True, check=False, env=env)
+    assert with_path.returncode == 0, with_path.stdout
+
+
+def test_a_web_step_without_node_modules_names_the_missing_install(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _edit(repo, "apps/app-web/src/lib/c.ts", "export const y = 0;\n")
+    exit_code = diff_scope.run(repo, ["test"], full=False, base="base", dry_run=False, entry="t")
+    assert exit_code == 2
+    assert "apps/app-web/node_modules is missing in this worktree: run `make install`" in capsys.readouterr().err

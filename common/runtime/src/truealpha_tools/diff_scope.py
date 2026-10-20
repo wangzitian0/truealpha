@@ -218,6 +218,9 @@ class Selection:
     bun: list[str] = field(default_factory=list)
     bun_all: list[str] = field(default_factory=list)
     mypy: list[str] = field(default_factory=list)
+    #: Every source root. mypy given a subset of files must resolve the other first-party
+    #: packages from source; from site-packages it reports them as untyped (#1412 L3).
+    mypy_path: list[str] = field(default_factory=list)
     tsc: bool = False
     conformance: bool = False
     lint: list[str] = field(default_factory=list)
@@ -563,6 +566,7 @@ class _Selector:
         selection.pytest = selection.pytest_all if self.all_py else sorted(self.py_tests)
         selection.bun = selection.bun_all if self.all_web else sorted(f for f in affected_web if _is_web_test(f))
         selection.mypy = sorted(f for f in affected_py if f in self.existing and _under(f, self.layout.mypy_roots))
+        selection.mypy_path = list(self.layout.src_roots)
         selection.lint = sorted(set(selection.lint))
         for path in selection.changed:
             if path in self.existing and path.endswith(".py") and _under(path, self.layout.src_roots):
@@ -596,6 +600,7 @@ class Command:
     step: str
     argv: tuple[str, ...]
     cwd: str = "."
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def plan(selection: Selection | None, steps: Sequence[str], *, web_tests_all: Sequence[str] = ()) -> list[Command]:
@@ -612,7 +617,8 @@ def plan(selection: Selection | None, steps: Sequence[str], *, web_tests_all: Se
             if selection is None:
                 commands.append(Command("typecheck", ("uv", "run", "mypy")))
             elif selection.mypy:
-                commands.append(Command("typecheck", ("uv", "run", "mypy", *selection.mypy)))
+                mypy_path = (("MYPYPATH", os.pathsep.join(selection.mypy_path)),)
+                commands.append(Command("typecheck", ("uv", "run", "mypy", *selection.mypy), env=mypy_path))
             if full or (selection is not None and selection.tsc):
                 commands.append(Command("typecheck", ("bun", "run", "typecheck"), WEB_ROOT))
         elif step == "test":
@@ -629,6 +635,14 @@ def plan(selection: Selection | None, steps: Sequence[str], *, web_tests_all: Se
         else:
             raise ValueError(f"unknown step {step!r}: expected lint, typecheck, test or conformance")
     return commands
+
+
+def _missing_toolchain(root: Path, commands: Sequence[Command]) -> str | None:
+    """A web command in a worktree without `bun install` fails with TS2307 on every import,
+    which names no cause. Name it before anything runs (#1412 L3)."""
+    if any(c.argv[0] == "bun" for c in commands) and not (root / WEB_ROOT / "node_modules").is_dir():
+        return f"{WEB_ROOT}/node_modules is missing in this worktree: run `make install` (bun install) first"
+    return None
 
 
 def all_web_tests(root: Path) -> list[str]:
@@ -673,13 +687,18 @@ def run(root: Path, steps: Sequence[str], *, full: bool, base: str, dry_run: boo
         if not selection.changed:
             print(f"diff-scope: nothing changed against {base}; no check selected. FULL=1 runs everything.")
     commands = plan(selection, steps, web_tests_all=all_web_tests(root))
+    missing = _missing_toolchain(root, commands)
+    if missing and not dry_run:
+        print(f"diff-scope: {missing}", file=sys.stderr)
+        return 2
     exit_code = 0
     for command in commands:
         shown = " ".join(command.argv[:10]) + (f" ... (+{len(command.argv) - 10})" if len(command.argv) > 10 else "")
         print(f"== [{command.step}] {shown}" + (f"  (in {command.cwd})" if command.cwd != "." else ""), flush=True)
         if dry_run:
             continue
-        result = subprocess.run(command.argv, cwd=root / command.cwd, check=False)
+        env = {**os.environ, **dict(command.env)}
+        result = subprocess.run(command.argv, cwd=root / command.cwd, env=env, check=False)
         if result.returncode != 0:
             exit_code = result.returncode
             print(f"diff-scope: [{command.step}] failed with exit {result.returncode}", file=sys.stderr)
