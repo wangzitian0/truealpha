@@ -75,7 +75,7 @@ For complex tasks or large repositories, dispatch 1 Init Swarm (M=4 Interns via 
 ## 6. Create the worktree
 
 - Name: `<repo>_issue<N>_<slug>`. Branch: `feat/issue<N>-<slug>`. Base: the latest `origin/main`.
-- Never edit in a shared checkout. One `git add` in a shared index can commit another worker's files.
+- Never edit in a shared checkout (`git add` shares `.git/index`), and never auto-remove IDE worktrees under `~/.gemini/antigravity/worktrees/`.
 - The worktree must work alone. Tools and tests must not use `../..` to find files outside it.
 
 ## 7. Report the baseline
