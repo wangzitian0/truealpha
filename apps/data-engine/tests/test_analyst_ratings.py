@@ -1600,7 +1600,21 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
             return 0, summary_payload
 
         def get_valuation_detail(self, code: str, **kwargs: Any):
-            return 0, {"profit_growth_rate": {"profit_data": []}}
+            return (
+                0,
+                {
+                    "profit_growth_rate": {
+                        "profit_data": [
+                            {
+                                "period_str": "2025/FY",
+                                "financial_quarter": 4,
+                                "report_date_str": "2025-12-31",
+                                "profit_growth_rate": 24.5,
+                            }
+                        ]
+                    }
+                },
+            )
 
     conn = _MockConnection()
     res = capture_ticker_analyst_ratings(
@@ -1615,4 +1629,5 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
     assert res.failure is None
     _, params = conn.executed[0]
     assert "vendor_timestamp" in params[9]
+    assert "valuation_profit_growth" in params[9]
     assert Decimal("0.40") < params[8] < Decimal("0.85")

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from numbers import Real
 from typing import Any
@@ -349,12 +349,18 @@ def _ticker_row(
             except Exception:  # noqa: BLE001
                 summary_items = []
         has_valuation = False
+        profit_growth: dict[date, Decimal] = {}
         if hasattr(ctx, "get_valuation_detail"):
             try:
+                from data_engine.datahub.production_topt.moomoo_origin import parse_valuation_profit_growth
+
                 val_payload = get_valuation_detail(ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings")
                 has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
+                if isinstance(val_payload, Mapping):
+                    profit_growth = parse_valuation_profit_growth(val_payload, cutoff=as_of.date())
             except Exception:  # noqa: BLE001
                 has_valuation = False
+                profit_growth = {}
     except Exception as exc:
         failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
         log.error(
@@ -409,6 +415,12 @@ def _ticker_row(
         consensus_row["confidence"] = cont.confidence
         if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
             consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "vendor_timestamp"]
+        if profit_growth:
+            consensus_row["profit_growth_by_period"] = {
+                end.isoformat(): str(rate) for end, rate in sorted(profit_growth.items())
+            }
+            if "valuation_profit_growth" not in consensus_row["reason_codes"]:
+                consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "valuation_profit_growth"]
     return consensus_row, None
 
 

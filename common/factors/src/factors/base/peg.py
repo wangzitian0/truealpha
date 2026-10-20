@@ -56,6 +56,7 @@ _EPS_DILUTED = "eps_diluted"
 _NET_INCOME = "net_income"
 _PRICE = "price"
 _SHARES = "shares_outstanding"
+_CONSENSUS_GROWTH = "consensus_profit_growth"
 
 # The `peg_from_rate` arithmetic as a matrix-compatible `truealpha_contracts.ast`
 # expression, built only from shared node types — the same shape modules 2 and 7 already
@@ -263,11 +264,13 @@ def peg(
 
     if cagr_years < 1:
         raise ValueError("cagr_years must be at least 1 — a growth rate needs two dated observations")
-    if growth_convention is not GrowthConvention.HISTORICAL_CAGR:
-        # The other two conventions are declared but unsourced: analyst consensus needs the
-        # moomoo rating feed (`staging.api_call_ledger` has never held a row) and company
-        # guidance needs `staging.company_guidance` (empty in both environments). Saying so
-        # beats silently serving the historical number under another name.
+    if growth_convention is GrowthConvention.COMPANY_GUIDANCE:
+        return unavailable([f"growth_convention_unsourced:{growth_convention.value}"])
+
+    consensus_facts = [
+        f for f in facts if f.entity_id == entity_id and f.metric == _CONSENSUS_GROWTH and f.value is not None
+    ]
+    if growth_convention is GrowthConvention.ANALYST_CONSENSUS and not consensus_facts:
         return unavailable([f"growth_convention_unsourced:{growth_convention.value}"])
 
     price = _sole(facts, entity_id, _PRICE)
@@ -290,6 +293,42 @@ def peg(
 
     assert price is not None and price.value is not None
     assert shares is not None and shares.value is not None
+
+    latest_earnings = series[max(series)]
+    if growth_convention is GrowthConvention.ANALYST_CONSENSUS:
+        conv_flags = [f"growth_convention:{growth_convention.value}"]
+        if latest_earnings <= 0:
+            return unavailable(["non_positive_earnings", *conv_flags])
+        consensus_series = _annual_by_period_end(facts, entity_id, _CONSENSUS_GROWTH)
+        if consensus_series:
+            latest_cg_end = max(consensus_series)
+            consensus_rate_pct = consensus_series[latest_cg_end]
+            conv_flags.append(f"period_end:{latest_cg_end.isoformat()}")
+        else:
+            scalar_cg = _sole(facts, entity_id, _CONSENSUS_GROWTH)
+            assert scalar_cg is not None and scalar_cg.value is not None
+            consensus_rate_pct = scalar_cg.value
+        if consensus_rate_pct <= 0:
+            return unavailable(["non_positive_growth", *conv_flags])
+        with localcontext(_DECIMAL_CONTEXT):
+            multiple = (price.value * shares.value) / latest_earnings
+            value = multiple / consensus_rate_pct
+        consumed = [price.confidence, shares.confidence, *(f.confidence for f in consensus_facts)]
+        consumed += [
+            fact.confidence
+            for fact in facts
+            if fact.entity_id == entity_id and fact.metric == _NET_INCOME and fact.value is not None
+        ]
+        return FactorResult(
+            factor="peg",
+            entity_id=entity_id,
+            value=value,
+            unit_family=UnitFamily.RATIO,
+            confidence=min(consumed),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=conv_flags,
+        )
 
     window = [f"cagr_years:{cagr_years}"]
     growth, base_end, latest_end = _recency_weighted_growth(series, cagr_years)
