@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test test-fast smoke prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck test smoke prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -23,12 +23,14 @@ help:
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
-	@echo "Quality:"
-	@echo "  make smoke        Fast inner-loop checks: lint + typecheck + fast tests (<20s)"
-	@echo "  make test-fast    Fast unit tests: contracts + factors + runtime checks (<10s)"
-	@echo "  make test         Full repository test suite (runs all tests, slower)"
+	@echo "Quality (diff scope by default: only what the diff against BASE reaches; FULL=1 runs everything):"
+	@echo "  make lint         ruff on the changed Python files"
+	@echo "  make typecheck    mypy on the changed modules and their importers; tsc when web code changed"
+	@echo "  make test         pytest files and bun tests that import a changed file"
+	@echo "  make smoke        lint + typecheck + test"
 	@echo "  make check        lint + typecheck + test + contract-conformance"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
+	@echo "  BASE=<ref>        diff base (default origin/main); FULL=1 whole repository, as CI"
 
 bootstrap:
 	uv sync --all-packages
@@ -129,45 +131,39 @@ strategy-smoke:
 vision-audit:
 	uv run python tools/vision_audit.py $(ARGS)
 
+# #1412 T1: every local check runs only what the diff against BASE (default origin/main)
+# reaches: committed, staged, unstaged and untracked changes. Local commits are frequent,
+# so the default command decides the laptop load; whole-repository work is opt-in with
+# FULL=1, which is what CI runs. tools/diff_scope.py owns the selection rules and records
+# each run (selected and skipped tests) for the escape-rate metric.
+# Web tests: bun runs every selected apps/app-web/tests/*.test.ts file. DB-backed tests skip
+# without a local Postgres; TRUEALPHA_REQUIRE_RUNTIME=1 forbids skips, as ci-web runs them (#468).
+DIFF_SCOPE = python3 tools/diff_scope.py run $(if $(BASE),--base $(BASE),) $(if $(filter-out 0,$(FULL)),--full,)
+
 lint:
-	uv run ruff check apps libs
-	uv run ruff format --check apps libs
+	@$(DIFF_SCOPE) --entry "make lint" lint
 
 format:
-	uv run ruff check apps libs --fix
-	uv run ruff format apps libs
+	uv run ruff check apps common tools --fix
+	uv run ruff format apps common tools
 
 typecheck:
-	uv run mypy
-	cd apps/app-web && bun run typecheck
+	@$(DIFF_SCOPE) --entry "make typecheck" typecheck
 
 prepush:
 	@tools/prepush.sh $(BASE)
 
 test:
-	uv run pytest
+	@$(DIFF_SCOPE) --entry "make test" test
 
-test-fast:
-	uv run pytest common/contracts/tests common/factors/tests common/runtime/tests/test_checks.py
-
-smoke: lint typecheck contract-conformance test-fast
-	@echo "✅ Inner-loop smoke checks passed"
+smoke:
+	@$(DIFF_SCOPE) --entry "make smoke" lint typecheck test
 
 contract-conformance:
-	uv run python common/contracts/conformance/export_issue58.py --check
-	# Runs every apps/app-web/tests/*.test.ts file, mirroring ci-web.yml (#373 found a
-	# hardcoded list here had silently stopped running 5 of them: conversations/documents
-	# validation, and now #433's topt tests — a hardcoded list drifts every time a test
-	# file is added and this line isn't touched; the glob can't drift).
-	# -eu only (no pipefail): make's default shell is /bin/sh (dash on most Linux, no
-	# `-o pipefail` support), and this loop has no pipe to protect anyway (Copilot review).
-	# DB-backed tests skip gracefully without a local Postgres; set
-	# TRUEALPHA_REQUIRE_RUNTIME=1 to forbid skips (unreachable DB then fails hard,
-	# exactly as ci-web runs them — #468).
-	cd apps/app-web && set -eu; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
+	@$(DIFF_SCOPE) --entry "make contract-conformance" conformance
 
-check: lint typecheck test contract-conformance
-	@echo "✅ All checks passed"
+check:
+	@$(DIFF_SCOPE) --entry "make check" lint typecheck test conformance
 
 clean:
 	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache \) -exec rm -rf {} + 2>/dev/null || true

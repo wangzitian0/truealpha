@@ -15,10 +15,10 @@
 # `|| true` is fail-open or intentional. It puts the question in front of you
 # while the diff is still cheap to change.
 #
-# The laptop tier is scoped by design (A4 budget table: <= 60 s, changed module
-# only). Heavy suites are NAMED and REFUSED, not run — the laptop is slower
-# than the runners and thermally limited, so data-engine, browser walks, docker
-# and mypy-wide belong to CI.
+# The laptop tier is scoped by design (A4 budget table: <= 60 s). Lint, types and
+# tests run through tools/diff_scope.py, the same selection as `make check`: only
+# the tests that import a changed file, through the import graph (#1412 T1).
+# Browser walks, docker and whole-repository runs belong to CI.
 #
 # Usage:
 #   tools/prepush.sh            # against origin/main
@@ -86,7 +86,7 @@ run() { # $1=label, rest=command
 }
 
 # --- mechanical: only what is instant on a laptop ----------------------------
-PY=(); YML=(); SH=(); TESTS=()
+PY=(); YML=(); SH=()
 for path in "${CHANGED[@]}"; do
   case "$path" in
     *.py) PY+=("$path") ;;&
@@ -96,8 +96,6 @@ for path in "${CHANGED[@]}"; do
 done
 
 if [ "${#PY[@]}" -gt 0 ]; then
-  run "ruff format --check (${#PY[@]} files)" uv run ruff format --check "${PY[@]}"
-  run "ruff check (${#PY[@]} files)" uv run ruff check "${PY[@]}"
   run "cyclomatic complexity gate" python3 tools/complexity_gate.py --check
 fi
 for path in "${YML[@]}"; do
@@ -110,46 +108,19 @@ for path in "${SH[@]}"; do
   run "bash -n: $path" bash -n "$path"
 done
 
-# --- scoped tests: the changed module only -----------------------------------
-# A changed file selects its own suite. Anything whose suite is a CI-tier cost
-# is named and skipped rather than run (A4: nothing heavy on the laptop).
-declare -A SEEN=()
-SKIPPED=()
-for path in "${CHANGED[@]}"; do
-  target=""
-  case "$path" in
-    apps/data-engine/*|apps/app-web/*)
-      SKIPPED+=("$path -> ${path%%/tests/*} suite (CI tier: data-engine ~168 s sharded, web walk needs a browser)")
-      continue ;;
-    common/*/tests/fixtures/*) ;;
-    common/*/tests/*.py|apps/llm-service/tests/*.py) target="$path" ;;
-    tools/*.py|tools/*.sh|tools/*.json)
-      base=$(basename "$path"); base="${base%.*}"
-      [ -f "common/runtime/tests/test_${base}.py" ] && target="common/runtime/tests/test_${base}.py" ;;
-    .github/workflows/*) target="common/runtime/tests/test_ci_workflows.py" ;;
-    common/*) target="$(echo "$path" | cut -d/ -f1-3)/tests" ;;
-    apps/llm-service/*) target="apps/llm-service/tests" ;;
-    db/migrations/*|db/*.sql) target="common/runtime/tests/test_migration_chain.py" ;;
-  esac
-  if [ -n "$target" ] && [ -e "$target" ] && [ -z "${SEEN[$target]:-}" ]; then
-    SEEN[$target]=1
-    TESTS+=("$target")
-  fi
-done
-
-if [ "${#TESTS[@]}" -gt 0 ]; then
-  echo
-  echo "== scoped tests: ${TESTS[*]} =="
-  # The marker breaks re-entry: common/runtime/tests/test_prepush.py runs THIS
-  # script, and this script runs that test file whenever it changed — an
-  # unbounded recursion that would burn a CI job to its timeout. The test skips
-  # itself when it sees the marker.
-  run "pytest (scoped)" env TRUEALPHA_PREPUSH=1 uv run pytest "${TESTS[@]}" -q
-fi
-if [ "${#SKIPPED[@]}" -gt 0 ]; then
-  echo
-  echo "== not run here, by design =="
-  printf '  %s\n' "${SKIPPED[@]}"
+# --- diff scope: lint, types, tests and contracts that the diff reaches -------
+# One selection for every local entry point (`make check` runs the same one).
+# The marker breaks re-entry: common/runtime/tests/test_prepush.py runs THIS
+# script, and the diff scope selects that test whenever this script changed — an
+# unbounded recursion that would burn a CI job to its timeout. The test skips
+# itself when it sees the marker.
+echo
+echo "== diff scope (tools/diff_scope.py) =="
+if TRUEALPHA_PREPUSH=1 python3 tools/diff_scope.py run --base "$BASE" --entry prepush lint typecheck test conformance; then
+  echo "  ok    diff scope"
+else
+  echo "  FAIL  diff scope (above)"
+  FAILED=1
 fi
 
 # --- judgement: the half a script cannot do ----------------------------------

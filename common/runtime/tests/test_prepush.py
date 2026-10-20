@@ -14,9 +14,9 @@ all of them learned the hard way:
 - untracked files are examined: a brand-new tool is invisible to every
   `git diff` until it is added, and dogfooding caught the script skipping
   ITSELF for that reason;
-- the heavy suites are named and refused, never run — the laptop tier is
-  <= 60 s by design (A4 budget table), and a pre-push check that boots
-  data-engine will be abandoned within a day.
+- tests run through the diff scope, never the whole suite — the laptop tier
+  is <= 60 s by design (A4 budget table). `test_diff_scope.py` proves the
+  selection through this script (#1412 T1).
 """
 
 from __future__ import annotations
@@ -99,19 +99,6 @@ def test_untracked_files_are_examined() -> None:
     finally:
         probe.unlink(missing_ok=True)
     assert not probe.exists()
-
-
-def test_the_heavy_suites_are_named_and_refused() -> None:
-    """A laptop tier that boots data-engine (168 s sharded across three CI
-    lanes) stops being run, and then nothing runs before a push."""
-    script = PREPUSH.read_text(encoding="utf-8")
-    heavy_branch = "apps/data-engine/*|apps/app-web/*"
-    assert heavy_branch in script, "the heavy-suite branch is gone — prepush may now run them on the laptop"
-    refusal = script.split(heavy_branch, 1)[1].split(";;", 1)[0]
-    assert "SKIPPED+=" in refusal and "continue" in refusal, (
-        "data-engine/app-web changes no longer route to the skip list, so the laptop tier will "
-        "try to run a CI-tier suite"
-    )
 
 
 def test_it_refuses_a_bash_too_old_to_run_it() -> None:
