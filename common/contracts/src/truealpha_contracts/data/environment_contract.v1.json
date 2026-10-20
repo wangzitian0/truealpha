@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "1.0.0",
-  "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, and shared vendor capacity demand (#1416).",
+  "contract_version": "1.1.0",
+  "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, shared vendor capacity demand (#1416), and the maximum runtime of every Dagster job (#1442).",
   "sentinels": [
     {
       "ticker": "AAPL",
@@ -207,6 +207,203 @@
     "moomoo": {
       "shared_credential": "single_opend_account",
       "allocation_basis": "planned_daily_demand"
+    }
+  },
+  "run_time_bounds": {
+    "description": "The maximum runtime of every deployed Dagster job (#1442). Bound = margin x the longest successful run over all measured environments, and never below floor_minutes. A job that never ran takes live_tick_fit at the largest listing count of its tick. The run launcher writes the bound to the run tag dagster/max_runtime. The run monitor fails a run that exceeds its bound. The bound starts from the longest success, not from p95: p95 x 2 ends real successes (staging head_reports_pipeline: p95 5.3 min, longest success 22.5 min). The floor keeps scheduler jitter and lock waits from ending a short job; it is five run-monitor polls of 2 minutes.",
+    "margin": 2,
+    "floor_minutes": 10,
+    "measured_at": "2026-10-20",
+    "window_days": 30,
+    "source": "dagster.runs of production and staging, SUCCESS runs, read-only SQL: https://github.com/wangzitian0/truealpha/issues/1442#issuecomment-6287671274",
+    "live_tick_fit": {
+      "intercept_minutes": 2.1,
+      "minutes_per_listing": 0.434,
+      "source": "fit through the TOPT and QQQ ticks: https://github.com/wangzitian0/truealpha/issues/1418#issuecomment-6286329834"
+    },
+    "jobs": {
+      "canary_live_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 38,
+            "longest_minutes": 27.3
+          },
+          "staging": {
+            "successes": 80,
+            "longest_minutes": 5.0
+          }
+        }
+      },
+      "datahub_confidence_report": {
+        "measured": {
+          "production": {
+            "successes": 60,
+            "longest_minutes": 1.2
+          },
+          "staging": {
+            "successes": 60,
+            "longest_minutes": 1.3
+          }
+        }
+      },
+      "entity_identity_backfill": {
+        "measured": {
+          "production": {
+            "successes": 78,
+            "longest_minutes": 1.0
+          },
+          "staging": {
+            "successes": 146,
+            "longest_minutes": 1.3
+          }
+        }
+      },
+      "head_reports_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 90,
+            "longest_minutes": 16.3
+          },
+          "staging": {
+            "successes": 98,
+            "longest_minutes": 22.5
+          }
+        }
+      },
+      "market_data_refresh_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 10,
+            "longest_minutes": 15.6
+          },
+          "staging": {
+            "successes": 5,
+            "longest_minutes": 20.0
+          }
+        }
+      },
+      "model_key_health": {
+        "measured": {
+          "production": {
+            "successes": 29,
+            "longest_minutes": 0.8
+          },
+          "staging": {
+            "successes": 27,
+            "longest_minutes": 0.7
+          }
+        }
+      },
+      "nightly_backtest_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 4,
+            "longest_minutes": 0.5
+          },
+          "staging": {
+            "successes": 9,
+            "longest_minutes": 0.6
+          }
+        }
+      },
+      "output_invariants_check": {
+        "measured": {
+          "production": {
+            "successes": 11,
+            "longest_minutes": 7.5
+          },
+          "staging": {
+            "successes": 10,
+            "longest_minutes": 0.7
+          }
+        }
+      },
+      "qqq_live_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 17,
+            "longest_minutes": 52.3
+          },
+          "staging": {
+            "successes": 1,
+            "longest_minutes": 4.1
+          }
+        }
+      },
+      "qqq_price_refresh_pipeline": {
+        "unmeasured": "No run in the window: the lane merged on 2026-10-19 (#1277). Measure it after its first runs."
+      },
+      "release_fetch_proof": {
+        "measured": {
+          "production": {
+            "successes": 13,
+            "longest_minutes": 0.6
+          },
+          "staging": {
+            "successes": 17,
+            "longest_minutes": 0.7
+          }
+        }
+      },
+      "sp500_live_pipeline": {
+        "estimate_tick": "sp500"
+      },
+      "standard_backfill_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 22,
+            "longest_minutes": 11.3
+          },
+          "staging": {
+            "successes": 7,
+            "longest_minutes": 9.4
+          }
+        }
+      },
+      "standard_history_backfill_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 2,
+            "longest_minutes": 3.6
+          },
+          "staging": {
+            "successes": 1,
+            "longest_minutes": 3.7
+          }
+        }
+      },
+      "strategy_history_projection_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 5,
+            "longest_minutes": 1.2
+          },
+          "staging": {
+            "successes": 8,
+            "longest_minutes": 2.4
+          }
+        }
+      },
+      "topt_live_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 15,
+            "longest_minutes": 11.6
+          },
+          "staging": {
+            "successes": 39,
+            "longest_minutes": 15.1
+          }
+        }
+      },
+      "universe_refresh_pipeline": {
+        "measured": {
+          "production": {
+            "successes": 3,
+            "longest_minutes": 0.3
+          }
+        }
+      }
     }
   }
 }
