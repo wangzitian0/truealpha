@@ -515,6 +515,12 @@ async function gotoStable(page, url) {
     try {
       const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 20000 });
+      const signOutCount = await page.locator("[data-sign-out]").count();
+      if (signOutCount > 0) {
+        await page
+          .waitForSelector('[data-sign-out][data-hydrated="true"]', { state: "attached", timeout: 15000 })
+          .catch(() => null);
+      }
       // The response of the navigation that succeeded, for a caller that checks the HTTP status (#1241).
       return response;
     } catch (error) {
