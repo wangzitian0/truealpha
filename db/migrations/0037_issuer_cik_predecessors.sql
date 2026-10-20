@@ -44,11 +44,19 @@ $$;
 -- Seed: ExxonMobil. SEC's ticker index repointed XOM to the post-reorganization
 -- holdco CIK 2115436 (zero us-gaap concepts, formerNames []); consolidated
 -- history lives in CIK 34088 and no SEC metadata links the two.
+--
+-- A boot replays this file. The insert reads first and writes only a missing row: an
+-- `on conflict do nothing` alone waits for an open transaction that wrote the row (#1412,
+-- common/runtime/tests/test_migration_boot_locks.py). The conflict clause stays as the
+-- guard against a concurrent insert.
 insert into staging.issuer_cik_predecessors (issuer_id, predecessor_cik, reason, approved_by)
-values (
+select
     'issuer:lei:J3WHBG0MTS7O8ZVMDC91',
     34088,
     '2026 ExxonMobil holdco reorganization: index CIK 2115436 publishes no us-gaap taxonomy yet; no machine-readable predecessor pointer exists in SEC metadata',
     'zitian (owner decision 2026-07-29, truealpha#496)'
+where not exists (
+    select 1 from staging.issuer_cik_predecessors
+    where issuer_id = 'issuer:lei:J3WHBG0MTS7O8ZVMDC91'
 )
 on conflict (issuer_id) do nothing;

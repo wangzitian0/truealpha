@@ -184,24 +184,52 @@ def test_a_row_for_a_schedule_no_lane_declares_is_reported() -> None:
 # --- the seed reader refuses what it cannot read ----------------------------------------------
 
 
+def _seed_statement(rows: str, *, columns: str = "a, b", insert_columns: str = "a, b") -> str:
+    """One seed statement in the shape that `read_seed_rows` reads (#1412)."""
+    return (
+        f"with seed ({columns}) as (\n    values\n{rows}\n),\n"
+        "restored as (update mart.t as present set b = seed.b from seed where present.a = seed.a\n"
+        "    and present.b is distinct from seed.b)\n"
+        f"insert into mart.t ({insert_columns})\nselect seed.* from seed\n"
+        "where not exists (select 1 from mart.t as present where present.a = seed.a)\n"
+        "on conflict do nothing;\n"
+    )
+
+
 def test_the_seed_reader_names_a_malformed_seed_instead_of_returning_fewer_rows(tmp_path: Path) -> None:
     seed = tmp_path / "seed.sql"
-    seed.write_text("insert into mart.t (a, b) values\n    ('x', 1),\n    ('y', now())\non conflict do nothing;\n")
+    seed.write_text(_seed_statement("    ('x', 1),\n    ('y', now())"))
     with pytest.raises(ValueError, match="cannot read the seed"):
         read_seed_rows(seed, "mart.t")
-    seed.write_text("insert into mart.t (a, b) values\n    ('x', 1),\n    ('y')\non conflict do nothing;\n")
+    seed.write_text(_seed_statement("    ('x', 1),\n    ('y')"))
     with pytest.raises(ValueError, match="1 values, not 2"):
+        read_seed_rows(seed, "mart.t")
+    seed.write_text(_seed_statement("    ('x', 1)", insert_columns="b, a"))
+    with pytest.raises(ValueError, match="names \\['b', 'a'\\], but the seed names \\['a', 'b'\\]"):
         read_seed_rows(seed, "mart.t")
     seed.write_text("select 1;\n")
     with pytest.raises(ValueError, match="expected exactly 1"):
         read_seed_rows(seed, "mart.t")
+    # The shape before #1412 is not a seed: replayed on a boot, it waits for an open
+    # transaction that wrote a seeded row.
+    seed.write_text("insert into mart.t (a, b) values\n    ('x', 1)\non conflict (a) do update set b = excluded.b;\n")
+    with pytest.raises(ValueError, match="expected exactly 1"):
+        read_seed_rows(seed, "mart.t")
+    # A seed for another table is not a seed for this one.
+    seed.write_text(_seed_statement("    ('x', 1)"))
+    with pytest.raises(ValueError, match="expected exactly 1"):
+        read_seed_rows(seed, "mart.other")
 
 
 def test_the_seed_reader_reads_quotes_nulls_booleans_numbers_and_comments(tmp_path: Path) -> None:
     seed = tmp_path / "seed.sql"
     seed.write_text(
-        "insert into mart.t (a, b, c, d)\nvalues\n    -- a comment, with a comma\n"
-        "    ('it''s', 7, null, true),\n    ('--not a comment', -2, 'x', FALSE)\non conflict do nothing;\n"
+        _seed_statement(
+            "    -- a comment, with a comma and a parenthesis)\n"
+            "    ('it''s', 7, null, true),\n    ('--not a comment', -2, 'x', FALSE)",
+            columns="a, b, c, d",
+            insert_columns="a, b, c, d",
+        )
     )
     assert read_seed_rows(seed, "mart.t") == [
         {"a": "it's", "b": 7, "c": None, "d": True},

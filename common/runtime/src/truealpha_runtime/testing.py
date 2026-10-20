@@ -308,59 +308,88 @@ _SEED_TOKEN = re.compile(
 )
 
 
-def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
-    """The rows one migration seeds into `table`, read from the file text without a database.
+def _seed_literal(kind: str, value: str) -> SeedValue:
+    if kind == "string":
+        return value[1:-1].replace("''", "'")
+    if kind == "number":
+        return int(value)
+    return None if value.lower() == "null" else value.lower() == "true"
 
-    It reads the single `insert into <table> (<columns>) values (<row>), ... on conflict`
-    statement. A row holds only quoted strings, whole numbers, null, true and false. Any
-    other token raises ValueError, so a seed the reader cannot parse never reads as fewer
-    rows. Two statements for the same table raise too: a seed lives in one place.
+
+def _read_seed_list(where: str, columns: list[str], body: str) -> tuple[list[dict[str, SeedValue]], int]:
+    """The rows of a `values` list, read up to the parenthesis that closes the list.
+
+    Returns the rows and the position in `body` after that parenthesis. `where` names the
+    seed in each error.
     """
-    text = migration.read_text(encoding="utf-8")
-    statement = re.compile(
-        rf"insert\s+into\s+{re.escape(table)}\s*\((?P<columns>[^)]*)\)\s*values(?P<body>.*?)\bon\s+conflict",
-        re.IGNORECASE | re.DOTALL,
-    )
-    found = list(statement.finditer(text))
-    if len(found) != 1:
-        raise ValueError(f"{migration.name} holds {len(found)} seed statements for {table}; expected exactly 1")
-    columns = [column.strip() for column in found[0].group("columns").split(",")]
-    body = found[0].group("body")
     rows: list[dict[str, SeedValue]] = []
     current: list[SeedValue] | None = None
     position = 0
     while position < len(body) and body[position:].strip():
         token = _SEED_TOKEN.match(body, position)
         if token is None:
-            raise ValueError(f"{migration.name}: cannot read the seed of {table} near {body[position:][:40]!r}")
+            raise ValueError(f"{where}: cannot read the seed near {body[position:][:40]!r}")
         position = token.end()
-        kind = token.lastgroup
+        kind = token.lastgroup or ""
         value = token.group(kind) if kind else ""
-        if kind == "comment":
+        if kind == "comment" or (kind == "punct" and value == ","):
             continue
-        if kind == "punct":
-            if value == "(" and current is None:
-                current = []
-            elif value == ")" and current is not None:
-                if len(current) != len(columns):
-                    raise ValueError(
-                        f"{migration.name}: a seed row of {table} has {len(current)} values, not {len(columns)}"
-                    )
-                rows.append(dict(zip(columns, current, strict=True)))
-                current = None
-            elif value != ",":
-                raise ValueError(f"{migration.name}: unexpected {value!r} in the seed of {table}")
-            continue
-        if current is None:
-            raise ValueError(f"{migration.name}: a value outside a row in the seed of {table}")
-        if kind == "string":
-            current.append(value[1:-1].replace("''", "'"))
-        elif kind == "number":
-            current.append(int(value))
+        if kind != "punct":
+            if current is None:
+                raise ValueError(f"{where}: a value outside a row")
+            current.append(_seed_literal(kind, value))
+        elif value == "(" and current is None:
+            current = []
+        elif value == ")" and current is not None:
+            if len(current) != len(columns):
+                raise ValueError(f"{where}: a seed row has {len(current)} values, not {len(columns)}")
+            rows.append(dict(zip(columns, current, strict=True)))
+            current = None
+        elif value == ")":
+            break  # the parenthesis that closes `seed`
         else:
-            current.append(None if value.lower() == "null" else value.lower() == "true")
+            raise ValueError(f"{where}: unexpected {value!r}")
     if current is not None:
-        raise ValueError(f"{migration.name}: the seed of {table} ends inside a row")
+        raise ValueError(f"{where}: the list ends inside a row")
+    return rows, position
+
+
+def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
+    """The rows one migration seeds into `table`, read from the file text without a database.
+
+    It reads the single statement of this shape (#1412):
+
+        with seed (<columns>) as (
+            values (<row>), ...
+        ),
+        <other common table expressions, for example the update of rows that differ>
+        insert into <table> (<columns>) ... on conflict ...
+
+    The `seed` list is the only copy of the rows, and the insert names the same columns in
+    the same order. A row holds only quoted strings, whole numbers, null, true and false. Any
+    other token raises ValueError, so a seed the reader cannot parse never reads as fewer
+    rows. Two statements for the same table raise too: a seed lives in one place. The old
+    shape `insert into <table> (...) values ... on conflict` is not read: replayed on every
+    boot, it waits for an open transaction that wrote a seeded row.
+    """
+    text = migration.read_text(encoding="utf-8")
+    statement = re.compile(
+        r"\bwith\s+seed\s*\((?P<columns>[^)]*)\)\s*as\s*\(\s*values\b(?P<body>.*?)\bon\s+conflict",
+        re.IGNORECASE | re.DOTALL,
+    )
+    insert = re.compile(rf"\binsert\s+into\s+{re.escape(table)}\s*\((?P<columns>[^)]*)\)", re.IGNORECASE)
+    found = [match for match in statement.finditer(text) if insert.search(match.group("body"))]
+    if len(found) != 1:
+        raise ValueError(f"{migration.name} holds {len(found)} seed statements for {table}; expected exactly 1")
+    columns = [column.strip() for column in found[0].group("columns").split(",")]
+    body = found[0].group("body")
+    rows, position = _read_seed_list(f"{migration.name}: the seed of {table}", columns, body)
+    target = insert.search(body, position)
+    if target is None:
+        raise ValueError(f"{migration.name}: the insert into {table} is not after the seed rows")
+    inserted = [column.strip() for column in target.group("columns").split(",")]
+    if inserted != columns:
+        raise ValueError(f"{migration.name}: the insert into {table} names {inserted}, but the seed names {columns}")
     return rows
 
 
