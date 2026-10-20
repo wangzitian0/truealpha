@@ -135,11 +135,12 @@ jobs:
               # test_a_document_selects_the_lanes_that_read_it_and_no_other derives
               # the readers from the tests. Every top-level markdown file is read:
               # by the reintroduction sweep, or by name (init.md, vision.md, README.md,
-              # CLAUDE.md). Two files under docs/ are read by name. Other files
+              # CLAUDE.md). Three files under docs/ are read by name. Other files
               # under docs/ start no lane.
               - '*.md'
               - 'docs/architecture-decisions/A3-source-governance.md'
               - 'docs/datahub-quality-report.md'
+              - 'docs/release-protocol.md'
             # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
             # self-termination class) sat on every PR's and every main push's
             # critical path — 151-160s of it, most of the job's own wall time —
