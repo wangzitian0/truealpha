@@ -108,7 +108,8 @@ def test_data_engine_manifest_carries_the_datahub_vendor_keys() -> None:
     assert by_env["GIT_COMMIT_SHA"].source == "release" and by_env["GIT_COMMIT_SHA"].injected
     assert by_env["DATABASE_URL"].provided_by == "truealpha/postgres:POSTGRES_PASSWORD"
     assert by_env["DATABASE_URL"].composed_env == ("TA_POSTGRES_PORT",)
-    assert by_env["MOOMOO_MONTHLY_CALL_BUDGET"].source == "code"
+    assert "MOOMOO_MONTHLY_CALL_BUDGET" not in by_env
+    assert by_env["MOOMOO_CALLS_PER_30S"].source == "code"
     assert manifest.contract_version == 2
 
 

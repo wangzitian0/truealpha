@@ -10,7 +10,6 @@ def _isolated_ledger(tmp_path, monkeypatch):
     # into the real append-only staging.api_call_ledger (autocommitted).
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
     # _call now throttles; keep the shared window empty so unrelated tests
     # can't accumulate into a real 30s sleep.
     ledger._recent_calls.clear()

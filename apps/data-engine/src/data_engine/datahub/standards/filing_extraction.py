@@ -285,6 +285,9 @@ def _annual_filing_from_index(
     return None
 
 
+_FILING_CACHE_BY_CLIENT: dict[tuple[int, int, date, tuple[str, ...]], FilingDocument | None] = {}
+
+
 def _latest_filing_for_forms(
     cik: int,
     *,
@@ -293,14 +296,19 @@ def _latest_filing_for_forms(
     cutoff: datetime,
     allowed_forms: Collection[str],
 ) -> FilingDocument | None:
+    cutoff_date = cutoff.astimezone(UTC).date()
+    cache_key = (id(http), cik, cutoff_date, tuple(sorted(allowed_forms)))
+    if http is not None and cache_key in _FILING_CACHE_BY_CLIENT:
+        return _FILING_CACHE_BY_CLIENT[cache_key]
     submissions = _fetch_json_via_gateway(http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik))
     filings = submissions.get("filings") or {}
     recent = filings.get("recent") or {}
-    cutoff_date = cutoff.astimezone(UTC).date()
     found = _annual_filing_from_index(
         cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
     )
     if found is not None:
+        if http is not None:
+            _FILING_CACHE_BY_CLIENT[cache_key] = found
         return found
     for file_meta in filings.get("files") or ():
         name = file_meta.get("name")
@@ -319,7 +327,11 @@ def _latest_filing_for_forms(
             cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
         )
         if found is not None:
+            if http is not None:
+                _FILING_CACHE_BY_CLIENT[cache_key] = found
             return found
+    if http is not None:
+        _FILING_CACHE_BY_CLIENT[cache_key] = None
     return None
 
 

@@ -382,18 +382,81 @@ class TwelveDataQuoteFetcher:
         *,
         throttle_seconds: int = _THROTTLE_SECONDS,
         today: date | None = None,
+        connection: Any = None,
     ) -> None:
         if not api_key:
             raise ValueError("Twelve Data origin requires an API key")
         self._api_key = api_key
         self._throttle_seconds = throttle_seconds
         self._today = today
+        self._connection = connection
         self._cache: dict[tuple[str, date], MarketPriceQuote | None] = {}
+
+    def _from_price_store(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
+        """Read the settled session's unadjusted bar from ``staging.market_prices_daily``
+        before issuing any Twelve Data HTTP request (#1411 K4 D1).
+        """
+        if self._connection is None:
+            return None
+        try:
+            row = self._connection.execute(
+                """
+                select trading_date, open, high, low, close, volume, transaction_time
+                from staging.market_prices_daily
+                where symbol = %s
+                  and trading_date <= %s
+                  and adjust = 'none'
+                order by trading_date desc, recorded_at desc
+                limit 1
+                """,
+                (symbol, cutoff),
+            ).fetchone()
+        except Exception:  # noqa: BLE001 - fall back to vendor HTTP when connection is a test stub or table is absent
+            return None
+        if row is None:
+            return None
+        trading_date, open_, high, low, close, volume, transaction_time = row
+        # Only reuse when the stored bar IS the target cutoff session (or the last settled session at cutoff)
+        from truealpha_contracts.calendar import settled_session_for_cutoff
+
+        settled_date = settled_session_for_cutoff(datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC))
+        if trading_date < settled_date:
+            return None
+        payload = {
+            "symbol": symbol,
+            "datetime": trading_date.isoformat(),
+            "open": None if open_ is None else str(open_),
+            "high": None if high is None else str(high),
+            "low": None if low is None else str(low),
+            "close": str(close),
+            "volume": None if volume is None else str(volume),
+            "source": "staging.market_prices_daily",
+        }
+        raw_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        knowable = (
+            transaction_time
+            if isinstance(transaction_time, datetime)
+            else datetime.combine(trading_date, datetime.min.time(), tzinfo=UTC)
+        )
+        return MarketPriceQuote(
+            raw_bytes=raw_bytes,
+            close=Decimal(str(close)),
+            as_of=trading_date,
+            knowable_at=knowable,
+            open=None if open_ is None else Decimal(str(open_)),
+            high=None if high is None else Decimal(str(high)),
+            low=None if low is None else Decimal(str(low)),
+            volume=None if volume is None else Decimal(str(volume)),
+        )
 
     def __call__(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
         key = (symbol, cutoff)
         if key in self._cache:
             return self._cache[key]
+        stored = self._from_price_store(symbol, cutoff)
+        if stored is not None:
+            self._cache[key] = stored
+            return stored
         sent_last = True
         try:
             quote = self._fetch(symbol, cutoff)
@@ -484,7 +547,7 @@ class TwelveDataQuoteFetcher:
         return body
 
 
-def twelve_data_origin() -> CorroboratingOrigin | None:
+def twelve_data_origin(*, connection: Any = None) -> CorroboratingOrigin | None:
     """The configured second price origin, or None when no key is provisioned."""
     if not settings.twelve_data_api_key:
         return None
@@ -494,5 +557,5 @@ def twelve_data_origin() -> CorroboratingOrigin | None:
         mapping_version=MAPPING_VERSION,
         value_key=VALUE_KEY,
         confidence=Decimal("0.85"),
-        fetch=TwelveDataQuoteFetcher(settings.twelve_data_api_key),
+        fetch=TwelveDataQuoteFetcher(settings.twelve_data_api_key, connection=connection),
     )

@@ -10,29 +10,33 @@ def _json_backend(monkeypatch):
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
 
 
-def test_gate_allows_calls_under_budget(tmp_path, monkeypatch):
+def test_gate_allows_calls_under_quota(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 2)
+    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 2)
 
-    ledger.gate("get_research_analyst_consensus", "test")
-    ledger.record("get_research_analyst_consensus", "test", ok=True)
+    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
+    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
     assert ledger.calls_this_month() == 1
+    assert ledger.kline_distinct_stocks_30d() == {"moomoo://US.AAPL"}
 
 
-def test_gate_blocks_once_budget_exhausted(tmp_path, monkeypatch):
+def test_gate_blocks_once_30d_kline_stock_quota_exhausted(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 1)
+    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 1)
 
-    ledger.gate("get_rating_change", "test")
-    ledger.record("get_rating_change", "test", ok=True)
+    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
+    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
 
+    # Requesting the SAME stock again within the 30-day window does not consume a new stock slot
+    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
+
+    # Requesting a SECOND distinct stock exceeds the 30-day stock quota
     with pytest.raises(ledger.BudgetExceededError):
-        ledger.gate("get_rating_change", "test")
+        ledger.gate("request_history_kline", "test", request_uri="moomoo://US.MSFT")
 
 
 def test_record_counts_failed_calls_too(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
 
     ledger.record("get_rating_change", "test", ok=False)
     assert ledger.calls_this_month() == 1
