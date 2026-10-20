@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
+import time
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +32,7 @@ import yaml
 from dagster._core.errors import DagsterInvalidConfigError
 from dagster._core.instance.config import dagster_instance_config
 from dagster._core.instance.ref import InstanceRef
+from dagster._grpc.client import DagsterGrpcClient
 from data_engine.dagster_defs import build_definitions, defs, with_in_process_executor
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
 from truealpha_contracts.environment_contract import CodeServerCapacity, load_environment_contract
@@ -38,15 +41,6 @@ DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 CAPACITY: CodeServerCapacity = load_environment_contract().code_server_capacity
 #: The environments that run the deployed definitions.
 DEPLOYED_ENVIRONMENTS = ("production", "staging")
-
-#: The code a fresh interpreter runs: import the composition root, print the peak resident memory in bytes.
-#: `ru_maxrss` is in kilobytes on Linux and in bytes on macOS.
-_PEAK_RSS_PROGRAM = (
-    "import resource, sys\n"
-    "import data_engine.dagster_defs\n"
-    "peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
-    "print(peak if sys.platform == 'darwin' else peak * 1024)\n"
-)
 
 
 def _queue(directory: Path = DAGSTER_YAML.parent) -> Any:
@@ -242,17 +236,59 @@ def test_a_job_that_waits_for_other_runs_has_the_waiting_tag_and_no_other_job_ha
 # --- one process and the declared size -------------------------------------------------
 
 
-def test_the_declared_process_size_covers_a_fresh_import_of_the_composition_root() -> None:
-    """Each run process imports the composition root. The size grows with the image."""
-    completed = subprocess.run(  # noqa: S603 - the interpreter of this test run, a fixed program
-        [sys.executable, "-I", "-c", _PEAK_RSS_PROGRAM], capture_output=True, text=True, check=True, timeout=120
+def _peak_rss_mib(pid: int) -> float:
+    """Peak resident memory of process `pid` in MiB: `VmHWM` of `/proc/<pid>/status` on Linux.
+
+    `ru_maxrss` of a child is wrong here: Linux carries the high-water mark of the parent across fork and
+    exec, so a child of a 387 MiB pytest process reads 387 MiB (a Linux container measured 420 MB for a
+    child of a 400 MB parent whose own `VmHWM` was 166 MiB). Without `/proc` (macOS) the current RSS from
+    `ps` stands in, for a local run only; CI on Linux is the authority."""
+    status = Path(f"/proc/{pid}/status")
+    if status.exists():
+        line = next(line for line in status.read_text().splitlines() if line.startswith("VmHWM:"))
+        return int(line.split()[1]) / 1024
+    return (
+        int(subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, check=True).stdout)
+        / 1024
     )
-    peak_mib = int(completed.stdout.strip().splitlines()[-1]) / (1024 * 1024)
+
+
+def _fresh_code_server_peak_mib() -> float:
+    """Start `dagster api grpc -m data_engine.dagster_defs` as the deployed pid 1 starts, wait until it answers
+    a ping, and return its peak resident memory. The interpreter and the packages are the ones of this venv."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+        socket_path = str(Path(directory) / "s.sock")
+        server = subprocess.Popen(  # noqa: S603 - the interpreter of this test run, fixed arguments
+            [sys.executable, "-I", "-m", "dagster", "api", "grpc", "-m", "data_engine.dagster_defs"]
+            + ["--socket", socket_path, "--lazy-load-user-code", "--log-level", "warning"]
+        )
+        try:
+            client = DagsterGrpcClient(socket=socket_path)
+            deadline = time.monotonic() + 120
+            while True:
+                try:
+                    client.ping("capacity")
+                    break
+                except Exception:  # noqa: BLE001 - the server is still starting
+                    if server.poll() is not None or time.monotonic() > deadline:
+                        raise
+                    time.sleep(0.5)
+            return _peak_rss_mib(server.pid)
+        finally:
+            server.terminate()
+            server.wait(timeout=30)
+
+
+def test_the_declared_process_size_covers_a_fresh_code_server() -> None:
+    """The deployed pid 1 held 229.5 MiB (`VmHWM`, staging, 2026-10-20). This starts the same command in this
+    venv and reads the same counter. A podman Linux container with the image layout (`uv sync --frozen --no-dev
+    --no-editable`) read 211.5 MiB for it. The size grows with the image; `process_mib` must follow."""
+    peak_mib = _fresh_code_server_peak_mib()
 
     assert peak_mib <= CAPACITY.process_mib, (
-        f"a process that imports data_engine.dagster_defs holds {peak_mib:.0f} MiB, above the declared"
-        f" {CAPACITY.process_mib} MiB; measure the code server again and raise process_mib in"
-        " environment_contract.v1.json (the queue limit follows)"
+        f"a fresh code server holds {peak_mib:.0f} MiB, above the declared {CAPACITY.process_mib} MiB;"
+        " measure the code server again and raise process_mib in environment_contract.v1.json"
+        " (the queue limit follows)"
     )
 
 
