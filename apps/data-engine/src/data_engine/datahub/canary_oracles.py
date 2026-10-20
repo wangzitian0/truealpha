@@ -22,19 +22,139 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from hashlib import sha256
+from typing import Any
 
 import psycopg
+from truealpha_contracts.environment_contract import (
+    SentinelKnownAnswer,
+    SentinelKnownAnswersCatalog,
+    load_sentinel_known_answers,
+)
 
 from data_engine import release_identity
 from data_engine.config import settings
 
 _CANARY_UNIVERSE_LIKE = "universe:canary-us-%"
-# AAPL's gross profit per employee, generous band: ~$1.07M on 2026 facts; an order
-# of magnitude off in either direction means a parse/unit/branch defect, which is
-# exactly what #528 shipped and no proxy gate caught.
-_AAPL_GPPE_BAND = (Decimal("300000"), Decimal("4000000"))
+
+
+def _aapl_gppe_band() -> tuple[Decimal, Decimal]:
+    catalog = load_sentinel_known_answers()
+    for answer in catalog.answers:
+        if answer.answer_id == "aapl-gppe-fy2025" and answer.lower_bound and answer.upper_bound:
+            return (Decimal(answer.lower_bound), Decimal(answer.upper_bound))
+    return (Decimal("300000"), Decimal("4000000"))
+
+
+_AAPL_GPPE_BAND = _aapl_gppe_band()
+
+
+def evaluate_known_answer(
+    answer: SentinelKnownAnswer,
+    actual_value: Any,
+    *,
+    actual_period_end: str | None = None,
+) -> str | None:
+    """Evaluate one sentinel known answer against a stored value (#1416 E4).
+
+    Returns ``None`` when the answer holds (or when ``actual_period_end`` is newer than
+    ``answer.period_end``, which marks the known answer stale rather than a data failure).
+    Returns a human-readable failure string when the stored value violates the oracle.
+    """
+    if actual_period_end is not None and actual_period_end > answer.period_end:
+        return None
+    if actual_value is None:
+        return f"{answer.answer_id} ({answer.ticker} {answer.metric}): value is NULL (accession {answer.accession})"
+    if answer.kind == "exact":
+        if str(actual_value) != str(answer.expected_value):
+            return (
+                f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
+                f"{actual_value!r} != {answer.expected_value!r} (accession {answer.accession})"
+            )
+        return None
+    numeric_actual = Decimal(str(actual_value))
+    if answer.kind == "band":
+        lower = Decimal(str(answer.lower_bound))
+        upper = Decimal(str(answer.upper_bound))
+        if not (lower <= numeric_actual <= upper):
+            return (
+                f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
+                f"{numeric_actual} outside [{lower}, {upper}] (accession {answer.accession})"
+            )
+        return None
+    expected = Decimal(str(answer.expected_value))
+    tolerance = Decimal(str(answer.relative_tolerance))
+    if expected == 0:
+        if numeric_actual != 0:
+            return f"{answer.answer_id} ({answer.ticker} {answer.metric}): {numeric_actual} != 0"
+        return None
+    relative_error = abs(numeric_actual - expected) / abs(expected)
+    if relative_error > tolerance:
+        return (
+            f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
+            f"{numeric_actual} differs from {expected} by {relative_error:.4f} > {tolerance} "
+            f"(accession {answer.accession})"
+        )
+    return None
+
+
+def evaluate_sentinel_known_answers(
+    rows_by_issuer: Mapping[str, Mapping[str, Any]],
+    *,
+    catalog: SentinelKnownAnswersCatalog | None = None,
+    require_all_issuers: bool = False,
+) -> list[str]:
+    """Evaluate all applicable sentinel known answers against a mapping of ``issuer_id -> metric dict``."""
+    resolved_catalog = catalog or load_sentinel_known_answers()
+    failures: list[str] = []
+    for answer in resolved_catalog.answers:
+        row = rows_by_issuer.get(answer.issuer_id) or rows_by_issuer.get(answer.cik)
+        if row is None:
+            if require_all_issuers:
+                failures.append(f"{answer.answer_id} ({answer.ticker}): issuer {answer.issuer_id} missing")
+            continue
+        if answer.metric not in row:
+            continue
+        period_key = f"{answer.metric}_period_end"
+        actual_period = str(row[period_key]) if row.get(period_key) is not None else None
+        verdict = evaluate_known_answer(answer, row.get(answer.metric), actual_period_end=actual_period)
+        if verdict is not None:
+            failures.append(verdict)
+    return failures
+
+
+def evaluate_negative_theme_classifications(
+    theme_shares: Sequence[Mapping[str, Any]],
+    *,
+    catalog: SentinelKnownAnswersCatalog | None = None,
+) -> list[str]:
+    """Evaluate negative theme classification known answers (#1416 E4)."""
+    resolved_catalog = catalog or load_sentinel_known_answers()
+    by_issuer_theme: dict[tuple[str, str], Decimal] = {}
+    for entry in theme_shares:
+        issuer = str(entry.get("issuer_id") or entry.get("cik") or "")
+        theme = str(entry.get("theme_key") or "")
+        share = Decimal(str(entry.get("theme_share") or "0"))
+        if issuer and theme:
+            by_issuer_theme[(issuer, theme)] = share
+            if issuer.startswith("issuer:cik:"):
+                by_issuer_theme[(issuer.removeprefix("issuer:cik:"), theme)] = share
+    failures: list[str] = []
+    for neg in resolved_catalog.negative_theme_classifications:
+        actual = by_issuer_theme.get((neg.issuer_id, neg.theme_key))
+        if actual is None:
+            actual = by_issuer_theme.get((neg.cik, neg.theme_key))
+        if actual is None:
+            continue
+        max_share = Decimal(neg.max_theme_share)
+        if actual > max_share:
+            failures.append(
+                f"{neg.answer_id} ({neg.ticker} {neg.theme_key}): "
+                f"theme_share {actual} > max {max_share} (accession {neg.accession})"
+            )
+    return failures
 
 
 _WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl")

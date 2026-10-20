@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0.0",
+  "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, and shared vendor capacity demand (#1416).",
+  "sentinels": [
+    {
+      "ticker": "AAPL",
+      "issuer_id": "issuer:cik:0000320193",
+      "listing_id": "listing:xnas:aapl",
+      "trait": "all_three_universes_september_fy",
+      "defect_refs": ["#528", "#648"]
+    },
+    {
+      "ticker": "GOOGL",
+      "issuer_id": "issuer:cik:0001652044",
+      "listing_id": "listing:xnas:googl",
+      "trait": "dual_class_share_class_a",
+      "defect_refs": ["#705", "#1265", "#1347"]
+    },
+    {
+      "ticker": "GOOG",
+      "issuer_id": "issuer:cik:0001652044",
+      "listing_id": "listing:xnas:goog",
+      "trait": "dual_class_share_class_c",
+      "defect_refs": ["#705", "#1265", "#1347"]
+    },
+    {
+      "ticker": "ASML",
+      "issuer_id": "issuer:cik:0000937966",
+      "listing_id": "listing:xnas:asml",
+      "trait": "foreign_20f_ifrs_filer",
+      "defect_refs": ["#648"]
+    },
+    {
+      "ticker": "HBAN",
+      "issuer_id": "issuer:cik:0000049196",
+      "listing_id": "listing:xnas:hban",
+      "trait": "regional_bank_financial_branch",
+      "defect_refs": ["#648", "#1176"]
+    },
+    {
+      "ticker": "CINF",
+      "issuer_id": "issuer:cik:0000020286",
+      "listing_id": "listing:xnas:cinf",
+      "trait": "property_casualty_insurer_branch",
+      "defect_refs": ["#648"]
+    },
+    {
+      "ticker": "JPM",
+      "issuer_id": "issuer:cik:0000019617",
+      "listing_id": "listing:xnys:jpm",
+      "trait": "nyse_bank_tangible_common_equity",
+      "defect_refs": ["#1176"]
+    },
+    {
+      "ticker": "NVDA",
+      "issuer_id": "issuer:cik:0001045810",
+      "listing_id": "listing:xnas:nvda",
+      "trait": "stock_split_ten_for_one",
+      "defect_refs": ["#1262", "#1277"]
+    },
+    {
+      "ticker": "BRK.B",
+      "issuer_id": "issuer:cik:0001067983",
+      "listing_id": "listing:xnys:brk.b",
+      "trait": "class_b_punctuation_no_gross_profit",
+      "defect_refs": ["#822", "#1359"]
+    },
+    {
+      "ticker": "CRWD",
+      "issuer_id": "issuer:cik:0001535527",
+      "listing_id": "listing:xnas:crwd",
+      "trait": "revenue_concept_including_assessed_tax",
+      "defect_refs": ["#1379"]
+    }
+  ],
+  "environments": {
+    "preview": {
+      "environment": "preview",
+      "trigger": "platform_paths_or_weekly",
+      "live_vendor_calls": false,
+      "strategy_universe": null,
+      "ticks": {
+        "topt": {
+          "scheduled": false,
+          "cron": null,
+          "tick_type": "strategy",
+          "estimated_listings": 0
+        },
+        "qqq": {
+          "scheduled": false,
+          "cron": null,
+          "tick_type": "fund",
+          "estimated_listings": 0
+        },
+        "sp500": {
+          "scheduled": false,
+          "cron": null,
+          "tick_type": "index",
+          "estimated_listings": 0
+        },
+        "canary": {
+          "scheduled": false,
+          "cron": null,
+          "tick_type": "sentinel",
+          "estimated_listings": 1
+        }
+      },
+      "planned_daily_demand": {
+        "twelvedata": 0,
+        "sec": 0,
+        "yahoo": 0,
+        "moomoo": 0
+      }
+    },
+    "staging": {
+      "environment": "staging",
+      "trigger": "auto_batch_on_main_and_scheduled",
+      "live_vendor_calls": true,
+      "strategy_universe": "topt",
+      "ticks": {
+        "topt": {
+          "scheduled": true,
+          "cron": "45 22 * * *",
+          "tick_type": "strategy",
+          "estimated_listings": 21
+        },
+        "qqq": {
+          "scheduled": false,
+          "cron": "20 23 * * *",
+          "tick_type": "fund",
+          "estimated_listings": 102
+        },
+        "sp500": {
+          "scheduled": false,
+          "cron": "15 1 * * *",
+          "tick_type": "index",
+          "estimated_listings": 503
+        },
+        "canary": {
+          "scheduled": true,
+          "cron": "47 23 * * *",
+          "tick_type": "sentinel",
+          "estimated_listings": 6
+        }
+      },
+      "planned_daily_demand": {
+        "twelvedata": 240,
+        "sec": 1200,
+        "yahoo": 300,
+        "moomoo": 200
+      }
+    },
+    "production": {
+      "environment": "production",
+      "trigger": "owner_approved_tag_and_scheduled",
+      "live_vendor_calls": true,
+      "strategy_universe": "topt",
+      "target_strategy_universe": "sp500",
+      "ticks": {
+        "topt": {
+          "scheduled": true,
+          "cron": "15 22 * * *",
+          "tick_type": "strategy",
+          "estimated_listings": 21
+        },
+        "qqq": {
+          "scheduled": true,
+          "cron": "20 23 * * *",
+          "tick_type": "fund",
+          "estimated_listings": 102
+        },
+        "sp500": {
+          "scheduled": false,
+          "cron": "15 1 * * *",
+          "tick_type": "index",
+          "estimated_listings": 503
+        },
+        "canary": {
+          "scheduled": true,
+          "cron": "47 23 * * *",
+          "tick_type": "sentinel",
+          "estimated_listings": 6
+        }
+      },
+      "planned_daily_demand": {
+        "twelvedata": 360,
+        "sec": 2400,
+        "yahoo": 900,
+        "moomoo": 400
+      }
+    }
+  },
+  "shared_physical_seats": {
+    "twelvedata": {
+      "shared_credential": "single_api_key",
+      "allocation_basis": "planned_daily_demand"
+    },
+    "sec": {
+      "shared_credential": "single_host_ip",
+      "allocation_basis": "planned_daily_demand"
+    },
+    "yahoo": {
+      "shared_credential": "single_host_ip",
+      "allocation_basis": "planned_daily_demand"
+    },
+    "moomoo": {
+      "shared_credential": "single_opend_account",
+      "allocation_basis": "planned_daily_demand"
+    }
+  }
+}

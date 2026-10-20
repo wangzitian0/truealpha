@@ -35,6 +35,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 
@@ -309,7 +310,13 @@ MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
 #: measures the lane's calls and holds this sum inside the share.
 #: The QQQ price lane (`lanes/qqq_prices.py`, #1277) spends only what the other callers leave below
 #: 85 % of the share. init.md section 5 holds its formula and the measured spend.
-TWELVE_DATA_ENVIRONMENT_SHARES: tuple[tuple[str, int], ...] = (("production", 60), ("staging", 40))
+
+
+def derived_environment_shares(seat: str) -> tuple[tuple[str, int], ...]:
+    """Derive per-environment percentage shares for a shared physical seat from
+    ``environment_contract.v1.json`` (#1416 E3)."""
+    return load_environment_contract().derived_environment_shares(seat)
+
 
 LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
     {
@@ -332,12 +339,12 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
             documented="SEC EDGAR fair access (same hosts as sec): max 10 requests/second",
         ),
         # Twelve Data's plan: 8 API credits per minute and 800 per day; `/eod` and
-        # `/time_series` cost one credit each. Split per environment (above).
+        # `/time_series` cost one credit each. Derived per environment from the contract (#1416 E3).
         "twelvedata": CapacityDeclaration(
             calls_per_window=8,
             window_seconds=60,
             daily_budget=800,
-            environment_shares=TWELVE_DATA_ENVIRONMENT_SHARES,
+            environment_shares=derived_environment_shares("twelvedata"),
             documented="Twelve Data Basic (free) plan: 8 API credits/minute, 800/day; one key for both environments",
         ),
         # OpenFIGI v3 with an API key: 25 requests per 6 seconds (100 jobs each); no

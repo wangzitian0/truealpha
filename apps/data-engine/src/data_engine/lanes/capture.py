@@ -22,6 +22,7 @@ from typing import Any
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.strategy import live_risk_free_rate
 
 from data_engine.config import settings
@@ -267,32 +268,43 @@ _KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
 
 
 def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
-    """The default status of `tick`'s schedule in `app_env` (#1310).
+    """The default status of `tick`'s schedule in `app_env` (#1310, #1416).
 
-    The definitions builder and the freshness checks both read this function, so they cannot disagree.
-    QQQ runs by schedule in production only. Every other tick keeps the status of its declaration.
+    Reads `environment_contract.v1.json` as the single source of truth for per-environment
+    schedule status, falling back to `tick.default_status` for unrecognised environments.
     """
+    contract = load_environment_contract()
+    env = contract.normalize_environment(app_env)
+    if env in contract.environments:
+        if tick.key == "sp500" and SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED:
+            return dg.DefaultScheduleStatus.STOPPED
+        return (
+            dg.DefaultScheduleStatus.RUNNING
+            if contract.is_universe_scheduled(tick.key, env)
+            else dg.DefaultScheduleStatus.STOPPED
+        )
     if tick.key == "qqq":
         return production_only_schedule_status(app_env)
     return tick.default_status
 
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
-    """Whether `universe` has an active schedule in `environment` (#1118)."""
+    """Whether `universe` has an active schedule in `environment` (#1118, #1416)."""
     key = universe.removeprefix("universe-list:")
     for tick in TICKS:
         if tick.key == key:
             if tick.cron is None:
                 return False
             return tick_schedule_status(tick, environment) == dg.DefaultScheduleStatus.RUNNING
-    return False
+    return load_environment_contract().is_universe_scheduled(universe, environment)
 
 
 def is_head_scheduled(universe_id: str, environment: str) -> bool:
-    """Whether `universe_id` has a running schedule in `environment` (#1256).
+    """Whether `universe_id` has a running schedule in `environment` (#1256, #1416).
 
-    Fails closed (returns True) when `environment` is omitted or unrecognised, or when
-    `universe_id` does not map to a declared tick in `TICKS`.
+    Delegates to `environment_contract.v1.json` and fails closed (returns True) when
+    `environment` is omitted or unrecognised, or when `universe_id` does not map to a
+    declared tick in `TICKS`.
     """
     env = environment.strip().lower()
     if env not in _KNOWN_ENVIRONMENTS:

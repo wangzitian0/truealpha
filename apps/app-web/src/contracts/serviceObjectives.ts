@@ -54,20 +54,13 @@ export function isCanaryUniverse(universeId: string): boolean {
   );
 }
 
+import { isHeadScheduledFromContract } from "./environmentContract.generated";
+
 /**
- * #1318 / #1359 / #1362: Mirrors `is_head_scheduled` in `apps/data-engine/src/data_engine/lanes/capture.py`.
- * `qqq_live_schedule` runs in production only; in staging, `universe:qqq-%` heads are manual.
+ * #1318 / #1359 / #1362 / #1416: Generated from `environment_contract.v1.json` via
+ * `environmentContract.generated.ts` so TypeScript and Python cannot drift.
  */
-export function isHeadScheduled(
-  universeId: string,
-  environment: string | null | undefined,
-): boolean {
-  const env = (environment || "production").trim().toLowerCase() || "production";
-  if (env === "staging" && universeId.startsWith("universe:qqq-")) {
-    return false;
-  }
-  return true;
-}
+export const isHeadScheduled = isHeadScheduledFromContract;
 
 /**
  * #1363: Single source of truth for resolving effective head freshness across

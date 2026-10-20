@@ -134,8 +134,8 @@ batching one release out of a burst of merges falls out of the same
 mechanism as the cadence rule above, not a separate scheduler.
 
 Five more reasons stand between "quiet" and "tagged", checked in this order,
-first match wins (`tools/auto_release.py`'s own docstring is the source of
-truth if this drifts): main HEAD is not green, main HEAD already carries a
+first match wins (`tools/auto_release.py`'s own docstring and constants are the
+source of truth): main HEAD is not green, main HEAD already carries a
 tag, a release would restart the data engine inside staging's nightly tick
 window (`TICK_WINDOW_LABEL`, `DEPLOY_LEAD` margin included), today's automatic-release
 count is already at the daily cap (`DEFAULT_DAILY_CAP` in

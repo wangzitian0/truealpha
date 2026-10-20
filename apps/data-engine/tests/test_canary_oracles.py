@@ -101,3 +101,92 @@ def test_the_run_verdict_carries_the_image_verdict(monkeypatch: pytest.MonkeyPat
         connection.close()
     assert any("does not ship" in line for line in failures), failures
     assert any("no capture status" in line for line in failures), failures
+
+
+# --- #1416 E3/E4: derived vendor shares and sentinel known-answer oracles ----------------
+
+
+def test_source_registrations_carries_no_hand_set_twelve_data_share_constant() -> None:
+    from data_engine.datahub.production_topt import source_registrations
+
+    assert not hasattr(source_registrations, "TWELVE_DATA_ENVIRONMENT_SHARES"), (
+        "#1416 E3: TWELVE_DATA_ENVIRONMENT_SHARES must be deleted in favour of derived_environment_shares"
+    )
+    shares = source_registrations.derived_environment_shares("twelvedata")
+    assert dict(shares) == {"production": 60, "staging": 40}
+
+
+def test_sentinel_known_answers_pass_on_grounded_values_and_fail_when_mutated_by_10x() -> None:
+    """#1416 E4: mutation test — changing one stored value by 10x fails the oracle,
+    and an answer for a period older than the latest filing is treated as stale, not failed."""
+    from decimal import Decimal
+
+    from truealpha_contracts.environment_contract import load_sentinel_known_answers
+
+    catalog = load_sentinel_known_answers()
+    baseline: dict[str, dict[str, object]] = {
+        "issuer:cik:0000320193": {
+            "operating_branch": "non_financial",
+            "gppe": Decimal("1070000"),
+            "headcount": Decimal("166000"),
+        },
+        "issuer:cik:0001652044": {
+            "operating_branch": "non_financial",
+            "headcount": Decimal("190820"),
+        },
+        "issuer:cik:0000049196": {"operating_branch": "financial"},
+        "issuer:cik:0000020286": {"operating_branch": "insurance"},
+        "issuer:cik:0000019617": {
+            "operating_branch": "financial",
+            "revenue": Decimal("182447000000"),
+        },
+        "issuer:cik:0001045810": {"headcount": Decimal("42000")},
+        "issuer:cik:0001067983": {"headcount": Decimal("385500")},
+        "issuer:cik:0001535527": {"revenue": Decimal("4812005000")},
+        "issuer:cik:0000937966": {"operating_branch": "non_financial"},
+    }
+    assert canary_oracles.evaluate_sentinel_known_answers(baseline, catalog=catalog, require_all_issuers=True) == []
+
+    # Mutate CRWD revenue by 10x -> oracle fails and cites accession 0001535527-26-000010
+    mutated_crwd = {**baseline, "issuer:cik:0001535527": {"revenue": Decimal("48120050000")}}
+    crwd_failures = canary_oracles.evaluate_sentinel_known_answers(mutated_crwd, catalog=catalog)
+    assert len(crwd_failures) == 1
+    assert "crwd-revenue-fy2026" in crwd_failures[0]
+    assert "0001535527-26-000010" in crwd_failures[0]
+
+    # Mutate AAPL GPPE by 10x -> oracle fails and cites accession 0000320193-25-000079
+    mutated_aapl = {
+        **baseline,
+        "issuer:cik:0000320193": {
+            **baseline["issuer:cik:0000320193"],
+            "gppe": Decimal("10700000"),
+        },
+    }
+    aapl_failures = canary_oracles.evaluate_sentinel_known_answers(mutated_aapl, catalog=catalog)
+    assert len(aapl_failures) == 1
+    assert "aapl-gppe-fy2025" in aapl_failures[0]
+
+    # Newer filing period than the known answer is flagged stale (not failed)
+    newer_filing = {
+        **baseline,
+        "issuer:cik:0001535527": {
+            "revenue": Decimal("9999999999"),
+            "revenue_period_end": "2027-01-31",
+        },
+    }
+    assert canary_oracles.evaluate_sentinel_known_answers(newer_filing, catalog=catalog) == []
+
+    # Negative theme classifications: Starbucks with 0% semiconductor passes; >0% fails
+    assert (
+        canary_oracles.evaluate_negative_theme_classifications(
+            [{"issuer_id": "issuer:cik:0000829224", "theme_key": "semiconductors", "theme_share": "0.00"}],
+            catalog=catalog,
+        )
+        == []
+    )
+    neg_failures = canary_oracles.evaluate_negative_theme_classifications(
+        [{"issuer_id": "issuer:cik:0000829224", "theme_key": "semiconductors", "theme_share": "0.25"}],
+        catalog=catalog,
+    )
+    assert len(neg_failures) == 1
+    assert "sbux-zero-semiconductor" in neg_failures[0]

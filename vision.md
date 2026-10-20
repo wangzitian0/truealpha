@@ -23,7 +23,7 @@ This isn't about building a flashy data platform — it's about engineering an a
 
 - Not a high-frequency / intraday trading system — the inherent disclosure lag in these data sources (e.g., a ~60-day public lag on ETF holdings) is acceptable
 - Not currently a multi-user SaaS product — this is a personal tool; the architecture leaves room to grow but doesn't add complexity for that now
-- Not aiming to cover every stock. The production target is the S&P 500 (owner decision 2026-10-20, #1410). "Depth over breadth" means that each company in that universe gets all seven modules with traceable history before any name outside it is added
+- Not aiming to cover every stock. The production target is the S&P 500 (owner decision 2026-10-20, #1410; governed by `common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`, #1416). "Depth over breadth" means that each company in that universe gets all seven modules with traceable history before any name outside it is added
 
 ## What Success Looks Like
 
