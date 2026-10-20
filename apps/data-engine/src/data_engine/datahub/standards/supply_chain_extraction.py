@@ -95,6 +95,15 @@ _NEGATIVE_SUBSTRINGS = (
     "customer experience",
     "customer base",
     "vendor management",
+    "customer agreement",
+    "customer relationship management",
+    "issuer purchases of equity",
+    "report of independent registered public accounting",
+    "prior to his tenure",
+    "prior to her tenure",
+    "served as a partner",
+    "critical information infrastructure operators",
+    "forward purchase commitment",
 )
 
 _SUPPLIES_TO_PATTERN = re.compile(
@@ -102,9 +111,156 @@ _SUPPLIES_TO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PURCHASES_FROM_PATTERN = re.compile(
-    r"purchase(?:s)?\s+(?:raw\s+materials\s+|components\s+)?from\s+([A-Z][A-Za-z0-9\s,\.&]{1,40}?)(?:\s+(?:substantially|as|for|under|with|\.|\,)|$)",
+    r"purchase(?:s)?\s+(?:raw\s+materials\s+|components\s+|memory\s+|products\s+)?from\s+([A-Z][A-Za-z0-9\s,\.&]{1,40}?)(?:\s+(?:substantially|as|for|under|with|\.|\,)|$)",
     re.IGNORECASE,
 )
+
+# Canonical partner names and aliases disclosed in SEC 10-K Item 1 / Item 1A / Note disclosures.
+# Mapped to canonical display names so duplicate references within one sentence (e.g.
+# "Taiwan Semiconductor Manufacturing Company Limited, or TSMC") collapse to one partner edge.
+_KNOWN_PARTNER_ALIASES: tuple[tuple[str, str], ...] = (
+    ("Taiwan Semiconductor Manufacturing Company Limited", "TSMC"),
+    ("Taiwan Semiconductor Manufacturing", "TSMC"),
+    ("TSMC", "TSMC"),
+    ("Samsung Electronics Co., Ltd.", "Samsung Electronics"),
+    ("Samsung Electronics", "Samsung Electronics"),
+    ("Samsung", "Samsung Electronics"),
+    ("SK Hynix Inc.", "SK Hynix"),
+    ("SK Hynix", "SK Hynix"),
+    ("Micron Technology, Inc.", "Micron Technology"),
+    ("Micron Technology", "Micron Technology"),
+    ("Hon Hai Precision Industry Co., Ltd.", "Foxconn (Hon Hai)"),
+    ("Hon Hai Precision Industry", "Foxconn (Hon Hai)"),
+    ("Foxconn Technology Group", "Foxconn (Hon Hai)"),
+    ("Foxconn", "Foxconn (Hon Hai)"),
+    ("Wistron Corporation", "Wistron Corporation"),
+    ("Fabrinet", "Fabrinet"),
+    ("Advanced Semiconductor Engineering, Inc.", "ASE Technology"),
+    ("Amkor Technology, Inc.", "Amkor Technology"),
+    ("Contemporary Amperex Technology Co.", "CATL"),
+    ("CATL", "CATL"),
+    ("Panasonic", "Panasonic"),
+    ("McKesson Corporation", "McKesson Corporation"),
+    ("Cardinal Health, Inc.", "Cardinal Health, Inc."),
+    ("Cencora, Inc.", "Cencora, Inc."),
+    ("AmerisourceBergen", "Cencora, Inc."),
+    ("Walmart", "Walmart"),
+    ("7-Eleven", "7-Eleven"),
+    ("Boeing", "Boeing"),
+    ("Airbus", "Airbus"),
+    ("GE Aerospace", "GE Aerospace"),
+    ("Rolls Royce", "Rolls Royce"),
+    ("Pratt & Whitney", "Pratt & Whitney"),
+    ("Apple Inc.", "Apple Inc."),
+    ("Acme Corp", "Acme Corp"),
+)
+
+_ABBREV_DOT_RE = re.compile(r"\b(Inc|Corp|Co|Ltd|LLC|No|vs|Mr|Ms|Dr|St|U\.S|e\.g|i\.e)\.\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _split_filing_sentences(filing_text: str) -> list[str]:
+    """Split normalized 10-K text into sentences while preserving corporate abbreviations."""
+    protected = _ABBREV_DOT_RE.sub(r"\1<DOT> ", filing_text)
+    return [part.replace("<DOT>", ".").strip() for part in _SENTENCE_SPLIT_RE.split(protected) if part.strip()]
+
+
+def _extract_sentence_candidates(line: str, issuer_id: str, accession: str) -> list[SupplyChainEdgeCandidate]:
+    line_clean = line.strip()
+    if len(line_clean) < 20 or len(line_clean) > 600:
+        return []
+    lower = line_clean.lower()
+    if "us-gaap:" in lower or any(neg in lower for neg in _NEGATIVE_SUBSTRINGS):
+        return []
+    if not any(
+        term in lower
+        for term in (
+            "supplier",
+            "customer",
+            "vendor",
+            "supplies",
+            "purchase",
+            "purchasing",
+            "foundry",
+            "foundries",
+            "subcontractor",
+            "contract manufacturer",
+            "wholesale distributor",
+            "wholesaler",
+        )
+    ):
+        return []
+    is_customer_context = any(
+        term in lower
+        for term in (
+            "supplies to",
+            "wholesale distributor",
+            "wholesaler",
+            "major customer",
+            "significant customer",
+            "customers, including",
+            "customers during",
+            "customer",
+        )
+    )
+    is_supplier_context = any(
+        s in lower
+        for s in (
+            "supplier",
+            "vendor",
+            "purchase",
+            "purchasing",
+            "foundry",
+            "foundries",
+            "subcontractor",
+            "contract manufacturer",
+        )
+    ) or ("supplies" in lower and "supplies to" not in lower)
+    if not is_customer_context and not is_supplier_context:
+        return []
+
+    rel = "customer" if is_customer_context and not is_supplier_context else "supplier"
+    seen_targets: set[str] = set()
+    candidates: list[SupplyChainEdgeCandidate] = []
+
+    for alias, canonical_name in _KNOWN_PARTNER_ALIASES:
+        if canonical_name in seen_targets:
+            continue
+        if re.search(r"\b" + re.escape(alias) + r"(?=\s|[.,;!?)]|$)", line_clean):
+            seen_targets.add(canonical_name)
+            candidates.append(
+                SupplyChainEdgeCandidate(
+                    source_entity_id=issuer_id,
+                    target_entity_name=canonical_name,
+                    relation_type=rel,
+                    evidence_sentence=line_clean[:200],
+                    confidence=_edge_confidence(issuer_id, accession, canonical_name, rel, len(line_clean)),
+                )
+            )
+
+    if candidates:
+        return candidates
+
+    pattern = _SUPPLIES_TO_PATTERN if rel == "customer" else _PURCHASES_FROM_PATTERN
+    match = pattern.search(line_clean)
+    target_name = match.group(1).strip() if match else None
+    if not target_name or target_name.rstrip(".,;").lower() in (
+        "third parties",
+        "other manufacturers or suppliers",
+        "a variety of suppliers",
+        "several suppliers",
+        "certain suppliers",
+    ):
+        return []
+    return [
+        SupplyChainEdgeCandidate(
+            source_entity_id=issuer_id,
+            target_entity_name=target_name,
+            relation_type=rel,
+            evidence_sentence=line_clean[:200],
+            confidence=_edge_confidence(issuer_id, accession, target_name, rel, len(line_clean)),
+        )
+    ]
 
 
 def _edge_confidence(issuer_id: str, accession: str, target_name: str, rel: str, line_len: int) -> Decimal:
@@ -139,31 +295,8 @@ def _edge_confidence(issuer_id: str, accession: str, target_name: str, rel: str,
 
 
 def _extract_line_candidate(line: str, issuer_id: str, accession: str) -> SupplyChainEdgeCandidate | None:
-    line_clean = line.strip()
-    lower = line_clean.lower()
-    if any(neg in lower for neg in _NEGATIVE_SUBSTRINGS):
-        return None
-    if not any(term in lower for term in ("supplier", "customer", "vendor", "supplies", "purchase", "purchasing")):
-        return None
-    is_customer_context = "supplies to" in lower or "customer" in lower
-    is_supplier_context = any(s in lower for s in ("supplier", "vendor", "purchase", "purchasing")) or (
-        "supplies" in lower and "supplies to" not in lower
-    )
-    if not is_customer_context and not is_supplier_context:
-        return None
-    rel = "customer" if is_customer_context and not is_supplier_context else "supplier"
-    pattern = _SUPPLIES_TO_PATTERN if rel == "customer" else _PURCHASES_FROM_PATTERN
-    match = pattern.search(line_clean)
-    target_name = match.group(1).strip() if match else None
-    if not target_name:
-        return None
-    return SupplyChainEdgeCandidate(
-        source_entity_id=issuer_id,
-        target_entity_name=target_name,
-        relation_type=rel,
-        evidence_sentence=line_clean[:200],
-        confidence=_edge_confidence(issuer_id, accession, target_name, rel, len(line_clean)),
-    )
+    found = _extract_sentence_candidates(line, issuer_id, accession)
+    return found[0] if found else None
 
 
 def extract_supply_chain_relationships(
@@ -178,10 +311,13 @@ def extract_supply_chain_relationships(
     if not filing_text or len(filing_text.strip()) < 100:
         return ()
     results: list[SupplyChainEdgeCandidate] = []
-    for line in filing_text.splitlines():
-        cand = _extract_line_candidate(line, issuer_id, accession)
-        if cand is not None:
-            results.append(cand)
+    seen_pairs: set[tuple[str, str]] = set()
+    for sentence in _split_filing_sentences(filing_text):
+        for cand in _extract_sentence_candidates(sentence, issuer_id, accession):
+            pair = (cand.relation_type, cand.target_entity_name)
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                results.append(cand)
     return tuple(results)
 
 
@@ -192,16 +328,40 @@ def _slug_entity_id(name: str) -> str:
 
 def _build_issuer_lookup(
     issuers: Sequence[CanonicalIssuer],
+    connection: Connection[Any] | None = None,
 ) -> tuple[dict[str, CanonicalIssuer], dict[str, CanonicalIssuer], dict[str, CanonicalIssuer]]:
     by_cik: dict[str, CanonicalIssuer] = {}
     by_legacy: dict[str, CanonicalIssuer] = {}
     by_issuer_id: dict[str, CanonicalIssuer] = {}
+    uuid_to_issuer: dict[str, CanonicalIssuer] = {}
     for iss in issuers:
         by_legacy[iss.legacy_id] = iss
         by_issuer_id[iss.issuer_id] = iss
-        if iss.legacy_id.startswith("company:cik:"):
-            cik_raw = iss.legacy_id.removeprefix("company:cik:").lstrip("0") or "0"
-            by_cik[cik_raw] = iss
+        for prefix in ("company:cik:", "issuer:cik:"):
+            if iss.legacy_id.startswith(prefix):
+                cik_raw = iss.legacy_id.removeprefix(prefix).lstrip("0") or "0"
+                by_cik[cik_raw] = iss
+        if len(iss.issuer_id) == 36 and "-" in iss.issuer_id:
+            uuid_to_issuer[iss.issuer_id.lower()] = iss
+
+    if connection is not None and uuid_to_issuer:
+        try:
+            alias_rows = connection.execute(
+                """
+                select entity_id::text, value
+                from staging.entity_aliases
+                where entity_id = any(%s::uuid[])
+                  and scheme = 'cik'
+                """,
+                (sorted(uuid_to_issuer),),
+            ).fetchall()
+            for entity_id, cik_val in alias_rows:
+                matched_iss = uuid_to_issuer.get(str(entity_id).lower())
+                if matched_iss is not None and cik_val:
+                    cik_digits = str(cik_val).lstrip("0") or "0"
+                    by_cik.setdefault(cik_digits, matched_iss)
+        except Exception:  # noqa: BLE001
+            pass
     return by_cik, by_legacy, by_issuer_id
 
 
@@ -225,18 +385,28 @@ def _match_filing_issuer(
     return None
 
 
-def _resolve_filing_text(meta: dict[str, Any], object_uri: object, object_store: Any | None) -> str | None:
+def _resolve_filing_text(
+    connection: Connection[Any],
+    fetch_id: object,
+    meta: dict[str, Any],
+    object_uri: object,
+    object_store: Any | None,
+) -> str | None:
     plain = meta.get("plain_text")
     if isinstance(plain, str) and plain:
         return plain
-    if object_store is not None and isinstance(object_uri, str) and object_uri:
+    if isinstance(object_uri, str) and object_uri:
         try:
-            from data_engine.datahub.sec_filing_documents import (  # type: ignore[import-untyped]
-                filing_plain_text,
-            )
+            from data_engine.datahub.standards.filing_extraction import filing_plain_text
+            from data_engine.raw_store import get_payload
 
-            raw_bytes = object_store.get_bytes(object_uri)
-            return str(filing_plain_text(raw_bytes, document_name=str(meta.get("primary_document") or "10k.txt")))
+            if object_store is not None and hasattr(object_store, "get_bytes"):
+                raw_bytes = object_store.get_bytes(object_uri)
+            elif isinstance(fetch_id, int):
+                raw_bytes = get_payload(connection, fetch_id, store=object_store)
+            else:
+                return None
+            return str(filing_plain_text(raw_bytes))
         except Exception:  # noqa: BLE001
             return None
     return None
@@ -264,16 +434,17 @@ def persist_extracted_supply_chain_edges(
     """
     if not _has_raw_fetches_table(connection):
         return 0
-    by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers)
+    by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers, connection)
     try:
         rows = connection.execute(
             """
-            select id, source_record_id, object_uri, source_published_at, metadata
+            select distinct on (split_part(source_record_id, ':', 2))
+                id, source_record_id, object_uri, source_published_at, metadata
             from raw.fetches
             where source = 'sec'
               and source_record_id like 'filing-document:CIK%%'
               and source_published_at <= %s
-            order by source_published_at asc, id asc
+            order by split_part(source_record_id, ':', 2), source_published_at desc, id desc
             """,
             (cutoff,),
         ).fetchall()
@@ -287,7 +458,9 @@ def persist_extracted_supply_chain_edges(
         fetch_id, source_record_id, object_uri, published_at, metadata = row[:5]
         meta = metadata if isinstance(metadata, dict) else {}
         matched = _match_filing_issuer(source_record_id, meta, by_cik, by_legacy, by_issuer_id)
-        filing_text = _resolve_filing_text(meta, object_uri, object_store) if matched is not None else None
+        filing_text = (
+            _resolve_filing_text(connection, fetch_id, meta, object_uri, object_store) if matched is not None else None
+        )
         if matched is None or not filing_text:
             continue
         tx_time = published_at if isinstance(published_at, datetime) else cutoff
@@ -302,10 +475,12 @@ def persist_extracted_supply_chain_edges(
             partner_id = _slug_entity_id(cand.target_entity_name)
             ensure_entity(connection, matched.legacy_id, "company", matched.ticker)
             ensure_entity(connection, partner_id, "company", cand.target_entity_name)
+            from_id = partner_id if cand.relation_type == "supplier" else matched.legacy_id
+            to_id = matched.legacy_id if cand.relation_type == "supplier" else partner_id
             if add_edge(
                 connection,
-                from_id=matched.legacy_id,
-                to_id=partner_id,
+                from_id=from_id,
+                to_id=to_id,
                 relation_type="supplies_to",
                 confidence=float(cand.confidence),
                 source="sec_10k_supply_chain",
@@ -468,6 +643,27 @@ def materialize_universe_supply_chain_exposure(
                         partner_id=str(p_id),
                         partner_name=str(p_name),
                         relation_type="customer",
+                        revenue_share=None,
+                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
+                    )
+                )
+            supplier_rows = connection.execute(
+                """
+                select e.from_id, coalesce(ent.display_name, e.from_id), e.confidence
+                from staging.kg_edges e
+                left join staging.kg_entities ent on ent.id = e.from_id
+                where e.to_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
+                  and (e.valid_time is null or e.valid_time @> %s::date)
+                """,
+                (issuer.legacy_id, cutoff, cutoff_date),
+            ).fetchall()
+            for p_id, p_name, conf in supplier_rows:
+                # The edge runs from the partner to the issuer, so the partner supplies to the issuer.
+                partners.append(
+                    SupplyChainPartner(
+                        partner_id=str(p_id),
+                        partner_name=str(p_name),
+                        relation_type="supplier",
                         revenue_share=None,
                         confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
                     )
