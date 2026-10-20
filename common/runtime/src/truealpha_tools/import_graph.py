@@ -11,8 +11,9 @@ An edge is one of three things:
 - an `import x.y` or `from x.y import z` statement that names a first-party package;
 - a registry string "x.y:function", which a deployed loop resolves at run time (#72, #800);
 - a bare string that equals a module name, such as a lane named in `LANE_MODULES` (#731);
-- a call of a registered loader with a string argument: `load_tool("walk_evidence")`
-  imports `truealpha_tools.walk_evidence` (`truealpha_runtime.testing.load_tool`).
+- a call of a registered loader with a string argument: the test helper
+  `truealpha_runtime.testing.load_tool` given "walk_evidence" imports
+  `truealpha_tools.walk_evidence`.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Loader function name -> module name template. A test loads a tool module through
-#: `load_tool("<name>")`, never through an import statement (#583).
+#: the `load_tool` helper with the tool name, never through an import statement (#583).
 DYNAMIC_LOADERS: dict[str, str] = {"load_tool": "truealpha_tools.{}"}
 
 

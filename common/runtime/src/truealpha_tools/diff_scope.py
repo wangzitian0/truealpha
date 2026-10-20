@@ -75,6 +75,7 @@ WEB_TEST_DIR = f"{WEB_ROOT}/tests"
 WEB_CODE_SUFFIXES = (".ts", ".tsx", ".mjs", ".js")
 WEB_ALL_TESTS_FILES = frozenset({"package.json", "bun.lock", "tsconfig.json", "next.config.mjs", "next-env.d.ts"})
 PY_ALL_TESTS_FILES = frozenset({"pyproject.toml", "uv.lock", "conftest.py"})
+WORKFLOW_DIR = ".github/workflows/"
 WORKFLOW_GATE_TEST = "common/runtime/tests/test_ci_workflows.py"
 MIGRATION_TEST_GLOB = "common/runtime/tests/test_migration*.py"
 CONTRACT_DIRS = ("common/contracts/", f"{WEB_ROOT}/src/contracts/")
@@ -516,7 +517,7 @@ class _Selector:
         reached = False
         if path in PY_ALL_TESTS_FILES:
             self.all_py = reached = True
-        if path.startswith(".github/workflows/"):
+        if path.startswith(WORKFLOW_DIR):
             self.py_tests.add(WORKFLOW_GATE_TEST)
             reached = True
         if path.startswith("db/"):

@@ -88,7 +88,7 @@ files = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
     ),
     "tools/run.sh": "#!/usr/bin/env bash\necho run\n",
     "db/migrations/0001_init.sql": "create table t (id int);\n",
-    ".github/workflows/ci.yml": "name: ci\n",
+    f"{diff_scope.WORKFLOW_DIR}ci.yml": "name: ci\n",
     "docs/guide.md": "# guide\n",
     "apps/app-web/package.json": "{}\n",
     "apps/app-web/src/lib/a.ts": "export const a = 1;\n",
@@ -197,9 +197,10 @@ def test_a_named_file_reaches_the_code_that_names_it_and_a_comment_does_not(repo
 
 
 def test_workflow_migration_and_document_rules(repo: Path) -> None:
-    _edit(repo, ".github/workflows/ci.yml")
+    workflow = f"{diff_scope.WORKFLOW_DIR}ci.yml"
+    _edit(repo, workflow)
     assert select(repo, "base").pytest == ["common/runtime/tests/test_ci_workflows.py"]
-    _git(repo, "checkout", "-q", "--", ".github/workflows/ci.yml")
+    _git(repo, "checkout", "-q", "--", workflow)
     _edit(repo, "db/migrations/0001_init.sql", "-- changed\n")
     assert select(repo, "base").pytest == [
         "common/runtime/tests/test_migration_chain.py",
