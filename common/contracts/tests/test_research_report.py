@@ -24,8 +24,8 @@ from truealpha_contracts.research_report import (
     render_report_json,
     render_report_markdown,
 )
-from truealpha_contracts.research_report_fixture import (
-    FixtureResearchReadRepository,
+from truealpha_contracts.research_report_mart import (
+    MartResearchReadRepository,
     _operating_efficiency_section,
     _strategy_summary_section,
     _valuation_section,
@@ -66,8 +66,25 @@ GOLDEN_CASES = {
 }
 
 
+class _NoServedModuleRows:
+    """An issuer-module read with no served row for any issuer."""
+
+    def supply_chain_exposure(self, issuer_id: str) -> None:
+        return None
+
+    def analyst_ratings(self, issuer_id: str) -> None:
+        return None
+
+
+def _repository() -> MartResearchReadRepository:
+    """The deployed reader class over the checked-in strategy run and no module rows."""
+    return MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(), issuer_modules=_NoServedModuleRows()
+    )
+
+
 def _build(name: str) -> ResearchReport:
-    return build_research_report(GOLDEN_CASES[name], FixtureResearchReadRepository(), context=_context())
+    return build_research_report(GOLDEN_CASES[name], _repository(), context=_context())
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CASES))
@@ -247,14 +264,14 @@ def test_section_filter_selects_only_requested_sections() -> None:
         cutoff_at=CUTOFF,
         section_kinds=(ReportSectionKind.VALUATION,),
     )
-    report = build_research_report(request, FixtureResearchReadRepository(), context=_context())
+    report = build_research_report(request, _repository(), context=_context())
     kinds = {section.section_kind for section in report.subjects[0].sections}
     assert kinds == {ReportSectionKind.VALUATION}
 
 
 def test_missing_subject_is_reported_not_dropped() -> None:
     request = _request(ResearchReportKind.COMPANY, ("issuer:not_in_universe",), "Missing")
-    report = build_research_report(request, FixtureResearchReadRepository(), context=_context())
+    report = build_research_report(request, _repository(), context=_context())
     subject = report.subjects[0]
     assert subject.sections[0].availability is AvailabilityStatus.UNAVAILABLE
     assert subject.sections[0].reason_codes == ("subject_not_in_strategy_run",)
@@ -356,3 +373,159 @@ def test_builder_contains_no_arithmetic_or_computation() -> None:
             if isinstance(inner, ast.Call):
                 forbidden = _forbidden_call_name(inner)
                 assert forbidden is None, f"{name} calls forbidden computation primitive {forbidden!r}"
+
+
+# --- #42: PEG, supply chain and analyst sections come from mart, never a constant -----------
+
+
+class _ServedModuleRows:
+    """An issuer-module read that serves one row per module for `issuer:adm` only."""
+
+    def __init__(self) -> None:
+        from truealpha_contracts.issuer_modules_mart import AnalystRatings, SupplyChainExposure
+
+        common = {
+            "run_id": "capture-run:" + "a1" * 32,
+            "cutoff": "2026-06-30T23:59:59Z",
+            "confidence": "0.7700",
+            "availability_status": "available",
+            "source_evidence_status": "verified",
+            "factor_validation_status": "not_evaluated",
+        }
+        self.supply = SupplyChainExposure(
+            **common,
+            reason_codes=("edge_confidence_floor",),
+            extractor="graph:kg-edges:v1",
+            exposure_score="0.4200",
+            direct_partners=3,
+            suppliers_count=2,
+            customers_count=1,
+            max_partner_share="0.3100",
+        )
+        self.analyst = AnalystRatings(
+            **common,
+            reason_codes=(),
+            extractor="origin:moomoo:v1",
+            consensus_rating="4.3500",
+            target_price=None,
+            analysts_count=20,
+            buy_count=14,
+            hold_count=5,
+            sell_count=1,
+        )
+
+    def supply_chain_exposure(self, issuer_id: str):  # type: ignore[no-untyped-def]
+        return self.supply if issuer_id == "issuer:adm" else None
+
+    def analyst_ratings(self, issuer_id: str):  # type: ignore[no-untyped-def]
+        return self.analyst if issuer_id == "issuer:adm" else None
+
+
+class _FailingModuleRows:
+    def supply_chain_exposure(self, issuer_id: str) -> None:
+        import psycopg
+
+        raise psycopg.OperationalError("connection refused")
+
+    def analyst_ratings(self, issuer_id: str) -> None:
+        import psycopg
+
+        raise psycopg.OperationalError("connection refused")
+
+
+def _company_sections(modules: object) -> dict[ReportSectionKind, ReportSection]:
+    repository = MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(),
+        issuer_modules=modules,  # type: ignore[arg-type]
+    )
+    report = build_research_report(GOLDEN_CASES["company_adm"], repository, context=_context())
+    return {section.section_kind: section for section in report.subjects[0].sections}
+
+
+def test_no_company_section_reads_not_materialized() -> None:
+    """The defect of #42: three sections were constants. No reason code may claim a module
+    is not materialized when the reader has its mart output."""
+    for section in _company_sections(_ServedModuleRows()).values():
+        assert not any(code.endswith("_not_materialized") for code in section.reason_codes), section
+
+
+def test_module_sections_carry_the_served_row_byte_exact() -> None:
+    modules = _ServedModuleRows()
+    sections = _company_sections(modules)
+
+    supply = sections[ReportSectionKind.SUPPLY_CHAIN]
+    assert supply.availability is AvailabilityStatus.AVAILABLE
+    assert supply.reason_codes == ("edge_confidence_floor",)
+    assert [(r.label, r.value) for r in supply.results] == [
+        ("exposure_score", "0.4200"),
+        ("direct_partners", "3"),
+        ("suppliers_count", "2"),
+        ("customers_count", "1"),
+        ("max_partner_share", "0.3100"),
+    ]
+    for result in supply.results:
+        assert result.cutoff_at == datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
+        assert result.confidence == Decimal("0.7700")
+        assert result.factor_version == "graph:kg-edges:v1"
+        assert result.trace is not None
+        assert result.trace.reference_id == f"mart.issuer_supply_chain_exposure:{modules.supply.run_id}:issuer:adm"
+
+    analyst = sections[ReportSectionKind.ANALYST_HISTORY]
+    values = {r.label: r for r in analyst.results}
+    assert values["consensus_rating"].value == "4.3500"
+    assert values["buy_count"].value == "14"
+    # A null value is unavailable on its own; the section keeps the row's status.
+    assert values["target_price"].value is None
+    assert values["target_price"].availability is AvailabilityStatus.UNAVAILABLE
+    assert analyst.availability is AvailabilityStatus.AVAILABLE
+
+
+def test_a_missing_served_row_and_a_failed_read_are_different_answers() -> None:
+    absent = _company_sections(_NoServedModuleRows())
+    failed = _company_sections(_FailingModuleRows())
+    for kind in (ReportSectionKind.SUPPLY_CHAIN, ReportSectionKind.ANALYST_HISTORY):
+        assert absent[kind].availability is AvailabilityStatus.UNAVAILABLE
+        assert absent[kind].reason_codes == ("no_row_in_served_head",)
+        assert failed[kind].availability is AvailabilityStatus.ERROR
+        assert failed[kind].reason_codes == ("mart_read_failed",)
+
+
+def _decision(**overrides: object) -> StrategyRunDecision:
+    fields: dict[str, object] = {
+        "issuer_id": "issuer:test",
+        "cutoff_at": CUTOFF,
+        "outcome": StrategyRunOutcome.SELECTED,
+        "eligible": True,
+        "rank": 1,
+        "confidence": Decimal("0.90"),
+    }
+    fields.update(overrides)
+    return StrategyRunDecision(**fields)  # type: ignore[arg-type]
+
+
+def test_peg_section_reads_the_decision() -> None:
+    from truealpha_contracts.research_report_mart import _peg_section
+
+    recorded = _peg_section(_decision(peg=Decimal("1.2300"), peg_rank=4), "mart", "0" * 64)
+    assert recorded.availability is AvailabilityStatus.AVAILABLE
+    assert [(r.label, r.value) for r in recorded.results] == [("peg", "1.2300"), ("peg_rank", "4")]
+    assert recorded.reason_codes == ()
+
+    missing = _peg_section(_decision(), "mart", "0" * 64)
+    assert missing.availability is AvailabilityStatus.UNAVAILABLE
+    assert missing.reason_codes == ("peg_not_recorded",)
+
+    excluded = _peg_section(
+        _decision(outcome=StrategyRunOutcome.EXCLUDED, eligible=False, rank=None, exclusion_reason="no_price"),
+        "mart",
+        "0" * 64,
+    )
+    assert excluded.availability is AvailabilityStatus.EXCLUDED, "an excluded decision stays visible"
+
+
+def test_the_mart_reader_has_no_default_source() -> None:
+    """No hidden fixture: without a database URL the reader needs both sources injected."""
+    with pytest.raises(TypeError):
+        MartResearchReadRepository(strategy_repository=FixtureStrategyRunRepository())
+    with pytest.raises(TypeError):
+        MartResearchReadRepository(issuer_modules=_NoServedModuleRows())

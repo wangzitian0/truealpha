@@ -1,8 +1,8 @@
 {
-  "card_id": "card:e733b96da5dbf997a9d00cba35691c2483f53a7b18a47465a1c02627f1475e87",
+  "card_id": "card:74baadf939ae0a286137e0c2ac80f6a322608c041a6f844761dc3a1c1e98b89c",
   "card_kind": "comparison",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:04aa63cce874792cb635f0dfc44ad04c2d9814549636ae4dd878b8033fa44b75",
+  "generated_from_report_id": "report:00ce64ecf27cad94932e00ca4eb3f8e596dc7975afddce2c09340ceda4fc55c7",
   "research_risk_note": "Side-by-side comparison of independently materialized results at one cutoff; no cross-issuer metric is computed for this card.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",

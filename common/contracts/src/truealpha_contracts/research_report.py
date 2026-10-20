@@ -13,11 +13,9 @@ side (`ResearchReadPort`) supplies fully-formed, provenance-neutral sections who
 were materialized upstream; the builder only filters by the request, orders subjects, and
 binds a stable content hash.
 
-`#41` (the stable seven-module mart read contract) is still open. Until it freezes, the
-shipped `ResearchReadPort` implementation reads checked-in fixtures that reproduce the
-already-materialized strategy-run values exactly (same pattern as `#347`'s
-`FixtureStrategyRunRepository`). Swapping in a real mart-backed port later changes only the
-port implementation, not this model, the builder, or the renderers.
+The shipped `ResearchReadPort` implementation is `research_report_mart.MartResearchReadRepository`
+(#369, #42), which reads every section from mart. A test injects its sources; no fixture
+reader ships.
 """
 
 from __future__ import annotations
@@ -204,8 +202,8 @@ class ResearchReadPort(Protocol):
     """The read boundary the builder assembles over.
 
     Implementations return fully-formed, already-materialized subjects and sections.
-    They own the mapping from materialized `mart` outputs (or, provisionally, checked-in
-    fixtures) to report sections; the builder never computes across their values.
+    They own the mapping from materialized `mart` outputs to report sections; the builder
+    never computes across their values.
     """
 
     @property

@@ -1,8 +1,8 @@
 {
-  "card_id": "card:b183c14f6b71124c4e414353a6de72b8378125df0a6ba3e01d1309264419422f",
+  "card_id": "card:487e457f7aac1377d87a4d613d3c4f6d84168fe0010206e58e8d5095399fe135",
   "card_kind": "ranking",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:f96c58819ba8e057b277695f8450b542d4796fdb8110192edfd44a2483ff5746",
+  "generated_from_report_id": "report:d02e4d773686029a108144c3af6431bf10b8cae99d042a6688a84331ffa123ae",
   "research_risk_note": "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
