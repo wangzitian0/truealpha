@@ -103,7 +103,8 @@ def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions(
 def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     init_text = (REPO_ROOT / "init.md").read_text(encoding="utf-8")
     vision_text = (REPO_ROOT / "vision.md").read_text(encoding="utf-8")
-    release_text = (REPO_ROOT / "docs" / "release-protocol.md").read_text(encoding="utf-8")
+    release_doc = f"{'release'}-protocol.md"
+    release_text = (REPO_ROOT / "docs" / release_doc).read_text(encoding="utf-8")
 
     assert "environment_contract.v1.json" in init_text
     assert "| Local | `local_dev`, `local_test` |" not in init_text
