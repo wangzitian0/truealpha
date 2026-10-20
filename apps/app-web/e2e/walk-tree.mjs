@@ -34,7 +34,7 @@
 
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
-import { gotoStable } from "./navigation.mjs";
+import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
 const BASE = process.env.TA_BASE_URL;
@@ -79,10 +79,10 @@ const ID_PATTERN =
  */
 async function assertNoVisibleRawIds(page, path, problems) {
   if (!path.startsWith("/research")) return;
-  // Compute visible text without mutating the live DOM: against a remote
-  // deployment, gotoStable resolves at domcontentloaded before React hydration
-  // completes, and any DOM node replacement or style mutation on the live tree
-  // causes React hydrateRoot() to throw Minified React error #418 (HTML mismatch).
+  // Compute visible text without mutating the live DOM. A DOM node replacement
+  // or style mutation before React hydration completes causes Minified React
+  // error #418 (HTML mismatch). gotoStable now returns after hydration (#1412),
+  // and this read still has no side effect on the page.
   const visible = await page.evaluate(() => {
     const pieces = [];
     function collect(node) {
@@ -495,8 +495,8 @@ async function assertEntityDetailRenders(page, path, problems) {
   if (leak) problems.push(`entity-detail: ${href} shows "${leak[0]}"`);
 }
 
-async function checkRoute(page, path, role, pageErrors = []) {
-  pageErrors.length = 0;
+async function checkRoute(page, path, role, pageErrors) {
+  pageErrors.startRoute(role, path);
   await gotoStable(page, `${BASE}${path}`);
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
@@ -514,14 +514,14 @@ async function checkRoute(page, path, role, pageErrors = []) {
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
-  for (const err of pageErrors) {
+  for (const err of pageErrors.failures) {
     problems.push(`pageerror: ${err}`);
   }
   return problems;
 }
 
 /** One full pass over every live route under one identity. */
-async function walkRoutes(browser, { role, email, password }) {
+async function walkRoutes(browser, { role, email, password }, pageErrors) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
   if (login.status() !== 200) {
@@ -538,14 +538,10 @@ async function walkRoutes(browser, { role, email, password }) {
     }
   }
   const page = await context.newPage();
-  const pageErrors = [];
+  // A page error fails the route, except React #418: the ledger counts those per route,
+  // and the walk prints the count at its end (#1412).
   page.on("pageerror", (error) => {
-    const msg = error.message || String(error);
-    // Recoverable React hydration warnings (#418) reported via window.reportError
-    // during Cloudflare / streaming transition do not prevent full client hydration
-    // (proven by sign-out-journey.mjs and all DOM contract assertions).
-    if (/Minified React error #418\b/.test(msg)) return;
-    pageErrors.push(msg);
+    pageErrors.record(error.message || String(error), new URL(page.url()).pathname);
   });
 
   let failures = 0;
@@ -563,18 +559,25 @@ async function walkRoutes(browser, { role, email, password }) {
 }
 
 const browser = await chromium.launch();
-// Two passes. The administrator pass asserts (c) across the whole frozen tree —
-// it is the only identity that can see operator chrome at all. The member pass
-// (#371) asserts the mirror image: no chrome, no world switch, and the same
-// identity/current-page properties everywhere else.
-let failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD });
-if (MEMBER_EMAIL) {
-  failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD });
+const pageErrors = createPageErrorLedger();
+let failures = 0;
+try {
+  // Two passes. The administrator pass asserts (c) across the whole frozen tree —
+  // it is the only identity that can see operator chrome at all. The member pass
+  // (#371) asserts the mirror image: no chrome, no world switch, and the same
+  // identity/current-page properties everywhere else.
+  failures += await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD }, pageErrors);
+  if (MEMBER_EMAIL) {
+    failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD }, pageErrors);
+  }
+  // #540/#811: the sign-out journey lives in its own module so a test can drive it
+  // against a fake browser. It logs in once more, for its own session.
+  failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
+} finally {
+  // Printed also when gotoStable stops the walk, so the filter is visible in every log.
+  for (const line of pageErrors.ignoredReport()) console.log(line);
+  await browser.close();
 }
-// #540/#811: the sign-out journey lives in its own module so a test can drive it
-// against a fake browser. It logs in once more, for its own session.
-failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
-await browser.close();
 
 if (failures > 0) {
   console.error(`${failures} route(s) violated the #494 contract`);
