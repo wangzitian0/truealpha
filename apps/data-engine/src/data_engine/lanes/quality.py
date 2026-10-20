@@ -583,7 +583,6 @@ def run_runtime_shape(context: dg.OpExecutionContext) -> str:
         judgement = runtime_shape.check(
             context.instance,
             tick=tick.isoformat() if tick is not None else None,
-            deployment=boot_deployment(),
             capacity=load_environment_contract().code_server_capacity,
         )
         context.log.info(f"runtime shape: {judgement.summary}")
@@ -611,7 +610,7 @@ def runtime_shape_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunReque
 
 
 RUNTIME_SHAPE_SAMPLER_NAME = "runtime_shape_sampler"
-RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS = 300
+RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS = runtime_shape.SAMPLE_INTERVAL_SECONDS
 
 
 @dg.sensor(

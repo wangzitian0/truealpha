@@ -13,21 +13,25 @@ inside the container and judges them against the capacity that `code_server_capa
 
 The kernel counters belong to the container. A deploy or a crash replaces the container, and the
 new cgroup starts at zero. A check that reads the counters once a night loses every kill and every
-peak that a replaced container held. So a sensor (`sample`, every few minutes) folds each reading
-into a `Tracker`: the totals of kills, unplanned restarts and new peaks above the limit over the
-life of all containers. A deploy then loses at most one sampling interval. The nightly check folds
-its own reading in, and judges the growth of the totals since the last nightly check (`Baseline`).
-The sensor and the nightly check each write one key of the run storage, so neither overwrites the
-other.
+peak that a replaced container held. So a sensor (`sample`, every `SAMPLE_INTERVAL_SECONDS`) folds
+each reading into a `Tracker`: the totals of kills, unplanned restarts and new peaks above the limit
+over the life of all containers. The nightly check judges the growth of the stored totals since the
+last scheduled check (`Baseline`). It does not fold its own reading in: the sensor and the check each
+write one key of the run storage, and the baseline never holds a count that the tracker lacks. A kill
+in the last minutes before a check shows at the next check.
+
+The check depends on the sensor, so a silent sensor is red: no tracker, or a last sample older than
+`STALE_AFTER_SECONDS`. A container that lives for less than one interval (a deploy followed at once by
+a crash) is not seen by any sample; this is the blind window of the design.
 
 The nightly verdict is red on any of these:
 
-* a fact is unreadable, or the stored state is unreadable or lower than the last check saw.
-  Unknown is red, never OK (#28 V3);
+* a fact is unreadable, the sensor is silent, or the stored state is unreadable or lower than the
+  last check saw. Unknown is red, never OK (#28 V3);
 * `memory.max` is `max` (no ceiling) or below the declared ceiling. The run limit of `dagster.yaml`
   derives from the declared ceiling, so a lower real ceiling breaks the premise of the limit;
 * `oom_kill` rose in any container since the last check. The first check counts every kill of
-  the container;
+  the container that the sensor saw;
 * the peak of a container rose above `utilization_limit` of `memory.max` since the last check. A
   peak that the last check already judged does not count again: `memory.peak` is a high-water mark
   of the whole container life;
@@ -35,9 +39,9 @@ The nightly verdict is red on any of these:
   process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
   does not show the kill. A deploy replaces the container too, but it changes the deployment.
 
-Only a tick-tagged run (the schedule) moves the baseline. A manual run shows the growth since the
-last scheduled check and consumes nothing. A re-execution of a scheduled tick returns the verdict
-that the tick already has.
+Only a tick-tagged run (the schedule) moves the baseline, and only forward. A manual run shows the
+growth since the last scheduled check and consumes nothing. A re-execution of the latest tick returns
+the verdict that the tick already has; a re-execution of an older tick judges and saves nothing.
 
 `memory.peak` counts page cache that the cgroup holds. The summary shows counts and sizes only,
 because the verdict is published on `/health`.
@@ -48,7 +52,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import dagster as dg
@@ -65,10 +70,32 @@ TRACKER_KEY = "truealpha/runtime_shape/tracker"
 BASELINE_KEY = "truealpha/runtime_shape/baseline"
 
 MIB = 1024 * 1024
+#: How often the sensor samples, and how old the last sample may be before the check calls the sensor silent.
+SAMPLE_INTERVAL_SECONDS = 300
+STALE_AFTER_SECONDS = 3 * SAMPLE_INTERVAL_SECONDS
 
 
 class StateUnreadable(Exception):
     """A value in the run storage is not the state that this module wrote."""
+
+
+def _text(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"not a text: {value!r}")
+    return value
+
+
+def _texts(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"not a list: {value!r}")
+    return tuple(_text(item) for item in value)
+
+
+def _count(value: object) -> int:
+    """A count is an integer of at least zero. A bool, a float or a string is not one."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"not a count: {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -115,6 +142,8 @@ class Tracker:
     restarts_same_deployment: int = 0
     restarts_new_deployment: int = 0
     peaks_over_limit: int = 0
+    #: When the sensor last ran (ISO 8601, UTC). Empty before the first sample.
+    sampled_at: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -128,17 +157,18 @@ class Tracker:
                 container=None
                 if container is None
                 else Container(
-                    id=str(container["id"]),
-                    deployment=str(container["deployment"]),
-                    oom_kill=int(container["oom_kill"]),
-                    peak=int(container["peak"]),
+                    id=_text(container["id"]),
+                    deployment=_text(container["deployment"]),
+                    oom_kill=_count(container["oom_kill"]),
+                    peak=_count(container["peak"]),
                 ),
-                kills=int(data["kills"]),
-                restarts_same_deployment=int(data["restarts_same_deployment"]),
-                restarts_new_deployment=int(data["restarts_new_deployment"]),
-                peaks_over_limit=int(data["peaks_over_limit"]),
+                kills=_count(data["kills"]),
+                restarts_same_deployment=_count(data["restarts_same_deployment"]),
+                restarts_new_deployment=_count(data["restarts_new_deployment"]),
+                peaks_over_limit=_count(data["peaks_over_limit"]),
+                sampled_at=_text(data["sampled_at"]),
             )
-        except (ValueError, KeyError, TypeError) as exc:
+        except (ValueError, KeyError, TypeError, OverflowError) as exc:
             raise StateUnreadable("the runtime shape tracker is not readable") from exc
 
 
@@ -162,15 +192,15 @@ class Baseline:
         try:
             data = json.loads(raw)
             return cls(
-                kills=int(data["kills"]),
-                restarts_same_deployment=int(data["restarts_same_deployment"]),
-                restarts_new_deployment=int(data["restarts_new_deployment"]),
-                peaks_over_limit=int(data["peaks_over_limit"]),
-                tick=str(data["tick"]),
-                red=tuple(str(item) for item in data["red"]),
-                summary=str(data["summary"]),
+                kills=_count(data["kills"]),
+                restarts_same_deployment=_count(data["restarts_same_deployment"]),
+                restarts_new_deployment=_count(data["restarts_new_deployment"]),
+                peaks_over_limit=_count(data["peaks_over_limit"]),
+                tick=_text(data["tick"]),
+                red=_texts(data["red"]),
+                summary=_text(data["summary"]),
             )
-        except (ValueError, KeyError, TypeError) as exc:
+        except (ValueError, KeyError, TypeError, OverflowError) as exc:
             raise StateUnreadable("the runtime shape baseline is not readable") from exc
 
 
@@ -340,7 +370,7 @@ def judge(
         red.append(f"{kills} OOM kill(s) since the last check")
     if same:
         red.append(
-            f"the code server was replaced {same} time(s) without a deployment change; its OOM counter restarted"
+            f"the code server was replaced {same} time(s) without a deployment change (a crash, a host reboot or a restart by hand)"
         )
     if peaks:
         red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
@@ -372,31 +402,64 @@ def load_baseline(instance: dg.DagsterInstance) -> Baseline | None:
 
 
 def sample(
-    instance: dg.DagsterInstance, *, deployment: str, capacity: CodeServerCapacity, reading: Reading | None = None
+    instance: dg.DagsterInstance,
+    *,
+    deployment: str,
+    capacity: CodeServerCapacity,
+    reading: Reading | None = None,
+    now: datetime | None = None,
 ) -> Tracker:
-    """Fold the current reading into the stored totals. A stored value that is not a tracker restarts the totals.
+    """Fold the current reading into the stored totals and stamp the time. The only writer of the tracker.
 
-    The next scheduled check sees totals below its baseline and goes red, so the loss is not hidden."""
+    A stored value that is not a tracker restarts the totals; the next scheduled check sees totals below
+    its baseline and goes red, so the loss is not hidden. A reading with a missing fact adds nothing but
+    still stamps the time: the sensor ran."""
     try:
         tracker = load_tracker(instance) or Tracker()
     except StateUnreadable:
         log.warning("the runtime shape tracker is not readable; the totals restart")
         tracker = Tracker()
     folded = fold(tracker, read() if reading is None else reading, deployment=deployment, capacity=capacity)
+    folded = replace(folded, sampled_at=(now or datetime.now(UTC)).isoformat())
     instance.run_storage.set_cursor_values({TRACKER_KEY: folded.to_json()})
     return folded
+
+
+def _sensor_findings(tracker: Tracker | None, now: datetime) -> list[str]:
+    """The check depends on the sensor: no tracker, or an old last sample, means kills may be unseen."""
+    if tracker is None or not tracker.sampled_at:
+        return ["the sampler has recorded nothing, so kills and restarts may be unseen"]
+    try:
+        age = (now - datetime.fromisoformat(tracker.sampled_at)).total_seconds()
+    except ValueError:
+        return ["the time of the last sample is not readable, so kills and restarts may be unseen"]
+    if age > STALE_AFTER_SECONDS:
+        return [f"the last sample is {round(age / 60)} minutes old, so kills and restarts may be unseen"]
+    return []
+
+
+def _later_than(tick: str, baseline_tick: str) -> bool:
+    """Whether `tick` is a later time than `baseline_tick`. An unreadable baseline tick is older than any tick."""
+    try:
+        return datetime.fromisoformat(tick) > datetime.fromisoformat(baseline_tick)
+    except ValueError:
+        return True
 
 
 def check(
     instance: dg.DagsterInstance,
     *,
     tick: str | None,
-    deployment: str,
     capacity: CodeServerCapacity,
     reading: Reading | None = None,
+    now: datetime | None = None,
 ) -> Judgement:
-    """The nightly judgement. Only a run with a `tick` moves the baseline; a repeat of the same tick repeats its verdict."""
+    """The nightly judgement of the stored totals. The only writer of the baseline.
+
+    Only a run with a `tick` moves the baseline, and only to a later tick. A repeat of the latest tick repeats
+    its verdict; an older tick is judged and saves nothing."""
     reading = read() if reading is None else reading
+    now = now or datetime.now(UTC)
     problems: list[str] = []
     try:
         tracker = load_tracker(instance)
@@ -411,14 +474,15 @@ def check(
     if tick is not None and baseline is not None and baseline.tick == tick:
         return Judgement(red=baseline.red, summary=baseline.summary)
 
-    folded = fold(tracker or Tracker(), reading, deployment=deployment, capacity=capacity)
-    judgement = judge(reading, tracker=folded, baseline=baseline, capacity=capacity, problems=tuple(problems))
-    if tick is not None:
+    problems += _sensor_findings(tracker, now)
+    totals = tracker or Tracker()
+    judgement = judge(reading, tracker=totals, baseline=baseline, capacity=capacity, problems=tuple(problems))
+    if tick is not None and (baseline is None or _later_than(tick, baseline.tick)):
         saved = Baseline(
-            kills=folded.kills,
-            restarts_same_deployment=folded.restarts_same_deployment,
-            restarts_new_deployment=folded.restarts_new_deployment,
-            peaks_over_limit=folded.peaks_over_limit,
+            kills=totals.kills,
+            restarts_same_deployment=totals.restarts_same_deployment,
+            restarts_new_deployment=totals.restarts_new_deployment,
+            peaks_over_limit=totals.peaks_over_limit,
             tick=tick,
             red=judgement.red,
             summary=judgement.summary,

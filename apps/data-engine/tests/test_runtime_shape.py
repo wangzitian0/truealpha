@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,8 @@ SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000, "utilization_limit"
 TICK_1 = "2026-10-21T06:30:00+00:00"
 TICK_2 = "2026-10-22T06:30:00+00:00"
 TICK_3 = "2026-10-23T06:30:00+00:00"
+#: The moment of every check and sample in the scenario tests.
+NOW = datetime(2026, 10, 23, 6, 29, tzinfo=UTC)
 #: The reader as the deployed code has it. A test patches the module attribute, never this name.
 REAL_READ = runtime_shape.read
 #: The totals of a check that counted nothing.
@@ -338,7 +340,7 @@ def test_a_restart_without_a_new_deployment_is_red_because_the_kill_of_the_serve
     verdict = _judge(reading, tracker=tracker, baseline=None)
 
     assert verdict.red == (
-        "the code server was replaced 1 time(s) without a deployment change; its OOM counter restarted",
+        "the code server was replaced 1 time(s) without a deployment change (a crash, a host reboot or a restart by hand)",
     )
 
 
@@ -374,12 +376,18 @@ def test_the_summary_is_counts_and_sizes_only(tmp_path: Path) -> None:
 # --- the nights: sample and check on one instance -------------------------------------------
 
 
-def _check(instance: dg.DagsterInstance, reading: Reading, tick: str | None, deployment: str = "A"):
-    return runtime_shape.check(instance, tick=tick, deployment=deployment, capacity=CAPACITY, reading=reading)
+def _sample(instance: dg.DagsterInstance, reading: Reading, deployment: str = "A", at: datetime = NOW) -> Tracker:
+    return runtime_shape.sample(instance, deployment=deployment, capacity=CAPACITY, reading=reading, now=at)
 
 
-def _sample(instance: dg.DagsterInstance, reading: Reading, deployment: str = "A") -> Tracker:
-    return runtime_shape.sample(instance, deployment=deployment, capacity=CAPACITY, reading=reading)
+def _check(instance: dg.DagsterInstance, reading: Reading, tick: str | None, at: datetime = NOW):
+    return runtime_shape.check(instance, tick=tick, capacity=CAPACITY, reading=reading, now=at)
+
+
+def _night(instance: dg.DagsterInstance, reading: Reading, tick: str | None, deployment: str = "A"):
+    """The sensor runs, then the schedule: the order of a normal night."""
+    _sample(instance, reading, deployment)
+    return _check(instance, reading, tick)
 
 
 def _baseline(instance: dg.DagsterInstance) -> Baseline:
@@ -392,25 +400,31 @@ def test_a_kill_before_a_deploy_is_seen_because_the_sensor_sampled_the_old_conta
     """The kernel kills two processes at night, a deploy replaces the container at 03:00, and the check at
     06:30 reads a new cgroup that shows zero kills and a small peak."""
     instance = dg.DagsterInstance.ephemeral()
-    assert _check(instance, _container(tmp_path, "n1", ticks=1), TICK_1).red == ()
+    assert _night(instance, _container(tmp_path, "n1", ticks=1), TICK_1).red == ()
 
     _sample(instance, _container(tmp_path, "killed", ticks=1, oom_kill=2, peak_mib=CAPACITY.ceiling_mib))
     after_deploy = _container(tmp_path, "deployed", ticks=9)
-    verdict = _check(instance, after_deploy, TICK_2, deployment="B")
+    verdict = _night(instance, after_deploy, TICK_2, deployment="B")
 
     assert any(reason.startswith("2 OOM kill(s)") for reason in verdict.red)
     assert any("rose above" in reason for reason in verdict.red)
-    assert _check(instance, after_deploy, TICK_3, deployment="B").red == (), "the next night has nothing new"
+    assert _night(instance, after_deploy, TICK_3, deployment="B").red == (), "the next night has nothing new"
 
 
-def test_without_a_sample_the_kill_in_a_replaced_container_is_unseen(tmp_path: Path) -> None:
-    """Why the sensor exists: the nightly reading alone cannot see a kill that a deploy erased."""
+def test_a_check_without_a_recent_sample_is_red_not_green(tmp_path: Path) -> None:
+    """Why the check depends on the sensor: a kill in a container that a deploy erased is unseen without it."""
     instance = dg.DagsterInstance.ephemeral()
-    _check(instance, _container(tmp_path, "n1", ticks=1), TICK_1)
+    reading = _container(tmp_path, "n1", ticks=1)
 
-    verdict = _check(instance, _container(tmp_path, "deployed", ticks=9), TICK_2, deployment="B")
+    never = _check(instance, reading, TICK_1)
+    _sample(instance, reading, at=NOW - timedelta(seconds=runtime_shape.STALE_AFTER_SECONDS + 60))
+    old = _check(instance, reading, TICK_2)
+    _sample(instance, reading, at=NOW - timedelta(seconds=runtime_shape.STALE_AFTER_SECONDS - 60))
+    recent = _check(instance, reading, TICK_3)
 
-    assert verdict.red == ()
+    assert never.red == ("the sampler has recorded nothing, so kills and restarts may be unseen",)
+    assert old.red == ("the last sample is 16 minutes old, so kills and restarts may be unseen",)
+    assert recent.red == ()
 
 
 def test_a_peak_burst_is_red_once_and_the_quiet_nights_after_it_are_green(tmp_path: Path) -> None:
@@ -418,34 +432,35 @@ def test_a_peak_burst_is_red_once_and_the_quiet_nights_after_it_are_green(tmp_pa
     instance = dg.DagsterInstance.ephemeral()
     burst = _container(tmp_path, "burst", ticks=1, peak_mib=HIGH_PEAK_MIB)
 
-    first = _check(instance, burst, TICK_1)
-    second = _check(instance, burst, TICK_2)
-    third = _check(instance, burst, TICK_3)
+    first = _night(instance, burst, TICK_1)
+    second = _night(instance, burst, TICK_2)
+    third = _night(instance, burst, TICK_3)
 
     assert first.red != ()
     assert (second.red, third.red) == ((), ())
 
 
-def test_a_peak_between_two_nights_that_the_sensor_saw_is_red_at_the_next_check(tmp_path: Path) -> None:
-    instance = dg.DagsterInstance.ephemeral()
-    _check(instance, _container(tmp_path, "a", ticks=1), TICK_1)
-
-    _sample(instance, _container(tmp_path, "b", ticks=1, peak_mib=HIGH_PEAK_MIB))
-    verdict = _check(instance, _container(tmp_path, "c", ticks=1, peak_mib=HIGH_PEAK_MIB), TICK_2)
-
-    assert [reason for reason in verdict.red if "rose above" in reason]
-
-
 def test_a_restart_without_a_deployment_change_between_two_samples_is_red(tmp_path: Path) -> None:
     instance = dg.DagsterInstance.ephemeral()
-    _check(instance, _container(tmp_path, "a", ticks=1), TICK_1)
-    _sample(instance, _container(tmp_path, "b", ticks=1))
+    _night(instance, _container(tmp_path, "a", ticks=1), TICK_1)
 
-    verdict = _check(instance, _container(tmp_path, "c", ticks=7), TICK_2)
+    verdict = _night(instance, _container(tmp_path, "c", ticks=7), TICK_2)
 
     assert verdict.red == (
-        "the code server was replaced 1 time(s) without a deployment change; its OOM counter restarted",
+        "the code server was replaced 1 time(s) without a deployment change"
+        " (a crash, a host reboot or a restart by hand)",
     )
+
+
+def test_a_crash_after_a_deploy_is_an_unplanned_restart_not_a_second_deployment(tmp_path: Path) -> None:
+    """Two replacements in a row, each sampled: a deploy (A to B) and then a crash of B."""
+    instance = dg.DagsterInstance.ephemeral()
+    _night(instance, _container(tmp_path, "a", ticks=1), TICK_1, deployment="A")
+
+    _sample(instance, _container(tmp_path, "b", ticks=2), deployment="B")
+    verdict = _night(instance, _container(tmp_path, "c", ticks=3), TICK_2, deployment="B")
+
+    assert [reason for reason in verdict.red if "without a deployment change" in reason]
 
 
 def test_a_repeat_of_a_tick_repeats_its_verdict_instead_of_clearing_it(tmp_path: Path) -> None:
@@ -453,18 +468,31 @@ def test_a_repeat_of_a_tick_repeats_its_verdict_instead_of_clearing_it(tmp_path:
     instance = dg.DagsterInstance.ephemeral()
     killed = _container(tmp_path, "a", ticks=1, oom_kill=2)
 
-    first = _check(instance, killed, TICK_1)
+    first = _night(instance, killed, TICK_1)
     again = _check(instance, killed, TICK_1)
 
     assert first.red != ()
     assert (again.red, again.summary) == (first.red, first.summary)
-    assert _check(instance, killed, TICK_2).red == (), "the next night counts from the first run, once"
+    assert _night(instance, killed, TICK_2).red == (), "the next night counts from the first run, once"
+
+
+def test_a_re_execution_of_an_older_tick_judges_and_saves_nothing(tmp_path: Path) -> None:
+    """Night 1 is red, night 2 is green. An operator re-executes night 1: the baseline must stay at night 2."""
+    instance = dg.DagsterInstance.ephemeral()
+    killed = _container(tmp_path, "a", ticks=1, oom_kill=2)
+    _night(instance, killed, TICK_1)
+    _night(instance, killed, TICK_2)
+
+    _check(instance, killed, TICK_1)
+
+    assert _baseline(instance).tick == TICK_2
 
 
 def test_a_manual_run_shows_the_growth_and_consumes_nothing(tmp_path: Path) -> None:
     instance = dg.DagsterInstance.ephemeral()
-    _check(instance, _container(tmp_path, "a", ticks=1), TICK_1)
+    _night(instance, _container(tmp_path, "a", ticks=1), TICK_1)
     killed = _container(tmp_path, "b", ticks=1, oom_kill=2)
+    _sample(instance, killed)
 
     manual = _check(instance, killed, None)
     assert _baseline(instance).tick == TICK_1, "a manual run does not move the baseline"
@@ -474,11 +502,24 @@ def test_a_manual_run_shows_the_growth_and_consumes_nothing(tmp_path: Path) -> N
     assert _baseline(instance).tick == TICK_2
 
 
+def test_the_baseline_holds_exactly_the_totals_the_sensor_stored(tmp_path: Path) -> None:
+    """The check does not fold its own reading, so a count in the baseline is always a count in the tracker."""
+    instance = dg.DagsterInstance.ephemeral()
+    _sample(instance, _container(tmp_path, "a", ticks=1, oom_kill=1))
+
+    _check(instance, _container(tmp_path, "b", ticks=1, oom_kill=5), TICK_1)
+
+    assert _baseline(instance).kills == 1
+    tracker = runtime_shape.load_tracker(instance)
+    assert tracker is not None
+    assert tracker.kills == 1
+
+
 def test_an_unreadable_baseline_is_red_not_silently_a_first_check(tmp_path: Path) -> None:
     instance = dg.DagsterInstance.ephemeral()
     instance.run_storage.set_cursor_values({runtime_shape.BASELINE_KEY: "{broken"})
 
-    verdict = _check(instance, _container(tmp_path, "a", ticks=1), TICK_1)
+    verdict = _night(instance, _container(tmp_path, "a", ticks=1), TICK_1)
 
     assert "the runtime shape baseline is not readable" in verdict.red
     assert _baseline(instance).tick == TICK_1, "the check replaces the broken value, so the next night is judged"
@@ -501,29 +542,105 @@ def test_a_tracker_that_lost_the_kills_of_a_replaced_container_turns_the_next_ch
     instance = dg.DagsterInstance.ephemeral()
     _sample(instance, _container(tmp_path, "old", ticks=1, oom_kill=3))
     replaced = _container(tmp_path, "new", ticks=2)
-    assert _check(instance, replaced, TICK_1, deployment="B").red != ()
+    assert _night(instance, replaced, TICK_1, deployment="B").red != ()
     instance.run_storage.set_cursor_values({runtime_shape.TRACKER_KEY: Tracker().to_json()})
 
-    verdict = _check(instance, replaced, TICK_2, deployment="B")
+    verdict = _night(instance, replaced, TICK_2, deployment="B")
 
     assert (
         "the runtime shape state is lower than at the last check: it was reset, so kills may be unseen" in verdict.red
     )
 
 
-def test_the_sampler_saves_what_it_folds(tmp_path: Path) -> None:
+@pytest.mark.parametrize("field", ["kills", "restarts_same_deployment", "restarts_new_deployment", "peaks_over_limit"])
+def test_each_total_that_falls_below_the_baseline_is_a_reset(tmp_path: Path, field: str) -> None:
+    reading = _container(tmp_path, "a", ticks=1)
+
+    verdict = _judge(reading, baseline=dataclasses.replace(NOTHING, **{field: 1}))
+
+    assert verdict.red == (
+        "the runtime shape state is lower than at the last check: it was reset, so kills may be unseen",
+    )
+
+
+def test_the_sampler_saves_what_it_folds_and_the_time(tmp_path: Path) -> None:
     instance = dg.DagsterInstance.ephemeral()
 
     sampled = _sample(instance, _container(tmp_path, "a", ticks=1, oom_kill=1))
 
     assert runtime_shape.load_tracker(instance) == sampled
-    assert sampled.kills == 1
+    assert (sampled.kills, sampled.sampled_at) == (1, NOW.isoformat())
 
 
-@pytest.mark.parametrize("stored", ["", "not json", "[1, 2]", '{"kills": "x"}', "{}"])
-def test_a_stored_value_that_is_not_a_tracker_or_baseline_raises_state_unreadable(stored: str) -> None:
+def test_a_reading_with_one_missing_fact_adds_nothing_but_stamps_the_time(tmp_path: Path) -> None:
+    instance = dg.DagsterInstance.ephemeral()
+    before = _sample(instance, _container(tmp_path, "a", ticks=1, oom_kill=1))
+
+    after = _sample(instance, _reading(tmp_path / "b", memory_max=None), at=NOW + timedelta(minutes=5))
+
+    assert (after.kills, after.container) == (before.kills, before.container)
+    assert after.sampled_at == (NOW + timedelta(minutes=5)).isoformat()
+
+
+def _tracker_json(**changes: Any) -> str:
+    import json
+
+    state: dict[str, Any] = {
+        "container": {"id": "x", "deployment": "A", "oom_kill": 0, "peak": 0},
+        "kills": 0,
+        "restarts_same_deployment": 0,
+        "restarts_new_deployment": 0,
+        "peaks_over_limit": 0,
+        "sampled_at": NOW.isoformat(),
+    }
+    return json.dumps({**state, **changes})
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "",
+        "not json",
+        "[1, 2]",
+        '{"kills": "x"}',
+        "{}",
+        _tracker_json(kills=-1),
+        _tracker_json(kills=True),
+        _tracker_json(kills=1.5),
+        _tracker_json(kills="3"),
+        _tracker_json(sampled_at=5),
+        _tracker_json(container={"id": "x", "deployment": "A", "oom_kill": 0, "peak": -1}),
+        '{"kills": Infinity}',
+    ],
+)
+def test_a_stored_value_that_is_not_a_tracker_raises_state_unreadable(stored: str) -> None:
     with pytest.raises(runtime_shape.StateUnreadable):
         Tracker.from_json(stored)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"kills": -1}, {"kills": True}, {"kills": 1.5}, {"red": "abc"}, {"red": [1]}, {"summary": None}, {"tick": 3}],
+)
+def test_a_stored_value_that_is_not_a_baseline_raises_state_unreadable(changes: dict[str, Any]) -> None:
+    import json
+
+    good = {
+        "kills": 0,
+        "restarts_same_deployment": 0,
+        "restarts_new_deployment": 0,
+        "peaks_over_limit": 0,
+        "tick": TICK_1,
+        "red": [],
+        "summary": "ok",
+    }
+    assert Baseline.from_json(json.dumps(good)).red == ()
+    with pytest.raises(runtime_shape.StateUnreadable):
+        Baseline.from_json(json.dumps({**good, **changes}))
+
+
+@pytest.mark.parametrize("stored", ["", "not json", "[1, 2]", "{}", '{"kills": Infinity}'])
+def test_a_stored_value_that_is_not_a_baseline_at_all_raises_state_unreadable(stored: str) -> None:
     with pytest.raises(runtime_shape.StateUnreadable):
         Baseline.from_json(stored)
 
@@ -559,11 +676,12 @@ def test_the_check_is_a_declared_nightly_verdict_of_a_scheduled_job() -> None:
 def test_the_job_records_green_then_red_after_a_kill_then_green_again(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, written: list[dict[str, Any]]
 ) -> None:
-    """One instance holds the state across three nights. Each night reads a different cgroup."""
+    """One instance holds the state across three nights. The sensor runs before each check."""
     instance = dg.DagsterInstance.ephemeral()
 
     def night(name: str, tick: str, **tree: Any):
         _point_the_code_at(monkeypatch, tmp_path / name, **tree)
+        list(quality.runtime_shape_sampler_sensor(dg.build_sensor_context(instance=instance)))
         return quality.runtime_shape_job.execute_in_process(
             instance=instance, tags={nightly_verdicts.TICK_TAG: tick}, raise_on_error=False
         )
@@ -584,13 +702,28 @@ def test_the_job_records_green_then_red_after_a_kill_then_green_again(
     assert [row["ran_at"] for row in written] == [datetime.fromisoformat(tick) for tick in (TICK_1, TICK_2, TICK_3)]
 
 
-def test_the_job_is_red_and_records_red_when_a_file_cannot_be_read(
+def test_the_job_is_red_when_the_sensor_never_ran(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, written: list[dict[str, Any]]
 ) -> None:
-    _point_the_code_at(monkeypatch, tmp_path, peak=None)
+    _point_the_code_at(monkeypatch, tmp_path)
 
     result = quality.runtime_shape_job.execute_in_process(
         tags={nightly_verdicts.TICK_TAG: TICK_1}, raise_on_error=False
+    )
+
+    assert result.success is False
+    assert written[0]["summary"] == "failed: the sampler has recorded nothing, so kills and restarts may be unseen"
+
+
+def test_the_job_is_red_and_records_red_when_a_file_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, written: list[dict[str, Any]]
+) -> None:
+    instance = dg.DagsterInstance.ephemeral()
+    _point_the_code_at(monkeypatch, tmp_path, peak=None)
+    list(quality.runtime_shape_sampler_sensor(dg.build_sensor_context(instance=instance)))
+
+    result = quality.runtime_shape_job.execute_in_process(
+        instance=instance, tags={nightly_verdicts.TICK_TAG: TICK_1}, raise_on_error=False
     )
 
     assert result.success is False
@@ -599,7 +732,7 @@ def test_the_job_is_red_and_records_red_when_a_file_cannot_be_read(
     ]
 
 
-def test_the_sampler_sensor_folds_the_reading_and_launches_nothing(
+def test_the_sampler_sensor_folds_the_reading_with_the_boot_deployment_and_launches_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     instance = dg.DagsterInstance.ephemeral()
@@ -611,5 +744,8 @@ def test_the_sampler_sensor_folds_the_reading_and_launches_nothing(
     tracker = runtime_shape.load_tracker(instance)
     assert tracker is not None
     assert tracker.kills == 2
-    assert quality.runtime_shape_sampler_sensor.minimum_interval_seconds == 300
+    assert tracker.container is not None
+    assert tracker.container.deployment == "A", "the sensor passes boot_deployment(), the identity of the deploy"
+    assert tracker.sampled_at != ""
+    assert quality.runtime_shape_sampler_sensor.minimum_interval_seconds == runtime_shape.SAMPLE_INTERVAL_SECONDS
     assert quality.runtime_shape_sampler_sensor.default_status == dg.DefaultSensorStatus.RUNNING
