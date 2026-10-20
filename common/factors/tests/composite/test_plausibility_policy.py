@@ -307,10 +307,30 @@ def test_one_refused_issuer_never_refuses_the_run_and_a_large_share_does() -> No
     run_refusals = [v for v in six if v.rule in policy.RUN_RULES]
     assert [(v.rule, v.listing_id) for v in run_refusals] == [(policy.RULE_REFUSED_SHARE, None)]
     assert "6 of 20 rows refused (30%)" in run_refusals[0].detail
-    # one issuer refused twice (revenue and gross profit) counts once
-    twice = row("listing:00", "1", "5", revenue="900", revenue_period_end=FY25, gross_profit="900",
+    # one issuer refused twice (revenue and gross profit) counts once: 1 of 4 listings, not 2
+    twice = row("listing:twice", "1", "5", revenue="900", revenue_period_end=FY25, gross_profit="900",
                 operating_period_end=FY25, references=(reference({FY25: {"revenue": "100", "gross_profit": "100"}}),))  # fmt: skip
-    assert policy.refused_share_of_run([twice, *_universe(0, 3)], {"listing:00"}) == []
+    found = evaluate([twice, *_universe(0, 3)])
+    assert [v.listing_id for v in found] == ["listing:twice", "listing:twice"]
+    assert {v.rule for v in found} == {policy.RULE_INDEPENDENT_REFERENCE}
+    # a listing read twice is one listing in the share: 2 of 6 rows (33%), but 1 of 5 listings (20%)
+    assert policy.refused_share_of_run([twice, twice, *_universe(0, 4)], {"listing:twice"}) == []
+
+
+def test_the_judged_listings_show_a_run_no_reference_reached() -> None:
+    """A second origin that fails leaves every row without a reference. Nothing is refused, and the
+    judged count says 0 instead of letting the run read as checked."""
+    judged = row("listing:a", "1", "5", revenue="100", revenue_period_end=FY25,
+                 references=(reference({FY25: {"revenue": "100"}}),))  # fmt: skip
+    silent = row("listing:b", "1", "5", revenue="100", revenue_period_end=FY25,
+                 references=(reference({FY25: {"revenue": None, "gross_profit": None}}),))  # fmt: skip
+    bare = row("listing:c", "1", "5", revenue="100", revenue_period_end=FY25)
+    assert policy.judged_listings([judged, silent, bare]) == {"listing:a"}
+    assert policy.judged_listings([silent, bare]) == set()
+    # a bank's gross profit is not compared, so a reference with only gross profit judges nothing
+    bank = row("listing:jpm", "1", "5", branch="financial", gross_profit="100", operating_period_end=FY25,
+               references=(reference({FY25: {"gross_profit": "100"}}),))  # fmt: skip
+    assert policy.judged_listings([bank]) == set()
 
 
 def test_an_empty_eligible_set_is_caught() -> None:

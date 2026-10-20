@@ -83,7 +83,8 @@ def _dated_bundle(*, total_assets: dict[str, Decimal]) -> Callable[[str, Operati
 
 def _second_origin(superseded: frozenset[str]) -> FinancialFactCorroboratingOrigin:
     """The second financial-fact origin: the primary's FY2025 figures for every issuer, and for the
-    `superseded` tickers a later fiscal year with five times the revenue."""
+    `superseded` tickers a later fiscal year with five times the revenue and gross profit (MU's
+    real shape: both figures were off the later year)."""
 
     def fetch(ticker: str, cutoff: date) -> FinancialFactAssertion:
         served: dict[str, Decimal | None] = {
@@ -93,7 +94,7 @@ def _second_origin(superseded: frozenset[str]) -> FinancialFactCorroboratingOrig
         }
         by_period = {FY2025: served}
         if ticker in superseded:
-            by_period[LATER_YEAR] = {**served, "revenue": D("500000000")}
+            by_period[LATER_YEAR] = {**served, "revenue": D("500000000"), "gross_profit": D("1050000000")}
         newest = max(by_period)
         return FinancialFactAssertion(
             raw_bytes=f'{{"ticker":"{ticker}","years":{len(by_period)}}}'.encode(),
@@ -175,7 +176,10 @@ def _assert_one_excluded(url: str, metadata: dict, *, ticker: str, rule: str, re
         reader.execute("set session_replication_role = origin")
         reader.commit()
         served_issuer = _served_identity(reader, issuer)
+    # one entry per refused listing and rule, though revenue and gross profit were both refused
     assert metadata["plausibility_excluded"] == [f"{rule} {listing}"]
+    # every published listing met its reference, so the "ok" of the other nineteen means something
+    assert metadata["plausibility_judged"] == "20/20"
     report = _served_report(url)
     assert report.strategy_run_id == metadata["strategy_run_id"]
     (served,) = [decision for decision in report.decisions if decision.issuer_id == served_issuer]

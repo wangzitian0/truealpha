@@ -123,8 +123,15 @@ def test_the_fixture_is_the_real_sequence(ticks: dict[str, Tick]) -> None:
     ]
     assert [tick.materialized for tick in ticks.values()] == [True, True, False, False, False, False, True]
     assert [len(tick.rows) for tick in ticks.values()] == [20, 20, 1, 1, 1, 1, 20]
-    # every row carries an independent reference: the replay judges against it, not against nothing
-    assert all(row.references for tick in ticks.values() for row in tick.rows)
+    # The reference judges 17 of 20 rows on every materialized tick. It reports no revenue or gross
+    # profit for the bank and the insurer, and XOM serves no revenue (its row is unavailable).
+    for tick in ticks.values():
+        judged = policy.judged_listings(tick.rows)
+        unjudged = sorted(
+            (row.operating_branch, row.revenue is None) for row in tick.rows if row.listing_id not in judged
+        )
+        expected = [("financial", False), ("insurance", False), ("non_financial", True)] if tick.materialized else []
+        assert (len(judged), unjudged) == ((17, expected) if tick.materialized else (1, [])), tick.cutoff
     # the derivation used for the refused ticks reproduces the stored price-to-sales exactly
     document = json.loads(FIXTURE.read_text())
     for tick in document["ticks"]:

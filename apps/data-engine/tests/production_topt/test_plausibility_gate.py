@@ -147,7 +147,7 @@ def test_xoms_shape_is_a_review_against_the_previous_accepted_run(connection, tm
     monkeypatch.setattr(
         plausibility_gate,
         "_rows",
-        lambda conn, run_id: previous_rows if run_id == previous_run_id else real_rows(conn, run_id),
+        lambda conn, run_id, **kw: previous_rows if run_id == previous_run_id else real_rows(conn, run_id, **kw),
     )
     _bypass_append_only(connection)
     connection.execute(
@@ -225,7 +225,7 @@ def test_a_valuation_move_against_the_previous_run_is_never_a_refusal(connection
         monkeypatch.setattr(
             plausibility_gate,
             "_rows",
-            lambda conn, run_id: previous_rows if run_id == previous_run_id else real_rows(conn, run_id),
+            lambda conn, run_id, **kw: previous_rows if run_id == previous_run_id else real_rows(conn, run_id, **kw),
         )
         return plausibility_gate.judge_run(
             connection,
@@ -409,3 +409,9 @@ def test_the_served_figures_are_the_rows_own_financial_fact(connection) -> None:
         Decimal("210000000")
     }
     assert all(row.references == () for row in rows.values())
+    # so nothing is judged, and the verdict says so instead of reading as checked
+    _point_head_at(connection, run_id, _snapshot)
+    verdict = plausibility_gate.judge_issuers(connection, run_id=run_id)
+    assert (verdict.judged, verdict.listings, verdict.refusals) == (0, 20, ())
+    assert "0 of 20 listings judged against an independent reference" in verdict.lines()[0]
+    assert verdict.lines()[-1] == "  ok: no refusal; 0 of 20 listings judged"

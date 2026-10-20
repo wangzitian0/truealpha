@@ -6,7 +6,7 @@ count), JPM's negative bank metric (a uniform capital charge), V valued on a 201
 count — and each was found by re-deriving from the vendor by hand. Every other gate in
 this repository compares the system against something the same process authored. This
 one compares a run against references the process did not author, in the tick's own
-transaction, and refuses an issuer instead of materialising a row nobody would believe on sight.
+transaction. It refuses an issuer whose published row nobody would believe on sight.
 
 The thresholds are a versioned policy (owner decision 2026-09-07, recorded on #544), not
 constants: a change is a new version with its own row on the issue, never a silent edit. Rule
@@ -27,24 +27,25 @@ explains (MU's FY2026 10-K of 2026-10-09). Thresholds are unchanged.
 
 v4 (#1443, #1323): a value is judged only against independent references. v1 to v3 also
 compared each run with the previous accepted run. That reference is our own earlier output, so
-the check protected whatever was published first. Production MU is the case: its price-to-sales
-read 31.30 on FY2025 revenue (37.378B) while the second financial-fact origin reported FY2026
-(133.188B, period end 2026-09-03) from 2026-09-30. The gate accepted 31.30, then refused the
-correction to 8.74 on every TOPT tick from 2026-10-09 to 2026-10-12 and froze the governed head.
+the check protected whatever was published first. Production MU is the case. Its price-to-sales
+read 31.30 on FY2025 revenue (37.378B). The second financial-fact origin reported FY2026
+(133.188B, period end 2026-09-03) from 2026-09-30. The gate accepted 31.30. Then it refused the
+correction to 8.74 on every TOPT tick from 2026-10-09 to 2026-10-12, and the governed head froze.
 v4 changes three things:
 
-* `independent-reference-disagreement` refuses an issuer whose served revenue or gross profit
-  differs by more than `independent_disagreement_ratio` from the independent reference: from the
-  reference's figure for the same period, or from its figure for the latest later period (the
-  served figure is then superseded). Gross profit is compared only where the served figure is gross profit:
-  the non-financial class, without the #533 revenue proxy.
-* `universe-max-regression` and `unexplained-valuation-move` read the previous run, so they
-  are change detectors (`reviews`). They raise a review flag and never refuse. The shapes they
-  caught are now refused at the source: a share count older than 730 days (#529) and revenue
-  used as gross profit where the industry does not allow it (#533).
-* A refusal names one issuer, and the caller excludes that issuer and publishes the others
-  (#1323). The run itself is refused only when more than `refused_share_limit` of its rows
-  are refused (a data fault, not a filing) or when nothing is eligible.
+* `independent-reference-disagreement` refuses an issuer when its served revenue or gross profit
+  differs from an independent reference by more than `independent_disagreement_ratio`. The rule
+  compares with the reference's figure for the same period. It also compares with the figure for
+  the latest later period: a figure off that one is superseded. Gross profit is compared only for
+  the non-financial class, and not when the served figure is the #533 revenue proxy.
+* `universe-max-regression` and `unexplained-valuation-move` read the previous run. They are
+  change detectors (`reviews`): they raise a review flag and never refuse. The source now refuses
+  the shapes they caught: a share count older than 730 days (#529), and revenue used as gross
+  profit where the industry does not allow it (#533).
+* A refusal names one issuer. The caller excludes the issuer and publishes the others (#1323).
+  The run itself is refused only when more than `refused_share_limit` of its listings are refused
+  (a data fault, not a filing), or when nothing is eligible. `judged_listings` counts the rows a
+  reference could judge, so a run where no reference arrived is visible and not silently "ok".
 
 The sentinel known answers (#1416 E4) join as a further independent reference when they land.
 
@@ -105,8 +106,10 @@ class Thresholds:
     price_move_floor: Decimal = Decimal("1.4")
     #: v4: the largest ratio between a served figure and its independent reference. Revenue that is
     #: off by this ratio moves price-to-sales by the same ratio, so it is the valuation move ratio.
-    #: Measured on production 2026-09-23, 2026-10-08 and 2026-10-19 (TOPT and QQQ, 408 rows): the
-    #: largest same-period revenue ratio was 1.42; MU's superseded FY2025 revenue was 3.56.
+    #: Measured on production TOPT and QQQ of 2026-09-23, 2026-10-08 and 2026-10-19 (408 rows). The
+    #: largest same-period ratio was 1.42 for revenue and 1.97 for a gross profit that is not the
+    #: #533 proxy. Later-period ratios: MU 3.56 (FY2025 served), CPRT 2.58 and XEL 1.27 (FY2018
+    #: served, #1457). The SP500 universe was not measured: its schedule is stopped (#1310).
     independent_disagreement_ratio: Decimal = Decimal("2")
     #: v4 (#1323): more than this share of a run's rows refused is a data fault, and the run is refused.
     refused_share_limit: Decimal = Decimal("0.25")
@@ -198,6 +201,40 @@ def _served_figures(row: Row) -> list[tuple[str, Decimal, date]]:
     return figures
 
 
+@dataclass(frozen=True)
+class _Comparison:
+    """One served figure against one reference figure: the same period, or the latest later one."""
+
+    name: str
+    served: Decimal
+    period: date
+    reference_id: str
+    reference_period: date
+    value: Decimal
+
+    @property
+    def superseding(self) -> bool:
+        return self.reference_period > self.period
+
+
+def _comparisons(row: Row) -> list[_Comparison]:
+    found: list[_Comparison] = []
+    for reference in row.references:
+        for name, served, period in _served_figures(row):
+            same = reference.figures.get(period, {}).get(name)
+            if same is not None:
+                found.append(_Comparison(name, served, period, reference.reference_id, period, same))
+            later = _latest_later_figure(reference, name, period)
+            if later is not None:
+                found.append(_Comparison(name, served, period, reference.reference_id, *later))
+    return found
+
+
+def judged_listings(current: list[Row]) -> set[str]:
+    """The listings a reference could judge: at least one served figure met a reference figure."""
+    return {row.listing_id for row in current if _comparisons(row)}
+
+
 def _latest_later_figure(reference: IndependentReference, name: str, after: date) -> tuple[date, Decimal] | None:
     later = [(end, values[name]) for end, values in reference.figures.items() if end > after and values.get(name)]
     if not later:
@@ -216,38 +253,24 @@ def independent_reference_disagreement(current: list[Row], thresholds: Threshold
     does not report, is not judged: a missing measurement is not evidence either way."""
     limit = thresholds.independent_disagreement_ratio
     violations: list[Violation] = []
-    for row, reference in ((row, reference) for row in current for reference in row.references):
-        for name, served, period in _served_figures(row):
-            same = reference.figures.get(period, {}).get(name)
-            if same is not None:
-                ratio = _ratio(served, same)
-                if ratio is not None and ratio > limit:
-                    violations.append(
-                        Violation(
-                            RULE_INDEPENDENT_REFERENCE,
-                            row.listing_id,
-                            f"{name} {served:,.0f} for the period ending {period} is {ratio:.2f}x the independent "
-                            f"reference {same:,.0f} for the same period ({reference.reference_id})",
-                        )
-                    )
-                    continue
-            # Agreement on the served period says the figure is right for that period, not that the
-            # period is current: a later period the reference reports supersedes it.
-            later = _latest_later_figure(reference, name, period)
-            if later is None:
+    for row in current:
+        for comparison in _comparisons(row):
+            ratio = _ratio(comparison.served, comparison.value)
+            if ratio is None or ratio <= limit:
                 continue
-            end, value = later
-            ratio = _ratio(served, value)
-            if ratio is not None and ratio > limit:
-                violations.append(
-                    Violation(
-                        RULE_INDEPENDENT_REFERENCE,
-                        row.listing_id,
-                        f"{name} {served:,.0f} is for the period ending {period}; the independent reference reports "
-                        f"{value:,.0f} for the later period ending {end} ({ratio:.2f}x), so the served figure is "
-                        f"superseded ({reference.reference_id})",
-                    )
+            name, served, period = comparison.name, comparison.served, comparison.period
+            if comparison.superseding:
+                detail = (
+                    f"{name} {served:,.0f} is for the period ending {period}; the independent reference reports "
+                    f"{comparison.value:,.0f} for the later period ending {comparison.reference_period} "
+                    f"({ratio:.2f}x), so the served figure is superseded ({comparison.reference_id})"
                 )
+            else:
+                detail = (
+                    f"{name} {served:,.0f} for the period ending {period} is {ratio:.2f}x the independent "
+                    f"reference {comparison.value:,.0f} for the same period ({comparison.reference_id})"
+                )
+            violations.append(Violation(RULE_INDEPENDENT_REFERENCE, row.listing_id, detail))
     return violations
 
 
@@ -298,16 +321,18 @@ def refused_share_of_run(
 ) -> list[Violation]:
     """More than `refused_share_limit` of a run's rows refused is a data fault, not a filing or a
     split: the run is refused as a whole (#1323: 6 of 20 refuses the run, 5 of 20 does not)."""
-    if not current:
+    listings = {row.listing_id for row in current}
+    refused = refused_listings & listings
+    if not listings:
         return []
-    share = Decimal(len(refused_listings)) / Decimal(len(current))
+    share = Decimal(len(refused)) / Decimal(len(listings))
     if share <= thresholds.refused_share_limit:
         return []
     return [
         Violation(
             RULE_REFUSED_SHARE,
             None,
-            f"{len(refused_listings)} of {len(current)} rows refused ({share:.0%}), more than the limit "
+            f"{len(refused)} of {len(listings)} rows refused ({share:.0%}), more than the limit "
             f"{thresholds.refused_share_limit:.0%}: a data fault, not one issuer's filing",
         )
     ]

@@ -2,11 +2,12 @@
 plausibility policy (v4 since #1443), in the tick's own transaction, before the pointer advances.
 
 `lanes/capture.py` calls `judge_issuers` right after materialization, before anything consumes
-the run. An issuer refusal that is not exempted names one listing: the tick excludes that issuer's
-strategy decision with the refusal's reason and publishes the others (#1323). A run refusal — more
-than the policy's share of rows refused, or `judge_strategy`'s empty eligible set — fails the
-Dagster run; the transaction rolls back with it, so nothing of the refused run is materialised and
-`mart.current_pointer` stays on the previous accepted run. Exemptions come from the same file the
+the run. An issuer refusal that is not exempted names one listing. A tick that runs the strategy
+excludes that issuer's decision with the refusal's reason and publishes the others (#1323). A tick
+without a strategy logs the refusal, and the refused core row stays published (#1456). A run
+refusal (more than the policy's share of listings refused, or `judge_strategy`'s empty eligible
+set) fails the Dagster run. The transaction rolls back with it, so nothing of the refused run is
+materialised and `mart.current_pointer` stays on the previous accepted run. Exemptions come from the same file the
 nightly suite reads (`tools/output_invariant_exemptions.json`, issue + expiry): `node-sign-policy`
 is judged under the suite's entry of the same id because it is the same question judged earlier.
 An expired exemption is no exemption.
@@ -39,6 +40,7 @@ from factors.composite.plausibility_policy import (
     Violation,
     empty_eligible_set,
     evaluate_issuers,
+    judged_listings,
     policy_sha256,
     refused_share_of_run,
     reviews,
@@ -148,6 +150,9 @@ class Verdict:
     signals: tuple[Violation, ...] = ()
     #: listing id -> issuer id of every judged row, so a refusal reaches the issuer's decision.
     issuers: Mapping[str, str] = field(default_factory=dict)
+    #: Listings a reference judged, of all listings of the run. 0 judged means no reference arrived.
+    judged: int = 0
+    listings: int = 0
     policy_sha256: str = field(default_factory=policy_sha256)
 
     @property
@@ -164,10 +169,15 @@ class Verdict:
             excluded.setdefault(self.issuers[violation.listing_id], EXCLUSION_REASON[violation.rule])
         return excluded
 
+    def excluded_lines(self) -> list[str]:
+        """One `<rule> <listing>` entry per refused listing and rule, for the op metadata."""
+        return sorted({f"{violation.rule} {violation.listing_id}" for violation in self.refusals})
+
     def lines(self) -> list[str]:
         out = [
             f"plausibility policy {self.policy_version} ({self.policy_sha256[:12]}): previous accepted run "
-            f"{self.previous_run_id or '(none)'}"
+            f"{self.previous_run_id or '(none)'}; {self.judged} of {self.listings} listings judged against an "
+            "independent reference"
         ]
         for signal in self.signals:
             out.append(f"  SIGNAL   {signal.rule} {signal.listing_id or ''}: {signal.detail} — a declared low signal")
@@ -180,13 +190,13 @@ class Verdict:
             out.append(f"  DEFERRED {violation.rule} {violation.listing_id or ''}: {violation.detail} — {note}")
         for violation in self.refusals:
             out.append(
-                f"  EXCLUDED {violation.rule} {violation.listing_id or ''}: {violation.detail} — the issuer is "
-                f"excluded as {EXCLUSION_REASON[violation.rule].value}; the run publishes the others"
+                f"  EXCLUDED {violation.rule} {violation.listing_id or ''}: {violation.detail} — refused as "
+                f"{EXCLUSION_REASON[violation.rule].value}; the run publishes the other listings"
             )
         for violation in self.run_refusals:
             out.append(f"  REFUSED  {violation.rule}: {violation.detail}")
         if not self.refusals and not self.run_refusals and not self.deferred:
-            out.append("  ok: every published row agrees with its independent references")
+            out.append(f"  ok: no refusal; {self.judged} of {self.listings} listings judged")
         return out
 
 
@@ -236,18 +246,15 @@ def _references(connection: Any, run_id: str) -> dict[str, list[tuple[str, Indep
     return found
 
 
-def _rows(connection: Any, run_id: str) -> list[Row]:
-    """The run's published rows with their served figures and independent references."""
-    references = _references(connection, run_id)
+def _rows(connection: Any, run_id: str, *, with_references: bool = True) -> list[Row]:
+    """The run's published rows with their served figures and, unless `with_references` is False,
+    their independent references. The change detectors read the previous run without them."""
+    references = _references(connection, run_id) if with_references else {}
     rows: list[Row] = []
-    seen: set[str] = set()
     for listing_id, branch, availability, op, ps, close, revenue_period_end, fact in connection.execute(
         _ROWS_SQL, (run_id,)
     ).fetchall():
         listing = str(listing_id)
-        if listing in seen:
-            raise RuntimeError(f"run {run_id} reads two rows for {listing}; the gate judges each published row once")
-        seen.add(listing)
         served: Mapping[str, Any] = fact if isinstance(fact, Mapping) else {}
         unit = financial_fact_unit(served)
         vintage = served.get("vintage")
@@ -319,7 +326,7 @@ def judge_issuers(
     universe_id, universe_version = str(universe[0]), str(universe[1])
     previous_row = connection.execute(_PREVIOUS_HEAD_SQL, (POINTER_FACTOR_ID, universe_id, universe_version)).fetchone()
     previous_run_id = str(previous_row[0]) if previous_row and previous_row[0] != run_id else None
-    previous = _rows(connection, previous_run_id) if previous_run_id else []
+    previous = _rows(connection, previous_run_id, with_references=False) if previous_run_id else []
     live = _exemptions(exemptions_path, today)
     refusals: list[Violation] = []
     deferred: list[tuple[Violation, str]] = []
@@ -340,6 +347,8 @@ def judge_issuers(
         reviews=tuple(reviews(current, previous)),
         signals=tuple(sign_signals(current)),
         issuers=_issuers(connection, run_id),
+        judged=len(judged_listings(current)),
+        listings=len({row.listing_id for row in current}),
     )
 
 

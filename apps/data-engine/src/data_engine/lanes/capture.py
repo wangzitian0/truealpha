@@ -425,6 +425,12 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             _refuse(context, pipeline.run_id, verdict)
         for line in verdict.lines():
             context.log.info(line)
+        if verdict.refusals and not tick.run_strategy:
+            context.log.warning(
+                f"{tick.log_label}: this tick runs no strategy, so its "
+                f"{len({violation.listing_id for violation in verdict.refusals})} refused listing(s) stay "
+                "published in mart.topt_core_results (#1456)"
+            )
         # #378: register the run on the A1 evidence plane and advance the governed
         # pointer inside the same transaction, so consumers resolve THIS run through
         # mart.current_pointer_head the moment the tick commits. #536: the advance is
@@ -478,7 +484,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,
         "plausibility_policy": verdict.policy_version,
-        "plausibility_excluded": sorted(f"{violation.rule} {violation.listing_id}" for violation in verdict.refusals),
+        "plausibility_excluded": verdict.excluded_lines(),
+        "plausibility_judged": f"{verdict.judged}/{verdict.listings}",
         "plausibility_reviews": len(verdict.reviews),
         "quality_report_id": pipeline.quality_report_id,
         "forced_fetch": pipeline.forced_fetch,
