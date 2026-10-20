@@ -224,6 +224,9 @@ class Ceremony:
             "FAKE_GH_LOG": str(log),
             "FAKE_GH_MERGES": json.dumps(self.merges),
             "FAKE_SERVED_TAG": served or tag,
+            # The fake answers at once and never changes its answer: a wait loop gets its
+            # final answer on the first poll. A timeout path needs only a few polls.
+            "CUT_RELEASE_MAX_POLLS": "3",
             **(extra_env or {}),
         }
         result = subprocess.run(
@@ -1097,3 +1100,23 @@ def test_a_release_without_its_replay_declaration_is_refused(ceremony: Ceremony)
     assert DECLARATION in result.stderr, result.stderr
     assert ceremony.remote_tags() == before
     assert not dispatched(calls)
+
+
+def test_the_poll_budget_is_the_loop_budget_unless_a_lower_cap_is_set() -> None:
+    """#1412 L3: the cap only lowers a budget. Unset, every loop keeps the budget it names."""
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    start = script.index("polls() {")
+    function = script[start : script.index("\n}\n", start) + 3]
+
+    def polls(budget: int, cap: str | None) -> str:
+        env = {k: v for k, v in os.environ.items() if k != "CUT_RELEASE_MAX_POLLS"}
+        if cap is not None:
+            env["CUT_RELEASE_MAX_POLLS"] = cap
+        return subprocess.run(
+            ["bash", "-c", f"{function}\npolls {budget}"], capture_output=True, text=True, env=env, check=True
+        ).stdout.strip()
+
+    assert polls(120, None) == "120"
+    assert polls(120, "3") == "3"
+    assert polls(12, "500") == "12"
+    assert script.count('$(seq 1 "$(polls ') == 6, "a wait loop does not read its budget through polls()"
