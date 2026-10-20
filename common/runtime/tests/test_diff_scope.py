@@ -304,7 +304,9 @@ def worktree(tmp_path_factory: pytest.TempPathFactory) -> object:
     subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=REPO_ROOT, capture_output=True, check=False)
 
 
-ENTRY_POINTS = ("test", "typecheck", "smoke", "check")
+#: Every make target that runs a check. #1426 replaced the diff-scoped `make lint` with direct
+#: ruff calls (a branch written before #1425 won the merge), and this list did not hold lint.
+ENTRY_POINTS = ("lint", "test", "typecheck", "smoke", "check")
 
 #: What an outer `make ... FULL=1` hands to every process below it. CI runs pytest under
 #: `make test-python FULL=1` (#1412 L1): a nested `make` reads FULL=1 back from MAKEFLAGS,
@@ -332,6 +334,11 @@ def test_every_make_entry_point_runs_only_what_the_diff_reaches(worktree: Path, 
         assert len(pytest_lines) == 1, planned
         assert "common/runtime/tests/test_walk_evidence.py" in pytest_lines[0]
         assert not pytest_lines[0].rstrip().endswith("uv run pytest"), "the default ran the whole suite"
+    if target in ("lint", "smoke", "check"):
+        lint_lines = [line for line in planned if "ruff check" in line]
+        assert lint_lines == ["== [lint] uv run ruff check common/runtime/src/truealpha_tools/walk_evidence.py"], (
+            planned
+        )
     if target in ("typecheck", "smoke", "check"):
         mypy_lines = [line for line in planned if "uv run mypy" in line]
         assert len(mypy_lines) == 1 and "truealpha_tools/walk_evidence.py" in mypy_lines[0], planned
