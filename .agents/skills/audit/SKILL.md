@@ -38,7 +38,7 @@ The Director MUST NOT stop or return a final report before completing all 3 Swar
 
 Each gate came from a measured failure.
 
-1. **The auditor must read code.** Use a read-only native agent, or provide complete source code and diff in the prompt for `subagent_batch` workers. Never ask an auditor to judge code that the auditor cannot see. Six of eight false findings came from agents without code access.
+1. **The auditor must read code.** Use a read-only native agent, or pass target files via `context_files` (with diffs and contracts) to `subagent_batch` workers so the worker injects code from disk without prompt duplication. Never ask an auditor to judge code that the auditor cannot see. Six of eight false findings came from agents without code access.
 2. **See each new test fail first.** Run only the target test case on unfixed code and confirm RED (`pytest <file>::<test> -x`).
    Never run full suites during Gate 2. This caught a fake `assertIn(role, text)` assertion that prose satisfied.
 3. **Re-review every fix independently.** The reviewer gets only the new code, not the defect story.

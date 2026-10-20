@@ -22,16 +22,16 @@ Swarm does not define multi-round state machines. Caller skills (`audit`, `init`
   - Dense, structured ASD-STE100 technical findings.
   - Length: 500 to 1200 tokens per Intern.
   - Anchors required: Every finding must cite exact file anchors (`file#Lxx-Lyy`) and reproducible counterexamples.
-  - Zero conversational filler. Lead with conclusion.
+  - Zero conversational filler. Start line 1 with `VERDICT: PASS` or `VERDICT: FAIL: <summary>`.
 
 ## Atomic invocation protocol
 
 To execute 1 Swarm, the orchestrator invokes `subagent_batch` with M tasks:
 
 1. Prepare task array with M distinct task objects: `[{"id": "...", "prompt": "..."}]`.
-2. Inject target source code, diffs, issue descriptions, and contracts directly into each task prompt (Gate 1 compliance).
+2. Pass target files via `context_files: [{"path": "...", "start_line": 1, "end_line": 120}]` (and optional `cwd`) so the worker reads disk once without duplicating code in tool-call JSON.
 3. Call `subagent_batch`.
-4. Reduce outputs: Parse each Intern's verdict into a consolidated `SwarmResult`. A task reported FAILED or PARTIAL gives no verdict. A task with an `Output truncated` warning gives a verdict only for the text shown.
+4. Reduce outputs: Full output persists to `~/.local/state/subagent-worker/runs/<call_id>.md`; inline return folds multi-line `PASS` tasks and expands `FAIL`, `PARTIAL`, or `FAILED` tasks into `SwarmResult`.
 5. Return `SwarmResult` to the calling skill for the next state transition.
 
 ## Lean execution discipline
