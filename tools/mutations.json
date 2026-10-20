@@ -840,6 +840,22 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "quality/zero-scheduled-heads-is-not-proven",
+      "guard": "common/runtime/tests/test_nightly_verdicts.py",
+      "file": "apps/data-engine/src/data_engine/lanes/quality.py",
+      "find": "    if require_head and not scheduled:\n",
+      "replace": "    if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }
