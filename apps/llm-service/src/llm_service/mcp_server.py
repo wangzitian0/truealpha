@@ -11,9 +11,10 @@ leaderboard), `etf_virtual_company_profile` (#1104's virtual company profile),
 the served-head rows the App shows), and `governed_backtest` (#758's backtest
 execution runs and valuations).
 
-No browser session exists for MCP callers today, so `AccessContext` is
-derived server-side via `AuthenticationMethod.SERVICE_IDENTITY` rather than
-accepted from the client — the tool schema has no role/tenant/tier argument.
+A tool runs only after `mcp_auth.BearerTokenGate` (mounted in `main.py`) accepted the
+caller's bearer token (#42). The token is one credential per environment, not a person,
+so `AccessContext` is derived server-side via `AuthenticationMethod.SERVICE_IDENTITY`
+rather than accepted from the client — the tool schema has no role/tenant/tier argument.
 """
 
 from __future__ import annotations

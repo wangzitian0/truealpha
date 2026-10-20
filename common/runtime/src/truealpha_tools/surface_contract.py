@@ -16,17 +16,26 @@ CMD, and neither is visible to a TestClient. So this asserts the same
 properties over real HTTPS against a deployed base URL, and nothing it checks
 can be satisfied by a local approximation.
 
-Read-only and side-effect free: the POST carries no body and no session, so the
-endpoint rejects it — the assertion is about WHICH rejection (405 means the
-method hole is back), never about doing anything.
+Read-only and side-effect free: no request carries a credential or a session,
+so the endpoint rejects each one — the assertion is about WHICH rejection (405
+means the method hole is back, anything but 401 on the endpoint means the
+credential check is gone), never about doing anything. The `tools/call` names
+a read-only tool.
 
-Measured baseline, production, 2026-09-01:
+#42 (#728 closed without a deployed probe): init.md rule 21 requires
+authentication on every non-local MCP endpoint. An `initialize` and a
+`tools/call` without a credential must each answer 401 with a Bearer
+challenge. Measured 2026-10-20 on staging and production before the gate:
+`initialize` answered 200 and `tools/call` answered 400 (a missing session,
+past every authorization point).
+
+Measured baseline, production, 2026-09-01 (before #42):
 
     GET  /api/mcp     307 -> https://truealpha.club/api/mcp/
     POST /api/mcp     307 -> same (a 405 here is the v0.0.30 defect)
     GET  /api/mcp/    406 (the MCP endpoint refusing a request with no Accept
                            header — a 404 here means it landed on app-web,
-                           which is the v0.0.28 defect)
+                           which is the v0.0.28 defect). 401 after #42.
     GET  /api/health  200 (a precondition only — tools/health_check.py owns
                            "is the EXPECTED release live", and this must not
                            duplicate it)
@@ -38,6 +47,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import urllib.error
 import urllib.request
@@ -58,6 +68,7 @@ class Response:
     status: int
     location: str
     body: bytes
+    challenge: str = ""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -67,21 +78,40 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch(url: str, method: str = "GET") -> Response:
+def fetch(url: str, method: str = "GET", payload: dict[str, object] | None = None) -> Response:
+    """One request with no credential. `payload` becomes a JSON body with the headers an
+    MCP client sends, so the endpoint judges the request on its credential, not on a
+    missing Accept or Content-Type header."""
     opener = urllib.request.build_opener(_NoRedirect)
+    headers = {"User-Agent": USER_AGENT}
+    data = None
+    if payload is not None:
+        headers["Accept"] = "application/json, text/event-stream"
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
     # noqa S310: the scheme is validated in main() to be http or https before
     # anything is fetched. Both are supported on purpose — the stub-server
     # tests speak http, and a preview target may too.
     request = urllib.request.Request(  # noqa: S310
-        url, method=method, headers={"User-Agent": USER_AGENT}
+        url, data=data, method=method, headers=headers
     )
     try:
         with opener.open(request, timeout=TIMEOUT) as answer:
-            return Response(answer.status, answer.headers.get("Location", ""), answer.read())
+            return Response(
+                answer.status,
+                answer.headers.get("Location", ""),
+                answer.read(),
+                answer.headers.get("WWW-Authenticate", ""),
+            )
     except urllib.error.HTTPError as error:
         # 4xx/5xx are results here, not failures: which rejection arrives is
         # exactly what distinguishes a healthy endpoint from a regressed one.
-        return Response(error.code, error.headers.get("Location", ""), error.read())
+        return Response(
+            error.code,
+            error.headers.get("Location", ""),
+            error.read(),
+            error.headers.get("WWW-Authenticate", ""),
+        )
     except OSError as error:
         # URLError, ConnectionRefusedError, RemoteDisconnected, socket timeouts: an
         # endpoint that did not answer is a verdict about the surface, not a crash of
@@ -122,6 +152,45 @@ def judge_redirect(source_url: str, base_scheme: str, status: int, location: str
             f"so the client lands on app-web instead of the MCP endpoint (v0.0.26)"
         )
     return failures
+
+
+#: The two JSON-RPC requests an MCP client sends first. Neither carries a credential. The
+#: tool is read-only, and with no session the server must not reach it in any case.
+UNAUTHENTICATED_MCP_REQUESTS: dict[str, dict[str, object]] = {
+    "initialize": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "truealpha-surface-contract", "version": "1"},
+        },
+    },
+    "tools/call": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "topt_gppe", "arguments": {}},
+    },
+}
+
+
+def judge_credential(endpoint: str, rpc_method: str, answer: Response) -> list[str]:
+    """The authentication verdict for one unauthenticated request (#42, init.md rule 21)."""
+    if answer.status != 401:
+        return [
+            f"POST {endpoint} {rpc_method} without a credential answered {answer.status}, not 401 — "
+            f"the MCP route serves an unauthenticated caller (init.md rule 21; #728 closed without "
+            f"this probe and production stayed open)"
+        ]
+    if not answer.challenge.lower().startswith("bearer"):
+        return [
+            f"POST {endpoint} {rpc_method} answered 401 without a Bearer challenge "
+            f"(WWW-Authenticate: {answer.challenge or '<none>'}), so a client cannot tell which "
+            f"credential to send"
+        ]
+    return []
 
 
 def check(base: str) -> list[str]:
@@ -177,6 +246,9 @@ def _check(base: str) -> list[str]:
             f"GET {endpoint} answered 404 — the redirect points at nothing, which is worse than "
             f"the downgrade it replaced (the v0.0.28 root_path defect)"
         )
+
+    for rpc_method, payload in UNAUTHENTICATED_MCP_REQUESTS.items():
+        failures.extend(judge_credential(endpoint, rpc_method, fetch(endpoint, method="POST", payload=payload)))
 
     return failures
 

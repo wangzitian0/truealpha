@@ -111,6 +111,8 @@ jobs:
       cancel-in-progress: false
     env:
       DEPLOY_TYPE: ${{ needs.resolve.outputs.deploy_type }}
+      # One definition of where the deployment lives, for the walk and the MCP probe.
+      TA_BASE_URL: ${{ needs.resolve.outputs.deploy_type == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
     steps:
       # The walked code must BE the released code, not whatever main has
       # moved to by the time this workflow is triggered — the tag is what
@@ -176,7 +178,6 @@ jobs:
       - name: Walk the deployed surface
         if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
         env:
-          TA_BASE_URL: ${{ env.DEPLOY_TYPE == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
           TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
           TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
           TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
@@ -198,3 +199,16 @@ jobs:
           "$GITHUB_WORKSPACE/tools/warm_surface.sh" "$TA_BASE_URL" / /research/rankings
 
           node e2e/walk-tree.mjs
+
+      # #42: init.md rule 21 requires authentication on every non-local MCP
+      # endpoint. #728 closed without a deployed probe, and production stayed
+      # open. tools/surface_contract.py asserts that an `initialize` and a
+      # `tools/call` without a credential each answer 401 with a Bearer
+      # challenge, plus the routing shape of #673. It needs no credential and
+      # no install (standard library only), so it runs on every release, also
+      # when the walk credentials are absent or the walk failed. A red probe
+      # makes this run red, and tools/cut_release.sh then refuses the
+      # production step. deploy-freshness.yml runs the same probe every day.
+      - name: Probe the MCP credential gate
+        if: ${{ !cancelled() }}
+        run: python3 tools/surface_contract.py "$TA_BASE_URL"
