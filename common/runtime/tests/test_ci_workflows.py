@@ -2972,11 +2972,7 @@ def test_every_mirror_only_root_entry_is_scanned_through_its_source(excluded_roo
             if not any(target == root or root in target.parents for root in scanned):
                 escapes.append(f"{entry} -> {target} resolves outside every scanned root")
             continue
-        source = (
-            REPO_ROOT / ".agents" / "skills" / entry[len(copy_prefix) :]
-            if entry.startswith(copy_prefix)
-            else None
-        )
+        source = REPO_ROOT / ".agents" / "skills" / entry[len(copy_prefix) :] if entry.startswith(copy_prefix) else None
         if source is None or not source.is_file() or source.read_bytes() != path.read_bytes():
             escapes.append(f"{entry} is a real file that no file under .agents/skills/ repeats byte for byte")
     assert not escapes, (
