@@ -1181,7 +1181,7 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
     workspace_modules = {
         member.rsplit("/", 1)[-1].replace("-", "_")
         for member in ("apps/data-engine", "apps/llm-service", "common/contracts", "common/factors", "common/runtime")
-    } | {"truealpha_runtime", "truealpha_contracts", "data_engine", "factors"}
+    } | {"truealpha_runtime", "truealpha_tools", "truealpha_contracts", "data_engine", "factors"}
 
     tools_src = REPO_ROOT / "common/runtime/src/truealpha_tools"
 
@@ -1194,14 +1194,14 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     top = alias.name.split(".")[0]
+                    names.add(top)
                     if top == "truealpha_tools" and "." in alias.name:
                         sub = tools_src / f"{alias.name.split('.')[1]}.py"
                         if sub.is_file() and sub not in seen:
                             names |= imports(sub, seen)
-                    else:
-                        names.add(top)
             elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 top = node.module.split(".")[0]
+                names.add(top)
                 if top == "truealpha_tools":
                     parts = node.module.split(".")
                     candidates = [parts[1]] if len(parts) > 1 else [alias.name for alias in node.names]
@@ -1209,8 +1209,6 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
                         sub = tools_src / f"{cand}.py"
                         if sub.is_file() and sub not in seen:
                             names |= imports(sub, seen)
-                else:
-                    names.add(top)
         return names
 
     offenders = []
