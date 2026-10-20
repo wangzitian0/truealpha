@@ -367,18 +367,85 @@ def _text(value: Decimal | None) -> str:
     return "none" if value is None else f"{value:.4f}"
 
 
-def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: datetime) -> BacktestOutcome:
+def _merge_override_dict(base: dict[str, Any], overrides: Mapping[str, Any]) -> None:
+    for raw_key, value in overrides.items():
+        parts = raw_key.split(".")
+        cursor = base
+        for part in parts[:-1]:
+            child = cursor.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                cursor[part] = child
+            cursor = child
+        leaf = parts[-1]
+        if isinstance(value, Mapping) and isinstance(cursor.get(leaf), dict):
+            _merge_override_dict(cursor[leaf], value)
+        else:
+            cursor[leaf] = value
+
+
+def apply_definition_overrides(
+    definition: LargeModelValueV0Definition,
+    overrides: Mapping[str, Any],
+) -> LargeModelValueV0Definition:
+    """Return a validated `LargeModelValueV0Definition` with `overrides` merged into its payload (#1413 B1).
+
+    Supports nested dicts or dotted keys (e.g. `selection.selection_count`, `eligibility.minimum_confidence`).
+    Recomputes `strategy_definition_id` and `content_sha256` from the overridden semantics.
+    """
+    if not overrides:
+        return definition
+    payload: dict[str, Any] = json.loads(
+        definition.model_dump_json(exclude={"strategy_definition_id", "content_sha256"})
+    )
+    _merge_override_dict(payload, overrides)
+    payload.pop("strategy_definition_id", None)
+    payload.pop("content_sha256", None)
+    return LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
+
+
+def _filter_cutoff_window(
+    cutoffs: Sequence[datetime],
+    *,
+    start_cutoff: datetime | None,
+    end_cutoff: datetime | None,
+) -> list[datetime]:
+    start_utc = None if start_cutoff is None else start_cutoff.astimezone(UTC)
+    end_utc = None if end_cutoff is None else end_cutoff.astimezone(UTC)
+    return [
+        cutoff
+        for cutoff in cutoffs
+        if (start_utc is None or cutoff >= start_utc) and (end_utc is None or cutoff <= end_utc)
+    ]
+
+
+def run_core_strategy_backtest(
+    connection: psycopg.Connection[Any],
+    *,
+    tick: datetime,
+    definition: LargeModelValueV0Definition | None = None,
+    overrides: Mapping[str, Any] | None = None,
+    start_cutoff: datetime | None = None,
+    end_cutoff: datetime | None = None,
+) -> BacktestOutcome:
     """Backtest ``large_model_value_v0`` over the stored quarter-end history and persist the run.
 
     Raise ``BacktestPending`` when this environment holds no data to judge yet. The caller owns
-    the transaction.
+    the transaction. Optional `definition`, `overrides`, `start_cutoff` and `end_cutoff` run
+    parameterized or windowed backtests bound to their own `definition_content_sha256` (#1413 B1).
     """
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
     code_identity = deployed_code_identity(settings.app_env, settings.git_commit_sha)
-    definition = load_strategy_definition()
+    definition = definition or load_strategy_definition()
+    if overrides:
+        definition = apply_definition_overrides(definition, overrides)
     rules = execution_rules(definition)
-    cutoffs = schedule_cutoffs(connection, definition.schedule)
+    cutoffs = _filter_cutoff_window(
+        schedule_cutoffs(connection, definition.schedule),
+        start_cutoff=start_cutoff,
+        end_cutoff=end_cutoff,
+    )
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
@@ -411,7 +478,7 @@ def run_core_strategy_backtest(connection: psycopg.Connection[Any], *, tick: dat
         raise BacktestPending(
             "no quarter-end inputs under canonical issuer ids; run strategy_history_projection_pipeline"
         )
-    inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs}
+    inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff], cutoff_at=cutoff) for cutoff in cutoffs}
     snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
 
     decisions = decide(cutoffs, inputs_by_cutoff.__getitem__, issuers, definition)
@@ -822,6 +889,36 @@ def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRe
     return True
 
 
+def sweep_core_strategy_backtest(
+    connection: psycopg.Connection[Any],
+    *,
+    tick: datetime,
+    overrides_list: Sequence[Mapping[str, Any]],
+    definition: LargeModelValueV0Definition | None = None,
+    start_cutoff: datetime | None = None,
+    end_cutoff: datetime | None = None,
+) -> list[BacktestOutcome]:
+    """Run N parameter-override combinations and persist N distinct `mart.backtest_runs` rows (#1413 B2).
+
+    Each combination produces its own `definition_content_sha256` and `run_id`, so none overwrites
+    the live strategy backtest run.
+    """
+    base_def = definition or load_strategy_definition()
+    outcomes: list[BacktestOutcome] = []
+    for overrides in overrides_list:
+        outcomes.append(
+            run_core_strategy_backtest(
+                connection,
+                tick=tick,
+                definition=base_def,
+                overrides=overrides,
+                start_cutoff=start_cutoff,
+                end_cutoff=end_cutoff,
+            )
+        )
+    return outcomes
+
+
 __all__ = [
     "LIMITATIONS",
     "NOTIONAL_CAPITAL",
@@ -830,6 +927,7 @@ __all__ = [
     "BacktestRecord",
     "CutoffDecision",
     "DEPLOYED_ENVIRONMENTS",
+    "apply_definition_overrides",
     "benchmark_never_filled",
     "decide",
     "deployed_code_identity",
@@ -841,4 +939,5 @@ __all__ = [
     "schedule_cutoffs",
     "selected_without_bars",
     "selected_without_open",
+    "sweep_core_strategy_backtest",
 ]

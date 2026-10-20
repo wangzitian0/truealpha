@@ -1303,6 +1303,7 @@ def test_the_wide_row_form_is_the_lower_case_hyphenated_uuid(value: str, expecte
 WRITERS = {
     "topt_gppe_results": "the capture tick: the wide row, the reference form",
     "topt_core_results": "the capture tick, from the same coordinates",
+    "metric_node_values": "the capture tick, long-table node values from the same coordinates",
     "strategy_input_coverage": "persist_strategy_input_coverage, from the run's own issuers",
     "issuer_theme_purity": "materialize_theme_purity, members read from the wide row",
     "issuer_supply_chain_exposure": "run_supply_chain_exposure",

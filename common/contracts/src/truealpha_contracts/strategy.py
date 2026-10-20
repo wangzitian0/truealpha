@@ -646,9 +646,10 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     strategy_id: Literal["large_model_value_v0"]
     definition_version: str = Field(pattern=_VERSION_PATTERN)
     provisional_semantics: bool
-    universe: UniverseRef
+    universe: UniverseRef | None = None
     schedule: QuarterlyCutoffSchedule
     labor_efficiency: CapitalAdjustedLaborEfficiencyDefinition
+    labor_efficiency_tree_keys: dict[str, str] | None = None
     price_to_sales: PriceToSalesDefinition
     price_to_gross_profit: PriceToGrossProfitDefinition | None = None
     tier_valuation: ThreeTierValuationDefinition | ThreeTierPgpValuationDefinition
@@ -670,6 +671,10 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
         data: dict[str, Any] = handler(self)
         if self.price_to_gross_profit is None:
             data.pop("price_to_gross_profit", None)
+        if self.universe is None:
+            data.pop("universe", None)
+        if self.labor_efficiency_tree_keys is None:
+            data.pop("labor_efficiency_tree_keys", None)
         return data
 
     @model_validator(mode="after")

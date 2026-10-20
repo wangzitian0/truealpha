@@ -108,6 +108,7 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
     # covers the typed unavailable answer, and test_mcp_module_tools.py covers a served row.
     "issuer_supply_chain_exposure": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
     "issuer_analyst_ratings": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "metric_node_values": {"request": {"node_key": "gppe_uniform_charge_v0"}},
 }
 
 

@@ -40,6 +40,11 @@ from truealpha_contracts.issuer_modules_mart import (
     PostgresIssuerModuleReader,
     SupplyChainExposure,
 )
+from truealpha_contracts.metric_node_read import (
+    MetricNodeValueReport,
+    MetricNodeValueUnavailable,
+    PostgresMetricNodeValueRepository,
+)
 from truealpha_contracts.research_cards import CardKind, ResearchCard, build_card
 from truealpha_contracts.research_report import (
     ReportSectionKind,
@@ -149,6 +154,14 @@ class BacktestToolRequest(BaseModel):
     run_id: str | None = None
     strategy_key: str | None = None
     limit: int = 10
+
+
+class MetricNodeValueToolRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_key: str
+    issuer_id: str | None = None
+    limit: int = 100
 
 
 def _owner_access_context() -> AccessContext:
@@ -976,6 +989,7 @@ def build_mcp_server(
     *,
     repository: StrategyRunReadRepository | None = None,
     topt_repository: PostgresToptGppeRepository | None = None,
+    metric_node_repository: PostgresMetricNodeValueRepository | None = None,
     research_repository: ResearchReadPort | None = None,
     company_profile_reader: CompanyProfileReader | None = None,
     theme_purity_reader: ThemePurityLeaderboardReader | None = None,
@@ -1003,6 +1017,11 @@ def build_mcp_server(
         topt_repository
         if topt_repository is not None
         else PostgresToptGppeRepository(database_url=settings.database_url)
+    )
+    active_metric_node = (
+        metric_node_repository
+        if metric_node_repository is not None
+        else PostgresMetricNodeValueRepository(database_url=settings.database_url)
     )
     active_research: ResearchReadPort = (
         research_repository if research_repository is not None else _default_research_report_repository()
@@ -1039,6 +1058,22 @@ def build_mcp_server(
     )
     def topt_gppe() -> ToptGppeReport | ToptGppeUnavailable:
         return active_topt.latest()
+
+    @server.tool(
+        name="metric_node_values",
+        description=(
+            "Read materialized metric-forest node outputs from mart.metric_node_values by node_key "
+            "(e.g. gppe_uniform_charge_v0, gppe_banking_tce_v1, capital_adjusted_gross_profit) at the governed head."
+        ),
+    )
+    def metric_node_values(
+        request: MetricNodeValueToolRequest,
+    ) -> MetricNodeValueReport | MetricNodeValueUnavailable:
+        return active_metric_node.latest(
+            node_key=request.node_key,
+            issuer_id=request.issuer_id,
+            limit=request.limit,
+        )
 
     @server.tool(
         name="research_report",

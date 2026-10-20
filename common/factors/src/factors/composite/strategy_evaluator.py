@@ -49,9 +49,21 @@ from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation, tier_band
-from factors.forest import IssuerClass
+from factors.forest import (
+    FOREST,
+    AliasKind,
+    Forest,
+    IssuerClass,
+    MetricTree,
+)
+from factors.forest import (
+    evaluate as evaluate_forest_tree,
+)
+from factors.forest import (
+    required_inputs as forest_required_inputs,
+)
 from factors.registry import FACTOR_REGISTRY
-from factors.types import Fact, FactorResult, GrowthConvention
+from factors.types import Fact, FactorResult, GrowthConvention, UnitFamily
 
 
 def _input_keys(factor_name: str) -> tuple[str, ...]:
@@ -164,6 +176,125 @@ _MULTIPLE_FACTOR = {
     ValuationBasis.PRICE_TO_SALES: price_to_sales,
     ValuationBasis.PRICE_TO_GROSS_PROFIT: price_to_gross_profit,
 }
+
+
+def _resolve_tree_by_key(forest: Forest, tree_key: str) -> MetricTree:
+    matches = [tree for tree in forest.trees if tree.key == tree_key]
+    if not matches:
+        raise KeyError(f"no tree with key {tree_key!r} in forest")
+    return matches[-1]
+
+
+def _tree_compute_for_class(
+    forest: Forest,
+    tree: MetricTree,
+    issuer_class: IssuerClass,
+) -> tuple[Callable[..., FactorResult], tuple[str, ...]]:
+    req_nodes = forest_required_inputs(forest, tree, issuer_class)
+    input_keys_list: list[str] = []
+    for node in req_nodes:
+        if node.alias(AliasKind.DEFINITION_PARAMETER) is not None:
+            continue
+        metric_name = node.alias(AliasKind.METRIC) or (
+            "gross_profit" if node.key == "pre_provision_profit" else node.key
+        )
+        key_name = node.alias(AliasKind.INPUT_KEY) or input_key_for_metric(metric_name)
+        if key_name not in input_keys_list:
+            input_keys_list.append(key_name)
+    root_node = forest.node(tree.root)
+    unit_family = root_node.unit or UnitFamily.PER_EMPLOYEE
+
+    def _compute(
+        facts: Sequence[Fact],
+        *,
+        entity_id: str,
+        as_of: datetime,
+        risk_free_rate: Decimal,
+    ) -> FactorResult:
+        fact_by_metric = {f.metric: f for f in facts if f.entity_id == entity_id}
+        tree_inputs: dict[str, Decimal | None] = {}
+        flags: list[str] = []
+        confidences: list[Decimal] = []
+        for node in req_nodes:
+            param = node.alias(AliasKind.DEFINITION_PARAMETER)
+            if param == "risk_free_rate":
+                tree_inputs[node.key] = risk_free_rate
+                continue
+            metric_name = node.alias(AliasKind.METRIC) or (
+                "gross_profit" if node.key == "pre_provision_profit" else node.key
+            )
+            fact = fact_by_metric.get(metric_name)
+            if fact is None or fact.value is None:
+                if metric_name in {"stockholders_equity", "goodwill", "intangible_assets_net_excluding_goodwill"}:
+                    if _MISSING_TCE_FLAG not in flags:
+                        flags.append(_MISSING_TCE_FLAG)
+                elif metric_name == "preferred_stock_value":
+                    flags.append(_MISSING_PREFERRED_FLAG)
+                else:
+                    flags.append(f"missing_{metric_name}")
+                tree_inputs[node.key] = None
+                continue
+            if metric_name == "employees_total" and fact.value <= 0:
+                flags.append("non_positive_employees_total")
+                tree_inputs[node.key] = None
+                continue
+            tree_inputs[node.key] = fact.value
+            confidences.append(fact.confidence)
+        if flags:
+            return FactorResult(
+                factor=tree.root,
+                entity_id=entity_id,
+                value=None,
+                unit_family=unit_family,
+                confidence=Decimal("0"),
+                as_of=as_of,
+                data_availability="unverified",
+                flags=flags,
+            )
+        evaluation = evaluate_forest_tree(forest, tree, issuer_class=issuer_class, inputs=tree_inputs)
+        val = evaluation.values.get(tree.root)
+        if val is None:
+            return FactorResult(
+                factor=tree.root,
+                entity_id=entity_id,
+                value=None,
+                unit_family=unit_family,
+                confidence=Decimal("0"),
+                as_of=as_of,
+                data_availability="unverified",
+                flags=[evaluation.undefined.get(tree.root, "undefined_operand")],
+            )
+        return FactorResult(
+            factor=tree.root,
+            entity_id=entity_id,
+            value=val,
+            unit_family=unit_family,
+            confidence=min(confidences) if confidences else Decimal("1"),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=[],
+        )
+
+    return _compute, tuple(input_keys_list)
+
+
+def labor_efficiency_binding_from_tree_keys(
+    tree_keys: Mapping[str, str],
+    *,
+    forest: Forest = FOREST,
+) -> Mapping[IssuerClass | None, LaborEfficiencyMetric]:
+    """Build a per-class `LaborEfficiencyMetric` binding from `{issuer_class: tree_key}` (#1413 F3)."""
+    binding: dict[IssuerClass | None, LaborEfficiencyMetric] = {}
+    for class_str, tree_key in tree_keys.items():
+        issuer_class = IssuerClass(class_str)
+        tree = _resolve_tree_by_key(forest, tree_key)
+        compute_fn, input_keys = _tree_compute_for_class(forest, tree, issuer_class)
+        binding[issuer_class] = LaborEfficiencyMetric(
+            metric=tree.root,
+            compute=compute_fn,
+            input_keys=input_keys,
+        )
+    return MappingProxyType(binding)
 
 
 @dataclass(frozen=True)
@@ -291,6 +422,10 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
     return facts
 
 
+class LookAheadError(ValueError):
+    """Raised when an input's `knowable_at` is strictly after the evaluation `cutoff_at` (#1413 D6)."""
+
+
 def _has_stale_required_input(
     issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime, maximum_age: timedelta
 ) -> bool:
@@ -299,7 +434,13 @@ def _has_stale_required_input(
     The test reads one instant per key. A periodic key answers with its latest period, so its older
     periods never count. An age equal to the limit is not stale. A required key without a
     ``knowable_at`` entry raises: a producer that skips the rule must fail, never pass.
+    Any input with ``knowable_at > as_of`` raises ``LookAheadError`` immediately (#1413 D6).
     """
+    for key, knowable_instant in issuer.knowable_at.items():
+        if knowable_instant > as_of:
+            raise LookAheadError(
+                f"{issuer.issuer_id}: input {key!r} has knowable_at {knowable_instant.isoformat()} > cutoff {as_of.isoformat()}"
+            )
     unknown = [key for key in keys if key not in issuer.knowable_at]
     if unknown:
         raise ValueError(f"{issuer.issuer_id}: knowable_at lacks the required inputs {unknown}")
@@ -517,17 +658,26 @@ def evaluate_cutoff(
     definition: LargeModelValueV0Definition,
     cutoff_at: datetime,
     risk_free_rate: Decimal,
-    labor_efficiency_by_class: Mapping[IssuerClass | None, LaborEfficiencyMetric] = LABOR_EFFICIENCY_BY_CLASS,
+    labor_efficiency_by_class: Mapping[IssuerClass | None, LaborEfficiencyMetric] | None = None,
+    forest: Forest = FOREST,
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id.
 
     `labor_efficiency_by_class` is the binding that selects each issuer's labor metric. An issuer
     whose class has no entry is excluded with `missing_issuer_class`. Replays of the frozen #21
-    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name.
+    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name. When omitted, `definition.labor_efficiency_tree_keys`
+    is resolved through `forest` if present, otherwise `LABOR_EFFICIENCY_BY_CLASS` is used.
 
     An issuer is excluded with `stale_required_input` when any required input became knowable more
     than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255)."""
+    resolved_binding: Mapping[IssuerClass | None, LaborEfficiencyMetric]
+    if labor_efficiency_by_class is not None:
+        resolved_binding = labor_efficiency_by_class
+    elif definition.labor_efficiency_tree_keys is not None:
+        resolved_binding = labor_efficiency_binding_from_tree_keys(definition.labor_efficiency_tree_keys, forest=forest)
+    else:
+        resolved_binding = LABOR_EFFICIENCY_BY_CLASS
 
     decisions = [
         _evaluate_issuer(
@@ -535,7 +685,7 @@ def evaluate_cutoff(
             definition=definition,
             risk_free_rate=risk_free_rate,
             as_of=cutoff_at,
-            binding=labor_efficiency_by_class,
+            binding=resolved_binding,
         )[0]
         for issuer in issuers
     ]
