@@ -23,18 +23,18 @@ This isn't about building a flashy data platform — it's about engineering an a
 
 - Not a high-frequency / intraday trading system — the inherent disclosure lag in these data sources (e.g., a ~60-day public lag on ETF holdings) is acceptable
 - Not currently a multi-user SaaS product — this is a personal tool; the architecture leaves room to grow but doesn't add complexity for that now
-- Not aiming to cover every stock — it serves a curated universe of companies first; depth over breadth
+- Not aiming to cover every stock. The production target is the S&P 500 (owner decision 2026-10-20, #1410). "Depth over breadth" means that each company in that universe gets all seven modules with traceable history before any name outside it is added
 
 ## What Success Looks Like
 
-- Continuously producing results from all seven factor modules for a curated universe (the sensor portfolio and similar + core names of interest), with history that's traceable and conventions that are switchable
+- Continuously producing results from all seven factor modules for the production universe, the S&P 500, with history that's traceable and conventions that are switchable
 - Being able to ask, in conversation, "what's this company's PEG trend" or "who's the purest play on this theme," and get an answer backed by data, traceable to a specific filing/vintage — not a number the model made up on the spot
 - Factor/ranking outputs converting directly into Xiaohongshu card material without a manual processing step in between
 - Adding a previously unseen company or theme through reviewed, versioned catalog/configuration changes, without changing factor formulas, schemas, or consumer business logic
 - Adding a source for an existing semantic type through one isolated adapter/normalizer registration, and adding a semantic record type through one typed schema/storage/projector registration, without source/type branches in the generic capture, snapshot, factor-runner, lineage, usage, or consumer path
-- Querying how often declared data is captured and actually consumed, and running an immutable strategy-to-source data-quality review that exposes required-but-missing inputs and the decisions they affected
+- *Demoted (owner decision 2026-10-20, #1410; init.md rules 23 and 24):* querying how often declared data is captured and actually consumed, and running an immutable strategy-to-source data-quality review that exposes required-but-missing inputs and the decisions they affected. Restore this item when the core path is green in production for two nights in a row, the exit condition of `governance/freezes/core-path-2026-10-12.md`
 
-"Continuously producing" means the versioned, owned curated universe has graduated
+"Continuously producing" means the versioned production universe has graduated
 beyond canary/shadow operation and meets explicit per-module applicability, usable
 coverage, freshness, and traceability objectives across real source refreshes. An
 `unavailable`, stale, unresolved, or sentinel placeholder does not count as a
@@ -47,17 +47,18 @@ This success state proves a reproducible research product and an honest evaluati
 It does not by itself prove that any factor, tier, screen, or strategy produces positive
 alpha; that requires a separate empirical claim and evidence.
 
-## Capabilities Delivery Ledger (SSOT Status)
+## Capabilities and where they live
 
-| Capability / Factor Module | Architecture Reference | Target Scope | Current Status | Issues & Deliverables |
-|---|---|---|---|---|
-| **Module 1: PEG (Switchable Conventions)** | `factors.base.peg` | Historical CAGR, Consensus, Guidance | **Partial [Live]** | Historical CAGR is live; Consensus and Guidance are explicitly unsourced (#284) |
-| **Module 2: Gross Profit per Employee** | `factors.base.gross_profit_per_employee` | Operating AI leverage | **[Live]** | Deployed in TOPT pipeline; split-adjustment tracked in #770 |
-| **Module 3: Supply Chain / Value Chain** | `factors.base...` | Upstream-downstream alpha | **[Building]** | Planned under Milestone M2-B (#772) |
-| **Module 4: Analyst Backtesting** | `apps/data-engine/sources/moomoo` | Historical analyst accuracy | **[Designed]** | Blocked on moomoo live data path (#771) |
-| **Module 5: ETF-as-Virtual-Company** | `factors.base.etf_virtual_company` | Holdings fundamentals aggregation | **[Live]** | Holdings aggregation and virtual valuation verified |
-| **Module 6: Pure-Blood Company Screening** | `factors.base.theme_purity` | Segment revenue exposure purity | **[Building]** | Core logic implemented; full production schedule under M2-B (#772) |
-| **Module 7: Three-Tier Valuation Gap** | `factors.composite.three_tier_valuation` | P/GP tier gap against GPPE (definition 1.0.0, #1235) | **[Live]** | Composite factor verified; definition locked in contracts |
-| **Xiaohongshu Card Deck Generation** | `contracts/research_cards` | Automated material export | **[Building]** | Contract defined; Next.js server-side Satori PNG export in progress |
-| **Conversational Research Q&A** | `apps/llm-service` MCP | Natural language fact retrieval | **[Building]** | Tier 3 in roadmap; served via FastAPI MCP endpoint (`apps/llm-service`); web prototype routes retired |
+Delivery state lives on the issues and on the dashboards (`/admin/datahub`), not in this file.
 
+| Capability / Factor Module | Architecture Reference | Target Scope |
+|---|---|---|
+| **Module 1: PEG (Switchable Conventions)** | `factors.base.peg` | Historical CAGR, Consensus, Guidance |
+| **Module 2: Gross Profit per Employee** | `factors.base.gross_profit_per_employee` | Operating AI leverage |
+| **Module 3: Supply Chain / Value Chain** | `factors.base.supply_chain_exposure` | Upstream-downstream alpha |
+| **Module 4: Analyst Backtesting** | `factors.base.analyst_track_record` | Historical analyst accuracy |
+| **Module 5: ETF-as-Virtual-Company** | `factors.base.etf_virtual_company` | Holdings fundamentals aggregation |
+| **Module 6: Pure-Blood Company Screening** | `factors.base.theme_purity` | Segment revenue exposure purity |
+| **Module 7: Three-Tier Valuation Gap** | `factors.composite.three_tier_valuation` | P/GP tier gap against GPPE (definition 1.0.0, #1235) |
+| **Xiaohongshu Card Deck Generation** | `truealpha_contracts.research_cards` | Automated material export |
+| **Conversational Research Q&A** | `apps/llm-service` MCP | Natural language fact retrieval |

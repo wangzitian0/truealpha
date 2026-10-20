@@ -12,11 +12,11 @@ the authoritative doc) → [`CLAUDE.md`](CLAUDE.md) (working rules).
 ```
 apps/data-engine    Python  ingestion into immutable raw objects + Postgres lineage/staging
 apps/llm-service    Python  FastAPI: MCP endpoint (priority) + /chat (Tier 3)
-apps/app-web        TS/Bun  Next.js — reads mart via the mart_readonly role, no API hop (strategy runs live; seven-module dashboard read pending #41)
+apps/app-web        TS/Bun  Next.js — reads mart via the mart_readonly role, no API hop
 common/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
 common/factors        Python  the ONLY place computation logic lives (base / composite / shared)
 common/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
-db                  SQL     raw / staging / mart / dagster schemas + mart_readonly role
+db                  SQL     raw / staging / mart / dagster / app schemas + mart_readonly role
 ```
 
 ## Quickstart
@@ -50,15 +50,13 @@ TOPT example, quality objectives, and the boundary with confidence calibration a
 
 The continuous-confidence formula and its sensitivity table are documented in
 [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
-Its DTOs live in `common/contracts`. The evaluator and the report builder were
-deleted in #1239, because no deployed path called them.
+Its DTOs live in `common/contracts`.
 
 ### Production TOPT orchestration
 
 Dagster (`apps/data-engine/src/data_engine/dagster_defs.py`) is the single orchestration authority for Production TOPT runs.
 The scheduled job (`topt_live_pipeline`, driven by `topt_live_schedule`) and the manual trigger sensor (`pipeline_trigger_sensor`) execute capture, core materialization, plausibility checks, and pointer advancement.
-Downstream consumers read the governed head (`mart.current_pointer`) through `mart_readonly`.
-The manual TOPT CLI scripts were deleted in #1272 because Dagster owns all TOPT execution.
+Downstream consumers read the governed head through `mart.served_head` and `mart_readonly`.
 
 ## Deployment
 
@@ -68,32 +66,4 @@ infra2 owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres
 the environment-specific S3-compatible storage binding, and every deployment side
 effect. The application pins only the versioned `infra2-sdk` request contract.
 
-Those two images are the current scaffold, not a complete Production release. Gate 4
-requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every service,
-migration, catalog/SLO version, and configuration hash in one signed release manifest;
-manual host sweeps cannot satisfy scheduled or promotion evidence.
-
-The local tool below validates and renders a release-only `DeployRequest v1` as canonical
-JSON. It has no transport or deployment side effects. The manual `Deploy release`
-workflow sends that exact payload to infra2 and succeeds only after the matching infra2
-receiver run succeeds; its receiver URL is the staging evidence required for Production.
-The workflow remains intentionally unusable until infra2 issue #500 enables the
-TrueAlpha receiver/profile and exact receipt identity.
-
-```bash
-uv run python tools/app_deploy_request.py \
-  --request-id truealpha-run-12345678 \
-  --deploy-type staging \
-  --version-ref v1.2.3 \
-  --source-sha 1234567890abcdef1234567890abcdef12345678 \
-  --source-run-url https://github.com/wangzitian0/truealpha/actions/runs/12345678 \
-  --source-run-id 12345678
-```
-
-## Status
-
-**Walking skeleton; Gate 0 is active.** Initial reconnaissance and runtime/contracts
-foundations exist, but the executable interfaces are not frozen until semantic, source,
-lineage, research-oracle, and coverage/SLO closure issues #56-#61 pass. Factor
-implementations remain registered stubs while the point-in-time path is built. CI is
-path-filtered per app (`.github/workflows/`).
+Releases follow [`docs/release-protocol.md`](docs/release-protocol.md).

@@ -18,11 +18,11 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 ## 1. Core Design Principles (hard constraints, not to be violated)
 
 1. **Point-in-time correctness is priority one.** Distinguish `valid_time` (the period the data describes) from `transaction_time` (when the data became knowable). A restatement always produces a new vintage — never overwrite an old record. Factor computation and backtesting always operate on "the data that was visible as of a specific point in time."
-2. **Computation logic is allowed to exist in exactly one place**, implemented in `libs/factors` and invoked by data-engine/Dagster. `llm-service` and the App consume materialized outputs through typed mart read contracts; they never invoke factor computation. The App layer is only allowed to do **deterministic reformatting**: sorting, filtering, pagination, unit conversion, simple within-row arithmetic that doesn't span tables (e.g., "change vs. prior period"). Any logic that jointly computes a new metric across factors or time points must go back into `libs/factors` and be materialized into mart — it must not be computed on the fly in the Next.js backend. Use this concrete rule wherever the boundary feels blurry. Enforced since #727 by `tools/check_app_layer_aggregation.py` (armed in `ci-web`): `sum(`, `avg(` or `over (partition` in `apps/app-web/src/server/mart/*.ts` is CI-red outside a named allow-list — added after #723 landed a fund-level weighted mean in that layer, contradicting its own file header, with every gate green. **This includes screening/tagging logic** (e.g., the three-tier valuation framework, Section 7 module 7) — it reads other factors' mart outputs, but it is still a factor (a "composite factor," Section 6), not app-layer business logic.
+2. **Computation logic is allowed to exist in exactly one place**, implemented in `common/factors` and invoked by data-engine/Dagster. `llm-service` and the App consume materialized outputs through typed mart read contracts; they never invoke factor computation. The App layer is only allowed to do **deterministic reformatting**: sorting, filtering, pagination, unit conversion, simple within-row arithmetic that doesn't span tables (e.g., "change vs. prior period"). Any logic that jointly computes a new metric across factors or time points must go back into `common/factors` and be materialized into mart — it must not be computed on the fly in the Next.js backend. Use this concrete rule wherever the boundary feels blurry. `tools/check_app_layer_aggregation.py` enforces it in `ci-web`: `sum(`, `avg(` or `over (partition` in `apps/app-web/src/server/mart/*.ts` fails CI outside a named allow-list. **This includes screening/tagging logic** (e.g., the three-tier valuation framework, Section 7 module 7) — it reads other factors' mart outputs, but it is still a factor (a "composite factor," Section 6), not app-layer business logic.
 3. **Factors never know their data's provenance.** Factors consume provenance-neutral typed semantic records: an opaque `input_id`, typed subject identity, value/unit/currency where relevant, valid period, confidence, and the snapshot cutoff. They must not receive or branch on `source`, `raw_ref`, accession, or extractor metadata. The runner uses the opaque IDs to record exact consumed-input lineage outside factor computation.
 4. **LLM surfaces read only authorized typed `mart` projections.** MCP and `/chat` call bounded `ResearchQueryService` methods over a `mart_readonly` repository; they never execute arbitrary model-generated SQL or recompute factors. A trusted server adapter derives `AccessContext` from the browser session, delegated MCP OAuth credential, or service identity and authorizes the exact resource before the repository issues mart SQL or retrieves an artifact. Tool arguments never supply tenant, principal, role, entitlement, or publication authority. The database role has a `statement_timeout` (5s recommended), and repositories enforce pagination and row caps. The App implements the same semantic read contract and authorization decision directly against mart.
 5. **The App reads the database directly** (querying the mart and app schemas through server-only typed repositories), not through FastAPI. FastAPI's scope is narrowed to LLM-call orchestration only. Direct database access does not bypass authorization: publication policy is checked before a mart query, and forced owner RLS is a second boundary for private app rows.
-6. **Every external call — data vendors and model providers alike — goes through the global source gateway with a declared capacity** — no module decides for itself whether to call. Each source declares its capacity (rate window, daily/monthly budget, concurrency) once, per ledger seat, in the registry (`source_registrations.LEDGER_CAPACITIES`; the gateway derives its view from it), every call is recorded in `api_call_ledger`, and a call that would exceed the declared capacity is refused or queued rather than fired: capacity is part of the capture logic, not an afterthought inside one adapter. A credential that serves several environments (the Twelve Data key) declares each environment's share of its allowance, and each environment enforces its share from its own ledger, since environments never share one (§3.1). Exhaustion is a named outcome (`deferred_capacity` on the cell, `capacity refused` in the tick summary), never "the vendor had no data". This applies to SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo and the LLM extraction provider alike (owner decision 2026-09-04; until then only moomoo was gated). End-user access only reads completed materialized results and never triggers a source or model call, so user entitlements do not allocate or bypass source quota. Pipeline-wide source budgeting and scheduling remain separate from consumer authorization; any future user-funded source-demand product requires a new architecture decision. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
+6. **Every external call — data vendors and model providers alike — goes through the global source gateway with a declared capacity** — no module decides for itself whether to call. Each source declares its capacity (rate window, daily/monthly budget, concurrency) once, per ledger seat, in the registry (`source_registrations.LEDGER_CAPACITIES`; the gateway derives its view from it), every call is recorded in `api_call_ledger`, and a call that would exceed the declared capacity is refused or queued rather than fired: capacity is part of the capture logic, not an afterthought inside one adapter. A credential that serves several environments (the Twelve Data key) declares each environment's share of its allowance, and each environment enforces its share from its own ledger, since environments never share one (§3.1). Exhaustion is a named outcome (`deferred_capacity` on the cell, `capacity refused` in the tick summary), never "the vendor had no data". This applies to SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo and the LLM extraction provider alike (owner decision 2026-09-04). End-user access only reads completed materialized results and never triggers a source or model call, so user entitlements do not allocate or bypass source quota. Pipeline-wide source budgeting and scheduling remain separate from consumer authorization; any future user-funded source-demand product requires a new architecture decision. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
 7. **Schema changes must raise an active alert.** Core point-in-time tables use dlt's frozen/contract mode, not the default auto-evolve.
 8. **Scheduling has exactly one authority: Dagster.** Local reconnaissance may use one-shot scripts, but Dagster is introduced with the first executable Gate 1 snapshot/factor slice and is the only authority for real recurring runs — see Section 8.
 9. **Observability is centered on the Dagster UI** — on the condition that Dagster's own runtime metadata is persisted (see Section 6), not left on its default local storage.
@@ -31,17 +31,17 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side; the mart winner comes from the metric registry's per-field `source_priority` (Section 6, "Source fusion"), and the ruleset version is part of mart lineage. Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property, never defaulted to the insert clock, and every staging row also carries `recorded_at` (ingestion clock, audit only) plus — for parsed facts — a `mapping_version`, so "the data changed" and "the cleaning logic changed" stay distinguishable forever.
 13. **Scope is immutable and explicit.** `UniverseRef` contains the universe ID, version, and membership or resolver hash. Every capture, snapshot, factor invocation, screen, strategy, report, SLO evaluation, and audit binds that exact reference plus `as_of` and `valid_on` where applicable. Research Catalog, applicability, capture, and SLO identities remain separate immutable contracts and are bound together by the release manifest. A mutable "current universe" or an unversioned ticker list is never a valid execution scope.
 14. **Applicability is frozen before execution and scope cannot shrink to obtain green status.** Required/optional/not-applicable cells are approved before a run. Removing a subject, invocation, theme, scenario, or required cell creates a new catalog/SLO version, records product-owner approval, and narrows the claim; it cannot retroactively make a failed gate pass. The supported workflow must also onboard an issuer and theme that were absent from development evidence without changing factor or consumer code.
-15. **Capture completeness is row-level, not job-level.** Each capture run records every required `(scope, subject or instrument, domain, partition or vintage)` cell as a capture obligation. `staging.capture_observation_obligations` binds each obligation to the observation that satisfies it. That observation carries the raw capture, normalized record, confidence, times, mapping/policy versions, and lineage. `mart.topt_capture_status` gives the obligation, success, unchanged, unavailable, skipped and failed counts and a `complete` flag for each run. (#1238 retired the unused `CaptureScope`/`CaptureManifest` types that first described this rule.) Missing required cells fail even when Dagster is green or raw payload counts look plausible. #58/#61 own the contracts, #27/#51/#67 emit the evidence at their bounded scopes, and #68 independently audits the complete Production shadow candidate before #54 may record authoritative graduation.
+15. **Capture completeness is row-level, not job-level.** Each capture run records every required `(scope, subject or instrument, domain, partition or vintage)` cell as a capture obligation. `staging.capture_observation_obligations` binds each obligation to the observation that satisfies it. That observation carries the raw capture, normalized record, confidence, times, mapping/policy versions, and lineage. `mart.topt_capture_status` gives the obligation, success, unchanged, unavailable, skipped and failed counts and a `complete` flag for each run. Missing required cells fail even when Dagster is green or raw payload counts look plausible.
 16. **V1 total return uses unadjusted bars plus explicit corporate-action lifecycle events.** The simulator applies declaration/knowability, ex, effective, record, and pay semantics exactly once through a monotonic event clock. Adjusted-close data may be retained for reconciliation but cannot be combined with separately applied splits or dividends. A6 allows one bounded `preview` deviation (split-adjusted returns, no events) until #1121 lands.
 17. **Labor efficiency is a named metric in the metric forest, and the forest keeps diversity** (owner decisions 2026-09-17, 2026-10-09 #1176, 2026-10-12 #1235; `docs/metric-forest.md`). Two metrics are live. `gppe_uniform_charge_v0` uses total assets as the capital base for every issuer. `gppe_banking_tce_v1` uses measured tangible common equity and applies to financial issuers only. Neither has a ratio test or a silent fallback. A new formula is a new node with a new key, not a branch in an old one. The operating component and the financial component of one issuer stay a target tree of the forest (#528). A negative value is a fact. The versioned definition records whether it is a valid low signal, and the output invariants assert exactly that.
 18. **Evidence quality is a continuous score, and dashboards carry the verdict** (owner decision 2026-10-15, #1333; ADR A8). A holdout, a golden or an independent check raises the score of a metric. Its absence never blocks a row. Custodian labels and external evaluators are optional evidence. Changed logic gets a new version.
-19. **Every source has a recorded prior and a recorded budget.** The source registry holds each source's prior reliability, declared capacity and known limits (rights, retention, SLA). The ledger records every call. Unknown rights are a visible dashboard flag on the source. An over-budget projection defers the call with a named reason (`deferred_capacity`). Neither stops the source from serving rows.
+19. **Every source has a recorded prior and a recorded budget.** The source registry holds each source's prior reliability, declared capacity and known limits (rights, retention, SLA). The ledger records every call. An over-budget projection defers the call with a named reason (`deferred_capacity`). A deferral does not stop the source from serving rows. No source-rights dashboard flag exists: this is a single-user project (owner decision 2026-10-20, #1410).
 20. **Continuous operation is read from natural refreshes on a dashboard.** Each source class declares cadence and maximum age. The served-freshness view (`mart.served_head`) shows age against that limit. Retries, reparsing unchanged bytes and replayed fixtures do not count as a refresh. A stale head is served with its age and a reason code. It is withheld at the `withhold` limit.
 21. **Production consumers need TLS and authentication.** Every non-local MCP, App, `/chat`, report and artifact endpoint requires both. Database and raw-object backups exist and run on a schedule. The owner approves each production release (AGENTS.md). Dashboards show restore age and capacity. No separate drill, custodian or reviewer signature gates a release.
-22. **Extension is registry-driven and deliberately static.** Content-hashed `SourceRegistry` and `SemanticTypeRegistry` snapshots are authenticated by the signed release manifest. They resolve source adapters/normalizers and typed normalized models/factor-input projectors/repositories. Adding a source for an existing semantic type changes only source-owned code, registrations, policies, and tests. Adding a record type inside an existing domain changes only its typed model, storage/migration, projector, registration, and tests. Generic capture, manifest, snapshot, Dagster composition, factor execution, lineage, usage, and review code must not branch on source or record type. A new domain or new business meaning remains an explicit contract/factor/catalog change. V1 uses checked-in registrations at process start, not dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts. **Concretely for metrics: adding one is a registry edit, never a migration and never an edit to generic transport code (see `docs/architecture-decisions/A7-standard-to-wide-row-loop.md`).** Two historical violations are recorded as resolved: migration `20260908T1027` removed the enumerated `CHECK` constraint on `staging.strategy_backtest_inputs.input_key`, and `strategy_bridge.py` dynamically resolves periodic metrics from `METRICS` to prevent branching on record types.
-23. **Data usage is automatic, idempotent infrastructure evidence.** Capture manifests, repositories, snapshot selection, and factor/strategy runners record append-only semantic-use identities outside factor code. Usage views distinguish planned demand, capture/normalization evidence, snapshot selection, factor consumption, and strategy consumption. Retries do not double-count one semantic use, missing telemetry is an error rather than zero use, and source attribution is recovered through lineage rather than exposed to a factor. V1 deliberately excludes page-view/query analytics so the App remains strictly `mart_readonly`.
-24. **Strategy quality review starts from expected data, not successful outputs.** The framework compiles source-neutral `DataRequirement` records from the immutable strategy, factor, and execution/return-rule graph for every scheduled cutoff and applicable subject, then left-joins actual capture, snapshot, consumption, lineage, rights, freshness, and quality evidence. Missing data that suppresses a candidate or produces no trade remains a failed expected cell with affected decisions; undeclared consumption or broken reverse lineage also fails. Observed low usage can prioritize remediation but can never relax applicability, retention, source policy, or an SLO retroactively.
-25. **Native Decimal implementations in `libs/factors` are the computation. No engine is a data or semantic authority.** Each base factor computes its value in Decimal Python. That value is the source of truth for monetary results, and it is the value that reaches `mart`. Serializable TrueAlpha definitions are versioned `truealpha_contracts.ast` expressions. The Polars AST compiler is a test-time reproducibility oracle in `libs/factors/tests/support/expression_oracle`. Tests compile each expression through it and check that it reproduces the Decimal value. No deployed path imports it. A5 selected VectorBT as the backtest engine, but the repository never adopted it. The backtest engine is `factors.backtest.engine` (#758). It is a Decimal simulation that reads its execution, transaction-cost, total-return and sizing rules from the strategy definition. Only code inside `libs/factors` computes factors or simulates portfolios. Its inputs are provenance-neutral records projected from durable PIT snapshots and the stored price series. No engine or oracle may crawl or select vintages, resolve membership, infer confidence or lineage, combine adjusted prices with explicit corporate actions in one return, or replace Decimal monetary logic. `ExpressionEngineExecutionBinding` pins one exact factor-expression runtime — `distribution="polars"`, version, release commit, runtime artifact and lock digests — plus its adapter. `StrategyEngineBinding` carries that binding together with the strategy identity. A backtest run pins its engine by `ENGINE_ID` in its `run_id`, together with the definition hash, the input snapshot and the price snapshot. No binding pins the operator set; A5 records why the Qlib operator-registry digest was dropped rather than reproduced as a placeholder. Native implementations also stay valid for graph and other computations that do not fit a columnar matrix-expression model. (Qlib held the expression role until 2026-09-23; see `docs/architecture-decisions/A5-polars-vectorbt-engine.md`.)
+22. **Extension is registry-driven and deliberately static.** Content-hashed `SourceRegistry` and `SemanticTypeRegistry` snapshots are authenticated by the signed release manifest. They resolve source adapters/normalizers and typed normalized models/factor-input projectors/repositories. Adding a source for an existing semantic type changes only source-owned code, registrations, policies, and tests. Adding a record type inside an existing domain changes only its typed model, storage/migration, projector, registration, and tests. Generic capture, manifest, snapshot, Dagster composition, factor execution, lineage, usage, and review code must not branch on source or record type. A new domain or new business meaning remains an explicit contract/factor/catalog change. V1 uses checked-in registrations at process start, not dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts. **Concretely for metrics: adding one is a registry edit, never a migration and never an edit to generic transport code (see `docs/architecture-decisions/A7-standard-to-wide-row-loop.md`).**
+23. **Data usage is automatic, idempotent infrastructure evidence.** *Demoted (owner decision 2026-10-20, #1410): no deployed code builds the usage views. Restore this rule when the core path is green in production for two nights in a row, the exit condition of `governance/freezes/core-path-2026-10-12.md`.* Capture manifests, repositories, snapshot selection, and factor/strategy runners record append-only semantic-use identities outside factor code. Usage views distinguish planned demand, capture/normalization evidence, snapshot selection, factor consumption, and strategy consumption. Retries do not double-count one semantic use, missing telemetry is an error rather than zero use, and source attribution is recovered through lineage rather than exposed to a factor. V1 deliberately excludes page-view/query analytics so the App remains strictly `mart_readonly`.
+24. **Strategy quality review starts from expected data, not successful outputs.** *Demoted with rule 23 (owner decision 2026-10-20, #1410): no deployed code builds the review. The restore trigger of rule 23 applies.* The framework compiles source-neutral `DataRequirement` records from the immutable strategy, factor, and execution/return-rule graph for every scheduled cutoff and applicable subject, then left-joins actual capture, snapshot, consumption, lineage, rights, freshness, and quality evidence. Missing data that suppresses a candidate or produces no trade remains a failed expected cell with affected decisions; undeclared consumption or broken reverse lineage also fails. Observed low usage can prioritize remediation but can never relax applicability, retention, source policy, or an SLO retroactively.
+25. **Native Decimal implementations in `common/factors` are the computation. No engine is a data or semantic authority.** Each base factor computes its value in Decimal Python. That value is the source of truth for monetary results, and it is the value that reaches `mart`. Serializable TrueAlpha definitions are versioned `truealpha_contracts.ast` expressions. The Polars AST compiler is a test-time reproducibility oracle in `common/factors/tests/support/expression_oracle`. Tests compile each expression through it and check that it reproduces the Decimal value. No deployed path imports it. A5 selected VectorBT as the backtest engine, but the repository never adopted it. The backtest engine is `factors.backtest.engine` (#758). It is a Decimal simulation that reads its execution, transaction-cost, total-return and sizing rules from the strategy definition. Only code inside `common/factors` computes factors or simulates portfolios. Its inputs are provenance-neutral records projected from durable PIT snapshots and the stored price series. No engine or oracle may crawl or select vintages, resolve membership, infer confidence or lineage, combine adjusted prices with explicit corporate actions in one return, or replace Decimal monetary logic. `ExpressionEngineExecutionBinding` pins one exact factor-expression runtime — `distribution="polars"`, version, release commit, runtime artifact and lock digests — plus its adapter. `StrategyEngineBinding` carries that binding together with the strategy identity. A backtest run pins its engine by `ENGINE_ID` in its `run_id`, together with the definition hash, the input snapshot and the price snapshot. No binding pins the operator set; A5 records why the Qlib operator-registry digest was dropped rather than reproduced as a placeholder. Native implementations also stay valid for graph and other computations that do not fit a columnar matrix-expression model. `docs/architecture-decisions/A5-polars-vectorbt-engine.md` records why Qlib left the expression role.
 26. **Consumer identity and research access are governed outside computation.** The additive `app` schema stores principals, memberships, append-only entitlement grants/revocations, immutable release-bound publication policy sets, owner-only private object locators, authorization decisions, and content-free audit events. Browser, App, chat, Claude Code, Codex, and service-agent access uses the same server-derived `AccessContext` and stable authorization contract. Private conversation/document content is owner-only by default; administrators may see policy-permitted materialized strategy/backtest results and tenant-filtered non-content audit metadata, not private content. Only a policy-authorized administrator may record a request for an already registered immutable replay definition; that request cannot carry code, parameters, dates, source selectors, or execution inputs, and Dagster remains the sole execution authority. `AccessContext`, tenant, principal, role, entitlement, and publication identities never enter factors, engine expressions, `BacktestDataGateway`, `DecisionSnapshot`, or `ReplayEventStream`. Consumer reads resolve through a governed, access-controlled current-pointer to an immutable exact run per ADR A1 (`docs/architecture-decisions/A1-evidence-chain-in-database.md`); exact run identities stay queryable for reproducible reads and a bare mutable `latest` is never a read path.
 
 ---
@@ -57,7 +57,7 @@ L1 Storage layer          ── S3-compatible object storage: immutable source-
                            → Postgres staging (normalized, dual timestamps + mandatory confidence, see Section 6 DDL),
                               including the knowledge graph (entities + edges — this is where all entity resolution lives, see Section 6)
                               → mart (clean point-in-time result tables, flattened 2D projections of the KG where applicable)
-L2 Factor computation     ── libs/factors: native Decimal/graph factors (a test-time Polars AST oracle cross-checks the expressible ones), wrapped as Dagster assets with code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
+L2 Factor computation     ── common/factors: native Decimal/graph factors (a test-time Polars AST oracle cross-checks the expressible ones), wrapped as Dagster assets with code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
                               - base factors consume provenance-neutral views projected from durable PIT snapshots
                               - composite factors reload other factors' mart outputs; confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed
 L3 Analytics modules      ── the 7 concrete tools (Section 7)
@@ -85,12 +85,13 @@ finite invocation batch and never accepts caller-supplied planned cells. Each re
 binds the partition-resolver output and lookback window; recurring horizon completeness
 remains Dagster's responsibility. Usage and strategy-quality projections are
 read/audit slices over the same immutable manifests and lineage, not alternative pipelines.
+Both are demoted with rules 23 and 24.
 
 ### 2.2 Service Topology and Priority (the four services are not peers)
 
 - **Tier 0 (needed now)**: Postgres + S3-compatible raw archive + the ingestion part of data-engine (dlt adapters)
-- **Tier 1 (Gate 1 onward)**: `libs/factors`, the mart schema, and Dagster asset execution; the first real recurring run already uses Dagster
-- **Tier 2 (Gate 1 Staging through Gate 4 Production)**: persistent Dagster scheduling/UI plus Dokploy environments; Production serves the App and MCP today without a recorded graduation (#54); until #54 records it, its outputs are ungraduated shadow output that happens to be reachable, and every Gate 4 requirement still stands
+- **Tier 1 (Gate 1 onward)**: `common/factors`, the mart schema, and Dagster asset execution
+- **Tier 2 (Gate 1 Staging through Gate 4 Production)**: persistent Dagster scheduling/UI plus Dokploy environments; Production output is shadow output until #54 records Gate 4 graduation
 - **Tier 3 (Gate 3 consumption, deployed proof in Gate 4)**: MCP first, then reports/cards and the App; `llm-service`'s self-built `/chat` and `app-web` chat UI remain the last consumption surface
 
 The four application units exchange structured data only through Postgres. The
@@ -108,7 +109,7 @@ the immutable raw archive; object storage is not an App/LLM integration path.
 | Python package management | uv |
 | Data ingestion | dlt |
 | Orchestration/scheduling | Dagster (asset-based, code_version + data_version tracked; **runtime metadata explicitly pointed at Postgres's `dagster` schema, not the default local store**) |
-| Factor expression and backtest engine | Native Decimal implementations in `libs/factors` compute every factor. The Polars AST compiler (`truealpha_contracts.ast` expressions, compiled in `libs/factors/tests/support/expression_oracle`) is a test-time reproducibility oracle. `factors.backtest.engine` simulates portfolios in Decimal from the strategy definition's rules. VectorBT was selected in A5 and never adopted |
+| Factor expression and backtest engine | Native Decimal implementations in `common/factors` compute every factor. The Polars AST compiler (`truealpha_contracts.ast` expressions, compiled in `common/factors/tests/support/expression_oracle`) is a test-time reproducibility oracle. `factors.backtest.engine` simulates portfolios in Decimal from the strategy definition's rules. VectorBT was selected in A5 and never adopted |
 | Storage | Postgres for raw metadata/staging/mart/KG + S3-compatible object storage for immutable raw bytes (MinIO in Local/CI) |
 | TS package management/runtime | Bun |
 | App frontend | Next.js + TypeScript |
@@ -121,26 +122,32 @@ the immutable raw archive; object storage is not an App/LLM integration path.
 
 ### 3.1 Environment Model and Promotion Gates
 
-The runtime keeps six logical tiers because local tests, GitHub CI, and a future
-PR preview have different dependency-substitution semantics. The table below is the
-target active rollout, not a claim that every environment has passed its gate:
+Three deployed environments stay isolated: preview, staging and production. Each one
+answers one question, with the smallest scope that can prove the answer false.
 
-| Actual environment | Logical tier(s) | Purpose | Data policy |
-|---|---|---|---|
-| Local | `local_dev`, `local_test` | Development and fixture replay | Fixtures by default; developer-owned Compose Postgres + MinIO |
-| GitHub CI | `github_ci` | Code, DDL, image, security, and runtime-contract validation | Ephemeral fixtures/mocks; no real source credentials |
-| Staging | `staging` | Real pipeline, point-in-time replay, and bounded backtest validation | Real sources; isolated canary universe and credentials |
-| Production | `production` | Serving since 2026-07 (App behind login, MCP, daily TOPT/QQQ/canary ticks) but **ungraduated**: authoritative research only after #54 records Gate 4 graduation | Exact approved Research Catalog/universe; isolated credentials and storage; rule-19 source attestations still missing (#60) |
+- **Preview proves that the release works.** It boots on the platform, applies its
+  migrations and reaches every source.
+- **Staging proves accuracy.** It runs every code path on live data for a small fixed
+  sentinel set, and the dashboards and the sentinel known answers agree.
+- **Production pursues completeness.** It runs the full production universe (`vision.md`)
+  and keeps the accuracy checks of staging.
 
-`preview` remains a logical tier but no preview environment is provisioned until
-the Web application needs per-PR visual review.
+Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime
+names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `staging`,
+`production`), because each one substitutes dependencies differently.
+
+This section states the principle only. The scope, sentinel set, cadence and trigger of
+each environment have one source, the environment contract of #1416. The delivery tiers
+(what each tier must catch, and its time budget) are in
+`docs/architecture-decisions/A4-the-iteration-loop-is-the-product.md`. Do not copy either
+into a document.
 
 Promotion is artifact-based: PRs prove code in CI; one signed release manifest then
 runs against real sources in Staging; Production receives that exact complete manifest
-only after the Staging pipeline/backtest gates and a human approval. Staging and
-Production never share writable Postgres databases, S3 buckets, Dagster metadata,
+only after the Staging pipeline/backtest gates and a human approval. No two deployed
+environments share writable Postgres databases, S3 buckets, Dagster metadata,
 API ledgers, or Vault secret paths. Strategy computation remains in
-`libs/factors`; environments only schedule and materialize versioned results.
+`common/factors`; environments only schedule and materialize versioned results.
 
 The promoted unit is a versioned release manifest, not one ambiguous application
 image. It binds the App, LLM service, data-engine/Dagster execution artifact,
@@ -154,31 +161,20 @@ executable connectivity and negative-network proof.
 
 ## 4. Repo Structure
 
-```
-/apps
-  /data-engine        Python: dlt pipelines + dagster assets/schedules/sensors
-  /app-web             TypeScript: Next.js frontend + data-display backend + chat UI (Tier 3)
-  /llm-service         Python: FastAPI, MCP endpoint (priority) + /chat SSE endpoint (Tier 3)
-/libs
-  /contracts           Python: sample-aware cross-module DTOs + storage/repository/backtest ports;
-                        no computation logic
-  /factors             Python: the single implementation of the seven modules; function signatures
-                        align with the executable Dagster asset convention frozen by Gates 0-1
-    /base              Factors that consume provenance-neutral views projected from PIT snapshots
-    /composite         Factors that consume other factors' mart outputs (e.g., module 7's three-tier tagging);
-                        confidence cannot exceed the minimum consumed confidence;
-                        a versioned stricter policy is allowed
-    /shared            Entity resolution (KG read/write) + LLM structured-extraction primitive,
-                        used by both base and composite factors, not reimplemented per module
-  /runtime             Python: environment/dependency manifest, Postgres/KG/S3 probes, and the
-                        boto3 immutable raw-object adapter; local/CI use Compose Postgres + MinIO,
-                        deployed environments receive the same DATABASE_URL/S3_* contract from infra2
-/db
-  /migrations          DDL for the five schemas: raw / staging / mart / dagster / app
-  /roles.sql           mart_readonly (incl. statement_timeout config) and other role permissions
-/.github
-  /workflows           CI triggered with path filtering
-```
+`README.md` ("Layout") lists the top-level directories. These rules hold for each part:
+
+- `common/contracts` holds the cross-module DTOs and the storage, repository and backtest
+  ports. It holds no computation logic.
+- `common/factors` is the one implementation of the seven modules. Its `base` factors read
+  provenance-neutral views of PIT snapshots. Its `composite` factors read other factors'
+  mart outputs, and their confidence cannot exceed the minimum consumed confidence. Its
+  `shared` package holds entity resolution and the LLM structured-extraction primitive. No
+  module reimplements them.
+- `common/runtime` holds the environment and dependency manifest, the Postgres/KG/S3 probes
+  and the immutable raw-object adapter. Every environment gets the same `DATABASE_URL` and
+  `S3_*` contract.
+- `db/migrations` is the schema source of truth for `raw`, `staging`, `mart`, `dagster` and
+  `app`. `db/roles.sql` holds the role permissions.
 
 ---
 
@@ -188,13 +184,13 @@ executable connectivity and negative-network proof.
 |---|---|---|
 | SEC EDGAR | Official structured financial data | `data.sec.gov/api/xbrl/companyfacts/CIK##########.json`; User-Agent must include an email. Financial companies have no gross-profit field, needs an industry branch. Headcount is free text, needs extraction with a fallback. |
 | yfinance | Zero-quota default base for daily prices and split events | Unofficial, no SLA. Its low source prior lowers row confidence. It is a normal critical-path source: it serves every universe, and a corroborating origin raises the score. Capture and reuse key is `(listing, session_date)` (#1333, #1352). |
-| Twelve Data | Corroborating source for daily prices and fundamentals | Plan limits 8 API credits/minute and 800/day on ONE key serving both environments: production spends 60 % (4/min, 480/day), staging 40 % (3/min, 320/day), each enforced from its own ledger (`TWELVE_DATA_ENVIRONMENT_SHARES`). An environment the split does not name (local, CI) has no share and is refused. One credit buys one `(listing, session_date)` close. A cell Twelve Data cannot serve stays served by the other origins at lower confidence. **Measured spend, 2026-10-15:** production spent 284 credits. The market-data refresh (21:15 UTC) spent 60, the TOPT tick (22:15) 42 and the QQQ tick (23:20) 178. Of the 178, 28 came after midnight. Staging spent 306 of its 320. **QQQ price refresh (#1277):** `qqq_price_refresh_pipeline` runs on weekdays at 21:35 UTC. It stores both daily series of the QQQ listings outside the TOPT symbols, one primary listing per issuer. The core values an issuer only when its series end at most `MAX_BAR_LAG_SESSIONS` (one) session before the close. A run after the close of session D serves the ticks of D and D+1. So each run refreshes the stalest ceil(N/2) of the N symbols: 2 × ceil(N/2) credits, about 90. A run spends at most floor(0.85 × share) − reserve − its own calls today. The reserve is the largest daily spend of the other callers over the last 7 complete UTC days in the ledger. Production gets 408 − 284 = 124, which covers the 90. Staging gets 272 − 306 < 0, so it fetches nothing. A larger plan changes two knobs: the 0.85 factor and the every-second-session cadence. |
-| LLM extraction provider | External source for prose-only fields (headcount, segment classification, disclosed relationships) | **Provisioned and calling (2026-09-10)**: `staging.api_call_ledger` records 17 `filing-extraction-model` calls, and module 6's segment-theme classifier invokes it per (issuer, filing, theme) with the served model recorded — `model:glm-5.3:…` appears on `mart.issuer_theme_purity` rows. `libs/factors/shared/extraction.py` is no longer a stub (#769, #803): it owns `select_single_candidate` and `select_exhaustive_partition`, and every rule identity is minted there. Enters like any other source: a `SourceRegistry` entry, a rule-19 rights/budget record, a declared capacity (requests per window, calls per day; the `filing-extraction-model` seat in `LEDGER_CAPACITIES`), every call recorded in `api_call_ledger` with its token cost, and an append-only invocation record per Section 9. The provider's calls are recorded but not yet admitted by the capacity gate: no lane binds a capacity scope around them (§11, rule-6 row). Never called from a factor or a consumer surface; replay reads the stored result — a second run of the same ask returns the recorded decision without reaching the provider. |
-| moomoo | Licensed terminal feed for K-lines, statements, analyst ratings and valuation detail. Rate-limited (bursts/30s), not a monthly quota — see below | **OpenD runs on the VPS and `moomoo-kline:v1` and `moomoo-financials:v1` fetch on schedule** (`release_fetch_proof`, 2026-10-14). The gated lanes call `get_analyst_consensus`, `get_rating_summary` (per-analyst rating history filtered to `recommendation_date_str <= cutoff`, `success_rate`, `excess_return`), and `get_valuation_detail` (`profit_growth_rate`) through `sources/moomoo.py` (#1333, #1354). Vendor timestamps are accepted evidence. A moomoo rating event is knowable at its vendor date, and the row carries the `vendor_timestamp` reason code and a lower time-quality factor. Fixtures live in `apps/data-engine/samples/moomoo/`. ETF weights and company-level supply-chain edges are not sourced from moomoo. |
+| Twelve Data | Corroborating source for daily prices and fundamentals | One key serves every environment. Each environment enforces its own share of the plan limit from its own ledger (`TWELVE_DATA_ENVIRONMENT_SHARES`; #1416 derives the shares from planned demand). An environment with no share (local, CI) is refused. One credit buys one `(listing, session_date)` close. A cell Twelve Data cannot serve stays served by the other origins at lower confidence. **QQQ price refresh (#1277):** `qqq_price_refresh_pipeline` stores the daily series of the QQQ listings outside the TOPT symbols. Its cadence and credit budget are in the docstring of `apps/data-engine/src/data_engine/lanes/qqq_prices.py`. |
+| LLM extraction provider | External source for prose-only fields (headcount, segment classification, disclosed relationships) | Module 6's segment-theme classifier calls it per (issuer, filing, theme) and records the served model on each `mart.issuer_theme_purity` row. `common/factors/src/factors/shared/extraction.py` owns the shared selection rules (`select_single_candidate`, `select_exhaustive_partition`) and mints every rule identity (#769, #803). The provider enters like any other source: a `SourceRegistry` entry, a rule-19 prior and budget record, a declared capacity (the `filing-extraction-model` seat in `LEDGER_CAPACITIES`), every call recorded in `api_call_ledger` with its token cost, and an append-only invocation record per Section 9. It is never called from a factor or a consumer surface. Replay reads the stored result: a second run of the same ask returns the recorded decision without a call to the provider. |
+| moomoo | Licensed terminal feed for K-lines, statements, analyst ratings and valuation detail. Rate-limited (bursts/30s), not a monthly quota — see below | OpenD runs on the VPS host. `moomoo-kline:v1` and `moomoo-financials:v1` fetch on schedule. The gated lanes call `get_analyst_consensus`, `get_rating_summary` (per-analyst rating history filtered to `recommendation_date_str <= cutoff`, `success_rate`, `excess_return`), and `get_valuation_detail` (`profit_growth_rate`) through `sources/moomoo.py` (#1333, #1354). Vendor timestamps are accepted evidence. A moomoo rating event is knowable at its vendor date, and the row carries the `vendor_timestamp` reason code and a lower time-quality factor. Fixtures live in `apps/data-engine/samples/moomoo/`. ETF weights and company-level supply-chain edges are not sourced from moomoo. |
 | Historical analyst ratings — fallback | Optional second route for a rating event | A second route for the same event raises the confidence of that event. Its absence does not block the moomoo row. |
-| ETF holdings weight data | **Confirmed (2026-07-07): SEC EDGAR N-PORT-P** | Monthly per-series filings, per-holding `pctVal` + CUSIP (verified on QQQ and ARKK; 2026-07-11 also on IVV, AGIX, MCHI). Pitfalls: the raw XML is `primary_doc.xml` (the filing's `primaryDocument` field points at the XSL-rendered HTML); multi-series trusts (e.g. ARK) must be queried by series ID via browse-edgar, not by trust CIK; foreign holdings carry CUSIP `000000000`, so `same_as` resolution needs an ISIN/name fallback. **SPY is a UIT and absent from SEC's fund-ticker mapping — proxy the S&P 500 with IVV/VOO.** The publicly available filing is the last month of each fiscal quarter (~1-3 months behind) — fine for defining a universe, not a live holdings feed. |
+| ETF holdings weight data | **Confirmed: SEC EDGAR N-PORT-P** | Monthly per-series filings, per-holding `pctVal` + CUSIP (verified on QQQ, ARKK, IVV, AGIX and MCHI). Pitfalls: the raw XML is `primary_doc.xml` (the filing's `primaryDocument` field points at the XSL-rendered HTML); multi-series trusts (e.g. ARK) must be queried by series ID via browse-edgar, not by trust CIK; foreign holdings carry CUSIP `000000000`, so `same_as` resolution needs an ISIN/name fallback. **SPY is a UIT and absent from SEC's fund-ticker mapping — proxy the S&P 500 with IVV/VOO.** The publicly available filing is the last month of each fiscal quarter (~1-3 months behind) — fine for defining a universe, not a live holdings feed. |
 
-**moomoo quota, corrected 2026-07-10**: moomoo's own "Authorities and Quota" docs only define two quota systems — a *subscription* quota (real-time push, tiered 100/300/1000/2000 by account assets/trade volume) and a *historical-candlestick* quota (per unique stock per rolling window, not per call). Fundamental/quote endpoints (`get_financials_statements`, `get_research_rating_summary`, `get_valuation_detail`, etc. — everything the Phase -1 moomoo audit actually uses) appear in neither table; they're only rate-limited (bursts per 30s), not capped at a monthly total. The "2,000 calls/month" figure that was previously written here conflated the subscription-quota tier ceiling with a call budget — there is no evidence for a real monthly cap on these endpoints. `moomoo_ledger.py`'s gate is kept anyway as a defensive throttle/audit trail (Section 1 rule 6's "no module decides for itself whether to call" principle still holds), not because 2,000/month is a real moomoo-side limit.
+**moomoo quota, corrected 2026-07-10**: moomoo's own "Authorities and Quota" docs only define two quota systems — a *subscription* quota (real-time push, tiered 100/300/1000/2000 by account assets/trade volume) and a *historical-candlestick* quota (per unique stock per rolling window, not per call). Fundamental/quote endpoints (`get_financials_statements`, `get_research_rating_summary`, `get_valuation_detail`, etc. — everything the Phase -1 moomoo audit actually uses) appear in neither table; they're only rate-limited (bursts per 30s), not capped at a monthly total. No evidence shows a monthly cap on these endpoints. `moomoo_ledger.py`'s gate stays as a defensive throttle and audit trail (Section 1 rule 6: no module decides for itself whether to call).
 
 **moomoo analyst-rating depth, confirmed 2026-07-10 (Path A)**: `get_research_rating_summary`'s per-analyst summary rows embed each analyst's own historical `rating_item_list` inline — DDOG alone has 20 analysts with 159 combined dated historical rating rows, plus moomoo-computed `success_rate`/`excess_return` per analyst. This is enough for module 4's per-analyst backtesting — see `apps/data-engine/samples/README.md` for the full findings and `apps/data-engine/samples/moomoo/` for the captured fixtures.
 
@@ -210,76 +206,9 @@ Five schemas: `raw`, `staging`, `mart`, `dagster` (Dagster's own run/event/sched
 - `transaction_time` — when the fact became **publicly knowable** (the DTO layer calls this `knowable_at`). Always set explicitly by the writer from a source property (filing date, publish time) — **never defaulted to the insert clock**. The failure mode this kills: a new source added in year N backfills five years of history; stamped with `now()` those rows are invisible to every historical as-of query, stamped correctly they are usable while `recorded_at` still tells the truth about when we got them.
 - `recorded_at` — when TrueAlpha ingested the row. Audit and reproducibility only; as-of resolution never reads it.
 
-The checked-in migrations still use a transitional `unified_id`. Gate 0 does not freeze
-that representation: #57 must distinguish issuer, security, and listing identities and
-#58 must bind exact selected rows and every domain policy into a durable snapshot. The
-target financial-fact shape below shows that semantic boundary; migration work must
-preserve legacy IDs as versioned aliases rather than rewriting history.
-
-```sql
--- RETIRED 2026-08-19 (see the note below). Kept as the record of what was intended,
--- not as a target. `staging.financial_facts` holds 0 rows in Production and its four
--- writers are statically unreachable.
-create table staging.financial_facts (
-    id                bigint generated always as identity primary key,
-    subject_kind      text not null,          -- 'issuer' or 'security', registry-constrained
-    subject_id        text not null,
-    metric            text not null,          -- canonical field name; registry: libs/contracts metrics.py
-    fiscal_period     text not null,          -- '2025Q4'
-    valid_time        daterange not null,     -- the period this data describes
-    transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
-    recorded_at       timestamptz not null default now(),  -- ingestion clock, audit only
-    value             numeric,
-    unit              text not null,
-    currency          char(3),
-    confidence        numeric not null check (confidence between 0 and 1),
-    source            text not null,
-    source_metric     text not null,
-    raw_ref           text not null,
-    mapping_version   text not null,
-    accession         text,
-    form              text,
-    is_restatement    boolean not null default false
-);
-
-create index idx_financial_facts_asof
-    on staging.financial_facts
-       (subject_kind, subject_id, metric, fiscal_period, transaction_time desc);
-```
-
-**`staging.financial_facts` is retired, and the reason is a layering error rather than a
-delivery failure.** It holds 0 rows in Production, and all four of its writers
-(`financial_facts_assets`, `sec_financial_facts`, `financial_facts_pipeline`,
-`mvp_medium_repository`) are statically unreachable from the composition root. It never
-acquired a writer because neither layer needed it where it sits:
-
-- **The datahub layer optimises for completeness and confidence.** Completeness is
-  row-level at OBLIGATION granularity (rule 15): a required `(scope, subject, domain,
-  partition)` cell either captured or did not. `raw.capture_*` plus
-  `staging.capture_normalized_observations` answer that for every cell, with per-cell
-  confidence, `parser_version` and `mapping_version`. Exploding one payload into one row
-  per metric adds nothing to "was the required cell captured".
-- **What this table uniquely offered — any metric, across periods, addressable by name —
-  is a FACTOR-layer need** (flexibility and traceability). But a factor may not read it:
-  rule 3 forbids factors from seeing `source`, `raw_ref`, or accession, and half of these
-  columns are exactly that. So the table sat in the datahub's schema solving the factor
-  layer's problem, in a shape the factor layer is not allowed to consume.
-
-The factor-input projection that does the job is `staging.strategy_backtest_inputs`
-(issuer, cutoff, `input_key`, `fiscal_period`, value, confidence, `knowable_at`). Its lack
-of a `source` column is REQUIRED by rule 3, not a gap; traceability is served by lineage
-recorded outside factor computation (rule 23) in `staging.evidence_nodes` /
-`evidence_edges`. `input_key` is validated against the metric registry before every
-insert (`is_registered_input_key`). Migration `20260908T1027` dropped the enumerated
-`CHECK`, so adding a metric is a registry edit and not a migration.
-
-Identity still matters and is unchanged: #57 must distinguish issuer, security and listing
-identities, migration work preserves legacy IDs as versioned aliases rather than rewriting
-history, and the transitional `unified_id` is not a second valid identity model. Note the
-open case: `mart.entity_display_resolution` currently resolves both
-`issuer:cik:0000320193` and `issuer:lei:HWUPKR0MPOU8FGXBT394` to AAPL, because the QQQ and
-TOPT universes mint issuer identities from different sources. Harmless while they run as
-separate pipelines; a prerequisite before they are one universe.
+**Identity.** #57 distinguishes issuer, security and listing identities. Migration work
+preserves legacy IDs as versioned aliases and never rewrites history. The transitional
+`unified_id` is not a second valid identity model.
 
 **Entity identity (owner decision 2026-09-17, #877).** No identifier scheme is canonical. An
 issuer, instrument, listing or fund is named by an opaque UUID, derived (UUIDv5) from the alias
@@ -290,8 +219,8 @@ and rewrite nothing, and every read resolves an alias at an explicit valid date 
 knowable-at time. The store is `staging.entities` / `entity_aliases` / `entity_relations`
 (migration `20260917T0412`, filled by the Dagster job `entity_identity_backfill`, never at
 boot); the ontology, rules, backfill and
-switch-over plan are `docs/entity-identity.md`. Until captures carry UUIDs (#877 PR-3) the
-legacy strings above remain the payload ids, each resolvable through its `legacy-id` alias.
+switch-over plan are `docs/entity-identity.md`. Until captures carry UUIDs (#877 PR-3), the
+legacy strings remain the payload ids, and each one resolves through its `legacy-id` alias.
 
 **Source fusion (staging → snapshot → mart).** Staging is evidence, the durable
 snapshot is the selected fact set, and mart is its materialized projection. Multiple
@@ -313,9 +242,7 @@ requested domain-selection policy version. The financial selection shape is:
 - **Bands for display.** High is a score of 80 or more. Medium is 60 to 79. Low is below 60. SEC plus moomoo agreeing can reach High. One SEC source can reach Medium. One yfinance source is Low and is still served and counted as available.
 - **No score blocks a row.** A low score is shown on the dashboard and carried to the consumer. It never turns a computable value into `unavailable`.
 
-**Where fusion is exercised (revised 2026-08-20).** The rule above outlived the table it
-was written against, so it is restated on the planes that carry data. Fusion is not
-homeless — it is UNEXERCISED, and the difference matters:
+**Where fusion is exercised.** The rule above applies on the planes that carry data:
 
 - **Evidence lives on the observation plane.** `staging.capture_normalized_observations`
   holds one row per `(obligation, semantic)` with its source, `parser_version`,
@@ -325,52 +252,29 @@ homeless — it is UNEXERCISED, and the difference matters:
 - **Selection is exercised at snapshot freeze.** `staging.topt_core_snapshots` is the
   durable "selected fact set", and every selected observation ID plus policy version is
   persisted in its manifest before any factor runs.
-- **Selection does not rank sources today.** `_load_observations` pins each obligation to
-  the source vintage of its terminal attempt. It refuses the run when that vintage holds
-  more than one candidate observation. The order `knowable_at desc, observation_id desc`
-  never decides, because a second candidate refuses the run. Ranking by `source_priority`
-  is not implemented in selection. This is a defect against rule 12 (#1333). Target: every
-  candidate is kept, the registry order selects the value, and a second candidate raises or
-  lowers the score through agreement. It never refuses the run.
-- **What is missing is a second source, not a plane.** Every financial metric resolves
-  from SEC alone today; Twelve Data is a second ORIGIN used for price reconciliation (a
-  disagreement measure). For prices `source_priority` chooses only when the primary is
-  absent: since #862 a cell Yahoo cannot serve is served by the next origin in the policy's
-  order, declared as a failover and graded on its own corroboration. A second source for an
-  existing metric does not activate fusion by itself. Selection must first rank by
-  `source_priority`. Registering the source must change only source-owned code and
-  registrations (rule 22).
+- **Target selection ranks by the registry.** Every candidate is kept. The registry order
+  of `source_priority` selects the value, and a second candidate raises or lowers the score
+  through agreement. A second candidate never refuses the run. #1333 records the gap between
+  this target and the snapshot freeze in code.
+- **Prices fail over in policy order.** A cell the primary origin cannot serve is served by
+  the next origin in the policy's order, declared as a failover and graded on its own
+  corroboration. Registering a second source for an existing metric changes only
+  source-owned code and registrations (rule 22).
 
-```sql
--- Target selection, NOT implemented at snapshot freeze today: highest-priority source first,
--- then restatement recency.
-select distinct on (o.subject_id, o.semantic_type)  o.*
-from staging.capture_normalized_observations o
-where o.knowable_at <= :as_of_timestamp
-  and array_position(:source_priority, o.source) is not null  -- registry order for the metric
-order by o.subject_id, o.semantic_type,
-         array_position(:source_priority, o.source),          -- fusion rank first
-         o.knowable_at desc, o.observation_id desc;
-```
-
-This SQL is a financial-domain illustration, not the public snapshot API or a generic
-"latest row" rule. It shows the target rule. The snapshot freeze does not run it. Every
-selected staging ID and policy version is persisted in the snapshot manifest before factor
-execution. Mart lineage points to that snapshot and its exact selected records, which in
-turn chain through mapping/extraction IDs to `raw_ref` and immutable bytes. Changing any
-selection policy creates a new snapshot/materialization; old evidence and results remain
-addressable.
+Mart lineage points to the snapshot and its exact selected records. They chain through
+mapping/extraction IDs to `raw_ref` and immutable bytes. Changing any selection policy
+creates a new snapshot/materialization; old evidence and results remain addressable.
 
 **Factor-input projection (`staging.strategy_backtest_inputs`).** The provenance-neutral
 projection factors actually consume, and the only shape rule 3 permits them to see. Its
 axes are `issuer x cutoff x metric x fiscal_period x vintage`:
 
 - `input_key` names a metric. It MUST validate against the metric registry
-  (`libs/contracts` `metrics.py`), never against an enumerated `CHECK` — see rule 22.
+  (`common/contracts/src/truealpha_contracts/metrics.py`), never against an enumerated `CHECK` — see rule 22.
 - `fiscal_period` is the period a value DESCRIBES, and is NULL for point-in-time
   observations (price, share count, headcount) which describe an instant. A metric may
   appear once per period per cutoff; that axis is what lets a multi-period factor live in
-  `libs/factors` instead of being pre-reduced in the capture layer.
+  `common/factors` instead of being pre-reduced in the capture layer.
 - **The period tag is a declared format, not a convention:**
   `<filing fiscal year>:<kind>:<start ISO date>:<end ISO date>`, e.g.
   `FY2025:FY:2025-01-01:2025-12-31`. The leading fiscal year is the FILING's, never the
@@ -379,28 +283,15 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   and a regex fails silently, as an empty series rather than an error.
 - `vintage` is `recorded_at`-ordered supersession: a restatement appends and wins by
   recency; history is never overwritten.
-- **History rows (#1139, #758).** `datahub/strategy_history.py` writes the rows of past cutoffs
-  from stored bytes only. The cutoffs are the first day of each of the last 36 months (00:00:00Z)
-  and each calendar quarter end of the strategy schedule in that window (23:59:59Z). The nightly
-  backtest evaluates the quarter-end cutoffs. The table also holds each issuer under its legacy
-  `issuer:lei:` id (#1257). The projector writes canonical entity ids only. The backtest reads
-  the rows of both generations at a cutoff and evaluates the canonical rows only. A fact is
-  admitted when its filed date is before the cutoff date. Its `knowable_at` is the end of the
-  filed day. Each input keeps its own filed date and its own `fiscal_period`. `last_close` is the
-  unadjusted close of the last session before the cutoff date. The share count is put on the
-  share basis of that close: a split after the count's basis date, and on or before the close's
-  session, multiplies it. The basis date of a cover-page count is its own date. The basis date of
-  a statement count is its filing date, because the filing restates it for an earlier split. The
-  product is knowable at the close (#1257). A re-run skips a row that exists with the same value
-  and `knowable_at`. The lane is `strategy_history_projection_pipeline`. The backtest raises
-  `ShareBasisError` when a winning share count is knowable before a split that the close of its
-  cutoff follows (#1270). Only a new projector run corrects such a row, so the lane runs on every
-  weekday at 20:07 UTC, before the nightly backtest.
+- **History rows (#1139, #758).** `datahub/strategy_history.py` writes the rows of past
+  cutoffs from stored bytes only, with zero vendor calls. Its module docstring holds the
+  cutoff, point-in-time, share-basis and idempotency rules. The lane is
+  `strategy_history_projection_pipeline`.
 - **Live rows (#429, #1262).** The deployed tick seeds the rows of its own cutoff from the
   captured cells of its run (`datahub/strategy_bridge.py`). `last_close` is the captured close.
-  The share count is put on the share basis of that close by the rule of the history rows
-  (`datahub/share_basis.py`). The splits come from the two stored daily series of the issuer's
-  listings. Any registered price origin may supply them, yfinance included (#1333). A wrong share
+  The share count is put on the share basis of that close by the rule in
+  `datahub/share_basis.py`, which the history rows also use. The splits come from the two
+  stored daily series of the issuer's listings. Any registered price origin may supply them, yfinance included (#1333). A wrong share
   basis gives a wrong number, so this guard is an integrity check and not a confidence score.
   When those series cannot prove the splits between the count's basis date and the
   close's session, the tick writes no share row for the issuer. The strategy then excludes the
@@ -410,75 +301,22 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   basis.
 - **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
-  computation (rule 23): `staging.evidence_nodes` / `evidence_edges`.
+  computation (rule 3): `staging.evidence_nodes` / `evidence_edges`.
 
-**Knowledge graph (replaces the old flat `symbol_mapping` table).** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal):
+**Knowledge graph.** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal). The tables are `staging.kg_entities`, `staging.kg_identifiers` and `staging.kg_edges`; `db/migrations` holds their DDL. These rules hold:
 
-```sql
-create table staging.kg_entities (
-    id            text primary key,
-    entity_type   text not null,             -- issuer | security | listing | analyst |
-                                               -- universe | theme | supply_chain_node
-    display_name  text not null
-);
-
--- Source identifier property rows locate source-specific entity nodes. Entity
--- resolution then traverses a same_as edge to the unified entity as of the
--- requested transaction-time cutoff.
-create table staging.kg_identifiers (
-    id                bigint generated always as identity primary key,
-    entity_id         text not null references staging.kg_entities(id),
-    source            text not null,
-    identifier_type   text not null,
-    identifier_value  text not null,
-    valid_time        daterange not null,
-    transaction_time  timestamptz not null,
-    recorded_at       timestamptz not null default now(),
-    confidence        numeric not null,
-    raw_ref           text not null
-);
-
-create table staging.kg_edges (
-    id                bigint generated always as identity primary key,
-    from_id           text not null references staging.kg_entities(id),
-    to_id             text not null references staging.kg_entities(id),
-    relation_type     text not null,          -- 'same_as' (cross-source ID crosswalk, e.g. CIK<->ticker<->
-                                               -- moomoo_code<->CUSIP/ISIN) | 'supplies_to' | 'holds' (ETF->company)
-                                               -- | 'covers' (analyst->company) | ...
-    valid_time        daterange not null,
-    transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
-    recorded_at       timestamptz not null default now(),
-    confidence        numeric not null,       -- edge evidence confidence; scenario propagation
-                                               -- enforces a versioned minimum but cannot infer causality
-    source            text not null,
-    raw_ref           text not null
-);
-
-create index idx_kg_edges_asof
-    on staging.kg_edges (from_id, relation_type, transaction_time desc);
-```
+- An entity has one type: issuer, security, listing, analyst, universe, theme or supply-chain node.
+- A source identifier row locates a source-specific node. Resolution traverses a `same_as` edge to the unified entity at the requested transaction-time cutoff.
+- An edge carries a relation type (`same_as` for the cross-source ID crosswalk, `supplies_to`, `holds` for ETF to company, `covers` for analyst to company), `valid_time`, an explicit `transaction_time`, `recorded_at`, `confidence`, `source` and `raw_ref`.
+- Scenario propagation enforces a versioned minimum edge confidence. Edge confidence alone cannot prove causality (rule 10).
 
 Mart's flattened 2D tables (e.g. a company-to-ticker lookup, or a supply-chain adjacency table for a given company) are SQL views/materializations over `kg_entities` + `kg_edges`, not separately maintained.
 
-The knowledge graph above predates the entity identity store (#877, `docs/entity-identity.md`). Its rows are evidence the store's backfill reads (the N-PORT/OpenFIGI ISIN crosswalk); its `company:*` nodes become aliases and its writers move to the store in #877 PR-5.
+The entity identity store (#877, `docs/entity-identity.md`) reads the graph's rows as evidence (the N-PORT/OpenFIGI ISIN crosswalk). Its `company:*` nodes become aliases, and its writers move to the store in #877 PR-5.
 
-Role permissions (`roles.sql`):
-
-```sql
-alter role mart_readonly set statement_timeout = '5s';
-grant select on schema mart to mart_readonly;
--- typed mart repositories additionally enforce cursor pagination and bounded row counts;
--- MCP/chat never accept arbitrary model-generated SQL
-```
+The `mart_readonly` role (`db/roles.sql`) reads `mart` only and has a statement timeout. Typed mart repositories add cursor pagination and bounded row counts. MCP and chat never accept model-generated SQL.
 
 Other tables: `api_call_ledger` (the external call ledger for every source and the model provider — rule 6; moomoo was its first tenant), `ingestion_health_log` (only business-specific metrics the Dagster UI doesn't already cover).
-
-**Data-accountability projections.** Generic runner and strategy materialization write
-idempotent input-to-output and output-to-decision lineage. `mart.data_usage_frequency`
-joins those edges with capture/snapshot/consumption records and the declared requirement
-graph; `mart.strategy_data_quality_review` starts from every expected requirement cell
-and left-joins the actual evidence. Neither projection may infer non-applicability from
-zero use, and neither becomes a second computation path for factors.
 
 **Governed research access.** Trusted browser, delegated-MCP OAuth, administrator,
 and service middleware construct a server-derived `AccessContext`; clients never
@@ -499,16 +337,21 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 
 ## 7. The Seven Analytics Modules
 
-**The module number is an identity, and `libs/factors`' `@factor(..., module=N)` must match this list**, checked by `libs/factors/tests/test_module_identity.py` against this exact section. A **feeder** (`@factor(..., kind="feeder")`) answers none of the seven questions on its own -- it is an input a composite reduces -- and registers the module it feeds rather than a number of its own, so it needs no item here and no question column (#855 B3). `price_to_sales` is one: the market-value input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per employee, so it registers `module=7` (#770). `price_to_gross_profit` is the second: market value / gross profit, the valuation basis of strategy definition 1.0.0, so it also registers `module=7` (#1235).
+**The module number is an identity, and `common/factors`' `@factor(..., module=N)` must match this list**, checked by `common/factors/tests/test_module_identity.py` against this exact section. A **feeder** (`@factor(..., kind="feeder")`) answers none of the seven questions on its own -- it is an input a composite reduces -- and registers the module it feeds rather than a number of its own, so it needs no item here and no question column (#855 B3). `price_to_sales` is one: the market-value input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per employee, so it registers `module=7` (#770). `price_to_gross_profit` is the second: market value / gross profit, the valuation basis of strategy definition 1.0.0, so it also registers `module=7` (#1235).
 
-Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
+Modules 1-6 are **base factors** (Section 4, `common/factors/src/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`common/factors/src/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
-1. **PEG**: switchable growth-rate conventions. *Status 2026-09-15: computed on every tick under the historical-CAGR convention only (`factors.base.peg`, #284); on the Staging TOPT head 14/20 issuers carry a PEG and the six that do not say why on the row — `mart.strategy_decisions.peg_reason_codes` (#837: `non_positive_growth` TSLA, ABBV; `insufficient_earnings_history` MU; three excluded upstream for a missing gross-profit fact or market-value input). The analyst-consensus convention reads moomoo `get_valuation_detail` `profit_growth_rate` once a lane calls it (#1333); the sample proves the field and no deployed lane calls it yet. No plane carries company guidance, so the switch has one deployed position until then.*
+1. **PEG**: switchable growth-rate conventions. `factors.base.peg` computes the historical-CAGR convention. An issuer without a PEG carries its reason on the row (`mart.strategy_decisions.peg_reason_codes`, #837). The analyst-consensus convention reads moomoo `get_valuation_detail` `profit_growth_rate` (#1333). No plane carries company guidance yet.
 2. **Gross profit per employee**: named metrics of the metric forest (rule 17): `gppe_uniform_charge_v0` for every issuer and `gppe_banking_tce_v1` for financial issuers. Headcount gaps are explicitly flagged rather than silently dropped; a negative value is a fact, not a defect — the datahub refuses only what cannot exist or cannot be computed (e.g. division by zero), and distortions are the factor layer's declared, versioned adjustments (docs/metric-forest.md §6.1)
-3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence. *Status 2026-09-10: `staging.kg_edges` holds 219 rows — `holds` 111, `same_as` 108, **`supplies_to` 0**. The first cause was a blocking rule, not recall: a disclosed concentration cannot be re-derived from anything the warehouse holds, and the rule demanded an oracle before any edge could land (#37). Owner decision 2026-10-15 (#1333): an extracted edge lands with its evidence span, a single-source prose prior and a confidence from the score. A second route, such as the filing text of the partner, raises it. `extract_supply_chain_relationships` exists in `datahub/standards/supply_chain_extraction.py` and `materialize_universe_supply_chain_exposure` does not call it yet.* *Status 2026-10-06 (#772): a Staging row for q3 read `no_disclosed_suppliers` while no extraction existed. The mart now separates two reasons. `no_supply_chain_extraction`: the graph holds no `supplies_to` edge for any issuer at the cutoff, so no extraction has run. `no_disclosed_suppliers`: edges exist for other issuers and none for this issuer.*
-4. **Analyst backtesting**: moomoo historical rating depth is confirmed. A rating event is knowable at its vendor date (reason code `vendor_timestamp`). It enters PIT scoring with a lower time-quality factor than an event with a second, public date. Backfilled rows are not hidden: the scoring window of an analyst states how many events carry only a vendor date. *Status 2026-10-15 (#1333): OpenD is live on the VPS and `moomoo-kline:v1` and `moomoo-financials:v1` fetch on schedule. The rating lane calls `get_analyst_consensus` only. `get_rating_summary` returns the per-analyst history and is not called by any deployed lane.*
+3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence. An extracted edge lands with its evidence span, a single-source prose prior and a confidence from the score (owner decision 2026-10-15, #1333). A second route, such as the filing text of the partner, raises it. The mart separates two reasons for an empty row: `no_supply_chain_extraction` (no `supplies_to` edge exists for any issuer at the cutoff) and `no_disclosed_suppliers` (edges exist for other issuers and none for this issuer).
+4. **Analyst backtesting**: moomoo historical rating depth is confirmed. A rating event is knowable at its vendor date (reason code `vendor_timestamp`). It enters PIT scoring with a lower time-quality factor than an event with a second, public date. Backfilled rows are not hidden: the scoring window of an analyst states how many events carry only a vendor date.
 5. **ETF virtual company**: SEC N-PORT-P is the confirmed holdings-weight source; calculations must respect report/filing lag, fund-series identity, instrument type, unresolved weight, currency, and period alignment
-6. **Pure-blood company screening**: LLM-assisted semantic classification of segment revenue. *Built 2026-09-10 (#772): `factors.base.theme_purity` -> `mart.issuer_theme_purity` -> `/research/themes`, over the accepted segment partitions in `staging.issuer_segment_revenue_facts`. The share's denominator is **consolidated** revenue and never the classified parts — a missed segment would otherwise raise every remaining share and rank the issuer with the worst data as the purest name. A declined classification is unclassified revenue rather than a negative, and coverage below the theme's governed floor refuses the row instead of ranking it. An issuer with one reportable segment is the whole company in one part, which balances by construction — so what decides it is the count the filer tags in its inline XBRL, never a sentence: the sentence rule (`rule:single-segment:v1`) landed Berkshire Hathaway as one segment and is withdrawn (#822). A withdrawn extractor's rows stay in the append-only plane and are absent to every reader, including the planner, so the issuer is re-extracted under the rule that replaced it. What a one-part row carries as its description — the only thing the classifier is shown for it — is the filer's own segment note (`us-gaap:SegmentReportingDisclosureTextBlock`, read through its `ix:continuation` chain), never the sentence the count happens to be tagged in: Visa's count sits in a sentence about expenses, on which every theme was declined, so v2 is withdrawn for v3 (#841); and a note can declare one segment without naming a business — Netflix's — on which the classifier, told only an id, answered as NVIDIA and ranked Netflix a semiconductor pure-play, so v4 carries the filer's nature-of-business opening beside the declaration and the classifier is told the issuer's ticker (#849). The rows are the governed run's MEMBERS only, under the issuer id that run gives them — resolved from the CIK the run's own capture fetched each member's financials under, since the `topt` members are LEI-keyed and the fact planes are CIK-keyed (#828). The parts are read from the segment revenue the filing TAGS on the business-segment axis of its inline XBRL; a filing that tags segments is answered from the tags — the union of its two context shapes, then each shape, then a short set completed by ONE positive off-axis corporate item (#835) — or refused, and a filing that tags none is refused (#830: 10 partitions against 3 on the same 106 filings; the printed-table regex reader that found the 3 — and once took Comcast's geography table for its segments — is retired, #833).*
+6. **Pure-blood company screening**: LLM-assisted semantic classification of segment revenue (`factors.base.theme_purity` -> `mart.issuer_theme_purity` -> `/research/themes`, #772), over the accepted segment partitions in `staging.issuer_segment_revenue_facts`. These rules hold:
+   - The denominator of a share is **consolidated** revenue, never the sum of the classified parts. A missed segment would otherwise raise every remaining share.
+   - A declined classification is unclassified revenue, not a negative. Coverage below the theme's governed floor refuses the row instead of ranking it.
+   - The parts are the segment revenue that the filing tags on the business-segment axis of its inline XBRL. A filing that tags no segments is refused (#830, #835).
+   - The segment count that the filer tags in its inline XBRL decides a one-segment issuer, never a sentence (#822). The description of a one-part row is the filer's segment note (`us-gaap:SegmentReportingDisclosureTextBlock`, read through its `ix:continuation` chain) plus its nature-of-business opening, and the classifier is told the issuer's ticker (#841, #849).
+   - The rows are the governed run's members only, under the issuer id that the run gives them (#828). A withdrawn extractor's rows stay in the append-only plane and are absent to every reader.
 7. **Three-tier valuation tagging** (composite): sorts a company into the traditional / tech / large-model-native tier (Vision, "large-model-driven company" framework) by reading module 2's gross-profit-per-employee output (and other base factors as needed), and values it against the tier's band of the definition's valuation basis (P/GP since strategy definition 1.0.0, #1235; one definition file supplies the bands to the strategy and the TOPT core engine) — this is a screening/interpretation layer expressed as a factor, not app-layer logic (Section 1, rule 2)
 
 ---
@@ -525,11 +368,11 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner
 
 **Gate acceptance and issue ownership (a gate claim needs a standing check or a dashboard row):**
 
-- **Gate 0 — #56 (#57-#61):** `UniverseRef`, capture obligations (rule 15; the `CaptureScope`/`CaptureManifest` types were retired unused in #1238), source/type registry snapshots, applicability-independent `SourceCapabilityCatalog`, source-neutral data requirements, requirement graph/schedule demand compilation, automatic run/module/emitter usage, reverse quality review, catalog, applicability, source-prior/budget and natural-refresh contracts are versioned and executable. #60's capability inventory cannot depend on #61 applicability; #61 projects it onto the exact denominator. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope,. An expired or unresolved source decision shows as a dashboard flag on that source.
+- **Gate 0 — #56 (#57-#61):** `UniverseRef`, capture obligations (rule 15), source/type registry snapshots, applicability-independent `SourceCapabilityCatalog`, source-neutral data requirements, requirement graph/schedule demand compilation, automatic run/module/emitter usage, reverse quality review, catalog, applicability, source-prior/budget and natural-refresh contracts are versioned and executable. #60's capability inventory cannot depend on #61 applicability; #61 projects it onto the exact denominator. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope.
 - **Gate 1 — #29 (#14, #21-#27, #70-#71):** #70 owns only the PIT document-to-headcount data path needed by the Core Strategy. After #24/#25 freeze candidate implementations, #71 runs the blind financial/non-financial GPPE, valuation-multiple (P/S, and P/GP from strategy definition 1.0.0, #1235), tier, and valuation-gap holdout as optional evidence (rule 18). #26 owns the version-pinned engine adapter and replay evidence; replay still uses unadjusted bars and explicit actions under the TrueAlpha clock. #27 proves that exact artifact on the immutable TOPT Core canary; #51 later owns all-module Staging soak, and a two-run canary is not continuous operation.
 - **Gate 2 — #30 (#33-#40, #62-#65):** all catalog-required module invocations have longitudinal inputs and meet predeclared per-required-subject coverage. #65 holdouts are optional evidence that raises a score (rule 18). An `unavailable` placeholder cannot satisfy this gate. A low score does not block it; the dashboard shows the score.
 - **Gate 3 — #31 (#41-#46, #48, #72, plus registered additions #229/#235/#236/#251):** the deployed consumers agree on typed materialized outputs and bounded usage/review reads from the same governed head; fixture conformance suites are CI-only evidence and do not close a consumption issue (AGENTS.md rule 6, audit #429). #72 separately proves configuration-only onboarding for an unseen issuer/theme and additive onboarding for one test source plus one semantic type; the latter may add isolated extension code and one probe factor, but cannot change central dispatch, generic Dagster/snapshot/lineage/usage/review code, existing factors, or consumers.
-- **Gate 4 — #32 (#11, #49-#54, #66-#68):** the exact signed release manifest and full approved `UniverseRef` pass natural-refresh soak, anti-shrink SLOs, usage and reverse-quality reconciliation, mandatory Production authentication, full-scope capacity tests, scheduled database and raw-object backups with a visible restore age, real-client equivalence, and a human look at the card deck. #67 produces the full-universe Production shadow candidate; #68 independently certifies its row-complete capture; #54 then reads the dashboards for scope, source flags, backup age, consumers, capture, usage and quality and records authoritative graduation. Seeded bad evidence must make `vision-audit` fail.
+- **Gate 4 — #32 (#11, #49-#54, #66-#68):** the exact signed release manifest and full approved `UniverseRef` pass natural-refresh soak, anti-shrink SLOs, usage and reverse-quality reconciliation, mandatory Production authentication, full-scope capacity tests, scheduled database and raw-object backups with a visible restore age, real-client equivalence, and a human look at the card deck. #67 produces the full-universe Production shadow candidate; #68 independently certifies its row-complete capture; #54 then reads the dashboards for scope, backup age, consumers, capture, usage and quality and records authoritative graduation. Seeded bad evidence must make `vision-audit` fail.
 
 **Availability and validation are separate**. Every factor output carries an
 `availability_status` such as `available`, `unavailable`, `stale`, `excluded`,
@@ -574,26 +417,21 @@ environment-scoped rights/budgets, row-complete capture, recovery, and human app
 remain mandatory at their applicable evidence scale.
 
 The gate rows above are claims; they are checked, not closed in order. The gate epics
-(#56, #29, #30, #31, #32) remain the registry of what each gate claims, but since
-2026-07-17 (`governance/README.md`) delivery is not sequenced through them: each claim is
+(#56, #29, #30, #31, #32) remain the registry of what each gate claims, but
+delivery is not sequenced through them (`governance/README.md`): each claim is
 proven or refuted by a standing check on the axis roots (#434 factor chain, #530 datahub
 completeness, #284 factor flexibility, #544 backtest reproducibility, #70 extraction,
 #581 production invariants, #712 release identity) under `AGENTS.md` rules 6 and 7, and
 a gate epic closes by hand when every claim in its row has such a check. Evidence
-(captured corpora, evaluation records) is content-hashed for replayability. The records of
-the earlier delivery machine (capability graph, evidence, handoffs) left the tree in #1061
-and live in git history (`governance/README.md`). Graduation additionally requires the
+(captured corpora, evaluation records) is content-hashed for replayability. Graduation additionally requires the
 capture audit (#68), the final Vision audit, and recorded owner approval. Day-to-day
 delivery is conventional: one issue, one pull request, tests and review before merge, as
-defined in `AGENTS.md`. The former capability dependency graph was planning information,
-never merge enforcement.
+defined in `AGENTS.md`.
 
 ### Served freshness (read time)
 
 `mart.served_head` computes the age, the limit, the `freshness` label and the `availability`
-at each read. It uses the time of the last good refresh and the data cadence. The target state
-is that no consumer relies on a stamp written at publication. Before #1062, a head 13 days old
-read `fresh`. Today `/api/health` reads the view. The readers in the guard baseline do not yet.
+at each read. It uses the time of the last good refresh and the data cadence. No consumer relies on a stamp written at publication.
 
 The limits live in `mart.freshness_limit`. Git is the authority for the rows that the seed
 lists. The seed in `db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores
@@ -632,20 +470,16 @@ family. Each scheduled lane has a row. `apps/data-engine/tests/test_freshness_re
 when a lane or a schedule has no row.
 
 The `wired` column is a readiness flag. It is true when an age source is wired for the artifact.
-Today only the three governed heads are wired. Their age source is the pointer's `advanced_at`.
-Other tables hold a time, for example `staging.accepted_rulesets.advanced_at` and
-`mart.nightly_verdicts.ran_at`. No row uses them yet. Nothing reads `wired`, and nothing
-enforces it.
+The age source of a governed head is the pointer's `advanced_at`.
 
-The target state is one read point. A consumer reads `mart.served_head` and not
-`mart.current_pointer_head`. A consumer computes no head age of its own. That is not true today.
-Follow-up changes 2 to 4 of #1062 move the readers that still read the pointer.
-`libs/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
-heuristic, and a new shape can pass it. Its BASELINE lists today's exceptions, and it can only
+There is one read point. A consumer reads `mart.served_head` and not
+`mart.current_pointer_head`. A consumer computes no head age of its own.
+`common/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
+heuristic, and a new shape can pass it. Its BASELINE lists the exceptions, and it can only
 shrink. The guard works per file. It cannot prove that a run id flows from the head into a result
-query. The per-reader behaviour tests of PRs 2 to 4 are the real proof.
+query. Per-reader behaviour tests are the real proof.
 
-`/api/health` already reads the head. It reports each governed pointer with `freshness`,
+`/api/health` reads the head. It reports each governed pointer with `freshness`,
 `limit_hours`, `staleness_reason` and `availability`. Its `status` stays `ok` for a stale head.
 It reports `governed_pointers: "unknown"` when heads exist that this database does not serve.
 
@@ -670,7 +504,7 @@ the three changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, 
 ## 9. Known Risks / Pitfalls
 
 - SEC XBRL tags are inconsistent across industries — don't assume field names/units are uniform
-- yfinance has no SLA. It is the default price base and carries a low prior; a second origin corroborates it. Since #862 a price cell it cannot serve fails over to the registered origins in the fusion policy's order (Twelve Data, then moomoo K-line), served under that origin's own identity one confidence grade lower and never counted as corroborated on its own (`docs/datahub-quality-report.md`, "Primary failover")
+- yfinance has no SLA. It is the default price base and carries a low prior; a second origin corroborates it. A price cell it cannot serve fails over to the registered origins in the fusion policy's order (Twelve Data, then moomoo K-line), served under that origin's own identity one confidence grade lower and never counted as corroborated on its own (`docs/datahub-quality-report.md`, "Primary failover")
 - Arbitrary SQL touching raw/staging carries silent look-ahead risk; roles deny it and MCP/chat expose typed mart reads only
 - dlt schema evolution must use frozen mode for core tables
 - **Dagster's `code_version`/`data_version` assumes deterministic inputs.** LLM extraction is therefore a separate, versioned, append-only step. Its invocation binds model, instructions, schema, and decoding settings; the stored semantic result and evidence spans determine downstream `data_version`. Replay reuses that stored result and never silently calls the model again. A new extraction is a new invocation/vintage, not sampling noise hidden behind the old ID.
@@ -684,74 +518,3 @@ the three changes. `tools/datahub_freshness.py` bounds the pointer at 72 hours, 
 - **Multi-user moomoo quota allocation**: not relevant while single-user; must be designed before going multi-user, no pre-modeling now
 - **Consumer page/query analytics**: V1 measures semantic pipeline and strategy consumption only. Add read-frequency telemetry later only with a separate append-only audit writer that preserves the App's `mart_readonly` role and cannot recursively count usage queries.
 - If Postgres concurrency becomes a real bottleneck, re-evaluate read/write splitting or a caching layer
-
----
-
-## 11. Current Baseline and Next Gate
-
-**Baseline as of 2026-09-15, measured on the deployed environments rather than on tracker
-state.** The reconnaissance baseline this section used to describe (monorepo, four schemas,
-registry skeleton, samples, first corpus audit) is history; what exists now is a running
-system with named gaps.
-
-What runs on the Dagster schedule — daily, and in both Staging and Production, unless the
-bullet says otherwise:
-
-- real-source capture for the TOPT 20, the QQQ 101 and a 5-issuer canary universe (SEC
-  company-facts, Twelve Data, yfinance corroboration, N-PORT holdings), immutable raw bytes in
-  object storage with `raw.fetches` pointers, row-level capture control and a quality report
-  per run;
-- module 2 (GPPE, v0.2.0 uniform), module 7 (three-tier valuation; P/GP bands of strategy definition 1.0.0
-  since #1235), P/S and P/GP, module 1 (PEG,
-  historical convention only) and the `large_model_value_v0` strategy, materialized into
-  `mart.topt_core_results` and `mart.strategy_*` behind a governed `current_pointer` that
-  advances with each accepted tick;
-- the standards lane (`standard_backfill_pipeline`, Sundays 09:07 UTC, and on demand through
-  the same job): the `headcount` and `segment_revenue` standards' open cells are extracted
-  from each issuer's latest annual filing through the gateway, module 6 (theme purity) is
-  materialized over the accepted segment partitions for the governed head's members, and the
-  question-coverage report (`mart.question_coverage_report`, #748) is written for that head —
-  Staging only until Production is promoted past v0.0.51;
-- the App (`/research/*`, `/admin/*`, behind login), the MCP endpoint, and a `/chat` v0 that
-  answers one question class deterministically — all reading `mart` only.
-
-What is verified and what is not, with the owning issue:
-
-| claim | state (dated per row; 2026-09-15 where undated) | owner |
-|---|---|---|
-| the chain is non-empty and scheduled | on the Staging TOPT head of 2026-09-15 18/20 issuers are `available` (q1), QQQ 72/101 (2026-09-07); PEG resolves for 14/20 and every refusal is named on the row (#837); the pointer advances each tick | #434 (root) |
-| the six questions are measured per head | `mart.question_coverage_report`, written by every standards tick for the governed head (#748). Staging TOPT head `capture-run:8259…`, 2026-09-15: **q1 18/20 · q2 14/20** (`non_positive_growth` 2, `insufficient_earnings_history` 1, excluded upstream 3) **· q3 0/20 `missing`** (no column: relationship extraction has no oracle a wrong edge could fail, #37) **· q4 0/20 `missing`** (moomoo has never written a ledger row, #771) **· q5 0/0** (the registry counts issuers; the funds are not in the denominator) **· q6 12/20** (`no_row` 4: GOOG, JPM, WMT, XOM; `unclassified_revenue` 4: AAPL, COST, MU, V — #841). Production has not run module 6 or the report: v0.0.51 there predates both | #773, #772 |
-| segment revenue is what the filer tags | `staging.issuer_segment_revenue_facts` holds a partition for 16 of the 20 TOPT issuers, each balanced against the capture plane's consolidated revenue; over the 106 filings the lane walks, the inline-XBRL tags balance 64 where the retired printed-table reader balanced 3 (#831, #836; reader retired in #834, −1,146 lines). A single segment is decided by the filer's tagged count, never a sentence (#824; v1 withdrawn after landing Berkshire as one segment). Members of a head are resolved from what its GPPE rows consumed, so a tick whose SEC bytes were unchanged keeps its q6 rows (#840) | #772 |
-| the published numbers are possible | a tick now refuses its own run: plausibility policy v2 judges every published row against the previous accepted run inside the tick's transaction, and the nightly invariant suite runs on both environments. What a negative number means is declared per metric-forest node and issuer class (`factors.forest`, docs/metric-forest.md) and both checks assert exactly that, with no exemption: JPM's negative GPPE under v0.2.0's uniform capital charge is a declared `sign-is-signal` value, printed by name on every tick and nightly run, until #528's operating + financial tree replaces it (2026-09-17). The citation/quality invariants still do not run against Production at deploy time | #528, #581, #544 |
-| the denominator is real | 106 headcount facts covering 89 issuers, 85 of them selected by the seated model from 10-K text rather than hand-seeded; the shared primitive is no longer a stub — `factors.shared.extraction.extract_metric` is what production's `filing_extraction` calls (#769/#782 moved the rule into the primitive, v0.0.49; #1130 routed the call through `extract_metric`); ~25 cells remain `no_candidate` | #70, #769 |
-| the vintage is a measurement | `knowable_at` is real on every plane (16 distinct times across 21 financial-fact entries on the 2026-09-09 governed TOPT head; identity/membership and price are one value each, which is correct — a head publishes once and a session settles once). #774's per-input filing vintage IS captured, in the observation payload; it does NOT reach mart — every `mart.topt_core_meta_info` lineage entry carries a `vintage` key whose value is `null`, so a mart reader still cannot name the filing behind a number. `valid_from` and the cutoff remain near-constant, so a historical replay would still see the future | #530 |
-| every source is admitted (rule 19) | the model provider has a record (`governance/sources/model-provider-zhipu-glm-coding-plan.v1.json`); every other source's attestation is still `missing` in `governance/gate0/issue-60.source-readiness.candidate-v1.json`; under rule 19 that is a dashboard flag, not a gate | #60 |
-| one release promotes all three images (§3.1) | **yes.** One app-deploy request promotes `truealpha/app` (web + llm-service) and, as its declared companion, `truealpha/data_engine`, whose registry digest is pinned into Vault before the compose reads it; re-verified on Production 2026-09-09 with v0.0.50: `/api/health` reports `git_sha` and `data_engine_git_sha` both `v0.0.50` on one digest, and the release health check matched the promoted data-engine on its first poll | #712, infra2#622 |
-| every external call is gated (rule 6) | **recorded everywhere, gated where named (2026-09-16).** Production's `staging.api_call_ledger` (the schema name is the medallion layer, not the environment) carries 2,186 rows across seven sources — SEC, Twelve Data, yahoo, OpenFIGI, N-PORT, the Nasdaq index and `filing-extraction-model`. Capacity is declared once per seat and enforced before the call by the capacity gate that the capture ticks, the universe refresh and the confidence report bind (paced to the seat's window, refused past the environment's daily share — measured need before it: a production tick fired 18 SEC requests in one second on 2026-09-08 against a 10/s policy); the standards lane admits SEC through `SourceGateway`; moomoo keeps its own gate, whose ceiling is now the registry's. Still recorded, not gated: model-provider calls (the standards lane binds no scope around them). moomoo is declared but has never written a row, which is why question 4 has no evidence rather than no capacity | #729 |
-| non-local endpoints are authenticated (rule 21) | MCP answers `tools/call` without a credential | #728 |
-| Production is graduated | no: #54 has not run. Under rules 18 to 21 the dashboards carry the evidence; #650 and #65 are optional evidence, not gates | #54 |
-
-**Next gate.** Not "Gate 0": the semantic and contract closure it named is in force in code
-(registries, PIT contracts, capture control, the frozen factor contract), and the
-batch/lease machine that would have closed it formally was retired on 2026-07-17. The next
-gate is the one whose claims are false in the table: make the numbers right and provably
-so (#434's standing criteria), fill the prose-only inputs through the gated extraction
-source (#70), admit the sources (#60).
-
-That work is sequenced as three named milestones, and the sequence is a dependency chain,
-not a preference. **M1 (#749)** stays open for its remaining strong-code and tracking
-tracks. **M2 (#773)** makes the wide row honest — real vintage (#530), the §8 status
-dimensions, the question-coverage report, GPPE decomposition, and one deployed slice per
-init.md question. **M3 (#758)** makes the backtest real, and its first track needs exactly
-what M2's first deliverable produces: a `knowable_at`/`valid_from` plane a historical
-cutoff can be replayed against. Within M2 the new data planes expand in the order A3
-decision 3 fixes (owner approved 2026-09-08): #63's ETF holdings before #62's forecasts,
-because an independent share count falsifies the class that produced #529 and #533. A forecast
-plane enters with a source prior and a score, and it does not wait for a check. Gate epics #56 and #29 close by hand when their rows
-have standing checks; #54 remains the only path to calling Production output authoritative.
-
-Provisional lower-gate work is ordinary issue→PR work; it remains excluded from the
-accepted `ReleaseManifest` registry/configuration bindings and cannot close a higher gate.
-Holdouts under #71's protocol (#65, optional evidence), additive registry/catalog proof (#72), and the
-Production capture audit (#68) keep their meaning. The owner's record on #54 separates
-"serving" from "graduated".
