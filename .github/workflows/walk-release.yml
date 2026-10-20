@@ -212,3 +212,40 @@ jobs:
       - name: Probe the MCP credential gate
         if: ${{ !cancelled() }}
         run: python3 tools/surface_contract.py "$TA_BASE_URL"
+
+      # #1437 acceptance 3: the other half. With the environment's token, `tools/list`
+      # answers 200. The owner copies each environment's MCP_BEARER_TOKEN from 1Password
+      # (infra2 mirrors it there) into the repository secrets MCP_BEARER_TOKEN_STAGING and
+      # MCP_BEARER_TOKEN_PROD. Two names, selected in the shell, so a missing production
+      # secret can never fall back to the staging token. Absent secret: the call step is
+      # SKIPPED (never a success) and the run summary says UNVERIFIED, as for the walk.
+      - name: Is the MCP token of this environment configured
+        id: mcp_token
+        if: ${{ !cancelled() }}
+        env:
+          STAGING_TOKEN: ${{ secrets.MCP_BEARER_TOKEN_STAGING }}
+          PROD_TOKEN: ${{ secrets.MCP_BEARER_TOKEN_PROD }}
+        run: |
+          set -euo pipefail
+          if [ "$DEPLOY_TYPE" = "prod" ]; then token="$PROD_TOKEN"; else token="$STAGING_TOKEN"; fi
+          if [ -n "$token" ]; then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::the authenticated MCP call is UNVERIFIED: repository secret for $DEPLOY_TYPE is not set (#1437)"
+            {
+              echo "### Authenticated MCP call: UNVERIFIED"
+              echo
+              echo "No MCP_BEARER_TOKEN secret for $DEPLOY_TYPE, so nothing confirmed that the token works."
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Call the MCP route with the environment token
+        if: ${{ !cancelled() && steps.mcp_token.outputs.ready == 'true' }}
+        env:
+          STAGING_TOKEN: ${{ secrets.MCP_BEARER_TOKEN_STAGING }}
+          PROD_TOKEN: ${{ secrets.MCP_BEARER_TOKEN_PROD }}
+        run: |
+          set -euo pipefail
+          if [ "$DEPLOY_TYPE" = "prod" ]; then TA_MCP_TOKEN="$PROD_TOKEN"; else TA_MCP_TOKEN="$STAGING_TOKEN"; fi
+          export TA_MCP_TOKEN
+          python3 tools/surface_contract.py --authenticated "$TA_BASE_URL"

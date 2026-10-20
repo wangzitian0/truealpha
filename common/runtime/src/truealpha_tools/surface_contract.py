@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -69,6 +70,7 @@ class Response:
     location: str
     body: bytes
     challenge: str = ""
+    session: str = ""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -78,12 +80,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch(url: str, method: str = "GET", payload: dict[str, object] | None = None) -> Response:
-    """One request with no credential. `payload` becomes a JSON body with the headers an
-    MCP client sends, so the endpoint judges the request on its credential, not on a
-    missing Accept or Content-Type header."""
+def fetch(
+    url: str,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> Response:
+    """One request. `payload` becomes a JSON body with the headers an MCP client sends, so
+    the endpoint judges the request on its credential, not on a missing Accept or
+    Content-Type header. Only the authenticated check passes `extra_headers`."""
     opener = urllib.request.build_opener(_NoRedirect)
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
     data = None
     if payload is not None:
         headers["Accept"] = "application/json, text/event-stream"
@@ -102,6 +109,7 @@ def fetch(url: str, method: str = "GET", payload: dict[str, object] | None = Non
                 answer.headers.get("Location", ""),
                 answer.read(),
                 answer.headers.get("WWW-Authenticate", ""),
+                answer.headers.get("Mcp-Session-Id", ""),
             )
     except urllib.error.HTTPError as error:
         # 4xx/5xx are results here, not failures: which rejection arrives is
@@ -253,16 +261,61 @@ def _check(base: str) -> list[str]:
     return failures
 
 
+#: The environment variable that holds the MCP token for the authenticated check. The walk
+#: sets it from the environment's GitHub secret; the value is never printed.
+TOKEN_ENV = "TA_MCP_TOKEN"
+
+
+def check_authenticated(base: str, token: str) -> list[str]:
+    """#1437 acceptance 3: with the environment's token, `initialize` opens a session and
+    `tools/list` answers 200 with the registered tools. Messages name statuses only."""
+    try:
+        endpoint = f"{base.rstrip('/')}/api/mcp/"
+        bearer = {"Authorization": f"Bearer {token}"}
+        opened = fetch(
+            endpoint, method="POST", payload=UNAUTHENTICATED_MCP_REQUESTS["initialize"], extra_headers=bearer
+        )
+        if opened.status != 200 or not opened.session:
+            return [
+                f"POST {endpoint} initialize with the environment token answered {opened.status} "
+                f"(session {'set' if opened.session else 'missing'}), not 200 with a session — the token "
+                f"in the walk secret and the deployed MCP_BEARER_TOKEN differ, or the route is down"
+            ]
+        session = {**bearer, "Mcp-Session-Id": opened.session}
+        fetch(endpoint, method="POST", payload={"jsonrpc": "2.0", "method": "notifications/initialized"},
+              extra_headers=session)  # fmt: skip
+        listed = fetch(
+            endpoint, method="POST", payload={"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, extra_headers=session
+        )
+    except SurfaceUnreachable as unreachable:
+        return [f"the surface is not serving: {unreachable}"]
+    if listed.status != 200 or b'"tools"' not in listed.body:
+        return [f"POST {endpoint} tools/list with the environment token answered {listed.status} without a tool list"]
+    return []
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Assert a deployed surface's shape over real HTTPS.")
     parser.add_argument("base_url", help="e.g. https://truealpha.club")
+    parser.add_argument(
+        "--authenticated",
+        action="store_true",
+        help=f"call tools/list with the token in ${TOKEN_ENV} instead of the unauthenticated checks",
+    )
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     if urlparse(arguments.base_url).scheme not in {"http", "https"}:
         print(f"surface_contract: {arguments.base_url} is not an http(s) URL", file=sys.stderr)
         return 2
 
-    failures = check(arguments.base_url)
+    if arguments.authenticated:
+        token = os.environ.get(TOKEN_ENV, "")
+        if not token:
+            print(f"surface_contract: --authenticated needs ${TOKEN_ENV}", file=sys.stderr)
+            return 2
+        failures = check_authenticated(arguments.base_url, token)
+    else:
+        failures = check(arguments.base_url)
     for failure in failures:
         print(f"::error::{failure}", file=sys.stderr)
     if failures:

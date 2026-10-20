@@ -544,7 +544,9 @@ def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(mo
     assert verdict == 0
 
 
-def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Three properties in one client, because they were traded for each other.
 
     On production `GET /api/mcp` answered
@@ -592,6 +594,8 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
         "params": {"name": "topt_gppe", "arguments": {}},
     }
     mcp_headers = {"Accept": "application/json, text/event-stream"}
+    authorized = {**mcp_headers, "Authorization": f"Bearer {MCP_TEST_TOKEN}"}
+    caplog.set_level("DEBUG")
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         # Absorbed from test_app_starts_with_the_mcp_mount_and_serves_health_under
         # _its_lifespan (#348): the MCP session manager is a module-level
@@ -614,8 +618,17 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
             )
             for method in ("GET", "POST", "DELETE")
         }
-        endpoint = client.post(
-            "/mcp/", headers={**mcp_headers, "Authorization": f"Bearer {MCP_TEST_TOKEN}"}, json=initialize
+        endpoint = client.post("/mcp/", headers=authorized, json=initialize)
+        # #1437 acceptance 1: a valid token lists the tools in the session it opened.
+        session = {"mcp-session-id": endpoint.headers.get("mcp-session-id", "")}
+        client.post(
+            "/mcp/", headers={**authorized, **session}, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+        )
+        listed = client.post(
+            "/mcp/", headers={**authorized, **session}, json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+        )
+        listed_without_token = client.post(
+            "/mcp/", headers={**mcp_headers, **session}, json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
         )
         refused = {
             "initialize without a credential": client.post("/mcp/", headers=mcp_headers, json=initialize),
@@ -655,6 +668,16 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(monkeypatch: pyte
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
+    assert session["mcp-session-id"], "initialize with the token opened no session"
+    assert listed.status_code == 200 and '"strategy_run"' in listed.text, (
+        f"tools/list with the token answers {listed.status_code}: {listed.text[:200]}"
+    )
+    # An open session is not a credential: without the token the same session gets 401.
+    refused["tools/list in an open session without a credential"] = listed_without_token
+    # #1437 acceptance 2: the token reaches no log line and no response body.
+    answers = [endpoint, listed, *refused.values(), *slashless.values(), redirect]
+    assert MCP_TEST_TOKEN not in caplog.text, "the MCP token appears in a log line"
+    assert all(MCP_TEST_TOKEN not in answer.text for answer in answers), "the MCP token appears in a response body"
     for request, answer in refused.items():
         assert answer.status_code == 401, (
             f"{request} answers {answer.status_code}, not 401: the MCP route serves a caller "

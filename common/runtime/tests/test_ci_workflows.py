@@ -305,6 +305,24 @@ def test_every_release_walk_probes_the_mcp_credential_gate() -> None:
     assert "TA_BASE_URL" not in (step(WALK, "Walk the deployed surface").get("env") or {})
 
 
+def test_the_walk_calls_mcp_with_the_token_of_its_own_environment() -> None:
+    """#1437 acceptance 3: the authenticated half runs only with a configured secret, is
+    skipped (never a success) without one, and picks the token by the walked environment,
+    so a missing production secret cannot fall back to the staging token."""
+    probe = step(WALK, "Is the MCP token of this environment configured")
+    call = step(WALK, "Call the MCP route with the environment token")
+    assert "steps.mcp_token.outputs.ready == 'true'" in str(call["if"])
+    assert "exit 0" not in str(call["run"])
+    assert "--authenticated" in str(call["run"]) and '"$TA_BASE_URL"' in str(call["run"])
+    for spec in (probe, call):
+        env = spec.get("env") or {}
+        assert env.get("STAGING_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_STAGING }}"
+        assert env.get("PROD_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_PROD }}"
+        assert "secrets." not in str(spec.get("run", "")), "a secret is selected in the shell, not in an expression"
+        assert '[ "$DEPLOY_TYPE" = "prod" ]' in str(spec["run"])
+    assert "UNVERIFIED" in str(probe["run"]) and "exit 1" not in str(probe["run"])
+
+
 def test_the_release_lane_is_not_deadlocked_by_a_missing_secret() -> None:
     """#560: failing the run on unconfigured credentials blocked every prod
     release, since prod requires a successful staging run."""

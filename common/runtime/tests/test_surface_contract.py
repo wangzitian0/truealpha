@@ -40,10 +40,12 @@ SCENARIOS = {
     "mcp_open": {"rpc_status": {"initialize": 200, "tools/call": 400}, "endpoint_status": 406},
     "tools_call_open": {"rpc_status": {"tools/call": 200}},
     "no_challenge": {"challenge": ""},
+    "no_tool_list": {"no_tool_list": True},
 }
 
 
 SEEN_AGENTS: list[str] = []
+STUB_TOKEN = "stub-token"
 SEEN_RPC: list[tuple[str, str]] = []
 
 
@@ -52,15 +54,30 @@ def build_handler(scenario: dict[str, object], host: str) -> type[BaseHTTPReques
         def log_message(self, *_: object) -> None:  # keep pytest output readable
             return
 
-        def _send(self, status: int, location: str = "", challenge: str = "") -> None:
+        def _send(
+            self, status: int, location: str = "", challenge: str = "", body: bytes = b"", session: str = ""
+        ) -> None:
             SEEN_AGENTS.append(self.headers.get("User-Agent", ""))
             self.send_response(status)
             if location:
                 self.send_header("Location", location.replace("HOST", host))
             if challenge:
                 self.send_header("WWW-Authenticate", challenge)
-            self.send_header("Content-Length", "0")
+            if session:
+                self.send_header("Mcp-Session-Id", session)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
+
+        def _authenticated(self, rpc: str) -> None:
+            """The gated endpoint with the right token: a session, then the tool list."""
+            if rpc == "initialize":
+                self._send(200, body=b'{"result": {}}', session="stub-session")
+            elif rpc == "tools/list" and self.headers.get("Mcp-Session-Id") == "stub-session":
+                tools = b'{"result": {}}' if scenario.get("no_tool_list") else b'{"result": {"tools": [{"name": "x"}]}}'
+                self._send(200, body=tools)
+            else:
+                self._send(202 if rpc.startswith("notifications/") else 400)
 
         def _gated(self, status: int) -> None:
             """The MCP endpoint: 401 with a Bearer challenge unless the scenario opens it."""
@@ -85,6 +102,9 @@ def build_handler(scenario: dict[str, object], host: str) -> type[BaseHTTPReques
                 length = int(self.headers.get("Content-Length", "0"))
                 rpc = json.loads(self.rfile.read(length) or b"{}").get("method", "")
                 SEEN_RPC.append((rpc, self.headers.get("Authorization", "")))
+                if self.headers.get("Authorization") == f"Bearer {STUB_TOKEN}":
+                    self._authenticated(rpc)
+                    return
                 statuses = dict(scenario.get("rpc_status", {}))  # type: ignore[call-overload]
                 self._gated(int(statuses.get(rpc, 401)))
             else:
@@ -285,3 +305,23 @@ def test_the_credential_probe_sends_both_requests_and_no_credential(serve) -> No
 def test_an_open_mcp_route_fails_the_exit_code_ci_reads(serve) -> None:  # type: ignore[no-untyped-def]
     """The release walk and the daily freshness run read only the exit code."""
     assert surface_contract.main([serve("mcp_open")]) == 1
+
+
+def test_the_authenticated_check_needs_a_session_and_a_tool_list(serve, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """#1437 acceptance 3: with the environment token the walk lists the tools (200). A
+    wrong token and a missing tool list each fail, and the token never reaches a message."""
+    base = serve("healthy")
+    assert surface_contract.check_authenticated(base, STUB_TOKEN) == []
+
+    wrong = surface_contract.check_authenticated(base, "not-the-token")
+    assert len(wrong) == 1 and "answered 401" in wrong[0] and "not-the-token" not in wrong[0], wrong
+
+    empty = surface_contract.check_authenticated(serve("no_tool_list"), STUB_TOKEN)
+    assert len(empty) == 1 and "without a tool list" in empty[0], empty
+
+    monkeypatch.setenv(surface_contract.TOKEN_ENV, STUB_TOKEN)
+    assert surface_contract.main(["--authenticated", base]) == 0
+    monkeypatch.setenv(surface_contract.TOKEN_ENV, "not-the-token")
+    assert surface_contract.main(["--authenticated", base]) == 1
+    monkeypatch.delenv(surface_contract.TOKEN_ENV)
+    assert surface_contract.main(["--authenticated", base]) == 2, "no token must not read as a pass"
