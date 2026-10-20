@@ -208,7 +208,7 @@ jobs:
       # no install (standard library only), so it runs on every release, also
       # when the walk credentials are absent or the walk failed. A red probe
       # makes this run red, and tools/cut_release.sh then refuses the
-      # production step. deploy-freshness.yml runs the same probe every day.
+      # production step. delivery-report.yml runs the same probe every day.
       - name: Probe the MCP credential gate
         if: ${{ !cancelled() }}
         run: python3 tools/surface_contract.py "$TA_BASE_URL"
