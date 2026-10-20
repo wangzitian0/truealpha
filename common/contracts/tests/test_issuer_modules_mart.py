@@ -12,7 +12,7 @@ lets the pointer name a capture run without the evidence-graph rows behind it.
 
 from __future__ import annotations
 
-import json
+import importlib.util
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -32,7 +32,12 @@ from truealpha_contracts.research_report import (
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 
-CANON = json.loads((Path(__file__).parents[1] / "conformance" / "issuer_modules_parity.json").read_text())
+_SEED_PATH = Path(__file__).parents[1] / "conformance" / "issuer_modules_parity.py"
+_SPEC = importlib.util.spec_from_file_location("issuer_modules_parity_seed", _SEED_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_SEED = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_SEED)
+CANON = _SEED.CANON
 _HASH64 = "e" * 64
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
 
@@ -74,62 +79,12 @@ def database(monkeypatch: pytest.MonkeyPatch):
         connection.close()
 
 
-def _run_id(label: str) -> str:
-    return str(CANON["served_run_id"] if label == "served" else CANON["unserved_run_id"])
-
-
 def _seed_module_rows(connection: psycopg.Connection) -> None:
-    issuer = CANON["issuer_id"]
-    for row in CANON["supply_chain_exposure"]["rows"]:
-        connection.execute(
-            """insert into mart.issuer_supply_chain_exposure
-               (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count,
-                max_partner_share, confidence, reason_codes, extractor, availability_status,
-                source_evidence_status, factor_validation_status)
-               values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                _run_id(row["run"]), issuer, row["cutoff"], row["exposure_score"], row["direct_partners"],
-                row["suppliers_count"], row["customers_count"], row["max_partner_share"], row["confidence"],
-                row["reason_codes"], row["extractor"], row["availability_status"],
-                row["source_evidence_status"], row["factor_validation_status"],
-            ),
-        )  # fmt: skip
-    for row in CANON["analyst_ratings"]["rows"]:
-        connection.execute(
-            """insert into mart.issuer_analyst_ratings
-               (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count,
-                confidence, reason_codes, extractor, availability_status, source_evidence_status,
-                factor_validation_status)
-               values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                _run_id(row["run"]), issuer, row["cutoff"], row["consensus_rating"], row["analysts_count"],
-                row["buy_count"], row["hold_count"], row["sell_count"], row["confidence"], row["reason_codes"],
-                row["extractor"], row["availability_status"], row["source_evidence_status"],
-                row["factor_validation_status"],
-            ),
-        )  # fmt: skip
+    _SEED.seed_module_rows(connection)
 
 
 def _seed_served_head(connection: psycopg.Connection) -> None:
-    pointer = CANON["pointer"]
-    connection.execute(
-        """insert into mart.current_pointer
-           (pointer_id, content_sha256, environment, universe_id, universe_version, factor_id,
-            target_run_id, sequence, previous_run_id, advanced_at)
-           values (%s, %s, (select environment from mart.environment_identity), %s, %s, %s, %s, 0, null, now())""",
-        (
-            f"current-pointer:{pointer['pointer_sha256']}",
-            pointer["pointer_sha256"],
-            pointer["universe_id"],
-            pointer["universe_version"],
-            pointer["factor_id"],
-            CANON["served_run_id"],
-        ),
-    )
-    served = connection.execute(
-        "select 1 from mart.served_head where run_id = %s", (CANON["served_run_id"],)
-    ).fetchone()
-    assert served is not None, "the seed must give mart.served_head a head for the served run"
+    _SEED.seed_served_head(connection)
 
 
 def test_the_reader_returns_the_served_row_and_not_the_newer_decoy(database: psycopg.Connection) -> None:
