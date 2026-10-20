@@ -46,24 +46,22 @@ DB_DIR = REPO_ROOT / "db"
 
 
 def load_tool(name: str) -> ModuleType:
-    """Import a `tools/<name>.py` script as a module.
+    """Import a `tools/<name>.py` tool module from `truealpha_tools.<name>`.
 
-    The scripts are executables, not a package, so reaching them needs
-    `spec_from_file_location`. Nine test files each carried their own six-line
-    copy of that bootstrap — four of them added during the session about
-    deleting duplication. One copy, here, where the other test-only helper
-    already lives.
+    Checks `tools/<name>.py` exists first, then imports the canonical module
+    from `truealpha_tools.<name>` (or falls back to `spec_from_file_location`
+    for synthetic test fixtures).
     """
     path = TOOLS / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"no tool named {name!r} in {TOOLS}")
+    impl_path = REPO_ROOT / "common" / "runtime" / "src" / "truealpha_tools" / f"{name}.py"
+    if impl_path.is_file():
+        return importlib.import_module(f"truealpha_tools.{name}")
     spec = importlib.util.spec_from_file_location(f"truealpha_tool_{name}", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    # Registered before exec so dataclasses in the tool can resolve their own
-    # module during class creation — omitting this raises a confusing
-    # AttributeError from dataclasses._is_type.
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return sys.modules.get(spec.name, module)
