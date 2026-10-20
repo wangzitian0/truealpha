@@ -18,7 +18,7 @@ def test_a_deployed_process_refuses_to_boot_without_what_the_deployment_injects(
     with pytest.raises(RuntimeError) as failure:
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     message = str(failure.value)
-    for name in ("APP_ENV", "GIT_COMMIT_SHA"):
+    for name in ("APP_ENV", "GIT_COMMIT_SHA", "MCP_BEARER_TOKEN"):
         assert name in message
     assert "S3_ENDPOINT" not in message
     assert "hunter2" not in message and "postgresql://" not in message, "names only, never values"
@@ -33,11 +33,15 @@ def test_a_local_process_tolerates_absent_injected_values() -> None:
 
 
 def test_an_empty_injected_value_counts_as_missing() -> None:
-    environ = {"APP_ENV": "staging", "GIT_COMMIT_SHA": ""}
+    environ = {"APP_ENV": "staging", "GIT_COMMIT_SHA": "", "MCP_BEARER_TOKEN": "test-mcp-token"}
     with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA"):
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     environ["GIT_COMMIT_SHA"] = "v0.0.50"
     assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
+    # #42: an empty MCP credential is as missing as an absent one.
+    environ["MCP_BEARER_TOKEN"] = ""
+    with pytest.raises(RuntimeError, match="MCP_BEARER_TOKEN"):
+        assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
 
 
 def test_a_required_field_is_missing_in_every_tier(tmp_path: Path) -> None:
