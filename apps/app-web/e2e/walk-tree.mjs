@@ -78,27 +78,46 @@ const ID_PATTERN =
  */
 async function assertNoVisibleRawIds(page, path, problems) {
   if (!path.startsWith("/research")) return;
-  // innerText must be computed on the LIVE body (layout-aware: excludes
-  // script/RSC payloads a detached clone would leak). Restore every
-  // [data-evidence] node synchronously in the same evaluate turn: against a
-  // remote deployment, gotoStable resolves at domcontentloaded before React
-  // hydration completes, and leaving [data-evidence] elements removed causes
-  // React hydrateRoot() to throw Minified React error #418 (HTML mismatch).
+  // Compute visible text without mutating the live DOM: against a remote
+  // deployment, gotoStable resolves at domcontentloaded before React hydration
+  // completes, and any DOM node replacement or style mutation on the live tree
+  // causes React hydrateRoot() to throw Minified React error #418 (HTML mismatch).
   const visible = await page.evaluate(() => {
-    const entries = [];
-    for (const el of document.querySelectorAll("[data-evidence]")) {
-      const marker = document.createComment("");
-      el.replaceWith(marker);
-      entries.push([marker, el]);
-    }
-    try {
-      return document.body.innerText;
-    } finally {
-      for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const [marker, el] = entries[i];
-        marker.replaceWith(el);
+    const pieces = [];
+    function collect(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        pieces.push(node.nodeValue || "");
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node;
+      const tag = el.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE") return;
+      if (el.hasAttribute("data-evidence") || el.hasAttribute("hidden")) return;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return;
+      for (const child of el.childNodes) {
+        collect(child);
+      }
+      if (
+        style.display === "block" ||
+        style.display === "flex" ||
+        style.display === "grid" ||
+        style.display === "table-row" ||
+        style.display === "table-cell" ||
+        tag === "BR" ||
+        tag === "P" ||
+        tag === "DIV" ||
+        tag === "LI" ||
+        tag === "TR" ||
+        tag === "TD" ||
+        tag === "TH"
+      ) {
+        pieces.push(" ");
       }
     }
+    if (document.body) collect(document.body);
+    return pieces.join("");
   });
   const match = visible.match(ID_PATTERN);
   if (match) problems.push(`visible raw id: ${match[0]}`);

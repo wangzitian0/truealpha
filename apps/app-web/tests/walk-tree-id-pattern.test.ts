@@ -85,9 +85,10 @@ assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for G
 assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
 assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 golden preview tickers");
 assert(
-  !source.includes('querySelectorAll("[data-evidence]")) el.remove()') &&
-    source.includes("marker.replaceWith(el)"),
-  "walk-tree.mjs must restore [data-evidence] DOM nodes synchronously so React hydration does not fail with #418",
+  !source.includes("el.remove()") &&
+    !source.includes("el.replaceWith(") &&
+    source.includes('el.hasAttribute("data-evidence")'),
+  "walk-tree.mjs must inspect visible text without mutating [data-evidence] DOM nodes so React hydration does not fail with #418",
 );
 
 // #1362 / #1363: SWEEP_RUN_SOURCE_PATTERN in walk-tree.mjs must match serviceObjectives.ts and catch timestamped sweep sources.
