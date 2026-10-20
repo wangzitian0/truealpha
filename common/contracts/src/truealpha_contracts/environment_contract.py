@@ -87,13 +87,13 @@ class JobRunTimeBasis(_StrictFrozenModel):
     reason why no run time exists; the instance-wide limit of ``dagster.yaml`` bounds the job.
     """
 
-    measured: Mapping[EnvironmentKey, MeasuredRunTimes] | None = None
+    measured: Mapping[EnvironmentKey, MeasuredRunTimes] | None = Field(default=None, min_length=1)
     estimate_tick: TickKey | None = None
-    unmeasured: str | None = None
+    unmeasured: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _declare_exactly_one_basis(self) -> Self:
-        declared = [name for name in ("measured", "estimate_tick", "unmeasured") if getattr(self, name)]
+        declared = [name for name in ("measured", "estimate_tick", "unmeasured") if getattr(self, name) is not None]
         if len(declared) != 1:
             raise ValueError(f"a job declares exactly one run-time basis, got {declared or 'none'}")
         return self

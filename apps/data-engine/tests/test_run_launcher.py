@@ -39,7 +39,13 @@ from dagster._core.workspace.load_target import EmptyWorkspaceTarget, GrpcServer
 from dagster._daemon.monitoring.run_monitoring import execute_run_monitoring_iteration
 from dagster._grpc.client import DagsterGrpcClient
 from data_engine import run_launcher
-from data_engine.run_launcher import RUN_WORKER_LOST, MonitoredRunLauncher
+from data_engine.run_launcher import (
+    CONTRACT_BOUND_TAG,
+    MAX_RUNTIME_ALIAS_TAG,
+    RUN_WORKER_LOST,
+    MonitoredRunLauncher,
+    bound_tags_to_write,
+)
 from truealpha_contracts.environment_contract import (
     EnvironmentContract,
     JobRunTimeBasis,
@@ -239,7 +245,9 @@ def test_a_run_whose_code_server_restarted_fails_at_the_next_monitor_poll(
 
             # The launch wrote the contract bound, and kept the bound that the operator set.
             assert _tags(instance, bounded).get(MAX_RUNTIME_SECONDS_TAG) == str(expected_bound)
+            assert _tags(instance, bounded).get(CONTRACT_BOUND_TAG) == str(expected_bound)
             assert _tags(instance, operator_set).get(MAX_RUNTIME_SECONDS_TAG) == "86400"
+            assert CONTRACT_BOUND_TAG not in _tags(instance, operator_set)
     finally:
         server.kill()
 
@@ -292,3 +300,51 @@ def test_a_run_without_a_code_server_address_is_left_to_its_maximum_runtime(inst
     assert run is not None
 
     assert instance.run_launcher.check_run_worker_health(run).status == WorkerStatus.RUNNING
+
+
+def test_a_run_with_an_unreadable_code_server_address_is_left_to_its_maximum_runtime(
+    instance: DagsterInstance,
+) -> None:
+    """A health check that raises would skip the runtime check at every poll. It must not raise."""
+    run_id = _started_run(instance, {GRPC_INFO_TAG: "not json"}, started_at=datetime.now(UTC))
+    run = instance.get_run_by_id(run_id)
+    assert run is not None
+
+    assert instance.run_launcher.check_run_worker_health(run).status == WorkerStatus.RUNNING
+
+
+#: A job of the deployed catalog with a measured bound.
+BOUNDED_JOB = "head_reports_pipeline"
+
+
+def _contract_tags() -> dict[str, str]:
+    bound = load_environment_contract().max_runtime_seconds(BOUNDED_JOB)
+    assert bound is not None
+    return {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
+
+
+@pytest.mark.parametrize(
+    ("run_tags", "written"),
+    [
+        pytest.param({}, "contract", id="new run"),
+        pytest.param({MAX_RUNTIME_SECONDS_TAG: "86400"}, "nothing", id="operator bound"),
+        pytest.param({MAX_RUNTIME_ALIAS_TAG: "86400"}, "nothing", id="operator bound through the alias"),
+        pytest.param(
+            {MAX_RUNTIME_SECONDS_TAG: "999", CONTRACT_BOUND_TAG: "999"},
+            "contract",
+            id="re-execution copies an old contract bound",
+        ),
+        pytest.param(
+            {MAX_RUNTIME_SECONDS_TAG: "86400", CONTRACT_BOUND_TAG: "999"},
+            "nothing",
+            id="operator bound on a re-execution",
+        ),
+    ],
+)
+def test_the_launch_keeps_an_operator_bound_and_renews_a_copied_contract_bound(
+    run_tags: dict[str, str], written: str
+) -> None:
+    """A re-execution copies its parent's tags (#1442 review). Only an operator's bound may stay."""
+    expected = _contract_tags() if written == "contract" else {}
+
+    assert bound_tags_to_write(BOUNDED_JOB, run_tags) == expected

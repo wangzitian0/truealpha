@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
 from data_engine.dagster_defs import build_definitions
-from data_engine.run_launcher import max_runtime_tags
+from data_engine.run_launcher import CONTRACT_BOUND_TAG, max_runtime_tags
 from truealpha_contracts.environment_contract import load_environment_contract
 
 #: The environments that run the deployed definitions. Their schedules differ in status only.
@@ -74,6 +74,6 @@ def test_no_measured_success_reaches_the_bound_of_its_job(job_name: str) -> None
         return
 
     assert bound is not None
-    assert max_runtime_tags(job_name) == {MAX_RUNTIME_SECONDS_TAG: str(bound)}
+    assert max_runtime_tags(job_name) == {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
     for environment, times in (basis.measured or {}).items():
         assert bound > times.longest_minutes * 60, f"{job_name}: a {environment} success reaches the bound"

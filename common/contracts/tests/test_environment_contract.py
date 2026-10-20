@@ -156,6 +156,9 @@ def test_max_runtime_is_margin_times_the_longest_success_over_all_environments()
         {"estimate_tick": "sp500", "unmeasured": "no run yet"},
         {"measured": {"staging": {"successes": 1, "longest_minutes": 1.0}}, "estimate_tick": "sp500"},
         {"measured": {"staging": {"successes": 0, "longest_minutes": 1.0}}},
+        {"measured": {"staging": {"successes": 1, "longest_minutes": 1.0}}, "unmeasured": ""},
+        {"measured": {}, "estimate_tick": "sp500"},
+        {"unmeasured": ""},
     ],
 )
 def test_a_job_declares_exactly_one_valid_run_time_basis(basis: dict[str, object]) -> None:
