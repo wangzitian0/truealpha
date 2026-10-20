@@ -700,6 +700,8 @@ def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
     assert gppe["required_semantics"] == ["financial-fact"]
     assert (gppe["complete_subjects"], gppe["universe_subjects"]) == (2, 4)
     assert gppe["ratio"] == "0.5000"
+    # #1346: the report names the complete subjects, so a check can compare sets, not counts.
+    assert gppe["complete_subject_ids"] == ["listing:a", "listing:c"]
 
 
 def test_factor_availability_with_no_graded_subjects_is_zero() -> None:
