@@ -19,10 +19,21 @@ import {
   formatTierLabel,
   formatUsdMagnitude,
 } from "@/client/format";
-import { type AccessContext, type ValuationBasis, valuationBasisLabel } from "@/contracts/strategyRun";
+import {
+  normalizePegConvention,
+  normalizeRankingUniverse,
+  PEG_CONVENTION_LABELS,
+  projectPegByConvention,
+  type AccessContext,
+  type PegGrowthConvention,
+  type RankingUniverse,
+  type ValuationBasis,
+  valuationBasisLabel,
+} from "@/contracts/strategyRun";
 import { loadEntityDetail, loadRanking, type MartAdapterLike } from "@/server/dashboard";
 import { PostgresDocumentsRepository, type DocumentsRepository } from "@/server/documents";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
+import type { AnalystRatingsDetail, SupplyChainExposureDetail } from "@/server/mart/research-read";
 
 export const XHS_CARD_WIDTH = 1080;
 export const XHS_CARD_HEIGHT = 1440;
@@ -49,6 +60,8 @@ export interface RankingCardData {
   cutoffAt: string;
   totalMembers: number;
   items: RankingCardItem[];
+  pegConvention?: PegGrowthConvention;
+  universe?: RankingUniverse;
 }
 
 function escapeXml(unsafe: string): string {
@@ -90,7 +103,7 @@ function prepareRankingCardViewModel(
     issuerId: item.issuerId,
     displayName: item.displayName,
     rankStr: item.rank !== null ? `#${item.rank}` : fallbackGlyph,
-    tierStr: item.tier ?? fallbackGlyph,
+    tierStr: formatTierLabel(item.tier, fallbackGlyph),
     gapColor: gapHexColor(item.valuationGap),
     formattedGap: formatSignedRatio(item.valuationGap) ?? fallbackGlyph,
     formattedMultiple: formatRatio(item.currentMultiple) ?? fallbackGlyph,
@@ -107,6 +120,8 @@ export function buildRankingCardJson(data: RankingCardData) {
     template_version: CARD_TEMPLATE_VERSION,
     title: "Valuation Rankings",
     cutoff_at: data.cutoffAt,
+    universe: data.universe ?? "topt",
+    peg_convention: data.pegConvention ?? "historical_cagr",
     generated_at: new Date().toISOString(),
     research_risk_note:
       "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
@@ -258,9 +273,12 @@ export interface EntityCardData {
   valuationBasis: ValuationBasis | null;
   valuationGap: string | null;
   peg: string | null;
+  pegConvention?: PegGrowthConvention;
   gppe: string | null;
   operatingBranch: string | null;
   themes: Array<{ theme: string; themeShare: string | null }>;
+  analystRatings?: AnalystRatingsDetail | null;
+  supplyChainExposure?: SupplyChainExposureDetail | null;
   confidence: string | null;
 }
 
@@ -270,6 +288,7 @@ interface FormattedEntityViewModel {
   formattedMultiple: string;
   basisLabel: string;
   formattedPeg: string;
+  pegConventionLabel: string;
   formattedGppe: string;
   formattedConf: string;
   tierText: string;
@@ -286,9 +305,10 @@ function prepareEntityCardViewModel(
     formattedMultiple: formatRatio(data.currentMultiple) ?? fallbackGlyph,
     basisLabel: valuationBasisLabel(data.valuationBasis),
     formattedPeg: formatRatio(data.peg) ?? fallbackGlyph,
+    pegConventionLabel: PEG_CONVENTION_LABELS[data.pegConvention ?? "historical_cagr"],
     formattedGppe: formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : fallbackGlyph),
     formattedConf: formatRatio(data.confidence) ?? fallbackGlyph,
-    tierText: formatTierLabel(data.tier),
+    tierText: formatTierLabel(data.tier, fallbackGlyph),
     displayThemes: data.themes.slice(0, 4),
   };
 }
@@ -318,7 +338,7 @@ export function buildEntityCardJson(data: EntityCardData) {
     research_risk_note:
       "Deep dive reflects one versioned strategy run at one cutoff; historical indicators are not forward-looking guarantees.",
     source_attribution:
-      "TrueAlpha research — traceable to materialized factor outputs (mart.strategy_decisions, mart.topt_gppe_results, mart.issuer_theme_purity).",
+      "TrueAlpha research — traceable to materialized factor outputs (mart.strategy_decisions, mart.topt_gppe_results, mart.issuer_theme_purity, mart.issuer_analyst_ratings, mart.issuer_supply_chain_exposure).",
     metrics: {
       tier: formatCell(data.tier),
       current_price_to_sales: data.currentPriceToSales,
@@ -326,6 +346,7 @@ export function buildEntityCardJson(data: EntityCardData) {
       valuation_basis: data.valuationBasis,
       valuation_gap: data.valuationGap,
       peg: data.peg,
+      peg_convention: data.pegConvention ?? "historical_cagr",
       gppe: data.gppe,
       operating_branch: data.operatingBranch,
       confidence: data.confidence,
@@ -334,6 +355,8 @@ export function buildEntityCardJson(data: EntityCardData) {
       theme: t.theme,
       theme_share: t.themeShare,
     })),
+    analyst_ratings: data.analystRatings ?? null,
+    supply_chain_exposure: data.supplyChainExposure ?? null,
   };
 }
 
@@ -344,6 +367,7 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
     formattedMultiple: formattedPs,
     basisLabel,
     formattedPeg,
+    pegConventionLabel,
     formattedGppe,
     formattedConf,
     tierText,
@@ -451,7 +475,7 @@ export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
       
       <text x="24" y="70" font-size="15" fill="#94A3B8">PEG</text>
       <text x="24" y="112" font-size="34" font-family="monospace" font-weight="700" fill="#38BDF8">${escapeXml(formattedPeg)}</text>
-      <text x="440" y="110" font-size="13" fill="#64748B" text-anchor="end">Historical CAGR</text>
+      <text x="440" y="110" font-size="13" fill="#64748B" text-anchor="end">${escapeXml(pegConventionLabel)}</text>
     </g>
   </g>
 
@@ -913,7 +937,7 @@ export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise
             { style: { fontSize: 28, fontWeight: 700, color: "#38BDF8", marginTop: "14px" } },
             `PEG: ${vm.formattedPeg}`,
           ),
-          h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "6px" } }, "Historical CAGR"),
+          h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "6px" } }, vm.pegConventionLabel),
         ),
       ),
       h(
@@ -1042,7 +1066,8 @@ async function persistCardDocument(
       contentType,
     });
     return created.document.documentId;
-  } catch {
+  } catch (error) {
+    console.error("persistCardDocument error:", error);
     return null;
   }
 }
@@ -1098,6 +1123,8 @@ export async function handleCardExportGet(
   const kind = searchParams.get("kind") ?? "ranking";
   const cutoff = searchParams.get("cutoff") ?? undefined;
   const format = searchParams.get("format") ?? "png";
+  const convention = normalizePegConvention(searchParams.get("convention"));
+  const universe = normalizeRankingUniverse(searchParams.get("universe"));
   const persist = searchParams.get("persist") !== "0";
   const documents = deps.documents ?? new PostgresDocumentsRepository();
 
@@ -1119,6 +1146,7 @@ export async function handleCardExportGet(
     const latestRow = state.data.rows
       .slice()
       .sort((a, b) => b.cutoffAt.localeCompare(a.cutoffAt))[0];
+    const projectedPeg = projectPegByConvention(latestRow ?? {}, convention);
 
     const cardData: EntityCardData = {
       issuerId: state.data.issuerId,
@@ -1129,10 +1157,13 @@ export async function handleCardExportGet(
       currentMultiple: latestRow?.currentMultiple ?? null,
       valuationBasis: latestRow?.valuationBasis ?? null,
       valuationGap: latestRow?.valuationGap ?? null,
-      peg: latestRow?.peg ?? null,
+      peg: projectedPeg.peg,
+      pegConvention: convention,
       gppe: state.data.gppeDetail?.gppe ?? latestRow?.capitalAdjustedLaborEfficiency ?? null,
       operatingBranch: state.data.gppeDetail?.operatingBranch ?? null,
       themes: entityCardThemes(state.data.themes ?? []),
+      analystRatings: state.data.analystRatings ?? null,
+      supplyChainExposure: state.data.supplyChainExposure ?? null,
       confidence: latestRow?.confidence ?? null,
     };
 
@@ -1145,7 +1176,7 @@ export async function handleCardExportGet(
       });
     }
 
-    const artifactId = `card:entity:${toStableToken(state.data.issuerId)}:${toStableToken(cardData.cutoffAt)}`;
+    const artifactId = `card:entity:${toStableToken(state.data.issuerId)}:${toStableToken(cardData.cutoffAt)}:${toStableToken(convention)}:${toStableToken(format)}`;
     const fileStem = `truealpha-card-entity-${state.data.issuerId.replace(/[:]/g, "-")}`;
 
     if (format === "svg") {
@@ -1177,7 +1208,11 @@ export async function handleCardExportGet(
     });
   }
 
-  const state = await loadRanking(principal.context, { cutoffAt: cutoff, cursor: null }, deps.adapter);
+  const state = await loadRanking(
+    principal.context,
+    { cutoffAt: cutoff, cursor: null, universe },
+    deps.adapter,
+  );
   if (state.kind !== "ready") {
     return NextResponse.json(
       { error: "ranking data not ready for card export", read_state: state.kind },
@@ -1190,6 +1225,8 @@ export async function handleCardExportGet(
   const cardData: RankingCardData = {
     cutoffAt: state.data.cutoffAt,
     totalMembers: state.data.page.total,
+    pegConvention: convention,
+    universe,
     items: state.data.rows.map((row) => ({
       rank: row.rank,
       issuerId: row.issuerId,
@@ -1199,7 +1236,7 @@ export async function handleCardExportGet(
       currentMultiple: row.currentMultiple,
       valuationBasis: row.valuationBasis,
       valuationGap: row.valuationGap,
-      peg: row.peg,
+      peg: projectPegByConvention(row, convention).peg,
       confidence: row.confidence,
     })),
   };
@@ -1213,7 +1250,7 @@ export async function handleCardExportGet(
     });
   }
 
-  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}`;
+  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(universe)}:${toStableToken(convention)}:${toStableToken(format)}`;
   const fileStem = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}`;
 
   if (format === "svg") {

@@ -5,7 +5,7 @@ import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { formatCell, formatRatio, formatSignedRatio, signColor } from "@/client/format";
+import { formatCell, formatRatio, formatSignedRatio, formatTierLabel, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
 import {
@@ -52,7 +52,11 @@ export default async function RankingsPage({
   const params = await searchParams;
   const convention = normalizePegConvention(params.convention);
   const selectedUniverse = normalizeRankingUniverse(params.universe);
-  const state = await loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const state = await loadRanking(principal.context, {
+    cutoffAt: params.cutoff,
+    cursor: params.cursor ?? null,
+    universe: selectedUniverse,
+  });
   const names = await loadEntityDisplayMap();
   // #1235: one run, one definition, one basis. Under definition 1.0.0 the gap divides P/GP.
   const basisLabel = valuationBasisLabel(
@@ -151,7 +155,11 @@ export default async function RankingsPage({
               <span className="font-mono text-gray-300">{convention}</span> · Universe:{" "}
               <span className="font-mono uppercase text-gray-300">{selectedUniverse}</span>
             </p>
-            <CardExportButton cutoff={params.cutoff} />
+            <CardExportButton
+              cutoff={params.cutoff}
+              convention={convention}
+              universe={selectedUniverse}
+            />
           </div>
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
@@ -196,7 +204,7 @@ export default async function RankingsPage({
                           {entityLabel(row.issuerId, names)}
                         </Link>
                       </th>
-                      <td className="px-4 py-3">{formatCell(row.tier)}</td>
+                      <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
                       <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
                         {formatCell(formatRatio(row.currentPriceToSales))}
                       </td>

@@ -14,7 +14,12 @@
  * streaming/suspense boundary; the current mart read never returns it.
  */
 
-import type { AccessContext } from "@/contracts/strategyRun";
+import {
+  matchesRankingUniverse,
+  normalizeRankingUniverse,
+  type AccessContext,
+  type RankingUniverse,
+} from "@/contracts/strategyRun";
 import {
   StrategyRunReadAdapter,
   MartReadUnavailable,
@@ -41,6 +46,7 @@ export interface OverviewData {
 
 export interface RankingData {
   cutoffAt: string;
+  universe: RankingUniverse;
   rows: readonly RankingRow[];
   page: PageInfo;
 }
@@ -61,10 +67,10 @@ export interface MartAdapterLike {
   comparison: StrategyRunReadAdapter["comparison"];
   entityDetail: StrategyRunReadAdapter["entityDetail"];
   traceView: StrategyRunReadAdapter["traceView"];
-  entityThemePurity?: StrategyRunReadAdapter["entityThemePurity"];
-  entityGppeDetail?: StrategyRunReadAdapter["entityGppeDetail"];
-  entityAnalystRatings?: StrategyRunReadAdapter["entityAnalystRatings"];
-  entitySupplyChainExposure?: StrategyRunReadAdapter["entitySupplyChainExposure"];
+  entityThemePurity: StrategyRunReadAdapter["entityThemePurity"];
+  entityGppeDetail: StrategyRunReadAdapter["entityGppeDetail"];
+  entityAnalystRatings: StrategyRunReadAdapter["entityAnalystRatings"];
+  entitySupplyChainExposure: StrategyRunReadAdapter["entitySupplyChainExposure"];
 }
 
 async function guard<T>(
@@ -95,16 +101,18 @@ export async function loadOverview(
 
 export async function loadRanking(
   context: AccessContext | null,
-  params: { cutoffAt?: string; cursor?: string | null; limit?: number } = {},
+  params: { cutoffAt?: string; cursor?: string | null; limit?: number; universe?: RankingUniverse | string } = {},
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<RankingData>> {
   return guard<RankingData>(context, async (mart, ctx) => {
     const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
     if (cutoffAt === null) return { kind: "empty" };
-    const rows = await mart.ranking(ctx, cutoffAt);
+    const universe = normalizeRankingUniverse(params.universe);
+    const allRows = await mart.ranking(ctx, cutoffAt);
+    const rows = allRows.filter((row) => matchesRankingUniverse(row.provenance.universeVersion, universe));
     if (rows.length === 0) return { kind: "empty" };
     const page = paginate(rows, params.cursor ?? null, params.limit);
-    return { kind: "ready", data: { cutoffAt, rows: page.items, page: page.info } };
+    return { kind: "ready", data: { cutoffAt, universe, rows: page.items, page: page.info } };
   }, adapter);
 }
 
@@ -132,10 +140,10 @@ export async function loadEntityDetail(
     const detail = await mart.entityDetail(ctx, issuerId);
     if (detail === null) return { kind: "empty" };
     const [themes, gppeDetail, analystRatings, supplyChainExposure] = await Promise.all([
-      mart.entityThemePurity ? mart.entityThemePurity(ctx, detail.issuerId) : Promise.resolve([]),
-      mart.entityGppeDetail ? mart.entityGppeDetail(ctx, detail.issuerId) : Promise.resolve(null),
-      mart.entityAnalystRatings ? mart.entityAnalystRatings(ctx, detail.issuerId) : Promise.resolve(null),
-      mart.entitySupplyChainExposure ? mart.entitySupplyChainExposure(ctx, detail.issuerId) : Promise.resolve(null),
+      mart.entityThemePurity(ctx, detail.issuerId),
+      mart.entityGppeDetail(ctx, detail.issuerId),
+      mart.entityAnalystRatings(ctx, detail.issuerId),
+      mart.entitySupplyChainExposure(ctx, detail.issuerId),
     ]);
     return {
       kind: "ready",
