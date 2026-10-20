@@ -450,15 +450,25 @@ export function moduleSourceTable(entry: ModuleCatalogEntry): string {
 	return entry.outputTable ?? DECISION_SOURCE;
 }
 
+/** #42: the output tables whose readers take only served runs (`servedRunPredicate`). */
+const SERVED_RUN_TABLES: ReadonlySet<MartOutputTable> = new Set<MartOutputTable>([
+	"mart.issuer_supply_chain_exposure",
+	"mart.issuer_analyst_ratings",
+]);
+
 /**
  * Counts the newest run in one output table, in one statement. The newest run has the newest
- * cutoff. The theme-purity reader uses the same rule. `table` is a typed constant, never input.
+ * cutoff. The theme-purity reader uses the same rule. For modules 3 and 4 the run must also be
+ * served (#42): the count describes the rows the entity page can show, never a newer unserved
+ * run. `table` is a typed constant, never input.
  */
 export function moduleOutputCountSql(table: MartOutputTable): string {
+	const served = SERVED_RUN_TABLES.has(table) ? `where ${servedRunPredicate("run_id")}` : "";
 	return `
 		with newest as (
 			select run_id
 			from ${table}
+			${served}
 			group by run_id
 			order by max(cutoff) desc
 			limit 1

@@ -88,6 +88,10 @@ FIRST_PARTY_ROOTS = {
     "factors": REPO / "common" / "factors" / "src",
 }
 FIXTURE_NAME = re.compile(r"^Fixture[A-Z]\w*$")
+#: A string that names a first-party module, alone or as `module:attribute`. Dagster lanes
+#: (`LANE_MODULES`) and source route builders are loaded by `import_module` from such
+#: strings, so the walk follows them like imports.
+MODULE_STRING = re.compile(r"^(?:" + "|".join(FIRST_PARTY_ROOTS) + r")(?:\.[A-Za-z_]\w*)+(?::[A-Za-z_]\w*)?$")
 
 
 def _module_file(module: str) -> Path | None:
@@ -116,6 +120,8 @@ def _imported(module: str, path: Path, tree: ast.AST) -> list[tuple[str, tuple[s
             else:
                 target = node.module or ""
             found.append((target, tuple(alias.name for alias in node.names)))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and MODULE_STRING.match(node.value):
+            found.append((node.value.partition(":")[0], ()))
     return found
 
 
@@ -172,6 +178,10 @@ def test_the_closure_walk_is_not_vacuous() -> None:
         "truealpha_contracts",
         "truealpha_contracts.research_report_mart",
         "truealpha_contracts.strategy_run_postgres",
+        # Loaded by import_module from strings: the Dagster lanes and a source route builder.
+        "data_engine.lanes.backtest",
+        "data_engine.lanes.market_data",
+        "data_engine.datahub.production_topt.release_derived_adapter",
     ):
         assert module in closure, f"{module} is deployed but the walk did not reach it"
     assert len(closure) > 100, f"the walk reached only {len(closure)} modules"
@@ -187,6 +197,8 @@ def test_the_reach_check_catches_the_2026_10_20_shape() -> None:
         "def f():\n    from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository\n": 2,
         "import truealpha_contracts.strategy_run_fixture as source\n": 1,
         "class Reader(source.FixtureStrategyRunRepository):\n    pass\n": 1,
+        'LANES = ("truealpha_contracts.strategy_run_fixture",)\n': 1,
+        'ROUTE = "truealpha_contracts.strategy_run_fixture:build_route"\n': 1,
     }
     for source, expected in shapes.items():
         found = _fixture_reaches("truealpha_contracts.research_report_mart", path, ast.parse(source))

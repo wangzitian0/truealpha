@@ -66,6 +66,8 @@ _ANALYST_TITLE = "Analyst consensus"
 NO_SERVED_ROW = "no_row_in_served_head"
 #: The module read failed; the section says so instead of reading as "no row".
 MART_READ_FAILED = "mart_read_failed"
+#: The served row is later than the report's cutoff: it was not knowable at the cutoff.
+ROW_AFTER_REPORT_CUTOFF = "served_row_after_report_cutoff"
 #: The strategy decision of the cutoff records no PEG value.
 PEG_NOT_RECORDED = "peg_not_recorded"
 
@@ -283,11 +285,15 @@ def _module_section(
     issuer_id: str,
     row: SupplyChainExposure | AnalystRatings,
     labeled: tuple[tuple[str, str | None], ...],
+    report_cutoff: datetime,
 ) -> ReportSection:
     """One served module row as a section. Every value keeps the row's own cutoff,
-    confidence, extractor and run, so a reader sees where it came from."""
-    status = row.availability_status
+    confidence, extractor and run, so a reader sees where it came from. A row later than
+    the report's cutoff is not shown: the report is anchored to what was knowable then."""
     cutoff_at = datetime.fromisoformat(row.cutoff.replace("Z", "+00:00"))
+    if cutoff_at > report_cutoff:
+        return _module_absent(section_kind, title, ROW_AFTER_REPORT_CUTOFF)
+    status = row.availability_status
     trace = EvidenceTrace(
         reference_id=f"{table}:{row.run_id}:{issuer_id}",
         materialized_output_id=row.run_id,
@@ -320,7 +326,7 @@ def _module_absent(section_kind: ReportSectionKind, title: str, reason: str) -> 
     return ReportSection(section_kind=section_kind, title=title, availability=status, reason_codes=(reason,))
 
 
-def _supply_chain_section(issuer_id: str, modules: IssuerModuleReader) -> ReportSection:
+def _supply_chain_section(issuer_id: str, report_cutoff: datetime, modules: IssuerModuleReader) -> ReportSection:
     try:
         row = modules.supply_chain_exposure(issuer_id)
     except psycopg.Error:
@@ -340,10 +346,11 @@ def _supply_chain_section(issuer_id: str, modules: IssuerModuleReader) -> Report
             ("customers_count", str(row.customers_count)),
             ("max_partner_share", row.max_partner_share),
         ),
+        report_cutoff,
     )
 
 
-def _analyst_section(issuer_id: str, modules: IssuerModuleReader) -> ReportSection:
+def _analyst_section(issuer_id: str, report_cutoff: datetime, modules: IssuerModuleReader) -> ReportSection:
     try:
         row = modules.analyst_ratings(issuer_id)
     except psycopg.Error:
@@ -364,6 +371,7 @@ def _analyst_section(issuer_id: str, modules: IssuerModuleReader) -> ReportSecti
             ("hold_count", str(row.hold_count)),
             ("sell_count", str(row.sell_count)),
         ),
+        report_cutoff,
     )
 
 
@@ -383,8 +391,8 @@ def _company_subject(
         _operating_efficiency_section(decision, source, corpus_sha256),
         _valuation_section(decision, source, corpus_sha256),
         _peg_section(decision, source, corpus_sha256),
-        _supply_chain_section(decision.issuer_id, modules),
-        _analyst_section(decision.issuer_id, modules),
+        _supply_chain_section(decision.issuer_id, decision.cutoff_at, modules),
+        _analyst_section(decision.issuer_id, decision.cutoff_at, modules),
         _strategy_summary_section(decision, source, corpus_sha256),
     )
     return ReportSubject(subject_id=decision.issuer_id, display_name=decision.issuer_id, sections=sections)

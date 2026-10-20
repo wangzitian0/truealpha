@@ -529,3 +529,16 @@ def test_the_mart_reader_has_no_default_source() -> None:
         MartResearchReadRepository(strategy_repository=FixtureStrategyRunRepository())
     with pytest.raises(TypeError):
         MartResearchReadRepository(issuer_modules=_NoServedModuleRows())
+
+
+def test_a_served_row_later_than_the_report_cutoff_is_not_shown() -> None:
+    """Point in time: a report anchored at 2026-06-30 never shows a module row of 2026-09-30."""
+    modules = _ServedModuleRows()
+    later = {"cutoff": "2026-09-30T23:59:59Z"}
+    modules.supply = modules.supply.model_copy(update=later)
+    modules.analyst = modules.analyst.model_copy(update=later)
+    sections = _company_sections(modules)
+    for kind in (ReportSectionKind.SUPPLY_CHAIN, ReportSectionKind.ANALYST_HISTORY):
+        assert sections[kind].availability is AvailabilityStatus.UNAVAILABLE
+        assert sections[kind].reason_codes == ("served_row_after_report_cutoff",)
+        assert sections[kind].results == ()

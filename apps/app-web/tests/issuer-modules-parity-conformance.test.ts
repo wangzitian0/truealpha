@@ -20,7 +20,7 @@ import { Client, type PoolClient } from "pg";
 
 import type { AccessContext } from "../src/contracts/strategyRun";
 import { __setTestClient } from "../src/server/mart/db";
-import { StrategyRunReadAdapter } from "../src/server/mart/research-read";
+import { moduleOutputCountSql, StrategyRunReadAdapter } from "../src/server/mart/research-read";
 
 import { requireDb } from "./helpers/db-guard";
 
@@ -167,6 +167,14 @@ if (db !== null) {
           canonical(CANON.analyst_ratings.expected, false),
         `module 4 differs from the canon: ${JSON.stringify(analyst)}`,
       );
+      // The module coverage count describes the rows the entity page can show: never the
+      // newer unserved run.
+      for (const table of ["mart.issuer_supply_chain_exposure", "mart.issuer_analyst_ratings"] as const) {
+        const counted = await db.query(moduleOutputCountSql(table));
+        const runId = counted.rows[0]?.run_id;
+        assert(runId !== CANON.unserved_run_id, `${table}: the coverage count names the unserved run ${runId}`);
+        assert(typeof runId === "string", `${table}: the coverage count names no run`);
+      }
     });
 
     // Rows exist, but no head serves their run: the App shows nothing, never a bare latest.
