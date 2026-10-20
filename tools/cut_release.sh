@@ -176,6 +176,15 @@ echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "cut_release: $TAG 
 fail() { echo "cut_release: $*" >&2; exit 1; }
 note() { echo "  $*"; }
 
+# The poll budget of one wait loop. Each loop below polls GitHub about every 10 s and
+# names its own budget. CUT_RELEASE_MAX_POLLS lowers every budget, never raises one. The
+# tests set it: their fake `gh` answers at once and never changes its answer, so a test of
+# a timeout path spent its whole budget, 121 fake calls and up to 24 s for one test (#1412 L3).
+polls() {
+  local budget="$1" cap="${CUT_RELEASE_MAX_POLLS:-}"
+  if [ -n "$cap" ] && [ "$cap" -lt "$budget" ]; then echo "$cap"; else echo "$budget"; fi
+}
+
 # vX.Y.Z -> vX.Y.(Z+1). Only ever called on a value that already matched the
 # vX.Y.Z regex (the CLI arg above, or a candidate this function itself just
 # produced), so no further validation here.
@@ -559,7 +568,7 @@ fi
 #    then no longer among the last 20 runs, and this wait would fail.
 if [ "$PROD" != "1" ]; then
   MAIN_RUN=""
-  for _ in $(seq 1 90); do
+  for _ in $(seq 1 "$(polls 90)"); do
     STATE=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
       --json databaseId,headSha,status,conclusion \
       -q "[.[]|select(.headSha==\"$LOCAL_MAIN\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
@@ -614,7 +623,7 @@ else
 
   echo "== waiting for tag ci-required =="
   TAG_RUN=""
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 "$(polls 120)"); do
     TAG_RUN=$(gh run list --repo "$REPO" --limit 30 --json databaseId,headBranch,event,status,conclusion \
       -q "[.[]|select(.headBranch==\"$TAG\" and .event==\"push\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
     case "$TAG_RUN" in
@@ -653,7 +662,7 @@ deploy() { # $1=staging|prod, extra -f args after
     -f deploy_type="$TYPE" -f version_ref="$TAG" -f source_run_id="$TAG_RUN_ID" "$@" >/dev/null
   local TITLE="Deploy $TYPE $TAG"
   local RUN=""
-  for _ in $(seq 1 12); do
+  for _ in $(seq 1 "$(polls 12)"); do
     RUN=$(gh run list --repo "$REPO" --workflow deploy-release.yml --limit 10 \
       --json databaseId,displayTitle,createdAt \
       -q "[.[]|select(.displayTitle==\"$TITLE\" and .createdAt>=\"$DISPATCHED_AT\")][0].databaseId // empty")
@@ -661,7 +670,7 @@ deploy() { # $1=staging|prod, extra -f args after
     sleep 5
   done
   [ -n "$RUN" ] || fail "$TYPE deploy dispatch for $TAG never appeared in the run list after 60s"
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 "$(polls 120)"); do
     local S
     S=$(gh run view "$RUN" --repo "$REPO" --json status,conclusion -q '"\(.status) \(.conclusion)"')
     case "$S" in
@@ -694,7 +703,7 @@ wait_for_walk() { # $1=staging|prod
   local RUN=""
   # workflow_run has to be delivered and queued after the deploy run finishes;
   # give it the same slack deploy()'s own dispatch-registration wait uses.
-  for _ in $(seq 1 18); do
+  for _ in $(seq 1 "$(polls 18)"); do
     RUN=$(gh run list --repo "$REPO" --workflow walk-release.yml --limit 20 \
       --json databaseId,displayTitle,createdAt \
       -q "[.[]|select(.displayTitle==\"$TITLE\")] | sort_by(.createdAt) | last | .databaseId // empty")
@@ -702,7 +711,7 @@ wait_for_walk() { # $1=staging|prod
     sleep 10
   done
   [ -n "$RUN" ] || fail "no '$TITLE' run appeared within 3 minutes of the $TYPE deploy — check walk-release.yml's workflow_run trigger, or re-run by hand: gh workflow run walk-release.yml -f deploy_type=$TYPE -f version_ref=$TAG"
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "$(polls 60)"); do
     local S
     S=$(gh run view "$RUN" --repo "$REPO" --json status,conclusion -q '"\(.status) \(.conclusion)"')
     case "$S" in
