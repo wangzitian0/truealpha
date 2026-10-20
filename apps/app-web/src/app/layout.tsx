@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppChrome } from "@/components/app-chrome";
+import { HydrationMarker } from "@/components/hydration-marker";
 import "./globals.css";
 
 /* #371: the top bar renders the verified session's identity, so NO route may
@@ -43,6 +44,9 @@ export default function RootLayout({
         <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
           {children}
         </main>
+        {/* #1412: sets html[data-hydrated] once React has hydrated this page.
+            The release walk waits for it after every navigation. */}
+        <HydrationMarker />
       </body>
     </html>
   );

@@ -34,6 +34,7 @@
 
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
+import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
 const BASE = process.env.TA_BASE_URL;
@@ -78,10 +79,10 @@ const ID_PATTERN =
  */
 async function assertNoVisibleRawIds(page, path, problems) {
   if (!path.startsWith("/research")) return;
-  // Compute visible text without mutating the live DOM: against a remote
-  // deployment, gotoStable resolves at domcontentloaded before React hydration
-  // completes, and any DOM node replacement or style mutation on the live tree
-  // causes React hydrateRoot() to throw Minified React error #418 (HTML mismatch).
+  // Compute visible text without mutating the live DOM. A DOM node replacement
+  // or style mutation before React hydration completes causes Minified React
+  // error #418 (HTML mismatch). gotoStable now returns after hydration (#1412),
+  // and this read still has no side effect on the page.
   const visible = await page.evaluate(() => {
     const pieces = [];
     function collect(node) {
@@ -494,44 +495,8 @@ async function assertEntityDetailRenders(page, path, problems) {
   if (leak) problems.push(`entity-detail: ${href} shows "${leak[0]}"`);
 }
 
-/** Navigate deterministically, and survive a saturated host without hiding a real outage.
- *
- * `waitUntil: "networkidle"` was the previous wait everywhere here. Playwright's own docs
- * mark it DISCOURAGED, and on 2026-08-31 it failed a production deploy that was entirely
- * healthy: every container had been up 21 hours, `https://truealpha.club/login` answered
- * 200 in 0.38s, and the walk still timed out after 30s. The host runs 93 containers across
- * four projects at load ~8.5 on 8 cores, so "500ms with no network activity" is a condition
- * that may simply never occur -- the gate was measuring the neighbours' traffic.
- *
- * A gate that fails while the service is fine is worse than no gate: it trains everyone to
- * re-run it. So: wait for a deterministic lifecycle event, then for the page's own main
- * region to exist (the assertions below read rendered DOM, so `domcontentloaded` alone is
- * not enough for an app-router page), and retry ONCE. A real outage fails both attempts and
- * still fails fast; a saturation blip no longer costs a deploy.
- */
-async function gotoStable(page, url) {
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 20000 });
-      const signOutCount = await page.locator("[data-sign-out]").count();
-      if (signOutCount > 0) {
-        await page
-          .waitForSelector('[data-sign-out][data-hydrated="true"]', { state: "attached", timeout: 15000 })
-          .catch(() => null);
-      }
-      // The response of the navigation that succeeded, for a caller that checks the HTTP status (#1241).
-      return response;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-async function checkRoute(page, path, role, pageErrors = []) {
-  pageErrors.length = 0;
+async function checkRoute(page, path, role, pageErrors) {
+  pageErrors.startRoute(role, path);
   await gotoStable(page, `${BASE}${path}`);
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
@@ -549,14 +514,14 @@ async function checkRoute(page, path, role, pageErrors = []) {
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
-  for (const err of pageErrors) {
+  for (const err of pageErrors.failures) {
     problems.push(`pageerror: ${err}`);
   }
   return problems;
 }
 
 /** One full pass over every live route under one identity. */
-async function walkRoutes(browser, { role, email, password }) {
+async function walkRoutes(browser, { role, email, password }, pageErrors) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
   if (login.status() !== 200) {
@@ -573,14 +538,10 @@ async function walkRoutes(browser, { role, email, password }) {
     }
   }
   const page = await context.newPage();
-  const pageErrors = [];
+  // A page error fails the route, except React #418: the ledger counts those per route,
+  // and the walk prints the count at its end (#1412).
   page.on("pageerror", (error) => {
-    const msg = error.message || String(error);
-    // Recoverable React hydration warnings (#418) reported via window.reportError
-    // during Cloudflare / streaming transition do not prevent full client hydration
-    // (proven by sign-out-journey.mjs and all DOM contract assertions).
-    if (/Minified React error #418\b/.test(msg)) return;
-    pageErrors.push(msg);
+    pageErrors.record(error.message || String(error), new URL(page.url()).pathname);
   });
 
   let failures = 0;
@@ -598,18 +559,25 @@ async function walkRoutes(browser, { role, email, password }) {
 }
 
 const browser = await chromium.launch();
-// Two passes. The administrator pass asserts (c) across the whole frozen tree —
-// it is the only identity that can see operator chrome at all. The member pass
-// (#371) asserts the mirror image: no chrome, no world switch, and the same
-// identity/current-page properties everywhere else.
-let failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD });
-if (MEMBER_EMAIL) {
-  failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD });
+const pageErrors = createPageErrorLedger();
+let failures = 0;
+try {
+  // Two passes. The administrator pass asserts (c) across the whole frozen tree —
+  // it is the only identity that can see operator chrome at all. The member pass
+  // (#371) asserts the mirror image: no chrome, no world switch, and the same
+  // identity/current-page properties everywhere else.
+  failures += await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD }, pageErrors);
+  if (MEMBER_EMAIL) {
+    failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD }, pageErrors);
+  }
+  // #540/#811: the sign-out journey lives in its own module so a test can drive it
+  // against a fake browser. It logs in once more, for its own session.
+  failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
+} finally {
+  // Printed also when gotoStable stops the walk, so the filter is visible in every log.
+  for (const line of pageErrors.ignoredReport()) console.log(line);
+  await browser.close();
 }
-// #540/#811: the sign-out journey lives in its own module so a test can drive it
-// against a fake browser. It logs in once more, for its own session.
-failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
-await browser.close();
 
 if (failures > 0) {
   console.error(`${failures} route(s) violated the #494 contract`);

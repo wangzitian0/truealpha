@@ -39,6 +39,8 @@
  * drives both halves against a fake browser, one broken property at a time.
  */
 
+import { NAVIGATION_TIMEOUTS } from "./navigation.mjs";
+
 export const SESSION_COOKIE = "truealpha_session";
 export const CONTROL = "[data-sign-out]";
 // Set by `SignOutButton` in an effect, so it exists only after the component
@@ -52,13 +54,9 @@ const LOGOUT_PATH = "/api/auth/logout";
 /** @type {Readonly<Timeouts>} */
 export const DEFAULT_TIMEOUTS = Object.freeze({
   // Bounds the wait for the client bundle to download, parse and hydrate the
-  // chrome. It costs time only when hydration is slow or broken. No walk log
-  // measures hydration directly. What the logs do show: a passing journey takes
-  // 3-8 s end to end (v0.0.70-v0.0.73), and both pre-#853 misses spent the whole
-  // 15 s window without reaching /login. The walk opens /research about a
-  // minute after a container swap on a shared host, so the bound is three of
-  // those windows.
-  hydrationMs: 45_000,
+  // chrome: the same bound as every walk navigation. Its basis is in
+  // e2e/navigation.mjs (#1412).
+  hydrationMs: NAVIGATION_TIMEOUTS.hydrationMs,
   // From the click to the logout request being sent and answered, and from
   // there to the /login landing. Both are same-origin round trips.
   signOutMs: 15_000,
