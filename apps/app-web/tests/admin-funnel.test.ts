@@ -192,6 +192,24 @@ const TEST_CONTEXT: AccessContext = {
     manualL5 !== undefined && manualL5.status === "ok",
     "unscheduled staging head with raw freshness='stale' resolves to 'manual' and grades L5 status 'ok'",
   );
+
+  // #1416 E1/E2: isHeadScheduled comes from the generated environment contract (SP500 is unscheduled in both envs)
+  const { isHeadScheduled, resolveHeadFreshness } = await import("../src/contracts/serviceObjectives");
+  assert(
+    isHeadScheduled("universe:sp500-us-2026-09-30", "production") === false,
+    "SP500 is unscheduled in production (#1416)",
+  );
+  assert(
+    isHeadScheduled("universe:sp500-us-2026-09-30", "staging") === false,
+    "SP500 is unscheduled in staging (#1416)",
+  );
+  assert(isHeadScheduled("universe:qqq-us-2026-09-30", "production") === true, "QQQ is scheduled in production");
+  assert(isHeadScheduled("universe:qqq-us-2026-09-30", "staging") === false, "QQQ is manual in staging");
+  assert(isHeadScheduled("universe:topt-us-2026-03-31", "staging") === true, "TOPT is scheduled in staging");
+  assert(
+    resolveHeadFreshness("stale", "universe:sp500-us-2026-09-30", "production") === "manual",
+    "unscheduled SP500 head resolves to manual",
+  );
 }
 
 console.log("#494 / #1363 admin-funnel loader outcomes passed");

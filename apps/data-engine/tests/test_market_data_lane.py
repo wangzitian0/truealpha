@@ -557,7 +557,7 @@ def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
     """Rule 6 ratchet. The measured calls of one lane run, plus the busiest measured capture day, fit the daily share.
 
     152 is production's busiest capture day of 2026-09-08..15, as recorded beside
-    `TWELVE_DATA_ENVIRONMENT_SHARES` in `source_registrations.py`.
+    `derived_environment_shares` in `source_registrations.py`.
     """
     measured_busiest_capture_day = 152
     requests: list[tuple[str, str, str]] = []
