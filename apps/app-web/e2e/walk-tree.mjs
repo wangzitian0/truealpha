@@ -79,11 +79,26 @@ const ID_PATTERN =
 async function assertNoVisibleRawIds(page, path, problems) {
   if (!path.startsWith("/research")) return;
   // innerText must be computed on the LIVE body (layout-aware: excludes
-  // script/RSC payloads a detached clone would leak); the page is throwaway,
-  // so evidence elements are simply removed first.
+  // script/RSC payloads a detached clone would leak). Restore every
+  // [data-evidence] node synchronously in the same evaluate turn: against a
+  // remote deployment, gotoStable resolves at domcontentloaded before React
+  // hydration completes, and leaving [data-evidence] elements removed causes
+  // React hydrateRoot() to throw Minified React error #418 (HTML mismatch).
   const visible = await page.evaluate(() => {
-    for (const el of document.querySelectorAll("[data-evidence]")) el.remove();
-    return document.body.innerText;
+    const entries = [];
+    for (const el of document.querySelectorAll("[data-evidence]")) {
+      const marker = document.createComment("");
+      el.replaceWith(marker);
+      entries.push([marker, el]);
+    }
+    try {
+      return document.body.innerText;
+    } finally {
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const [marker, el] = entries[i];
+        marker.replaceWith(el);
+      }
+    }
   });
   const match = visible.match(ID_PATTERN);
   if (match) problems.push(`visible raw id: ${match[0]}`);
