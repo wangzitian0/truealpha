@@ -109,8 +109,8 @@ def _describe(key: str, spec: dict[str, Any]) -> str:
     return f"{key} (the code of {', '.join(spec['paths'])})"
 
 
-def parse_declaration(text: str | None, rev: str) -> dict[str, Any]:
-    """The validated declaration at `rev`. Every defect is a refusal, never a silent pass."""
+def _load(text: str | None, rev: str) -> dict[str, Any]:
+    """The declaration as a JSON object with an 'identities' object and a 'replays' list."""
     if text is None:
         raise ReplayError(
             f"{DECLARATION} is missing at {rev[:8]}. Without it the release cannot show which data "
@@ -124,31 +124,52 @@ def parse_declaration(text: str | None, rev: str) -> dict[str, Any]:
     replays = data.get("replays") if isinstance(data, dict) else None
     if not isinstance(identities, dict) or not identities or not isinstance(replays, list):
         raise ReplayError(f"{DECLARATION} at {rev[:8]} must hold a non-empty 'identities' object and a 'replays' list")
-    for key, spec in identities.items():
-        named = isinstance(spec, dict) and isinstance(spec.get("path"), str) and isinstance(spec.get("name"), str)
-        code = (
-            isinstance(spec, dict)
-            and isinstance(spec.get("paths"), list)
-            and bool(spec["paths"])
-            and all(isinstance(path, str) for path in spec["paths"])
+    return data
+
+
+def _is_named_identity(spec: object) -> bool:
+    """`{"path": P, "name": N}`: one module-level assignment."""
+    return isinstance(spec, dict) and isinstance(spec.get("path"), str) and isinstance(spec.get("name"), str)
+
+
+def _is_code_identity(spec: object) -> bool:
+    """`{"paths": [P, ...]}`: the code of whole modules."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("paths"), list) or not spec["paths"]:
+        return False
+    return all(isinstance(path, str) for path in spec["paths"])
+
+
+def _check_identity(key: str, spec: object) -> None:
+    if not _KEY.match(key) or not (_is_named_identity(spec) or _is_code_identity(spec)):
+        raise ReplayError(
+            f'{DECLARATION}: identity {key!r} must be a lowercase key with {{"path": ..., "name": ...}} or {{"paths": [...]}}'
         )
-        if not _KEY.match(key) or not (named or code):
-            raise ReplayError(
-                f"{DECLARATION}: identity {key!r} must be a lowercase key with "
-                f'{{"path": ..., "name": ...}} or {{"paths": [...]}}'
-            )
-    for entry in replays:
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("identity"), str)
-            or entry["identity"] not in identities
-            or not isinstance(entry.get("replay"), str)
-            or not entry["replay"].strip()
-            or _CONTROL.search(entry["replay"])
-        ):
-            raise ReplayError(
-                f"{DECLARATION}: replay entry {entry!r} must name a watched identity and a one-line, non-empty 'replay'"
-            )
+
+
+def _is_one_line_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and not _CONTROL.search(value)
+
+
+def _check_replay(entry: object, identities: dict[str, Any]) -> None:
+    valid = (
+        isinstance(entry, dict)
+        and isinstance(entry.get("identity"), str)
+        and entry["identity"] in identities
+        and _is_one_line_text(entry.get("replay"))
+    )
+    if not valid:
+        raise ReplayError(
+            f"{DECLARATION}: replay entry {entry!r} must name a watched identity and a one-line, non-empty 'replay'"
+        )
+
+
+def parse_declaration(text: str | None, rev: str) -> dict[str, Any]:
+    """The validated declaration at `rev`. Every defect is a refusal, never a silent pass."""
+    data = _load(text, rev)
+    for key, spec in data["identities"].items():
+        _check_identity(key, spec)
+    for entry in data["replays"]:
+        _check_replay(entry, data["identities"])
     return data
 
 

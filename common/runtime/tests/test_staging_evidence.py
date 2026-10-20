@@ -90,7 +90,9 @@ def test_a_red_tag_ci_run_is_not_a_release() -> None:
 
 
 def test_a_staging_deploy_of_another_tag_still_in_progress_during_the_walk_is_a_refusal() -> None:
-    running = _run(3031, "Deploy staging v0.2.24", "2026-10-20T04:17:00Z", "2026-10-20T04:17:30Z", status="in_progress")
+    """The `updated_at` of a run in progress is its last update, not its end. This run last
+    updated before the evidence deploy ended, but it still runs, so it can change staging."""
+    running = _run(3031, "Deploy staging v0.2.24", "2026-10-20T04:10:00Z", "2026-10-20T04:12:00Z", status="in_progress")
 
     with pytest.raises(_module.NotPromotable, match="Deploy staging v0.2.24"):
         _module.find_staging_evidence(TAG, SHA, **_sources(deploys=[DEPLOY, running]))
