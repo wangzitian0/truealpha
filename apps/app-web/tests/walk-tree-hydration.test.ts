@@ -1,6 +1,6 @@
 /**
- * #1412 W2: every walk navigation waits until the page has hydrated, and the
- * walk shows the React #418 events that it ignores.
+ * #1412 W2: every walk navigation waits until the page has hydrated.
+ * #1468: the walk ignores no page error. React #418 fails its route.
  *
  * Nine staging walks (v0.2.18 to v0.2.21) failed on "Minified React error
  * #418" on routes that changed from run to run. `gotoStable` waited for
@@ -179,13 +179,13 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 	assert(lines.length === 1 && lines[0].includes("/research/strategy"), `the retry must be printed: ${JSON.stringify(lines)}`);
 }
 
-// ─── (c) the #418 filter stays visible: a count per route ────────────────────
+// ─── (c) every page error fails its route, React #418 included (#1468) ───────
 {
-	const REACT_418 = "Minified React error #418; visit https://react.dev/errors/418?args[]=text for the full message";
+	const REACT_418 = "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message";
 	const ledger = navigation.createPageErrorLedger();
 	assert(
-		JSON.stringify(ledger.ignoredReport()) === JSON.stringify(["React #418 events that the walk ignored: 0"]),
-		`a walk without #418 must still print its count: ${JSON.stringify(ledger.ignoredReport())}`,
+		!("ignoredReport" in ledger),
+		"the ledger has an ignoredReport again: the walk must not ignore React #418, because it hides a hydration defect (#1468)",
 	);
 
 	ledger.startRoute("administrator", "/research/trace");
@@ -193,33 +193,27 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 	// assertTraceRendersDecisionInputs opens /research first, so the event names that page too.
 	ledger.record(REACT_418, "/research");
 	ledger.record("TypeError: Cannot read properties of undefined (reading 'value')", "/research/trace");
-	// The filter knows #418 only: #4180 and #423 are failures.
-	ledger.record("Minified React error #4180", "/research/trace");
-	ledger.record("Minified React error #423", "/research/trace");
 	assert(
 		JSON.stringify(ledger.failures) ===
 			JSON.stringify([
+				REACT_418,
+				`${REACT_418} (raised on /research)`,
 				"TypeError: Cannot read properties of undefined (reading 'value')",
-				"Minified React error #4180",
-				"Minified React error #423",
 			]),
-		`only #418 is ignored, and every other page error fails the route: ${JSON.stringify(ledger.failures)}`,
+		`#418 must fail its route like every other page error: ${JSON.stringify(ledger.failures)}`,
 	);
 
 	ledger.startRoute("member", "/research/rankings");
 	assert(ledger.failures.length === 0, `a new route starts with no page errors: ${JSON.stringify(ledger.failures)}`);
 	ledger.record(REACT_418, "/research/rankings");
-
-	const report = ledger.ignoredReport();
 	assert(
-		JSON.stringify(report) ===
-			JSON.stringify([
-				"React #418 events that the walk ignored: 3",
-				"  [administrator] /research/trace: 1",
-				"  [administrator] /research/trace on /research: 1",
-				"  [member] /research/rankings: 1",
-			]),
-		`the walk must print each ignored #418 under its route: ${JSON.stringify(report)}`,
+		JSON.stringify(ledger.failures) === JSON.stringify([REACT_418]),
+		`a #418 of the current route fails the route: ${JSON.stringify(ledger.failures)}`,
+	);
+
+	assert(
+		JSON.stringify(ledger.problems()) === JSON.stringify([`pageerror: ${REACT_418}`]),
+		`the route verdict must carry the #418 as a problem, so that the walk exits non-zero: ${JSON.stringify(ledger.problems())}`,
 	);
 }
 

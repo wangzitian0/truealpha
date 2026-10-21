@@ -92,27 +92,26 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
   throw new Error(`gotoStable: ${route} failed twice. ${failed.join("; ")}`);
 }
 
-// Minified React error #418 is "Hydration failed because the server rendered HTML didn't
-// match the client". React recovers: it renders the tree again on the client and reports
-// the error through window.reportError, which Playwright delivers as a `pageerror`.
-const RECOVERABLE_REACT_418 = /Minified React error #418\b/;
-
 /**
- * Splits the page errors of a walk into failures of the current route and the React #418
- * events that the walk ignores (8711285a). The ignore stays until the cause of #418 on the
- * deployed path is known; v0.2.21 still raised it with no DOM mutation by the walk (#1412).
- * The walk prints the count per route at its end, so the filter is visible in every log.
+ * Collects the page errors of a walk, one list per route. Every page error fails its route.
+ *
+ * React error #418 ("Hydration failed because the server rendered HTML didn't match the client")
+ * is a page error like any other. The walk ignored it from 8711285a until #1468. The cause was a
+ * React bug in Next 15.5 (see late-row-proxy.mjs), and Next 16.4.2 removed it. An ignored #418
+ * hid a real defect: React throws away the server markup and renders the page again on the client.
  */
 export function createPageErrorLedger() {
   /** @type {{ role: string, path: string } | null} */
   let current = null;
   /** @type {string[]} */
   const failures = [];
-  /** @type {Map<string, number>} */
-  const ignored = new Map();
   return {
-    /** The page errors of the current route that fail it. */
+    /** The page errors of the current route. */
     failures,
+    /** @returns {string[]} the problems that the page errors of the current route add to its verdict */
+    problems() {
+      return failures.map((error) => `pageerror: ${error}`);
+    },
     /**
      * @param {string} role
      * @param {string} path
@@ -126,22 +125,8 @@ export function createPageErrorLedger() {
      * @param {string} pagePath the path of the page that raised it
      */
     record(message, pagePath) {
-      if (!RECOVERABLE_REACT_418.test(message)) {
-        failures.push(message);
-        return;
-      }
-      const label = current === null ? "(before the first route)" : `[${current.role}] ${current.path}`;
-      const key = current !== null && pagePath !== current.path ? `${label} on ${pagePath}` : label;
-      ignored.set(key, (ignored.get(key) ?? 0) + 1);
-    },
-    /** @returns {string[]} the total, then one line per route */
-    ignoredReport() {
-      let total = 0;
-      for (const count of ignored.values()) total += count;
-      return [
-        `React #418 events that the walk ignored: ${total}`,
-        ...[...ignored].map(([key, count]) => `  ${key}: ${count}`),
-      ];
+      // assertTraceRendersDecisionInputs opens /research first, so an error can come from another page.
+      failures.push(current !== null && pagePath !== current.path ? `${message} (raised on ${pagePath})` : message);
     },
   };
 }
