@@ -908,6 +908,13 @@ def land(
         log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
 
 
+def current_fetch_key() -> str | None:
+    """The ledger form of the key of the `fetch_once` that is making a request now, or None.
+
+    A caller that writes its own ledger row (the moomoo SDK wrapper) reads it here."""
+    return _fetch_key.get()
+
+
 @contextmanager
 def fetching(key: FetchKey) -> Iterator[None]:
     """Stamp the ledger row of the ONE external request in the block with ``key``.

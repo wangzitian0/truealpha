@@ -201,6 +201,7 @@ def record(
                 byte_length=byte_length,
                 run_key=gateway.current_run_key(),
                 capacity_window_id=gateway.capacity_window_id("moomoo", now),
+                fetch_key=gateway.current_fetch_key(),
             )
         )
         return
