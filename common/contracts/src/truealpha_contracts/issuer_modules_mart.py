@@ -59,7 +59,7 @@ _RESOLVE_CANDIDATES_SQL = (
 )
 
 _RESOLVE_BATCH_CANDIDATES_SQL = (
-    "select inp.raw_q,"
+    "select u.raw_q,"
     "       ei.entity_id::text as entity_id,"
     "       ei.legacy_id,"
     "       ei.current_ticker,"

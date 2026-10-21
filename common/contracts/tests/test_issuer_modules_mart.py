@@ -233,3 +233,40 @@ def test_resolve_issuer_id_candidates_expands_uuid_legacy_ticker_cik_and_lei(mon
     assert "company:cik:0001045810" in candidates
     assert "0001045810" in candidates
     assert "549300S4KLFTLO7GSQ80" in candidates
+
+
+def test_resolve_issuer_id_candidates_batch_executes_against_live_entity_identity(database: psycopg.Connection) -> None:
+    from truealpha_contracts.issuer_modules_mart import resolve_issuer_id_candidates_batch
+
+    _seed_module_rows(database)
+    # Seed a known issuer in staging.entities + staging.entity_aliases so mart.entity_identity resolves it
+    entity_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://truealpha.invalid/test/batch-issuer/nvda"))
+    database.execute(
+        """
+        insert into staging.entities (entity_id, kind, minted_from_scheme, minted_from_value, minted_by)
+        values (%s::uuid, 'issuer', 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', 'test')
+        on conflict (entity_id) do nothing
+        """,
+        (entity_uuid,),
+    )
+    database.execute(
+        """
+        insert into staging.entity_aliases
+            (entity_id, scheme, value, valid_from, transaction_time, source, confidence)
+        values
+            (%s::uuid, 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95),
+            (%s::uuid, 'cik', '0001045810', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95),
+            (%s::uuid, 'lei', '549300S4KLFTLO7GSQ80', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95)
+        on conflict do nothing
+        """,
+        (entity_uuid, entity_uuid, entity_uuid),
+    )
+
+    batch = resolve_issuer_id_candidates_batch(
+        "postgresql://borrowed",
+        ["0001045810", "UNKNOWN_TICKER_XYZ"],
+    )
+    assert entity_uuid in batch["0001045810"]
+    assert "issuer:lei:549300S4KLFTLO7GSQ80" in batch["0001045810"]
+    assert "issuer:cik:0001045810" in batch["0001045810"]
+    assert batch["UNKNOWN_TICKER_XYZ"] == ("UNKNOWN_TICKER_XYZ",)
