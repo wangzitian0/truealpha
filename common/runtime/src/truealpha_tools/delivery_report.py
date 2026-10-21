@@ -973,7 +973,12 @@ def _verdict_lines(environment: Environment, get: HttpGet, gh: GhApi, repo: str,
     report = nightly_verdicts.read_report(environment.health, get)
     if report.verdicts is None:
         return [f"- {environment.name}: the served release predates the nightly verdict report."]
-    expectations, source = nightly_verdicts.expectations_for(report.release, nightly_verdicts.git_release_reader(repo))
+    expectations, source = nightly_verdicts.expectations_for(
+        report.release,
+        nightly_verdicts.git_release_reader(repo),
+        environment=environment.name,
+        contract_reader=nightly_verdicts.git_release_reader(repo, path=nightly_verdicts.RELEASE_CONTRACT_PATH),
+    )
     if expectations is None:
         return [f"- {environment.name}: the data engine release {source}; nothing to bound."]
     release = report.release

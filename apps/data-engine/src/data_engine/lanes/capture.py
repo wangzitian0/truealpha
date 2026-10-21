@@ -41,6 +41,7 @@ from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
+from data_engine.environment_universes import rule_environment
 from data_engine.sources import gateway
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
@@ -247,24 +248,17 @@ TICKS: tuple[UniverseTick, ...] = (
     ),
 )
 
-#: An environment that the contract does not name (local runs, CI) takes the rule of staging: the TOPT tick
-#: and the canary run, nothing else.
-UNRECOGNISED_ENVIRONMENT_RULE = "staging"
-
 
 def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
     """The default status of `tick`'s schedule in `app_env` (#1310, #1416).
 
     `environment_contract.v1.json` is the only source of "scheduled" and "stopped". An environment
-    that the contract does not name follows `UNRECOGNISED_ENVIRONMENT_RULE`.
+    that the contract does not name follows staging: the TOPT tick and the canary run, nothing else
+    (`environment_universes.UNRECOGNISED_ENVIRONMENT_RULE`).
     """
-    contract = load_environment_contract()
-    env = contract.normalize_environment(app_env)
-    if env not in contract.environments:
-        env = UNRECOGNISED_ENVIRONMENT_RULE
     return (
         dg.DefaultScheduleStatus.RUNNING
-        if contract.is_universe_scheduled(tick.key, env)
+        if load_environment_contract().is_universe_scheduled(tick.key, rule_environment(app_env))
         else dg.DefaultScheduleStatus.STOPPED
     )
 

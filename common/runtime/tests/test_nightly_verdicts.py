@@ -306,6 +306,156 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
     )
 
 
+# --- one list per environment: the contract says which universes an environment runs ---
+
+
+def _main_contract(_ref: str) -> str:
+    """The deployed release declares exactly main's environment contract."""
+    return (REPO_ROOT / _module.RELEASE_CONTRACT_PATH).read_text(encoding="utf-8")
+
+
+def _universe_checks() -> list[str]:
+    return sorted(name for name in EXPECTED if _module.universe_key_of(name) is not None)
+
+
+def _qqq_checks() -> list[str]:
+    return [name for name in EXPECTED if _module.universe_key_of(name) == "qqq"]
+
+
+def test_the_per_universe_checks_of_the_qqq_universe_are_the_three_the_owner_named() -> None:
+    assert _qqq_checks() == [
+        "datahub_confidence_report@universe-list:qqq",
+        "question_coverage@universe-list:qqq",
+        "theme_purity@universe-list:qqq",
+    ]
+
+
+def test_staging_is_not_asked_for_a_qqq_verdict_and_production_is(capsys: pytest.CaptureFixture[str]) -> None:
+    """Staging runs TOPT only (owner decision of 2026-10-21). The same report is red in production."""
+    qqq = set(_qqq_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+
+    def run(environment: str) -> int:
+        return check(
+            URL,
+            environment=environment,
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=_main_contract,
+        )
+
+    assert run("staging") == 0, capsys.readouterr().err
+    assert run("production") == 1
+    err = capsys.readouterr().err
+    assert all(f"{name}: no verdict at all" in err for name in sorted(qqq)), err
+    assert run("prod") == 1, "the alias of production is production"
+
+
+def test_a_report_that_holds_the_staging_checks_only_is_green_in_staging_with_the_expected_count(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    qqq = set(_qqq_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=_main_contract,
+        )
+        == 0
+    )
+    assert f"all {len(EXPECTED) - len(qqq)} nightly checks are green" in capsys.readouterr().out
+
+
+def test_a_release_whose_contract_predates_the_universe_list_is_asked_for_every_check() -> None:
+    """The release that staging serves before this change records the QQQ checks: they stay bounded there."""
+    old_contract = json.dumps({"environments": {"staging": {"strategy_universe": "topt"}}})
+    verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
+
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=lambda ref: old_contract,
+        )
+        == 1
+    )
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=lambda ref: None,
+        )
+        == 1
+    ), "a release without the contract file is asked for every check"
+
+
+def test_an_unreadable_contract_bounds_every_check_rather_than_none(capsys: pytest.CaptureFixture[str]) -> None:
+    verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
+
+    def broken(ref: str) -> str:
+        raise _module.VerdictCheckFailure(f"cannot read the contract at {ref}")
+
+    code = check(
+        URL,
+        environment="staging",
+        http_get=_health(verdicts),
+        now=NOW,
+        reader=_main_set,
+        contract_reader=broken,
+    )
+    assert code == 1
+    assert "every universe is bounded" in capsys.readouterr().err
+
+
+def test_a_universe_that_the_contract_does_not_list_keeps_its_checks() -> None:
+    """A false red beats a silent miss: a check of an unknown universe is still bounded."""
+    expectations = {
+        "theme_purity@universe-list:nasdaq100": _module.Expectation("theme_purity@universe-list:nasdaq100", 24, "j"),
+        "theme_purity@universe-list:qqq": _module.Expectation("theme_purity@universe-list:qqq", 24, "j"),
+        "runtime_shape": _module.Expectation("runtime_shape", 24, "j"),
+    }
+    kept = _module.expected_in(expectations, frozenset({"topt"}), frozenset({"topt", "qqq"}))
+
+    assert sorted(kept) == ["runtime_shape", "theme_purity@universe-list:nasdaq100"]
+
+
+def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expects_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The standing check of owner decision 2026-10-21 (staging runs TOPT only). Both sides read the contract:
+    the lanes through `is_registered`, the tool through `expectations_for`. A check that a lane records and
+    the tool does not expect is un-watched; a check that the tool expects and no lane records is red forever."""
+    from data_engine.config import settings
+    from data_engine.lanes import nightly_verdict_names
+    from data_engine.quality.nightly_verdicts import is_registered
+
+    declared = nightly_verdict_names()
+    for environment in ("staging", "production"):
+        monkeypatch.setattr(settings, "app_env", environment)
+        recorded = {name for name in declared if is_registered(name, declared)}
+        expected, _ = _module.expectations_for(
+            "v0.0.70", _main_set, environment=environment, contract_reader=_main_contract
+        )
+        assert expected is not None
+        assert set(expected) == recorded, (
+            f"{environment}: expected but not recorded {sorted(set(expected) - recorded)}; "
+            f"recorded but not expected {sorted(recorded - set(expected))}"
+        )
+    monkeypatch.setattr(settings, "app_env", "staging")
+    assert not {name for name in declared if is_registered(name, declared)} & set(_qqq_checks())
+
+
 def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
     """#1131: the lane ticks on weekdays only, so Friday's verdict is the newest one until Monday night.
 

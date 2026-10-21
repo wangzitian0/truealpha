@@ -39,6 +39,7 @@ from typing import Any
 import psycopg
 
 from data_engine.config import settings
+from data_engine.environment_universes import contract_universe_names, scheduled_universe_names
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +81,22 @@ def check_name(check: str, universe: str | None = None) -> str:
     """`check`, or `check@universe` for a per-universe check. Not validated here: a manual
     run may name any universe, and `verdict()` records only declared names."""
     return f"{check}@{universe}" if universe else check
+
+
+def is_registered(name: str, declared: Collection[str]) -> bool:
+    """Whether the process environment records the verdict ``name``.
+
+    A lane declares every name it can record in any environment (``declared``). A per-universe name
+    (``check@universe``) of a contract universe is recorded only in an environment whose contract
+    schedules that universe: staging runs TOPT only, so it records no QQQ verdict (owner decision of
+    2026-10-21). The names of a universe that the contract does not list are not recorded either.
+    """
+    if name not in declared:
+        return False
+    _, _, universe = name.partition("@")
+    if universe not in contract_universe_names():
+        return not universe
+    return universe in scheduled_universe_names()
 
 
 def is_valid_name(name: str) -> bool:
@@ -144,8 +161,8 @@ def verdict(name: str, *, registered: Collection[str], run_id: str, tick: dateti
     re-raised unchanged. `tick` is the run's schedule tick; a manual run (None) is dated by
     the wall clock when it completes, which is when its verdict became true."""
     outcome = Outcome()
-    if name not in registered:
-        log.info("%s is not a declared nightly check; no verdict recorded", name)
+    if not is_registered(name, registered):
+        log.info("%s is not a nightly check of this environment; no verdict recorded", name)
         yield outcome
         return
     try:
