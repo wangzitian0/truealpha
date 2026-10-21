@@ -112,7 +112,7 @@ jobs:
   # The browser half: a production build, then the frozen route tree walked
   # against two data states.
   browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # not ubuntu-latest: Playwright cannot install chromium on 26.04
     timeout-minutes: 20
     # The only job here that needs it: actions/cache cannot SAVE read-only.
     permissions:

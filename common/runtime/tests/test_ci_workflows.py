@@ -3431,3 +3431,19 @@ def test_each_ci_make_target_runs_the_whole_repository_with_full(target: str) ->
         if command[:4] == ["uv", "run", "ruff", "check"]:
             missing = [p for p in command[4:] if not (REPO_ROOT / p).is_dir()]
             assert not missing, f"`make {target} FULL=1` lints paths that do not exist: {missing} (the libs/ rot)"
+
+
+def test_a_job_that_installs_a_playwright_browser_does_not_ride_the_moving_runner_label() -> None:
+    """On 2026-10-21 `ubuntu-latest` moved to Ubuntu 26.04. Playwright 1.58.2 cannot install
+    chromium there ("does not support chromium on ubuntu26.04-x64"), so the release walk of
+    production v0.2.30 and of staging v0.2.32 failed before it touched the app. A job that
+    installs a browser or its system dependencies pins `ubuntu-24.04` as a plain string. The
+    test also names the jobs it expects to find, so a renamed command cannot empty the scan."""
+    installs = re.compile(r"playwright\s+(i|install)\b|--with-deps|apt(-get)?\s+install")
+    found = {}
+    for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        for job_id, spec in yaml.safe_load(path.read_text())["jobs"].items():
+            if any(installs.search(str(item.get("run", ""))) for item in spec.get("steps", [])):
+                found[f"{path.name}:{job_id}"] = spec.get("runs-on")
+    assert set(found) == {"ci-web.yml:browser", "walk-release.yml:walk"}, found
+    assert {job: runner for job, runner in found.items() if runner != "ubuntu-24.04"} == {}, found
