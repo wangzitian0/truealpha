@@ -35,7 +35,7 @@ from truealpha_contracts.confidence import (
 
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
-from data_engine.datahub.resolve_coordinates import is_uuid
+from data_engine.datahub.resolve_coordinates import is_uuid, lookup_minted_entity, ontology_kind_namespace
 from data_engine.sources import llm
 
 logger = logging.getLogger(__name__)
@@ -138,11 +138,18 @@ class SupplyChainEdgeCandidate:
     replayed: bool = False
 
 
+_CASE_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9._:/@+-]+")
+
+
+def _safe_case_id_part(value: str, fallback: str) -> str:
+    return _CASE_ID_SANITIZE_RE.sub("-", value).strip("-") or fallback
+
+
 def _edge_confidence(issuer_id: str, accession: str, target_name: str, rel: str, quote_len: int) -> Decimal:
     sample_conf = Decimal("0.98") if quote_len >= 40 else Decimal("0.92")
-    safe_issuer = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", issuer_id).strip("-") or "issuer"
-    safe_acc = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", accession).strip("-") or "acc"
-    safe_target = re.sub(r"[^A-Za-z0-9._:/@+-]+", "-", target_name).strip("-") or "partner"
+    safe_issuer = _safe_case_id_part(issuer_id, "issuer")
+    safe_acc = _safe_case_id_part(accession, "acc")
+    safe_target = _safe_case_id_part(target_name, "partner")
     return evaluate_continuous_confidence(
         _CONFIDENCE_POLICY,
         ContinuousConfidenceInput(
@@ -241,9 +248,7 @@ def _slug_entity_id(name: str) -> str:
 
 def _deterministic_partner_uuid(legacy_partner_id: str) -> str:
     """Deterministic UUIDv5 under the ontology's `kind:issuer` namespace for environments without entity store."""
-    root = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/blob/main/docs/entity-identity.md")
-    issuer_ns = uuid.uuid5(root, "kind:issuer")
-    return str(uuid.uuid5(issuer_ns, f"legacy-id:{legacy_partner_id}"))
+    return str(uuid.uuid5(ontology_kind_namespace("issuer"), f"legacy-id:{legacy_partner_id}"))
 
 
 @contextlib.contextmanager
@@ -293,19 +298,9 @@ def _resolve_or_mint_partner_entity(
 
             # 1b. Check immutable birth registry in `staging.entities` so out-of-order filing
             # dates never re-mint generation 2 of an already-minted `legacy-id`.
-            birth_row = connection.execute(
-                """
-                select staging.entity_survivor(entity_id, %s)::text
-                from staging.entities
-                where birth_scheme = 'legacy-id'
-                  and birth_value = staging.entity_alias_normalize('legacy-id', %s)
-                  and birth_generation = 1
-                limit 1
-                """,
-                (tx_time, legacy_partner_id),
-            ).fetchone()
-            if birth_row and birth_row[0]:
-                return str(birth_row[0])
+            birth_uuid = lookup_minted_entity(connection, "legacy-id", legacy_partner_id, known_at=tx_time)
+            if birth_uuid is not None:
+                return str(birth_uuid)
 
             # 2. Match by ticker via `issues` -> `listed_as` -> `mic-ticker` if ticker was extracted
             if partner_ticker:
@@ -551,10 +546,10 @@ def _resolve_filing_text(
     return None
 
 
-def _has_raw_fetches_table(connection: Connection[Any]) -> bool:
+def _has_table(connection: Connection[Any], qualified_name: str) -> bool:
     try:
         with _optional_savepoint(connection), connection.cursor() as cur:
-            cur.execute("select to_regclass('raw.fetches')")
+            cur.execute(f"select to_regclass('{qualified_name}')")
             res = cur.fetchone()
             return bool(res and res[0])
     except Exception:  # noqa: BLE001
@@ -701,7 +696,7 @@ def persist_extracted_supply_chain_edges(
     the 1M-context LLM task and persist them into `staging.entity_relations` and `staging.kg_edges`
     keyed by Canonical UUID (`issuer.issuer_id`).
     """
-    if not _has_raw_fetches_table(connection):
+    if not _has_table(connection, "raw.fetches"):
         return 0
     diag = _diagnostics if _diagnostics is not None else _ExtractionDiagnostics()
     by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers, connection, run_id=run_id)
@@ -854,20 +849,6 @@ def materialize_supply_chain_exposure(
     return count
 
 
-def _has_kg_edges_table(connection: Connection[Any]) -> bool:
-    try:
-        with connection.cursor() as cur:
-            cur.execute("select to_regclass('staging.kg_edges')")
-            res = cur.fetchone()
-            return bool(res and res[0])
-    except Exception:
-        try:
-            connection.rollback()
-        except Exception:
-            pass
-        return False
-
-
 def _load_issuer_graph_partners(
     connection: Connection[Any],
     *,
@@ -946,7 +927,7 @@ def materialize_universe_supply_chain_exposure(
     `reason_codes = ['context_window_exceeded']` instead of `no_disclosed_suppliers`.
     """
     count = 0
-    has_edges_table = _has_kg_edges_table(connection)
+    has_edges_table = _has_table(connection, "staging.kg_edges")
     diag = _ExtractionDiagnostics()
     if has_edges_table:
         persist_extracted_supply_chain_edges(
