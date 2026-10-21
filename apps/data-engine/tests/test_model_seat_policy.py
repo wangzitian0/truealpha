@@ -281,6 +281,56 @@ def test_a_call_that_finds_no_slot_before_its_deadline_is_refused_and_sends_noth
     assert [row.attempt for row in call_ledger] == [1], "only the call that held the slot made a request"
 
 
+def test_the_pacer_reads_the_time_left_again_after_each_wait(monkeypatch) -> None:
+    """The slot wait, the lock wait and the window wait each get what is left, not the first value."""
+    pacer = model_policy.ModelPacer("staging", SEAT.limits_for("staging"))  # type: ignore[arg-type]
+    timeouts: list[float] = []
+
+    class Spy:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        def acquire(self, timeout: float) -> bool:
+            timeouts.append(timeout)
+            return self._inner.acquire()
+
+        def release(self) -> None:
+            self._inner.release()
+
+    pacer._slots = Spy(pacer._slots)  # type: ignore[assignment]
+    pacer._admission = Spy(pacer._admission)  # type: ignore[assignment]
+    monkeypatch.setattr(pacer._gate, "admit", lambda seat: timeouts.append(pacer._gate.max_wait_seconds))
+    left = iter([9.0, 6.0, 3.0])
+    with pacer.admitted(lambda: next(left)):
+        pass
+    assert timeouts == [9.0, 6.0, 3.0]
+
+
+def test_the_wait_for_the_admission_lock_stops_at_the_deadline() -> None:
+    pacer = model_policy.ModelPacer("production", SEAT.limits_for("production"))  # type: ignore[arg-type]
+    outcome: list[BaseException] = []
+
+    def admit_once() -> None:
+        try:
+            with pacer.admitted(lambda: 0.2):
+                pass
+        except BaseException as error:  # noqa: BLE001 - the test reads the type
+            outcome.append(error)
+
+    pacer._admission.acquire()  # another thread sits in the rate gate
+    try:
+        waiter = threading.Thread(target=admit_once)
+        waiter.start()
+        waiter.join(timeout=10)
+        assert not waiter.is_alive(), "the wait for the lock ends at the deadline"
+    finally:
+        pacer._admission.release()
+        waiter.join(timeout=10)
+    (refused,) = outcome
+    assert isinstance(refused, gateway.CapacityExceeded) and "admission lock" in refused.reason
+    assert pacer._slots.acquire(blocking=False), "the slot was given back"
+
+
 def test_the_probe_names_a_refusal_by_the_pacer_and_not_a_provider_answer() -> None:
     health = model_key_health.classify(llm.ModelCapacityRefused("no concurrency slot before the deadline of the call"))
     assert (health.ok, health.outcome, health.status_code) == (False, "provider-error", None)
@@ -433,6 +483,10 @@ def test_the_ledger_insert_maps_each_value_to_its_own_column(world, call_ledger,
         (1, "1302", 429),
         (2, None, 200),
     ]
+    for record, row in zip(call_ledger, rows, strict=True):
+        for column in gateway._BASE_COLUMNS:
+            expected = bool(record.ok) if column == "ok" else getattr(record, column)
+            assert row[column] == expected, column
     assert [json.loads(row["request_params"])["max_tokens"] for row in rows] == [
         model_key_health.PROBE_TASK.max_tokens
     ] * 2

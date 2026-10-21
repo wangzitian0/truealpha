@@ -157,7 +157,7 @@ class ModelPacer:
         self, lock: threading.BoundedSemaphore | threading.Lock, remaining_seconds: Callable[[], float], what: str
     ) -> None:
         if not lock.acquire(timeout=max(0.0, remaining_seconds())):
-            raise gateway.CapacityExceeded(self.seat, f"no {what} before the deadline of the call")
+            gateway._refuse(gateway.CapacityExceeded(self.seat, f"no {what} before the deadline of the call"))
 
 
 _pacers: dict[str, ModelPacer] = {}

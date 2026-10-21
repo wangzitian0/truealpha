@@ -347,23 +347,9 @@ _INSERT_ATTEMPT_SQL = _insert_statement(_BASE_COLUMNS + _ATTEMPT_COLUMNS)
 
 
 def _insert_params(record: CallRecord) -> tuple:
-    return (
-        record.source,
-        record.endpoint,
-        record.caller,
-        record.called_at,
-        bool(record.ok),
-        record.status_code,
-        record.error,
-        record.duration_ms,
-        record.request_uri,
-        record.payload_sha256,
-        record.byte_length,
-        record.cost,
-        record.capacity_window_id,
-        record.run_key,
-        *_attempt_params(record),
-    )
+    """The values in the order of `_BASE_COLUMNS`, then those of `_ATTEMPT_COLUMNS` when set."""
+    base = tuple(bool(record.ok) if column == "ok" else getattr(record, column) for column in _BASE_COLUMNS)
+    return (*base, *_attempt_params(record))
 
 
 def _attempt_params(record: CallRecord) -> tuple:
