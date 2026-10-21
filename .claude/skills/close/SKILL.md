@@ -86,11 +86,11 @@ Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
 
 - Claim "deployed" only with an evidence chain: image digest, ledger entry, and a real end-to-end probe (the real browser or TUI).
   The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
-- Only a production change requires owner approval, with the owner present (owner instruction, 2026-10-06). Ask once, then finish the non-production close.
+- Only a production change requires owner approval, with the owner present (Root section `Production reservation`). Ask once, then finish the non-production close.
   Closing in silence is forbidden.
 - Without an answer on an active release promotion, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
   Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
-- A "deploy" covers only the release it names. Immediately before dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production.
+- A "deploy" covers only the release it names. Immediately before a production dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production (Root section `Production reservation`).
 - Refuse bare "deploy" keywords without release tags or commits. If the owner replies only "deploy", request explicit disambiguation naming the target: "Please confirm release target: deploy vX.Y.Z". Without explicit approval, do not deploy production.
 - After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
 
@@ -99,15 +99,14 @@ Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
 Write the handover with four parts. Include the exact next command.
 
 1. **Done:** commit SHAs, changed files, tests that passed.
-2. **Blocked:** the cause (CI, open design question, a fact only the owner can supply).
-   List an owner action only when it needs the owner's hands or presence.
-   Examples: a production deploy, a setting that the agent token cannot change, a credential root.
-   A merge, a head approval, or a review of non-production work is never an owner action. If a gate demands one, the gate is the defect.
-   The exception is an edit that the production reservation keeps with the owner permanently.
-   Only three such holds exist: the reservation's self-guard, infra2's owner-held set (rule 6) and dev_env's `ci.yml` hold.
+2. **Blocked:** the cause (CI, or a fact that the agent cannot get).
+   List a step for the owner only when it needs the owner's hands or presence, for example a production deploy. Other examples: a setting that the agent token cannot change, a credential root.
+   Other work is your next step. If a gate holds non-production work, the gate is the defect.
    Name the missing physical fact, then do the agent work that supplies it.
 3. **Decisions:** contracts you fixed and assumptions you overturned.
-4. **Next:** the first command for the next session.
+4. **Next:** the first command for the next session. For each check due after the session, name
+   where it is recorded: an issue comment, a label or a scheduled task. An in-session timer
+   does not count.
 
 ```bash
 ws-bm write-note --folder memory/handover --tags handover --title "Handover: issue-<N> <slug>" --content "..."

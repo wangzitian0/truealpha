@@ -49,12 +49,6 @@ A substring match is wrong: `issue12` would match `issue123`.
 gh issue list --search "label:prod-pending" --json repository,number,title
 ```
 
-- **Scan open PRs needing owner**:
-Report the open PRs labelled `needs-owner` once. A non-production PR that waits more than 12 hours shows a defect in the rule that holds it.
-```bash
-gh pr list --search "label:needs-owner" --json repository,number,title
-```
-
 - **Scan stale leftovers**:
 Run these in bash or zsh, in the repository you work in. The three counts are: branches whose upstream is gone, stashes older than 30 days, and local branches whose name is the head of a merged PR. Put each count above zero in the "facts you recalled" line. A count above zero shows a cleanup that nothing triggered. Do not delete what another session owns. A `gh` error is a failed scan, not a zero.
 ```bash

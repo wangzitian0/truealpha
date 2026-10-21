@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=f90ea4aa142e7105c8d42be8934df74e09c8792aaaee0a96deae2c97cea93a86 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=f021d7a6bbe07817accbb8a1ce7fea7608a8b17c3ff104ad0ab07fccaf52f741 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -29,6 +29,16 @@
 - **Anti-exclusion and reality invariant:** Exclusion is not resolution. Marking failing entities as excluded, adding expiring exemptions, or filtering out edge cases to manufacture green checks is a defect. A task is complete only when a physical reality probe confirms non-empty real-world execution.
 - **Three-stage deployment prerequisite:** Stage 1 (Merge to main) is a non-bypassable physical prerequisite for Stage 2 and Stage 3. If HEAD is not on main, fail closed and refuse any deployment request.
 - **Deploy provenance invariant:** Before dispatching any deploy workflow, physically verify that the target ref or tag contains current branch commits (`git merge-base --is-ancestor HEAD <target>`). Never deploy an older tag as completion evidence for current work.
+
+## Production reservation
+
+The single definition of the production reservation. Other tiers, skills and gates point here.
+
+- **Only a production change returns to the owner.** A production change alters what production runs or stores. Examples: a deploy, promote or apply to production; a production secret write; a manual production data write or deletion. Also a production DNS, route or host change, and a release that cannot be recalled. Code that reaches production with no later owner approval, for example on a schedule, counts too. Each Repo tier names its production paths.
+- **Approval:** the owner approves the exact commit SHA or release tag of each production change, and is present when it runs. A "deploy" reply covers only the release that it names. Immediately before a production dispatch, get a live reply from the owner.
+- **Self-guard:** an edit that removes, narrows or redefines the production reservation needs the owner's approval of its head SHA. This includes an edit that makes fewer production runs wait for the owner. Examples: the owner-approval check of a deploy path, a production job classification, the settings of a production environment. It also includes an edit that removes or weakens a pin of this section or its dev_env pin test. The same holds for the required check that runs the test.
+- **Everything else is the agent's:** in a repository that the owner owns, every merge, staging and canary deploy, and release tag. Also rule text, skills, gate code, data and tests, required-check workflows and release code. Before you merge gate or release code, a read-only reviewer that did not write it checks the head. The review states whether the gate gets stricter, stays equal or gets looser. A looser edit in the self-guard list follows the self-guard.
+- **Every other hold is a defect:** a rule, skill, label or gate exit code that holds non-production work for the owner. Do the work, then fix the hold. The dev_env check `ws_owner_scope` fails on it.
 
 ## Runtime safety
 
@@ -66,10 +76,11 @@
    findings are tracked, with unresolved blockers budgeted (High = 0, Medium <= 2, Low <= 4). Live dashboards (`/admin/datahub`,
    `/research/backtest`, Postgres `mart` health tables) govern observability, not regexes on
    PR descriptions or issue comments. Once a PR is merge-ready, the agent that owns it merges
-   it. A merge whose pipeline reaches production (a release promote, see
-   `docs/release-protocol.md`) waits for the owner.
-   **Production reservation.** The owner approves every production change, for the precise commit or tag in question, and is present when it runs. A production change is anything that alters what production runs or stores: a release, promote or apply; a secret value; a manual data write or deletion; DNS, routes or the host; and whatever this repository's release pipeline names as production. A "deploy" reply authorizes only the release it names, and the dispatching session first hears from the owner directly. An edit that weakens this block, or the gate code and wording behind it, also needs the owner. A release workflow deploys, promotes or applies to a production environment. The release code is the code that a release workflow runs. The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter. Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this. A workflow that defines a required check is part of the gate, so this rule covers its edits too. In a repository with a release workflow, the owner also approves workflow edits and edits to the release code. A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`. With a verified run, the agent merges an edit to the release code. With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check. With a verified run, the agent merges a proven tightening of the infra2 gate inventory. In a repository whose gate does not print `production lock verified`, these edits stay with the owner. A Repo tier may record an owner decision that replaces this rule for that repository.
-   **Workflow edits**: An owner decision of 2026-10-06 (`docs/release-protocol.md`) replaces the block's rule on workflow and release-code edits here. Workflow edits and release-code edits are the agent's, like any other non-production change. The production release is `tools/cut_release.sh <tag> --prod` or `deploy-release.yml` with `deploy_type=prod`. The owner approves the exact commit SHA of each such dispatch at run time. The block's holds on merge-gate code and data still apply, including required-check workflows.
+   it. That covers gate code, workflows and release code once the review that the Root section
+   `Production reservation` requires is on the PR. Production here (`docs/release-protocol.md`):
+   `tools/cut_release.sh <tag> --prod` and `deploy-release.yml` with `deploy_type=prod`. The
+   checks of `--owner-approved-sha` and `owner_approved_sha` in those paths are part of the
+   reservation itself.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are

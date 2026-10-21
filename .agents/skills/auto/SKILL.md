@@ -19,17 +19,15 @@ Task completion requires both code landing and physical reality verification.
 
 ## Loop
 
-1. Open the PR. Quote the owner instruction in the description when the change touches rules, gates, or other protected files.
-   Under the quote, list each agent decision that the quote does not cover. A quote above agent decisions reads as owner approval of all of them.
-   A change to rule text also carries the section `Owner touchpoints` (dev_env Repo tier, rule-text checklist item 8).
+1. Open the PR. An edit to merge-gate code, data or tests, to a required-check workflow, or to release code needs the independent review of the production reservation. Record it on the PR.
 2. Run the `prr` gate. Fix each finding in the issue worktree. Do not touch unrelated files.
 3. Run focused checks on every fix. Read the decision from the gate exit code:
    - Exit 0: Merge with `ws-pr-gate --merge` (or `gh pr merge --squash --delete-branch` when the repository requires squash merge).
    - Exit 1 (Wait): Poll with exponential backoff (`30s * 1.5^n`, capped at 120s). Apply a client-side deadline of 45 minutes (maximum 30 iterations). If checks remain pending after 45 minutes, transition to `Suspend`, record the CI snapshot in the issue, and report `In review`. Do not spin indefinitely.
-   - Exit 2 (Needs owner): Stop immediately. Do not spin. Label `needs-owner` and record the holding reason in the issue.
+   - Exit 2 (Held): infra2's `pr_merge_gate` returns it for its review set (infra2 rule 4); `ws-pr-gate` returns it only for a usage error. A production change waits for the owner: report it and ask once. For any other hold, get the independent review. Merge only when the hold is the only reason in the verdict. The checks must be green on the same head (`gh pr merge --match-head-commit <sha>`). A gate that holds a non-production PR is a defect: open an issue for it.
    - Exit 3 (Action required): Resolve findings or fix conflicts, push, and re-run. If unresolved after two rounds, escalate to Senior or Suspend.
    - Exit 4 (Could not evaluate): Pull main or retry after rate limits settle.
-4. A change with no side effect needs no question to the owner. Fix it and merge it.
+4. Fix and merge every non-production change without a question to the owner.
 5. Merge. Verify with `ws-delivery-status` that the commit is merged on `origin/main` (exit code 0, `CODE_LANDED_STAGE1`).
    Transition to Reality Probe or deployment verification before declaring task complete.
 6. When the delivery required rework (CI retry, gate rejection, or more than one review round), execute the post-delivery retrospective checks before closing the delivery.
@@ -54,42 +52,22 @@ On a clean first-pass delivery (zero CI failures, zero gate rejections, at most 
    - Flag any remote CI job that exceeds 60 seconds (such as un-cached Docker builds or slow test shards).
    - Identify whether the slow job can be short-circuited by file path filters or accelerated with dependency caching.
 
-## Stop and return to the owner
+## When to stop
 
-Stop only for one of these:
+Only the production reservation returns a decision to the owner (Root section `Production reservation`). Merge is not deploy. After the merge, report the merge SHA, the staging evidence and the production state. Then ask the owner once for "deploy" or "hold" on that production release.
 
-- **Production change** (apply, promote, runner rebuild, and the rest of the repository's production reservation). Merge is not deploy. After the merge, report the merge SHA, the staging evidence, and the production state, then ask the owner for "deploy" or "hold".
-- **Self-adjudication**: the PR changes what decides whether this PR may merge.
-  A relaxation, or a change whose direction you cannot prove, goes to the owner.
-  Only the three carve-outs below change this.
-  A release workflow deploys, promotes or applies to a production environment.
-  The release code is the code that a release workflow runs.
-  The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter.
-  Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this.
-  A workflow that defines a required check is part of the gate, so this rule covers its edits too.
-  In a repository with a release workflow, the owner also approves workflow edits and edits to the release code.
-  A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`.
-  With a verified run, the agent merges an edit to the release code.
-  With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check.
-  With a verified run, the agent merges a proven tightening of the infra2 gate inventory.
-  In a repository whose gate does not print `production lock verified`, these edits stay with the owner.
-  A Repo tier may record an owner decision that replaces this rule for that repository.
-- **Irreversible action**: data deletion, or an external publication that cannot be recalled.
-- **Another worker's issue lock**: an issue-prefixed worktree, an open PR, or a running process.
+Stop the action, but do not ask the owner, in two cases:
+
+- **Another worker's issue lock**: an issue-prefixed worktree, an open PR, or a running process. Coordinate through the issue.
+- **An irreversible step outside production**: for example a data deletion in a test or staging store. Find a reversible path first. A production deletion and a release that cannot be recalled are production changes.
 
 A large impact or an unclear preference is not a stop reason. Choose, state the basis, and keep a way back.
 
-When a gate returns the owner for a non-production PR, add the label `needs-owner`. Remove it when the PR merges or closes.
-A non-production PR that waits for the owner more than 12 hours shows a defect in the rule that holds it.
-Find the missing physical fact. Do the agent work that supplies it. Ask the owner only for what needs the owner's hands.
-Never list a merge or a head approval of non-production work as an owner action.
-The exception is an edit that the production reservation keeps with the owner permanently.
-Only three such holds exist: the reservation's self-guard, infra2's owner-held set (rule 6) and dev_env's `ci.yml` hold.
-Such an edit waits for the owner by design, so its wait is not a defect.
+Gate code, gate data and tests, required-check workflows and release code are the agent's. Merge them after the independent read-only review that the reservation requires. A gate exit code, a label or a rule that holds a non-production PR for the owner is a defect. Merge the PR after the review, then fix the gate or the text.
 
 ## Report rules
 
-- State the root cause before you ask for a decision. The owner could not decide without it.
+- State the root cause before you ask for a production decision. The owner could not decide without it.
 - Do only what was asked. "I asked you to add a skill. What else did you do?" is a real correction.
 - Keep committed text free of private names, internal hosts, and local paths. It must be safe to paste into a public issue.
 - Keep the description short and plain. The owner rejected text with an "AI tone".

@@ -29,6 +29,23 @@ Never optimize a step that should not exist.
 8. **Contract first.** Lock signatures, schemas, and the observable endpoint before the internals.
    Prove equivalence with real inputs on old and new paths. Run staging first when a scheduler or alert stack changes.
 
+## Mechanical Gates (MANDATORY)
+
+An `/ssot` pass fails closed unless every gate below passes with physical command output:
+
+1. **Predecessor Deletion & Net-Diff Gate**:
+   - Run `git diff --stat <base>...HEAD` and `wc -l` on touched modules before opening or merging a PR.
+   - Every new abstraction, shared helper, or unified entry point MUST delete its predecessor in the same PR.
+   - Purely additive "unification" PRs are forbidden. If lines added exceed lines deleted on an `/ssot` or refactor slice, justify why or delete the remaining duplicate callers first.
+2. **Cross-Package & Standalone-Script Convergence Gate**:
+   - When extracting a contract or helper into an SDK or `common/` module, migrate all in-repository callers and delete the local copy in the same change. Verify zero remaining local definitions with `git grep`.
+   - Never duplicate dataclasses, registries, or parsers inside standalone or piped scripts via `try: from common... except ImportError:` fallbacks. Keep one authoritative definition and inline or pass it mechanically at the boundary.
+3. **Zero-Caller Speculative Code Gate**:
+   - Every new public function, class, dataclass field, or CLI flag MUST have at least one production caller in the same diff.
+   - Delete pass-through aliases (`_X = X`), one-line private wrappers with a single caller, and unused re-exports (`__all__` entries with zero external imports).
+4. **Falsifiable Guard Test Gate**:
+   - Every deleted duplicate or predecessor must be locked by an executed test (`pytest <file>::<test> -x`) that fails if the second copy or legacy symbol returns.
+
 ## SSOT Swarm (M=10)
 
 Before major refactorings or cleanups, dispatch 1 SSOT Swarm (M=10 Interns via `subagent_batch`). The Director dynamically defines the focus dimensions and allocation across the following baseline topology:
@@ -45,4 +62,8 @@ Before major refactorings or cleanups, dispatch 1 SSOT Swarm (M=10 Interns via `
 
 ## Report
 
-State what you deleted, what is now the single source, and the check that fails if a second copy appears.
+Output a verification table with four columns:
+
+| Deleted Predecessor (`file#Lxx`) | Single Source (`file#Lxx`) | Net Line Delta (`git diff --stat`) | Guard Test (`pytest <file>::<test> -x`) |
+|---|---|---|---|
+
