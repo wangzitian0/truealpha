@@ -34,6 +34,7 @@
 
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
+import { runHydrationRace } from "./hydration-race.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
@@ -514,9 +515,7 @@ async function checkRoute(page, path, role, pageErrors) {
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
-  for (const err of pageErrors.failures) {
-    problems.push(`pageerror: ${err}`);
-  }
+  problems.push(...pageErrors.problems());
   return problems;
 }
 
@@ -538,8 +537,7 @@ async function walkRoutes(browser, { role, email, password }, pageErrors) {
     }
   }
   const page = await context.newPage();
-  // A page error fails the route, except React #418: the ledger counts those per route,
-  // and the walk prints the count at its end (#1412).
+  // Every page error fails the route, React #418 included (#1468).
   page.on("pageerror", (error) => {
     pageErrors.record(error.message || String(error), new URL(page.url()).pathname);
   });
@@ -573,9 +571,19 @@ try {
   // #540/#811: the sign-out journey lives in its own module so a test can drive it
   // against a fake browser. It logs in once more, for its own session.
   failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
+  // #1468: the CI server delivers every flight row in one burst, so only this pass opens the
+  // window in which the deployed surface raised React #418. It runs against the seeded fixture
+  // only: the deployed surface has the window by itself, and the proxy cannot sit in front of it.
+  if (SEEDED_FIXTURE && DATA_STATE === "populated") {
+    const race = await runHydrationRace({ browser, base: BASE, email: EMAIL, password: PASSWORD });
+    for (const problem of race.problems) console.log(`FAIL ${problem}`);
+    if (race.problems.length > 0) {
+      failures += 1;
+    } else {
+      console.log(`ok   [hydration-race] ${race.visits} visits, each with a late flight row, raised no page error`);
+    }
+  }
 } finally {
-  // Printed also when gotoStable stops the walk, so the filter is visible in every log.
-  for (const line of pageErrors.ignoredReport()) console.log(line);
   await browser.close();
 }
 
