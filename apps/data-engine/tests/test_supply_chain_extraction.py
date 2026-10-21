@@ -169,7 +169,19 @@ def test_extract_supply_chain_relationships_via_llm_gateway() -> None:
 
 
 def test_extract_supply_chain_adversarial_negative_corpus() -> None:
-    """Adversarial Negative Corpus: when the LLM extracts no named partners, zero edges are returned."""
+    """Adversarial Negative Corpus: legacy regex/dictionary patterns no longer exist on the module,
+    and when the LLM extracts no named partners from false-positive phrases, zero edges are returned."""
+    import data_engine.datahub.standards.supply_chain_extraction as sc_mod
+
+    for removed_legacy_symbol in (
+        "_KNOWN_PARTNER_LEXICON",
+        "_SENTENCE_RE",
+        "_RELATION_RULES",
+        "_ENTITY_MATCH_RE",
+        "_STOPWORDS",
+    ):
+        assert not hasattr(sc_mod, removed_legacy_symbol), f"legacy regex symbol {removed_legacy_symbol} returned"
+
     negative_text = (
         "Item 1. Business\n"
         "We maintain customer service centers across the country to assist users.\n"

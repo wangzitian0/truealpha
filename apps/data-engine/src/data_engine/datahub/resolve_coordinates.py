@@ -15,6 +15,38 @@ from typing import Any
 import psycopg
 
 _UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+ONTOLOGY_ROOT_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/blob/main/docs/entity-identity.md"
+)
+
+
+def ontology_kind_namespace(kind: str) -> uuid.UUID:
+    """Return the deterministic UUIDv5 namespace for an ontology entity kind (`issuer`, `instrument`, `listing`, `fund`)."""
+    return uuid.uuid5(ONTOLOGY_ROOT_NAMESPACE, f"kind:{kind}")
+
+
+def lookup_minted_entity(
+    connection: psycopg.Connection[Any],
+    scheme: str,
+    value: str,
+    *,
+    known_at: datetime,
+) -> uuid.UUID | None:
+    """Return the surviving entity UUID if `(scheme, value)` was already minted in `staging.entities` (generation 1)."""
+    existing_row = connection.execute(
+        """
+        select entity_id from staging.entities
+        where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1
+        """,
+        (scheme, scheme, value),
+    ).fetchone()
+    if existing_row and existing_row[0]:
+        survivor = connection.execute(
+            "select staging.entity_survivor(%s, %s)",
+            (existing_row[0], known_at),
+        ).fetchone()
+        return survivor[0] if survivor and survivor[0] else existing_row[0]
+    return None
 
 
 def is_uuid(value: str) -> bool:
@@ -94,34 +126,14 @@ def lookup_entity(
             return resolved_legacy[0]
 
     # 2b. Check if entity was already minted in immutable registry staging.entities
-    existing_row = connection.execute(
-        """
-        select entity_id from staging.entities
-        where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1
-        """,
-        (scheme, scheme, value),
-    ).fetchone()
-    if existing_row and existing_row[0]:
-        survivor = connection.execute(
-            "select staging.entity_survivor(%s, %s)",
-            (existing_row[0], known_at),
-        ).fetchone()
-        return survivor[0] if survivor and survivor[0] else existing_row[0]
+    found_typed = lookup_minted_entity(connection, scheme, value, known_at=known_at)
+    if found_typed is not None:
+        return found_typed
 
     if scheme != "legacy-id":
-        existing_legacy = connection.execute(
-            """
-            select entity_id from staging.entities
-            where birth_scheme = 'legacy-id' and birth_value = staging.entity_alias_normalize('legacy-id', %s) and birth_generation = 1
-            """,
-            (raw,),
-        ).fetchone()
-        if existing_legacy and existing_legacy[0]:
-            survivor = connection.execute(
-                "select staging.entity_survivor(%s, %s)",
-                (existing_legacy[0], known_at),
-            ).fetchone()
-            return survivor[0] if survivor and survivor[0] else existing_legacy[0]
+        found_legacy = lookup_minted_entity(connection, "legacy-id", raw, known_at=known_at)
+        if found_legacy is not None:
+            return found_legacy
 
     return None
 
