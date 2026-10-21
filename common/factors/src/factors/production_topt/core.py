@@ -755,6 +755,25 @@ def _unavailable_core(
     )
 
 
+def _share_count_reasons(snapshot: ToptCoreSnapshotInput) -> list[ToptCoreReasonCode]:
+    """The reasons that the share counts of the issuer's listings give no market value.
+
+    #1277: a count that the snapshot builder dropped for a named cause reports that cause.
+    A count that no cause explains reports `missing_shares_outstanding`.
+    """
+    shares = [component.shares_outstanding for component in snapshot.market_value_components]
+    dropped = [metric for metric in shares if metric.value is None]
+    if dropped:
+        causes = {metric.unavailable_reason for metric in dropped}
+        reasons = [cause for cause in causes if cause is not None]
+        if None in causes:
+            reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
+        return reasons
+    if any(metric.value is not None and metric.value <= 0 for metric in shares):
+        return [ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING]
+    return []
+
+
 def compute_topt_core(
     snapshot: ToptCoreSnapshotInput,
     gppe_result: ToptGppeResult,
@@ -799,20 +818,7 @@ def compute_topt_core(
         reasons.append(ToptCoreReasonCode(f"missing_{numerator_field}"))
     elif numerator.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT)
-    share_values = tuple(component.shares_outstanding.value for component in snapshot.market_value_components)
-    if any(value is None for value in share_values):
-        # #1277: a count that the snapshot builder dropped for a named cause reports that cause.
-        # A count that no cause explains reports `missing_shares_outstanding`.
-        causes = {
-            component.shares_outstanding.unavailable_reason
-            for component in snapshot.market_value_components
-            if component.shares_outstanding.value is None
-        }
-        reasons.extend(cause for cause in causes if cause is not None)
-        if None in causes:
-            reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
-    elif any(value <= 0 for value in share_values if value is not None):
-        reasons.append(ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING)
+    reasons.extend(_share_count_reasons(snapshot))
     price_values = tuple(component.market_price.value for component in snapshot.market_value_components)
     if any(value is None for value in price_values):
         reasons.append(ToptCoreReasonCode.MISSING_MARKET_PRICE)
