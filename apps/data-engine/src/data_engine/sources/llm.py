@@ -518,6 +518,72 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
     return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
 
 
+@dataclass(frozen=True)
+class _ProviderAnswer:
+    """The last answer of one logical provider call, after the retry policy has run."""
+
+    status: int
+    body: bytes
+    payload: dict[str, Any]
+    usage: dict[str, Any]
+    provider_code: str | None
+
+
+def _call_provider(
+    *,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_body: dict[str, Any],
+    timeout_seconds: int,
+    caller: str,
+    transport: Transport | None,
+) -> _ProviderAnswer:
+    """Ask the provider until it answers without a transient error (#1444).
+
+    Each attempt is one ledger row with its attempt number, provider code and request parameters.
+    The pacer admits each attempt, so `admit=False` keeps a bound capacity scope from admitting it a
+    second time under another seat figure. A transport error raises after its row is written."""
+    global _ACTIVE_TIMEOUT_SECONDS
+    _ACTIVE_TIMEOUT_SECONDS = timeout_seconds
+    request_params = _request_params(request_body)
+    budget = model_policy.RetryBudget()
+    pacer = model_policy.pacer_for(gateway.capacity_environment())
+    send = transport or _gateway_transport
+    while True:
+        attempt = budget.begin_attempt()
+        payload: dict[str, Any] = {}
+        usage: dict[str, Any] = {}
+        provider_code: str | None = None
+        with (
+            pacer.admitted() if pacer is not None else nullcontext(),
+            record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
+        ):
+            call.attempt = attempt
+            call.request_params = request_params
+            status, body = send(url, headers, request_bytes)
+            call.observe(status_code=status, body=body)
+            if status >= 400:
+                provider_code = model_policy.provider_code(body)
+                call.provider_code = provider_code
+                call.fail(f"HTTP {status}: {body[:200]!r}")
+            else:
+                payload = json.loads(body.decode())
+                usage = payload.get("usage") or {}
+                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+        wait = None if status < 400 else budget.wait_before_next(status, provider_code)
+        if wait is None:
+            return _ProviderAnswer(status, body, payload, usage, provider_code)
+        logger.warning(
+            "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
+            status,
+            provider_code,
+            attempt,
+            wait,
+        )
+        model_policy.sleep(wait)
+
+
 def _ask(
     connection: Any | None,
     *,
@@ -581,44 +647,22 @@ def _ask(
         served_model = None
         decision = refusal(limit_msg)
     else:
-        global _ACTIVE_TIMEOUT_SECONDS
-        _ACTIVE_TIMEOUT_SECONDS = task.timeout_seconds
-        request_params = _request_params(request_body)
-        budget = model_policy.RetryBudget()
-        pacer = model_policy.pacer_for(gateway.capacity_environment())
-        while True:
-            attempt = budget.begin_attempt()
-            # One ledger row per attempt: the pacer admits the attempt, so `admit=False` keeps a
-            # bound capacity scope from admitting it a second time under another seat figure.
-            with (
-                pacer.admitted() if pacer is not None else nullcontext(),
-                record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
-            ):
-                call.attempt = attempt
-                call.request_params = request_params
-                status, body = (transport or _gateway_transport)(url, headers, request_bytes)
-                call.observe(status_code=status, body=body)
-                if status >= 400:
-                    provider_code = model_policy.provider_code(body)
-                    call.provider_code = provider_code
-                    call.fail(f"HTTP {status}: {body[:200]!r}")
-                else:
-                    payload = json.loads(body.decode())
-                    usage = payload.get("usage") or {}
-                    call.cost = Decimal(int(usage.get("total_tokens") or 0))
-            if status < 400:
-                break
-            wait = budget.wait_before_next(status, provider_code)
-            if wait is None:
-                break
-            logger.warning(
-                "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-                status,
-                provider_code,
-                attempt,
-                wait,
-            )
-            model_policy.sleep(wait)
+        answer = _call_provider(
+            url=url,
+            headers=headers,
+            request_bytes=request_bytes,
+            request_body=request_body,
+            timeout_seconds=task.timeout_seconds,
+            caller=caller,
+            transport=transport,
+        )
+        status, body, payload, usage, provider_code = (
+            answer.status,
+            answer.body,
+            answer.payload,
+            answer.usage,
+            answer.provider_code,
+        )
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         served_model = str(payload["model"]) if payload.get("model") else None
