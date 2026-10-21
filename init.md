@@ -196,8 +196,9 @@ answers one question, with the smallest scope that can prove the answer false.
   plus the sentinel listings outside TOPT, and the dashboards and the sentinel known answers
   agree.
 - **Production pursues completeness.** It runs TOPT and QQQ, then the S&P 500 when its
-  unlock holds (Section 0; the environment contract lists the universes and the unlock), the
-  strategy included. It keeps the accuracy checks of staging.
+  unlock holds (Section 0), the strategy included. It keeps the accuracy checks of staging.
+  The `sp500` universe of the environment contract (cited below) holds the unlock and the
+  current state.
 
 Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime
 names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `staging`,
