@@ -3437,13 +3437,13 @@ def test_a_job_that_installs_a_playwright_browser_does_not_ride_the_moving_runne
     """On 2026-10-21 `ubuntu-latest` moved to Ubuntu 26.04. Playwright 1.58.2 cannot install
     chromium there ("does not support chromium on ubuntu26.04-x64"), so the release walk of
     production v0.2.30 and of staging v0.2.32 failed before it touched the app. A job that
-    installs a browser pins its runner image; a moving label is allowed only where nothing
-    installs system dependencies."""
-    offenders = []
+    installs a browser or its system dependencies pins `ubuntu-24.04` as a plain string. The
+    test also names the jobs it expects to find, so a renamed command cannot empty the scan."""
+    installs = re.compile(r"playwright\s+(i|install)\b|--with-deps|apt(-get)?\s+install")
+    found = {}
     for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
-        jobs = yaml.safe_load(path.read_text())["jobs"]
-        for job_id, spec in jobs.items():
-            installs_browser = any("playwright install" in str(item.get("run", "")) for item in spec.get("steps", []))
-            if installs_browser and spec.get("runs-on") == "ubuntu-latest":
-                offenders.append(f"{path.name}:{job_id}")
-    assert offenders == [], f"pin these jobs to an explicit runner image such as ubuntu-24.04: {offenders}"
+        for job_id, spec in yaml.safe_load(path.read_text())["jobs"].items():
+            if any(installs.search(str(item.get("run", ""))) for item in spec.get("steps", [])):
+                found[f"{path.name}:{job_id}"] = spec.get("runs-on")
+    assert set(found) == {"ci-web.yml:browser", "walk-release.yml:walk"}, found
+    assert {job: runner for job, runner in found.items() if runner != "ubuntu-24.04"} == {}, found
