@@ -246,6 +246,64 @@ def test_every_attempt_is_admitted_and_no_slot_is_held_while_the_call_waits(worl
     assert held_during_waits and set(held_during_waits) == {0}, "a waiting call holds no concurrency slot"
 
 
+def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monkeypatch) -> None:
+    """Two calls wait for the one concurrency slot of staging while a third holds it. Each socket
+    call then carries the timeout of its own task. A shared module global gives both the value
+    that was set last."""
+    import dataclasses
+    import time as real_time
+
+    in_environment(monkeypatch, "staging")  # one concurrent call
+    seen: dict[str, float] = {}
+    holder_in_flight, release_holder = threading.Event(), threading.Event()
+
+    def urlopen(request: urllib.request.Request, timeout: float) -> _Answer:
+        name = threading.current_thread().name
+        seen[name] = timeout
+        if name == "holder":
+            holder_in_flight.set()
+            release_holder.wait(timeout=30)
+        return _Answer(OK_BODY)
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    def call(timeout_seconds: int) -> None:
+        task = dataclasses.replace(model_key_health.PROBE_TASK, timeout_seconds=timeout_seconds)
+        llm.invoke(
+            None,
+            task=task,
+            cik=0,
+            accession="",
+            user_content="ping",
+            caller="t",
+            standard="t",
+            parse=lambda content: {},
+            refusal=lambda detail: {},
+            persist=False,
+        )
+
+    holder = threading.Thread(target=call, args=(33,), name="holder")
+    holder.start()
+    assert holder_in_flight.wait(timeout=10)
+    waiters = [
+        threading.Thread(target=call, args=(11,), name="short"),
+        threading.Thread(target=call, args=(22,), name="long"),
+    ]
+    for waiter in waiters:
+        waiter.start()
+        real_time.sleep(0.3)  # let it set its timeout and queue for the slot
+    release_holder.set()
+    for thread in (holder, *waiters):
+        thread.join(timeout=30)
+    assert seen == {"holder": 33, "short": 11, "long": 22}
+
+
+def test_the_default_transport_keeps_the_three_argument_form_that_callers_patch() -> None:
+    import inspect
+
+    assert list(inspect.signature(llm._gateway_transport).parameters) == ["url", "headers", "body"]
+
+
 def test_a_call_that_finds_no_slot_before_its_deadline_is_refused_and_sends_nothing(
     world, call_ledger, monkeypatch
 ) -> None:

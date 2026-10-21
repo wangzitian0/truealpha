@@ -21,6 +21,7 @@ replay, and persistence behaviour above is unchanged and still reached through i
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -260,14 +261,19 @@ def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _gateway_transport(
-    url: str, headers: dict[str, str], body: bytes, *, timeout: int = ModelTask.timeout_seconds
-) -> tuple[int, bytes]:
+#: The timeout of one attempt, set by `_call_provider` for the code that runs inside it. A context
+#: variable, not a module global: calls on several threads each keep their own task timeout.
+_attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "llm_attempt_timeout", default=ModelTask.timeout_seconds
+)
+
+
+def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
     """The provider call through the external call ledger (rule 6). Nested inside the
     `record_call` block in `select_headcount`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=timeout, cost=0)
+    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_attempt_timeout.get(), cost=0)
     return int(status or 0), response
 
 
@@ -558,7 +564,34 @@ def _call_provider(
     request_params = _request_params(request_body)
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
-    send = transport or partial(_gateway_transport, timeout=timeout_seconds)
+    send = transport or _gateway_transport
+    token = _attempt_timeout.set(timeout_seconds)
+    try:
+        return _retry_loop(
+            budget=budget,
+            pacer=pacer,
+            send=send,
+            url=url,
+            headers=headers,
+            request_bytes=request_bytes,
+            request_params=request_params,
+            caller=caller,
+        )
+    finally:
+        _attempt_timeout.reset(token)
+
+
+def _retry_loop(
+    *,
+    budget: model_policy.RetryBudget,
+    pacer: model_policy.ModelPacer | None,
+    send: Transport,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_params: dict[str, Any],
+    caller: str,
+) -> _ProviderAnswer:
     last: _ProviderAnswer | None = None
     while True:
         attempt = budget.begin_attempt()
