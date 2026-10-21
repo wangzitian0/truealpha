@@ -1063,6 +1063,34 @@ class SupplyChainExtraction:
         return self.invocation.extractor
 
 
+def _normalize_partner_entry(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("partner_name") or "").strip()
+    rel = str(item.get("relation_type") or "").strip().lower()
+    quote = str(item.get("evidence_quote") or "").strip()[:240]
+    if not name or rel not in ("supplier", "customer") or not quote:
+        return None
+    raw_ticker = item.get("ticker")
+    ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
+    raw_share = item.get("revenue_share_pct")
+    share_str: str | None = None
+    if isinstance(raw_share, int | float | str) and not isinstance(raw_share, bool):
+        try:
+            val = Decimal(str(raw_share))
+            if Decimal("0") <= val <= Decimal("100"):
+                share_str = str(val)
+        except Exception:  # noqa: BLE001
+            share_str = None
+    return {
+        "partner_name": name,
+        "ticker": ticker,
+        "relation_type": rel,
+        "revenue_share_pct": share_str,
+        "evidence_quote": quote,
+    }
+
+
 def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     """Parse and validate the model's extracted supply-chain partner list."""
     try:
@@ -1072,45 +1100,20 @@ def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     objects = parsed if isinstance(parsed, list) else [parsed]
     if not all(isinstance(entry, dict) for entry in objects):
         return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
-    raw_items: list[Any] = []
-    for entry in objects:
-        found = entry.get("partners")
-        if isinstance(found, list):
-            raw_items.extend(found)
     partners: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for item in raw_items:
-        if not isinstance(item, dict):
+    for entry in objects:
+        found = entry.get("partners")
+        if not isinstance(found, list):
             continue
-        name = str(item.get("partner_name") or "").strip()
-        rel = str(item.get("relation_type") or "").strip().lower()
-        quote = str(item.get("evidence_quote") or "").strip()[:240]
-        if not name or rel not in ("supplier", "customer") or not quote:
-            continue
-        key = (rel, name.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        raw_ticker = item.get("ticker")
-        ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
-        raw_share = item.get("revenue_share_pct")
-        share_str: str | None = None
-        if isinstance(raw_share, int | float | str) and not isinstance(raw_share, bool):
-            try:
-                val = Decimal(str(raw_share))
-                if Decimal("0") <= val <= Decimal("100"):
-                    share_str = str(val)
-            except Exception:  # noqa: BLE001
-                share_str = None
-        partners.append(
-            {
-                "partner_name": name,
-                "ticker": ticker,
-                "relation_type": rel,
-                "revenue_share_pct": share_str,
-                "evidence_quote": quote,
-            }
-        )
+        for item in found:
+            normalized = _normalize_partner_entry(item)
+            if normalized is None:
+                continue
+            key = (normalized["relation_type"], normalized["partner_name"].lower())
+            if key not in seen:
+                seen.add(key)
+                partners.append(normalized)
     return {"partners": partners, "reason": "ok"}
 
 
