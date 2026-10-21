@@ -12,10 +12,13 @@ number of its own.
   deadline of the call.
 - ``ModelPacer`` admits one attempt at a time under the limits of one environment: at most
   ``max_concurrent_calls`` attempts at once, at most ``calls_per_minute`` attempts in any 60 s
-  window. The rate is the ``CapacityGate`` of the source gateway, so it reads the ledger of the
-  environment and counts the attempts of every process. The concurrency limit holds inside one
-  process. Every model caller of the data engine asks one question at a time, so this limit has
-  never been the binding one.
+  window. The rate is the ``CapacityGate`` of the source gateway. It reads the ledger of the
+  environment, so it counts the attempts that ended in any process. A row exists only when its
+  attempt ends: an attempt that is still in flight in another process is not counted. The gate
+  also keeps its own window for the attempts of this process, and that window is the only one
+  when the ledger is off. The concurrency limit holds inside one process. Every model caller of
+  the data engine asks one question at a time, so this limit has never been the binding one.
+  The wait for the window counts against the deadline of the call.
 """
 
 from __future__ import annotations
@@ -98,6 +101,10 @@ class RetryBudget:
         self.attempts += 1
         return self.attempts
 
+    def remaining_seconds(self) -> float:
+        """The time left before the deadline of the call. The pacer wait of an attempt may not pass it."""
+        return max(0.0, self.spec.deadline_seconds - (clock() - self.started_at))
+
     def wait_before_next(self, status: int, code: str | None) -> float | None:
         """Seconds to wait before the next attempt, or None when the call must stop now.
 
@@ -128,12 +135,16 @@ class ModelPacer:
         )
 
     @contextmanager
-    def admitted(self) -> Iterator[None]:
+    def admitted(self, max_wait_seconds: float) -> Iterator[None]:
         """Hold one concurrency slot for the attempt. Wait first for the slot, then for the window.
 
-        The rate wait comes second so that the window counts the moment the attempt starts."""
+        The rate wait comes second so that the window counts the moment the attempt starts. It
+        stops after ``max_wait_seconds`` with ``CapacityExceeded``: the caller passes the time left
+        to the deadline of its call. A thread that waits for the slot is not bounded by it; every
+        holder of a slot ends within its attempt timeout."""
         with self._slots:
             with self._admission:
+                self._gate.max_wait_seconds = max_wait_seconds
                 self._gate.admit(self.seat)
             yield
 

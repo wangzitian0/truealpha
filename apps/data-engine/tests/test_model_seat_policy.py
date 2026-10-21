@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -171,14 +171,76 @@ def test_a_call_that_never_succeeds_waits_at_least_ninety_seconds_and_then_stops
 def test_the_deadline_stops_a_call_before_its_attempts_are_used(world, call_ledger, monkeypatch) -> None:
     """A stuck call must not hold a worker for ever: the next wait may not pass the deadline."""
     in_environment(monkeypatch, "staging")
-    short = RETRY.model_copy(update={"deadline_seconds": 20})
+    first, second = RETRY.base_backoff_seconds(1), RETRY.base_backoff_seconds(2)
+    short = RETRY.model_copy(update={"deadline_seconds": first + second + 1})
     monkeypatch.setattr(model_policy, "retry_spec", lambda: short)
     transport = Transport([(429, rate_limited())], world)
     with pytest.raises(llm.ModelHTTPError):
         ask(transport)
-    # Waits are 5 s and 10 s (15 s in all). The third wait of 20 s would end at 35 s, past 20 s.
+    # Two waits fit inside the deadline. The third wait would end after it.
     assert transport.asked == 3 == len(call_ledger)
-    assert world.sleeps == [5, 10]
+    assert world.sleeps == [first, second]
+
+
+def test_the_wait_for_the_rate_window_counts_against_the_deadline(world, call_ledger, monkeypatch) -> None:
+    """The window of a full minute must not hold a call past its deadline."""
+    in_environment(monkeypatch, "staging")
+    per_minute = SEAT.limits_for("staging").calls_per_minute  # type: ignore[union-attr]
+    waits = [RETRY.base_backoff_seconds(n) for n in range(1, per_minute + 1)]
+    # The attempts after the first `per_minute` ones would wait for the window, about 60 s less
+    # the age of the oldest attempt. One second is left of the deadline when that wait begins.
+    short = RETRY.model_copy(update={"deadline_seconds": sum(waits) + 1})
+    monkeypatch.setattr(model_policy, "retry_spec", lambda: short)
+    transport = Transport([(429, rate_limited())], world)
+    with pytest.raises(llm.ModelHTTPError) as raised:
+        ask(transport)
+    assert raised.value.provider_code == "1302", "the last answer of the provider stands, not a gate error"
+    assert transport.asked == per_minute == len(call_ledger)
+    assert world.now - 1_000.0 <= short.deadline_seconds
+
+
+class SpyPacer:
+    """The real pacer plus a count of admissions and of slots held right now."""
+
+    def __init__(self, pacer: model_policy.ModelPacer) -> None:
+        self._pacer = pacer
+        self.admissions = 0
+        self.held = 0
+
+    def admitted(self, max_wait_seconds: float):
+        spy = self
+
+        class _Slot:
+            def __enter__(self) -> None:
+                self._inner = spy._pacer.admitted(max_wait_seconds)
+                self._inner.__enter__()
+                spy.admissions += 1
+                spy.held += 1
+
+            def __exit__(self, *exc: object) -> bool | None:
+                spy.held -= 1
+                return self._inner.__exit__(*exc)
+
+        return _Slot()
+
+
+def test_every_attempt_is_admitted_and_no_slot_is_held_while_the_call_waits(world, call_ledger, monkeypatch) -> None:
+    in_environment(monkeypatch, "staging")
+    real = model_policy.pacer_for("staging")
+    assert real is not None
+    spy = SpyPacer(real)
+    monkeypatch.setattr(model_policy, "pacer_for", lambda environment: spy)
+    held_during_waits: list[int] = []
+    real_sleep = world.sleep
+
+    def sleep(seconds: float) -> None:
+        held_during_waits.append(spy.held)
+        real_sleep(seconds)
+
+    monkeypatch.setattr(model_policy, "sleep", sleep)
+    ask(Transport([(429, rate_limited()), (429, rate_limited()), (200, OK_BODY)], world))
+    assert spy.admissions == len(call_ledger) == 3
+    assert held_during_waits and set(held_during_waits) == {0}, "a waiting call holds no concurrency slot"
 
 
 @pytest.mark.parametrize(
@@ -310,15 +372,51 @@ def test_each_attempt_records_the_request_parameters_without_the_key(world, call
         assert FAKE_KEY not in serialized and "Bearer" not in serialized
 
 
-def test_the_ledger_insert_writes_attempt_provider_code_and_request_params(world, call_ledger, monkeypatch) -> None:
+def _columns(sql: str) -> list[str]:
+    inside = sql[sql.index("(") + 1 : sql.index(")")]
+    return [column.strip() for column in inside.split(",")]
+
+
+def test_the_ledger_insert_maps_each_value_to_its_own_column(world, call_ledger, monkeypatch) -> None:
     in_environment(monkeypatch, "staging")
     ask(Transport([(429, rate_limited("1302")), (200, OK_BODY)], world))
-    params = [gateway._insert_params(row) for row in call_ledger]
-    insert = gateway._INSERT_SQL
-    for column in ("attempt", "provider_code", "request_params"):
-        assert column in insert
-    assert [p[-3] for p in params] == [1, 2] and [p[-2] for p in params] == ["1302", None]
-    assert [json.loads(p[-1])["max_tokens"] for p in params] == [model_key_health.PROBE_TASK.max_tokens] * 2
+    rows = []
+    for record in call_ledger:
+        columns, params = _columns(gateway._insert_sql(record)), gateway._insert_params(record)
+        assert len(columns) == len(params), "one value for each column"
+        rows.append(dict(zip(columns, params, strict=True)))
+    assert [(row["attempt"], row["provider_code"], row["status_code"]) for row in rows] == [
+        (1, "1302", 429),
+        (2, None, 200),
+    ]
+    assert [json.loads(row["request_params"])["max_tokens"] for row in rows] == [
+        model_key_health.PROBE_TASK.max_tokens
+    ] * 2
+
+
+def test_a_row_of_another_source_does_not_depend_on_the_attempt_columns() -> None:
+    record = gateway.CallRecord(source="sec", endpoint="submissions", caller="t", called_at=datetime.now(UTC))
+    assert gateway._insert_sql(record) == gateway._INSERT_SQL
+    assert len(gateway._insert_params(record)) == len(_columns(gateway._INSERT_SQL))
+
+
+def test_a_model_row_survives_a_schema_that_lacks_the_attempt_columns(monkeypatch) -> None:
+    """The llm-service applies the migration at its boot; the data-engine may start before it."""
+    import psycopg
+
+    executed: list[str] = []
+
+    def execute(sql: str, params: tuple = ()) -> None:
+        executed.append(sql)
+        if sql == gateway._INSERT_ATTEMPT_SQL:
+            raise psycopg.errors.UndefinedColumn('column "attempt" does not exist')
+
+    monkeypatch.setattr(gateway, "_pg_execute", execute)
+    record = gateway.CallRecord(
+        source=llm.SOURCE, endpoint="x", caller="t", called_at=datetime.now(UTC), attempt=1, provider_code="1302"
+    )
+    gateway.postgres_writer(record)
+    assert executed == [gateway._INSERT_ATTEMPT_SQL, gateway._INSERT_SQL]
 
 
 # --- 4. the probe: the same policy through its deployed job -----------------------------------
@@ -402,24 +500,37 @@ def test_the_probe_minutes_of_the_two_live_environments_differ_and_come_from_the
     assert production.split()[1:] == staging.split()[1:] == [str(SEAT.probe.hour_utc), "*", "*", "*"]
 
 
-def test_the_deployed_schedule_uses_the_cron_of_its_own_environment() -> None:
+@pytest.mark.parametrize("environment", sorted(SEAT.environments))
+def test_the_schedule_of_each_live_environment_runs_in_its_own_slot(environment) -> None:
+    """Built for the environment, not read from the CI environment (which the contract does not list)."""
+    schedule = quality.build_model_key_health_schedule(environment)
+    assert schedule.cron_schedule == SEAT.probe_cron(environment)
+    assert schedule.name == "model_key_health_schedule"
+    others = {quality.build_model_key_health_schedule(name).cron_schedule for name in SEAT.environments}
+    assert len(others) == len(SEAT.environments), "no two live environments share a probe minute"
+
+
+def test_the_deployed_schedule_is_built_for_the_environment_of_the_process() -> None:
     schedule = quality.defs.get_schedule_def("model_key_health_schedule")
-    assert schedule.cron_schedule == quality.model_key_health_cron(gateway.capacity_environment())
-    assert quality.MODEL_KEY_HEALTH_CRON == schedule.cron_schedule
+    assert (
+        schedule.cron_schedule == quality.build_model_key_health_schedule(gateway.capacity_environment()).cron_schedule
+    )
 
 
 def test_every_probe_slot_ends_before_the_release_fetch_proof_starts() -> None:
     proof_minute, proof_hour, *_ = quality.RELEASE_FETCH_PROOF_CRON.split()
-    for environment in ("production", "staging"):
+    longest = RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds + SEAT.probe.launch_margin_seconds
+    for environment in SEAT.environments:
         minute, hour, *_ = quality.model_key_health_cron(environment).split()
-        end_minute = int(minute) + ceil((RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds) / 60)
-        assert hour == proof_hour and end_minute <= int(proof_minute), environment
+        assert hour == proof_hour and int(minute) + ceil(longest / 60) <= int(proof_minute), environment
 
 
 def test_the_probe_deadline_fits_inside_the_run_time_bound_of_its_job() -> None:
     bound = load_environment_contract().max_runtime_seconds(quality.MODEL_KEY_HEALTH_JOB_NAME)
     assert bound is not None
-    assert RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds < bound
+    assert (
+        RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds + SEAT.probe.launch_margin_seconds < bound
+    )
 
 
 # --- 6. the key name comes from settings --------------------------------------------------------

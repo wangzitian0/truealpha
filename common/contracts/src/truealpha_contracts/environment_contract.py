@@ -260,6 +260,8 @@ class ModelProbeSlots(_StrictFrozenModel):
 
     hour_utc: int = Field(ge=0, le=23)
     slot_minutes: int = Field(ge=1)
+    attempt_timeout_seconds: int = Field(ge=1)
+    launch_margin_seconds: int = Field(ge=0)
 
 
 class ModelSeatEnvironmentLimits(_StrictFrozenModel):
@@ -284,16 +286,22 @@ class ModelSeatContract(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _probe_slots_hold_the_whole_retry_deadline(self) -> Self:
-        slot_floor = math.ceil(self.retry.deadline_seconds / 60)
+        longest_probe_seconds = self.launch_margin_and_deadline_seconds + self.probe.attempt_timeout_seconds
+        slot_floor = math.ceil(longest_probe_seconds / 60)
         if self.probe.slot_minutes < slot_floor:
             raise ValueError(
-                f"slot_minutes {self.probe.slot_minutes} is below the retry deadline of {slot_floor} minutes"
+                f"slot_minutes {self.probe.slot_minutes} is below the longest probe of {slot_floor} minutes "
+                "(launch margin, retry deadline and one attempt)"
             )
         offsets = sorted(limits.probe_offset_minutes for limits in self.environments.values())
         for earlier, later in zip(offsets, offsets[1:], strict=False):
             if later - earlier < self.probe.slot_minutes:
                 raise ValueError(f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}")
         return self
+
+    @property
+    def launch_margin_and_deadline_seconds(self) -> int:
+        return self.probe.launch_margin_seconds + self.retry.deadline_seconds
 
     def limits_for(self, environment: str) -> ModelSeatEnvironmentLimits | None:
         """The limits of ``environment``, or None when the environment is not listed (dev, ci)."""

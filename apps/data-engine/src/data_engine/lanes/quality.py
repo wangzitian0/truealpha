@@ -108,8 +108,6 @@ def model_key_health_cron(environment: str) -> str:
     return load_environment_contract().model_seat.probe_cron(environment)
 
 
-MODEL_KEY_HEALTH_CRON = model_key_health_cron(gateway.capacity_environment())
-
 RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 # 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
 # finished, and before the delivery report (07:00) reads the verdict. The verdict is pending
@@ -527,15 +525,24 @@ def model_key_health_job() -> None:
     run_model_key_health()
 
 
-@dg.schedule(
-    job=model_key_health_job,
-    cron_schedule=MODEL_KEY_HEALTH_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
+    """The daily key probe of ``environment``. The slot comes from the contract (`model_key_health_cron`)."""
+
+    @dg.schedule(
+        name="model_key_health_schedule",
+        job=model_key_health_job,
+        cron_schedule=model_key_health_cron(environment),
+        execution_timezone="UTC",
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+    )
+    def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+    return model_key_health_schedule
+
+
+model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
 
 
 @dg.op

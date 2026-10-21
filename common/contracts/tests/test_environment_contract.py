@@ -318,7 +318,8 @@ def test_probe_slots_of_the_two_live_environments_differ_by_at_least_the_retry_d
     production, staging = seat.probe_cron("production"), seat.probe_cron("staging")
     assert production != staging
     minutes = sorted(seat.probe_offset_minutes(name) for name in ("production", "staging"))
-    assert minutes[1] - minutes[0] >= seat.retry.deadline_seconds / 60
+    longest = seat.retry.deadline_seconds + seat.probe.attempt_timeout_seconds + seat.probe.launch_margin_seconds
+    assert minutes[1] - minutes[0] >= longest / 60
     assert production == f"{seat.probe_offset_minutes('production')} {seat.probe.hour_utc} * * *"
 
 
@@ -334,7 +335,7 @@ def test_probe_slots_of_the_two_live_environments_differ_by_at_least_the_retry_d
             {
                 "environments": {
                     "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0},
-                    "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 4},
+                    "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 6},
                 }
             },
             "closer than slot_minutes",
@@ -347,7 +348,14 @@ def test_probe_slots_of_the_two_live_environments_differ_by_at_least_the_retry_d
             },
             "greater than or equal to 1",
         ),
-        ({"probe": {"hour_utc": 6, "slot_minutes": 4}}, "below the retry deadline"),
+        (
+            {"probe": {"hour_utc": 6, "slot_minutes": 6, "attempt_timeout_seconds": 60, "launch_margin_seconds": 60}},
+            "below the longest probe of 7 minutes",
+        ),
+        (
+            {"probe": {"hour_utc": 6, "slot_minutes": 7, "attempt_timeout_seconds": 120, "launch_margin_seconds": 60}},
+            "below the longest probe of 8 minutes",
+        ),
     ],
 )
 def test_a_model_seat_that_breaks_a_rule_is_refused(changes: dict[str, object], message: str) -> None:

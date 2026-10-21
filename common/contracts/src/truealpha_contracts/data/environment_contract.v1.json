@@ -432,7 +432,7 @@
     }
   },
   "model_seat": {
-    "description": "The limits of the model provider seat (#1444). All environments call one coding-plan account, and other users of that account share its rate limit. When the account is over its limit, it answers HTTP 429 with provider code 1302. Every model call passes one retry policy: the extraction path and the nightly key probe. A call retries only on a transient answer. A transient answer is HTTP 429 without a terminal provider code, or any answer with a transient provider code. The wait before retry n is min(initial_backoff_seconds x backoff_factor^(n-1), max_backoff_seconds), plus a random extra of at most jitter_percent. The random extra only lengthens the wait, so the waits sum to at least min_total_wait_seconds. A call stops after max_attempts attempts, or when the next wait would pass deadline_seconds since the first attempt. Each attempt is one ledger row. Each environment starts at most calls_per_minute attempts per minute and runs at most max_concurrent_calls attempts at one time. The limit is per environment because the account is shared. The probe starts at probe.hour_utc plus probe_offset_minutes of its environment. Probe slots of two environments stay at least probe.slot_minutes apart, so the retries of one probe never meet the probe of another environment. An environment that is not listed (dev, ci) has no pacing limit and the probe offset 0.",
+    "description": "The limits of the model provider seat (#1444). All environments call one coding-plan account, and other users of that account share its rate limit. When the account is over its limit, it answers HTTP 429 with provider code 1302. Every model call passes one retry policy: the extraction path and the nightly key probe. A call retries only on a transient answer. A transient answer is HTTP 429 without a terminal provider code, or any answer with a transient provider code. The wait before retry n is min(initial_backoff_seconds x backoff_factor^(n-1), max_backoff_seconds), plus a random extra of at most jitter_percent. The random extra only lengthens the wait, so the waits sum to at least min_total_wait_seconds. A call stops after max_attempts attempts, or when the next wait would pass deadline_seconds since the first attempt. The wait of an attempt for the per-minute window also counts against that deadline. A call lasts at most deadline_seconds plus the timeout of one attempt. Each attempt is one ledger row. Each environment starts at most calls_per_minute attempts per minute and runs at most max_concurrent_calls attempts at one time. The limit is per environment because the account is shared. The probe starts at probe.hour_utc plus probe_offset_minutes of its environment, up to launch_margin_seconds late (the probe of production was seen 40 s late on 2026-10-21). The probe call uses attempt_timeout_seconds as its attempt timeout. Probe slots of two environments stay at least probe.slot_minutes apart. slot_minutes holds the deadline, one attempt and the launch margin, so the retries of one probe never meet the probe of another environment. An environment that is not listed (dev, ci) has no pacing limit and the probe offset 0.",
     "seat": "filing-extraction-model",
     "shared_credential": "single_coding_plan_account",
     "measured_at": "2026-10-21",
@@ -449,10 +449,10 @@
       "min_total_wait_seconds": 90,
       "deadline_seconds": 300
     },
-    "probe": {"hour_utc": 6, "slot_minutes": 5},
+    "probe": {"hour_utc": 6, "slot_minutes": 7, "attempt_timeout_seconds": 60, "launch_margin_seconds": 60},
     "environments": {
       "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0},
-      "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 5}
+      "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 7}
     }
   }
 }

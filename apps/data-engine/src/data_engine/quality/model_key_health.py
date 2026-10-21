@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from data_engine.sources import llm
+from data_engine.sources import llm, model_policy
 
 CALLER = "watchdog:model-key-health"
 
@@ -32,6 +32,8 @@ PROBE_TASK = llm.ModelTask(
     instructions='Reply with exactly this JSON object and nothing else: {"ok": true}',
     response_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
     max_tokens=16,
+    #: The probe slots of the contract assume this timeout for one attempt.
+    timeout_seconds=model_policy.seat_contract().probe.attempt_timeout_seconds,
 )
 
 #: The statuses that mean the provider refused the CREDENTIAL, not the request.

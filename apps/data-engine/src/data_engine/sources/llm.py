@@ -220,8 +220,9 @@ def build_chat_request(task: ModelTask, user_content: str, *, model: str) -> dic
         "messages": [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}],
         "max_tokens": task.max_tokens,
         "temperature": 0,
-        # Deterministic decoding settings are part of the invocation identity (§9); the
-        # provider's reasoning mode is disabled so the answer is the JSON, not a trace.
+        # Deterministic decoding settings are part of the invocation identity (§9). The request
+        # asks for reasoning mode off so that the answer is the JSON, not a trace. Z.ai documents
+        # that GLM-5.3 accepts only `enabled` (#1444); the effect is read from the ledger.
         "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
     }
@@ -250,15 +251,14 @@ def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_ACTIVE_TIMEOUT_SECONDS = 60
-
-
-def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+def _gateway_transport(
+    url: str, headers: dict[str, str], body: bytes, *, timeout: int = ModelTask.timeout_seconds
+) -> tuple[int, bytes]:
     """The provider call through the external call ledger (rule 6). Nested inside the
     `record_call` block in `select_headcount`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_ACTIVE_TIMEOUT_SECONDS, cost=0)
+    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=timeout, cost=0)
     return int(status or 0), response
 
 
@@ -543,45 +543,78 @@ def _call_provider(
 
     Each attempt is one ledger row with its attempt number, provider code and request parameters.
     The pacer admits each attempt, so `admit=False` keeps a bound capacity scope from admitting it a
-    second time under another seat figure. A transport error raises after its row is written."""
-    global _ACTIVE_TIMEOUT_SECONDS
-    _ACTIVE_TIMEOUT_SECONDS = timeout_seconds
+    second time under another seat figure. A transport error raises after its row is written. The
+    wait for the rate window counts against the deadline: when it ends the wait, the last answer
+    stands."""
     request_params = _request_params(request_body)
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
-    send = transport or _gateway_transport
+    send = transport or partial(_gateway_transport, timeout=timeout_seconds)
+    last: _ProviderAnswer | None = None
     while True:
         attempt = budget.begin_attempt()
-        payload: dict[str, Any] = {}
-        usage: dict[str, Any] = {}
-        provider_code: str | None = None
-        with (
-            pacer.admitted() if pacer is not None else nullcontext(),
-            record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
-        ):
-            call.attempt = attempt
-            call.request_params = request_params
-            status, body = send(url, headers, request_bytes)
-            call.observe(status_code=status, body=body)
-            if status >= 400:
-                provider_code = model_policy.provider_code(body)
-                call.provider_code = provider_code
-                call.fail(f"HTTP {status}: {body[:200]!r}")
-            else:
-                payload = json.loads(body.decode())
-                usage = payload.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
-        wait = None if status < 400 else budget.wait_before_next(status, provider_code)
+        try:
+            last = _attempt(
+                attempt=attempt,
+                pacer=pacer,
+                max_wait_seconds=budget.remaining_seconds(),
+                send=send,
+                url=url,
+                headers=headers,
+                request_bytes=request_bytes,
+                request_params=request_params,
+                caller=caller,
+            )
+        except gateway.CapacityExceeded:
+            if last is None:
+                raise
+            return last
+        wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
         if wait is None:
-            return _ProviderAnswer(status, body, payload, usage, provider_code)
+            return last
         logger.warning(
             "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-            status,
-            provider_code,
+            last.status,
+            last.provider_code,
             attempt,
             wait,
         )
         model_policy.sleep(wait)
+
+
+def _attempt(
+    *,
+    attempt: int,
+    pacer: model_policy.ModelPacer | None,
+    max_wait_seconds: float,
+    send: Transport,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_params: dict[str, Any],
+    caller: str,
+) -> _ProviderAnswer:
+    """One attempt: admitted by the pacer, one ledger row, the answer read."""
+    payload: dict[str, Any] = {}
+    usage: dict[str, Any] = {}
+    provider_code: str | None = None
+    with (
+        pacer.admitted(max_wait_seconds) if pacer is not None else nullcontext(),
+        record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
+    ):
+        call.attempt = attempt
+        call.request_params = request_params
+        status, body = send(url, headers, request_bytes)
+        call.observe(status_code=status, body=body)
+        if status >= 400:
+            provider_code = model_policy.provider_code(body)
+            call.provider_code = provider_code
+            call.fail(f"HTTP {status}: {body[:200]!r}")
+        else:
+            payload = json.loads(body.decode())
+            usage = payload.get("usage") or {}
+            call.cost = Decimal(int(usage.get("total_tokens") or 0))
+    return _ProviderAnswer(status, body, payload, usage, provider_code)
 
 
 def _ask(
