@@ -20,6 +20,8 @@ from collections.abc import Callable, Sequence
 from truealpha_tools.staging_line import ISSUE_TITLE_PREFIX, StagingRed
 
 Runner = Callable[[Sequence[str]], str]
+#: How many open issues one run reads.
+ISSUE_LIST_LIMIT = 300
 
 
 def open_red_issues(repo: str, gh: Runner) -> list[dict[str, object]]:
@@ -28,10 +30,27 @@ def open_red_issues(repo: str, gh: Runner) -> list[dict[str, object]]:
     This reads the list of open issues and filters by title. The search index lags behind a new
     issue, and a lagging answer would open a second issue.
     """
-    out = gh(["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "300", "--json", "number,title"])
+    out = gh(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(ISSUE_LIST_LIMIT),
+            "--json",
+            "number,title",
+        ]
+    )
     issues = json.loads(out or "[]")
     if not isinstance(issues, list):
         raise ValueError(f"unexpected issue list payload: {out[:200]}")
+    if len(issues) >= ISSUE_LIST_LIMIT:
+        # An older staging-red issue could be past the limit, and the run would open a second one.
+        raise ValueError(f"{len(issues)} open issues reach the list limit of {ISSUE_LIST_LIMIT}; raise the limit")
     red = [
         issue
         for issue in issues

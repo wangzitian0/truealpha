@@ -140,3 +140,17 @@ def test_an_open_line_with_no_open_issue_does_nothing() -> None:
 def test_an_issue_list_that_is_no_list_fails_closed() -> None:
     with pytest.raises(ValueError, match="unexpected issue list payload"):
         staging_issue.open_red_issues(REPO, lambda args: "{}")
+
+
+def test_the_issue_list_is_read_with_the_limit_and_without_the_search_index() -> None:
+    desk = Desk()
+    staging_issue.open_red_issues(REPO, desk)
+    call = desk.calls[0]
+    assert call[call.index("--limit") + 1] == str(staging_issue.ISSUE_LIST_LIMIT)
+    assert "--search" not in call
+
+
+def test_a_list_that_fills_the_limit_fails_closed_because_an_older_issue_may_be_cut_off() -> None:
+    full = [{"number": n, "title": f"issue {n}"} for n in range(staging_issue.ISSUE_LIST_LIMIT)]
+    with pytest.raises(ValueError, match="reach the list limit"):
+        staging_issue.open_red_issues(REPO, lambda args: json.dumps(full))

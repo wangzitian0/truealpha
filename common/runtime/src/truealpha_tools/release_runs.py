@@ -31,6 +31,9 @@ TAG_RE = re.compile(r"\Av(\d+)\.(\d+)\.(\d+)\Z")
 DEPLOY_TITLE = re.compile(r"\ADeploy (?P<deploy_type>staging|prod) (?P<release>\S+)\Z")
 #: The run-name of `walk-release.yml`, for example "Walk Deploy staging v0.2.30".
 WALK_TITLE = re.compile(r"\AWalk Deploy (?P<deploy_type>staging|prod) (?P<release>\S+)\Z")
+#: The start of every run-name of those workflows, also for a deploy type that the train ignores.
+DEPLOY_PREFIX = "Deploy "
+WALK_PREFIX = "Walk Deploy "
 #: The job of `ci-required` that fails when any other job fails. It names no cause.
 SUMMARY_JOB = "ci-required"
 #: Run conclusions that count as a failure. A cancelled or skipped run carries no verdict.

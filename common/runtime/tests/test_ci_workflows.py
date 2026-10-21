@@ -941,6 +941,12 @@ def test_the_run_names_of_the_release_workflows_render_titles_that_the_train_rea
     assert deploy is not None, rendered
     assert (deploy["deploy_type"], deploy["release"]) == ("staging", "v0.2.5")
 
+    # The reader looks for the words "staging" and "prod" in the title. A rename of one option of
+    # the deploy type would leave the page matching through the other and read an empty history.
+    for file in (RELEASE, WALK):
+        dispatch = (yaml.safe_load(source(file)).get(True) or yaml.safe_load(source(file))["on"])["workflow_dispatch"]
+        assert {"staging", "prod"} <= set(dispatch["inputs"]["deploy_type"]["options"]), file
+
     walk_name = yaml.safe_load(source(WALK))["run-name"]
     # A manual walk renders `Walk Deploy <type> <ref>`. A walk that follows a deploy renders
     # `Walk <display title of the deploy run>`, which is `Walk Deploy <type> <ref>` again.

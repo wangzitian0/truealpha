@@ -171,9 +171,10 @@ Three modules hold the rule, and each fact has one definition:
 
 * `staging_line.py`: the rule, with no read of the network.
 * `release_history.py`: the releases, read from the run lists. It starts at the newest
-  passing walk and reads forward, which costs about a dozen API calls. A run that has
-  moved on to a newer commit reads none. A re-run keeps its run id, so the reader also
-  reads the failed attempt that the re-run hides.
+  passing walk and reads forward, which costs about a dozen API calls. It reads every
+  tag from the lowest tag of that window up, because a release cut between two failing
+  releases breaks their run. A run that has moved on to a newer commit reads none. A
+  re-run keeps its run id, so the reader also reads the attempt that the re-run hides.
 * `release_runs.py`: the words that the delivery report and the train share (the run
   titles, the tag name, the summary job).
 
