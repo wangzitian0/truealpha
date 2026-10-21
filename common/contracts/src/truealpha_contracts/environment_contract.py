@@ -292,9 +292,7 @@ class ModelSeatContract(_StrictFrozenModel):
         offsets = sorted(limits.probe_offset_minutes for limits in self.environments.values())
         for earlier, later in zip(offsets, offsets[1:], strict=False):
             if later - earlier < self.probe.slot_minutes:
-                raise ValueError(
-                    f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}"
-                )
+                raise ValueError(f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}")
         return self
 
     def limits_for(self, environment: str) -> ModelSeatEnvironmentLimits | None:
