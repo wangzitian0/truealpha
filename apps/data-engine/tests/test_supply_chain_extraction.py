@@ -520,3 +520,90 @@ def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent(
     assert row[3] is None  # exposure_score
     assert row[9] == ["context_window_exceeded"]
     assert row[11] == "unavailable"
+
+
+def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> None:
+    """Regression test: `_resolve_or_mint_partner_entity` passes all 8 parameters to the
+    2-row `staging.entity_aliases` INSERT (`%s` count == len(params) == 8), reuses existing
+    `legacy-id` aliases regardless of `tx_time` ordering so `staging.entity_mint` is never
+    called twice for the same partner, and wraps DB operations in a savepoint (`transaction()`)."""
+    import contextlib
+
+    from data_engine.datahub.standards.supply_chain_extraction import _resolve_or_mint_partner_entity
+
+    minted_id = _issuer_id("partner-tsmc")
+
+    class _StrictParamConn:
+        def __init__(self) -> None:
+            self.savepoints = 0
+            self.mint_calls = 0
+            self.alias_inserts: list[tuple[object, ...]] = []
+            self.minted_legacy: dict[str, str] = {}
+
+        @contextlib.contextmanager
+        def transaction(self):
+            self.savepoints += 1
+            yield
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            placeholder_count = sql.count("%s")
+            assert placeholder_count == len(p), (
+                f"SQL placeholder mismatch: {placeholder_count} '%s' vs {len(p)} params in: {sql}"
+            )
+            if "from staging.entity_aliases a" in sql and "a.scheme = 'legacy-id'" in sql:
+                legacy_val = str(p[1])
+                if legacy_val in self.minted_legacy:
+                    cur.fetchone = lambda: (self.minted_legacy[legacy_val],)  # type: ignore[method-assign]
+            elif "select staging.entity_mint" in sql:
+                self.mint_calls += 1
+                legacy_val = str(p[0])
+                if legacy_val in self.minted_legacy:
+                    raise AssertionError(f"entity_mint called a second time for {legacy_val}")
+                self.minted_legacy[legacy_val] = minted_id
+                cur.fetchone = lambda: (minted_id,)  # type: ignore[method-assign]
+            elif "insert into staging.entity_aliases" in sql:
+                self.alias_inserts.append(p)
+            return cur
+
+    conn = _StrictParamConn()
+    # Filing 1 (newer tx_time: 2026-02-26) mints TSMC
+    first_uuid = _resolve_or_mint_partner_entity(
+        conn,  # type: ignore[arg-type]
+        partner_name="TSMC",
+        partner_ticker=None,
+        tx_time=datetime(2026, 2, 26, tzinfo=UTC),
+        raw_ref="raw.fetches:1",
+    )
+    assert first_uuid == minted_id
+    assert conn.mint_calls == 1
+    assert len(conn.alias_inserts) == 1
+    assert len(conn.alias_inserts[0]) == 8
+
+    # Filing 2 (older tx_time: 2026-01-15) resolves existing legacy-id without re-minting
+    second_uuid = _resolve_or_mint_partner_entity(
+        conn,  # type: ignore[arg-type]
+        partner_name="TSMC",
+        partner_ticker=None,
+        tx_time=datetime(2026, 1, 15, tzinfo=UTC),
+        raw_ref="raw.fetches:2",
+    )
+    assert second_uuid == minted_id
+    assert conn.mint_calls == 1
+    assert conn.savepoints == 2
+
+
+def test_build_issuer_lookup_resolves_ciks_via_governed_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LEI-keyed wide-row issuers resolve to their SEC CIK via `governed_members(connection, run_id=...)`
+    even when `staging.entity_aliases` has no `scheme = 'cik'` row."""
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.standards.supply_chain_extraction import _build_issuer_lookup
+
+    nvda_uuid = _issuer_id("nvda")
+    monkeypatch.setattr(theme_purity, "governed_members", lambda _conn, *, run_id: {1045810: nvda_uuid})
+
+    conn = _MockConnection()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="issuer:lei:549300S4KLFTLO7GSQ80", ticker="NVDA")]
+    by_cik, _, _ = _build_issuer_lookup(issuers, conn, run_id="capture-run:topt")  # type: ignore[arg-type]
+    assert by_cik.get("1045810") == issuers[0]

@@ -8,6 +8,7 @@ and materializes exposure metrics into `mart.issuer_supply_chain_exposure`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -245,6 +246,18 @@ def _deterministic_partner_uuid(legacy_partner_id: str) -> str:
     return str(uuid.uuid5(issuer_ns, f"legacy-id:{legacy_partner_id}"))
 
 
+@contextlib.contextmanager
+def _optional_savepoint(connection: Connection[Any]) -> Any:
+    """Enter a PostgreSQL savepoint (`with connection.transaction():`) when supported so a
+    caught database error never leaves the outer transaction in `InFailedSqlTransaction`."""
+    tx_fn = getattr(connection, "transaction", None)
+    if callable(tx_fn):
+        with tx_fn():
+            yield
+    else:
+        yield
+
+
 def _resolve_or_mint_partner_entity(
     connection: Connection[Any],
     *,
@@ -257,67 +270,84 @@ def _resolve_or_mint_partner_entity(
     legacy_partner_id = _slug_entity_id(partner_name)
     clean_name = partner_name.strip()
     try:
-        # 1. Exact case-insensitive match on existing `name` alias or `legacy-id`
-        row = connection.execute(
-            """
-            select staging.entity_survivor(a.entity_id, %s)::text
-            from staging.entity_aliases a
-            join staging.entities e on e.entity_id = a.entity_id
-            where e.kind in ('issuer', 'fund')
-              and (
-                  (a.scheme = 'name' and lower(a.value) = lower(%s))
-                  or (a.scheme = 'legacy-id' and a.value = %s)
-              )
-              and a.transaction_time <= %s
-            order by a.confidence desc, a.transaction_time desc
-            limit 1
-            """,
-            (tx_time, clean_name, legacy_partner_id, tx_time),
-        ).fetchone()
-        if row and row[0]:
-            return str(row[0])
-
-        # 2. Match by ticker via `issues` -> `listed_as` -> `mic-ticker` if ticker was extracted
-        if partner_ticker:
-            ticker_row = connection.execute(
+        with _optional_savepoint(connection):
+            # 1. Exact case-insensitive match on existing `name` alias (PIT at tx_time)
+            # or unique `legacy-id` alias (valid across all time once minted).
+            row = connection.execute(
                 """
-                select staging.entity_survivor(r1.from_entity_id, %s)::text
+                select staging.entity_survivor(a.entity_id, %s)::text
                 from staging.entity_aliases a
-                join staging.entity_relations r2
-                  on r2.to_entity_id = a.entity_id and r2.relation_type = 'listed_as'
-                join staging.entity_relations r1
-                  on r1.to_entity_id = r2.from_entity_id and r1.relation_type = 'issues'
-                where a.scheme = 'mic-ticker'
-                  and split_part(a.value, ':', 2) = upper(%s)
-                  and a.transaction_time <= %s
-                order by a.confidence desc, a.transaction_time desc
+                join staging.entities e on e.entity_id = a.entity_id
+                where e.kind in ('issuer', 'fund')
+                  and (
+                      (a.scheme = 'legacy-id' and a.value = %s)
+                      or (a.scheme = 'name' and lower(a.value) = lower(%s) and a.transaction_time <= %s)
+                  )
+                order by (a.scheme = 'legacy-id') desc, a.confidence desc, a.transaction_time desc
                 limit 1
                 """,
-                (tx_time, partner_ticker.strip(), tx_time),
+                (tx_time, legacy_partner_id, clean_name, tx_time),
             ).fetchone()
-            if ticker_row and ticker_row[0]:
-                return str(ticker_row[0])
+            if row and row[0]:
+                return str(row[0])
 
-        # 3. Mint canonical UUID in `staging.entities` and register `legacy-id` + `name` aliases
-        minted_row = connection.execute(
-            "select staging.entity_mint('issuer', 'legacy-id', %s, 'datahub.supply_chain')::text",
-            (legacy_partner_id,),
-        ).fetchone()
-        if minted_row and minted_row[0]:
-            minted_uuid = str(minted_row[0])
-            connection.execute(
+            # 1b. Check immutable birth registry in `staging.entities` so out-of-order filing
+            # dates never re-mint generation 2 of an already-minted `legacy-id`.
+            birth_row = connection.execute(
                 """
-                insert into staging.entity_aliases (
-                    entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
-                    raw_ref, method, confidence, mapping_version
-                ) values
-                    (%s::uuid, 'legacy-id', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), 'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1'),
-                    (%s::uuid, 'name', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), 'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1')
-                on conflict do nothing
+                select staging.entity_survivor(entity_id, %s)::text
+                from staging.entities
+                where birth_scheme = 'legacy-id'
+                  and birth_value = staging.entity_alias_normalize('legacy-id', %s)
+                  and birth_generation = 1
+                limit 1
                 """,
-                (minted_uuid, legacy_partner_id, tx_time, raw_ref, minted_uuid, clean_name, raw_ref),
-            )
-            return minted_uuid
+                (tx_time, legacy_partner_id),
+            ).fetchone()
+            if birth_row and birth_row[0]:
+                return str(birth_row[0])
+
+            # 2. Match by ticker via `issues` -> `listed_as` -> `mic-ticker` if ticker was extracted
+            if partner_ticker:
+                ticker_row = connection.execute(
+                    """
+                    select staging.entity_survivor(r1.from_entity_id, %s)::text
+                    from staging.entity_aliases a
+                    join staging.entity_relations r2
+                      on r2.to_entity_id = a.entity_id and r2.relation_type = 'listed_as'
+                    join staging.entity_relations r1
+                      on r1.to_entity_id = r2.from_entity_id and r1.relation_type = 'issues'
+                    where a.scheme = 'mic-ticker'
+                      and split_part(a.value, ':', 2) = upper(%s)
+                      and a.transaction_time <= %s
+                    order by a.confidence desc, a.transaction_time desc
+                    limit 1
+                    """,
+                    (tx_time, partner_ticker.strip(), tx_time),
+                ).fetchone()
+                if ticker_row and ticker_row[0]:
+                    return str(ticker_row[0])
+
+            # 3. Mint canonical UUID in `staging.entities` and register `legacy-id` + `name` aliases
+            minted_row = connection.execute(
+                "select staging.entity_mint('issuer', 'legacy-id', %s, 'datahub.supply_chain')::text",
+                (legacy_partner_id,),
+            ).fetchone()
+            if minted_row and minted_row[0]:
+                minted_uuid = str(minted_row[0])
+                connection.execute(
+                    """
+                    insert into staging.entity_aliases (
+                        entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
+                        raw_ref, method, confidence, mapping_version
+                    ) values
+                        (%s::uuid, 'legacy-id', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), 'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1'),
+                        (%s::uuid, 'name', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), 'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1')
+                    on conflict do nothing
+                    """,
+                    (minted_uuid, legacy_partner_id, tx_time, raw_ref, minted_uuid, clean_name, tx_time, raw_ref),
+                )
+                return minted_uuid
     except Exception:  # noqa: BLE001
         pass
     return _deterministic_partner_uuid(legacy_partner_id)
@@ -339,47 +369,94 @@ def _record_entity_relation_supplies_to(
     if not (is_uuid(from_uuid) and is_uuid(to_uuid)) or from_uuid == to_uuid:
         return
     try:
-        attributes = {"revenue_share_pct": str(revenue_share_pct)} if revenue_share_pct is not None else {}
-        connection.execute(
-            """
-            with t as (
-                select least(%s::timestamptz, clock_timestamp()) as eff_tx
-            ),
-            r as (
-                select staging.entity_relation_uuid(
-                    'supplies_to', %s::uuid, %s::uuid, %s::date, t.eff_tx, 'sec_10k_supply_chain', 'asserted'
-                ) as rel_id,
-                t.eff_tx
-                from t
+        with _optional_savepoint(connection):
+            attributes = {"revenue_share_pct": str(revenue_share_pct)} if revenue_share_pct is not None else {}
+            connection.execute(
+                """
+                with t as (
+                    select least(%s::timestamptz, clock_timestamp()) as eff_tx
+                ),
+                r as (
+                    select staging.entity_relation_uuid(
+                        'supplies_to', %s::uuid, %s::uuid, %s::date, t.eff_tx, 'sec_10k_supply_chain', 'asserted'
+                    ) as rel_id,
+                    t.eff_tx
+                    from t
+                )
+                insert into staging.entity_relations (
+                    relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
+                    transaction_time, source, raw_ref, method, confidence, evidence, attributes, mapping_version
+                )
+                select
+                    r.rel_id, 'supplies_to', %s::uuid, %s::uuid, %s::date,
+                    r.eff_tx, 'sec_10k_supply_chain', %s, 'asserted', %s, %s::jsonb, %s::jsonb, 'supply-chain:v1'
+                from r
+                where exists (select 1 from staging.entities where entity_id = %s::uuid)
+                  and exists (select 1 from staging.entities where entity_id = %s::uuid)
+                on conflict do nothing
+                """,
+                (
+                    tx_time,
+                    from_uuid,
+                    to_uuid,
+                    valid_from,
+                    from_uuid,
+                    to_uuid,
+                    valid_from,
+                    raw_ref,
+                    confidence,
+                    json.dumps({"quote": evidence_sentence}),
+                    json.dumps(attributes),
+                    from_uuid,
+                    to_uuid,
+                ),
             )
-            insert into staging.entity_relations (
-                relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
-                transaction_time, source, raw_ref, method, confidence, evidence, attributes, mapping_version
-            )
-            select
-                r.rel_id, 'supplies_to', %s::uuid, %s::uuid, %s::date,
-                r.eff_tx, 'sec_10k_supply_chain', %s, 'asserted', %s, %s::jsonb, %s::jsonb, 'supply-chain:v1'
-            from r
-            where exists (select 1 from staging.entities where entity_id = %s::uuid)
-              and exists (select 1 from staging.entities where entity_id = %s::uuid)
-            on conflict do nothing
-            """,
-            (
-                tx_time,
-                from_uuid,
-                to_uuid,
-                valid_from,
-                from_uuid,
-                to_uuid,
-                valid_from,
-                raw_ref,
-                confidence,
-                json.dumps({"quote": evidence_sentence}),
-                json.dumps(attributes),
-                from_uuid,
-                to_uuid,
-            ),
-        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _populate_alias_ciks(
+    connection: Connection[Any],
+    uuid_to_issuer: dict[str, CanonicalIssuer],
+    by_cik: dict[str, CanonicalIssuer],
+) -> None:
+    if not uuid_to_issuer:
+        return
+    try:
+        with _optional_savepoint(connection):
+            alias_rows = connection.execute(
+                """
+                select entity_id::text, value
+                from staging.entity_aliases
+                where entity_id = any(%s::uuid[])
+                  and scheme = 'cik'
+                """,
+                (sorted(uuid_to_issuer),),
+            ).fetchall()
+            for entity_id, cik_val in alias_rows:
+                matched_iss = uuid_to_issuer.get(str(entity_id).lower())
+                if matched_iss is not None and cik_val:
+                    cik_digits = str(cik_val).lstrip("0") or "0"
+                    by_cik.setdefault(cik_digits, matched_iss)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _populate_governed_member_ciks(
+    connection: Connection[Any],
+    run_id: str,
+    by_issuer_id: dict[str, CanonicalIssuer],
+    uuid_to_issuer: dict[str, CanonicalIssuer],
+    by_cik: dict[str, CanonicalIssuer],
+) -> None:
+    try:
+        with _optional_savepoint(connection):
+            from data_engine.datahub.production_topt.theme_purity import governed_members
+
+            for cik_int, member_issuer_id in governed_members(connection, run_id=run_id).items():
+                matched_iss = by_issuer_id.get(member_issuer_id) or uuid_to_issuer.get(member_issuer_id.lower())
+                if matched_iss is not None:
+                    by_cik.setdefault(str(cik_int), matched_iss)
     except Exception:  # noqa: BLE001
         pass
 
@@ -387,6 +464,8 @@ def _record_entity_relation_supplies_to(
 def _build_issuer_lookup(
     issuers: Sequence[CanonicalIssuer],
     connection: Connection[Any] | None = None,
+    *,
+    run_id: str | None = None,
 ) -> tuple[dict[str, CanonicalIssuer], dict[str, CanonicalIssuer], dict[str, CanonicalIssuer]]:
     by_cik: dict[str, CanonicalIssuer] = {}
     by_legacy: dict[str, CanonicalIssuer] = {}
@@ -402,24 +481,10 @@ def _build_issuer_lookup(
         if is_uuid(iss.issuer_id):
             uuid_to_issuer[iss.issuer_id.lower()] = iss
 
-    if connection is not None and uuid_to_issuer:
-        try:
-            alias_rows = connection.execute(
-                """
-                select entity_id::text, value
-                from staging.entity_aliases
-                where entity_id = any(%s::uuid[])
-                  and scheme = 'cik'
-                """,
-                (sorted(uuid_to_issuer),),
-            ).fetchall()
-            for entity_id, cik_val in alias_rows:
-                matched_iss = uuid_to_issuer.get(str(entity_id).lower())
-                if matched_iss is not None and cik_val:
-                    cik_digits = str(cik_val).lstrip("0") or "0"
-                    by_cik.setdefault(cik_digits, matched_iss)
-        except Exception:  # noqa: BLE001
-            pass
+    if connection is not None:
+        _populate_alias_ciks(connection, uuid_to_issuer, by_cik)
+        if run_id:
+            _populate_governed_member_ciks(connection, run_id, by_issuer_id, uuid_to_issuer, by_cik)
     return by_cik, by_legacy, by_issuer_id
 
 
@@ -470,16 +535,17 @@ def _resolve_filing_text(
         return plain
     if isinstance(object_uri, str) and object_uri:
         try:
-            from data_engine.datahub.standards.filing_extraction import filing_plain_text
-            from data_engine.raw_store import get_payload
+            with _optional_savepoint(connection):
+                from data_engine.datahub.standards.filing_extraction import filing_plain_text
+                from data_engine.raw_store import get_payload
 
-            if object_store is not None and hasattr(object_store, "get_bytes"):
-                raw_bytes = object_store.get_bytes(object_uri)
-            elif isinstance(fetch_id, int):
-                raw_bytes = get_payload(connection, fetch_id, store=object_store)
-            else:
-                return None
-            return str(filing_plain_text(raw_bytes))
+                if object_store is not None and hasattr(object_store, "get_bytes"):
+                    raw_bytes = object_store.get_bytes(object_uri)
+                elif isinstance(fetch_id, int):
+                    raw_bytes = get_payload(connection, fetch_id, store=object_store)
+                else:
+                    return None
+                return str(filing_plain_text(raw_bytes))
         except Exception:  # noqa: BLE001
             return None
     return None
@@ -487,7 +553,7 @@ def _resolve_filing_text(
 
 def _has_raw_fetches_table(connection: Connection[Any]) -> bool:
     try:
-        with connection.cursor() as cur:
+        with _optional_savepoint(connection), connection.cursor() as cur:
             cur.execute("select to_regclass('raw.fetches')")
             res = cur.fetchone()
             return bool(res and res[0])
@@ -531,8 +597,6 @@ def _persist_single_candidate_edge(
     )
     if partner_uuid == canonical_issuer_id:
         return False
-    ensure_entity(connection, canonical_issuer_id, "company", matched.ticker)
-    ensure_entity(connection, partner_uuid, "company", cand.target_entity_name)
     from_id = partner_uuid if cand.relation_type == "supplier" else canonical_issuer_id
     to_id = canonical_issuer_id if cand.relation_type == "supplier" else partner_uuid
     _record_entity_relation_supplies_to(
@@ -546,19 +610,25 @@ def _persist_single_candidate_edge(
         evidence_sentence=cand.evidence_sentence,
         revenue_share_pct=cand.revenue_share_pct,
     )
-    return bool(
-        add_edge(
-            connection,
-            from_id=from_id,
-            to_id=to_id,
-            relation_type="supplies_to",
-            confidence=float(cand.confidence),
-            source="sec_10k_supply_chain",
-            transaction_time=tx_time,
-            valid_from=filing_dt.isoformat(),
-            raw_ref=raw_ref,
-        )
-    )
+    try:
+        with _optional_savepoint(connection):
+            ensure_entity(connection, canonical_issuer_id, "company", matched.ticker)
+            ensure_entity(connection, partner_uuid, "company", cand.target_entity_name)
+            return bool(
+                add_edge(
+                    connection,
+                    from_id=from_id,
+                    to_id=to_id,
+                    relation_type="supplies_to",
+                    confidence=float(cand.confidence),
+                    source="sec_10k_supply_chain",
+                    transaction_time=tx_time,
+                    valid_from=filing_dt.isoformat(),
+                    raw_ref=raw_ref,
+                )
+            )
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _extract_filing_for_issuer(
@@ -622,6 +692,7 @@ def persist_extracted_supply_chain_edges(
     *,
     issuers: Sequence[CanonicalIssuer],
     cutoff: datetime,
+    run_id: str | None = None,
     object_store: Any | None = None,
     llm_gateway: Any | None = None,
     _diagnostics: _ExtractionDiagnostics | None = None,
@@ -633,20 +704,21 @@ def persist_extracted_supply_chain_edges(
     if not _has_raw_fetches_table(connection):
         return 0
     diag = _diagnostics if _diagnostics is not None else _ExtractionDiagnostics()
-    by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers, connection)
+    by_cik, by_legacy, by_issuer_id = _build_issuer_lookup(issuers, connection, run_id=run_id)
     try:
-        rows = connection.execute(
-            """
-            select distinct on (split_part(source_record_id, ':', 2))
-                id, source_record_id, object_uri, source_published_at, metadata
-            from raw.fetches
-            where source = 'sec'
-              and source_record_id like 'filing-document:CIK%%'
-              and source_published_at <= %s
-            order by split_part(source_record_id, ':', 2), source_published_at desc, id desc
-            """,
-            (cutoff,),
-        ).fetchall()
+        with _optional_savepoint(connection):
+            rows = connection.execute(
+                """
+                select distinct on (split_part(source_record_id, ':', 2))
+                    id, source_record_id, object_uri, source_published_at, metadata
+                from raw.fetches
+                where source = 'sec'
+                  and source_record_id like 'filing-document:CIK%%'
+                  and source_published_at <= %s
+                order by split_part(source_record_id, ':', 2), source_published_at desc, id desc
+                """,
+                (cutoff,),
+            ).fetchall()
     except Exception:  # noqa: BLE001
         return 0
 
@@ -881,6 +953,7 @@ def materialize_universe_supply_chain_exposure(
             connection,
             issuers=issuers,
             cutoff=cutoff,
+            run_id=run_id,
             object_store=object_store,
             llm_gateway=llm_gateway,
             _diagnostics=diag,
