@@ -13,6 +13,9 @@ walk, so the reader starts at that walk and reads forward. It reads these tags:
   no deploy and no walk run. A hand cut of the next number would hide it without this list,
 * the tag that the train would cut next. It may hold earlier pushes that were deleted.
 
+The window then takes every known tag from the lowest of these tags up. A release cut between two
+failing releases breaks their run in the rule, also when it ended before the passing walk.
+
 The `ci-required` runs of each tag are read by branch name, which also finds a deleted tag. With no
 passing walk in the lists, the reader takes the newest `MAX_TAGS` tags.
 
