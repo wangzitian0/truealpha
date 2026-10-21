@@ -1,8 +1,9 @@
 name: doc-drift
 
-# #1410 W1: init.md, vision.md and README.md cite only repository paths and `mart` objects
-# that exist on main, and they hold no "Status 20xx" or "as of 20xx" stamp. On 2026-10-20 they
-# held 22 dead paths, 2 missing mart objects and 5 stamps, and no check saw it.
+# #1410 W1: every tracked Markdown file cites only repository paths and `mart` objects that
+# exist on main, and holds no "Status 20xx" or "as of 20xx" stamp. The check names its
+# exclusions (historical records and generated files) and gives each one a reason. On
+# 2026-10-20 init.md held 22 dead paths, 2 missing mart objects and 5 stamps, and no check saw it.
 # `common/runtime/src/truealpha_tools/doc_drift.py` is the check; its docstring states the rules.
 #
 # A red run is the verdict. It gates no merge, it is not a required check, and it opens no
