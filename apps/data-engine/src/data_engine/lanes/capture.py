@@ -88,6 +88,9 @@ class ToptLiveTickConfig(dg.Config):
     (`triggers.boot_canary_forces_fetch`, owner decision 2026-09-17). A schedule
     never sets it. The run fetches every obligation instead of reusing observations
     committed in the last twelve hours (#635), under a capture identity of its own.
+    A fetch key that already landed on the same UTC day is still served from the index
+    of landed keys (#1411): the adapters and parsers of the release run again on those
+    bytes, and the vendor is not asked again.
     Launch it through the admin page or Dagster GraphQL
     (docs/datahub-quality-report.md). The run plan, the quality report and this op's
     output metadata record `forced_fetch`.

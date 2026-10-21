@@ -43,7 +43,7 @@ from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT
 from data_engine.raw_store import insert_fetch
 from data_engine.sources import llm
 from data_engine.sources.gateway import CapacityExceeded, SourceGateway
-from data_engine.sources.sec import SUBMISSIONS_URL
+from data_engine.sources.sec import SUBMISSIONS_URL, submissions_key
 
 ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
@@ -243,11 +243,10 @@ def parse_as_of(text: str | None) -> date | None:
 
 
 def _fetch_bytes_via_gateway(
-    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, entity: str, as_of: str
+    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, key: FetchKey
 ) -> bytes:
     """One SEC document as bytes, fetched once per key (#1411 K3, K5).
 
-    The key is the issuer or filing (``entity``) and the axis on which it changes (``as_of``).
     A second caller for the same key, in this run or a later one, reads the landed bytes."""
     from data_engine.sources import gateway as gw_mod
 
@@ -258,16 +257,13 @@ def _fetch_bytes_via_gateway(
         response.raise_for_status()
         return bytes(response.content)
 
-    return gw_mod.fetch_once(FetchKey("sec", endpoint, entity, as_of), fetch, content_type="application/octet-stream")
+    return gw_mod.fetch_once(key, fetch, content_type="application/octet-stream")
 
 
 def _fetch_json_via_gateway(
-    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, entity: str
+    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, key: FetchKey
 ) -> dict[str, Any]:
-    from data_engine.sources import gateway as gw_mod
-
-    body = _fetch_bytes_via_gateway(http, gateway_instance, endpoint, url, entity=entity, as_of=gw_mod.utc_day())
-    return dict(json.loads(body.decode()))
+    return dict(json.loads(_fetch_bytes_via_gateway(http, gateway_instance, endpoint, url, key=key).decode()))
 
 
 def _annual_filing_from_index(
@@ -292,7 +288,11 @@ def _annual_filing_from_index(
         url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
         # A filed accession never changes (an amendment is a new accession): the key holds for ever.
         body = _fetch_bytes_via_gateway(
-            http, gateway, "archive", url, entity=f"filing:{cik:010d}:{accession}:{document}", as_of=ACCESSION_AS_OF
+            http,
+            gateway,
+            "archive",
+            url,
+            key=FetchKey("sec", "archive", f"filing:{cik:010d}:{accession}:{document}", ACCESSION_AS_OF),
         )
         return FilingDocument(cik, accession, form, filing_date, document, url, body)
     return None
@@ -308,7 +308,7 @@ def _latest_filing_for_forms(
 ) -> FilingDocument | None:
     cutoff_date = cutoff.astimezone(UTC).date()
     submissions = _fetch_json_via_gateway(
-        http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), entity=f"issuer:cik:{cik:010d}"
+        http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), key=submissions_key(cik)
     )
     filings = submissions.get("filings") or {}
     recent = filings.get("recent") or {}
@@ -330,7 +330,7 @@ def _latest_filing_for_forms(
                 pass
         overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
         overflow = _fetch_json_via_gateway(
-            http, gateway, "submissions", overflow_url, entity=f"issuer:cik:{cik:010d}:{name}"
+            http, gateway, "submissions", overflow_url, key=submissions_key(cik, overflow=name)
         )
         found = _annual_filing_from_index(
             cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms

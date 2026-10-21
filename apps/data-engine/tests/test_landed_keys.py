@@ -121,3 +121,57 @@ def test_the_gateway_logs_and_keeps_going_when_a_seat_has_no_raw_source(
             0
         ]
     assert count == 0
+
+
+def test_the_deployed_wiring_keeps_a_landing_through_a_rollback_and_a_dropped_connection(
+    database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway's own autocommit connection lands the key, so the caller's transaction cannot take it.
+
+    The connection then drops, as after a database restart; the next read opens a new one."""
+    from data_engine import raw_store
+    from data_engine.config import settings
+
+    key, store = _key("0000000005"), InMemoryRawObjectStore()
+    monkeypatch.setattr(settings, "database_url", database)
+    monkeypatch.setattr(raw_store, "object_store", lambda: store)
+    monkeypatch.setattr(gateway, "_landed_keys", PostgresLandedKeys(gateway._pg, gateway._pg_reset))
+    gateway._pg_reset()
+    try:
+        with psycopg.connect(database) as caller:
+            caller.execute("select 1")
+            gateway.land(key, BODY)
+            caller.rollback()
+        gateway._pg().close()
+        assert gateway.landed(key) == BODY
+    finally:
+        gateway._pg_reset()
+
+
+def test_a_ledger_without_the_fetch_key_column_still_records_a_keyed_call(
+    database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A code server that starts before the migration replay keeps its audit rows (deploy skew).
+
+    The writer on the gateway's connection falls back to the unkeyed row. The writer on a caller's
+    connection does it in a savepoint, so the caller's transaction is not aborted."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "database_url", database)
+    record = gateway.CallRecord(
+        source="sec", endpoint="e", caller="skew-test", called_at=FETCHED_AT, ok=True, fetch_key="sec|e|x|d"
+    )
+    gateway._pg_reset()
+    with psycopg.connect(database, autocommit=True) as admin:
+        admin.execute("alter table staging.api_call_ledger drop column fetch_key")
+        try:
+            gateway.postgres_writer(record)
+            with psycopg.connect(database) as caller:
+                gateway.SourceGateway(caller, caller="skew-test")._write(record)
+                assert caller.execute("select 1").fetchone() == (1,), "the caller's transaction was aborted"
+                caller.commit()
+            rows = admin.execute("select count(*) from staging.api_call_ledger where caller = 'skew-test'").fetchone()
+        finally:
+            gateway._pg_reset()
+            admin.execute("alter table staging.api_call_ledger add column fetch_key text")
+    assert rows == (2,)

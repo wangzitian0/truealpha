@@ -20,6 +20,24 @@ COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.js
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 
+def company_facts_key(cik: int) -> FetchKey:
+    """The one key of a company-facts document (#1411 K5). The adapter and the vendor oracle share it."""
+    return FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
+
+
+def submissions_key(cik: int, *, overflow: str | None = None) -> FetchKey:
+    """The one key of an issuer's submissions index, or of one overflow file of it.
+
+    The filing readers and `fetch_company_submissions` share it."""
+    entity = f"issuer:cik:{cik:010d}" if overflow is None else f"issuer:cik:{cik:010d}:{overflow}"
+    return FetchKey("sec", "submissions", entity, gateway.utc_day())
+
+
+def company_tickers_key() -> FetchKey:
+    """The one key of SEC's ticker-to-CIK crosswalk file."""
+    return FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
+
+
 def client() -> httpx.Client:
     """The shared SEC-facing HTTP client (correct User-Agent per SEC fair-use
     policy) — also reused for other keyless public APIs (OpenFIGI). Public API:
@@ -29,21 +47,24 @@ def client() -> httpx.Client:
     return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
 
 
-def ticker_cik_index(http: httpx.Client | None = None) -> dict[str, int]:
+def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, int]:
     """The whole ticker -> CIK crosswalk from SEC's official mapping file, once.
 
     Resolving a universe one ticker at a time re-downloads this file per lookup; a
     capture run reads it once and indexes.
     """
-    key = FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
 
     def fetch() -> bytes:
-        if http is None:
-            with client() as c:
-                return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
-        return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
+        def request() -> bytes:
+            if http is None:
+                with client() as c:
+                    return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
+            return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
 
-    rows = json.loads(gateway.fetch_once(key, fetch).decode())
+        # A standards-lane gateway admits and records the request itself. It runs only on a miss.
+        return request() if via is None else via.call("sec", "company_tickers", request)
+
+    rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
 
 
@@ -72,7 +93,6 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     This is issuer *registry* metadata, not reported financial data: it is what says
     an issuer is a depository institution rather than a manufacturer.
     """
-    key = FetchKey("sec", "submissions", f"issuer:cik:{cik:010d}", gateway.utc_day())
 
     def fetch() -> bytes:
         url = SUBMISSIONS_URL.format(cik=cik)
@@ -81,7 +101,7 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
                 return _get(c, "submissions", url, "sec.fetch_company_submissions")
         return _get(http, "submissions", url, "sec.fetch_company_submissions")
 
-    return dict(json.loads(gateway.fetch_once(key, fetch).decode()))
+    return dict(json.loads(gateway.fetch_once(submissions_key(cik), fetch).decode()))
 
 
 def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> tuple[bytes, dict[str, Any]]:
@@ -92,7 +112,6 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
     describes our rendering rather than the vendor's document, and a reparse under a
     corrected mapping would be replaying our own output.
     """
-    key = FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
 
     def fetch() -> bytes:
         url = COMPANY_FACTS_URL.format(cik=cik)
@@ -101,7 +120,7 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
                 return _get(c, "companyfacts", url, "sec.fetch_company_facts_response")
         return _get(http, "companyfacts", url, "sec.fetch_company_facts_response")
 
-    body = gateway.fetch_once(key, fetch)
+    body = gateway.fetch_once(company_facts_key(cik), fetch)
     return body, json.loads(body.decode())
 
 

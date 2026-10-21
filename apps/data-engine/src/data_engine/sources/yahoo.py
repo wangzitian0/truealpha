@@ -120,11 +120,26 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
             resp.raise_for_status()
             return bytes(resp.content)
 
-    body = gateway.fetch_once(key, fetch, keep=settled_end)
+    body = gateway.fetch_once(key, fetch, keep=settled_end, accept=lambda answer: _session_is_final(answer, end))
     # Decoded with parse_float=Decimal so the response is never routed through a
     # Python float — that would add a second rounding on top of the vendor's.
     payload = json.loads(body.decode(), parse_float=Decimal)
     return body, _parse_chart_response(payload)
+
+
+def _session_is_final(body: bytes, end: date) -> bool:
+    """Whether a chart answer settles the session of ``end`` for good, so the index may keep it.
+
+    A session is final once its XNYS close has passed and the chart holds its bar. Before the close the
+    chart sends a bar that still moves (#637). After it, Yahoo can lag and omit the bar, and an older
+    bar would then stand in for the session. An ``end`` that is no XNYS session needs no bar."""
+    from data_engine.datahub.market_prices import is_xnys_trading_day, xnys_session_close_utc
+
+    if not is_xnys_trading_day(end):
+        return True
+    if gateway._utcnow() < xnys_session_close_utc(end):
+        return False
+    return any(bar.date == end for bar in _parse_chart_response(json.loads(body.decode(), parse_float=Decimal)))
 
 
 def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int = 365) -> list[PriceBar]:

@@ -22,7 +22,13 @@ period end rather than by declaration order.
 
 A checked-in expected value would not do either: a constant is authored by this repository
 too, so it drifts silently the moment the issuer files again. The right-hand side has to
-come over the network at check time.
+come from the vendor.
+
+The oracle reads the SEC document by the same fetch key as the tick (#1411 K5). A document
+that the tick landed on the same UTC day is read from the index, and SEC is asked once. The
+independence of the oracle is its parser. It cannot catch a defect of the fetch step, because
+it reads the same bytes. The sha256 of each landed document is in `raw.fetches` and in the
+ledger row of the call, so a wrong fetch is a lineage question (#1418 B7), not an oracle one.
 """
 
 from __future__ import annotations
@@ -134,18 +140,16 @@ def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
 
 
 def ticker_cik_index(user_agent: str) -> dict[str, int]:
-    from data_engine.sources import gateway
+    from data_engine.sources import sec
 
-    key = FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
-    payload = _http_json(_TICKERS_URL, user_agent, key)
+    payload = _http_json(_TICKERS_URL, user_agent, sec.company_tickers_key())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in payload.values()}
 
 
 def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
-    from data_engine.sources import gateway
+    from data_engine.sources import sec
 
-    key = FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
-    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, key)
+    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, sec.company_facts_key(cik))
 
 
 def _annual_entries(facts: dict[str, Any], concept: str, unit: str, cutoff: date) -> Iterable[tuple[date, Decimal]]:

@@ -20,6 +20,11 @@ The verdict is pending when the day holds no successful vendor call. It judges n
 
 Calls without a key are counted and named by seat and endpoint (``unkeyed``). They are not judged:
 a caller that does not name its key cannot prove it fetched once. The number is the work left.
+A request whose answer is not final (a window that ends today) is made without a key, so it is
+listed as unkeyed and never counted as a duplicate.
+
+A forced tick (`force_fetch`) reads the same index. It does not ask the vendors again for a key that
+landed. A key that must be fetched again is deleted from `staging.landed_fetch_keys` by an operator.
 """
 
 from __future__ import annotations
@@ -40,8 +45,8 @@ having count(*) > 1
 order by count(*) desc, fetch_key
 """
 
-#: Successful vendor calls that spent quota (``cost > 0``). A model call records tokens as cost
-#: and none of its requests is a resource that can be fetched twice.
+#: Successful vendor calls that spent quota (``cost > 0``). A model call records ``cost = 0``, and
+#: none of its requests is a resource that can be fetched twice.
 COVERAGE_SQL = """
 select count(*) filter (where fetch_key is not null), count(*) filter (where fetch_key is null)
 from staging.api_call_ledger

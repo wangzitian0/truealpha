@@ -53,6 +53,12 @@ def test_k1_every_registration_declares_per_key_cost_and_as_of_axis() -> None:
     assert CREDITS_PER_SYMBOL == origin_per_key_cost("twelve-data:v1") == 2
 
 
+@pytest.fixture(autouse=True)
+def _fixed_utc_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keys that use the UTC day as their as-of must not change when a test crosses 00:00 UTC."""
+    monkeypatch.setattr(gateway, "utc_day", lambda: "2026-10-16")
+
+
 _SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src" / "data_engine"
 #: The one module that may write a per-key cost: the source registry.
 _REGISTRY = "source_registrations.py"
@@ -196,7 +202,7 @@ def test_k3_a_failed_fetch_lands_nothing_so_the_next_caller_asks_again(call_ledg
     assert len(attempts) == 2 and landed_keys.bodies == {key: b"{}"}
 
 
-def test_k3_a_window_that_is_not_final_is_stamped_with_its_key_and_never_landed(call_ledger, landed_keys) -> None:
+def test_k3_a_window_that_is_not_final_is_asked_each_time_without_a_key(call_ledger, landed_keys) -> None:
     key = FetchKey("yahoo", "chart", "symbol:AAPL", "2026-10-16")
     socket: list[str] = []
     client = _socket(socket)
@@ -208,7 +214,114 @@ def test_k3_a_window_that_is_not_final_is_stamped_with_its_key_and_never_landed(
     gateway.fetch_once(key, fetch, keep=False)
 
     assert len(socket) == 2 and landed_keys.bodies == {}
-    assert [row.fetch_key for row in call_ledger] == [key.ledger_key] * 2
+    assert [row.fetch_key for row in call_ledger] == [None, None], "an unfinished window is not a counted key"
+
+
+def test_k3_an_answer_that_the_caller_refuses_reaches_the_caller_and_stays_out_of_the_index(
+    call_ledger, landed_keys
+) -> None:
+    key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
+    answers = [b'{"status":"error"}', b'{"close":"1"}']
+
+    def fetch() -> bytes:
+        return answers.pop(0)
+
+    accept = lambda body: b"error" not in body  # noqa: E731 - the one rule under test
+    assert gateway.fetch_once(key, fetch, accept=accept) == b'{"status":"error"}'
+    assert landed_keys.bodies == {}
+    assert gateway.fetch_once(key, fetch, accept=accept) == b'{"close":"1"}'
+    assert landed_keys.bodies == {key: b'{"close":"1"}'}
+
+
+# --- Yahoo: a chart lands only when its session is final and its bar is in it -----------
+
+
+def _chart(*days: str) -> bytes:
+    stamps = [int(datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp()) for day in days]
+    closes = [40.0] * len(days)
+    quote = {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [1] * len(days)}
+    result = {"timestamp": stamps, "indicators": {"quote": [quote], "adjclose": [{"adjclose": closes}]}}
+    return json.dumps({"chart": {"result": [result]}}).encode()
+
+
+@pytest.fixture
+def yahoo_socket(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """The chart answers a fake Yahoo gives, in order; the list of answers left is the test's script."""
+    answers: list[bytes] = []
+    real_client = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=answers.pop(0))
+
+    monkeypatch.setattr(
+        httpx, "Client", lambda *a, **kw: real_client(*a, **{**kw, "transport": httpx.MockTransport(handler)})
+    )
+    return answers
+
+
+def _fetch_chart(end: date, now: datetime) -> bytes:
+    from data_engine.sources import yahoo
+
+    gateway_now = gateway._utcnow
+    gateway._utcnow = lambda: now  # type: ignore[assignment]
+    try:
+        return yahoo.fetch_daily_chart("AAPL", end=end)[0]
+    finally:
+        gateway._utcnow = gateway_now  # type: ignore[assignment]
+
+
+def test_k3_yahoo_lands_a_closed_session_that_has_its_bar_and_serves_the_second_reader(
+    yahoo_socket, landed_keys
+) -> None:
+    yahoo_socket.append(_chart("2026-03-30", "2026-03-31"))
+    after_close = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
+    first = _fetch_chart(date(2026, 3, 31), after_close)
+    second = _fetch_chart(date(2026, 3, 31), after_close)
+    assert first == second and yahoo_socket == [], "the second reader must not ask Yahoo"
+    assert len(landed_keys.bodies) == 1
+
+
+def test_k3_yahoo_does_not_land_a_chart_before_the_close_of_its_session(yahoo_socket, landed_keys) -> None:
+    """The bar of an open session moves (#637). A smoke at 14:00 UTC must not feed the 22:15 UTC tick."""
+    yahoo_socket.extend([_chart("2026-03-30", "2026-03-31")] * 2)
+    midday = datetime(2026, 3, 31, 14, 0, tzinfo=UTC)
+    _fetch_chart(date(2026, 3, 31), midday)
+    _fetch_chart(date(2026, 3, 31), midday)
+    assert yahoo_socket == [] and landed_keys.bodies == {}, "both reads asked Yahoo, and none landed"
+
+
+def test_k3_yahoo_does_not_land_a_closed_session_whose_bar_the_vendor_has_not_published(
+    yahoo_socket, landed_keys
+) -> None:
+    """Yahoo can lag after the close. The chart then ends one session early and must be asked again."""
+    yahoo_socket.extend([_chart("2026-03-27", "2026-03-30"), _chart("2026-03-30", "2026-03-31")])
+    after_close = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
+    _fetch_chart(date(2026, 3, 31), after_close)
+    assert landed_keys.bodies == {}
+    _fetch_chart(date(2026, 3, 31), after_close)
+    assert len(landed_keys.bodies) == 1 and yahoo_socket == []
+
+
+def test_k5_the_vendor_oracle_reads_the_company_facts_that_the_adapter_landed(monkeypatch) -> None:
+    """One resource, one key: the oracle and the adapter fetch one company-facts document once a day."""
+    from data_engine.quality import vendor_oracle
+
+    socket: list[str] = []
+    document = json.dumps({"facts": {}}).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        socket.append(str(request.url))
+        return httpx.Response(200, content=document)
+
+    monkeypatch.setattr(sec, "client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+
+    def refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("the oracle asked SEC for a document that the adapter landed")
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    sec.fetch_company_facts_response(1652044)
+    assert vendor_oracle.company_facts(1652044, "TrueAlpha test test@example.com") == {"facts": {}}
+    assert len(socket) == 1
 
 
 # --- K4: One price store (D1) & closed-month-only monthly fetch (D2) ------------------

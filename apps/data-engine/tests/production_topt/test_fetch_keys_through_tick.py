@@ -277,7 +277,8 @@ def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) ->
     """The ledger of the environment shows each key once, and the keys carry the vendors' paths."""
     with psycopg.connect(ticks.url) as connection:
         rows = connection.execute(
-            "select fetch_key, count(*) from staging.api_call_ledger where fetch_key is not null and ok group by 1"
+            "select fetch_key, count(*) from staging.api_call_ledger "
+            "where fetch_key is not null and ok and caller not like 'injected-%' group by 1"
         ).fetchall()
         reuse = connection.execute("select coalesce(sum(reuse_count), 0) from staging.landed_fetch_keys").fetchone()[0]
     keys = {key for key, _count in rows}
@@ -289,21 +290,17 @@ def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) ->
 
 def test_the_nightly_verdict_is_green_on_these_ticks_and_names_an_injected_duplicate(ticks: Ticks) -> None:
     """`fetch_keys_once` reads the ledger of the two ticks: green. One duplicate row turns it red, by key."""
-    with psycopg.connect(ticks.url) as connection:
+    with psycopg.connect(ticks.url, autocommit=True) as connection:
         green = fetch_keys_once.evaluate(connection, day=ticks.day)
         assert green.keyed > 0 and green.duplicates == () and not green.red, green.summary
         key = connection.execute(
             "select fetch_key from staging.api_call_ledger where fetch_key like 'sec|companyfacts|%' limit 1"
         ).fetchone()[0]
-        connection.execute(
-            """
-            insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key)
-            values ('sec', 'companyfacts', 'injected-duplicate', now(), true, 1, %s)
-            """,
-            (key,),
-        )
-        red = fetch_keys_once.evaluate(connection, day=ticks.day)
-        connection.rollback()
+        _inject(connection, "injected-duplicate", key)
+        try:
+            red = fetch_keys_once.evaluate(connection, day=ticks.day)
+        finally:
+            _clean(connection)
     assert red.red and dict(red.duplicates) == {key: 2}, red.summary
     assert key in red.summary
 
@@ -312,18 +309,29 @@ def test_the_dagster_check_records_a_red_verdict_for_a_duplicate_and_fails_the_r
     """The deployed op `run_fetch_keys_once` fails with the key named, and the verdict row is red."""
     key = "sec|companyfacts|issuer:cik:9999999999|" + ticks.day.isoformat()
     with psycopg.connect(ticks.url, autocommit=True) as connection:
-        for caller in ("first", "second"):
-            connection.execute(
-                """
-                insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key)
-                values ('sec', 'companyfacts', %s, now(), true, 1, %s)
-                """,
-                (caller, key),
-            )
-        with pytest.raises(dg.Failure, match="fetched twice"):
-            run_fetch_keys_once(dg.build_op_context(), FetchKeysOnceConfig(day=ticks.day.isoformat()))
-        row = connection.execute(
-            "select ok, summary from mart.nightly_verdicts where check_name = 'fetch_keys_once' order by verdict_id desc limit 1"
-        ).fetchone()
-        connection.execute("delete from staging.api_call_ledger where caller in ('first', 'second')")
+        _inject(connection, "injected-first", key)
+        _inject(connection, "injected-second", key)
+        try:
+            with pytest.raises(dg.Failure, match="fetched twice"):
+                run_fetch_keys_once(dg.build_op_context(), FetchKeysOnceConfig(day=ticks.day.isoformat()))
+            row = connection.execute(
+                "select ok, summary from mart.nightly_verdicts where check_name = 'fetch_keys_once' "
+                "order by verdict_id desc limit 1"
+            ).fetchone()
+        finally:
+            _clean(connection)
     assert row is not None and row[0] is False and key in row[1], row
+
+
+def _inject(connection: psycopg.Connection, caller: str, key: str) -> None:
+    connection.execute(
+        """
+        insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key)
+        values ('sec', 'companyfacts', %s, now(), true, 1, %s)
+        """,
+        (caller, key),
+    )
+
+
+def _clean(connection: psycopg.Connection) -> None:
+    connection.execute("delete from staging.api_call_ledger where caller like 'injected-%'")

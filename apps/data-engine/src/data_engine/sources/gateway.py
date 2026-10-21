@@ -862,13 +862,6 @@ def urlopen(
 _landed_keys: LandedKeys = PostgresLandedKeys(_pg, _pg_reset)
 
 
-def set_landed_keys(index: LandedKeys) -> LandedKeys:
-    """Swap the index of landed keys (tests; local probes without a warehouse). Returns the previous one."""
-    global _landed_keys
-    previous, _landed_keys = _landed_keys, index
-    return previous
-
-
 def utc_day() -> str:
     """The current UTC day, ISO form: the ``as_of`` of a vendor document that has no version of its own."""
     return _utcnow().date().isoformat()
@@ -929,27 +922,35 @@ def fetching(key: FetchKey) -> Iterator[None]:
 
 
 def fetch_once(
-    key: FetchKey, fetch: Callable[[], bytes], *, content_type: str = "application/json", keep: bool = True
+    key: FetchKey,
+    fetch: Callable[[], bytes],
+    *,
+    content_type: str = "application/json",
+    keep: bool = True,
+    accept: Callable[[bytes], bool] | None = None,
 ) -> bytes:
     """The bytes of ``key``: from the index when it landed, else from ``fetch()`` once.
 
     ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
     `SourceGateway.call`). The ledger row of that request carries the key, and the nightly
     verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
-    failed or refused call is tried again by the next caller. A caller that must refuse some
-    answers (an error body with status 200, "no data yet") uses `landed`, `fetching` and `land`.
-    ``keep=False`` is for a request whose answer is not yet final (a window that ends today, before
-    its session settles): the row still carries the key, and nothing is read from or written to the index."""
+    failed or refused call is tried again by the next caller.
+
+    ``accept`` judges the answer before it lands. An answer it refuses (an error body with status
+    200, a window whose session has not settled) goes to the caller and stays out of the index.
+    ``keep=False`` is for a request whose answer is not final at all: it is made without a key,
+    reads nothing from the index and writes nothing to it. Its row is unkeyed, and the verdict lists
+    it as such. A caller that needs more control uses `landed`, `fetching` and `land`."""
     if not keep:
-        with fetching(key):
-            return fetch()
+        return fetch()
     hit = landed(key)
     if hit is not None:
         return hit
     started = _utcnow()
     with fetching(key):
         body = fetch()
-    land(key, body, content_type=content_type, fetched_at=started)
+    if accept is None or accept(body):
+        land(key, body, content_type=content_type, fetched_at=started)
     return body
 
 
@@ -1028,7 +1029,20 @@ class SourceGateway:
             return result
 
     def _write(self, record: CallRecord) -> None:
-        self.connection.execute(*_insert_statement(record))
+        sql, params = _insert_statement(record)
+        if record.fetch_key is None or not hasattr(self.connection, "transaction"):
+            self.connection.execute(sql, params)
+            return
+        # A keyed row needs the ``fetch_key`` column. A failed statement would abort the caller's
+        # transaction, so the keyed insert runs in its own savepoint and falls back to the unkeyed row.
+        import psycopg
+
+        try:
+            with self.connection.transaction():
+                self.connection.execute(sql, params)
+        except psycopg.errors.UndefinedColumn:
+            log.warning("staging.api_call_ledger has no fetch_key column yet; the call is recorded without its key")
+            self.connection.execute(_INSERT_SQL, _insert_params(record))
 
     def _recorded_since(self, source: str, since: datetime) -> int:
         row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()

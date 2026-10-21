@@ -11,6 +11,9 @@ Two implementations share one shape (``lookup``, ``land``):
   so a rolled-back tick keeps the keys its calls landed (the ledger rows survive the same way).
 - `MemoryLandedKeys` is the test double. It keeps the same contract in a dict.
 
+To fetch a landed key again (a vendor answer found wrong), an operator deletes its row from
+``staging.landed_fetch_keys``. The bytes stay in ``raw.fetches``, and the next fetch lands a new row.
+
 An index never decides whether a caller may fetch. A lookup that fails reads as a miss, and the
 failure is logged by the gateway. A miss costs one external call, which the ledger records.
 """

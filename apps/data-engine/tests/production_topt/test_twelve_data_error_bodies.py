@@ -261,11 +261,71 @@ def test_a_refused_bar_request_keeps_the_settled_close(vendor, monkeypatch) -> N
     fetcher = TwelveDataQuoteFetcher("k", throttle_seconds=0)
     real_get = fetcher._get
 
-    def gated_get(url: str, params: dict[str, str]) -> bytes:
+    def gated_get(url: str, params: dict[str, str], **kwargs: bool) -> bytes:
         if url.endswith("/time_series"):
             raise gateway.CapacityExceeded("twelvedata", "daily budget 480 spent (480 calls today)")
-        return real_get(url, params)
+        return real_get(url, params, **kwargs)
 
     monkeypatch.setattr(fetcher, "_get", gated_get)
     quote = fetcher("AAPL", date(2026, 9, 11))
     assert quote is not None and quote.close == Decimal("332.26999") and len(asked) == 1
+
+
+# -- fetch keys (#1411 K3): a settled answer lands once; an unsettled or empty one never does ----
+
+
+_SETTLED_DAY = date(2026, 9, 11)  # a Friday: its end of day exists
+_AFTER = date(2026, 9, 14)  # the Monday after: the Friday window is final
+
+
+def test_a_settled_session_lands_both_answers_and_the_next_fetcher_asks_nothing(vendor, call_ledger, landed_keys):
+    answers, asked = vendor
+    answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES)])
+
+    first = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    second = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+
+    assert first is not None and second == first
+    assert len(asked) == 2, "the second fetcher reached the vendor for landed keys"
+    assert len(landed_keys.bodies) == 2
+    assert [row.fetch_key is not None for row in call_ledger] == [True, True]
+    assert {row.fetch_key.split("|")[3] for row in call_ledger} == {"2026-09-11", "2026-09-12"}
+
+
+def test_a_window_whose_newest_row_is_still_forming_is_asked_without_a_key_and_never_landed(
+    vendor, call_ledger, landed_keys
+):
+    """`today == cutoff`: the row of the session may still change, so the series is not final."""
+    answers, asked = vendor
+    answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES), (200, _SETTLED_SERIES)])
+
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
+
+    assert [url.split("/")[-1].split("?")[0] for url in asked] == ["eod", "time_series", "time_series"]
+    assert len(landed_keys.bodies) == 1, "only the end of day landed"
+    assert [row.fetch_key is None for row in call_ledger] == [False, True, True]
+
+
+def test_the_no_data_answer_is_returned_to_the_parser_and_stays_out_of_the_index(vendor, landed_keys) -> None:
+    answers, asked = vendor
+    answers.extend([(400, _bytes(_NO_EOD)), (400, _bytes(_NO_SERIES))] * 2)
+
+    for _ in range(2):
+        assert TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _PARTITION) is None
+
+    assert len(asked) == 4, "a session without data is asked again by the next fetcher"
+    assert landed_keys.bodies == {}
+
+
+def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypatch) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr(origin_module.time, "sleep", waits.append)
+    answers, _asked = vendor
+    answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES)])
+
+    TwelveDataQuoteFetcher("k", throttle_seconds=8, today=_AFTER)("AAPL", _SETTLED_DAY)
+    assert waits == [8, 8], "two requests, two waits"
+    waits.clear()
+    TwelveDataQuoteFetcher("k", throttle_seconds=8, today=_AFTER)("AAPL", _SETTLED_DAY)
+    assert waits == [], "no request was sent, so there is no minute to wait out"

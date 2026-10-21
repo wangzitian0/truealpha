@@ -11,7 +11,8 @@
 -- one day is a duplicate fetch, and the verdict names it.
 --
 -- Backward compatible and replay-safe: the table is new, and the ledger column is added only when
--- it is absent (a replay on a settled database takes no lock).
+-- it is absent (a replay on a settled database takes no lock). The first application of the column
+-- and the index takes a table lock on the ledger, so a deploy applies it while no job runs.
 create table if not exists staging.landed_fetch_keys (
     seat                text not null check (char_length(seat) > 0),
     endpoint            text not null check (char_length(endpoint) > 0),
@@ -54,16 +55,4 @@ begin
             on staging.api_call_ledger (called_at, fetch_key) where fetch_key is not null;
     end if;
 end
-$$;
-
--- /admin/datahub reads the landed keys through app_ops_reader. Conditional because CI applies
--- migrations before roles.sql creates the role; the guard keeps a replay lock-free.
-do $$
-begin
-    if exists (select from pg_roles where rolname = 'app_ops_reader')
-       and not has_table_privilege('app_ops_reader', 'staging.landed_fetch_keys', 'SELECT')
-    then
-        grant select on staging.landed_fetch_keys to app_ops_reader;
-    end if;
-end;
 $$;

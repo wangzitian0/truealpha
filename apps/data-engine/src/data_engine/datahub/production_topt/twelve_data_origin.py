@@ -392,6 +392,10 @@ class TwelveDataQuoteFetcher:
         self._today = today
         self._connection = connection
         self._cache: dict[tuple[str, date], MarketPriceQuote | None] = {}
+        #: Requests this fetcher put on the socket, and answers it read from the index of landed keys.
+        #: An answer from the index sends nothing, so it needs no wait before the next request (#1411 K3).
+        self._requests = 0
+        self._index_hits = 0
 
     def _from_price_store(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
         """Read the settled session's unadjusted bar from ``staging.market_prices_daily``
@@ -458,7 +462,7 @@ class TwelveDataQuoteFetcher:
         if stored is not None:
             self._cache[key] = stored
             return stored
-        sent_last = True
+        marker = self._marker()
         try:
             quote = self._fetch(symbol, cutoff)
         except Exception as error:  # noqa: BLE001 - a second origin that errors is simply absent
@@ -473,18 +477,32 @@ class TwelveDataQuoteFetcher:
             record_lost_corroboration(ORIGIN, FETCH, symbol, error)
             quote = None
             # A call the rule-6 gate refused was never sent: there is no request to wait out.
-            sent_last = not isinstance(error, gateway.CapacityExceeded)
+            if isinstance(error, gateway.CapacityExceeded):
+                marker = self._marker(refused=True)
         self._cache[key] = quote
-        if self._throttle_seconds and sent_last:
+        if self._throttle_seconds and self._sent_since(marker):
             time.sleep(self._throttle_seconds)
         return quote
 
+    def _marker(self, *, refused: bool = False) -> tuple[int, int, bool]:
+        return self._requests, self._index_hits, refused
+
+    def _sent_since(self, marker: tuple[int, int, bool]) -> bool:
+        """Whether a request may be pending on the vendor's minute since ``marker``.
+
+        No wait follows a call that the gate refused, or one that only read landed keys."""
+        requests, hits, refused = marker
+        if refused:
+            return False
+        return self._requests > requests or self._index_hits == hits
+
     def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
+        marker = self._marker()
         settled = parse_session_close(
             self._get(_EOD_URL, {"symbol": symbol, "date": str(cutoff)}),
             partition=cutoff,
         )
-        if self._throttle_seconds:
+        if self._throttle_seconds and self._sent_since(marker):
             time.sleep(self._throttle_seconds)
         series_params = {
             "symbol": symbol,
@@ -500,13 +518,16 @@ class TwelveDataQuoteFetcher:
             "end_date": str(cutoff + timedelta(days=1)),
             "outputsize": "12",
         }
+        today = self._today or datetime.now(UTC).date()
         if settled is not None:
             # The close is settled by `/eod`; the bar comes from the series window and is
             # attached only when its row closes at that settled close (v3, header). The
             # bar is additive: a series request that errors or is refused by the gate
             # leaves the settled close exactly what it was — said, not swallowed.
             try:
-                series = self._get(_TIME_SERIES_URL, series_params)
+                # The row of the partition date is still forming while `today` is that date, so a
+                # window that ends there is not final: it is neither read from nor written to the index.
+                series = self._get(_TIME_SERIES_URL, series_params, final=today > cutoff)
             except (TwelveDataError, gateway.CapacityExceeded) as error:
                 log.warning(
                     "twelve-data bar for %s not attached (%s: %s); the settled close corroborates alone",
@@ -515,7 +536,6 @@ class TwelveDataQuoteFetcher:
                     error,
                 )
                 return settled
-            today = self._today or datetime.now(UTC).date()
             is_provisional = settled.as_of == cutoff and today == cutoff
             return attach_settled_bar(series, settled=settled, is_provisional=is_provisional)
         series = self._get(_TIME_SERIES_URL, series_params)
@@ -523,9 +543,12 @@ class TwelveDataQuoteFetcher:
         # settled — the same session the primary resolves to on a weekend or holiday.
         return parse_last_settled_close(series, partition=cutoff)
 
-    def _get(self, url: str, params: dict[str, str]) -> bytes:
+    def _get(self, url: str, params: dict[str, str], *, final: bool = True) -> bytes:
         """The vendor's body for one request, or the classified `TwelveDataError` it
-        carries; the "no data is available" body is returned for the parser to read."""
+        carries; the "no data is available" body is returned for the parser to read.
+
+        ``final`` is False for a window whose newest row is still forming. Such a request carries no
+        fetch key and uses no index."""
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
         # Twelve Data answers "no end of day for this date" with HTTP 400 and a JSON
         # error body — and urlopen RAISES on any non-2xx. Letting that raise propagate
@@ -540,6 +563,15 @@ class TwelveDataQuoteFetcher:
         # recorded it (raw.fetches only ever saw the landed successes). Since v3 every
         # tick spends two: the second request is the bar's on a settled day.
         endpoint = url.rsplit("/", 1)[-1]
+        if not final:
+            self._requests += 1
+            status, body = gateway.urlopen(
+                "twelvedata", endpoint, f"{url}?{query}", caller="twelve_data_origin", timeout=20
+            )
+            error = classify_error_body(status, body)
+            if error is not None:
+                raise error
+            return body
         # One key per settled session and symbol (#1411 K3): the second tick, the second universe
         # and the canary read the landed bytes. An answer that carries no data stays unlanded, so a
         # session that has not settled yet is asked again.
@@ -554,7 +586,9 @@ class TwelveDataQuoteFetcher:
         )
         hit = gateway.landed(key)
         if hit is not None:
+            self._index_hits += 1
             return hit
+        self._requests += 1
         with gateway.fetching(key):
             status, body = gateway.urlopen(
                 "twelvedata", endpoint, f"{url}?{query}", caller="twelve_data_origin", timeout=20

@@ -227,6 +227,9 @@
           }
         }
       },
+      "fetch_keys_once_check": {
+        "unmeasured": "No run in the window: the job merged on 2026-10-21 (#1411 K7). It runs three SQL queries over one day of the call ledger. Measure it after its first runs."
+      },
       "head_reports_pipeline": {
         "measured": {
           "production": {
