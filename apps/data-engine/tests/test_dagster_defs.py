@@ -228,6 +228,8 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     passing = Verdict("v4", (), (), ())
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
     monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
+    # #1323: the tick also reads the issuers whose registry read failed, through the connection.
+    monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
 
 
 def _run_tick(monkeypatch, registration: PointerRegistration):
