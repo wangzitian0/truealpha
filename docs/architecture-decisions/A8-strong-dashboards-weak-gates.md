@@ -39,7 +39,7 @@ A gate belongs to one of three classes. Everything else is a dashboard.
 
 ### 3. Issue Lifecycle and Verification
 - Issues are closed when staging verifies the change: an agent or engineer reads the relevant dashboard or runs a physical read-only probe (SQL rows / HTTP responses), and `/close` walks the acceptance rows (ADR A2).
-- Production state is not an issue state. The release checklist that infra2 owns records it.
+- Production state is not an issue state. The release process that infra2 owns records it (`docs/ssot/ops.pipeline.md` in wangzitian0/infra2).
 - Reopening is driven by physical regressions identified on the dashboard or by operational failure, not by arbitrary comment text parsers.
 
 ## Consequences
