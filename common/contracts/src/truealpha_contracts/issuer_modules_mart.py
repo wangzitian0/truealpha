@@ -51,15 +51,24 @@ def issuer_identity_sql(column: str, placeholder: str = "%s") -> str:
     )
 
 
-#: The issuer predicate of both twins (the App's `bidirectionalIssuerPredicate`): the stored
-#: id, or its canonical entity id, or its legacy id, resolved across all alias schemes.
-_ISSUER_PREDICATE = issuer_identity_sql("__ALIAS__.issuer_id", "%s")
-
 _RESOLVE_CANDIDATES_SQL = (
     "select ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
     " from mart.entity_identity ei"
     " cross join (select btrim(%s::text) as q) inp"
     f" where {_IDENTITY_MATCH_SQL}"
+)
+
+_RESOLVE_BATCH_CANDIDATES_SQL = (
+    "select inp.raw_q,"
+    "       ei.entity_id::text as entity_id,"
+    "       ei.legacy_id,"
+    "       ei.current_ticker,"
+    "       ei.cik,"
+    "       ei.lei"
+    " from unnest(%s::text[]) as u(raw_q)"
+    " cross join lateral (select btrim(u.raw_q) as q) inp"
+    " join mart.entity_identity ei"
+    f"   on ({_IDENTITY_MATCH_SQL})"
 )
 #: Only a run that the served head names (the App's `servedRunPredicate`). A withheld head
 #: has a null `run_id`.
@@ -180,6 +189,24 @@ def _row(sql: str, database_url: str, issuer_id: str) -> dict[str, Any] | None:
             return cursor.fetchone()
 
 
+def _append_row_aliases(candidates: list[str], row: dict[str, Any]) -> None:
+    for key in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
+        val = row.get(key)
+        if isinstance(val, str) and val and val not in candidates:
+            candidates.append(val)
+    cik_val = row.get("cik")
+    if isinstance(cik_val, str) and cik_val:
+        for prefix in ("issuer:cik:", "company:cik:"):
+            prefixed = f"{prefix}{cik_val}"
+            if prefixed not in candidates:
+                candidates.append(prefixed)
+    lei_val = row.get("lei")
+    if isinstance(lei_val, str) and lei_val:
+        prefixed_lei = f"issuer:lei:{lei_val}"
+        if prefixed_lei not in candidates:
+            candidates.append(prefixed_lei)
+
+
 def resolve_issuer_id_candidates(database_url: str, issuer_id: str) -> tuple[str, ...]:
     """Return every identifier alias (`entity_id`, `legacy_id`, `current_ticker`, `cik`, `lei`)
     in `mart.entity_identity` that resolves to the same issuer as `issuer_id`."""
@@ -195,22 +222,32 @@ def resolve_issuer_id_candidates(database_url: str, issuer_id: str) -> tuple[str
     except psycopg.Error:
         return tuple(candidates)
     for row in rows:
-        for key in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
-            val = row.get(key)
-            if isinstance(val, str) and val and val not in candidates:
-                candidates.append(val)
-        cik_val = row.get("cik")
-        if isinstance(cik_val, str) and cik_val:
-            for prefix in ("issuer:cik:", "company:cik:"):
-                prefixed = f"{prefix}{cik_val}"
-                if prefixed not in candidates:
-                    candidates.append(prefixed)
-        lei_val = row.get("lei")
-        if isinstance(lei_val, str) and lei_val:
-            prefixed_lei = f"issuer:lei:{lei_val}"
-            if prefixed_lei not in candidates:
-                candidates.append(prefixed_lei)
+        _append_row_aliases(candidates, row)
     return tuple(candidates)
+
+
+def resolve_issuer_id_candidates_batch(
+    database_url: str,
+    issuer_ids: tuple[str, ...] | list[str],
+) -> dict[str, tuple[str, ...]]:
+    """Resolve multiple issuer identifiers in a single Postgres round-trip."""
+    cleaned = [item.strip() for item in issuer_ids if item and item.strip()]
+    if not cleaned:
+        return {}
+    by_input: dict[str, list[str]] = {raw: [raw] for raw in cleaned}
+    try:
+        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(_RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input.keys()),))
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        return {raw: tuple(vals) for raw, vals in by_input.items()}
+    for row in rows:
+        raw_q = str(row.get("raw_q") or "")
+        target = by_input.get(raw_q)
+        if target is not None:
+            _append_row_aliases(target, row)
+    return {raw: tuple(vals) for raw, vals in by_input.items()}
 
 
 class PostgresIssuerModuleReader:
