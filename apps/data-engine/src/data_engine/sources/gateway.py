@@ -218,6 +218,12 @@ class CallRecord:
     duration_ms: int | None = None
     run_key: str | None = None
     capacity_window_id: str | None = None
+    #: The 1-based attempt of one logical model call that retries (#1444); None for other sources.
+    attempt: int | None = None
+    #: The code in the error body of the provider, for example "1302" (#1444).
+    provider_code: str | None = None
+    #: The request parameters without any secret: model, thinking type, max_tokens (#1444).
+    request_params: dict[str, Any] | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -310,8 +316,8 @@ def _pg_execute(sql: str, params=()):
 _INSERT_SQL = """
 insert into staging.api_call_ledger
     (source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,
-     payload_sha256, byte_length, cost, capacity_window_id, run_key)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     payload_sha256, byte_length, cost, capacity_window_id, run_key, attempt, provider_code, request_params)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
 """
 
 
@@ -331,6 +337,9 @@ def _insert_params(record: CallRecord) -> tuple:
         record.cost,
         record.capacity_window_id,
         record.run_key,
+        record.attempt,
+        record.provider_code,
+        None if record.request_params is None else json.dumps(record.request_params, sort_keys=True),
     )
 
 

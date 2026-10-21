@@ -38,12 +38,12 @@ from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
-from data_engine.sources import gateway
+from data_engine.sources import gateway, model_policy
 from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
 
-SOURCE = "filing-extraction-model"
+SOURCE = model_policy.seat_contract().seat  # "filing-extraction-model": the contract names the seat
 ENDPOINT = "chat.completions"
 PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
 MAX_CONTEXT_TOKENS = 1_000_000
@@ -138,17 +138,19 @@ Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 
 class ModelNotConfigured(RuntimeError):
-    """No provider seated (empty LLM_API_KEY): the caller keeps the cell deferred."""
+    """No provider seated (the key setting is empty): the caller keeps the cell deferred."""
 
 
 class ModelHTTPError(RuntimeError):
     """The provider answered with an error status. A `RuntimeError`, as it always was, so
     every existing caller is unchanged; the status is carried for a caller that must tell a
-    rejected credential (401/403) from an unavailable provider (#876 W2)."""
+    rejected credential (401/403) from an unavailable provider (#876 W2). The provider code
+    (for example "1302" for a rate limit) is carried for the same reason (#1444)."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code: int, message: str, provider_code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.provider_code = provider_code
 
 
 class ModelContextLimitError(ModelHTTPError):
@@ -230,6 +232,22 @@ def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate],
     lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
     user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
     return build_chat_request(HEADCOUNT_TASK, user, model=model)
+
+
+def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
+    """The request parameters that matter for the model plan, for the ledger row (#1444).
+
+    An allow-list: the headers, the messages and the key never enter it. ``thinking`` is the type
+    that was sent, or None when the request carries no thinking parameter."""
+    thinking = request_body.get("thinking")
+    response_format = request_body.get("response_format")
+    return {
+        "model": request_body.get("model"),
+        "thinking": thinking.get("type") if isinstance(thinking, dict) else None,
+        "max_tokens": request_body.get("max_tokens"),
+        "temperature": request_body.get("temperature"),
+        "response_format": response_format.get("type") if isinstance(response_format, dict) else None,
+    }
 
 
 _ACTIVE_TIMEOUT_SECONDS = 60
@@ -449,7 +467,7 @@ def invoke(
     recorded decision rather than a hole the caller has to special-case.
     """
     if not is_configured():
-        raise ModelNotConfigured("LLM_API_KEY is not set; no provider seated (#70 scope 1)")
+        raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
     request_body = build_chat_request(task, user_content, model=model)
     ask = partial(
@@ -536,6 +554,7 @@ def _ask(
     )
     estimated_tokens = _estimate_prompt_tokens(task, user_text)
     context_limit_exceeded = estimated_tokens > task.max_context_tokens
+    provider_code: str | None = None
     prompt_tokens: int | None
     completion_tokens: int | None
     served_model: str | None
@@ -564,15 +583,42 @@ def _ask(
     else:
         global _ACTIVE_TIMEOUT_SECONDS
         _ACTIVE_TIMEOUT_SECONDS = task.timeout_seconds
-        with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
-            status, body = (transport or _gateway_transport)(url, headers, request_bytes)
-            call.observe(status_code=status, body=body)
-            if status >= 400:
-                call.fail(f"HTTP {status}: {body[:200]!r}")
-            else:
-                payload = json.loads(body.decode())
-                usage = payload.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+        request_params = _request_params(request_body)
+        budget = model_policy.RetryBudget()
+        pacer = model_policy.pacer_for(gateway.capacity_environment())
+        while True:
+            attempt = budget.begin_attempt()
+            # One ledger row per attempt: the pacer admits the attempt, so `admit=False` keeps a
+            # bound capacity scope from admitting it a second time under another seat figure.
+            with (
+                pacer.admitted() if pacer is not None else nullcontext(),
+                record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
+            ):
+                call.attempt = attempt
+                call.request_params = request_params
+                status, body = (transport or _gateway_transport)(url, headers, request_bytes)
+                call.observe(status_code=status, body=body)
+                if status >= 400:
+                    provider_code = model_policy.provider_code(body)
+                    call.provider_code = provider_code
+                    call.fail(f"HTTP {status}: {body[:200]!r}")
+                else:
+                    payload = json.loads(body.decode())
+                    usage = payload.get("usage") or {}
+                    call.cost = Decimal(int(usage.get("total_tokens") or 0))
+            if status < 400:
+                break
+            wait = budget.wait_before_next(status, provider_code)
+            if wait is None:
+                break
+            logger.warning(
+                "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
+                status,
+                provider_code,
+                attempt,
+                wait,
+            )
+            model_policy.sleep(wait)
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         served_model = str(payload["model"]) if payload.get("model") else None
@@ -667,7 +713,7 @@ def _ask(
             status_code=status,
         )
     if status >= 400:
-        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
+        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
     return invocation, None
 
 

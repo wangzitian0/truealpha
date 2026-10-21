@@ -96,9 +96,19 @@ CONFIDENCE_REPORT_CRON = "45 0 * * *"
 CONFIDENCE_REPORT_UNIVERSES = ("universe-list:qqq", "topt")
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
-# 06:00 UTC: after every nightly model caller, an hour before the delivery report (07:00) reads
-# the verdict, so a daemon that is merely slow still lands inside the day's check.
-MODEL_KEY_HEALTH_CRON = "0 6 * * *"
+
+
+def model_key_health_cron(environment: str) -> str:
+    """The daily cron of the key probe of ``environment``. The hour and the minute come from the
+    model seat of the environment contract (#1444): the environments probe one shared account, so
+    each takes its own slot. The slots start at 06:00 UTC, after every nightly model caller and
+    an hour before the delivery report (07:00) reads the verdict, so a daemon that is merely slow
+    still lands inside the day's check. The release fetch proof starts at 06:15 and every slot
+    ends before it (`test_every_probe_slot_ends_before_the_release_fetch_proof_starts`)."""
+    return load_environment_contract().model_seat.probe_cron(environment)
+
+
+MODEL_KEY_HEALTH_CRON = model_key_health_cron(gateway.capacity_environment())
 
 RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 # 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
@@ -492,9 +502,6 @@ def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
-MODEL_KEY_HEALTH_MAX_ATTEMPTS = 3
-
-
 @dg.op
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
     """One minimal ask of the seated model provider (#876 W2). A rejected key, an erroring or
@@ -506,7 +513,7 @@ def run_model_key_health(context: dg.OpExecutionContext) -> str:
     ) as outcome:
         # The ask lands in the external call ledger attributed to this run (#729).
         with gateway.run_scope(f"dagster:{context.run_id}"):
-            health = probe(max_attempts=MODEL_KEY_HEALTH_MAX_ATTEMPTS)
+            health = probe()
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
         context.add_output_metadata({"outcome": health.outcome, "status_code": health.status_code or 0})
