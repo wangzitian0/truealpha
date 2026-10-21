@@ -906,25 +906,40 @@ def land(key: FetchKey, body: bytes, *, content_type: str = "application/json", 
         log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
 
 
+@contextmanager
+def fetching(key: FetchKey) -> Iterator[None]:
+    """Stamp the ledger row of the ONE external request in the block with ``key``.
+
+    For a caller that decides itself whether the answer may be kept (`landed`, then `fetching`,
+    then `land`). `fetch_once` is the short form."""
+    token = _fetch_key.set(key.ledger_key)
+    try:
+        yield
+    finally:
+        _fetch_key.reset(token)
+
+
 def fetch_once(
-    key: FetchKey, fetch: Callable[[], bytes], *, content_type: str = "application/json"
+    key: FetchKey, fetch: Callable[[], bytes], *, content_type: str = "application/json", keep: bool = True
 ) -> bytes:
     """The bytes of ``key``: from the index when it landed, else from ``fetch()`` once.
 
     ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
     `SourceGateway.call`). The ledger row of that request carries the key, and the nightly
     verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
-    failed or refused call is tried again by the next caller. A ``fetch`` whose answer must not
-    be kept (an error body with status 200) raises, or the caller uses `landed` and `land`."""
+    failed or refused call is tried again by the next caller. A caller that must refuse some
+    answers (an error body with status 200, "no data yet") uses `landed`, `fetching` and `land`.
+    ``keep=False`` is for a request whose answer is not yet final (a window that ends today, before
+    its session settles): the row still carries the key, and nothing is read from or written to the index."""
+    if not keep:
+        with fetching(key):
+            return fetch()
     hit = landed(key)
     if hit is not None:
         return hit
     started = _utcnow()
-    token = _fetch_key.set(key.ledger_key)
-    try:
+    with fetching(key):
         body = fetch()
-    finally:
-        _fetch_key.reset(token)
     land(key, body, content_type=content_type, fetched_at=started)
     return body
 

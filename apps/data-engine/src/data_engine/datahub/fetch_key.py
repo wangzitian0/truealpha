@@ -13,6 +13,8 @@ uses two keys, because the ledger counts requests per key.
 
 from __future__ import annotations
 
+import urllib.parse
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 #: Separator of the ledger form. A key part holds none (``__post_init__`` refuses it).
@@ -45,3 +47,30 @@ class FetchKey:
     def ledger_key(self) -> str:
         """The form written to ``staging.api_call_ledger.fetch_key`` and named by the verdict."""
         return KEY_SEPARATOR.join((self.seat, self.endpoint, self.canonical_entity_id, self.as_of))
+
+    @classmethod
+    def for_request(
+        cls,
+        seat: str,
+        endpoint: str,
+        params: Mapping[str, str],
+        *,
+        entity_param: str,
+        as_of_params: Collection[str],
+        default_as_of: str,
+        exclude: Collection[str] = (),
+    ) -> FetchKey:
+        """The key of a vendor request that its query parameters describe in full.
+
+        The entity is ``symbol:<value>`` of ``entity_param``. The as-of is the first of
+        ``as_of_params`` that the request carries, else ``default_as_of``. Every other parameter
+        stays in the endpoint label, in sorted order, so two requests that differ in window,
+        interval or adjustment never share a key. ``exclude`` names the credentials."""
+        remaining = {
+            name: value
+            for name, value in params.items()
+            if name != entity_param and name not in exclude and name not in as_of_params
+        }
+        as_of = next((str(params[name]) for name in as_of_params if name in params), default_as_of)
+        label = endpoint if not remaining else f"{endpoint}?{urllib.parse.urlencode(sorted(remaining.items()))}"
+        return cls(seat, label, f"symbol:{params[entity_param]}", as_of)

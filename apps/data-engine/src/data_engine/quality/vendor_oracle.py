@@ -38,6 +38,8 @@ from typing import Any
 
 from psycopg import Connection
 
+from data_engine.datahub.fetch_key import FetchKey
+
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 # SEC fair use is ~10 req/s; a check run is small and has no reason to approach it.
@@ -115,25 +117,35 @@ class Drift:
         return max(0, self.vendor.period_end.year - self.mart_period_end.year)
 
 
-def _http_json(url: str, user_agent: str) -> dict[str, Any]:
+def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
+    """One SEC document, fetched once per ``key`` (#1411 K5): the oracle reads the bytes the tick landed."""
     from data_engine.sources import gateway
 
-    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
-    # raises as it always did here instead of being parsed as a document.
-    _status, body = gateway.urlopen(
-        "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
-    )
-    return json.loads(body.decode())
+    def fetch() -> bytes:
+        request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+        # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
+        # raises as it always did here instead of being parsed as a document.
+        _status, body = gateway.urlopen(
+            "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
+        )
+        return body
+
+    return json.loads(gateway.fetch_once(key, fetch).decode())
 
 
 def ticker_cik_index(user_agent: str) -> dict[str, int]:
-    payload = _http_json(_TICKERS_URL, user_agent)
+    from data_engine.sources import gateway
+
+    key = FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
+    payload = _http_json(_TICKERS_URL, user_agent, key)
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in payload.values()}
 
 
 def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
-    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent)
+    from data_engine.sources import gateway
+
+    key = FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
+    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, key)
 
 
 def _annual_entries(facts: dict[str, Any], concept: str, unit: str, cutoff: date) -> Iterable[tuple[date, Decimal]]:

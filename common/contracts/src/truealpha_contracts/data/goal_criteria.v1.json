@@ -131,9 +131,8 @@
       "threshold": "0 duplicate keys",
       "window": "per environment per day",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1411 K3"
+      "status": "backed",
+      "verdict_keys": ["fetch_keys_once"]
     },
     {
       "id": "R2.B3",

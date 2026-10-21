@@ -78,6 +78,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
 from data_engine.datahub.production_topt.source_registrations import (
@@ -538,13 +539,43 @@ class TwelveDataQuoteFetcher:
         # spends two credits per listing this way, and until the ledger existed nothing
         # recorded it (raw.fetches only ever saw the landed successes). Since v3 every
         # tick spends two: the second request is the bar's on a settled day.
-        status, body = gateway.urlopen(
-            "twelvedata", url.rsplit("/", 1)[-1], f"{url}?{query}", caller="twelve_data_origin", timeout=20
+        endpoint = url.rsplit("/", 1)[-1]
+        # One key per settled session and symbol (#1411 K3): the second tick, the second universe
+        # and the canary read the landed bytes. An answer that carries no data stays unlanded, so a
+        # session that has not settled yet is asked again.
+        key = FetchKey.for_request(
+            "twelvedata",
+            endpoint,
+            params,
+            entity_param="symbol",
+            as_of_params=("date", "end_date"),
+            default_as_of=gateway.utc_day(),
+            exclude=("apikey",),
         )
+        hit = gateway.landed(key)
+        if hit is not None:
+            return hit
+        with gateway.fetching(key):
+            status, body = gateway.urlopen(
+                "twelvedata", endpoint, f"{url}?{query}", caller="twelve_data_origin", timeout=20
+            )
         error = classify_error_body(status, body)
         if error is not None:
             raise error
+        if carries_data(status, body):
+            gateway.land(key, body)
         return body
+
+
+def carries_data(http_status: int | None, body: bytes) -> bool:
+    """Whether a Twelve Data answer is data, not an error and not the "no data is available" absence."""
+    try:
+        payload = json.loads(body.decode())
+    except (UnicodeDecodeError, ValueError):
+        return False
+    return isinstance(payload, Mapping) and payload.get("status") != "error" and not (
+        http_status is not None and http_status >= 400
+    )
 
 
 def twelve_data_origin(*, connection: Any = None) -> CorroboratingOrigin | None:
