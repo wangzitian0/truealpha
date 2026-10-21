@@ -57,20 +57,22 @@ run_monitoring:
 # the kernel killed the container and every run in it stayed STARTED. Every job now uses the
 # in-process executor (data_engine.dagster_defs), so a run is one process.
 # The two numbers below are a projection of `code_server_capacity` in environment_contract.v1.json,
-# which holds the ceiling, the utilization limit and the measured size of one process.
-# test_run_capacity.py holds this file equal to the value that the contract derives.
+# which holds the ceiling, the utilization limit, the size of the server and the number of slots.
+# The memory left beside the server, divided over the slots, is the budget of one run. The nightly
+# verdict runtime_shape compares every run process with that budget.
+# test_run_capacity.py holds this file equal to the contract.
 # A job that waits for other runs (tag truealpha/waits_for_runs) holds a slot while it waits.
 # The tag limit is one below max_concurrent_runs, so the waiting runs never hold every slot.
 # A run that does not wait always holds one slot, finishes, and passes it to the next queued run.
 # The queue does not start a run that exceeds a limit and starts the next one.
 run_queue:
-  max_concurrent_runs: 3
+  max_concurrent_runs: 2
   tag_concurrency_limits:
     - key: truealpha/waits_for_runs
       value: "true"
-      limit: 2
+      limit: 1
 
-# Tick retention (#1072). Three sensors poll every 30 seconds. Each poll that does no work
+# Tick retention (#1072). Several sensors poll every 30 seconds. Each poll that does no work
 # writes a SKIPPED tick to dagster.job_ticks. Dagster keeps SKIPPED sensor ticks for 7 days
 # by default. Here they expire after 3 days. The other statuses stay for ever (-1), so
 # every tick that did work or failed remains. Schedule ticks keep the Dagster defaults.

@@ -25,8 +25,8 @@ itself. Production's boot canary reuses the night's observations, so nothing els
 a promoted release's fetch path works.
 
 The fifth is the runtime shape of the code server (`quality.runtime_shape`, #1467): whether the
-memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, or a new
-peak above 70% of its ceiling. The run reads the cgroup of the container it executes in, which is the
+memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, a new
+peak above 70% of its ceiling, or a process larger than its budget. The run reads the cgroup of the container it executes in, which is the
 code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
@@ -630,7 +630,8 @@ def runtime_shape_sampler_sensor(context: dg.SensorEvaluationContext):
         capacity=load_environment_contract().code_server_capacity,
     )
     yield dg.SkipReason(
-        f"sampled: {tracker.kills} OOM kill(s) and {tracker.peaks_over_limit} peak(s) over the limit so far"
+        f"sampled: {tracker.kills} OOM kill(s), {tracker.peaks_over_limit} peak(s) over the limit,"
+        f" {tracker.processes_over_size} run process(es) and {tracker.servers_over_size} server(s) over their size so far"
     )
 
 

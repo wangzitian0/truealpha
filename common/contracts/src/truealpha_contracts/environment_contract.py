@@ -118,42 +118,58 @@ UTILIZATION_CEILING = 0.7
 
 
 class MeasuredProcessMemory(_StrictFrozenModel):
-    """The peak resident memory (``VmHWM``) of the processes of the code server, read once (#1467)."""
+    """What the code server container held, read once (#1467).
+
+    ``grpc_server_hwm_mib`` is the ``VmHWM`` of the first process. ``fresh_import_hwm_mib`` is the
+    ``VmHWM`` of a fresh interpreter that imports ``data_engine.dagster_defs``: no run is smaller.
+    ``container_peak_mib`` is the ``memory.peak`` of the cgroup while ``runs_at_peak`` in-process runs
+    overlapped, ``waiting_runs_at_peak`` of them only waiting for other runs. The peak does not split
+    into one size per run: it fixes no size for a working run."""
 
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
     method: str = Field(min_length=1)
     grpc_server_hwm_mib: float = Field(gt=0)
-    spawned_process_hwm_mib: float = Field(gt=0)
+    fresh_import_hwm_mib: float = Field(gt=0)
+    container_peak_mib: float = Field(gt=0)
+    runs_at_peak: int = Field(ge=1)
+    waiting_runs_at_peak: int = Field(ge=0)
     source: str = Field(min_length=1)
 
 
 class CodeServerCapacity(_StrictFrozenModel):
     """The memory of the Dagster code server container and the run limit that follows from it (#1467).
 
-    The gRPC server and every run process share one cgroup. A run executes in one process when its
-    job uses the in-process executor (``processes_per_run`` = 1). Each process that imports
-    ``data_engine.dagster_defs`` holds ``process_mib``. The queue limit is the number of runs that
-    fit beside the server inside ``utilization_limit`` of the ceiling.
+    The gRPC server and every run process share one cgroup. The server holds ``server_mib``. The
+    queue admits ``concurrent_runs`` runs; at least 2, because a run that waits for other runs holds a
+    slot while it waits. Each run executes in ``processes_per_run`` processes (1 when its job uses the
+    in-process executor). The memory left inside ``utilization_limit`` of the ceiling, divided over the
+    slots, is the budget of one run (``run_mib``). The budget is a decision, not a measurement: the
+    nightly verdict compares every run process with it. A run cannot be smaller than a fresh import.
     """
 
     description: str = Field(min_length=1)
     ceiling_mib: int = Field(ge=1)
     ceiling_source: str = Field(min_length=1)
     utilization_limit: float = Field(gt=0, le=UTILIZATION_CEILING)
-    process_mib: int = Field(ge=1)
+    server_mib: int = Field(ge=1)
+    concurrent_runs: int = Field(ge=1)
     server_processes: int = Field(ge=1)
     processes_per_run: int = Field(ge=1)
     measured: MeasuredProcessMemory
 
     @model_validator(mode="after")
-    def _process_covers_the_measurement_and_two_runs_fit(self) -> Self:
-        observed = max(self.measured.grpc_server_hwm_mib, self.measured.spawned_process_hwm_mib)
-        if self.process_mib < observed:
-            raise ValueError(f"process_mib {self.process_mib} is below the measured peak of {observed} MiB")
-        if self.max_concurrent_runs < 2:
+    def _server_covers_the_measurement_and_the_budget_covers_an_import(self) -> Self:
+        if self.server_mib < self.measured.grpc_server_hwm_mib:
             raise ValueError(
-                f"the ceiling admits {self.max_concurrent_runs} concurrent run(s); a waiting run and the run it waits for need 2"
+                f"server_mib {self.server_mib} is below the measured {self.measured.grpc_server_hwm_mib} MiB"
+            )
+        if self.concurrent_runs < 2:
+            raise ValueError("the queue needs 2 slots: a waiting run and the run it waits for")
+        if self.run_mib < self.measured.fresh_import_hwm_mib:
+            raise ValueError(
+                f"the budget of one run, {self.run_mib} MiB, is below a fresh import,"
+                f" {self.measured.fresh_import_hwm_mib} MiB: the ceiling is too small for {self.concurrent_runs} runs"
             )
         return self
 
@@ -163,15 +179,20 @@ class CodeServerCapacity(_StrictFrozenModel):
         return math.floor(Decimal(self.ceiling_mib) * Decimal(str(self.utilization_limit)))
 
     @property
+    def run_mib(self) -> int:
+        """The budget of one run process: what is left beside the server, divided over the slots."""
+        free = self.usable_mib - self.server_processes * self.server_mib
+        return max(free // (self.concurrent_runs * self.processes_per_run), 0)
+
+    @property
     def max_concurrent_runs(self) -> int:
-        """The most runs that fit beside the server processes inside ``usable_mib``."""
-        free = self.usable_mib - self.server_processes * self.process_mib
-        return max(free // (self.processes_per_run * self.process_mib), 0)
+        """The queue limit of ``dagster.yaml``."""
+        return self.concurrent_runs
 
     @property
     def max_waiting_runs(self) -> int:
         """The most runs that may wait for other runs at one time. One slot stays free for the run waited for."""
-        return self.max_concurrent_runs - 1
+        return self.concurrent_runs - 1
 
 
 class EnvironmentContract(_StrictFrozenModel):

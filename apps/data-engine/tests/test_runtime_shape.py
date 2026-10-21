@@ -35,6 +35,11 @@ QUIET_PEAK_MIB = CAPACITY.ceiling_mib // 4
 LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * CAPACITY.utilization_limit)
 #: A peak above the limit.
 HIGH_PEAK_MIB = LIMIT_MIB + 1
+#: The budget of one run, a process above it, and the declared size of the server, in bytes.
+RUN_BYTES = CAPACITY.run_mib * MIB
+BIG_PROCESS = RUN_BYTES + MIB
+SERVER_BYTES = CAPACITY.server_mib * MIB
+QUIET_SERVER = SERVER_BYTES - 10 * MIB
 #: A synthetic capacity for the exact-boundary test: 70% of 2000 MiB is exactly 1400 MiB.
 SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000, "utilization_limit": 0.7})
 TICK_1 = "2026-10-21T06:30:00+00:00"
@@ -59,8 +64,15 @@ def _tree(
     start_ticks: int | None = 12345,
     boot_id: str | None = BOOT_ID,
     command: str = "dagster api grpc",
+    processes: dict[int, int] | None = None,
+    server: int | None = QUIET_SERVER,
+    ticks: dict[int, int] | None = None,
+    server_command: bytes = b"/app/.venv/bin/python\x00/app/.venv/bin/dagster\x00api\x00grpc\x00",
 ) -> tuple[Path, Path]:
-    """Write a cgroup tree and a process table. A None argument leaves the file out."""
+    """Write a cgroup tree and a process table. A None argument leaves the file out.
+
+    `processes` maps a pid to its `VmHWM` in kB, `ticks` a pid to its start ticks (default: the pid). The
+    code server (pid 1) holds `server` bytes."""
     cgroup, proc = root / "cgroup", root / "proc"
     (proc / "1").mkdir(parents=True)
     (proc / "sys" / "kernel" / "random").mkdir(parents=True)
@@ -76,6 +88,14 @@ def _tree(
         (proc / "1" / "stat").write_text(f"1 ({command}) {' '.join(after_name)}\n")
     if boot_id is not None:
         (proc / "sys" / "kernel" / "random" / "boot_id").write_text(f"{boot_id}\n")
+    (proc / "1" / "cmdline").write_bytes(server_command)
+    hwm_line = "" if server is None else f"VmHWM:\t{server // 1024} kB\n"
+    (proc / "1" / "status").write_text(f"Name:\tdagster\n{hwm_line}")
+    for pid, kilobytes in (processes or {}).items():
+        (proc / str(pid)).mkdir()
+        (proc / str(pid) / "status").write_text(f"Name:\tpython\nVmPeak:\t{kilobytes * 2} kB\nVmHWM:\t{kilobytes} kB\n")
+        after_name = ["S", *["0"] * 18, str((ticks or {}).get(pid, pid)), *["0"] * 30]
+        (proc / str(pid) / "stat").write_text(f"{pid} (python) {' '.join(after_name)}\n")
     return cgroup, proc
 
 
@@ -84,9 +104,27 @@ def _reading(tmp_path: Path, **tree: Any) -> Reading:
     return runtime_shape.read(cgroup, proc)
 
 
-def _container(tmp_path: Path, name: str, *, ticks: int, oom_kill: int = 0, peak_mib: int = QUIET_PEAK_MIB) -> Reading:
-    """The reading of the container that started at `ticks`, in its own tree."""
-    return _reading(tmp_path / name, start_ticks=ticks, oom_kill=oom_kill, peak=peak_mib * MIB)
+def _container(
+    tmp_path: Path,
+    name: str,
+    *,
+    ticks: int,
+    oom_kill: int = 0,
+    peak_mib: int = QUIET_PEAK_MIB,
+    process_bytes: int = 0,
+    pid: int = 2,
+    server: int = QUIET_SERVER,
+) -> Reading:
+    """The reading of the container that started at `ticks`, in its own tree. A process is `pid:pid`."""
+    processes = {pid: process_bytes // 1024} if process_bytes else None
+    return _reading(
+        tmp_path / name,
+        start_ticks=ticks,
+        oom_kill=oom_kill,
+        peak=peak_mib * MIB,
+        processes=processes,
+        server=server,
+    )
 
 
 def _fold(tracker: Tracker, reading: Reading, deployment: str = "A") -> Tracker:
@@ -96,7 +134,7 @@ def _fold(tracker: Tracker, reading: Reading, deployment: str = "A") -> Tracker:
 # --- reading the files -----------------------------------------------------------------
 
 
-def test_the_reading_holds_the_four_facts_of_the_files(tmp_path: Path) -> None:
+def test_the_reading_holds_the_facts_of_the_files(tmp_path: Path) -> None:
     reading = _reading(tmp_path, memory_max="1610612736", peak=123456789, oom_kill=7, start_ticks=424242)
 
     assert reading == Reading(
@@ -105,6 +143,9 @@ def test_the_reading_holds_the_four_facts_of_the_files(tmp_path: Path) -> None:
         memory_peak=123456789,
         oom_kill=7,
         container=f"{BOOT_ID}:424242",
+        largest_process=0,
+        largest_process_id="",
+        server_process=QUIET_SERVER,
     )
     assert reading.unreadable == ()
 
@@ -156,13 +197,98 @@ def test_a_file_with_text_that_is_not_a_number_is_unreadable(tmp_path: Path) -> 
     assert runtime_shape.read(cgroup, proc).unreadable == ("memory.peak",)
 
 
-def test_an_empty_reading_misses_all_four_facts() -> None:
-    assert Reading().unreadable == ("memory.max", "memory.peak", "memory.events", "container identity")
+def test_an_empty_reading_misses_every_fact() -> None:
+    assert Reading().unreadable == (
+        "memory.max",
+        "memory.peak",
+        "memory.events",
+        "container identity",
+        "process sizes",
+    )
+
+
+def test_the_sensor_samples_often_enough_to_see_a_run_of_a_few_minutes_and_the_stale_limit_allows_slow_ticks() -> None:
+    """A run of two minutes (head_reports) needs a sample inside its life; one slow tick must not look silent."""
+    assert runtime_shape.SAMPLE_INTERVAL_SECONDS <= 60
+    assert runtime_shape.STALE_AFTER_SECONDS >= 10 * runtime_shape.SAMPLE_INTERVAL_SECONDS
+    assert runtime_shape.STALE_AFTER_SECONDS <= 3600, "an hour of silence is not a nightly check"
 
 
 def test_the_deployed_paths_are_the_container_cgroup_and_process_table() -> None:
     assert runtime_shape.CGROUP_ROOT == Path("/sys/fs/cgroup")
     assert runtime_shape.PROC_ROOT == Path("/proc")
+
+
+def test_the_largest_process_is_the_largest_vmhwm_of_any_process_but_the_code_server(tmp_path: Path) -> None:
+    reading = _reading(
+        tmp_path, processes={7: 300 * 1024, 8: 330 * 1024, 9: 120 * 1024}, server=9999 * MIB, ticks={8: 777}
+    )
+
+    assert reading.largest_process == 330 * MIB
+    assert reading.largest_process_id == "8:777", "the process is named by pid and start ticks"
+    assert reading.server_process == 9999 * MIB, "pid 1 is the server, never a run"
+
+
+def test_no_process_but_the_code_server_is_a_largest_process_of_zero_not_a_missing_fact(tmp_path: Path) -> None:
+    reading = _reading(tmp_path)
+
+    assert reading.largest_process == 0
+    assert reading.unreadable == ()
+
+
+def test_a_process_that_exited_or_hides_its_status_is_skipped(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path, processes={7: 250 * 1024})
+    (proc / "8").mkdir()  # exited between the listing and the read: no status file
+    (proc / "cpuinfo").write_text("x")
+    (proc / "9").mkdir()  # a kernel thread: a status file without VmHWM
+    (proc / "9" / "status").write_text("Name:\tkthreadd\n")
+
+    reading = runtime_shape.read(cgroup, proc)
+
+    assert reading.largest_process == 250 * MIB
+    assert reading.unreadable == (), "one process that cannot be read does not void the reading"
+
+
+def test_a_process_name_that_is_not_utf8_does_not_hide_a_large_process(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path, processes={7: 250 * 1024})
+    (proc / "10").mkdir()
+    (proc / "10" / "status").write_bytes(b"Name:\t\xff\xfe\nVmHWM:\t" + str(976 * 1024).encode() + b" kB\n")
+    (proc / "10" / "stat").write_bytes(b"10 (\xff\xfe) S " + b"0 " * 18 + b"4242 " + b"0 " * 30 + b"\n")
+
+    reading = runtime_shape.read(cgroup, proc)
+
+    assert (reading.largest_process, reading.largest_process_id) == (976 * MIB, "10:4242")
+
+
+def test_a_first_process_that_is_not_the_code_server_makes_the_sizes_unreadable(tmp_path: Path) -> None:
+    """With `init: true` pid 1 is docker-init. The server would be judged as a run and pid 1 as the server."""
+    reading = _reading(tmp_path, server_command=b"/sbin/docker-init\x00--\x00dagster-entrypoint\x00"[:18])
+
+    assert reading.server_process is None
+    assert reading.unreadable == ("process sizes",)
+
+
+def test_a_first_process_without_a_vmhwm_makes_the_sizes_unreadable(tmp_path: Path) -> None:
+    assert _reading(tmp_path, server=None).unreadable == ("process sizes",)
+
+
+def test_proc_self_is_not_a_process_even_when_it_carries_a_large_status(tmp_path: Path) -> None:
+    """On a real /proc, `self` and `thread-self` point at the reader. They are not process ids."""
+    cgroup, proc = _tree(tmp_path, processes={7: 100 * 1024})
+    (proc / "self").mkdir()
+    (proc / "self" / "status").write_text(f"VmHWM:\t{5000 * 1024} kB\n")
+    (proc / "self" / "stat").write_text(f"1 (python) {' '.join(['S', *['0'] * 18, '5', *['0'] * 30])}\n")
+
+    assert runtime_shape.read(cgroup, proc).largest_process == 100 * MIB
+
+
+def test_a_process_table_that_cannot_be_listed_is_an_unreadable_fact(tmp_path: Path) -> None:
+    cgroup, _ = _tree(tmp_path)
+
+    assert runtime_shape.read(cgroup, tmp_path / "no-proc").unreadable == (
+        "container identity",
+        "process sizes",
+    )
 
 
 # --- folding readings into totals --------------------------------------------------------
@@ -224,6 +350,88 @@ def test_a_reading_with_a_missing_fact_adds_nothing(tmp_path: Path) -> None:
     assert _fold(Tracker(), Reading()) == Tracker()
 
 
+def test_one_process_that_grows_past_the_budget_counts_once(tmp_path: Path) -> None:
+    """A process of the same pid and start ticks, sampled three times while it grows."""
+    first = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    second = _fold(first, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS + MIB))
+    third = _fold(second, _container(tmp_path, "c", ticks=1, process_bytes=BIG_PROCESS + 2 * MIB))
+
+    assert (first.processes_over_size, second.processes_over_size, third.processes_over_size) == (1, 1, 1)
+
+
+def test_a_process_that_crosses_the_budget_while_it_runs_counts_when_it_crosses(tmp_path: Path) -> None:
+    below = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=RUN_BYTES))
+    crossed = _fold(below, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS))
+
+    assert (below.processes_over_size, crossed.processes_over_size) == (0, 1)
+
+
+def test_a_new_process_over_the_budget_counts_even_when_an_earlier_one_was_larger(tmp_path: Path) -> None:
+    """A recurring over-size run must not hide behind one record: a smaller process of another pid counts."""
+    big = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS + 100 * MIB, pid=2))
+    other = _fold(big, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS, pid=3))
+
+    assert other.processes_over_size == 2
+    assert other.largest_process == BIG_PROCESS + 100 * MIB, "the record is the largest of the container so far"
+
+
+def test_the_same_pid_with_other_start_ticks_is_another_process(tmp_path: Path) -> None:
+    """A pid is reused. The start ticks tell the new process from the old one."""
+    first = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    reading = _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS)
+    reading = dataclasses.replace(reading, largest_process_id="2:99999")
+
+    assert _fold(first, reading).processes_over_size == 2
+
+
+def test_an_over_size_process_counts_again_in_a_new_container_even_with_the_same_pid_and_ticks(tmp_path: Path) -> None:
+    """`_container` names the process `2:2` in every container, as a restart that reuses pid and ticks would."""
+    first = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    second = _fold(first, _container(tmp_path, "b", ticks=2, process_bytes=BIG_PROCESS), deployment="B")
+
+    assert (first.processes_over_size, second.processes_over_size) == (1, 2)
+
+
+def test_the_largest_process_record_starts_again_in_a_new_container(tmp_path: Path) -> None:
+    old = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS + 50 * MIB))
+
+    new = _fold(old, _container(tmp_path, "b", ticks=2, process_bytes=RUN_BYTES - MIB), deployment="B")
+
+    assert new.largest_process == RUN_BYTES - MIB
+    assert new.processes_over_size == 1
+
+
+def test_a_process_at_the_budget_does_not_count(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=RUN_BYTES))
+
+    assert (tracker.processes_over_size, tracker.largest_process) == (0, RUN_BYTES)
+
+
+def test_the_code_server_over_its_declared_size_counts_once_per_crossing(tmp_path: Path) -> None:
+    quiet = _fold(Tracker(), _container(tmp_path, "a", ticks=1))
+    over = _fold(quiet, _container(tmp_path, "b", ticks=1, server=SERVER_BYTES + MIB))
+    still = _fold(over, _container(tmp_path, "c", ticks=1, server=SERVER_BYTES + 2 * MIB))
+    replaced = _fold(still, _container(tmp_path, "d", ticks=2, server=SERVER_BYTES + MIB), deployment="B")
+
+    assert [quiet.servers_over_size, over.servers_over_size, still.servers_over_size] == [0, 1, 1]
+    assert replaced.servers_over_size == 2, "a new container that starts over the size counts"
+
+
+def test_a_tracker_with_sizes_survives_a_round_trip(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS, server=SERVER_BYTES + MIB))
+
+    again = Tracker.from_json(tracker.to_json())
+
+    assert again == tracker
+    assert (again.process_id, again.process_size, again.server_size) == (
+        "2:2",
+        BIG_PROCESS,
+        SERVER_BYTES + MIB,
+    )
+    assert (again.processes_over_size, again.servers_over_size, again.largest_process) == (1, 1, BIG_PROCESS)
+    assert (again.worst_process, again.worst_server) == (BIG_PROCESS, SERVER_BYTES + MIB)
+
+
 # --- the judgement of one reading ------------------------------------------------------------
 
 
@@ -255,8 +463,10 @@ def test_an_unreadable_fact_is_red_even_when_every_other_fact_is_good(tmp_path: 
     assert _judge(_reading(tmp_path, peak=None)).red == ("unreadable: memory.peak",)
 
 
-def test_an_empty_reading_is_red_for_all_four_facts() -> None:
-    assert _judge(Reading()).red == ("unreadable: memory.max, memory.peak, memory.events, container identity",)
+def test_an_empty_reading_is_red_for_every_fact() -> None:
+    assert _judge(Reading()).red == (
+        "unreadable: memory.max, memory.peak, memory.events, container identity, process sizes",
+    )
 
 
 @pytest.mark.parametrize(
@@ -285,6 +495,40 @@ def test_a_peak_exactly_at_the_limit_of_the_real_ceiling_is_green_and_one_byte_a
     assert at_the_limit.red == ()
     assert len(one_byte_above.red) == 1
     assert "rose above 70%" in one_byte_above.red[0]
+
+
+def test_a_process_larger_than_the_declared_run_size_is_red_and_names_both_sizes(tmp_path: Path) -> None:
+    verdict = _judge(_container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+
+    assert verdict.red == (
+        f"a run process held {CAPACITY.run_mib + 1} MiB, above the run budget {CAPACITY.run_mib} MiB"
+        " (1 time(s)); the run limit assumes that budget",
+    )
+    assert verdict.facts["processes_over_size"] == 1
+    assert verdict.facts["largest_process_mib"] == CAPACITY.run_mib + 1
+
+
+def test_the_red_text_names_the_size_that_made_it_red_not_the_latest_container(tmp_path: Path) -> None:
+    """A run of 480 MiB in one container, a deploy, then a small process in the next: the text keeps 480."""
+    big = BIG_PROCESS + 60 * MIB
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=big, server=SERVER_BYTES + 7 * MIB))
+    reading = _container(tmp_path, "b", ticks=2, process_bytes=RUN_BYTES // 2)
+    tracker = _fold(tracker, reading, deployment="B")
+
+    verdict = _judge(reading, tracker=tracker, baseline=NOTHING)
+
+    assert any(f"a run process held {big // MIB} MiB" in reason for reason in verdict.red)
+    assert any(f"the code server held {SERVER_BYTES // MIB + 7} MiB" in reason for reason in verdict.red)
+    assert (tracker.worst_process, tracker.worst_server) == (big, SERVER_BYTES + 7 * MIB)
+    assert verdict.facts["worst_process_mib"] == big // MIB
+
+
+def test_a_code_server_larger_than_its_declared_size_is_red(tmp_path: Path) -> None:
+    verdict = _judge(_container(tmp_path, "a", ticks=1, server=SERVER_BYTES + 3 * MIB))
+
+    assert verdict.red == (
+        f"the code server held {CAPACITY.server_mib + 3} MiB, above the declared {CAPACITY.server_mib} MiB (1 time(s))",
+    )
 
 
 def test_the_peak_is_judged_against_the_real_ceiling_not_the_declared_one(tmp_path: Path) -> None:
@@ -423,7 +667,8 @@ def test_a_check_without_a_recent_sample_is_red_not_green(tmp_path: Path) -> Non
     recent = _check(instance, reading, TICK_3)
 
     assert never.red == ("the sampler has recorded nothing, so kills and restarts may be unseen",)
-    assert old.red == ("the last sample is 16 minutes old, so kills and restarts may be unseen",)
+    minutes = round((runtime_shape.STALE_AFTER_SECONDS + 60) / 60)
+    assert old.red == (f"the last sample is {minutes} minutes old, so kills and restarts may be unseen",)
     assert recent.red == ()
 
 
@@ -461,6 +706,33 @@ def test_a_crash_after_a_deploy_is_an_unplanned_restart_not_a_second_deployment(
     verdict = _night(instance, _container(tmp_path, "c", ticks=3), TICK_2, deployment="B")
 
     assert [reason for reason in verdict.red if "without a deployment change" in reason]
+
+
+def test_an_over_size_process_is_red_on_its_night_only_and_a_new_one_is_red_again(tmp_path: Path) -> None:
+    """Three nights: a process over the budget, the same process still alive, then another process over it."""
+    instance = dg.DagsterInstance.ephemeral()
+    big = _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS, pid=2)
+    other = _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS, pid=3)
+
+    first = _night(instance, big, TICK_1)
+    second = _night(instance, big, TICK_2)
+    third = _night(instance, other, TICK_3)
+
+    assert [reason for reason in first.red if reason.startswith("a run process held")]
+    assert second.red == ()
+    assert [reason for reason in third.red if reason.startswith("a run process held")]
+    assert _baseline(instance).processes_over_size == 2, "the baseline keeps the count, so a later night is not red"
+
+
+def test_a_code_server_over_its_size_is_red_on_its_night_only(tmp_path: Path) -> None:
+    instance = dg.DagsterInstance.ephemeral()
+    big_server = _container(tmp_path, "a", ticks=1, server=SERVER_BYTES + MIB)
+
+    first = _night(instance, big_server, TICK_1)
+    second = _night(instance, big_server, TICK_2)
+
+    assert [reason for reason in first.red if reason.startswith("the code server held")]
+    assert second.red == ()
 
 
 def test_a_repeat_of_a_tick_repeats_its_verdict_instead_of_clearing_it(tmp_path: Path) -> None:
@@ -552,7 +824,17 @@ def test_a_tracker_that_lost_the_kills_of_a_replaced_container_turns_the_next_ch
     )
 
 
-@pytest.mark.parametrize("field", ["kills", "restarts_same_deployment", "restarts_new_deployment", "peaks_over_limit"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "kills",
+        "restarts_same_deployment",
+        "restarts_new_deployment",
+        "peaks_over_limit",
+        "processes_over_size",
+        "servers_over_size",
+    ],
+)
 def test_each_total_that_falls_below_the_baseline_is_a_reset(tmp_path: Path, field: str) -> None:
     reading = _container(tmp_path, "a", ticks=1)
 
@@ -594,6 +876,29 @@ def _tracker_json(**changes: Any) -> str:
         "sampled_at": NOW.isoformat(),
     }
     return json.dumps({**state, **changes})
+
+
+def test_state_saved_before_the_process_sizes_existed_still_loads_with_zero_sizes() -> None:
+    """The sensor of the first release stored no process size. Its tracker and baseline must not read as broken."""
+    import json
+
+    tracker = Tracker.from_json(_tracker_json())
+    baseline = Baseline.from_json(
+        json.dumps(
+            {
+                "kills": 0,
+                "restarts_same_deployment": 0,
+                "restarts_new_deployment": 0,
+                "peaks_over_limit": 1,
+                "tick": TICK_1,
+                "red": ["x"],
+                "summary": "x",
+            }
+        )
+    )
+
+    assert (tracker.largest_process, tracker.processes_over_size) == (0, 0)
+    assert baseline.processes_over_size == 0
 
 
 @pytest.mark.parametrize(

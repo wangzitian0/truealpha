@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.2.0",
+  "contract_version": "1.3.0",
   "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, shared vendor capacity demand (#1416), the maximum runtime of every Dagster job (#1442), and the memory capacity of the Dagster code server (#1467).",
   "sentinels": [
     {
@@ -410,19 +410,23 @@
     }
   },
   "code_server_capacity": {
-    "description": "The memory that the Dagster code server container gives to its processes, and the run limit that follows from it (#1467). Every run executes inside the code server container, in the same cgroup as the gRPC server. The queue limit of dagster.yaml is derived here: max_concurrent_runs = floor((floor(ceiling_mib x utilization_limit) - server_processes x process_mib) / (processes_per_run x process_mib)). Tests hold dagster.yaml equal to that value and hold the deployed jobs to processes_per_run. The nightly verdict runtime_shape reads the real memory.max, memory.peak and oom_kill of the container and fails when the ceiling is lower than declared here, when the peak of a container rises above utilization_limit of memory.max, or when a kill or an unplanned restart is seen. A sensor keeps the counters of containers that a deploy replaced.",
+    "description": "The memory that the Dagster code server container gives to its processes, and the run limit of dagster.yaml (#1467). Every run executes inside the code server container, in the same cgroup as the gRPC server. The queue admits concurrent_runs runs (at least 2: a run that waits for other runs holds a slot). The budget of one run process is run_mib = floor((floor(ceiling_mib x utilization_limit) - server_processes x server_mib) / (concurrent_runs x processes_per_run)). It is a decision, not a measurement. Tests hold dagster.yaml equal to concurrent_runs and the deployed jobs to processes_per_run. The nightly verdict runtime_shape reads the real memory.max, memory.peak and oom_kill of the container and every process size, and fails when the ceiling is lower than declared here, when the peak of a container rises above utilization_limit of memory.max, when a process is larger than the server or run budget, or when a kill or an unplanned restart is seen. A sensor keeps the counters of containers that a deploy replaced.",
     "ceiling_mib": 1536,
     "ceiling_source": "infra2 truealpha/truealpha/20.data_engine/compose.yaml, x-dagster-service mem_limit, one value for staging and production (infra2#1342)",
     "utilization_limit": 0.7,
-    "process_mib": 240,
+    "server_mib": 260,
+    "concurrent_runs": 2,
     "server_processes": 1,
     "processes_per_run": 1,
     "measured": {
-      "at": "2026-10-20",
+      "at": "2026-10-21",
       "environment": "staging",
-      "method": "VmHWM in /proc/<pid>/status of each process in the code server container, read with docker exec. The spawned processes are run workers and step workers under the multiprocess executor. An in-process run is both in one process: its size is not measured here, and the runtime_shape verdict is the standing check of the whole cgroup.",
-      "grpc_server_hwm_mib": 229.5,
-      "spawned_process_hwm_mib": 213.3,
+      "method": "Server: VmHWM of /proc/1/status in the code server container (docker exec, read only), 13 hours after its start; server_mib adds a margin of 10% for growth (the same reading was 229.5 MiB on 2026-10-20 and 211.5 MiB for a fresh server in a Linux container). Fresh import: VmHWM of /proc/self/status of a fresh interpreter that imports data_engine.dagster_defs, in a Linux container with the image layout (uv sync --frozen --no-dev --no-editable). Peak: memory.peak of the container cgroup (1186.4 MiB, container start 00:39 UTC). In the window 00:40-00:50 UTC (dagster.runs) 3 in-process runs overlapped at most (dagster.event_logs: one pid and no multiprocess event in each of 12 runs): topt_live_pipeline, two datahub_confidence_report and head_reports_pipeline. The two confidence reports only waited for the other runs from 00:45:29 to 00:50:46 (their own waiting log lines). memory.swap.peak was 0 and memory.events max was 0. The peak holds one or two working runs and up to two waiting runs, and it fixes no size for a working run. The runtime_shape verdict measures the largest process of every sample and goes red above run_mib.",
+      "grpc_server_hwm_mib": 236.1,
+      "fresh_import_hwm_mib": 179.7,
+      "container_peak_mib": 1186.4,
+      "runs_at_peak": 3,
+      "waiting_runs_at_peak": 2,
       "source": "https://github.com/wangzitian0/truealpha/issues/1467"
     }
   }

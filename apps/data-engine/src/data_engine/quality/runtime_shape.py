@@ -9,7 +9,9 @@ inside the container and judges them against the capacity that `code_server_capa
 * `memory.events` `oom_kill`: the kernel killed a process of the cgroup;
 * `memory.peak`: the most memory the cgroup held since the container started;
 * `memory.max`: the ceiling that the container really has;
-* the identity of the container: the boot id of the host and the start ticks of its first process.
+* the identity of the container: the boot id of the host and the start ticks of its first process;
+* `VmHWM` of the code server and of the largest other process (a run), judged against `server_mib`
+  and the run budget `run_mib` of the contract.
 
 The kernel counters belong to the container. A deploy or a crash replaces the container, and the
 new cgroup starts at zero. A check that reads the counters once a night loses every kill and every
@@ -35,6 +37,13 @@ The nightly verdict is red on any of these:
 * the peak of a container rose above `utilization_limit` of `memory.max` since the last check. A
   peak that the last check already judged does not count again: `memory.peak` is a high-water mark
   of the whole container life;
+* a run process held more than the budget `run_mib`, or the code server more than `server_mib`. A
+  process counts once: when it first passes the limit, and again for each new process that does. The
+  budget is what is left inside the utilization limit when the queue is full, so a larger run
+  breaks the premise of the limit. A run that ends between two samples after its peak is not seen,
+  and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
+  process at each sample: a smaller over-size process beside a larger one, and a largest process
+  that alternates between two over-size processes, are counted by that rule and not once each;
 * the container was replaced without a change of the deployment. The kernel may kill the server
   process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
   does not show the kill. A deploy replaces the container too, but it changes the deployment.
@@ -71,8 +80,8 @@ BASELINE_KEY = "truealpha/runtime_shape/baseline"
 
 MIB = 1024 * 1024
 #: How often the sensor samples, and how old the last sample may be before the check calls the sensor silent.
-SAMPLE_INTERVAL_SECONDS = 300
-STALE_AFTER_SECONDS = 3 * SAMPLE_INTERVAL_SECONDS
+SAMPLE_INTERVAL_SECONDS = 30
+STALE_AFTER_SECONDS = 600
 
 
 class StateUnreadable(Exception):
@@ -110,6 +119,12 @@ class Reading:
     memory_peak: int | None = None
     oom_kill: int | None = None
     container: str | None = None
+    #: The largest `VmHWM` in bytes of any process except the first (the code server), and that process
+    #: (pid and start ticks). 0 and empty when none runs.
+    largest_process: int | None = None
+    largest_process_id: str = ""
+    #: The `VmHWM` in bytes of the first process, the code server.
+    server_process: int | None = None
 
     @property
     def unreadable(self) -> tuple[str, ...]:
@@ -119,6 +134,7 @@ class Reading:
             ("memory.peak", self.memory_peak is None),
             ("memory.events", self.oom_kill is None),
             ("container identity", self.container is None),
+            ("process sizes", self.largest_process is None or self.server_process is None),
         )
         return tuple(name for name, is_missing in missing if is_missing)
 
@@ -142,6 +158,20 @@ class Tracker:
     restarts_same_deployment: int = 0
     restarts_new_deployment: int = 0
     peaks_over_limit: int = 0
+    #: The process that was the largest at the last sample and its size (bytes). A process counts when it
+    #: first passes the run budget; a new process that passes it counts again.
+    process_id: str = ""
+    process_size: int = 0
+    processes_over_size: int = 0
+    #: The code server at the last sample (bytes), and how often it passed `server_mib`.
+    server_size: int = 0
+    servers_over_size: int = 0
+    #: The largest process of this container so far (bytes). A record to read, not a rule.
+    largest_process: int = 0
+    #: The largest run process and the largest code server that were counted over their limit (bytes).
+    #: They never restart with a container, so a red verdict names the size that made it red.
+    worst_process: int = 0
+    worst_server: int = 0
     #: When the sensor last ran (ISO 8601, UTC). Empty before the first sample.
     sampled_at: str = ""
 
@@ -166,6 +196,14 @@ class Tracker:
                 restarts_same_deployment=_count(data["restarts_same_deployment"]),
                 restarts_new_deployment=_count(data["restarts_new_deployment"]),
                 peaks_over_limit=_count(data["peaks_over_limit"]),
+                process_id=_text(data.get("process_id", "")),
+                process_size=_count(data.get("process_size", 0)),
+                processes_over_size=_count(data.get("processes_over_size", 0)),
+                server_size=_count(data.get("server_size", 0)),
+                servers_over_size=_count(data.get("servers_over_size", 0)),
+                largest_process=_count(data.get("largest_process", 0)),
+                worst_process=_count(data.get("worst_process", 0)),
+                worst_server=_count(data.get("worst_server", 0)),
                 sampled_at=_text(data["sampled_at"]),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
@@ -183,6 +221,8 @@ class Baseline:
     tick: str
     red: tuple[str, ...]
     summary: str
+    processes_over_size: int = 0
+    servers_over_size: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -199,6 +239,8 @@ class Baseline:
                 tick=_text(data["tick"]),
                 red=_texts(data["red"]),
                 summary=_text(data["summary"]),
+                processes_over_size=_count(data.get("processes_over_size", 0)),
+                servers_over_size=_count(data.get("servers_over_size", 0)),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
             raise StateUnreadable("the runtime shape baseline is not readable") from exc
@@ -229,17 +271,58 @@ def _events(text: str) -> dict[str, int]:
     return {name: int(value) for name, value in pairs}
 
 
-def _container_id(proc_root: Path) -> str:
-    """Boot id of the host plus the start ticks of the first process: neither depends on the wall clock.
+def _start_ticks(stat: str) -> int:
+    """Field 22 of `/proc/<pid>/stat`, the start of the process in ticks since boot.
 
     The process name in `stat` may hold spaces and brackets, so the fields count from the last `)`."""
-    boot_id = _read_text(proc_root / "sys" / "kernel" / "random" / "boot_id")
-    stat = _read_text(proc_root / "1" / "stat")
     fields_after_name = stat[stat.rindex(")") + 2 :].split()
-    start_ticks = int(fields_after_name[19])  # field 22 of the line, counting the pid as field 1
+    return int(fields_after_name[19])  # field 22 of the line, counting the pid as field 1
+
+
+def _container_id(proc_root: Path) -> str:
+    """Boot id of the host plus the start ticks of the first process: neither depends on the wall clock."""
+    boot_id = _read_text(proc_root / "sys" / "kernel" / "random" / "boot_id")
     if not boot_id:
         raise ValueError("empty boot id")
-    return f"{boot_id}:{start_ticks}"
+    return f"{boot_id}:{_start_ticks(_read_text(proc_root / '1' / 'stat'))}"
+
+
+def _hwm_bytes(status: str) -> int | None:
+    """`VmHWM` of a `/proc/<pid>/status` text in bytes. None for a process without one (a kernel thread)."""
+    for line in status.splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1]) * 1024
+    return None
+
+
+def _largest_process(proc_root: Path) -> tuple[int, str]:
+    """The largest `VmHWM` in bytes of any process except the first, and that process as `pid:start ticks`.
+
+    A process that exits between the listing and the read, or that cannot be read, is skipped. A listing
+    that cannot be read raises."""
+    largest, identity = 0, ""
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit() or entry.name == "1":
+            continue
+        try:
+            size = _hwm_bytes((entry / "status").read_bytes().decode("utf-8", errors="replace"))
+            ticks = _start_ticks((entry / "stat").read_bytes().decode("utf-8", errors="replace")) if size else 0
+        except (OSError, ValueError, IndexError):
+            continue
+        if size is not None and size > largest:
+            largest, identity = size, f"{entry.name}:{ticks}"
+    return largest, identity
+
+
+def _server_process(proc_root: Path) -> int:
+    """`VmHWM` in bytes of the first process, the code server."""
+    command = (proc_root / "1" / "cmdline").read_bytes()
+    if b"dagster" not in command:
+        raise ValueError("the first process is not the code server")
+    size = _hwm_bytes((proc_root / "1" / "status").read_bytes().decode("utf-8", errors="replace"))
+    if size is None:
+        raise ValueError("the first process has no VmHWM")
+    return size
 
 
 def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Reading:
@@ -249,6 +332,9 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
     memory_peak: int | None = None
     oom_kill: int | None = None
     container: str | None = None
+    largest_process: int | None = None
+    largest_process_id = ""
+    server_process: int | None = None
 
     try:
         raw_max = _read_text(cgroup_root / "memory.max")
@@ -268,9 +354,51 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
         container = _container_id(proc_root)
     except (OSError, ValueError, IndexError):
         pass
+    try:
+        largest_process, largest_process_id = _largest_process(proc_root)
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        server_process = _server_process(proc_root)
+    except (OSError, ValueError):
+        pass
 
     return Reading(
-        memory_max=memory_max, unlimited=unlimited, memory_peak=memory_peak, oom_kill=oom_kill, container=container
+        memory_max=memory_max,
+        unlimited=unlimited,
+        memory_peak=memory_peak,
+        oom_kill=oom_kill,
+        container=container,
+        largest_process=largest_process,
+        largest_process_id=largest_process_id,
+        server_process=server_process,
+    )
+
+
+def _fold_sizes(
+    tracker: Tracker, folded: Tracker, reading: Reading, *, fresh_container: bool, capacity: CodeServerCapacity
+) -> Tracker:
+    """`folded` with the size fields of one reading. A process counts once: when it first passes the run budget."""
+    run_limit, server_limit = capacity.run_mib * MIB, capacity.server_mib * MIB
+    size, server = reading.largest_process or 0, reading.server_process or 0
+    before_id = "" if fresh_container else tracker.process_id
+    before_size = 0 if fresh_container else tracker.process_size
+    over, worst_process = tracker.processes_over_size, tracker.worst_process
+    if size > run_limit and (reading.largest_process_id != before_id or before_size <= run_limit):
+        over, worst_process = over + 1, max(worst_process, size)
+    server_over, worst_server = tracker.servers_over_size, tracker.worst_server
+    if server > server_limit and (fresh_container or tracker.server_size <= server_limit):
+        server_over, worst_server = server_over + 1, max(worst_server, server)
+    return replace(
+        folded,
+        process_id=reading.largest_process_id,
+        process_size=size,
+        processes_over_size=over,
+        server_size=server,
+        servers_over_size=server_over,
+        worst_process=worst_process,
+        worst_server=worst_server,
+        largest_process=size if fresh_container else max(tracker.largest_process, size),
     )
 
 
@@ -279,8 +407,9 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
     if reading.oom_kill is None or reading.memory_peak is None or reading.container is None or reading.unreadable:
         return tracker
     previous = tracker.container
+    fresh_container = previous is None or previous.id != reading.container
     kills, same, new = tracker.kills, tracker.restarts_same_deployment, tracker.restarts_new_deployment
-    if previous is not None and previous.id == reading.container:
+    if previous is not None and not fresh_container:
         kills += max(reading.oom_kill - previous.oom_kill, 0)
         peak_is_new = reading.memory_peak > previous.peak
     else:
@@ -298,7 +427,7 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
         and reading.memory_peak > capacity.utilization_limit * reading.memory_max
     ):
         over += 1
-    return Tracker(
+    folded = Tracker(
         container=Container(
             id=reading.container, deployment=deployment, oom_kill=reading.oom_kill, peak=reading.memory_peak
         ),
@@ -306,7 +435,9 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
         restarts_same_deployment=same,
         restarts_new_deployment=new,
         peaks_over_limit=over,
+        sampled_at=tracker.sampled_at,
     )
+    return _fold_sizes(tracker, folded, reading, fresh_container=fresh_container, capacity=capacity)
 
 
 def _mib(value: int) -> int:
@@ -331,6 +462,8 @@ def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
         or tracker.restarts_same_deployment < baseline.restarts_same_deployment
         or tracker.restarts_new_deployment < baseline.restarts_new_deployment
         or tracker.peaks_over_limit < baseline.peaks_over_limit
+        or tracker.processes_over_size < baseline.processes_over_size
+        or tracker.servers_over_size < baseline.servers_over_size
     )
     if shrunk:
         return ["the runtime shape state is lower than at the last check: it was reset, so kills may be unseen"]
@@ -359,7 +492,19 @@ def judge(
     same = max(tracker.restarts_same_deployment - before.restarts_same_deployment, 0)
     new = max(tracker.restarts_new_deployment - before.restarts_new_deployment, 0)
     peaks = max(tracker.peaks_over_limit - before.peaks_over_limit, 0)
-    facts: dict[str, int | float] = {"oom_kills": kills, "unplanned_restarts": same, "peaks_over_limit": peaks}
+    too_big = max(tracker.processes_over_size - before.processes_over_size, 0)
+    server_big = max(tracker.servers_over_size - before.servers_over_size, 0)
+    facts: dict[str, int | float] = {
+        "oom_kills": kills,
+        "unplanned_restarts": same,
+        "peaks_over_limit": peaks,
+        "processes_over_size": too_big,
+        "servers_over_size": server_big,
+        "largest_process_mib": round(tracker.largest_process / MIB),
+        "worst_process_mib": round(tracker.worst_process / MIB),
+        "server_size_mib": round(tracker.server_size / MIB),
+        "worst_server_mib": round(tracker.worst_server / MIB),
+    }
 
     peak = ""
     if reading.memory_peak is not None and reading.memory_max is not None:
@@ -374,6 +519,16 @@ def judge(
         )
     if peaks:
         red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
+    if too_big:
+        red.append(
+            f"a run process held {round(tracker.worst_process / MIB)} MiB, above the run budget"
+            f" {capacity.run_mib} MiB ({too_big} time(s)); the run limit assumes that budget"
+        )
+    if server_big:
+        red.append(
+            f"the code server held {round(tracker.worst_server / MIB)} MiB, above the declared"
+            f" {capacity.server_mib} MiB ({server_big} time(s))"
+        )
 
     # The verdict is published on /health: counts and sizes only, never a path or an error text.
     if red:
@@ -483,6 +638,8 @@ def check(
             restarts_same_deployment=totals.restarts_same_deployment,
             restarts_new_deployment=totals.restarts_new_deployment,
             peaks_over_limit=totals.peaks_over_limit,
+            processes_over_size=totals.processes_over_size,
+            servers_over_size=totals.servers_over_size,
             tick=tick,
             red=judgement.red,
             summary=judgement.summary,

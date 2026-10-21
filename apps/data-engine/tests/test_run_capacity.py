@@ -4,15 +4,15 @@ The gRPC server and every run process share the memory cgroup of one container. 
 ceiling of staging was exceeded by three processes per run, and the kernel killed the container with
 every run in it. These tests hold the demand under the declared capacity:
 
-1. `dagster.yaml` sets the run limit that `code_server_capacity` derives, and the limit fits inside
+1. `dagster.yaml` sets the number of slots that `code_server_capacity` declares, and the slots fit inside
    the utilization limit of the ceiling.
 2. Every deployed job uses the in-process executor, so a run is one process (`processes_per_run`).
 3. A job that waits for other runs carries the tag that the queue caps below the run limit, so a run
    that it waits for always finds a slot.
-4. A fresh import of the composition root fits the declared size of one process.
+4. A fresh code server fits the declared size of the server.
 
 No test opens a database. Each test fails under its mutation: a queue limit one too high, a job on the
-default executor, a waiting job without the tag, a process size below the measured import.
+default executor, a waiting job without the tag, a server size below a fresh code server.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _queue(directory: Path = DAGSTER_YAML.parent) -> Any:
 
 def _held_mib(runs: int) -> int:
     """The memory in MiB of the server processes and `runs` runs, each run at `processes_per_run` processes."""
-    return (CAPACITY.server_processes + runs * CAPACITY.processes_per_run) * CAPACITY.process_mib
+    return CAPACITY.server_processes * CAPACITY.server_mib + runs * CAPACITY.processes_per_run * CAPACITY.run_mib
 
 
 def _deployed_jobs() -> dict[str, list[dg.JobDefinition]]:
@@ -63,7 +63,7 @@ def _deployed_jobs() -> dict[str, list[dg.JobDefinition]]:
 # --- the run queue ---------------------------------------------------------------------
 
 
-def test_the_queue_limit_is_the_value_that_the_declared_capacity_derives() -> None:
+def test_the_queue_limit_is_the_number_of_slots_that_the_contract_declares() -> None:
     assert _queue().max_concurrent_runs == CAPACITY.max_concurrent_runs
 
 
@@ -78,7 +78,7 @@ def test_the_demand_fits_inside_the_utilization_limit_of_the_ceiling() -> None:
 
 
 def test_one_more_run_than_the_limit_would_pass_the_utilization_limit() -> None:
-    """The limit is the largest that fits. A lower one would leave the capacity unused."""
+    """The limit is the largest that fits. A lower one gives each run a larger budget."""
     assert _held_mib(_queue().max_concurrent_runs + 1) > CAPACITY.utilization_limit * CAPACITY.ceiling_mib
 
 
@@ -280,15 +280,15 @@ def _fresh_code_server_peak_mib() -> float:
 
 
 def test_the_declared_process_size_covers_a_fresh_code_server() -> None:
-    """The deployed pid 1 held 229.5 MiB (`VmHWM`, staging, 2026-10-20). This starts the same command in this
+    """The deployed pid 1 held 236.1 MiB (`VmHWM`, staging, 13 hours after its start, 2026-10-21). This starts the same command in this
     venv and reads the same counter. A podman Linux container with the image layout (`uv sync --frozen --no-dev
-    --no-editable`) read 211.5 MiB for it. The size grows with the image; `process_mib` must follow."""
+    --no-editable`) read 211.5 MiB for it. The size grows with the image; `server_mib` must follow."""
     peak_mib = _fresh_code_server_peak_mib()
 
-    assert peak_mib <= CAPACITY.process_mib, (
-        f"a fresh code server holds {peak_mib:.0f} MiB, above the declared {CAPACITY.process_mib} MiB;"
-        " measure the code server again and raise process_mib in environment_contract.v1.json"
-        " (the queue limit follows)"
+    assert peak_mib <= CAPACITY.server_mib, (
+        f"a fresh code server holds {peak_mib:.0f} MiB, above the declared {CAPACITY.server_mib} MiB;"
+        " measure the code server again and raise server_mib in environment_contract.v1.json"
+        " (the run budget follows)"
     )
 
 

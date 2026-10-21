@@ -174,15 +174,19 @@ _BASE_CAPACITY: dict[str, object] = {
     "ceiling_mib": 1536,
     "ceiling_source": "test",
     "utilization_limit": 0.7,
-    "process_mib": 240,
+    "server_mib": 240,
+    "concurrent_runs": 2,
     "server_processes": 1,
     "processes_per_run": 1,
     "measured": {
-        "at": "2026-10-20",
+        "at": "2026-10-21",
         "environment": "staging",
         "method": "test",
-        "grpc_server_hwm_mib": 229.5,
-        "spawned_process_hwm_mib": 213.3,
+        "grpc_server_hwm_mib": 236.0,
+        "fresh_import_hwm_mib": 180.0,
+        "container_peak_mib": 1186.0,
+        "runs_at_peak": 3,
+        "waiting_runs_at_peak": 2,
         "source": "test",
     },
 }
@@ -193,37 +197,49 @@ def _capacity(**changes: object) -> CodeServerCapacity:
     return CodeServerCapacity.model_validate({**_BASE_CAPACITY, **changes})
 
 
-def test_the_declared_run_limit_is_the_largest_that_fits_inside_the_utilization_limit() -> None:
-    """Whatever the contract declares: the server and `max_concurrent_runs` runs fit, one more run does not."""
+def test_the_declared_slots_leave_each_run_a_budget_that_fits_inside_the_utilization_limit() -> None:
+    """Whatever the contract declares: the server and all slots at the budget fit; one more MiB per slot does not."""
     capacity = load_environment_contract().code_server_capacity
-    per_run = capacity.processes_per_run * capacity.process_mib
-    held = capacity.server_processes * capacity.process_mib + capacity.max_concurrent_runs * per_run
+    slots = capacity.concurrent_runs * capacity.processes_per_run
+    held = capacity.server_processes * capacity.server_mib + slots * capacity.run_mib
 
     assert capacity.usable_mib <= capacity.ceiling_mib * capacity.utilization_limit
-    assert held <= capacity.usable_mib < held + per_run
-    assert capacity.max_waiting_runs == capacity.max_concurrent_runs - 1 >= 1
+    assert held <= capacity.usable_mib < held + slots, "the budget is the largest whole MiB per slot"
+    assert capacity.max_concurrent_runs == capacity.concurrent_runs
+    assert capacity.max_waiting_runs == capacity.concurrent_runs - 1 >= 1
 
 
-def test_the_run_limit_of_the_fixed_capacity_is_three() -> None:
-    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. Three runs of 240 MiB fit in the other 835 MiB."""
+def test_the_declared_server_and_budget_cover_what_was_measured() -> None:
+    """The server cannot be smaller than it was read. A run cannot be smaller than a fresh import."""
+    capacity = load_environment_contract().code_server_capacity
+    measured = capacity.measured
+
+    assert capacity.server_mib >= measured.grpc_server_hwm_mib
+    assert capacity.run_mib >= measured.fresh_import_hwm_mib
+    assert measured.waiting_runs_at_peak < measured.runs_at_peak, "a peak with only waiting runs would prove no size"
+
+
+def test_the_fixed_capacity_gives_two_slots_and_a_budget_of_417_mib() -> None:
+    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. The other 835 MiB go to two slots: 417 MiB each."""
     capacity = _capacity()
 
-    assert (capacity.usable_mib, capacity.max_concurrent_runs, capacity.max_waiting_runs) == (1075, 3, 2)
+    assert (capacity.usable_mib, capacity.run_mib) == (1075, 417)
+    assert (capacity.max_concurrent_runs, capacity.max_waiting_runs) == (2, 1)
 
 
 @pytest.mark.parametrize(
-    ("changes", "runs"),
+    ("changes", "budget"),
     [
-        ({"ceiling_mib": 2048}, 4),
-        ({"ceiling_mib": 1280}, 2),
-        ({"process_mib": 300, "ceiling_mib": 2048}, 3),
-        ({"processes_per_run": 2, "ceiling_mib": 2048}, 2),
-        ({"server_processes": 2, "ceiling_mib": 2048}, 3),
-        ({"utilization_limit": 0.5, "ceiling_mib": 2048}, 3),
+        ({"ceiling_mib": 2048}, 596),
+        ({"concurrent_runs": 3}, 278),
+        ({"concurrent_runs": 4}, 208),
+        ({"processes_per_run": 2, "ceiling_mib": 2048}, 298),
+        ({"server_processes": 2}, 297),
+        ({"utilization_limit": 0.5, "ceiling_mib": 2048}, 392),
     ],
 )
-def test_the_run_limit_follows_each_input_of_the_derivation(changes: dict[str, object], runs: int) -> None:
-    assert _capacity(**changes).max_concurrent_runs == runs
+def test_the_run_budget_follows_each_input_of_the_derivation(changes: dict[str, object], budget: int) -> None:
+    assert _capacity(**changes).run_mib == budget
 
 
 @pytest.mark.parametrize(
@@ -231,15 +247,19 @@ def test_the_run_limit_follows_each_input_of_the_derivation(changes: dict[str, o
     [
         {"utilization_limit": 0.71},
         {"utilization_limit": 1.0},
-        {"process_mib": 229},
+        {"concurrent_runs": 1},
+        {"concurrent_runs": 5},
+        {"server_mib": 235},
         {"ceiling_mib": 768},
         {"ceiling_mib": 0},
     ],
     ids=[
         "above-the-70-percent-rule",
         "full-utilization",
-        "below-the-measured-peak",
-        "ceiling-admits-one-run",
+        "one-slot-cannot-wait-for-another-run",
+        "budget-below-a-fresh-import",
+        "server-below-the-measured-peak",
+        "ceiling-too-small-for-two-imports",
         "no-ceiling",
     ],
 )
