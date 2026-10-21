@@ -74,6 +74,7 @@ from data_engine.datahub.price_series import load_daily_series, split_events_by_
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
+from data_engine.datahub.production_topt.issuer_registry import UNAVAILABLE_PAYLOAD_KEY
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     HeadcountExtractor,
@@ -382,6 +383,8 @@ from (
     join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
     where o.semantic_type = 'financial-fact'
       and o.parser_version = %s
+      -- #1323: an observation of an issuer the registry could not classify names a placeholder branch.
+      and p.normalized_payload ->> %s is distinct from 'true'
     order by named.entity_id, p.normalized_payload ->> 'listing_id',
              o.recorded_at desc, o.knowable_at desc, o.observation_id desc
 ) newest
@@ -408,7 +411,12 @@ def latest_financial_observations(
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
     rows = connection.execute(
         _LATEST_FINANCIAL_SQL,
-        ([issuer_id for issuer_id, _ in pairs], [entity_id for _, entity_id in pairs], parser_version),
+        (
+            [issuer_id for issuer_id, _ in pairs],
+            [entity_id for _, entity_id in pairs],
+            parser_version,
+            UNAVAILABLE_PAYLOAD_KEY,
+        ),
     ).fetchall()
     candidates: dict[str, list[tuple[dict[str, Any], str]]] = {}
     for entity_id, payload, record_id in rows:

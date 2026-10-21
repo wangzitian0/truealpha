@@ -27,6 +27,7 @@ import httpx
 from factors.production_topt import OperatingBranch
 
 from data_engine.sources import sec
+from data_engine.sources.gateway import CapacityExceeded
 
 _DEPOSITORY_INSTITUTION_SIC = range(6000, 6100)
 _INSURANCE_SIC = range(6300, 6400)
@@ -126,9 +127,10 @@ class IssuerClassification:
 #: Attempts to read one issuer's submissions (#1323). Three attempts wait 1 s, then 2 s.
 REGISTRY_ATTEMPTS = 3
 REGISTRY_BACKOFF_SECONDS = 1.0
-#: Issuers in a row that spent every attempt on a transient failure. At this count the registry
-#: is down and the remaining issuers get no attempt. Each attempt can wait for the client timeout
-#: (30 s), so 20 issuers would hold the tick transaction for 30 minutes.
+#: Issuers in a row whose read failed in a way the next issuer may share: a timeout after every
+#: attempt, a block (403), a spent budget. At this count the registry is down. Each remaining issuer
+#: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no
+#: more. A long outage costs one client timeout (30 s) per issuer instead of three.
 REGISTRY_OUTAGE_AFTER = 3
 #: The payload key of a financial-fact observation whose issuer the registry could not classify.
 UNAVAILABLE_PAYLOAD_KEY = "registry_unavailable"
@@ -145,30 +147,40 @@ class RegistryReading:
     unavailable: dict[int, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _Read:
+    submissions: dict[str, Any] | None
+    reason: str = ""
+    #: The failure may repeat for the next issuer, so it counts toward an outage.
+    outage: bool = False
+
+
 def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _transient(error: httpx.HTTPError | json.JSONDecodeError) -> bool:
-    """True for a failure the next attempt can clear: a timeout, a reset, a 429 or a 5xx."""
-    if isinstance(error, httpx.HTTPStatusError):
-        return error.response.status_code == 429 or error.response.status_code >= 500
-    return isinstance(error, httpx.TransportError | json.JSONDecodeError)
+def _failure(error: Exception) -> tuple[bool, bool]:
+    """(worth another attempt, counts toward an outage) for a failed read.
 
-
-def _read_submissions(cik: int, http: httpx.Client) -> tuple[dict[str, Any] | None, str | None, bool]:
-    """(submissions, None, False) on success; (None, reason, transient) when every attempt failed.
-
-    Only a transient failure is retried, with a doubling wait between attempts.
+    A timeout, a reset, a truncated body, a 429 and a 5xx may clear. A 404 means that EDGAR has no such
+    issuer: no outage. Any other failure (a block, a spent budget, a body that is not an object) is not
+    worth another attempt and may repeat for the next issuer.
     """
-    for attempt in range(REGISTRY_ATTEMPTS):
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        return (status == 429 or status >= 500), status != 404
+    return isinstance(error, httpx.TransportError | json.JSONDecodeError), True
+
+
+def _read_submissions(cik: int, http: httpx.Client, *, attempts: int) -> _Read:
+    """The submissions of `cik`, or why not. Only a failure that may clear is tried again, with a doubling wait."""
+    for attempt in range(attempts):
         try:
-            return sec.fetch_company_submissions(cik, http), None, False
-        except (httpx.HTTPError, json.JSONDecodeError) as error:
-            transient = _transient(error)
-            reason = f"{type(error).__name__}: {error}"[:300]
-            if not transient or attempt == REGISTRY_ATTEMPTS - 1:
-                return None, reason, transient
+            return _Read(sec.fetch_company_submissions(cik, http))
+        except (httpx.HTTPError, ValueError, CapacityExceeded) as error:
+            retry, outage = _failure(error)
+            if not retry or attempt == attempts - 1:
+                return _Read(None, f"{type(error).__name__}: {error}"[:300], outage)
             _pause(REGISTRY_BACKOFF_SECONDS * 2**attempt)
     raise AssertionError("unreachable: the last attempt returns")
 
@@ -176,33 +188,36 @@ def _read_submissions(cik: int, http: httpx.Client) -> tuple[dict[str, Any] | No
 def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     """Classify every distinct CIK in the run's universe, once, from one submissions read.
 
-    A read that fails with a transient error is tried again, up to `REGISTRY_ATTEMPTS`. An issuer
+    A read that fails in a way that may clear is tried again, up to `REGISTRY_ATTEMPTS`. An issuer
     whose read still fails is named in `RegistryReading.unavailable`. The caller excludes that
     issuer: a run that cannot say whether an issuer is a bank must not classify it as anything.
-    One issuer never fails the run (#1323).
+    One issuer never fails the run (#1323). The registry never marks an issuer unavailable that it
+    did not try to read.
     """
     classifications: dict[int, IssuerClassification] = {}
     unavailable: dict[int, str] = {}
-    exhausted_in_a_row = 0
+    failed_in_a_row = 0
     with sec.client() as http:
         for cik in sorted(set(ciks.values())):
-            if exhausted_in_a_row >= REGISTRY_OUTAGE_AFTER:
-                unavailable[cik] = (
-                    f"not read: {exhausted_in_a_row} issuers in a row spent {REGISTRY_ATTEMPTS} attempts on failures"
-                )
+            read = _read_submissions(
+                cik, http, attempts=1 if failed_in_a_row >= REGISTRY_OUTAGE_AFTER else REGISTRY_ATTEMPTS
+            )
+            if read.submissions is None:
+                logger.warning("registry unavailable for CIK %010d: %s", cik, read.reason)
+                unavailable[cik] = read.reason
+                failed_in_a_row += read.outage
+                if read.outage and failed_in_a_row == REGISTRY_OUTAGE_AFTER:
+                    logger.warning(
+                        "registry down: %d issuers in a row failed; one attempt for each remaining issuer",
+                        failed_in_a_row,
+                    )
                 continue
-            submissions, reason, transient = _read_submissions(cik, http)
-            if submissions is None:
-                logger.warning("registry unavailable for CIK %010d: %s", cik, reason)
-                unavailable[cik] = reason or "no reason"
-                exhausted_in_a_row = exhausted_in_a_row + 1 if transient else 0
-                continue
-            exhausted_in_a_row = 0
-            sic = submissions.get("sic")
+            failed_in_a_row = 0
+            sic = read.submissions.get("sic")
             classifications[cik] = IssuerClassification(
                 operating_branch=operating_branch_for_sic(sic),
                 revenue_proxy_allowed=revenue_proxy_allowed_for_sic(sic),
-                statement_filings=statement_filings(submissions),
+                statement_filings=statement_filings(read.submissions),
             )
     return RegistryReading(classifications=classifications, unavailable=unavailable)
 

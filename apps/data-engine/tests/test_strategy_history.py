@@ -893,6 +893,20 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     assert (
         latest_financial_observations(connection, one_id_each, known_at=TICK, parser_version="no-such-parser:v0") == {}
     )
+    # #1323: the payload of an issuer that the registry could not classify names a placeholder branch.
+    # The lineage read skips it, so the projector never classifies the issuer from the placeholder.
+    flagged = issuer_ids[0]
+    connection.execute("set local session_replication_role = replica")
+    connection.execute(
+        "update staging.capture_observation_payloads set normalized_payload = normalized_payload || "
+        "'{\"registry_unavailable\": true}'::jsonb where normalized_payload ->> 'issuer_id' = %s",
+        (flagged,),
+    )
+    connection.execute("set local session_replication_role = origin")
+    skipped = latest_financial_observations(
+        connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert sorted(skipped) == [issuer_id for issuer_id in issuer_ids if issuer_id != flagged]
     # #1257: two ids of one entity yield ONE observation. #1347: the ticker of its listing selects it.
     paired = latest_financial_observations(
         connection,

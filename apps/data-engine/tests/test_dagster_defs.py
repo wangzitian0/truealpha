@@ -328,6 +328,36 @@ def test_the_strategy_replay_gets_the_rate_the_core_engine_used_and_the_op_repor
     ) == ("us_treasury_bill_3_month", "0.0431", "2026-07-29", "us-treasury", rate.fetch_id)
 
 
+def _two_issuers_flagged(monkeypatch, flagged: list[str]) -> None:
+    """The gate judged two issuers; the registry could not classify `flagged`."""
+    from data_engine.datahub.production_topt.plausibility_gate import Verdict
+
+    judged = Verdict("v4", (), (), (), issuers={"listing:a": "issuer:a", "listing:b": "issuer:b"})
+    monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: judged)
+    monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: flagged)
+
+
+def test_a_tick_without_a_strategy_refuses_a_run_in_which_the_registry_classified_no_issuer(monkeypatch) -> None:
+    """#1323: the QQQ tick runs no strategy, so the empty eligible set cannot refuse it. Every operating
+    numerator of the run is null; the run would publish that as a success."""
+    _fake_tick(monkeypatch, PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=3, unmet=()))
+    _two_issuers_flagged(monkeypatch, ["issuer:a", "issuer:b"])
+
+    with pytest.raises(dg.Failure, match="classified none of 2 issuers"):
+        capture.run_qqq_live_tick(dg.build_op_context(), ToptLiveTickConfig(executed_at=TICK))
+
+
+def test_a_tick_without_a_strategy_publishes_the_issuers_the_registry_classified(monkeypatch) -> None:
+    _fake_tick(monkeypatch, PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=3, unmet=()))
+    _two_issuers_flagged(monkeypatch, ["issuer:a"])
+    monkeypatch.setattr(capture, "materialize_fund_consolidation", lambda *a, **k: ())
+    context = dg.build_op_context()
+
+    capture.run_qqq_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+
+    assert context.get_output_metadata("result")["registry_unavailable_excluded"] == ["issuer:a"]
+
+
 def _logged_tick(monkeypatch, op, registration: PointerRegistration) -> tuple[list[str], dict]:
     """Run `op` with its info/warning lines recorded (Dagster's log manager does not
     reach caplog) and return (lines, output metadata)."""

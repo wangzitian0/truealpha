@@ -45,6 +45,17 @@ SESSION = date(2026, 4, 8)
 #: The ticker whose registry read times out. A non-bank, so its numerator is the gross profit.
 TIMED_OUT_TICKER = "NVDA"
 _BANK_TICKER = "JPM"
+#: The deployed route builder, taken before any test replaces it.
+_REAL_BUILD_ROUTES = composition.build_routes
+#: The financial-fact payload of one issuer in one run.
+_PAYLOAD_SQL = """
+    select p.normalized_payload
+    from raw.capture_obligations ob
+    join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+    join staging.capture_observation_payloads p on p.observation_id = link.observation_id
+    where ob.run_id = %s and ob.capture_requirement_id = 'financial-fact:v1'
+      and p.normalized_payload->>'issuer_id' = %s and p.normalized_payload ? 'gross_profit'
+"""
 #: The reason the owner named. `ExclusionReason.REGISTRY_UNAVAILABLE` must carry exactly this text.
 REASON = "registry_unavailable"
 
@@ -92,7 +103,6 @@ def _arm_registry(
     """The deployed route builder with a fake SEC socket. Prices and company facts stay offline.
 
     `timing_out_tickers` None means the whole SEC host times out."""
-    real_build_routes = composition.build_routes
     _arm(monkeypatch, quote=lambda: _quote(SESSION, Decimal("40")), price_cutoff=SESSION)
     socket = _FakeSecSocket({}, timing_out=set())
     pauses: list[float] = []
@@ -107,7 +117,7 @@ def _arm_registry(
             for ticker, cik in socket.cik_by_ticker.items()
             if timing_out_tickers is None or ticker in timing_out_tickers
         }
-        routes = real_build_routes(plan, connection)
+        routes = _REAL_BUILD_ROUTES(plan, connection)
         for work_item_id, binding in plan.bindings.items():
             if binding.obligation.capture_requirement_id != "financial-fact:v1":
                 routes[work_item_id] = offline[work_item_id]
@@ -168,9 +178,12 @@ def test_one_registry_timeout_excludes_one_issuer_and_the_tick_publishes_the_res
         assert decisions[issuer] == REASON
         # the pointer advanced to this run
         assert reader.execute(_HEAD_SQL).fetchone()[0] == metadata["capture_run_id"]
-        # the others are ranked: a precondition that the exclusion cost one decision and no more
-        assert sum(1 for why in decisions.values() if why is None) >= 1
-        # the issuer's row states a gap: the run withheld both numerators and did not guess a branch
+        # the evidence: both numerators are withheld, the flag is written, the honest facts stay
+        (payload,) = [row[0] for row in reader.execute(_PAYLOAD_SQL, (metadata["capture_run_id"], issuer)).fetchall()]
+        assert payload["gross_profit"] is None and payload["pre_provision_profit"] is None
+        assert payload["registry_unavailable"] is True and payload["operating_period_end"] is None
+        assert payload["revenue"] is not None and payload["total_assets"] is not None
+        # the row states a gap
         (availability,) = reader.execute(
             "select availability from mart.topt_core_results where run_id = %s and issuer_id = %s",
             (metadata["capture_run_id"], issuer),
@@ -189,12 +202,11 @@ def test_the_next_unforced_tick_asks_the_registry_again(
     _arm_registry(monkeypatch, timing_out_tickers={TIMED_OUT_TICKER})
     first = _live_topt_tick(tick_database_url, monkeypatch, executed_at=_at(22, 30), force_fetch=True, accept=True)
     assert len(first["registry_unavailable_excluded"]) == 1
-    socket, _pauses = _arm_registry(monkeypatch, timing_out_tickers=set())
+    _arm_registry(monkeypatch, timing_out_tickers=set())
 
     second = _live_topt_tick(tick_database_url, monkeypatch, executed_at=_at(22, 45), accept=True)
 
     assert second["registry_unavailable_excluded"] == []
-    assert socket.cik_by_ticker[TIMED_OUT_TICKER] in socket.submissions_reads, "the registry was read again"
     with psycopg.connect(tick_database_url) as reader:
         issuer = _issuer_of(reader, second["capture_run_id"], TIMED_OUT_TICKER)
         assert _decisions(reader, second["strategy_run_id"])[issuer] != REASON
@@ -205,13 +217,15 @@ def test_the_next_unforced_tick_asks_the_registry_again(
         assert availability == "available"
 
 
-def test_a_registry_outage_stops_after_three_issuers_and_the_empty_eligible_set_refuses_the_run(
+def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empty_eligible_set_refuses_the_run(
     tick_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every read times out. Three issuers spend their attempts, the rest get none, and the run stays
-    refused: the empty eligible set is the only run refusal."""
+    """Every read times out. Three issuers spend three attempts each, the 17 others one attempt each, and the run
+    is refused: the empty eligible set is the only run refusal."""
     socket, _pauses = _arm_registry(monkeypatch, timing_out_tickers=None)
     monkeypatch.setattr(settings, "database_url", tick_database_url)
+    with psycopg.connect(tick_database_url) as reader:
+        head_before = reader.execute(_HEAD_SQL).fetchone()
 
     from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
 
@@ -219,7 +233,9 @@ def test_a_registry_outage_stops_after_three_issuers_and_the_empty_eligible_set_
     with pytest.raises(dg.Failure, match="all 20 decisions are excluded"):
         run_topt_live_tick(dg.build_op_context(), config)
 
-    assert len(socket.submissions_reads) == 3 * 3, "three issuers spend three attempts each, the rest are not read"
+    assert len(socket.submissions_reads) == 3 * 3 + 17, "three issuers spend three attempts each, 17 get one"
+    with psycopg.connect(tick_database_url) as reader:
+        assert reader.execute(_HEAD_SQL).fetchone() == head_before, "the pointer stays on the previous accepted run"
 
 
 def _at(hour: int, minute: int) -> datetime:

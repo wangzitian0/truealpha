@@ -300,6 +300,27 @@ def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: Corro
         raise
 
 
+def _registry_unavailable(
+    context: dg.OpExecutionContext, connection: Any, tick: UniverseTick, run_id: str, verdict: Any
+) -> list[str]:
+    """The issuers of the run whose registry read failed (#1323), named in the log.
+
+    A tick that runs the strategy refuses a run with no eligible issuer. A tick without a strategy
+    has no such rule, so it refuses here a run in which the registry classified no issuer at all:
+    every operating numerator of that run is null, and the run would publish it as a success.
+    """
+    flagged = registry_unavailable_issuers(connection, run_id=run_id)
+    for issuer_id in flagged:
+        context.log.warning(f"{tick.log_label}: issuer {issuer_id} excluded as registry_unavailable")
+    judged = set(verdict.issuers.values())
+    if not tick.run_strategy and judged and judged <= set(flagged):
+        raise dg.Failure(
+            f"{tick.log_label}: the issuer registry classified none of {len(judged)} issuers; "
+            "the run would publish no operating numerator (#1323)"
+        )
+    return flagged
+
+
 def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
     """The one tick body every universe runs: capture → freeze → materialize → report →
     governed pointer, plus the strategy replay where the declaration asks for it."""
@@ -336,11 +357,11 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         issuers = judge_issuers(connection, run_id=pipeline.run_id)
         # #1323: an issuer whose registry read failed after its retries is excluded by name, like a
         # refused issuer. The registry reason wins: the row of that issuer rests on no classification.
-        excluded = issuers.excluded_issuers()
-        registry_unavailable = registry_unavailable_issuers(connection, run_id=pipeline.run_id)
-        excluded.update(dict.fromkeys(registry_unavailable, ExclusionReason.REGISTRY_UNAVAILABLE))
-        for issuer_id in registry_unavailable:
-            context.log.warning(f"{tick.log_label}: issuer {issuer_id} excluded as registry_unavailable")
+        registry_unavailable = _registry_unavailable(context, connection, tick, pipeline.run_id, issuers)
+        excluded = {
+            **issuers.excluded_issuers(),
+            **dict.fromkeys(registry_unavailable, ExclusionReason.REGISTRY_UNAVAILABLE),
+        }
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
