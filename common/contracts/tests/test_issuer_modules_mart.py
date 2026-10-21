@@ -239,24 +239,19 @@ def test_resolve_issuer_id_candidates_batch_executes_against_live_entity_identit
     from truealpha_contracts.issuer_modules_mart import resolve_issuer_id_candidates_batch
 
     _seed_module_rows(database)
-    # Seed a known issuer in staging.entities + staging.entity_aliases so mart.entity_identity resolves it
-    entity_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://truealpha.invalid/test/batch-issuer/nvda"))
-    database.execute(
-        """
-        insert into staging.entities (entity_id, kind, minted_from_scheme, minted_from_value, minted_by)
-        values (%s::uuid, 'issuer', 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', 'test')
-        on conflict (entity_id) do nothing
-        """,
-        (entity_uuid,),
-    )
+    minted = database.execute(
+        "select staging.entity_mint('issuer', 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', 'test')::text"
+    ).fetchone()
+    assert minted is not None
+    entity_uuid = str(minted[0])
     database.execute(
         """
         insert into staging.entity_aliases
-            (entity_id, scheme, value, valid_from, transaction_time, source, confidence)
+            (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref, method, confidence, mapping_version)
         values
-            (%s::uuid, 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95),
-            (%s::uuid, 'cik', '0001045810', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95),
-            (%s::uuid, 'lei', '549300S4KLFTLO7GSQ80', '2020-01-01', '2020-01-01T00:00:00Z', 'test', 95)
+            (%s::uuid, 'legacy-id', 'issuer:lei:549300S4KLFTLO7GSQ80', '2020-01-01', null, '2020-01-01T00:00:00Z', 'test', 'raw:test', 'asserted', 0.95, 'v1'),
+            (%s::uuid, 'cik', '0001045810', '2020-01-01', null, '2020-01-01T00:00:00Z', 'test', 'raw:test', 'asserted', 0.95, 'v1'),
+            (%s::uuid, 'lei', '549300S4KLFTLO7GSQ80', '2020-01-01', null, '2020-01-01T00:00:00Z', 'test', 'raw:test', 'asserted', 0.95, 'v1')
         on conflict do nothing
         """,
         (entity_uuid, entity_uuid, entity_uuid),
