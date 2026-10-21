@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import runpy
 from decimal import Decimal
 from importlib import resources
@@ -259,7 +260,10 @@ def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     assert "S&P 500" in vision_text
 
     assert "waits\n20 minutes" not in release_text
-    assert "daily cap (4," not in release_text
+    # The daily cap of automatic releases has one value, `DEFAULT_DAILY_CAP`. The docs name it and state no number.
+    assert "`DEFAULT_DAILY_CAP`" in release_text
+    assert re.search(r"daily cap\s*\(\s*(?:\d+|[a-z]+),", release_text) is None
+    assert "owner's bound" not in release_text
 
 
 def _contract_with_jobs(jobs: dict[str, dict[str, object]]) -> EnvironmentContract:

@@ -31,7 +31,7 @@ CEILING = CAPACITY.ceiling_mib * MIB
 BOOT_ID = "6f1c2c7e-0a5e-4b8e-9d11-3c2f5a7b9e01"
 #: A quarter of the declared ceiling: far below the limit, whatever the contract declares.
 QUIET_PEAK_MIB = CAPACITY.ceiling_mib // 4
-#: The largest whole MiB at or below the utilization limit of the declared ceiling.
+#: The largest whole MiB at or below UTILIZATION_CEILING of the declared ceiling.
 LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * UTILIZATION_CEILING)
 #: A peak above the limit.
 HIGH_PEAK_MIB = LIMIT_MIB + 1
@@ -40,7 +40,7 @@ RUN_BYTES = CAPACITY.run_mib * MIB
 BIG_PROCESS = RUN_BYTES + MIB
 SERVER_BYTES = CAPACITY.server_mib * MIB
 QUIET_SERVER = SERVER_BYTES - 10 * MIB
-#: A synthetic capacity for the exact-boundary test: 70% of 2000 MiB is exactly 1400 MiB.
+#: A synthetic capacity for the exact-boundary test: UTILIZATION_CEILING of 2000 MiB is exactly 1400 MiB.
 SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000})
 TICK_1 = "2026-10-21T06:30:00+00:00"
 TICK_2 = "2026-10-22T06:30:00+00:00"
@@ -515,7 +515,7 @@ def test_a_new_peak_above_the_utilization_limit_of_the_ceiling_is_red(tmp_path: 
 
 
 def test_a_peak_exactly_at_the_limit_of_the_real_ceiling_is_green_and_one_byte_above_is_red(tmp_path: Path) -> None:
-    """The rule is `above` the limit. 70% of 2000 MiB is exactly 1400 MiB (a synthetic capacity)."""
+    """The rule is `above` the limit. UTILIZATION_CEILING of 2000 MiB is exactly 1400 MiB (a synthetic capacity)."""
     at_the_limit = _judge(_reading(tmp_path / "a", memory_max=str(2000 * MIB), peak=1400 * MIB), capacity=SYNTHETIC)
     one_byte_above = _judge(
         _reading(tmp_path / "b", memory_max=str(2000 * MIB), peak=1400 * MIB + 1), capacity=SYNTHETIC
@@ -523,7 +523,7 @@ def test_a_peak_exactly_at_the_limit_of_the_real_ceiling_is_green_and_one_byte_a
 
     assert at_the_limit.red == ()
     assert len(one_byte_above.red) == 1
-    assert "rose above 70%" in one_byte_above.red[0]
+    assert f"rose above {UTILIZATION_CEILING:.0%}" in one_byte_above.red[0]
 
 
 def test_a_process_larger_than_the_declared_run_size_is_red_and_does_not_invent_a_size_or_a_job(tmp_path: Path) -> None:
@@ -1483,3 +1483,109 @@ def test_the_sampler_sensor_folds_the_reading_with_the_boot_deployment_and_launc
     assert tracker.sampled_at != ""
     assert quality.runtime_shape_sampler_sensor.minimum_interval_seconds == runtime_shape.SAMPLE_INTERVAL_SECONDS
     assert quality.runtime_shape_sampler_sensor.default_status == dg.DefaultSensorStatus.RUNNING
+
+
+# -- the order of the nightly night (#1484) ----------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DELIVERY_REPORT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "delivery-report.yml"
+NIGHTLY_CHECKS = REPO_ROOT / "tools" / "nightly_verdicts.json"
+
+
+def _minutes_of_day(expression: str) -> list[int]:
+    """Every time of day (minutes after 00:00 UTC) at which the cron fires."""
+    from truealpha_runtime.testing import load_tool
+
+    cron = load_tool("scheduler_liveness").Cron.parse(expression)
+    return sorted(hour * 60 + minute for hour in cron.hours for minute in cron.minutes)
+
+
+def order_violations(shape: str, report: str, checks: dict[str, list[str]]) -> list[str]:
+    """What breaks the order of the night: the other nightly checks, then the runtime shape, then the report.
+
+    The shape verdict reads state that the other checks and the ticks leave. A check that fires in the
+    window from the shape verdict to the report is read after the shape verdict. The shape verdict must
+    also come before the report, or the report reads the verdict of the night before.
+    """
+    (shape_time,) = _minutes_of_day(shape)
+    (report_time,) = _minutes_of_day(report)
+    found = []
+    if not shape_time < report_time:
+        found.append(f"the shape check {shape!r} does not precede the report {report!r}")
+    for job, expressions in sorted(checks.items()):
+        for expression in expressions:
+            late = [t for t in _minutes_of_day(expression) if shape_time <= t < report_time]
+            if late:
+                found.append(f"{job} {expression!r} does not precede the shape check {shape!r}")
+    return found
+
+
+def _deployed_check_crons() -> dict[str, list[str]]:
+    """The cron of every job that tools/nightly_verdicts.json names, from the deployed root, without the shape job."""
+    import json
+
+    from data_engine.dagster_defs import defs
+
+    jobs = {entry["job"] for entry in json.loads(NIGHTLY_CHECKS.read_text())["checks"].values()}
+    jobs.discard(quality.RUNTIME_SHAPE_JOB_NAME)
+    crons: dict[str, list[str]] = {}
+    for schedule in defs.schedules or ():
+        if schedule.job_name in jobs:
+            expressions = (
+                [schedule.cron_schedule] if isinstance(schedule.cron_schedule, str) else schedule.cron_schedule
+            )
+            crons.setdefault(schedule.job_name, []).extend(expressions)
+    assert set(crons) == jobs, f"a nightly check job has no deployed schedule: {sorted(jobs - set(crons))}"
+    return crons
+
+
+def _deployed_shape_cron() -> str:
+    from data_engine.dagster_defs import defs
+
+    (schedule,) = [s for s in defs.schedules or () if s.job_name == quality.RUNTIME_SHAPE_JOB_NAME]
+    assert isinstance(schedule.cron_schedule, str)
+    return schedule.cron_schedule
+
+
+def _report_cron() -> str:
+    import re
+
+    found = re.findall(r'^\s*-?\s*cron:\s*"([^"]+)"', DELIVERY_REPORT_WORKFLOW.read_text(), flags=re.MULTILINE)
+    assert len(found) == 1, f"the delivery report has {len(found)} schedules"
+    return found[0]
+
+
+def test_the_runtime_shape_check_follows_every_nightly_check_and_precedes_the_report() -> None:
+    """The deployed schedules: no other check fires between the shape check and the report, and the shape
+    check fires before the report. The shape verdict then reads a finished night."""
+    checks = _deployed_check_crons()
+    assert "release_fetch_proof" in checks, "the last check before the shape check is in the scan"
+    assert _deployed_shape_cron() == quality.RUNTIME_SHAPE_CRON
+
+    assert order_violations(_deployed_shape_cron(), _report_cron(), checks) == []
+
+
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        ("30 8 * * *", "does not precede the report"),
+        ("30 5 * * *", "release_fetch_proof"),
+        ("0 6 * * *", "release_fetch_proof"),
+        ("0 7 * * *", "does not precede the report"),
+    ],
+    ids=[
+        "after-the-report",
+        "before-the-release-fetch-proof",
+        "before-the-release-fetch-proof-at-six",
+        "at-the-report",
+    ],
+)
+def test_a_shape_cron_out_of_order_with_the_night_is_a_violation(shape: str, expected: str) -> None:
+    """The mutation of #1484: `30 8 * * *` kept every test green before this one."""
+    violations = order_violations(shape, _report_cron(), _deployed_check_crons())
+
+    assert any(expected in violation for violation in violations), violations
+
+
+def test_the_report_cron_is_seven_in_the_morning_so_the_order_is_read_from_the_workflow() -> None:
+    assert _minutes_of_day(_report_cron()) == [7 * 60]

@@ -68,7 +68,7 @@ def test_the_queue_limit_is_the_number_of_slots_that_the_contract_declares() -> 
 
 
 def test_the_demand_fits_inside_the_utilization_limit_of_the_ceiling() -> None:
-    """The runs that the queue admits, beside the server, hold at most 70% of the ceiling (#1418)."""
+    """The runs that the queue admits, beside the server, hold at most UTILIZATION_CEILING of the ceiling (#1418)."""
     runs = _queue().max_concurrent_runs
 
     assert _held_mib(runs) <= UTILIZATION_CEILING * CAPACITY.ceiling_mib, (

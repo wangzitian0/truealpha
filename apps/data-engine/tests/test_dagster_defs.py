@@ -873,12 +873,13 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
 
 
-# -- #1310: the SP500 schedule stays STOPPED until a Twelve Data budget exists for it ---------------------
+# -- #1310: the SP500 schedule stays STOPPED until the unlock of the contract holds ------------------------
 
 #: Every failure below shows this text, so a person who flips the SP500 status reads the reason first.
 SP500_STOPPED_BECAUSE = (
-    "#1310: one SP500 tick needs about 1,000 Twelve Data credits. Production owns 480 credits a day. "
-    "Keep the SP500 schedule STOPPED until a declared Twelve Data budget for the SP500 tick exists."
+    "environment_contract.v1.json holds the SP500 as stopped until QQQ runs end to end on production and the "
+    "verdict fetch_keys_once is green for 3 consecutive nights. #1310: one SP500 tick needs about 1,000 "
+    "Twelve Data credits, and production owns 480 credits a day."
 )
 
 
@@ -911,7 +912,7 @@ def test_the_sp500_schedule_is_stopped_in_every_environment_and_its_job_stays_re
 
 def test_the_sp500_universe_has_no_schedule_in_any_environment_and_the_qqq_rule_is_unchanged() -> None:
     """#1310: freshness checks skip a head whose lane has no running schedule. SP500 has none.
-    QQQ keeps its rule: scheduled in production, manual in staging."""
+    QQQ keeps its rule: scheduled in production, not run in staging."""
     for environment in ("production", "prod", "staging"):
         assert capture.is_universe_scheduled("sp500", environment) is False, (environment, SP500_STOPPED_BECAUSE)
         assert capture.is_universe_scheduled("universe-list:sp500", environment) is False, environment
