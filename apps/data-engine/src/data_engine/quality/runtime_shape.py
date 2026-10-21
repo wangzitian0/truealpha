@@ -40,8 +40,10 @@ The nightly verdict is red on any of these:
 * a run process held more than the budget `run_mib`, or the code server more than `server_mib`. A
   process counts once: when it first passes the limit, and again for each new process that does. The
   budget is what is left inside the utilization limit when the queue is full, so a larger run
-  breaks the premise of the limit. A run that ends between two samples after its peak is not seen;
-  the cgroup peak above covers the whole;
+  breaks the premise of the limit. A run that ends between two samples after its peak is not seen,
+  and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
+  process at each sample: a smaller over-size process beside a larger one, and a largest process
+  that alternates between two over-size processes, are counted by that rule and not once each;
 * the container was replaced without a change of the deployment. The kernel may kill the server
   process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
   does not show the kill. A deploy replaces the container too, but it changes the deployment.
@@ -166,6 +168,10 @@ class Tracker:
     servers_over_size: int = 0
     #: The largest process of this container so far (bytes). A record to read, not a rule.
     largest_process: int = 0
+    #: The largest run process and the largest code server that were counted over their limit (bytes).
+    #: They never restart with a container, so a red verdict names the size that made it red.
+    worst_process: int = 0
+    worst_server: int = 0
     #: When the sensor last ran (ISO 8601, UTC). Empty before the first sample.
     sampled_at: str = ""
 
@@ -196,6 +202,8 @@ class Tracker:
                 server_size=_count(data.get("server_size", 0)),
                 servers_over_size=_count(data.get("servers_over_size", 0)),
                 largest_process=_count(data.get("largest_process", 0)),
+                worst_process=_count(data.get("worst_process", 0)),
+                worst_server=_count(data.get("worst_server", 0)),
                 sampled_at=_text(data["sampled_at"]),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
@@ -297,8 +305,8 @@ def _largest_process(proc_root: Path) -> tuple[int, str]:
         if not entry.name.isdigit() or entry.name == "1":
             continue
         try:
-            size = _hwm_bytes((entry / "status").read_text(encoding="utf-8"))
-            ticks = _start_ticks((entry / "stat").read_text(encoding="utf-8")) if size else 0
+            size = _hwm_bytes((entry / "status").read_bytes().decode("utf-8", errors="replace"))
+            ticks = _start_ticks((entry / "stat").read_bytes().decode("utf-8", errors="replace")) if size else 0
         except (OSError, ValueError, IndexError):
             continue
         if size is not None and size > largest:
@@ -308,7 +316,10 @@ def _largest_process(proc_root: Path) -> tuple[int, str]:
 
 def _server_process(proc_root: Path) -> int:
     """`VmHWM` in bytes of the first process, the code server."""
-    size = _hwm_bytes((proc_root / "1" / "status").read_text(encoding="utf-8"))
+    command = (proc_root / "1" / "cmdline").read_bytes()
+    if b"dagster" not in command:
+        raise ValueError("the first process is not the code server")
+    size = _hwm_bytes((proc_root / "1" / "status").read_bytes().decode("utf-8", errors="replace"))
     if size is None:
         raise ValueError("the first process has no VmHWM")
     return size
@@ -372,12 +383,12 @@ def _fold_sizes(
     size, server = reading.largest_process or 0, reading.server_process or 0
     before_id = "" if fresh_container else tracker.process_id
     before_size = 0 if fresh_container else tracker.process_size
-    over = tracker.processes_over_size
+    over, worst_process = tracker.processes_over_size, tracker.worst_process
     if size > run_limit and (reading.largest_process_id != before_id or before_size <= run_limit):
-        over += 1
-    server_over = tracker.servers_over_size
+        over, worst_process = over + 1, max(worst_process, size)
+    server_over, worst_server = tracker.servers_over_size, tracker.worst_server
     if server > server_limit and (fresh_container or tracker.server_size <= server_limit):
-        server_over += 1
+        server_over, worst_server = server_over + 1, max(worst_server, server)
     return replace(
         folded,
         process_id=reading.largest_process_id,
@@ -385,6 +396,8 @@ def _fold_sizes(
         processes_over_size=over,
         server_size=server,
         servers_over_size=server_over,
+        worst_process=worst_process,
+        worst_server=worst_server,
         largest_process=size if fresh_container else max(tracker.largest_process, size),
     )
 
@@ -488,7 +501,9 @@ def judge(
         "processes_over_size": too_big,
         "servers_over_size": server_big,
         "largest_process_mib": round(tracker.largest_process / MIB),
-        "server_mib": round(tracker.server_size / MIB),
+        "worst_process_mib": round(tracker.worst_process / MIB),
+        "server_size_mib": round(tracker.server_size / MIB),
+        "worst_server_mib": round(tracker.worst_server / MIB),
     }
 
     peak = ""
@@ -506,12 +521,12 @@ def judge(
         red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
     if too_big:
         red.append(
-            f"a run process held {round(tracker.largest_process / MIB)} MiB, above the run budget"
+            f"a run process held {round(tracker.worst_process / MIB)} MiB, above the run budget"
             f" {capacity.run_mib} MiB ({too_big} time(s)); the run limit assumes that budget"
         )
     if server_big:
         red.append(
-            f"the code server held {round(tracker.server_size / MIB)} MiB, above the declared"
+            f"the code server held {round(tracker.worst_server / MIB)} MiB, above the declared"
             f" {capacity.server_mib} MiB ({server_big} time(s))"
         )
 

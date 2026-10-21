@@ -630,8 +630,8 @@ def runtime_shape_sampler_sensor(context: dg.SensorEvaluationContext):
         capacity=load_environment_contract().code_server_capacity,
     )
     yield dg.SkipReason(
-        f"sampled: {tracker.kills} OOM kill(s), {tracker.peaks_over_limit} peak(s) over the limit and"
-        f" {tracker.processes_over_size} process(es) over the budget so far"
+        f"sampled: {tracker.kills} OOM kill(s), {tracker.peaks_over_limit} peak(s) over the limit,"
+        f" {tracker.processes_over_size} run process(es) and {tracker.servers_over_size} server(s) over their size so far"
     )
 
 

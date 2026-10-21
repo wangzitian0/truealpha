@@ -65,8 +65,9 @@ def _tree(
     boot_id: str | None = BOOT_ID,
     command: str = "dagster api grpc",
     processes: dict[int, int] | None = None,
-    server: int = QUIET_SERVER,
+    server: int | None = QUIET_SERVER,
     ticks: dict[int, int] | None = None,
+    server_command: bytes = b"/app/.venv/bin/python\x00/app/.venv/bin/dagster\x00api\x00grpc\x00",
 ) -> tuple[Path, Path]:
     """Write a cgroup tree and a process table. A None argument leaves the file out.
 
@@ -87,7 +88,9 @@ def _tree(
         (proc / "1" / "stat").write_text(f"1 ({command}) {' '.join(after_name)}\n")
     if boot_id is not None:
         (proc / "sys" / "kernel" / "random" / "boot_id").write_text(f"{boot_id}\n")
-    (proc / "1" / "status").write_text(f"Name:\tdagster\nVmHWM:\t{server // 1024} kB\n")
+    (proc / "1" / "cmdline").write_bytes(server_command)
+    hwm_line = "" if server is None else f"VmHWM:\t{server // 1024} kB\n"
+    (proc / "1" / "status").write_text(f"Name:\tdagster\n{hwm_line}")
     for pid, kilobytes in (processes or {}).items():
         (proc / str(pid)).mkdir()
         (proc / str(pid) / "status").write_text(f"Name:\tpython\nVmPeak:\t{kilobytes * 2} kB\nVmHWM:\t{kilobytes} kB\n")
@@ -204,6 +207,13 @@ def test_an_empty_reading_misses_every_fact() -> None:
     )
 
 
+def test_the_sensor_samples_often_enough_to_see_a_run_of_a_few_minutes_and_the_stale_limit_allows_slow_ticks() -> None:
+    """A run of two minutes (head_reports) needs a sample inside its life; one slow tick must not look silent."""
+    assert runtime_shape.SAMPLE_INTERVAL_SECONDS <= 60
+    assert runtime_shape.STALE_AFTER_SECONDS >= 10 * runtime_shape.SAMPLE_INTERVAL_SECONDS
+    assert runtime_shape.STALE_AFTER_SECONDS <= 3600, "an hour of silence is not a nightly check"
+
+
 def test_the_deployed_paths_are_the_container_cgroup_and_process_table() -> None:
     assert runtime_shape.CGROUP_ROOT == Path("/sys/fs/cgroup")
     assert runtime_shape.PROC_ROOT == Path("/proc")
@@ -232,14 +242,34 @@ def test_a_process_that_exited_or_hides_its_status_is_skipped(tmp_path: Path) ->
     (proc / "cpuinfo").write_text("x")
     (proc / "9").mkdir()  # a kernel thread: a status file without VmHWM
     (proc / "9" / "status").write_text("Name:\tkthreadd\n")
-    (proc / "10").mkdir()  # a name that is not UTF-8
-    (proc / "10" / "status").write_bytes(b"Name:\t\xff\xfe\nVmHWM:\t999999 kB\n")
-    (proc / "10" / "stat").write_text("10 (x) S 0\n")
 
     reading = runtime_shape.read(cgroup, proc)
 
     assert reading.largest_process == 250 * MIB
     assert reading.unreadable == (), "one process that cannot be read does not void the reading"
+
+
+def test_a_process_name_that_is_not_utf8_does_not_hide_a_large_process(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path, processes={7: 250 * 1024})
+    (proc / "10").mkdir()
+    (proc / "10" / "status").write_bytes(b"Name:\t\xff\xfe\nVmHWM:\t" + str(976 * 1024).encode() + b" kB\n")
+    (proc / "10" / "stat").write_bytes(b"10 (\xff\xfe) S " + b"0 " * 18 + b"4242 " + b"0 " * 30 + b"\n")
+
+    reading = runtime_shape.read(cgroup, proc)
+
+    assert (reading.largest_process, reading.largest_process_id) == (976 * MIB, "10:4242")
+
+
+def test_a_first_process_that_is_not_the_code_server_makes_the_sizes_unreadable(tmp_path: Path) -> None:
+    """With `init: true` pid 1 is docker-init. The server would be judged as a run and pid 1 as the server."""
+    reading = _reading(tmp_path, server_command=b"/sbin/docker-init\x00--\x00dagster-entrypoint\x00"[:18])
+
+    assert reading.server_process is None
+    assert reading.unreadable == ("process sizes",)
+
+
+def test_a_first_process_without_a_vmhwm_makes_the_sizes_unreadable(tmp_path: Path) -> None:
+    assert _reading(tmp_path, server=None).unreadable == ("process sizes",)
 
 
 def test_proc_self_is_not_a_process_even_when_it_carries_a_large_status(tmp_path: Path) -> None:
@@ -354,6 +384,14 @@ def test_the_same_pid_with_other_start_ticks_is_another_process(tmp_path: Path) 
     assert _fold(first, reading).processes_over_size == 2
 
 
+def test_an_over_size_process_counts_again_in_a_new_container_even_with_the_same_pid_and_ticks(tmp_path: Path) -> None:
+    """`_container` names the process `2:2` in every container, as a restart that reuses pid and ticks would."""
+    first = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    second = _fold(first, _container(tmp_path, "b", ticks=2, process_bytes=BIG_PROCESS), deployment="B")
+
+    assert (first.processes_over_size, second.processes_over_size) == (1, 2)
+
+
 def test_the_largest_process_record_starts_again_in_a_new_container(tmp_path: Path) -> None:
     old = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS + 50 * MIB))
 
@@ -391,6 +429,7 @@ def test_a_tracker_with_sizes_survives_a_round_trip(tmp_path: Path) -> None:
         SERVER_BYTES + MIB,
     )
     assert (again.processes_over_size, again.servers_over_size, again.largest_process) == (1, 1, BIG_PROCESS)
+    assert (again.worst_process, again.worst_server) == (BIG_PROCESS, SERVER_BYTES + MIB)
 
 
 # --- the judgement of one reading ------------------------------------------------------------
@@ -467,6 +506,21 @@ def test_a_process_larger_than_the_declared_run_size_is_red_and_names_both_sizes
     )
     assert verdict.facts["processes_over_size"] == 1
     assert verdict.facts["largest_process_mib"] == CAPACITY.run_mib + 1
+
+
+def test_the_red_text_names_the_size_that_made_it_red_not_the_latest_container(tmp_path: Path) -> None:
+    """A run of 480 MiB in one container, a deploy, then a small process in the next: the text keeps 480."""
+    big = BIG_PROCESS + 60 * MIB
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=big, server=SERVER_BYTES + 7 * MIB))
+    reading = _container(tmp_path, "b", ticks=2, process_bytes=RUN_BYTES // 2)
+    tracker = _fold(tracker, reading, deployment="B")
+
+    verdict = _judge(reading, tracker=tracker, baseline=NOTHING)
+
+    assert any(f"a run process held {big // MIB} MiB" in reason for reason in verdict.red)
+    assert any(f"the code server held {SERVER_BYTES // MIB + 7} MiB" in reason for reason in verdict.red)
+    assert (tracker.worst_process, tracker.worst_server) == (big, SERVER_BYTES + 7 * MIB)
+    assert verdict.facts["worst_process_mib"] == big // MIB
 
 
 def test_a_code_server_larger_than_its_declared_size_is_red(tmp_path: Path) -> None:

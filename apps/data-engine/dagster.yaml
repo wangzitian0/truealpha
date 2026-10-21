@@ -72,7 +72,7 @@ run_queue:
       value: "true"
       limit: 1
 
-# Tick retention (#1072). Three sensors poll every 30 seconds. Each poll that does no work
+# Tick retention (#1072). Several sensors poll every 30 seconds. Each poll that does no work
 # writes a SKIPPED tick to dagster.job_ticks. Dagster keeps SKIPPED sensor ticks for 7 days
 # by default. Here they expire after 3 days. The other statuses stay for ever (-1), so
 # every tick that did work or failed remains. Schedule ticks keep the Dagster defaults.
