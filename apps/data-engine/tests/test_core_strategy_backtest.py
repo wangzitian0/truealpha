@@ -11,16 +11,19 @@ from decimal import Decimal
 
 import pytest
 from data_engine.datahub.backtest import (
+    SHARPE_RISK_FREE,
     ShareBasisError,
     decide,
     price_book,
     require_current_share_basis,
     schedule_cutoffs,
 )
+from data_engine.datahub.risk_free import MissingRiskFreeRate
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import HistoryIssuer
 from data_engine.strategy_backtest_gateway import MarketValueVintage
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent
+from factors.backtest.engine import Valuation, performance
 from factors.composite.strategy_evaluator import IssuerInput
 from factors.production_topt import OperatingBranch
 
@@ -28,6 +31,8 @@ Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
 Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
 Q3 = datetime(2024, 9, 30, 23, 59, 59, tzinfo=UTC)
 CONFIDENCE = Decimal("0.90")
+#: The rate of every cutoff in the tests that do not study the rate. The caller measures it (#1255).
+RATE = Decimal("0.05")
 #: Every input of these issuers became knowable on this day. It is under 214 days before Q3, inside the age limit.
 KNOWN = datetime(2024, 3, 1, tzinfo=UTC)
 
@@ -63,6 +68,43 @@ def _inputs(name: str, last_close: str) -> IssuerInput:
     )
 
 
+def _rate_of(rate: Decimal):
+    return lambda _cutoff: rate
+
+
+def test_each_cutoff_is_decided_with_the_rate_of_that_cutoff() -> None:
+    """#1255: the rate decides the tier, and the tier decides the band.
+
+    The issuer earns 10M of gross profit on 10M of assets per 1,000 employees. So its labor
+    efficiency is 10M x (1 - rate) per employee. At a rate of 0.05 that is 9.5M, the large-model-native tier, whose
+    P/GP band is 26.67 to 40. At a rate of 0.95 it is 0.5M, the traditional tier, whose band is 7.50
+    to 10.00. The close of 200 gives a P/GP of 20: below the first band and above the second. Red when
+    `decide` takes one rate for every cutoff, or any rate but the one that `rate_at` names.
+    """
+    definition = load_strategy_definition()
+    inputs = {Q1: [_inputs("a", "200")], Q2: [_inputs("a", "200")]}
+    rates = {Q1: Decimal("0.05"), Q2: Decimal("0.95")}
+
+    first, second = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, rate_at=rates.__getitem__)
+
+    assert first.weights == {"T758A": Decimal("1")} and first.outcomes == {"selected": 1}
+    assert second.weights == {} and second.outcomes == {"rejected_valuation_above_tier_band": 1}
+    swapped = {Q1: Decimal("0.95"), Q2: Decimal("0.05")}
+    third, fourth = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, rate_at=swapped.__getitem__)
+    assert (third.weights, fourth.weights) == (second.weights, first.weights)
+
+
+def test_a_cutoff_without_a_rate_stops_the_decision() -> None:
+    """`rate_at` is the caller's measurement. When it raises, no decision is made for a guessed rate."""
+    definition = load_strategy_definition()
+
+    def rate_at(_cutoff: datetime) -> Decimal:
+        raise MissingRiskFreeRate(Q1, None)
+
+    with pytest.raises(MissingRiskFreeRate):
+        decide([Q1], lambda _cutoff: [_inputs("a", "1")], ISSUERS, definition, rate_at=rate_at)
+
+
 def test_a_change_to_a_later_cutoff_changes_no_earlier_decision() -> None:
     """No lookahead in the decision step.
 
@@ -74,9 +116,9 @@ def test_a_change_to_a_later_cutoff_changes_no_earlier_decision() -> None:
         Q1: [_inputs("a", "1"), _inputs("b", "2"), _inputs("c", "1000")],
         Q2: [_inputs("a", "1"), _inputs("b", "2"), _inputs("c", "1000")],
     }
-    base = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition)
+    base = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, rate_at=_rate_of(RATE))
     inputs[Q2] = [_inputs("a", "1000"), _inputs("b", "2"), _inputs("c", "1")]
-    after = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition)
+    after = decide([Q1, Q2], inputs.__getitem__, ISSUERS, definition, rate_at=_rate_of(RATE))
 
     assert base[0].weights == {"T758A": Decimal("0.5"), "T758B": Decimal("0.5")}
     assert after[0] == base[0], "a Q2 input changed the Q1 decision"
@@ -88,7 +130,9 @@ def test_an_issuer_without_lineage_is_excluded_and_never_traded() -> None:
     known = _inputs("a", "1")
     unknown = IssuerInput(issuer_id="issuer:t758:z", records=known.records, knowable_at=known.knowable_at)
 
-    (decision,) = decide([Q1], lambda _cutoff: [unknown, _inputs("b", "2")], ISSUERS, definition)
+    (decision,) = decide(
+        [Q1], lambda _cutoff: [unknown, _inputs("b", "2")], ISSUERS, definition, rate_at=_rate_of(RATE)
+    )
 
     assert decision.weights == {"T758B": Decimal("1")}
     assert decision.outcomes["missing_issuer_class"] == 1
@@ -166,6 +210,7 @@ def test_strategy_weights_sum_to_exactly_one_when_six_are_selected() -> None:
         lambda _cutoff: [_inputs(name, str(index + 1)) for index, name in enumerate(names)],
         issuers,
         wider,
+        rate_at=_rate_of(RATE),
     )
 
     assert len(decision.weights) == 6
@@ -358,3 +403,35 @@ def test_the_benchmark_line_is_unchanged_and_the_strategy_lines_follow_it() -> N
         "The strategy selected MSFT at 2024-09-30, but no open existed on the fill session, "
         "so the weight it could not buy stayed cash.",
     )
+
+
+def test_the_sharpe_parameter_is_the_rate_that_the_engine_subtracts() -> None:
+    """The run states a Sharpe rate by name, series and value (#1255). The engine must subtract that value.
+
+    The engine computes the Sharpe ratio as the mean return over its deviation, which is an excess
+    return over a rate of zero. The test computes the excess return with the declared value and compares
+    it with the engine. Red when someone declares another value and leaves the engine unchanged.
+    """
+    navs = ["1", "1.01", "1.005", "1.02", "1.015", "1.03"]
+    valuations = [
+        Valuation(
+            session=date(2024, 1, 2 + index),
+            value=Decimal(nav) * 1000,
+            cum_nav=Decimal(nav),
+            drawdown=Decimal(0),
+            gross_exposure=Decimal(1),
+            cash_weight=Decimal(0),
+        )
+        for index, nav in enumerate(navs)
+    ]
+    returns = [b.cum_nav / a.cum_nav - 1 for a, b in zip(valuations, valuations[1:])]
+    years = Decimal((valuations[-1].session - valuations[0].session).days) / Decimal("365.25")
+    per_year = Decimal(len(returns)) / years
+    excess = [item - SHARPE_RISK_FREE.value / per_year for item in returns]
+    mean = sum(excess) / len(excess)
+    deviation = (sum((item - mean) ** 2 for item in excess) / (len(excess) - 1)).sqrt()
+
+    assert SHARPE_RISK_FREE.value == 0 and SHARPE_RISK_FREE.series_id is None
+    measured = performance(valuations).sharpe
+    assert measured is not None
+    assert abs(measured - mean / deviation * per_year.sqrt()) < Decimal("1e-20")

@@ -474,11 +474,12 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
         # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): one public CSV per
         # calendar year, no key. A request returns every registered macro series of one year.
         # The nightly run makes one request. The first run makes one request per year back to
-        # `MACRO_FIRST_YEAR`. 50 per day is our runaway backstop, per environment.
+        # `first_year` of the macro registration. 100 per day is our runaway backstop, per environment.
+        # It is twice the first run (27 requests in 2026), so the first run and its replays fit.
         "us-treasury": CapacityDeclaration(
             calls_per_window=1,
             window_seconds=1,
-            daily_budget=50,
+            daily_budget=100,
             documented="none published (public CSV on home.treasury.gov, no key)",
         ),
         # The model seat: the sum of the per-environment limits of the model seat in the
@@ -648,7 +649,7 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         # files of 2023 to 2026 is four days (a Friday and the Tuesday after a Monday holiday). One day
         # more admits the run that comes before the Treasury publishes.
         max_age_days=5,
-        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat allows 50
+        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat allows 100
         # requests per day, and this load needs one request per year.
         first_year=2000,
         notes=(

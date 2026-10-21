@@ -131,3 +131,19 @@ of the projector (`datahub/share_basis.py`).
 
 A strategy symbol without an open on its fill session stays cash, as `remain_cash` defines. Each run
 now names that symbol and the dates of its cutoffs in `metrics_payload.limitations`.
+
+## Status update 2026-10-21 (#1255)
+
+The risk-free rate is a measurement now. Decision 3 holds for dividends only.
+
+- Each cutoff reads the 3-month U.S. Treasury par yield from `mart.macro_series_daily`
+  (`datahub.risk_free`). It takes the newest observation that was knowable at the cutoff, at most
+  10 days old. A rate is knowable at 00:00 UTC of the day after its observation date.
+- The run resolves the rate of every cutoff before it decides anything. A cutoff without a rate stops
+  the run with `MissingRiskFreeRate`. The run writes no partial headline.
+- The binding lists each rate with its cutoff, its series, its observation date and its source
+  (`risk_free_rates`). It replaces the single `risk_free_rate`. `run_id` hashes the binding, so another
+  rate series is another run.
+- The golden replay keeps the explicit rates of its corpus. The definition file is unchanged.
+- The Sharpe ratio subtracts a declared rate of 0. Each run states it as the named parameter
+  `sharpe_risk_free` with its series (none) and its value.

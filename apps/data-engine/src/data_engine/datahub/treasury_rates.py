@@ -331,13 +331,14 @@ def _refresh_year(
     fetch: Callable[[int], bytes],
     clock: Callable[[], datetime],
     store: RawObjectStore | None,
+    registration: MacroSourceRegistration,
 ) -> YearResult:
     fetched_at = clock()
     key = fetch_key_of(year, on=fetched_at.astimezone(UTC).date())
     if has_landed(connection, key):
         return YearResult(year=year, inserted=0, fetch_id=None, observations=0, reused=True)
     body = fetch(year)
-    observations = parse_par_yield_csv(body, year=year)
+    observations = parse_par_yield_csv(body, year=year, series=registration.series)
     fetch_id = raw_store.insert_fetch(
         connection,
         source=SOURCE,
@@ -348,7 +349,7 @@ def _refresh_year(
         metadata={
             "year": year,
             "url": year_url(year),
-            "series": {item.series_id: item.source_column for item in REGISTRATION.series},
+            "series": {item.series_id: item.source_column for item in registration.series},
         },
         store=store,
     )
@@ -368,6 +369,7 @@ def refresh_macro_series(
     fetch: Callable[[int], bytes] = fetch_year,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     store: RawObjectStore | None = None,
+    registration: MacroSourceRegistration = REGISTRATION,
 ) -> list[YearResult]:
     """Write the catalog, then fetch, store and append the years that ``years_to_fetch`` names.
 
@@ -375,14 +377,16 @@ def refresh_macro_series(
     failed backfill must not block the current year. At the end, any failure raises
     ``TreasuryRefreshError``.
     """
-    register_series(connection)
+    register_series(connection, registration)
     connection.commit()
     results: list[YearResult] = []
     failures: list[str] = []
     first_error: Exception | None = None
-    for year in years_to_fetch(connection, today=today):
+    for year in years_to_fetch(connection, today=today, registration=registration):
         try:
-            results.append(_refresh_year(connection, year, fetch=fetch, clock=clock, store=store))
+            results.append(
+                _refresh_year(connection, year, fetch=fetch, clock=clock, store=store, registration=registration)
+            )
             connection.commit()
         except Exception as error:  # noqa: BLE001 - recorded, and raised after the last year
             connection.rollback()
