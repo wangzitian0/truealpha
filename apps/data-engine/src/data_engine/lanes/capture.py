@@ -41,7 +41,6 @@ from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
-from data_engine.lanes import production_only_schedule_status
 from data_engine.sources import gateway
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
@@ -123,8 +122,6 @@ class UniverseTick:
     #: tranche's problem (stated the same way in the App's fund-valuation reader).
     consolidate_funds: bool
     cron: str | None
-    #: The status that applies in the process environment. `tick_schedule_status` gives the status in any environment.
-    default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.RUNNING
 
 
 QQQ_LIVE_JOB_NAME = "qqq_live_pipeline"
@@ -182,14 +179,8 @@ SP500_LIVE_JOB_NAME = "sp500_live_pipeline"
 # 01:15 UTC: after the nightly invariants (00:15 UTC) and confidence report (00:45 UTC),
 # well clear of the 22:15/22:45 TOPT, 23:20 QQQ, and 23:47 canary capture windows (#67 / #1281).
 SP500_LIVE_CRON = "15 1 * * *"
-# #1310: the SP500 schedule is STOPPED in every environment. One tick needs about 1,000 Twelve Data
-# credits (about 500 issuers, about 2 credits each). Production owns 480 of the 800 daily credits on
-# the shared key. The production core path spends about 286 credits a day. A tick at 01:15 UTC spends
-# the whole share before the 21:15 UTC price refresh and the 22:15 UTC core tick. The core tick then
-# loses its second-origin cells. The plausibility gate refuses that run. The governed head freezes.
-# Operators launch `sp500_live_pipeline` by hand. Remove this constant when a declared Twelve Data
-# budget for the SP500 tick exists.
-SP500_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
+# The contract holds the status of the SP500 universe: `environment_contract.v1.json` lists it as
+# stopped, with the precondition that unlocks it. This lane declares no status of its own.
 SP500_UNIVERSE_HEAD = "universe-list:sp500"
 SP500_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
@@ -213,10 +204,6 @@ TICKS: tuple[UniverseTick, ...] = (
         run_strategy=True,
         consolidate_funds=False,
         cron=TOPT_LIVE_CRON,
-        # ENABLED by default: #27's appended acceptance (issue comment, 2026-07-20)
-        # requires the schedule running in Staging; enabling it is the deliberate,
-        # owner-authorized operator action recorded there — not an accidental default.
-        default_status=dg.DefaultScheduleStatus.RUNNING,
     ),
     UniverseTick(
         key="qqq",
@@ -231,7 +218,6 @@ TICKS: tuple[UniverseTick, ...] = (
         # QQQ's core rows are the fund's own holdings: the only tick that can value them.
         consolidate_funds=True,
         cron=QQQ_LIVE_CRON,
-        default_status=production_only_schedule_status(settings.app_env),
     ),
     UniverseTick(
         key="sp500",
@@ -245,7 +231,6 @@ TICKS: tuple[UniverseTick, ...] = (
         run_strategy=False,
         consolidate_funds=False,
         cron=SP500_LIVE_CRON,
-        default_status=SP500_SCHEDULE_STATUS,
     ),
     UniverseTick(
         key="canary",
@@ -259,33 +244,29 @@ TICKS: tuple[UniverseTick, ...] = (
         run_strategy=False,
         consolidate_funds=False,
         cron=CANARY_DAILY_CRON,
-        default_status=dg.DefaultScheduleStatus.RUNNING,
     ),
 )
 
-_KNOWN_TICK_KEYS = frozenset(tick.key for tick in TICKS)
-_KNOWN_ENVIRONMENTS = frozenset({"staging", "production", "prod"})
+#: An environment that the contract does not name (local runs, CI) takes the rule of staging: the TOPT tick
+#: and the canary run, nothing else.
+UNRECOGNISED_ENVIRONMENT_RULE = "staging"
 
 
 def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
     """The default status of `tick`'s schedule in `app_env` (#1310, #1416).
 
-    Reads `environment_contract.v1.json` as the single source of truth for per-environment
-    schedule status, falling back to `tick.default_status` for unrecognised environments.
+    `environment_contract.v1.json` is the only source of "scheduled" and "stopped". An environment
+    that the contract does not name follows `UNRECOGNISED_ENVIRONMENT_RULE`.
     """
     contract = load_environment_contract()
     env = contract.normalize_environment(app_env)
-    if env in contract.environments:
-        if tick.key == "sp500" and SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED:
-            return dg.DefaultScheduleStatus.STOPPED
-        return (
-            dg.DefaultScheduleStatus.RUNNING
-            if contract.is_universe_scheduled(tick.key, env)
-            else dg.DefaultScheduleStatus.STOPPED
-        )
-    if tick.key == "qqq":
-        return production_only_schedule_status(app_env)
-    return tick.default_status
+    if env not in contract.environments:
+        env = UNRECOGNISED_ENVIRONMENT_RULE
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if contract.is_universe_scheduled(tick.key, env)
+        else dg.DefaultScheduleStatus.STOPPED
+    )
 
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
@@ -303,16 +284,9 @@ def is_head_scheduled(universe_id: str, environment: str) -> bool:
     """Whether `universe_id` has a running schedule in `environment` (#1256, #1416).
 
     Delegates to `environment_contract.v1.json` and fails closed (returns True) when
-    `environment` is omitted or unrecognised, or when `universe_id` does not map to a
-    declared tick in `TICKS`.
+    `environment` is omitted or unrecognised, or when `universe_id` maps to no tick key.
     """
-    env = environment.strip().lower()
-    if env not in _KNOWN_ENVIRONMENTS:
-        return True
-    key = universe_id.removeprefix("universe:").split("-", 1)[0]
-    if key not in _KNOWN_TICK_KEYS:
-        return True
-    return is_universe_scheduled(key, env)
+    return load_environment_contract().is_head_scheduled(universe_id, environment)
 
 
 @contextmanager
@@ -496,7 +470,7 @@ def build_schedule(
     effective_cron = tick.cron if cron is None else cron
     if effective_cron is None:
         return None
-    effective_status = tick.default_status if default_status is None else default_status
+    effective_status = tick_schedule_status(tick, settings.app_env) if default_status is None else default_status
 
     @dg.schedule(
         name=tick.schedule_name,

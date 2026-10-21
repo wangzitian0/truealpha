@@ -8,7 +8,7 @@
 
 export interface EnvironmentTickRule {
   readonly scheduled: boolean;
-  readonly cron: string | null;
+  readonly cron: string;
   readonly tick_type: "strategy" | "fund" | "index" | "sentinel";
   readonly estimated_listings: number;
 }
@@ -20,8 +20,8 @@ export interface SentinelMemberContract {
   readonly trait: string;
 }
 
-export const ENVIRONMENT_CONTRACT_VERSION = "1.4.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "6ba132c22fbbe3f63502de7c2c1ac1d6d2f89e61e4eec9ff158a980cd0159a74" as const;
+export const ENVIRONMENT_CONTRACT_VERSION = "1.5.0" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "c3569d5007efdfa768674795b2fec789b1e807f925854e345c494d12a3268ff8" as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   {
@@ -87,50 +87,13 @@ export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
 ] as const;
 
 export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, EnvironmentTickRule>>>> = {
-  "preview": {
-    "topt": {
-      "scheduled": false,
-      "cron": null,
-      "tick_type": "strategy",
-      "estimated_listings": 0
-    },
-    "qqq": {
-      "scheduled": false,
-      "cron": null,
-      "tick_type": "fund",
-      "estimated_listings": 0
-    },
-    "sp500": {
-      "scheduled": false,
-      "cron": null,
-      "tick_type": "index",
-      "estimated_listings": 0
-    },
-    "canary": {
-      "scheduled": false,
-      "cron": null,
-      "tick_type": "sentinel",
-      "estimated_listings": 1
-    }
-  },
+  "preview": {},
   "staging": {
     "topt": {
       "scheduled": true,
       "cron": "45 22 * * *",
       "tick_type": "strategy",
       "estimated_listings": 21
-    },
-    "qqq": {
-      "scheduled": false,
-      "cron": "20 23 * * *",
-      "tick_type": "fund",
-      "estimated_listings": 102
-    },
-    "sp500": {
-      "scheduled": false,
-      "cron": "15 1 * * *",
-      "tick_type": "index",
-      "estimated_listings": 503
     },
     "canary": {
       "scheduled": true,
@@ -167,9 +130,12 @@ export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, 
   }
 } as const;
 
+export const KNOWN_TICK_KEYS: readonly string[] = ["canary", "qqq", "sp500", "topt"] as const;
+
 /**
  * Generated from environment_contract.v1.json (#1416 E1/E2).
- * Fails closed (returns true) when environment is unrecognised or universeId does not map to a declared tick.
+ * Fails closed (returns true) when environment is unrecognised or universeId maps to no tick key of the contract.
+ * A tick key that another environment declares and this one does not is not scheduled here.
  */
 export function isHeadScheduledFromContract(
   universeId: string,
@@ -188,7 +154,7 @@ export function isHeadScheduledFromContract(
   const key = stripped.split("-", 1)[0] || "";
   const rule = envTicks[key];
   if (!rule) {
-    return true;
+    return !KNOWN_TICK_KEYS.includes(key);
   }
-  return Boolean(rule.scheduled && rule.cron !== null);
+  return rule.scheduled;
 }

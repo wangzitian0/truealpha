@@ -34,12 +34,12 @@ The nightly verdict is red on any of these:
   derives from the declared ceiling, so a lower real ceiling breaks the premise of the limit;
 * `oom_kill` rose in any container since the last check. The first check counts every kill of
   the container that the sensor saw;
-* the peak of a container rose above `utilization_limit` of `memory.max` since the last check. A
+* the peak of a container rose above `UTILIZATION_CEILING` of `memory.max` since the last check. A
   peak that the last check already judged does not count again: `memory.peak` is a high-water mark
   of the whole container life;
 * a run process held more than the budget `run_mib`, or the code server more than `server_mib`. A
   process counts once: when it first passes the limit, and again for each new process that does. The
-  budget is what is left inside the utilization limit when the queue is full, so a larger run
+  budget is what is left inside `UTILIZATION_CEILING` of the ceiling when the queue is full, so a larger run
   breaks the premise of the limit. A run that ends between two samples after its peak is not seen,
   and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
   process at each sample, and each counted process keeps an event (the newest `MAX_OVER_EVENTS`). A
@@ -68,7 +68,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import dagster as dg
-from truealpha_contracts.environment_contract import CodeServerCapacity
+from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity
 
 log = logging.getLogger(__name__)
 
@@ -462,7 +462,7 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
     if (
         peak_is_new
         and reading.memory_max is not None
-        and reading.memory_peak > capacity.utilization_limit * reading.memory_max
+        and reading.memory_peak > UTILIZATION_CEILING * reading.memory_max
     ):
         over += 1
     folded = Tracker(
@@ -594,7 +594,7 @@ def judge(
             f"the code server was replaced {same} time(s) without a deployment change (a crash, a host reboot or a restart by hand)"
         )
     if peaks:
-        red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
+        red.append(f"the peak rose above {UTILIZATION_CEILING:.0%} of memory.max {peaks} time(s); {peak}")
     if too_big:
         red.append(_over_size_text(tracker, too_big, capacity))
     if server_big:

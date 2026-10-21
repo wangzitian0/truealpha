@@ -9,7 +9,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.lanes import production_only_schedule_status
-from data_engine.lanes.capture import SP500_SCHEDULE_STATUS
+from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
 # -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
@@ -27,10 +27,12 @@ SP500_UNIVERSE_REFRESH_CRON = "37 8 * * 6"
 
 
 def _is_source_refresh_enabled(source) -> bool:
-    """Skip automatic constituent and N-PORT refresh for SP500 while SP500_SCHEDULE_STATUS is STOPPED (#67, #1310)."""
-    if getattr(source, "etf", None) == "sp500" and SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED:
-        return False
-    return True
+    """Refresh the constituents and the N-PORT holdings of a universe that the process environment runs.
+
+    The contract is the only source of "scheduled" and "stopped" (#67, #1310): a stopped universe, and
+    a universe that the environment does not list, are not refreshed.
+    """
+    return is_universe_scheduled(source.etf, settings.app_env)
 
 
 @dg.op
@@ -158,12 +160,12 @@ def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.Sched
 def build_sp500_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.ScheduleDefinition:
     """Build the staggered Saturday UTC schedule for SP500 constituent refresh (#67, #1310).
 
-    Follows `SP500_SCHEDULE_STATUS` while the SP500 plane stays gated (#67 / #206 / #1310).
+    Follows the status of the SP500 universe in the contract (#67 / #206 / #1310).
     """
     status = (
-        SP500_SCHEDULE_STATUS
-        if SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED
-        else production_only_schedule_status(app_env)
+        dg.DefaultScheduleStatus.RUNNING
+        if is_universe_scheduled("sp500", app_env)
+        else dg.DefaultScheduleStatus.STOPPED
     )
 
     @dg.schedule(

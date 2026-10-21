@@ -35,7 +35,7 @@ def render() -> str:
         spec = contract.environments[env_name]
         ticks_by_env[env_name] = {
             tick_key: {
-                "scheduled": bool(tick.scheduled and tick.cron is not None),
+                "scheduled": contract.is_universe_scheduled(tick_key, env_name),
                 "cron": tick.cron,
                 "tick_type": tick.tick_type,
                 "estimated_listings": tick.estimated_listings,
@@ -52,6 +52,7 @@ def render() -> str:
         for member in contract.sentinels
     ]
     ticks_json = json.dumps(ticks_by_env, indent=2)
+    known_keys_json = json.dumps(sorted(contract.known_tick_keys))
     sentinels_json = json.dumps(sentinels, indent=2)
     return f"""\
 /**
@@ -64,7 +65,7 @@ def render() -> str:
 
 export interface EnvironmentTickRule {{
   readonly scheduled: boolean;
-  readonly cron: string | null;
+  readonly cron: string;
   readonly tick_type: "strategy" | "fund" | "index" | "sentinel";
   readonly estimated_listings: number;
 }}
@@ -83,9 +84,12 @@ export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = {sentinels_js
 
 export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, EnvironmentTickRule>>>> = {ticks_json} as const;
 
+export const KNOWN_TICK_KEYS: readonly string[] = {known_keys_json} as const;
+
 /**
  * Generated from environment_contract.v1.json (#1416 E1/E2).
- * Fails closed (returns true) when environment is unrecognised or universeId does not map to a declared tick.
+ * Fails closed (returns true) when environment is unrecognised or universeId maps to no tick key of the contract.
+ * A tick key that another environment declares and this one does not is not scheduled here.
  */
 export function isHeadScheduledFromContract(
   universeId: string,
@@ -104,9 +108,9 @@ export function isHeadScheduledFromContract(
   const key = stripped.split("-", 1)[0] || "";
   const rule = envTicks[key];
   if (!rule) {{
-    return true;
+    return !KNOWN_TICK_KEYS.includes(key);
   }}
-  return Boolean(rule.scheduled && rule.cron !== null);
+  return rule.scheduled;
 }}
 """
 

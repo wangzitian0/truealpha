@@ -24,7 +24,7 @@ import pytest
 from data_engine.lanes import quality, standards
 from data_engine.quality import nightly_verdicts, runtime_shape
 from data_engine.quality.runtime_shape import MIB, Baseline, Reading, Tracker
-from truealpha_contracts.environment_contract import CodeServerCapacity, load_environment_contract
+from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity, load_environment_contract
 
 CAPACITY: CodeServerCapacity = load_environment_contract().code_server_capacity
 CEILING = CAPACITY.ceiling_mib * MIB
@@ -32,7 +32,7 @@ BOOT_ID = "6f1c2c7e-0a5e-4b8e-9d11-3c2f5a7b9e01"
 #: A quarter of the declared ceiling: far below the limit, whatever the contract declares.
 QUIET_PEAK_MIB = CAPACITY.ceiling_mib // 4
 #: The largest whole MiB at or below the utilization limit of the declared ceiling.
-LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * CAPACITY.utilization_limit)
+LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * UTILIZATION_CEILING)
 #: A peak above the limit.
 HIGH_PEAK_MIB = LIMIT_MIB + 1
 #: The budget of one run, a process above it, and the declared size of the server, in bytes.
@@ -41,7 +41,7 @@ BIG_PROCESS = RUN_BYTES + MIB
 SERVER_BYTES = CAPACITY.server_mib * MIB
 QUIET_SERVER = SERVER_BYTES - 10 * MIB
 #: A synthetic capacity for the exact-boundary test: 70% of 2000 MiB is exactly 1400 MiB.
-SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000, "utilization_limit": 0.7})
+SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000})
 TICK_1 = "2026-10-21T06:30:00+00:00"
 TICK_2 = "2026-10-22T06:30:00+00:00"
 TICK_3 = "2026-10-23T06:30:00+00:00"
@@ -510,9 +510,7 @@ def test_a_new_peak_above_the_utilization_limit_of_the_ceiling_is_red(tmp_path: 
 
     assert bool(verdict.red) is red
     if red:
-        assert verdict.red[0].startswith(
-            f"the peak rose above {CAPACITY.utilization_limit:.0%} of memory.max 1 time(s)"
-        )
+        assert verdict.red[0].startswith(f"the peak rose above {UTILIZATION_CEILING:.0%} of memory.max 1 time(s)")
         assert f"peak {peak_mib} of {CAPACITY.ceiling_mib} MiB" in verdict.red[0]
 
 

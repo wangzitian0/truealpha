@@ -26,8 +26,8 @@ a promoted release's fetch path works.
 
 The fifth is the runtime shape of the code server (`quality.runtime_shape`, #1467): whether the
 memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, a new
-peak above 70% of its ceiling, or a process larger than its budget. The run reads the cgroup of the container it executes in, which is the
-code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
+peak above `UTILIZATION_CEILING` of its ceiling, or a process larger than its budget. The run reads the
+cgroup of the container it executes in, which is the code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
