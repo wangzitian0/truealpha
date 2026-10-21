@@ -23,13 +23,12 @@ Runner = Callable[[Sequence[str]], str]
 
 
 def open_red_issues(repo: str, gh: Runner) -> list[dict[str, object]]:
-    """The open staging-red issues, the oldest first."""
-    out = gh(
-        [
-            "gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "20",
-            "--search", '"Staging red since" in:title', "--json", "number,title",
-        ]
-    )  # fmt: skip
+    """The open staging-red issues, the oldest first.
+
+    This reads the list of open issues and filters by title. The search index lags behind a new
+    issue, and a lagging answer would open a second issue.
+    """
+    out = gh(["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "300", "--json", "number,title"])
     issues = json.loads(out or "[]")
     if not isinstance(issues, list):
         raise ValueError(f"unexpected issue list payload: {out[:200]}")

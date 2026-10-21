@@ -6,7 +6,7 @@
    "gh run list --workflow ci-required.yml --branch <tag> --event push --limit 30 --json databaseId,createdAt,updatedAt,conclusion,status",
    "gh run list --workflow deploy-release.yml --limit 400 --json databaseId,createdAt,updatedAt,conclusion,status,displayTitle",
    "gh run list --workflow walk-release.yml --limit 400 --json databaseId,createdAt,updatedAt,conclusion,status,displayTitle",
-   "gh run view <id> --json jobs  (the first failed step of each failed run, sorted as 'job::step', with the ci-required summary job skipped; the walk step of each green walk run)",
+   "gh run view <id> --json jobs  (the step that failed first, as 'job::step', with the ci-required summary job skipped; the walk step of each green walk run)",
    "git for-each-ref refs/tags  (annotation Release-Trigger: auto-staging marks an automatic tag)"
   ],
   "fields": {

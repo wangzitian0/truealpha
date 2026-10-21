@@ -2,26 +2,33 @@
 
 `staging_line.py` holds the rule and reads nothing. This module builds its input.
 
-A release is one tag push. The tags come from three places:
+A release is one tag push. The rule needs only the releases that failed after the newest passing
+walk, so the reader starts at that walk and reads forward. It reads these tags:
 
-* the staging `deploy-release` and `walk-release` runs. Those workflows run only for a release.
-  One page of each reaches back for weeks, also while the train is stopped. The `ci-required`
-  list is not a source of tags: every push to main adds a run to it.
-* the failed `ci-required` runs of tag pushes. A tag whose own CI failed is deleted, and it has
-  no deploy and no walk run. Without this list a hand-cut of the next number would hide it.
+* the tag of the newest passing walk, so that the walk is in the input,
+* every tag with a staging deploy or walk run that changed after that walk. Those workflows run
+  only for a release. One page of each reaches back for weeks, also while the train is stopped.
+  The `ci-required` list is no source of tags: every push to main adds a run to it,
+* every tag whose own `ci-required` run failed after that walk. Such a tag is deleted, and it has
+  no deploy and no walk run. A hand cut of the next number would hide it without this list,
 * the tag that the train would cut next. It may hold earlier pushes that were deleted.
 
-The `ci-required` runs of each tag are read by branch name, which also finds a deleted tag.
+The `ci-required` runs of each tag are read by branch name, which also finds a deleted tag. With no
+passing walk in the lists, the reader takes the newest `MAX_TAGS` tags.
 
 A walk counts as passed only when its walk step passed. A `walk-release` run ends `success` with
 the walk step skipped when the walk credentials are not set. That run walked nothing.
+
+A re-run keeps the run id. While it is in flight, the run list shows the in-flight run and hides
+the failed attempt. The reader reads that earlier attempt, so that a re-run does not lift a stop.
 
 Stdlib only: `auto-release-staging.yml` runs the train with no `uv sync`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import re
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime
 
@@ -29,25 +36,27 @@ from truealpha_tools.release_runs import (
     CI_WORKFLOW,
     DEPLOY_TITLE,
     DEPLOY_WORKFLOW,
+    FAILED_CONCLUSIONS,
     SUMMARY_JOB,
     TAG_RE,
     WALK_TITLE,
     WALK_WORKFLOW,
+    GitHubGet,
     parse_time,
     tag_key,
     workflow_runs,
 )
-from truealpha_tools.staging_line import FAILED_CONCLUSIONS, StageRun, StagingRelease
+from truealpha_tools.staging_line import StageRun, StagingRelease
 from truealpha_tools.walk_evidence import WALK_STEP_NAME
 
-GitHubGet = Callable[[str], object]
-
-#: How many of the newest tags the rule reads. A stop that 16 newer tags push out of this window
-#: lifts without a passing walk, but a stopped train cuts no tag and a hand-cut tag is rare.
-RECENT_STAGING_TAGS = 16
+#: The most tags that one read takes. A stop needs the releases since the last passing walk, and a
+#: stopped train cuts no tag, so this bound is far above what a normal read finds.
+MAX_TAGS = 40
 #: How many pushes of one tag the rule reads. One tag can fail its own CI many times.
 CI_ATTEMPTS_PER_TAG = 8
 RUN_PAGE_SIZE = 100
+#: `status=failure` does not list `timed_out` runs, so each conclusion has its own query.
+FAILED_PUSH_STATUSES = ("failure", "timed_out")
 
 Run = dict[str, object]
 
@@ -58,36 +67,53 @@ def _steps(job: Run) -> list[Run]:
 
 
 class JobReader:
-    """Read the jobs of runs, once for each run."""
+    """Read the jobs and the attempts of runs, once for each."""
 
     def __init__(self, repo: str, get: GitHubGet) -> None:
         self._repo = repo
         self._get = get
-        self._cache: dict[int, list[Run]] = {}
+        self._jobs: dict[tuple[int, int | None], list[Run]] = {}
 
-    def jobs(self, run_id: int) -> list[Run]:
-        if run_id not in self._cache:
-            payload = self._get(f"/repos/{self._repo}/actions/runs/{run_id}/jobs?per_page=100")
+    def jobs(self, run_id: int, attempt: int | None = None) -> list[Run]:
+        key = (run_id, attempt)
+        if key not in self._jobs:
+            where = f"runs/{run_id}" if attempt is None else f"runs/{run_id}/attempts/{attempt}"
+            payload = self._get(f"/repos/{self._repo}/actions/{where}/jobs?per_page=100")
             jobs = payload.get("jobs") if isinstance(payload, dict) else None
             if not isinstance(jobs, list):
                 raise ValueError(f"unexpected jobs payload for run {run_id}: {str(payload)[:200]}")
-            self._cache[run_id] = [job for job in jobs if isinstance(job, dict)]
-        return self._cache[run_id]
+            self._jobs[key] = [job for job in jobs if isinstance(job, dict)]
+        return self._jobs[key]
 
-    def failed_step(self, run_id: int) -> str:
-        """ "<job>::<step>" of the failed step that sorts first, or "" when the API names none.
+    def attempt(self, run_id: int, attempt: int) -> Run:
+        payload = self._get(f"/repos/{self._repo}/actions/runs/{run_id}/attempts/{attempt}")
+        if not isinstance(payload, dict):
+            raise ValueError(f"unexpected attempt payload for run {run_id}: {str(payload)[:200]}")
+        return payload
 
-        The `ci-required` summary job is skipped: it fails whenever another job fails, so it
-        names no cause. Sorting makes the label the same for the same fault on every read.
+    def failed_step(self, run_id: int, attempt: int | None = None) -> str:
+        """ "<job>::<step>" of the step that failed first, or "" when the API names none.
+
+        The first failure in time is the cause. A step that runs after a failure, such as a probe
+        with `if: !cancelled()`, fails because of it. Equal times, and a missing time, follow the
+        order of the payload. The `ci-required` summary job is skipped: it fails whenever another
+        job fails, so it names no cause.
         """
-        failed = sorted(
-            f"{job.get('name')}::{step.get('name')}"
-            for job in self.jobs(run_id)
-            if job.get("conclusion") == "failure" and job.get("name") != SUMMARY_JOB
-            for step in _steps(job)
-            if step.get("conclusion") == "failure"
-        )
-        return failed[0] if failed else ""
+        failed = [
+            (
+                not step.get("completed_at"),
+                str(step.get("completed_at") or ""),
+                order,
+                f"{job.get('name')}::{step.get('name')}",
+            )
+            for order, (job, step) in enumerate(
+                (job, step) for job in self.jobs(run_id, attempt) for step in _steps(job)
+            )
+            if job.get("conclusion") == "failure"
+            and job.get("name") != SUMMARY_JOB
+            and step.get("conclusion") == "failure"
+        ]
+        return min(failed)[3] if failed else ""
 
     def walk_step_passed(self, run_id: int) -> bool:
         return any(
@@ -114,40 +140,83 @@ def _time(run: Run, key: str) -> datetime:
 def stage_runs(reader: JobReader, runs: Iterable[Run], *, walk: bool = False) -> tuple[StageRun, ...]:
     """The runs of one stage. Only the newest failed run gets a step name.
 
-    `StagingRelease.failure` reads the step of the newest failed run and no other, so the jobs of
-    an older failed run are not worth one API call each. With `walk`, a run that ended `success`
-    without a passing walk step gets the conclusion `skipped`.
+    `StagingRelease.failure` reads the step of the newest failed run only. The jobs of an older
+    failed run are not worth one API call each. With `walk`, a run that ended `success` without a
+    passing walk step gets the conclusion `skipped`. A run in flight after a re-run adds the
+    failed attempt that it hides.
     """
-    found: list[StageRun] = []
+    found: list[tuple[StageRun, int | None]] = []
     for run in runs:
         run_id = _run_id(run)
-        conclusion = str(run.get("conclusion") or "") if run.get("status") == "completed" else ""
+        done = run.get("status") == "completed"
+        conclusion = str(run.get("conclusion") or "") if done else ""
         if walk and conclusion == "success" and not reader.walk_step_passed(run_id):
             conclusion = "skipped"
-        found.append(StageRun(conclusion, _time(run, "updated_at"), "", run_id))
-    failed = [run for run in found if run.conclusion in FAILED_CONCLUSIONS]
+        found.append((StageRun(conclusion, _time(run, "updated_at"), "", run_id), None))
+        attempt = run.get("run_attempt")
+        if not done and isinstance(attempt, int) and attempt > 1:
+            earlier = reader.attempt(run_id, attempt - 1)
+            if earlier.get("conclusion") in FAILED_CONCLUSIONS:
+                found.append(
+                    (StageRun(str(earlier["conclusion"]), _time(earlier, "updated_at"), "", run_id), attempt - 1)
+                )
+    failed = [index for index, (run, _) in enumerate(found) if run.conclusion in FAILED_CONCLUSIONS]
+    result = [run for run, _ in found]
     if failed:
-        newest = max(failed, key=lambda run: run.finished_at)
-        found[found.index(newest)] = replace(newest, failed_step=reader.failed_step(newest.run))
-    return tuple(found)
+        index = max(failed, key=lambda i: found[i][0].finished_at)
+        newest, attempt = found[index]
+        result[index] = replace(newest, failed_step=reader.failed_step(newest.run, attempt))
+    return tuple(result)
 
 
-def _staging_runs(repo: str, workflow: str, title, get: GitHubGet) -> dict[str, list[Run]]:
+def _staging_runs(repo: str, workflow: str, title: re.Pattern[str], get: GitHubGet) -> dict[str, list[Run]]:
+    """The staging runs of one release workflow, by tag.
+
+    A page of runs with no title that matches means that the run-name changed. That would look like
+    an empty history, so it raises.
+    """
+    runs = workflow_runs(get(f"/repos/{repo}/actions/workflows/{workflow}/runs?per_page={RUN_PAGE_SIZE}"))
     by_tag: dict[str, list[Run]] = {}
-    for run in workflow_runs(get(f"/repos/{repo}/actions/workflows/{workflow}/runs?per_page={RUN_PAGE_SIZE}")):
+    matched = 0
+    for run in runs:
         match = title.match(str(run.get("display_title") or ""))
-        if match is not None and match["deploy_type"] == "staging" and TAG_RE.match(match["release"]):
+        if match is None:
+            continue
+        matched += 1
+        if match["deploy_type"] == "staging" and TAG_RE.match(match["release"]):
             by_tag.setdefault(match["release"], []).append(run)
+    if runs and not matched:
+        raise ValueError(f"no run title of {workflow} matches {title.pattern}; the run-name changed")
     return by_tag
 
 
-def _failed_tag_pushes(repo: str, get: GitHubGet) -> set[str]:
-    path = f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs?event=push&status=failure&per_page={RUN_PAGE_SIZE}"
-    return {
-        str(run["head_branch"])
-        for run in workflow_runs(get(path))
-        if TAG_RE.match(str(run.get("head_branch") or "")) and run.get("conclusion") in FAILED_CONCLUSIONS
-    }
+def _failed_tag_pushes(repo: str, get: GitHubGet, since: datetime | None) -> set[str]:
+    tags: set[str] = set()
+    for status in FAILED_PUSH_STATUSES:
+        path = f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs?event=push&status={status}&per_page={RUN_PAGE_SIZE}"
+        for run in workflow_runs(get(path)):
+            branch = str(run.get("head_branch") or "")
+            if TAG_RE.match(branch) and (since is None or _time(run, "updated_at") > since):
+                tags.add(branch)
+    return tags
+
+
+def _newest_green_walk(reader: JobReader, walks: dict[str, list[Run]]) -> tuple[datetime, str] | None:
+    """The finish time and the tag of the newest walk run whose walk step passed."""
+    passed = sorted(
+        (
+            (_time(run, "updated_at"), tag, run)
+            for tag, runs in walks.items()
+            for run in runs
+            if run.get("conclusion") == "success"
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    for finished, tag, run in passed:
+        if reader.walk_step_passed(_run_id(run)):
+            return finished, tag
+    return None
 
 
 def _order(name: str) -> tuple[int, int, int]:
@@ -157,22 +226,25 @@ def _order(name: str) -> tuple[int, int, int]:
 def tag_names(
     repo: str,
     get: GitHubGet,
-    known: Iterable[str],
+    deploys: dict[str, list[Run]],
+    walks: dict[str, list[Run]],
+    green: tuple[datetime, str] | None,
     *,
     next_tag: str | None,
-    recent: int = RECENT_STAGING_TAGS,
+    max_tags: int = MAX_TAGS,
 ) -> list[str]:
-    """The tags to read, oldest first. `known` holds the tags of the staging deploy and walk runs."""
-    names = sorted(set(known), key=_order)[-recent:]
-    floor = _order(names[0]) if names else None
-    names.extend(
-        name
-        for name in sorted(_failed_tag_pushes(repo, get))
-        if name not in names and (floor is None or _order(name) >= floor)
-    )
-    if next_tag is not None and next_tag not in names:
-        names.append(next_tag)
-    return sorted(names, key=_order)
+    """The tags to read, oldest first."""
+    since = green[0] if green else None
+    names = {
+        tag
+        for runs_by_tag in (deploys, walks)
+        for tag, runs in runs_by_tag.items()
+        if since is None or any(_time(run, "updated_at") > since for run in runs)
+    }
+    names |= _failed_tag_pushes(repo, get, since)
+    newest = sorted(names, key=_order)[-max_tags:]
+    extra = {tag for tag in (green[1] if green else None, next_tag) if tag is not None}
+    return sorted({*newest, *extra}, key=_order)
 
 
 def _pushes(repo: str, name: str, get: GitHubGet) -> list[Run]:
@@ -183,9 +255,9 @@ def _pushes(repo: str, name: str, get: GitHubGet) -> list[Run]:
 
 
 def read_releases(
-    repo: str, get: GitHubGet, *, next_tag: str | None = None, recent: int = RECENT_STAGING_TAGS
+    repo: str, get: GitHubGet, *, next_tag: str | None = None, max_tags: int = MAX_TAGS
 ) -> tuple[StagingRelease, ...]:
-    """The recent staging releases, one for each tag push, with the outcome of each stage.
+    """The staging releases since the newest passing walk, one for each tag push.
 
     A deploy and a walk run only after a green CI run, so they belong to the newest push of the
     tag. A manual walk can start a moment before that push, so no time filter applies. A tag
@@ -195,8 +267,9 @@ def read_releases(
     deploys = _staging_runs(repo, DEPLOY_WORKFLOW, DEPLOY_TITLE, get)
     walks = _staging_runs(repo, WALK_WORKFLOW, WALK_TITLE, get)
     reader = JobReader(repo, get)
+    green = _newest_green_walk(reader, walks)
     releases: list[StagingRelease] = []
-    for name in tag_names(repo, get, [*deploys, *walks], next_tag=next_tag, recent=recent):
+    for name in tag_names(repo, get, deploys, walks, green, next_tag=next_tag, max_tags=max_tags):
         pushes = _pushes(repo, name, get)
         runs = deploys.get(name, []) + walks.get(name, [])
         if not pushes and runs:

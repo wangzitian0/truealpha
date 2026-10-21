@@ -20,6 +20,22 @@ name: auto-release-staging
 # walked green. The train now cuts no tag, exits green with that reason, and
 # keeps one issue open that names the step. A green walk of any tag resumes
 # it. The rule is in `common/runtime/src/truealpha_tools/staging_line.py`.
+#
+# The quiet period is a DEBOUNCE, not a sleep-then-hope: every green push to
+# main starts its own 3-minute wait, then the checkout below and
+# `tools/auto_release.py` re-read main HEAD fresh (the checkout from git,
+# the tool from the GitHub API) rather than trusting anything captured at
+# trigger time. A push whose wait elapses only to find main has moved on
+# defers — that later push's own green run already started an independent
+# wait, and only the newest one can still find itself at HEAD when it wakes.
+# The `release` job's own concurrency group (below) is the second half: it
+# serialises the actual decide-and-tag step so two overlapping waits can
+# never race the same tag number, even if both somehow reached it together.
+#
+# workflow_run executes this file from the default branch with a write
+# token (main-health.yml's own comment on the same trigger type) — nothing
+# from the triggering run reaches a `run:` block directly, only through
+# `env:`.
 
 on:
   workflow_run:

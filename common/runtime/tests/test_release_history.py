@@ -7,11 +7,12 @@ reader.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from truealpha_tools import release_history
-from truealpha_tools.release_history import JobReader, read_releases, tag_names
+from truealpha_tools.release_history import JobReader, read_releases
 from truealpha_tools.staging_line import staging_red
 
 REPO = "wangzitian0/truealpha"
@@ -28,8 +29,11 @@ def stamp(minutes: int) -> str:
     return (T0 + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run(run_id: int, title: str, conclusion: str | None, start: int, end: int, branch: str = "main") -> dict:
+def run(
+    run_id: int, title: str, conclusion: str | None, start: int, end: int, branch: str = "main", attempt: int = 1
+) -> dict:
     return {
+        "run_attempt": attempt,
         "id": run_id,
         "display_title": title,
         "status": "completed" if conclusion else "in_progress",
@@ -45,12 +49,12 @@ def job(name: str, step: str, conclusion: str = "failure") -> dict:
 
 
 class FakeApi:
-    def __init__(self, *, deploys=(), walks=(), ci=(), failed_pushes=None, jobs=None) -> None:
+    def __init__(self, *, deploys=(), walks=(), ci=(), jobs=None, attempts=None) -> None:
         self.deploys = list(deploys)
         self.walks = list(walks)
         self.ci = list(ci)
-        self.failed_pushes = failed_pushes
         self.jobs = jobs or {}
+        self.attempts = attempts or {}
         self.calls: list[str] = []
 
     def jobs_read(self) -> list[int]:
@@ -58,6 +62,10 @@ class FakeApi:
 
     def __call__(self, path: str) -> object:
         self.calls.append(path)
+        attempt = re.search(r"/runs/(\d+)/attempts/(\d+)(/jobs)?", path)
+        if attempt:
+            key = (int(attempt.group(1)), int(attempt.group(2)))
+            return {"jobs": self.jobs.get(key, [])} if attempt.group(3) else self.attempts[key]
         if "/actions/runs/" in path and "/jobs?" in path:
             return {"jobs": self.jobs.get(int(path.split("/runs/")[1].split("/")[0]), [])}
         if "workflows/deploy-release.yml/runs" in path:
@@ -67,9 +75,9 @@ class FakeApi:
         if "workflows/ci-required.yml/runs?branch=" in path:
             branch = path.split("branch=")[1].split("&")[0]
             return {"workflow_runs": [r for r in self.ci if r["head_branch"] == branch]}
-        if "workflows/ci-required.yml/runs?event=push&status=failure" in path:
-            runs = self.ci if self.failed_pushes is None else self.failed_pushes
-            return {"workflow_runs": [r for r in runs if r["conclusion"] == "failure"]}
+        failed = re.search(r"workflows/ci-required.yml/runs\?event=push&status=(\w+)&", path)
+        if failed:
+            return {"workflow_runs": [r for r in self.ci if r["conclusion"] == failed.group(1)]}
         raise AssertionError(f"unexpected GET {path}")
 
 
@@ -87,8 +95,8 @@ def walk_jobs(conclusion: str) -> list[dict]:
     ]
 
 
-def test_failed_step_is_the_first_failed_step_by_name_and_skips_the_summary_job() -> None:
-    api = FakeApi(jobs={7: [SUMMARY, job("zeta", "Last"), job("images_release / plan", "Select available images")]})
+def test_failed_step_skips_the_summary_job() -> None:
+    api = FakeApi(jobs={7: [SUMMARY, job("images_release / plan", "Select available images")]})
     assert JobReader(REPO, api).failed_step(7) == "images_release / plan::Select available images"
 
 
@@ -183,30 +191,62 @@ def test_a_hand_cut_that_skips_a_deleted_number_does_not_hide_its_failed_pushes(
     assert red.newest_failed == "v0.0.7"
 
 
-def test_a_failed_push_older_than_the_window_is_not_read() -> None:
-    names = tag_names(
-        REPO,
-        FakeApi(
-            failed_pushes=[
-                run(1, "ci-required", "failure", 0, 1, "v0.0.1"),
-                run(2, "ci-required", "failure", 0, 1, "v0.0.30"),
-            ]
-        ),
-        ["v0.0.20", "v0.0.21"],
-        next_tag=None,
-    )
-    assert names == ["v0.0.20", "v0.0.21", "v0.0.30"]
+def green_history(*, last_green: int, tags: int = 20) -> FakeApi:
+    """Tags v0.0.1 to v0.0.<tags>. Each tag has a deploy at minute 10n and a walk at 10n+5. The
+    walk of tag `last_green` passes. Every later walk fails."""
+    deploys, walks, ci, jobs = [], [], [], {}
+    for n in range(1, tags + 1):
+        tag = f"v0.0.{n}"
+        deploys.append(run(1000 + n, f"Deploy staging {tag}", "success", 10 * n, 10 * n + 3))
+        ok = n <= last_green
+        walks.append(
+            run(2000 + n, f"Walk Deploy staging {tag}", "success" if ok else "failure", 10 * n + 4, 10 * n + 6)
+        )
+        jobs[2000 + n] = walk_jobs("success") if ok else [job("walk", "Walk the deployed surface")]
+        ci.append(run(3000 + n, "ci-required", "success", 10 * n - 1, 10 * n + 1, tag))
+    return FakeApi(deploys=deploys, walks=walks, ci=ci, jobs=jobs)
 
 
-def test_the_window_keeps_the_newest_tags_and_drops_the_oldest() -> None:
-    known = [f"v0.0.{n}" for n in range(1, 21)]
-    names = tag_names(REPO, FakeApi(), known, next_tag=None, recent=8)
-    assert names == [f"v0.0.{n}" for n in range(13, 21)]
+def test_the_reader_starts_at_the_newest_green_walk_and_reads_forward() -> None:
+    api = green_history(last_green=12, tags=20)
+    tags = [r.tag for r in read_releases(REPO, api, next_tag="v0.0.21")]
+    assert tags == [f"v0.0.{n}" for n in range(12, 21)], "the tag of the green walk and every later tag"
 
 
-def test_the_next_tag_is_read_once_even_when_it_is_already_known() -> None:
-    assert tag_names(REPO, FakeApi(), ["v0.0.5", "v0.0.6"], next_tag="v0.0.6") == ["v0.0.5", "v0.0.6"]
-    assert tag_names(REPO, FakeApi(), ["v0.0.5"], next_tag="v0.0.6") == ["v0.0.5", "v0.0.6"]
+def test_with_no_green_walk_the_reader_takes_the_newest_tags_up_to_the_bound() -> None:
+    api = green_history(last_green=0, tags=20)
+    tags = [r.tag for r in read_releases(REPO, api, next_tag=None, max_tags=8)]
+    assert tags == [f"v0.0.{n}" for n in range(13, 21)]
+
+
+def test_a_walk_with_a_skipped_step_does_not_start_the_window() -> None:
+    """The newest success walk, v0.0.15, walked nothing. The window starts at the v0.0.12 walk."""
+    api = green_history(last_green=12, tags=20)
+    for run_ in api.walks:
+        if run_["id"] == 2015:
+            run_["conclusion"] = "success"
+    api.jobs[2015] = walk_jobs("skipped")
+    tags = [r.tag for r in read_releases(REPO, api, next_tag=None)]
+    assert tags[0] == "v0.0.12"
+
+
+def test_a_failed_push_after_the_green_walk_is_read_and_one_before_it_is_not() -> None:
+    api = green_history(last_green=12, tags=14)
+    api.ci += [
+        run(4001, "ci-required", "failure", 5, 6, "v0.0.3"),
+        run(4002, "ci-required", "failure", 200, 201, "v0.0.16"),
+        run(4003, "ci-required", "timed_out", 210, 211, "v0.0.17"),
+    ]
+    tags = [(r.tag, len(r.ci)) for r in read_releases(REPO, api, next_tag=None)]
+    assert ("v0.0.16", 1) in tags and ("v0.0.17", 1) in tags
+    assert not any(tag == "v0.0.3" for tag, _ in tags)
+
+
+def test_the_next_tag_is_read_even_when_it_has_no_run_of_any_kind() -> None:
+    api = green_history(last_green=12, tags=14)
+    api.ci.append(run(4005, "ci-required", "failure", 300, 301, "v0.0.15"))
+    tags = [r.tag for r in read_releases(REPO, api, next_tag="v0.0.15")]
+    assert tags[-1] == "v0.0.15"
 
 
 def test_only_the_newest_pushes_of_a_tag_are_read() -> None:
@@ -316,3 +356,62 @@ def test_a_run_without_an_integer_id_fails_closed() -> None:
     api = FakeApi(deploys=[{**run(1, "Deploy staging v0.0.5", "success", 0, 1), "id": "one"}])
     with pytest.raises(ValueError, match="integer id"):
         read_releases(REPO, api, next_tag=None)
+
+
+def test_a_rerun_in_flight_adds_the_failed_attempt_that_it_hides() -> None:
+    """A re-run keeps the run id. The run list shows run 70 in flight and hides the failed attempt 1.
+    The reader reads attempt 1, so the rerun does not lift a stop."""
+    api = FakeApi(
+        deploys=[run(70, "Deploy staging v0.0.6", None, 5, 12, attempt=2)],
+        ci=[run(52, "ci-required", "success", 1, 4, "v0.0.6")],
+        attempts={(70, 1): run(70, "Deploy staging v0.0.6", "failure", 5, 9)},
+        jobs={(70, 1): [job("request", "Dispatch")]},
+    )
+    (release,) = read_releases(REPO, api, next_tag=None)
+    assert [d.conclusion for d in release.deploys] == ["", "failure"]
+    failure = release.failure()
+    assert failure is not None and failure.step == "request::Dispatch"
+
+
+def test_a_rerun_that_is_in_flight_after_a_green_first_attempt_adds_nothing() -> None:
+    api = FakeApi(
+        deploys=[run(70, "Deploy staging v0.0.6", None, 5, 12, attempt=2)],
+        ci=[run(52, "ci-required", "success", 1, 4, "v0.0.6")],
+        attempts={(70, 1): run(70, "Deploy staging v0.0.6", "success", 5, 9)},
+    )
+    (release,) = read_releases(REPO, api, next_tag=None)
+    assert [d.conclusion for d in release.deploys] == [""]
+
+
+def test_the_step_that_failed_first_names_the_cause_not_a_probe_that_ran_after_it() -> None:
+    """A probe with `if: !cancelled()` runs after a failed walk and fails with it. Its name sorts
+    before the walk step, but the walk step failed first."""
+    walk = {
+        "name": "walk",
+        "conclusion": "failure",
+        "steps": [
+            {"name": "Probe the MCP credential gate", "conclusion": "failure", "completed_at": stamp(20)},
+            {"name": "Walk the deployed surface", "conclusion": "failure", "completed_at": stamp(10)},
+        ],
+    }
+    assert JobReader(REPO, FakeApi(jobs={7: [walk]})).failed_step(7) == "walk::Walk the deployed surface"
+
+
+def test_equal_or_missing_times_follow_the_order_of_the_payload() -> None:
+    steps = [{"name": "Second", "conclusion": "failure"}, {"name": "First", "conclusion": "failure"}]
+    jobs = [{"name": "request", "conclusion": "failure", "steps": steps}]
+    assert JobReader(REPO, FakeApi(jobs={7: jobs})).failed_step(7) == "request::Second"
+
+
+def test_a_run_name_that_matches_no_run_raises_instead_of_reading_an_empty_history() -> None:
+    api = FakeApi(deploys=[run(1, "Staging deploy of v0.0.5", "failure", 0, 1)])
+    with pytest.raises(ValueError, match="run-name changed"):
+        read_releases(REPO, api, next_tag=None)
+    api = FakeApi(walks=[run(1, "Walk of v0.0.5", "success", 0, 1)])
+    with pytest.raises(ValueError, match="run-name changed"):
+        read_releases(REPO, api, next_tag=None)
+
+
+def test_a_page_with_only_prod_runs_is_no_title_drift() -> None:
+    api = FakeApi(deploys=[run(1, "Deploy prod v0.0.5", "success", 0, 1)])
+    assert read_releases(REPO, api, next_tag=None) == ()

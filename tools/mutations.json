@@ -1006,45 +1006,13 @@
       "guard": "common/runtime/tests/test_staging_line.py",
       "file": "common/runtime/src/truealpha_tools/staging_line.py",
       "find": "            if not failed:\n                return None",
-      "replace": "            if not failed or any(run.in_flight for run in runs):\n                return None",
+      "replace": "            if not failed or any(run.conclusion == \"\" for run in runs):\n                return None",
       "command": [
         "uv",
         "run",
         "--no-sync",
         "pytest",
         "common/runtime/tests/test_staging_line.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
-      "id": "release-history/window-keeps-the-oldest-tags",
-      "guard": "common/runtime/tests/test_release_history.py",
-      "file": "common/runtime/src/truealpha_tools/release_history.py",
-      "find": "names = sorted(set(known), key=_order)[-recent:]",
-      "replace": "names = sorted(set(known), key=_order)[:recent]",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "common/runtime/tests/test_release_history.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
-      "id": "release-history/failed-tag-pushes-not-read",
-      "guard": "common/runtime/tests/test_release_history.py",
-      "file": "common/runtime/src/truealpha_tools/release_history.py",
-      "find": "for name in sorted(_failed_tag_pushes(repo, get))",
-      "replace": "for name in sorted(set())",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "common/runtime/tests/test_release_history.py",
         "-q"
       ],
       "cwd": "."
@@ -1101,8 +1069,8 @@
       "id": "release-history/summary-job-names-the-step",
       "guard": "common/runtime/tests/test_release_history.py",
       "file": "common/runtime/src/truealpha_tools/release_history.py",
-      "find": "if job.get(\"conclusion\") == \"failure\" and job.get(\"name\") != SUMMARY_JOB",
-      "replace": "if job.get(\"conclusion\") == \"failure\"",
+      "find": "            and job.get(\"name\") != SUMMARY_JOB\n",
+      "replace": "",
       "command": [
         "uv",
         "run",
@@ -1151,6 +1119,150 @@
       "file": "common/runtime/src/truealpha_tools/auto_release.py",
       "find": "            if red is None:",
       "replace": "            if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_auto_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/window-ignores-the-green-walk",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "since = green[0] if green else None",
+      "replace": "since = None",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/max-tags-keeps-the-oldest",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "newest = sorted(names, key=_order)[-max_tags:]",
+      "replace": "newest = sorted(names, key=_order)[:max_tags]",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/failed-tag-pushes-not-read",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "for status in FAILED_PUSH_STATUSES:",
+      "replace": "for status in ():",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/timed-out-pushes-not-read",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "FAILED_PUSH_STATUSES = (\"failure\", \"timed_out\")",
+      "replace": "FAILED_PUSH_STATUSES = (\"failure\",)",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/rerun-hides-the-failed-attempt",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "if not done and isinstance(attempt, int) and attempt > 1:",
+      "replace": "if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/failed-step-by-payload-order",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "                not step.get(\"completed_at\"),\n                str(step.get(\"completed_at\") or \"\"),\n",
+      "replace": "                False,\n                \"\",\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/run-name-drift-reads-an-empty-history",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "if runs and not matched:",
+      "replace": "if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/unchecked-walk-starts-the-window",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "if reader.walk_step_passed(_run_id(run)):",
+      "replace": "if True:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "auto-release/moot-run-reads-the-history",
+      "guard": "common/runtime/tests/test_auto_release.py",
+      "file": "common/runtime/src/truealpha_tools/auto_release.py",
+      "find": "        if early is None:",
+      "replace": "        if True:",
       "command": [
         "uv",
         "run",

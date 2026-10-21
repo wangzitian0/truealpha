@@ -59,7 +59,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
@@ -71,6 +71,7 @@ from truealpha_tools.release_runs import (
     TAG_RE,
     WALK_TITLE,
     WALK_WORKFLOW,
+    GitHubGet,
     workflow_runs,
 )
 from truealpha_tools.staging_line import StagingRelease
@@ -166,9 +167,12 @@ def automatic_releases_on(day: datetime, tags: Iterable[ReleaseTag]) -> list[Rel
     ]
 
 
-def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta = DEPLOY_LEAD) -> Decision:
-    if daily_cap < 0:
-        raise ValueError(f"daily cap must be >= 0, got {daily_cap}")
+def early_decision(facts: Facts) -> Decision | None:
+    """The first three reasons, and the refusal to roll back. They need no release history.
+
+    A run that ends here is moot or refused before the staging line matters, so `main` reads the
+    history only when this returns None.
+    """
     short = facts.trigger_sha[:8]
     head_short = facts.main_head[:8]
     if not facts.trigger_is_ancestor_of_head:
@@ -193,6 +197,16 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
     released = sorted(tag.name for tag in facts.tags if tag.commit == facts.main_head)
     if released:
         return Decision(False, f"main HEAD {head_short} is already released as {', '.join(released)}")
+    return None
+
+
+def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta = DEPLOY_LEAD) -> Decision:
+    if daily_cap < 0:
+        raise ValueError(f"daily cap must be >= 0, got {daily_cap}")
+    early = early_decision(facts)
+    if early is not None:
+        return early
+    head_short = facts.main_head[:8]
     red = staging_line.staging_red(facts.releases)
     if red is not None:
         return Decision(
@@ -224,7 +238,6 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
 # --- gathering the facts -----------------------------------------------------------------
 
 Runner = Callable[[Sequence[str]], str]
-GitHubGet = Callable[[str], object]
 
 
 def run_command(arguments: Sequence[str]) -> str:
@@ -326,6 +339,11 @@ def head_ci_completed(repo: str, sha: str, get: GitHubGet = gh_get) -> bool:
     )
 
 
+def read_history(repo: str, get: GitHubGet, tags: Sequence[ReleaseTag]) -> tuple[StagingRelease, ...]:
+    """The staging releases since the newest passing walk (`release_history.py`)."""
+    return read_releases(repo, get, next_tag=next_tag(tags) if tags else None)
+
+
 def gather(
     repo: str,
     trigger_sha: str,
@@ -333,7 +351,9 @@ def gather(
     get: GitHubGet = gh_get,
     run: Runner = run_command,
     now: datetime | None = None,
+    history: bool = True,
 ) -> Facts:
+    """Read the facts. With `history` false, the release history is left out (`read_history`)."""
     head = main_head(repo, get)
     tags = read_tags(run)
     latest = highest_tag(tags)
@@ -351,7 +371,7 @@ def gather(
         trigger_is_ancestor_of_head=trigger_anc,
         head_ci_completed=ci_done,
         latest_tag_is_ancestor_of_head=latest_anc,
-        releases=read_releases(repo, get, next_tag=next_tag(tags) if tags else None),
+        releases=read_history(repo, get, tags) if history else (),
     )
 
 
@@ -395,12 +415,21 @@ def main(
         print(f"::error::--trigger-sha must be a 40-hex commit, got {args.trigger_sha!r}", file=sys.stderr)
         return 2
     try:
-        facts = gather(args.repo, args.trigger_sha, get=get, run=run)
-        decision = decide(facts, daily_cap=args.daily_cap)
+        facts = gather(args.repo, args.trigger_sha, get=get, run=run, history=False)
+        early = early_decision(facts)
+        if early is None:
+            # The release history costs about a dozen API calls. A moot run does not need it.
+            facts = replace(facts, releases=read_history(args.repo, get, facts.tags))
+        decision = early or decide(facts, daily_cap=args.daily_cap)
     except (ValueError, subprocess.CalledProcessError) as exc:
         # Fail closed: a fact that cannot be read is never a reason to release.
         print(f"::error::auto-release could not read its facts: {_why(exc)}", file=sys.stderr)
         return 1
+    if early is not None:
+        print(f"skip: {early.reason}")
+        if args.github_output is not None:
+            write_outputs(args.github_output, early)
+        return 0
     red = staging_line.staging_red(facts.releases)
     line = staging_line.describe(facts.releases, red)
     print(("release: " if decision.release else "skip: ") + decision.reason)

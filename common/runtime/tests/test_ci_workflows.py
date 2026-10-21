@@ -927,6 +927,32 @@ def test_auto_release_keeps_the_staging_red_issue_in_step_with_every_decision() 
     assert "--github-output" in decide_text
 
 
+def test_the_run_names_of_the_release_workflows_render_titles_that_the_train_reads() -> None:
+    """The train reads staging deploy and walk runs by title (`truealpha_tools.release_runs`).
+    If a run-name changes, the reader sees an empty history. This test renders both run-names with
+    sample values and matches them against the patterns that the reader uses."""
+    from truealpha_tools.release_runs import DEPLOY_TITLE, WALK_TITLE
+
+    deploy_name = yaml.safe_load(source(RELEASE))["run-name"]
+    rendered = deploy_name.replace("${{ inputs.deploy_type }}", "staging").replace(
+        "${{ inputs.version_ref }}", "v0.2.5"
+    )
+    deploy = DEPLOY_TITLE.match(rendered)
+    assert deploy is not None, rendered
+    assert (deploy["deploy_type"], deploy["release"]) == ("staging", "v0.2.5")
+
+    walk_name = yaml.safe_load(source(WALK))["run-name"]
+    # A manual walk renders `Walk Deploy <type> <ref>`. A walk that follows a deploy renders
+    # `Walk <display title of the deploy run>`, which is `Walk Deploy <type> <ref>` again.
+    manual = re.search(r"format\('(Walk Deploy \{0\} \{1\})'", walk_name)
+    chained = re.search(r"format\('(Walk \{0\})', github\.event\.workflow_run\.display_title\)", walk_name)
+    assert manual is not None and chained is not None, walk_name
+    for title in (manual.group(1).format("staging", "v0.2.5"), chained.group(1).format(rendered)):
+        walk = WALK_TITLE.match(title)
+        assert walk is not None, title
+        assert (walk["deploy_type"], walk["release"]) == ("staging", "v0.2.5")
+
+
 def test_auto_release_writes_trigger_sha_only_through_env_not_into_the_script() -> None:
     """workflow_run executes this file from the default branch (main-health.yml's
     own comment on the same trigger type) with a write token; nothing from the

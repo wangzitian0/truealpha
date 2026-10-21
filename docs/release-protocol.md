@@ -157,10 +157,12 @@ before it had failed. The train now stops when both conditions hold:
 
 A release is one tag push. A tag whose own `ci-required` run fails is deleted, and
 the next attempt reuses its number, so each push counts. The stage is `ci-required`,
-`deploy-release` or `walk-release`. The step is the failed step of the newest failed
-run of that stage. The summary job of `ci-required` and the `auto-release-staging`
-run itself only echo a failure, so they never name the step. Two failures of one
-stage that name no step count as the same step.
+`deploy-release` or `walk-release`. The step is the step that failed first in the
+newest failed run of that stage. A step that runs after a failure, such as a probe,
+fails because of it, so the first failure in time is the cause. The summary job of
+`ci-required` and the `auto-release-staging` run itself only echo a failure, so they
+never name the step. Two failures of one stage that name no step count as the same
+step.
 
 A walk passes only when its walk step passed. A `walk-release` run can end `success`
 with the walk step skipped. That run walked nothing, so it lifts nothing.
@@ -168,7 +170,10 @@ with the walk step skipped. That run walked nothing, so it lifts nothing.
 Three modules hold the rule, and each fact has one definition:
 
 * `staging_line.py`: the rule, with no read of the network.
-* `release_history.py`: the releases, read from the run lists.
+* `release_history.py`: the releases, read from the run lists. It starts at the newest
+  passing walk and reads forward, which costs about a dozen API calls. A run that has
+  moved on to a newer commit reads none. A re-run keeps its run id, so the reader also
+  reads the failed attempt that the re-run hides.
 * `release_runs.py`: the words that the delivery report and the train share (the run
   titles, the tag name, the summary job).
 
@@ -190,11 +195,12 @@ Manual replay of the decision, read-only (it writes no issue and no output file)
 python3 tools/auto_release.py --repo wangzitian0/truealpha --trigger-sha "$(git rev-parse origin/main)"
 ```
 
-Add `--report-staging-red` to also open, update or close the issue. The standing
-checks are `common/runtime/tests/test_staging_line.py` (a replay of the real run
-history of 2026-10-13 to 2026-10-21 through the reader and `decide`) and the
-mutations `staging-line/*`, `release-history/*` and `staging-issue/*` in
-`tools/mutations.json`.
+Add `--report-staging-red` to also open, update or close the issue. Two standing
+checks hold the rule. The first is `common/runtime/tests/test_staging_line.py`, a
+replay of the real run history of 2026-10-13 to 2026-10-21 through the reader and
+`decide`. The second is the mutations `staging-line/*`, `release-history/*` and
+`staging-issue/*` in `tools/mutations.json`. A third check ties the run-names of the
+release workflows to the title patterns of the reader (`test_ci_workflows.py`).
 
 `--auto` is the one new flag on `cut_release.sh`, and it does exactly two
 things: it writes that trailer, and it refuses outright if `--prod` is also

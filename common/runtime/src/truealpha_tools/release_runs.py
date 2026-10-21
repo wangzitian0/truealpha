@@ -1,9 +1,13 @@
 """The words that the delivery report and the staging release train share (#1468).
 
 Both tools read the same GitHub Actions runs of a release: the `ci-required` run of a tag push,
-the `deploy-release` run and the `walk-release` run. Each fact about those runs has one
-definition, here. The delivery report is a dashboard and the release train is a gate. Neither
-defines the title of a run, the name of a tag, or the name of the summary job on its own.
+the `deploy-release` run and the `walk-release` run. The facts below have one definition, here:
+the run titles, the workflow files, the tag name, the summary job, the failed conclusions and the
+timestamp parser. `delivery_report.py` and the train import them.
+
+Other tools still hold their own copies of some of these facts: `walk_evidence.py`,
+`staging_evidence.py`, `nightly_verdicts.py` and the workflow paths of `delivery_report.py`. Move a
+fact here when you change it there.
 
 Stdlib only: `auto-release-staging.yml` runs the train with no `uv sync`.
 """
@@ -11,7 +15,11 @@ Stdlib only: `auto-release-staging.yml` runs the train with no `uv sync`.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
+
+#: Read one GitHub REST path and return the parsed JSON.
+GitHubGet = Callable[[str], object]
 
 #: The workflow files of a release.
 DEPLOY_WORKFLOW = "deploy-release.yml"
@@ -25,6 +33,8 @@ DEPLOY_TITLE = re.compile(r"\ADeploy (?P<deploy_type>staging|prod) (?P<release>\
 WALK_TITLE = re.compile(r"\AWalk Deploy (?P<deploy_type>staging|prod) (?P<release>\S+)\Z")
 #: The job of `ci-required` that fails when any other job fails. It names no cause.
 SUMMARY_JOB = "ci-required"
+#: Run conclusions that count as a failure. A cancelled or skipped run carries no verdict.
+FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
 
 
 def workflow_runs(payload: object) -> list[dict[str, object]]:

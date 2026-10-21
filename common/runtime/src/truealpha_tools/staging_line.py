@@ -1,8 +1,8 @@
 """Stop the staging release train while staging is red (#1468 F1).
 
 Measured on 2026-10-19 and 2026-10-20: in 22 hours the train cut 16 automatic tags. Only one
-walk passed in that time, on a hand-cut tag. Each automatic tag failed where the tag before it
-had failed. Nothing stopped the train, and nothing owned the red state.
+walk passed in that time, on a hand-cut tag. Tags kept failing at steps where earlier tags had
+failed. Nothing stopped the train, and nothing owned the red state.
 
 This module holds the rule. It reads no network and no clock. `auto_release.py` gathers the
 facts and calls `staging_red`.
@@ -43,10 +43,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
+from truealpha_tools.release_runs import FAILED_CONCLUSIONS
+
 #: The number of releases in a row that fail at the same step before the train stops.
 SAME_STEP_FAILURES = 2
-#: Run conclusions that count as a failure. A cancelled or skipped run carries no verdict.
-FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
 CI_STAGE = "ci-required"
 DEPLOY_STAGE = "deploy-release"
 WALK_STAGE = "walk-release"
@@ -64,10 +64,6 @@ class StageRun:
     #: "<job>::<step>" of the failing step. Empty when the run did not fail or the step is unknown.
     failed_step: str = ""
     run: int = 0
-
-    @property
-    def in_flight(self) -> bool:
-        return self.conclusion == ""
 
     @property
     def passed(self) -> bool:

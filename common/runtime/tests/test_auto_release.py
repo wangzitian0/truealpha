@@ -798,3 +798,33 @@ def test_an_error_carries_the_standard_error_of_the_failed_command(capsys: pytes
     code = main(["--repo", REPO, "--trigger-sha", TRIGGER], get=_get_for(main_sha=TRIGGER, green=True), run=broken)
     assert code == 1
     assert "Resource not accessible by integration" in capsys.readouterr().err
+
+
+def test_a_moot_run_reads_no_release_history_and_touches_no_issue(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Main moved on since this run's push, so a later run decides. The release history costs
+    about a dozen API calls, and this run needs none of them."""
+    calls: list[str] = []
+    base = _get_for(main_sha=OTHER, green=True)
+
+    def get(path: str):
+        calls.append(path)
+        return base(path)
+
+    def gh(args):
+        raise AssertionError(f"a moot run must not call gh: {args}")
+
+    output = tmp_path / "gh_output"
+    output.write_text("", encoding="utf-8")
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER, "--github-output", str(output), "--report-staging-red"],
+        get=get,
+        run=_git_with_v0_0_5,
+        gh=gh,
+    )
+    assert code == 0
+    assert "skip: main moved on" in capsys.readouterr().out
+    assert "release=false" in output.read_text(encoding="utf-8")
+    history_calls = [c for c in calls if "status=failure" in c or "status=timed_out" in c or "branch=v" in c]
+    assert history_calls == []

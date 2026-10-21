@@ -108,6 +108,7 @@ class FakeGitHub:
             "created_at": row["started_at"],
             "updated_at": row["finished_at"] if done else self._when.isoformat(),
             "head_branch": branch,
+            "run_attempt": 1,
         }
 
     def _listing(self, rows: list[dict | None]) -> dict:
@@ -170,9 +171,9 @@ class FakeGitHub:
         branch = re.search(r"workflows/ci-required.yml/runs\?branch=([^&]+)&", path)
         if branch:
             return self._listing(self._ci(branch.group(1)))
-        if "workflows/ci-required.yml/runs?event=push&status=failure" in path:
-            failed = [r for r in self._ci() if r is not None and r["conclusion"] == "failure"]
-            return self._listing(failed)
+        failed = re.search(r"workflows/ci-required.yml/runs\?event=push&status=(\w+)&", path)
+        if failed:
+            return self._listing([r for r in self._ci() if r is not None and r["conclusion"] == failed.group(1)])
         raise AssertionError(f"unexpected GET {path}")
 
 
@@ -297,20 +298,23 @@ def test_replay_resumes_the_train_after_a_green_walk() -> None:
     assert replay(HISTORY).automatic_cuts(WALK_V0_2_23, END) == expected
 
 
-def test_the_production_reader_reads_the_whole_fixture_back() -> None:
-    """The reader, fed the fixture through the REST paths, returns the 48 releases of the fixture
-    with the same verdicts. This guards the reader against the history that the replay uses."""
-    read = release_history.read_releases(REPO, FakeGitHub(HISTORY, END), next_tag="v0.2.33", recent=100)
-    expected = [a.release() for a in HISTORY]
-    assert len(read) == len(expected) == 48
-    key = lambda r: (r.tag, r.cut_at)  # noqa: E731
-    for got, want in zip(sorted(read, key=key), sorted(expected, key=key), strict=True):
-        assert (got.tag, got.cut_at, got.walked_green, got.failure()) == (
-            want.tag,
-            want.cut_at,
-            want.walked_green,
-            want.failure(),
-        )
+def test_the_production_reader_reads_the_fixture_back_from_the_newest_green_walk() -> None:
+    """The reader starts at the newest passing walk and reads forward. At 10:30Z on 2026-10-19 the
+    newest walk is that of the hand-cut v0.2.11, so the reader returns the seven pushes of v0.2.11 and
+    v0.2.12 to v0.2.17 from the full history, held pushes included, and the rule finds the stop of v0.2.13 and v0.2.14. At the
+    end of the history the newest walk is that of v0.2.31, and the line is open."""
+    direct = {(a.tag, a.cut_at): a.release() for a in HISTORY}
+    when = at("2026-10-19T10:30:00Z")
+    read = release_history.read_releases(REPO, FakeGitHub(HISTORY, when), next_tag="v0.2.18")
+    assert [r.tag for r in read] == ["v0.2.11"] * 7 + ["v0.2.12", "v0.2.13", "v0.2.14", "v0.2.15", "v0.2.16", "v0.2.17"]
+    red = staging_red(read)
+    assert red is not None and red.since == "v0.2.13"
+    end = release_history.read_releases(REPO, FakeGitHub(HISTORY, END), next_tag="v0.2.33")
+    assert [r.tag for r in end] == ["v0.2.31", "v0.2.32"]
+    assert staging_red(end) is None
+    for got in end:
+        want = direct[(got.tag, got.cut_at)]
+        assert (got.walked_green, got.failure()) == (want.walked_green, want.failure())
 
 
 def test_today_a_failed_walk_is_one_failure_and_the_second_one_stops_the_train() -> None:

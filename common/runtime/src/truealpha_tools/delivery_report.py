@@ -56,7 +56,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 
 from truealpha_tools import nightly_verdicts, surface_contract, walk_evidence
-from truealpha_tools.release_runs import DEPLOY_TITLE, SUMMARY_JOB, parse_time, tag_key
+from truealpha_tools.release_runs import DEPLOY_TITLE, FAILED_CONCLUSIONS, SUMMARY_JOB, parse_time, tag_key
 
 GhApi = Callable[[str], str]
 HttpGet = Callable[[str], tuple[int, str]]
@@ -96,9 +96,6 @@ Z95 = 1.959963984540054
 #: deploy-release.yml sets cancel-in-progress to false, so no newer run cancels a deploy.
 #: A cancelled deploy did not deliver its release, so it counts as a failure.
 DEPLOY_FAILED = frozenset({"failure", "cancelled", "timed_out", "startup_failure"})
-#: ci-required cancels a superseded PR run by design (cancel-in-progress true). A
-#: cancelled CI run carries no verdict about its SHA.
-CI_FAILED = frozenset({"failure", "timed_out", "startup_failure"})
 #: The conclusion of an earlier attempt that the API did not return.
 UNREADABLE = "unknown"
 DEPLOY_TYPES = ("staging", "prod")
@@ -599,13 +596,13 @@ class ShaRecord:
         passes = [index for index, attempt in enumerate(self.attempts) if attempt.conclusion == "success"]
         if not passes:
             return []
-        return [attempt for attempt in self.attempts[: passes[-1]] if attempt.conclusion in CI_FAILED]
+        return [attempt for attempt in self.attempts[: passes[-1]] if attempt.conclusion in FAILED_CONCLUSIONS]
 
 
 def sha_records(attempts: Iterable[CiAttempt]) -> list[ShaRecord]:
     grouped: dict[tuple[str, str], list[CiAttempt]] = defaultdict(list)
     for attempt in attempts:
-        if attempt.conclusion == "success" or attempt.conclusion in CI_FAILED:
+        if attempt.conclusion == "success" or attempt.conclusion in FAILED_CONCLUSIONS:
             grouped[(attempt.tier, attempt.sha)].append(attempt)
     return [
         ShaRecord(tier, sha, sorted(group, key=lambda attempt: attempt.started_at))
@@ -674,7 +671,7 @@ def failed_jobs(gh: GhApi, attempt: CiAttempt) -> set[str]:
     return {
         str(job.get("name"))
         for job in jobs
-        if job.get("conclusion") in CI_FAILED and str(job.get("name")) != SUMMARY_JOB
+        if job.get("conclusion") in FAILED_CONCLUSIONS and str(job.get("name")) != SUMMARY_JOB
     }
 
 
