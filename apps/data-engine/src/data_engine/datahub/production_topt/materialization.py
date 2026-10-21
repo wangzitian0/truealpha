@@ -106,6 +106,10 @@ class FinancialFactPayload(_FrozenModel):
     # period. Absent on a current row, so the payload hash of a current row does not move.
     operating_period_stale: bool | None = None
     stale_operating_period_end: date | None = None
+    # #1323: written only when the issuer registry gave no classification after its retries. Both
+    # numerators are then null. The name is `issuer_registry.UNAVAILABLE_PAYLOAD_KEY`. Absent on a
+    # classified row, so the payload hash of a classified row does not move.
+    registry_unavailable: bool | None = None
     # The share count's measurement date (#529). Present even when `shares_outstanding` is
     # None, because a count refused for staleness must be distinguishable from one the
     # source never published — the first is a dated gap, the second an absence.

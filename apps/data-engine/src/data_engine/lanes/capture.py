@@ -23,6 +23,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.strategy import ExclusionReason
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
@@ -34,6 +35,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
 from data_engine.datahub.production_topt.fund_consolidation import (
     summary_line as fund_consolidation_summary,
 )
+from data_engine.datahub.production_topt.issuer_registry import registry_unavailable_issuers
 from data_engine.datahub.production_topt.plausibility_gate import judge_issuers, judge_strategy
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
@@ -332,6 +334,13 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         # run. An issuer refusal excludes that issuer's decision with a named reason, and the run
         # publishes the others.
         issuers = judge_issuers(connection, run_id=pipeline.run_id)
+        # #1323: an issuer whose registry read failed after its retries is excluded by name, like a
+        # refused issuer. The registry reason wins: the row of that issuer rests on no classification.
+        excluded = issuers.excluded_issuers()
+        registry_unavailable = registry_unavailable_issuers(connection, run_id=pipeline.run_id)
+        excluded.update(dict.fromkeys(registry_unavailable, ExclusionReason.REGISTRY_UNAVAILABLE))
+        for issuer_id in registry_unavailable:
+            context.log.warning(f"{tick.log_label}: issuer {issuer_id} excluded as registry_unavailable")
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
@@ -347,7 +356,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 executed_at=cutoff,
                 risk_free_rate=pipeline.risk_free_rate,
                 capture_run_id=pipeline.run_id,
-                plausibility_refusals=issuers.excluded_issuers(),
+                plausibility_refusals=excluded,
             )
             strategy = {
                 "strategy_inputs_seeded": seeded,
@@ -440,6 +449,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,
         "plausibility_excluded": sorted({f"{v.rule} {v.listing_id}" for v in verdict.refusals}),
+        "registry_unavailable_excluded": registry_unavailable,
         "quality_report_id": pipeline.quality_report_id,
         "forced_fetch": pipeline.forced_fetch,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],
