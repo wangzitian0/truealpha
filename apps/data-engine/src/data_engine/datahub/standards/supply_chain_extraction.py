@@ -415,6 +415,52 @@ def _record_entity_relation_supplies_to(
         pass
 
 
+def _populate_alias_ciks(
+    connection: Connection[Any],
+    uuid_to_issuer: dict[str, CanonicalIssuer],
+    by_cik: dict[str, CanonicalIssuer],
+) -> None:
+    if not uuid_to_issuer:
+        return
+    try:
+        with _optional_savepoint(connection):
+            alias_rows = connection.execute(
+                """
+                select entity_id::text, value
+                from staging.entity_aliases
+                where entity_id = any(%s::uuid[])
+                  and scheme = 'cik'
+                """,
+                (sorted(uuid_to_issuer),),
+            ).fetchall()
+            for entity_id, cik_val in alias_rows:
+                matched_iss = uuid_to_issuer.get(str(entity_id).lower())
+                if matched_iss is not None and cik_val:
+                    cik_digits = str(cik_val).lstrip("0") or "0"
+                    by_cik.setdefault(cik_digits, matched_iss)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _populate_governed_member_ciks(
+    connection: Connection[Any],
+    run_id: str,
+    by_issuer_id: dict[str, CanonicalIssuer],
+    uuid_to_issuer: dict[str, CanonicalIssuer],
+    by_cik: dict[str, CanonicalIssuer],
+) -> None:
+    try:
+        with _optional_savepoint(connection):
+            from data_engine.datahub.production_topt.theme_purity import governed_members
+
+            for cik_int, member_issuer_id in governed_members(connection, run_id=run_id).items():
+                matched_iss = by_issuer_id.get(member_issuer_id) or uuid_to_issuer.get(member_issuer_id.lower())
+                if matched_iss is not None:
+                    by_cik.setdefault(str(cik_int), matched_iss)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _build_issuer_lookup(
     issuers: Sequence[CanonicalIssuer],
     connection: Connection[Any] | None = None,
@@ -435,37 +481,10 @@ def _build_issuer_lookup(
         if is_uuid(iss.issuer_id):
             uuid_to_issuer[iss.issuer_id.lower()] = iss
 
-    if connection is not None and uuid_to_issuer:
-        try:
-            with _optional_savepoint(connection):
-                alias_rows = connection.execute(
-                    """
-                    select entity_id::text, value
-                    from staging.entity_aliases
-                    where entity_id = any(%s::uuid[])
-                      and scheme = 'cik'
-                    """,
-                    (sorted(uuid_to_issuer),),
-                ).fetchall()
-                for entity_id, cik_val in alias_rows:
-                    matched_iss = uuid_to_issuer.get(str(entity_id).lower())
-                    if matched_iss is not None and cik_val:
-                        cik_digits = str(cik_val).lstrip("0") or "0"
-                        by_cik.setdefault(cik_digits, matched_iss)
-        except Exception:  # noqa: BLE001
-            pass
-
-    if connection is not None and run_id:
-        try:
-            with _optional_savepoint(connection):
-                from data_engine.datahub.production_topt.theme_purity import governed_members
-
-                for cik_int, member_issuer_id in governed_members(connection, run_id=run_id).items():
-                    matched_iss = by_issuer_id.get(member_issuer_id) or uuid_to_issuer.get(member_issuer_id.lower())
-                    if matched_iss is not None:
-                        by_cik.setdefault(str(cik_int), matched_iss)
-        except Exception:  # noqa: BLE001
-            pass
+    if connection is not None:
+        _populate_alias_ciks(connection, uuid_to_issuer, by_cik)
+        if run_id:
+            _populate_governed_member_ciks(connection, run_id, by_issuer_id, uuid_to_issuer, by_cik)
     return by_cik, by_legacy, by_issuer_id
 
 
