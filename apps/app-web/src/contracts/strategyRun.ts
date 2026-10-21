@@ -639,11 +639,11 @@ export class FixtureStrategyRunRepository {
 	): StrategyRunReport | StrategyRunUnavailable {
 		let raw: string;
 		try {
-			raw = readFileSync(this.fixturePath ?? FIXTURE_PATH, "utf8");
+			raw = readFileSync(/* turbopackIgnore: true */ this.fixturePath ?? FIXTURE_PATH, "utf8");
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT" && !this.fixturePath) {
 				try {
-					raw = readFileSync(REPO_ROOT_FIXTURE_PATH, "utf8");
+					raw = readFileSync(/* turbopackIgnore: true */ REPO_ROOT_FIXTURE_PATH, "utf8");
 				} catch (fallbackError) {
 					if ((fallbackError as NodeJS.ErrnoException).code === "ENOENT") {
 						return { strategy_id: strategyId, reason: "fixture_missing" };

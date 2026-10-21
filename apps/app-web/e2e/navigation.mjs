@@ -92,56 +92,57 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
   throw new Error(`gotoStable: ${route} failed twice. ${failed.join("; ")}`);
 }
 
-// Minified React error #418 is "Hydration failed because the server rendered HTML didn't
-// match the client". React recovers: it renders the tree again on the client and reports
-// the error through window.reportError, which Playwright delivers as a `pageerror`.
-const RECOVERABLE_REACT_418 = /Minified React error #418\b/;
-
 /**
- * Splits the page errors of a walk into failures of the current route and the React #418
- * events that the walk ignores (8711285a). The ignore stays until the cause of #418 on the
- * deployed path is known; v0.2.21 still raised it with no DOM mutation by the walk (#1412).
- * The walk prints the count per route at its end, so the filter is visible in every log.
+ * Collects the page errors of a walk. Every page error fails a route.
+ *
+ * React error #418 ("Hydration failed because the server rendered HTML didn't match the client")
+ * is a page error like any other. The walk ignored it from 8711285a until #1468. An ignored #418
+ * hides a real defect: React throws away the server markup and renders the page again on the client.
+ * The race check (hydration-race.mjs) shows #418 on Next 15.5.18 and none on Next 16.4.2.
+ *
+ * A page error can arrive after the walk read the verdict of a route. The ledger keeps it in
+ * `unread`. The next route reports it, and `lateProblems()` reports it at the end of a pass.
  */
 export function createPageErrorLedger() {
-  /** @type {{ role: string, path: string } | null} */
-  let current = null;
+  /** @type {string | null} */
+  let currentPath = null;
+  /** The page errors of the current route. */
   /** @type {string[]} */
   const failures = [];
-  /** @type {Map<string, number>} */
-  const ignored = new Map();
+  /** The page errors that no verdict has reported yet. */
+  /** @type {string[]} */
+  let unread = [];
   return {
-    /** The page errors of the current route that fail it. */
     failures,
+    /** @returns {string[]} the problems that the page errors of the current route add to its verdict */
+    problems() {
+      unread = [];
+      return failures.map((error) => `pageerror: ${error}`);
+    },
+    /** @returns {string[]} the problems of page errors that came after the last verdict */
+    lateProblems() {
+      const late = unread.map((error) => `pageerror after the last route: ${error}`);
+      unread = [];
+      return late;
+    },
     /**
-     * @param {string} role
+     * @param {string} _role
      * @param {string} path
      */
-    startRoute(role, path) {
-      current = { role, path };
+    startRoute(_role, path) {
+      currentPath = path;
       failures.length = 0;
+      failures.push(...unread);
     },
     /**
      * @param {string} message
      * @param {string} pagePath the path of the page that raised it
      */
     record(message, pagePath) {
-      if (!RECOVERABLE_REACT_418.test(message)) {
-        failures.push(message);
-        return;
-      }
-      const label = current === null ? "(before the first route)" : `[${current.role}] ${current.path}`;
-      const key = current !== null && pagePath !== current.path ? `${label} on ${pagePath}` : label;
-      ignored.set(key, (ignored.get(key) ?? 0) + 1);
-    },
-    /** @returns {string[]} the total, then one line per route */
-    ignoredReport() {
-      let total = 0;
-      for (const count of ignored.values()) total += count;
-      return [
-        `React #418 events that the walk ignored: ${total}`,
-        ...[...ignored].map(([key, count]) => `  ${key}: ${count}`),
-      ];
+      // assertTraceRendersDecisionInputs opens /research first, so an error can come from another page.
+      const text = currentPath !== null && pagePath !== currentPath ? `${message} (raised on ${pagePath})` : message;
+      failures.push(text);
+      unread.push(text);
     },
   };
 }
