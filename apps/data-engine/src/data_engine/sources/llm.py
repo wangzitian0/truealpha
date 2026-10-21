@@ -232,12 +232,15 @@ def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate],
     return build_chat_request(HEADCOUNT_TASK, user, model=model)
 
 
-def _gateway_transport(url: str, headers: dict[str, str], body: bytes, *, timeout: int = 60) -> tuple[int, bytes]:
+_ACTIVE_TIMEOUT_SECONDS = 60
+
+
+def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
     """The provider call through the external call ledger (rule 6). Nested inside the
     `record_call` block in `select_headcount`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=timeout, cost=0)
+    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_ACTIVE_TIMEOUT_SECONDS, cost=0)
     return int(status or 0), response
 
 
@@ -542,9 +545,10 @@ def _ask(
         served_model = None
         decision = refusal(limit_msg)
     else:
-        default_transport = partial(_gateway_transport, timeout=task.timeout_seconds)
+        global _ACTIVE_TIMEOUT_SECONDS
+        _ACTIVE_TIMEOUT_SECONDS = task.timeout_seconds
         with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
-            status, body = (transport or default_transport)(url, headers, request_bytes)
+            status, body = (transport or _gateway_transport)(url, headers, request_bytes)
             call.observe(status_code=status, body=body)
             if status >= 400:
                 call.fail(f"HTTP {status}: {body[:200]!r}")
@@ -1117,7 +1121,7 @@ def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     return {"partners": partners, "reason": "ok"}
 
 
-def extract_supply_chain_partners(
+def identify_supply_chain_partners(
     connection: Any | None,
     *,
     cik: int,

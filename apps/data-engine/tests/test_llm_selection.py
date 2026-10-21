@@ -280,7 +280,7 @@ def test_replay_is_keyed_on_the_exact_request_so_a_changed_candidate_set_is_aske
 
 
 def test_supply_chain_extraction_compacts_large_10k_prompt_and_records_partners(seated):
-    from data_engine.sources.llm import extract_supply_chain_partners
+    from data_engine.sources.llm import identify_supply_chain_partners
 
     conn = _Conn()
     filing_text = "Item 1. Business. We purchase wafers from TSMC and supplies to McKesson Corporation. " * 400
@@ -319,7 +319,7 @@ def test_supply_chain_extraction_compacts_large_10k_prompt_and_records_partners(
         }
         return 200, json.dumps(payload).encode("utf-8")
 
-    result = extract_supply_chain_partners(
+    result = identify_supply_chain_partners(
         conn,
         cik=1045810,
         accession="0001045810-25-000023",
@@ -348,7 +348,7 @@ def test_supply_chain_extraction_compacts_large_10k_prompt_and_records_partners(
 def test_context_window_exceeded_logs_alert_records_413_refusal_and_raises_model_context_limit_error(
     seated, caplog: pytest.LogCaptureFixture
 ):
-    from data_engine.sources.llm import ModelContextLimitError, extract_supply_chain_partners
+    from data_engine.sources.llm import ModelContextLimitError, identify_supply_chain_partners
 
     conn = _Conn()
     # > 2.5M chars -> estimated > 1,000,000 tokens
@@ -358,7 +358,7 @@ def test_context_window_exceeded_logs_alert_records_413_refusal_and_raises_model
         raise AssertionError("pre-flight >1M guard must reject before HTTP call")
 
     with caplog.at_level("ERROR"), pytest.raises(ModelContextLimitError) as exc_info:
-        extract_supply_chain_partners(
+        identify_supply_chain_partners(
             conn,
             cik=1045810,
             accession="0001045810-26-999999",

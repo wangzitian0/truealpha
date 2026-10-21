@@ -41,7 +41,7 @@ class _StubLLMGateway:
         self._replayed = replayed
         self._error = error
 
-    def extract_supply_chain_partners(self, _conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
+    def identify_supply_chain_partners(self, _conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
         if self._error is not None:
             raise self._error
         inv = llm.ModelInvocation(

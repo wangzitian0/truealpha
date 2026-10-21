@@ -196,7 +196,7 @@ def extract_supply_chain_relationships(
     resolved_cik = cik if cik is not None else _parse_cik_from_identifier(issuer_id or accession)
     label = issuer_label or issuer_id
     gateway_mod = llm_gateway or llm
-    extraction = gateway_mod.extract_supply_chain_partners(
+    extraction = gateway_mod.identify_supply_chain_partners(
         connection,
         cik=resolved_cik,
         accession=accession,
