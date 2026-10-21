@@ -33,10 +33,12 @@
  */
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { runHydrationRace } from "./hydration-race.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
+import { unexpectedStandaloneEntries } from "./standalone-shape.mjs";
 
 const BASE = process.env.TA_BASE_URL;
 const EMAIL = process.env.TA_EMAIL;
@@ -576,10 +578,16 @@ try {
   // #540/#811: the sign-out journey lives in its own module so a test can drive it
   // against a fake browser. It logs in once more, for its own session.
   failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
-  // #1468: the CI server sends every flight row in one burst. Only this pass opens the window
-  // that raised React #418 on the deployed surface. It runs on the seeded loopback fixture only.
-  // The deployed surface has the window already, and the proxy cannot sit in front of it.
   if (SEEDED_FIXTURE && DATA_STATE === "populated") {
+    // #1468: the image copies .next/standalone. A traced project file there is a file in the image.
+    const extra = unexpectedStandaloneEntries(fileURLToPath(new URL("../.next/standalone", import.meta.url)));
+    if (extra !== null && extra.length > 0) {
+      failures += 1;
+      console.log(`FAIL [standalone] .next/standalone holds files that the image must not carry: ${extra.join(", ")}`);
+    }
+    // #1468: the CI server sends every flight row in one burst. Only this pass opens the window
+    // that raised React #418 on the deployed surface. It runs on the seeded loopback fixture only.
+    // The deployed surface has the window already, and the proxy cannot sit in front of it.
     const race = await runHydrationRace({ browser, base: BASE, email: EMAIL, password: PASSWORD });
     for (const problem of race.problems) console.log(`FAIL ${problem}`);
     if (race.problems.length > 0) {
