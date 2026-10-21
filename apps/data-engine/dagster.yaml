@@ -64,11 +64,11 @@ run_monitoring:
 # A run that does not wait always holds one slot, finishes, and passes it to the next queued run.
 # The queue does not start a run that exceeds a limit and starts the next one.
 run_queue:
-  max_concurrent_runs: 3
+  max_concurrent_runs: 2
   tag_concurrency_limits:
     - key: truealpha/waits_for_runs
       value: "true"
-      limit: 2
+      limit: 1
 
 # Tick retention (#1072). Three sensors poll every 30 seconds. Each poll that does no work
 # writes a SKIPPED tick to dagster.job_ticks. Dagster keeps SKIPPED sensor ticks for 7 days

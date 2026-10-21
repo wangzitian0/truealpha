@@ -35,6 +35,9 @@ QUIET_PEAK_MIB = CAPACITY.ceiling_mib // 4
 LIMIT_MIB = math.floor(CAPACITY.ceiling_mib * CAPACITY.utilization_limit)
 #: A peak above the limit.
 HIGH_PEAK_MIB = LIMIT_MIB + 1
+#: The declared size of one run, and a process above it, in bytes.
+RUN_BYTES = CAPACITY.run_mib * MIB
+BIG_PROCESS = RUN_BYTES + MIB
 #: A synthetic capacity for the exact-boundary test: 70% of 2000 MiB is exactly 1400 MiB.
 SYNTHETIC = CAPACITY.model_copy(update={"ceiling_mib": 2000, "utilization_limit": 0.7})
 TICK_1 = "2026-10-21T06:30:00+00:00"
@@ -59,8 +62,11 @@ def _tree(
     start_ticks: int | None = 12345,
     boot_id: str | None = BOOT_ID,
     command: str = "dagster api grpc",
+    processes: dict[int, int] | None = None,
 ) -> tuple[Path, Path]:
-    """Write a cgroup tree and a process table. A None argument leaves the file out."""
+    """Write a cgroup tree and a process table. A None argument leaves the file out.
+
+    `processes` maps a pid to its `VmHWM` in kB. The code server (pid 1) always holds more than any run."""
     cgroup, proc = root / "cgroup", root / "proc"
     (proc / "1").mkdir(parents=True)
     (proc / "sys" / "kernel" / "random").mkdir(parents=True)
@@ -76,6 +82,10 @@ def _tree(
         (proc / "1" / "stat").write_text(f"1 ({command}) {' '.join(after_name)}\n")
     if boot_id is not None:
         (proc / "sys" / "kernel" / "random" / "boot_id").write_text(f"{boot_id}\n")
+    (proc / "1" / "status").write_text(f"Name:\tdagster\nVmHWM:\t{9999 * 1024} kB\n")
+    for pid, kilobytes in (processes or {}).items():
+        (proc / str(pid)).mkdir()
+        (proc / str(pid) / "status").write_text(f"Name:\tpython\nVmPeak:\t{kilobytes * 2} kB\nVmHWM:\t{kilobytes} kB\n")
     return cgroup, proc
 
 
@@ -84,9 +94,18 @@ def _reading(tmp_path: Path, **tree: Any) -> Reading:
     return runtime_shape.read(cgroup, proc)
 
 
-def _container(tmp_path: Path, name: str, *, ticks: int, oom_kill: int = 0, peak_mib: int = QUIET_PEAK_MIB) -> Reading:
+def _container(
+    tmp_path: Path,
+    name: str,
+    *,
+    ticks: int,
+    oom_kill: int = 0,
+    peak_mib: int = QUIET_PEAK_MIB,
+    process_bytes: int = 0,
+) -> Reading:
     """The reading of the container that started at `ticks`, in its own tree."""
-    return _reading(tmp_path / name, start_ticks=ticks, oom_kill=oom_kill, peak=peak_mib * MIB)
+    processes = {2: process_bytes // 1024} if process_bytes else None
+    return _reading(tmp_path / name, start_ticks=ticks, oom_kill=oom_kill, peak=peak_mib * MIB, processes=processes)
 
 
 def _fold(tracker: Tracker, reading: Reading, deployment: str = "A") -> Tracker:
@@ -105,6 +124,7 @@ def test_the_reading_holds_the_four_facts_of_the_files(tmp_path: Path) -> None:
         memory_peak=123456789,
         oom_kill=7,
         container=f"{BOOT_ID}:424242",
+        largest_process=0,
     )
     assert reading.unreadable == ()
 
@@ -157,12 +177,49 @@ def test_a_file_with_text_that_is_not_a_number_is_unreadable(tmp_path: Path) -> 
 
 
 def test_an_empty_reading_misses_all_four_facts() -> None:
-    assert Reading().unreadable == ("memory.max", "memory.peak", "memory.events", "container identity")
+    assert Reading().unreadable == (
+        "memory.max",
+        "memory.peak",
+        "memory.events",
+        "container identity",
+        "process sizes",
+    )
 
 
 def test_the_deployed_paths_are_the_container_cgroup_and_process_table() -> None:
     assert runtime_shape.CGROUP_ROOT == Path("/sys/fs/cgroup")
     assert runtime_shape.PROC_ROOT == Path("/proc")
+
+
+def test_the_largest_process_is_the_largest_vmhwm_of_any_process_but_the_code_server(tmp_path: Path) -> None:
+    reading = _reading(tmp_path, processes={7: 300 * 1024, 8: 330 * 1024, 9: 120 * 1024})
+
+    assert reading.largest_process == 330 * MIB, "pid 1 holds 9999 MiB in this tree and is not counted"
+
+
+def test_no_process_but_the_code_server_is_a_largest_process_of_zero_not_a_missing_fact(tmp_path: Path) -> None:
+    reading = _reading(tmp_path)
+
+    assert reading.largest_process == 0
+    assert reading.unreadable == ()
+
+
+def test_a_process_that_exited_or_hides_its_status_is_skipped(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path, processes={7: 250 * 1024})
+    (proc / "8").mkdir()  # exited between the listing and the read: no status file
+    (proc / "self").mkdir()  # not a process id
+    (proc / "cpuinfo").write_text("x")
+
+    assert runtime_shape.read(cgroup, proc).largest_process == 250 * MIB
+
+
+def test_a_process_table_that_cannot_be_listed_is_an_unreadable_fact(tmp_path: Path) -> None:
+    cgroup, _ = _tree(tmp_path)
+
+    assert runtime_shape.read(cgroup, tmp_path / "no-proc").unreadable == (
+        "container identity",
+        "process sizes",
+    )
 
 
 # --- folding readings into totals --------------------------------------------------------
@@ -224,6 +281,23 @@ def test_a_reading_with_a_missing_fact_adds_nothing(tmp_path: Path) -> None:
     assert _fold(Tracker(), Reading()) == Tracker()
 
 
+def test_a_new_largest_process_above_the_declared_run_size_counts_once(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    again = _fold(tracker, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS))
+    smaller = _fold(again, _container(tmp_path, "c", ticks=1, process_bytes=BIG_PROCESS - MIB // 2))
+    bigger = _fold(smaller, _container(tmp_path, "d", ticks=1, process_bytes=BIG_PROCESS + MIB))
+
+    assert (tracker.processes_over_size, again.processes_over_size, smaller.processes_over_size) == (1, 1, 1)
+    assert bigger.processes_over_size == 2
+    assert bigger.largest_process == BIG_PROCESS + MIB, "the largest is a high-water mark of the samples"
+
+
+def test_a_process_at_the_declared_run_size_does_not_count(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=RUN_BYTES))
+
+    assert (tracker.processes_over_size, tracker.largest_process) == (0, RUN_BYTES)
+
+
 # --- the judgement of one reading ------------------------------------------------------------
 
 
@@ -256,7 +330,9 @@ def test_an_unreadable_fact_is_red_even_when_every_other_fact_is_good(tmp_path: 
 
 
 def test_an_empty_reading_is_red_for_all_four_facts() -> None:
-    assert _judge(Reading()).red == ("unreadable: memory.max, memory.peak, memory.events, container identity",)
+    assert _judge(Reading()).red == (
+        "unreadable: memory.max, memory.peak, memory.events, container identity, process sizes",
+    )
 
 
 @pytest.mark.parametrize(
@@ -285,6 +361,17 @@ def test_a_peak_exactly_at_the_limit_of_the_real_ceiling_is_green_and_one_byte_a
     assert at_the_limit.red == ()
     assert len(one_byte_above.red) == 1
     assert "rose above 70%" in one_byte_above.red[0]
+
+
+def test_a_process_larger_than_the_declared_run_size_is_red_and_names_both_sizes(tmp_path: Path) -> None:
+    verdict = _judge(_container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+
+    assert verdict.red == (
+        f"a process held {CAPACITY.run_mib + 1} MiB, above the declared run size {CAPACITY.run_mib} MiB"
+        " (1 time(s)); the run limit assumes that size",
+    )
+    assert verdict.facts["processes_over_size"] == 1
+    assert verdict.facts["largest_process_mib"] == CAPACITY.run_mib + 1
 
 
 def test_the_peak_is_judged_against_the_real_ceiling_not_the_declared_one(tmp_path: Path) -> None:
@@ -552,7 +639,10 @@ def test_a_tracker_that_lost_the_kills_of_a_replaced_container_turns_the_next_ch
     )
 
 
-@pytest.mark.parametrize("field", ["kills", "restarts_same_deployment", "restarts_new_deployment", "peaks_over_limit"])
+@pytest.mark.parametrize(
+    "field",
+    ["kills", "restarts_same_deployment", "restarts_new_deployment", "peaks_over_limit", "processes_over_size"],
+)
 def test_each_total_that_falls_below_the_baseline_is_a_reset(tmp_path: Path, field: str) -> None:
     reading = _container(tmp_path, "a", ticks=1)
 
@@ -594,6 +684,29 @@ def _tracker_json(**changes: Any) -> str:
         "sampled_at": NOW.isoformat(),
     }
     return json.dumps({**state, **changes})
+
+
+def test_state_saved_before_the_process_sizes_existed_still_loads_with_zero_sizes() -> None:
+    """The sensor of the first release stored no process size. Its tracker and baseline must not read as broken."""
+    import json
+
+    tracker = Tracker.from_json(_tracker_json())
+    baseline = Baseline.from_json(
+        json.dumps(
+            {
+                "kills": 0,
+                "restarts_same_deployment": 0,
+                "restarts_new_deployment": 0,
+                "peaks_over_limit": 1,
+                "tick": TICK_1,
+                "red": ["x"],
+                "summary": "x",
+            }
+        )
+    )
+
+    assert (tracker.largest_process, tracker.processes_over_size) == (0, 0)
+    assert baseline.processes_over_size == 0
 
 
 @pytest.mark.parametrize(

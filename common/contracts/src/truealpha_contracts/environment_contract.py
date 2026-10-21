@@ -118,39 +118,53 @@ UTILIZATION_CEILING = 0.7
 
 
 class MeasuredProcessMemory(_StrictFrozenModel):
-    """The peak resident memory (``VmHWM``) of the processes of the code server, read once (#1467)."""
+    """What the code server container held, read once (#1467).
+
+    ``grpc_server_hwm_mib`` is the ``VmHWM`` of the first process. ``container_peak_mib`` is the
+    ``memory.peak`` of the cgroup while ``concurrent_runs`` in-process runs overlapped. The share of one
+    run is an upper bound: the cgroup counts the file pages that the processes share once."""
 
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
     method: str = Field(min_length=1)
     grpc_server_hwm_mib: float = Field(gt=0)
-    spawned_process_hwm_mib: float = Field(gt=0)
+    container_peak_mib: float = Field(gt=0)
+    concurrent_runs: int = Field(ge=1)
     source: str = Field(min_length=1)
+
+    @property
+    def run_mib(self) -> float:
+        """The memory of one in-process run: the peak beside the server, divided over the runs."""
+        return (self.container_peak_mib - self.grpc_server_hwm_mib) / self.concurrent_runs
 
 
 class CodeServerCapacity(_StrictFrozenModel):
     """The memory of the Dagster code server container and the run limit that follows from it (#1467).
 
-    The gRPC server and every run process share one cgroup. A run executes in one process when its
-    job uses the in-process executor (``processes_per_run`` = 1). Each process that imports
-    ``data_engine.dagster_defs`` holds ``process_mib``. The queue limit is the number of runs that
-    fit beside the server inside ``utilization_limit`` of the ceiling.
+    The gRPC server and every run process share one cgroup. The server holds ``server_mib``. A run
+    executes in ``processes_per_run`` processes (1 when its job uses the in-process executor) and holds
+    ``run_mib`` per process, the import of the whole code location plus the work of the steps. The queue
+    limit is the number of runs that fit beside the server inside ``utilization_limit`` of the ceiling.
     """
 
     description: str = Field(min_length=1)
     ceiling_mib: int = Field(ge=1)
     ceiling_source: str = Field(min_length=1)
     utilization_limit: float = Field(gt=0, le=UTILIZATION_CEILING)
-    process_mib: int = Field(ge=1)
+    server_mib: int = Field(ge=1)
+    run_mib: int = Field(ge=1)
     server_processes: int = Field(ge=1)
     processes_per_run: int = Field(ge=1)
     measured: MeasuredProcessMemory
 
     @model_validator(mode="after")
-    def _process_covers_the_measurement_and_two_runs_fit(self) -> Self:
-        observed = max(self.measured.grpc_server_hwm_mib, self.measured.spawned_process_hwm_mib)
-        if self.process_mib < observed:
-            raise ValueError(f"process_mib {self.process_mib} is below the measured peak of {observed} MiB")
+    def _sizes_cover_the_measurement_and_two_runs_fit(self) -> Self:
+        if self.server_mib < self.measured.grpc_server_hwm_mib:
+            raise ValueError(
+                f"server_mib {self.server_mib} is below the measured {self.measured.grpc_server_hwm_mib} MiB"
+            )
+        if self.run_mib < self.measured.run_mib:
+            raise ValueError(f"run_mib {self.run_mib} is below the measured {self.measured.run_mib:.1f} MiB")
         if self.max_concurrent_runs < 2:
             raise ValueError(
                 f"the ceiling admits {self.max_concurrent_runs} concurrent run(s); a waiting run and the run it waits for need 2"
@@ -165,8 +179,8 @@ class CodeServerCapacity(_StrictFrozenModel):
     @property
     def max_concurrent_runs(self) -> int:
         """The most runs that fit beside the server processes inside ``usable_mib``."""
-        free = self.usable_mib - self.server_processes * self.process_mib
-        return max(free // (self.processes_per_run * self.process_mib), 0)
+        free = self.usable_mib - self.server_processes * self.server_mib
+        return max(free // (self.processes_per_run * self.run_mib), 0)
 
     @property
     def max_waiting_runs(self) -> int:

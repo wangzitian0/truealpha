@@ -50,7 +50,7 @@ def _queue(directory: Path = DAGSTER_YAML.parent) -> Any:
 
 def _held_mib(runs: int) -> int:
     """The memory in MiB of the server processes and `runs` runs, each run at `processes_per_run` processes."""
-    return (CAPACITY.server_processes + runs * CAPACITY.processes_per_run) * CAPACITY.process_mib
+    return CAPACITY.server_processes * CAPACITY.server_mib + runs * CAPACITY.processes_per_run * CAPACITY.run_mib
 
 
 def _deployed_jobs() -> dict[str, list[dg.JobDefinition]]:
@@ -282,12 +282,12 @@ def _fresh_code_server_peak_mib() -> float:
 def test_the_declared_process_size_covers_a_fresh_code_server() -> None:
     """The deployed pid 1 held 229.5 MiB (`VmHWM`, staging, 2026-10-20). This starts the same command in this
     venv and reads the same counter. A podman Linux container with the image layout (`uv sync --frozen --no-dev
-    --no-editable`) read 211.5 MiB for it. The size grows with the image; `process_mib` must follow."""
+    --no-editable`) read 211.5 MiB for it. The size grows with the image; `server_mib` must follow."""
     peak_mib = _fresh_code_server_peak_mib()
 
-    assert peak_mib <= CAPACITY.process_mib, (
-        f"a fresh code server holds {peak_mib:.0f} MiB, above the declared {CAPACITY.process_mib} MiB;"
-        " measure the code server again and raise process_mib in environment_contract.v1.json"
+    assert peak_mib <= CAPACITY.server_mib, (
+        f"a fresh code server holds {peak_mib:.0f} MiB, above the declared {CAPACITY.server_mib} MiB;"
+        " measure the code server again and raise server_mib in environment_contract.v1.json"
         " (the queue limit follows)"
     )
 
