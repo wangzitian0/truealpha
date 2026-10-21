@@ -42,6 +42,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.strategy_history",
     # the nightly backtest of large_model_value_v0 at its quarter-end cutoffs (#758, Milestone M3)
     "data_engine.lanes.backtest",
+    # macro base data: the U.S. Treasury par yields, the measured risk-free rate included (#1255)
+    "data_engine.lanes.macro_data",
 )
 
 

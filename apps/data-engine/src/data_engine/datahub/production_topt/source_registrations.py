@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.strategy import RiskFreeInstrument
 
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 
@@ -275,6 +276,80 @@ class SourceRegistration:
         return getattr(import_module(module_name), attribute)
 
 
+#: The as-of axes that a macro source may declare. A macro observation is dated by a business day.
+MACRO_AS_OF_AXES = ("business_day",)
+
+
+@dataclass(frozen=True)
+class MacroSeries:
+    """One macro series that a source file carries (#1255).
+
+    ``series_id`` is the id that rows of ``mart.macro_series_daily`` carry and that a strategy
+    definition names. ``source_column`` is the column of the source file. ``unit`` is the unit of the
+    stored value.
+    """
+
+    series_id: str
+    label: str
+    source_column: str
+    unit: str = "annualized_decimal_fraction"
+
+    def __post_init__(self) -> None:
+        for name in ("series_id", "label", "source_column", "unit"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"macro series {name} must not be empty")
+
+
+@dataclass(frozen=True)
+class MacroSourceRegistration:
+    """A source of macro base data (#1255). It owns no capture cell, so it is not in ``REGISTRATIONS``.
+
+    ``REGISTRATIONS`` expands into capture obligations for every issuer. A macro series belongs to no
+    issuer. Its own list therefore keeps the capture plan unchanged. It follows the rules of
+    ``SourceRegistration`` for the ledger seat, the per-key cost and the as-of axis (#1411 K1).
+
+    ``per_key_cost`` is the cost of one request. One request returns one calendar year of the file.
+    The file carries every series of this registration, so a night costs one request for all series.
+    ``max_age_days`` is the longest age that the newest observation may have. The age counts calendar
+    days from the observation date. It is the cadence of the series: the source publishes on business
+    days, and the longest normal gap between two observation dates is four days.
+    """
+
+    source_id: str
+    version: str
+    series: tuple[MacroSeries, ...]
+    ledger_seat: str
+    per_key_cost: int
+    as_of_axis: str
+    max_age_days: int
+    #: The first calendar year that the first run loads. The ideal backtest window is 20 years.
+    first_year: int
+    capacity: CapacityDeclaration | None = None
+    notes: tuple[str, ...] = field(default=(), compare=False)
+
+    def __post_init__(self) -> None:
+        _seat_capacity(self, self.source_id)  # type: ignore[arg-type]
+        if self.ledger_seat not in LEDGER_CAPACITIES:
+            raise ValueError(f"{self.source_id}: ledger seat {self.ledger_seat!r} has no capacity declaration")
+        if self.per_key_cost <= 0:
+            raise ValueError(f"{self.source_id}: macro registration must declare positive per_key_cost (#1411 K1)")
+        if self.as_of_axis not in MACRO_AS_OF_AXES:
+            raise ValueError(f"{self.source_id}: as_of_axis {self.as_of_axis!r} is not one of {MACRO_AS_OF_AXES}")
+        if not self.series:
+            raise ValueError(f"{self.source_id}: a macro registration must declare at least one series")
+        ids = [item.series_id for item in self.series]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"{self.source_id}: a series id appears twice: {ids}")
+        if self.max_age_days <= 0:
+            raise ValueError(f"{self.source_id}: max_age_days must be positive, got {self.max_age_days}")
+
+    def series_by_id(self, series_id: str) -> MacroSeries:
+        for item in self.series:
+            if item.series_id == series_id:
+                return item
+        raise LookupError(f"{self.source_id} does not carry the series {series_id!r}")
+
+
 # Twelve Data is the second origin behind market-price: its identity lives here (not
 # in the adapter) so the quality report can recognise its vintages from the registry.
 TWELVE_DATA_ORIGIN = "twelve-data"
@@ -395,6 +470,16 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
             window_seconds=1,
             daily_budget=50,
             documented="none published",
+        ),
+        # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): one public CSV per
+        # calendar year, no key. A request returns every registered macro series of one year.
+        # The nightly run makes one request. The first run makes one request per year back to
+        # `MACRO_FIRST_YEAR`. 50 per day is our runaway backstop, per environment.
+        "us-treasury": CapacityDeclaration(
+            calls_per_window=1,
+            window_seconds=1,
+            daily_budget=50,
+            documented="none published (public CSV on home.treasury.gov, no key)",
         ),
         # The model seat: the sum of the per-environment limits of the model seat in the
         # environment contract (#1444). The account is shared with other users and its own limit is
@@ -531,6 +616,59 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         ),
     ),
 )
+
+#: Macro base data (#1255). Its own list keeps the capture plan unchanged: see `MacroSourceRegistration`.
+MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
+    MacroSourceRegistration(
+        source_id="us-treasury-par-yield",
+        version="v1",
+        # The first series is the instrument that the core strategy definition names for its
+        # risk-free rate (`labor_efficiency.risk_free.instrument`). The id has one definition: the enum.
+        series=(
+            MacroSeries(
+                series_id=RiskFreeInstrument.US_TREASURY_BILL_3_MONTH.value,
+                label="U.S. Treasury 3-month par yield",
+                source_column="3 Mo",
+            ),
+            MacroSeries(
+                series_id="us_treasury_note_2_year",
+                label="U.S. Treasury 2-year par yield",
+                source_column="2 Yr",
+            ),
+            MacroSeries(
+                series_id="us_treasury_note_10_year",
+                label="U.S. Treasury 10-year par yield",
+                source_column="10 Yr",
+            ),
+        ),
+        ledger_seat="us-treasury",
+        per_key_cost=1,
+        as_of_axis="business_day",
+        # The Treasury publishes on business days. The longest gap between two observation dates in the
+        # files of 2023 to 2026 is four days (a Friday and the Tuesday after a Monday holiday). One day
+        # more admits the run that comes before the Treasury publishes.
+        max_age_days=5,
+        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat allows 50
+        # requests per day, and this load needs one request per year.
+        first_year=2000,
+        notes=(
+            "The Treasury obtains its input quotes at about 3:30 PM New York time on each business day. "
+            "A value is knowable at 00:00 UTC of the next day.",
+        ),
+    ),
+)
+
+
+def registered_macro_series() -> tuple[tuple[MacroSourceRegistration, MacroSeries], ...]:
+    """Every macro series with the registration that owns it."""
+    return tuple((registration, item) for registration in MACRO_REGISTRATIONS for item in registration.series)
+
+
+def macro_registration_for(series_id: str) -> MacroSourceRegistration:
+    for registration in MACRO_REGISTRATIONS:
+        if any(item.series_id == series_id for item in registration.series):
+            return registration
+    raise LookupError(f"no macro registration carries the series {series_id!r}")
 
 
 def registered_semantic_types() -> tuple[str, ...]:

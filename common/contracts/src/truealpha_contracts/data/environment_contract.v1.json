@@ -242,6 +242,9 @@
           }
         }
       },
+      "macro_data_refresh_pipeline": {
+        "unmeasured": "No run in the window: the lane merged on 2026-10-21 (#1255). The first run makes one request per year since 2000 at 1 request per second. Measure it after its first runs."
+      },
       "market_data_refresh_pipeline": {
         "measured": {
           "production": {
