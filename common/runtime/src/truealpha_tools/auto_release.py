@@ -2,7 +2,7 @@
 """Decide whether a quiet, green main HEAD is released to staging now.
 
     python3 tools/auto_release.py --repo wangzitian0/truealpha --trigger-sha <40-hex> \
-        [--daily-cap 4] [--github-output "$GITHUB_OUTPUT"]
+        [--daily-cap 4] [--github-output "$GITHUB_OUTPUT"] [--report-staging-red]
 
 `auto-release-staging.yml` runs this after its quiet period and, on `release=true`, runs
 `tools/cut_release.sh <tag> --auto` — the same ceremony an operator runs, without `--prod`.
@@ -24,16 +24,22 @@ not to release even after that quiet period. The first matching reason wins:
 2. main HEAD has no green `ci-required` push run. This repeats the trigger's own condition;
    `cut_release.sh` checks it a third time before it tags.
 3. main HEAD already carries a vX.Y.Z tag. Someone released it by hand while we waited.
-4. Staging's nightly tick window is open, or the deploy would land inside it. The staging
+4. Staging is red (#1468 F1). The newest staging release has no passing walk. Two releases in
+   a row failed at the same stage and step since the newest passing walk of any tag
+   (`staging_line.py` holds the rule). The train cuts no tag until a walk passes. With
+   `--report-staging-red`, this tool opens or updates one issue, `[truealpha] Staging red since
+   <tag>: <step>`, and closes it when the train resumes (`staging_issue.py`). The stop is no
+   failure: this tool exits 0, so a stopped train is not a red run.
+5. Staging's nightly tick window is open, or the deploy would land inside it. The staging
    TOPT tick starts at 22:45Z, QQQ at 23:20Z and the canary at 23:47Z
    (`apps/data-engine/src/data_engine/lanes/capture.py`). A deploy restarts the data engine,
    so a release that starts shortly before 22:45 would restart it mid-tick.
    `DEPLOY_LEAD` is that margin. `test_auto_release.py` holds the window against those
    crons.
-5. This UTC day already has `--daily-cap` automatic releases (default 4). They are counted
+6. This UTC day already has `--daily-cap` automatic releases (default 4). They are counted
    from tags whose annotation carries `AUTO_TRAILER`, which `cut_release.sh --auto` writes.
    Hand-cut tags do not count.
-6. A release is already in flight: a `deploy-release.yml` run, a staging surface walk, or a
+7. A release is already in flight: a `deploy-release.yml` run, a staging surface walk, or a
    tag's `ci-required` run that has not completed. Their next step belongs to someone else.
    Two auto-release runs never overlap, because the workflow's release job is serialised by
    its own concurrency group.
@@ -53,9 +59,22 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+
+from truealpha_tools import staging_issue, staging_line
+from truealpha_tools.release_history import read_releases
+from truealpha_tools.release_runs import (
+    CI_WORKFLOW,
+    DEPLOY_WORKFLOW,
+    TAG_RE,
+    WALK_TITLE,
+    WALK_WORKFLOW,
+    GitHubGet,
+    workflow_runs,
+)
+from truealpha_tools.staging_line import StagingRelease
 
 #: The annotation line `cut_release.sh --auto` writes; the daily cap counts tags carrying it.
 AUTO_TRAILER = "Release-Trigger: auto-staging"
@@ -68,13 +87,7 @@ TICK_WINDOW_LABEL = "22:45-00:00Z"
 #: infra2 dispatch (~6 min, docs/release-protocol.md), with margin. A release that starts
 #: less than this long before the window would restart the engine inside it.
 DEPLOY_LEAD = timedelta(minutes=15)
-TAG_RE = re.compile(r"\Av(\d+)\.(\d+)\.(\d+)\Z")
 SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
-#: Runs that are part of a release still in flight, until they complete.
-DEPLOY_WORKFLOW = "deploy-release.yml"
-WALK_WORKFLOW = "walk-release.yml"
-CI_WORKFLOW = "ci-required.yml"
-STAGING_WALK_TITLE_PREFIX = "Walk Deploy staging "
 _FIELD = "\x1f"
 _RECORD = "\x1e"
 
@@ -110,6 +123,8 @@ class Facts:
     trigger_is_ancestor_of_head: bool = True
     head_ci_completed: bool = False
     latest_tag_is_ancestor_of_head: bool = True
+    #: The recent staging releases with the outcome of each stage (`staging_line.py`).
+    releases: tuple[StagingRelease, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,9 +167,12 @@ def automatic_releases_on(day: datetime, tags: Iterable[ReleaseTag]) -> list[Rel
     ]
 
 
-def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta = DEPLOY_LEAD) -> Decision:
-    if daily_cap < 0:
-        raise ValueError(f"daily cap must be >= 0, got {daily_cap}")
+def early_decision(facts: Facts) -> Decision | None:
+    """The first three reasons, and the refusal to roll back. They need no release history.
+
+    A run that ends here is moot or refused before the staging line matters, so `main` reads the
+    history only when this returns None.
+    """
     short = facts.trigger_sha[:8]
     head_short = facts.main_head[:8]
     if not facts.trigger_is_ancestor_of_head:
@@ -179,6 +197,23 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
     released = sorted(tag.name for tag in facts.tags if tag.commit == facts.main_head)
     if released:
         return Decision(False, f"main HEAD {head_short} is already released as {', '.join(released)}")
+    return None
+
+
+def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta = DEPLOY_LEAD) -> Decision:
+    if daily_cap < 0:
+        raise ValueError(f"daily cap must be >= 0, got {daily_cap}")
+    early = early_decision(facts)
+    if early is not None:
+        return early
+    head_short = facts.main_head[:8]
+    red = staging_line.staging_red(facts.releases)
+    if red is not None:
+        return Decision(
+            False,
+            f"staging is red since {red.since} at {red.label}; no walk has passed since; "
+            f"no new tag until a walk of any tag passes",
+        )
     if in_tick_window(facts.now, lead=lead):
         return Decision(
             False,
@@ -203,7 +238,6 @@ def decide(facts: Facts, *, daily_cap: int = DEFAULT_DAILY_CAP, lead: timedelta 
 # --- gathering the facts -----------------------------------------------------------------
 
 Runner = Callable[[Sequence[str]], str]
-GitHubGet = Callable[[str], object]
 
 
 def run_command(arguments: Sequence[str]) -> str:
@@ -249,12 +283,6 @@ def gh_get(path: str) -> object:
     return json.loads(run_command(["gh", "api", "-X", "GET", path]))
 
 
-def _runs(payload: object) -> list[dict[str, object]]:
-    if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
-        raise ValueError(f"unexpected workflow runs payload: {str(payload)[:200]}")
-    return [run for run in payload["workflow_runs"] if isinstance(run, dict)]
-
-
 def in_flight_releases(repo: str, get: GitHubGet = gh_get) -> tuple[str, ...]:
     """Release runs that have not completed, described for the log."""
     busy: list[str] = []
@@ -262,14 +290,14 @@ def in_flight_releases(repo: str, get: GitHubGet = gh_get) -> tuple[str, ...]:
     def describe(run: dict[str, object]) -> str:
         return f"{run.get('display_title') or run.get('name')} (run {run.get('id')}, {run.get('status')})"
 
-    for run in _runs(get(f"/repos/{repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=20")):
+    for run in workflow_runs(get(f"/repos/{repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=20")):
         if run.get("status") != "completed":
             busy.append(describe(run))
-    for run in _runs(get(f"/repos/{repo}/actions/workflows/{WALK_WORKFLOW}/runs?per_page=20")):
-        title = str(run.get("display_title") or "")
-        if run.get("status") != "completed" and title.startswith(STAGING_WALK_TITLE_PREFIX):
+    for run in workflow_runs(get(f"/repos/{repo}/actions/workflows/{WALK_WORKFLOW}/runs?per_page=20")):
+        walk = WALK_TITLE.match(str(run.get("display_title") or ""))
+        if run.get("status") != "completed" and walk is not None and walk["deploy_type"] == "staging":
             busy.append(describe(run))
-    for run in _runs(get(f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs?event=push&per_page=30")):
+    for run in workflow_runs(get(f"/repos/{repo}/actions/workflows/{CI_WORKFLOW}/runs?event=push&per_page=30")):
         if run.get("status") != "completed" and TAG_RE.match(str(run.get("head_branch") or "")):
             busy.append(describe(run))
     return tuple(busy)
@@ -311,6 +339,11 @@ def head_ci_completed(repo: str, sha: str, get: GitHubGet = gh_get) -> bool:
     )
 
 
+def read_history(repo: str, get: GitHubGet, tags: Sequence[ReleaseTag]) -> tuple[StagingRelease, ...]:
+    """The staging releases since the newest passing walk (`release_history.py`)."""
+    return read_releases(repo, get, next_tag=next_tag(tags) if tags else None)
+
+
 def gather(
     repo: str,
     trigger_sha: str,
@@ -318,7 +351,9 @@ def gather(
     get: GitHubGet = gh_get,
     run: Runner = run_command,
     now: datetime | None = None,
+    history: bool = True,
 ) -> Facts:
+    """Read the facts. With `history` false, the release history is left out (`read_history`)."""
     head = main_head(repo, get)
     tags = read_tags(run)
     latest = highest_tag(tags)
@@ -336,6 +371,7 @@ def gather(
         trigger_is_ancestor_of_head=trigger_anc,
         head_ci_completed=ci_done,
         latest_tag_is_ancestor_of_head=latest_anc,
+        releases=read_history(repo, get, tags) if history else (),
     )
 
 
@@ -353,23 +389,64 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trigger-sha", required=True, help="the main commit whose green run started the wait")
     parser.add_argument("--daily-cap", type=int, default=DEFAULT_DAILY_CAP)
     parser.add_argument("--github-output", type=Path, help="append release/tag/reason for the next step")
+    parser.add_argument(
+        "--report-staging-red",
+        action="store_true",
+        help="open or update the staging-red issue when staging is red, and close it when a walk has passed",
+    )
     return parser
 
 
-def main(argv: Sequence[str] | None = None, *, get: GitHubGet = gh_get, run: Runner = run_command) -> int:
+def _why(exc: Exception) -> str:
+    """The error text, with the standard error of a failed command."""
+    stderr = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else ""
+    return f"{exc}: {stderr[-300:]}" if stderr else str(exc)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    get: GitHubGet = gh_get,
+    run: Runner = run_command,
+    gh: Runner = run_command,
+) -> int:
     args = _parser().parse_args(argv)
     if not SHA_RE.match(args.trigger_sha):
         print(f"::error::--trigger-sha must be a 40-hex commit, got {args.trigger_sha!r}", file=sys.stderr)
         return 2
     try:
-        decision = decide(gather(args.repo, args.trigger_sha, get=get, run=run), daily_cap=args.daily_cap)
+        facts = gather(args.repo, args.trigger_sha, get=get, run=run, history=False)
+        early = early_decision(facts)
+        if early is None:
+            # The release history costs about a dozen API calls. A moot run does not need it.
+            facts = replace(facts, releases=read_history(args.repo, get, facts.tags))
+        decision = early or decide(facts, daily_cap=args.daily_cap)
     except (ValueError, subprocess.CalledProcessError) as exc:
         # Fail closed: a fact that cannot be read is never a reason to release.
-        print(f"::error::auto-release could not read its facts: {exc}", file=sys.stderr)
+        print(f"::error::auto-release could not read its facts: {_why(exc)}", file=sys.stderr)
         return 1
+    if early is not None:
+        print(f"skip: {early.reason}")
+        if args.github_output is not None:
+            write_outputs(args.github_output, early)
+        return 0
+    red = staging_line.staging_red(facts.releases)
+    line = staging_line.describe(facts.releases, red)
     print(("release: " if decision.release else "skip: ") + decision.reason)
+    print("staging line: " + line)
     if args.github_output is not None:
         write_outputs(args.github_output, decision)
+    if args.report_staging_red:
+        try:
+            print("staging issue: " + staging_issue.reconcile(args.repo, red, line, facts.main_head, gh))
+        except (ValueError, subprocess.CalledProcessError) as exc:
+            if red is None:
+                # Closing an issue is housekeeping. It never blocks a release that is decided.
+                print(f"::warning::could not close the staging-red issue: {_why(exc)}", file=sys.stderr)
+                return 0
+            # The train is held either way. A red state without an owner is the defect, so say it loudly.
+            print(f"::error::could not update the staging-red issue: {_why(exc)}", file=sys.stderr)
+            return 1
     return 0
 
 

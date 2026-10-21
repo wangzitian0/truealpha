@@ -133,16 +133,75 @@ disagree — that later push already started its own independent wait, and
 batching one release out of a burst of merges falls out of the same
 mechanism as the cadence rule above, not a separate scheduler.
 
-Five more reasons stand between "quiet" and "tagged", checked in this order,
+Six more reasons stand between "quiet" and "tagged", checked in this order,
 first match wins (`tools/auto_release.py`'s own docstring and constants are the
 source of truth): main HEAD is not green, main HEAD already carries a
-tag, a release would restart the data engine inside staging's nightly tick
+tag, staging is red (next section), a release would restart the data engine
+inside staging's nightly tick
 window (`TICK_WINDOW_LABEL`, `DEPLOY_LEAD` margin included), today's automatic-release
 count is already at the daily cap (`DEFAULT_DAILY_CAP` in
 `common/runtime/src/truealpha_tools/auto_release.py` — hand-cut releases
 never count against it, only tags carrying the `Release-Trigger: auto-staging`
 trailer `--auto` writes), or a release is already in flight (a deploy run, a
 surface walk, or a tag's own `ci-required`, any of them incomplete).
+
+### Staging red stops the train (#1468 F1)
+
+On 2026-10-19 and 2026-10-20 the train cut 16 automatic tags in 22 hours. Only one
+hand-cut tag walked green in that time. Each automatic tag failed where the tag
+before it had failed. The train now stops when both conditions hold:
+
+* the newest release has no passing walk, and
+* two releases in a row failed at the same stage and the same step, and both
+  failures are newer than the newest passing walk of any tag.
+
+A release is one tag push. A tag whose own `ci-required` run fails is deleted, and
+the next attempt reuses its number, so each push counts. The stage is `ci-required`,
+`deploy-release` or `walk-release`. The step is the step that failed first in the
+newest failed run of that stage. A step that runs after a failure, such as a probe,
+fails because of it, so the first failure in time is the cause. The summary job of
+`ci-required` and the `auto-release-staging` run itself only echo a failure, so they
+never name the step. Two failures of one stage that name no step count as the same
+step.
+
+A walk passes only when its walk step passed. A `walk-release` run can end `success`
+with the walk step skipped. That run walked nothing, so it lifts nothing.
+
+Three modules hold the rule, and each fact has one definition:
+
+* `staging_line.py`: the rule, with no read of the network.
+* `release_history.py`: the releases, read from the run lists. It starts at the newest
+  passing walk and reads forward, which costs about a dozen API calls. It reads every
+  tag from the lowest tag of that window up, because a release cut between two failing
+  releases breaks their run. A run that has moved on to a newer commit reads none. A
+  re-run keeps its run id, so the reader also reads the attempt that the re-run hides.
+* `release_runs.py`: the words that the delivery report and the train share (the run
+  titles, the tag name, the summary job).
+
+When the train stops it cuts no tag and exits green. The log shows `skip: staging is
+red since <tag> at <stage / job / step> ...`. The tool opens one issue, `[truealpha]
+Staging red since <tag>: <step>`, or comments on the open one (`staging_issue.py`).
+It never opens a second one. Every run prints a `staging line:` line, red or not.
+
+The stop holds until a walk passes. A later failure at another step does not lift it.
+A re-run that is still in flight does not lift it. To resume, fix the cause. Then cut
+a release by hand with `tools/cut_release.sh`, because the stop does not hold a
+hand-cut release. A walk of a deployed tag also lifts the stop, but it does not fix
+the cause: `gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=<tag>`.
+The next run sees the passing walk, resumes the train and closes the issue.
+
+Manual replay of the decision, read-only (it writes no issue and no output file):
+
+```bash
+python3 tools/auto_release.py --repo wangzitian0/truealpha --trigger-sha "$(git rev-parse origin/main)"
+```
+
+Add `--report-staging-red` to also open, update or close the issue. Two standing
+checks hold the rule. The first is `common/runtime/tests/test_staging_line.py`, a
+replay of the real run history of 2026-10-13 to 2026-10-21 through the reader and
+`decide`. The second is the mutations `staging-line/*`, `release-history/*` and
+`staging-issue/*` in `tools/mutations.json`. A third check ties the run-names of the
+release workflows to the title patterns of the reader (`test_ci_workflows.py`).
 
 `--auto` is the one new flag on `cut_release.sh`, and it does exactly two
 things: it writes that trailer, and it refuses outright if `--prod` is also

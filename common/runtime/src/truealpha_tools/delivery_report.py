@@ -56,6 +56,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 
 from truealpha_tools import nightly_verdicts, surface_contract, walk_evidence
+from truealpha_tools.release_runs import DEPLOY_TITLE, FAILED_CONCLUSIONS, SUMMARY_JOB, parse_time, tag_key
 
 GhApi = Callable[[str], str]
 HttpGet = Callable[[str], tuple[int, str]]
@@ -95,17 +96,10 @@ Z95 = 1.959963984540054
 #: deploy-release.yml sets cancel-in-progress to false, so no newer run cancels a deploy.
 #: A cancelled deploy did not deliver its release, so it counts as a failure.
 DEPLOY_FAILED = frozenset({"failure", "cancelled", "timed_out", "startup_failure"})
-#: ci-required cancels a superseded PR run by design (cancel-in-progress true). A
-#: cancelled CI run carries no verdict about its SHA.
-CI_FAILED = frozenset({"failure", "timed_out", "startup_failure"})
-#: The `required` job fails when any other job fails, so it names no cause of a flake.
-SUMMARY_JOB = "ci-required"
 #: The conclusion of an earlier attempt that the API did not return.
 UNREADABLE = "unknown"
 DEPLOY_TYPES = ("staging", "prod")
 
-_DEPLOY_TITLE = re.compile(r"^Deploy (?P<deploy_type>staging|prod) (?P<release>\S+)$")
-_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 
@@ -219,16 +213,6 @@ def _pages(
     return items, False
 
 
-def _time(value: object) -> datetime | None:
-    if not value:
-        return None
-    try:
-        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
-
-
 @dataclass(frozen=True)
 class Unknown:
     reason: str
@@ -291,7 +275,7 @@ def deploy_outcome(conclusion: str) -> str | None:
 
 
 def _deploy_attempt(record: dict, run_id: int, number: int, title: re.Match[str]) -> Attempt | None:
-    started = _time(record.get("run_started_at")) or _time(record.get("created_at"))
+    started = parse_time(record.get("run_started_at")) or parse_time(record.get("created_at"))
     if started is None:
         return None
     return Attempt(
@@ -300,7 +284,7 @@ def _deploy_attempt(record: dict, run_id: int, number: int, title: re.Match[str]
         title["deploy_type"],
         title["release"],
         started,
-        _time(record.get("updated_at")),
+        parse_time(record.get("updated_at")),
         str(record.get("conclusion") or ""),
     )
 
@@ -311,7 +295,7 @@ def read_deploy_history(gh: GhApi, *, max_pages: int = DEPLOY_PAGES) -> DeployHi
     unreadable: list[str] = []
     in_flight = 0
     for run in runs:
-        title = _DEPLOY_TITLE.match(str(run.get("display_title", "")))
+        title = DEPLOY_TITLE.match(str(run.get("display_title", "")))
         if title is None:
             continue
         run_id, last = int(run["id"]), int(run.get("run_attempt") or 1)
@@ -458,11 +442,6 @@ def percentile(values: Sequence[timedelta], q: float) -> timedelta | None:
 # --- release age ----------------------------------------------------------------------
 
 
-def tag_key(name: str) -> tuple[int, int, int] | None:
-    match = _TAG.match(name)
-    return (int(match[1]), int(match[2]), int(match[3])) if match else None
-
-
 def newest_tag(tags: Iterable[str]) -> str | None:
     versions = [(key, name) for name in tags if (key := tag_key(name)) is not None]
     return max(versions)[1] if versions else None
@@ -519,7 +498,7 @@ def release_age(environment: Environment, served: str, tags: Iterable[str], gh: 
     ahead = int(comparison["ahead_by"])
     if ahead == 0:
         return ReleaseAge(environment, served, newest, behind, 0, None)
-    oldest = _time(comparison["commits"][0]["commit"]["committer"]["date"])
+    oldest = parse_time(comparison["commits"][0]["commit"]["committer"]["date"])
     if oldest is None:
         raise InputUnavailable(f"the comparison {served}...{newest} names no commit time")
     return ReleaseAge(environment, served, newest, behind, ahead, now - oldest)
@@ -551,7 +530,7 @@ def untagged_main(tags: Iterable[str], gh: GhApi, now: datetime) -> UntaggedMain
     ahead = int(comparison["ahead_by"])
     if ahead == 0:
         return UntaggedMain(newest, 0, None)
-    oldest = _time(comparison["commits"][0]["commit"]["committer"]["date"])
+    oldest = parse_time(comparison["commits"][0]["commit"]["committer"]["date"])
     if oldest is None:
         raise InputUnavailable(f"the comparison {newest}...main names no commit time")
     return UntaggedMain(newest, ahead, now - oldest)
@@ -617,13 +596,13 @@ class ShaRecord:
         passes = [index for index, attempt in enumerate(self.attempts) if attempt.conclusion == "success"]
         if not passes:
             return []
-        return [attempt for attempt in self.attempts[: passes[-1]] if attempt.conclusion in CI_FAILED]
+        return [attempt for attempt in self.attempts[: passes[-1]] if attempt.conclusion in FAILED_CONCLUSIONS]
 
 
 def sha_records(attempts: Iterable[CiAttempt]) -> list[ShaRecord]:
     grouped: dict[tuple[str, str], list[CiAttempt]] = defaultdict(list)
     for attempt in attempts:
-        if attempt.conclusion == "success" or attempt.conclusion in CI_FAILED:
+        if attempt.conclusion == "success" or attempt.conclusion in FAILED_CONCLUSIONS:
             grouped[(attempt.tier, attempt.sha)].append(attempt)
     return [
         ShaRecord(tier, sha, sorted(group, key=lambda attempt: attempt.started_at))
@@ -650,7 +629,7 @@ class CiHistory:
 def _ci_attempts_of(gh: GhApi, run: dict, tier: str, unreadable: list[str]) -> list[CiAttempt]:
     run_id, last, sha = int(run["id"]), int(run.get("run_attempt") or 1), str(run["head_sha"])
     found: list[CiAttempt] = []
-    started = _time(run.get("run_started_at")) or _time(run.get("created_at"))
+    started = parse_time(run.get("run_started_at")) or parse_time(run.get("created_at"))
     if run.get("status") == "completed" and started is not None:
         found.append(CiAttempt(tier, sha, run_id, last, started, str(run.get("conclusion") or "")))
     for number in range(1, last):
@@ -659,7 +638,7 @@ def _ci_attempts_of(gh: GhApi, run: dict, tier: str, unreadable: list[str]) -> l
         except InputUnavailable as error:
             unreadable.append(f"{sha[:8]}: run {run_id} attempt {number}: {error}")
             return []
-        stamp = _time(earlier.get("run_started_at")) if isinstance(earlier, dict) else None
+        stamp = parse_time(earlier.get("run_started_at")) if isinstance(earlier, dict) else None
         if stamp is None or not isinstance(earlier, dict):
             unreadable.append(f"{sha[:8]}: run {run_id} attempt {number} names no start time")
             return []
@@ -692,7 +671,7 @@ def failed_jobs(gh: GhApi, attempt: CiAttempt) -> set[str]:
     return {
         str(job.get("name"))
         for job in jobs
-        if job.get("conclusion") in CI_FAILED and str(job.get("name")) != SUMMARY_JOB
+        if job.get("conclusion") in FAILED_CONCLUSIONS and str(job.get("name")) != SUMMARY_JOB
     }
 
 
@@ -765,7 +744,7 @@ def lead_times(
 
 def read_merged_prs(gh: GhApi, since: datetime) -> list[MergedPr]:
     def older(batch: list[dict]) -> bool:
-        stamps = [_time(item.get("updated_at")) for item in batch]
+        stamps = [parse_time(item.get("updated_at")) for item in batch]
         return all(stamp is not None and stamp < since for stamp in stamps)
 
     pulls, complete = _pages(gh, PULLS, None, max_pages=PULL_PAGES, done=older)
@@ -773,7 +752,7 @@ def read_merged_prs(gh: GhApi, since: datetime) -> list[MergedPr]:
         raise InputUnavailable(f"more than {PULL_PAGES * PAGE_SIZE} PRs changed since {since:%Y-%m-%d}")
     merged = []
     for pull in pulls:
-        stamp = _time(pull.get("merged_at"))
+        stamp = parse_time(pull.get("merged_at"))
         if stamp is not None and stamp >= since and pull.get("merge_commit_sha"):
             merged.append(MergedPr(int(pull["number"]), str(pull["merge_commit_sha"]), stamp))
     return merged

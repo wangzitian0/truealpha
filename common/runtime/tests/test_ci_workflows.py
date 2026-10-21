@@ -919,6 +919,46 @@ def test_auto_release_decides_with_stdlib_only_and_installs_no_workspace() -> No
     assert "python3 tools/auto_release.py" in decide_text
 
 
+def test_auto_release_keeps_the_staging_red_issue_in_step_with_every_decision() -> None:
+    """#1468 F1: the decide step passes `--report-staging-red`. Without it a stopped train holds
+    its release and nothing names the red step, which is the state that the issue measured."""
+    decide_text = step_text(AUTO_RELEASE, "Decide whether to release")
+    assert "--report-staging-red" in decide_text
+    assert "--github-output" in decide_text
+
+
+def test_the_run_names_of_the_release_workflows_render_titles_that_the_train_reads() -> None:
+    """The train reads staging deploy and walk runs by title (`truealpha_tools.release_runs`).
+    If a run-name changes, the reader sees an empty history. This test renders both run-names with
+    sample values and matches them against the patterns that the reader uses."""
+    from truealpha_tools.release_runs import DEPLOY_TITLE, WALK_TITLE
+
+    deploy_name = yaml.safe_load(source(RELEASE))["run-name"]
+    rendered = deploy_name.replace("${{ inputs.deploy_type }}", "staging").replace(
+        "${{ inputs.version_ref }}", "v0.2.5"
+    )
+    deploy = DEPLOY_TITLE.match(rendered)
+    assert deploy is not None, rendered
+    assert (deploy["deploy_type"], deploy["release"]) == ("staging", "v0.2.5")
+
+    # The reader looks for the words "staging" and "prod" in the title. A rename of one option of
+    # the deploy type would leave the page matching through the other and read an empty history.
+    for file in (RELEASE, WALK):
+        dispatch = (yaml.safe_load(source(file)).get(True) or yaml.safe_load(source(file))["on"])["workflow_dispatch"]
+        assert {"staging", "prod"} <= set(dispatch["inputs"]["deploy_type"]["options"]), file
+
+    walk_name = yaml.safe_load(source(WALK))["run-name"]
+    # A manual walk renders `Walk Deploy <type> <ref>`. A walk that follows a deploy renders
+    # `Walk <display title of the deploy run>`, which is `Walk Deploy <type> <ref>` again.
+    manual = re.search(r"format\('(Walk Deploy \{0\} \{1\})'", walk_name)
+    chained = re.search(r"format\('(Walk \{0\})', github\.event\.workflow_run\.display_title\)", walk_name)
+    assert manual is not None and chained is not None, walk_name
+    for title in (manual.group(1).format("staging", "v0.2.5"), chained.group(1).format(rendered)):
+        walk = WALK_TITLE.match(title)
+        assert walk is not None, title
+        assert (walk["deploy_type"], walk["release"]) == ("staging", "v0.2.5")
+
+
 def test_auto_release_writes_trigger_sha_only_through_env_not_into_the_script() -> None:
     """workflow_run executes this file from the default branch (main-health.yml's
     own comment on the same trigger type) with a write token; nothing from the
@@ -955,13 +995,15 @@ def test_auto_release_has_only_the_permissions_it_needs() -> None:
     ci-required, the deploy/walk runs) are the Actions API, not `contents` —
     covered by `actions: write`, which also dispatches the staging deploy and
     surface walk. `pull-requests: read` is for the derived PR review-thread
-    check. Nothing broader."""
+    check. `issues: write` is for the one staging-red issue (#1468 F1).
+    Nothing broader."""
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     permissions = workflow["permissions"]
     assert permissions["contents"] == "read"
     assert permissions["actions"] == "write"
     assert permissions["pull-requests"] == "read"
-    assert set(permissions) == {"contents", "actions", "pull-requests"}
+    assert permissions["issues"] == "write", "the staging-red issue is opened, commented on and closed (#1468 F1)"
+    assert set(permissions) == {"contents", "actions", "pull-requests", "issues"}
 
 
 # --- one migration applier (#984) --------------------------------------------
