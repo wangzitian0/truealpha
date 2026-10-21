@@ -9,10 +9,10 @@ every run in it. These tests hold the demand under the declared capacity:
 2. Every deployed job uses the in-process executor, so a run is one process (`processes_per_run`).
 3. A job that waits for other runs carries the tag that the queue caps below the run limit, so a run
    that it waits for always finds a slot.
-4. A fresh import of the composition root fits the declared size of one process.
+4. A fresh code server fits the declared size of the server.
 
 No test opens a database. Each test fails under its mutation: a queue limit one too high, a job on the
-default executor, a waiting job without the tag, a process size below the measured import.
+default executor, a waiting job without the tag, a server size below a fresh code server.
 """
 
 from __future__ import annotations
