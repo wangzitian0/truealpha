@@ -24,13 +24,42 @@ from pydantic import BaseModel, ConfigDict
 
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
+_IDENTITY_MATCH_SQL = (
+    "ei.entity_id::text = lower(inp.q)"
+    " or ei.legacy_id = inp.q"
+    " or upper(ei.legacy_id) = upper(inp.q)"
+    " or upper(ei.current_ticker) = upper(inp.q)"
+    " or (inp.q ~* '^listing:[0-9a-z]{4}:[0-9a-z.\\-]+$' and upper(ei.current_ticker) = upper(split_part(inp.q, ':', 3)))"
+    " or (regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i') ~ '^[0-9]{1,10}$'"
+    "     and ei.cik = lpad(regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i'), 10, '0'))"
+    " or upper(ei.lei) = upper(regexp_replace(inp.q, '^(?:issuer:lei:|company:lei:|lei:)', '', 'i'))"
+)
+
+
+def issuer_identity_sql(column: str, placeholder: str = "%s") -> str:
+    """Return the unified SQL predicate resolving any issuer alias (UUID, ticker, CIK, LEI, legacy_id)."""
+    return (
+        f"({column} = {placeholder}"
+        f" or {column} in ("
+        f"select ei.entity_id::text from mart.entity_identity ei"
+        f" cross join (select btrim({placeholder}::text) as q) inp"
+        f" where {_IDENTITY_MATCH_SQL})"
+        f" or {column} in ("
+        f"select ei.legacy_id from mart.entity_identity ei"
+        f" cross join (select btrim({placeholder}::text) as q) inp"
+        f" where ei.legacy_id is not null and ({_IDENTITY_MATCH_SQL})))"
+    )
+
+
 #: The issuer predicate of both twins (the App's `bidirectionalIssuerPredicate`): the stored
-#: id, or its entity id, or its legacy id. psycopg takes the same value three times.
-_ISSUER_PREDICATE = (
-    "({alias}.issuer_id = %s"
-    " or {alias}.issuer_id in (select entity_id::text from mart.entity_identity where legacy_id = %s)"
-    " or {alias}.issuer_id in (select legacy_id from mart.entity_identity"
-    " where entity_id::text = %s and legacy_id is not null))"
+#: id, or its canonical entity id, or its legacy id, resolved across all alias schemes.
+_ISSUER_PREDICATE = issuer_identity_sql("__ALIAS__.issuer_id", "%s")
+
+_RESOLVE_CANDIDATES_SQL = (
+    "select ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
+    " from mart.entity_identity ei"
+    " cross join (select btrim(%s::text) as q) inp"
+    f" where {_IDENTITY_MATCH_SQL}"
 )
 #: Only a run that the served head names (the App's `servedRunPredicate`). A withheld head
 #: has a null `run_id`.
@@ -51,7 +80,7 @@ select s.run_id,
        coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
        coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
 from mart.issuer_supply_chain_exposure s
-where {_ISSUER_PREDICATE.format(alias="s")}
+where {issuer_identity_sql("s.issuer_id", "%s")}
   and {_SERVED_RUN.format(alias="s")}
 order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
 limit 1
@@ -79,7 +108,7 @@ select r.run_id,
        coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
        coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
 from mart.issuer_analyst_ratings r
-where {_ISSUER_PREDICATE.format(alias="r")}
+where {issuer_identity_sql("r.issuer_id", "%s")}
   and {_SERVED_RUN.format(alias="r")}
 order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
 limit 1
@@ -149,6 +178,39 @@ def _row(sql: str, database_url: str, issuer_id: str) -> dict[str, Any] | None:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(sql, (issuer_id, issuer_id, issuer_id))
             return cursor.fetchone()
+
+
+def resolve_issuer_id_candidates(database_url: str, issuer_id: str) -> tuple[str, ...]:
+    """Return every identifier alias (`entity_id`, `legacy_id`, `current_ticker`, `cik`, `lei`)
+    in `mart.entity_identity` that resolves to the same issuer as `issuer_id`."""
+    clean = issuer_id.strip()
+    if not clean:
+        return ()
+    candidates: list[str] = [clean]
+    try:
+        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(_RESOLVE_CANDIDATES_SQL, (clean,))
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        return tuple(candidates)
+    for row in rows:
+        for key in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
+            val = row.get(key)
+            if isinstance(val, str) and val and val not in candidates:
+                candidates.append(val)
+        cik_val = row.get("cik")
+        if isinstance(cik_val, str) and cik_val:
+            for prefix in ("issuer:cik:", "company:cik:"):
+                prefixed = f"{prefix}{cik_val}"
+                if prefixed not in candidates:
+                    candidates.append(prefixed)
+        lei_val = row.get("lei")
+        if isinstance(lei_val, str) and lei_val:
+            prefixed_lei = f"issuer:lei:{lei_val}"
+            if prefixed_lei not in candidates:
+                candidates.append(prefixed_lei)
+    return tuple(candidates)
 
 
 class PostgresIssuerModuleReader:

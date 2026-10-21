@@ -563,18 +563,16 @@ def test_resolve_fund_resolution_candidates_falsifiable() -> None:
     assert empty["name_pattern"] == ""
 
 
-def test_resolve_issuer_resolution_candidates_falsifiable() -> None:
-    from llm_service.mcp_server import resolve_issuer_resolution_candidates
+def test_issuer_identity_sql_ssot_falsifiable() -> None:
+    from truealpha_contracts.issuer_modules_mart import issuer_identity_sql
 
-    nvda = resolve_issuer_resolution_candidates("NVDA")
-    assert nvda["clean_issuer"] == "NVDA"
-    assert nvda["token"] == "NVDA"
-    assert nvda["upper_token"] == "NVDA"
-
-    cik = resolve_issuer_resolution_candidates("issuer:cik:0001045810")
-    assert cik["clean_issuer"] == "issuer:cik:0001045810"
-    assert cik["token"] == "0001045810"
-    assert cik["upper_token"] == "0001045810"
+    predicate = issuer_identity_sql("d.issuer_id", "%s")
+    assert predicate.count("%s") == 3
+    assert "mart.entity_identity" in predicate
+    assert "ei.current_ticker" in predicate
+    assert "ei.cik" in predicate
+    assert "ei.lei" in predicate
+    assert "ei.legacy_id" in predicate
 
 
 def test_postgres_company_profile_reader_handles_connection_error(

@@ -449,8 +449,12 @@ def stored_report_run(connection: Connection[Any], universe_id: str) -> str | No
 def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for question, entry in report["questions"].items():
-        unavailable = sum(entry["unavailable"].values())
+        unavailable_map = entry["unavailable"] or {}
+        unavailable = sum(unavailable_map.values())
+        exceeded = int(unavailable_map.get("context_window_exceeded", 0))
+        exceeded_note = f" ({exceeded} >1M context_window_exceeded)" if exceeded > 0 else ""
         parts.append(
-            f"{question}: {entry['answered']}/{entry['denominator']} answered, {unavailable} unavailable, {entry['missing']} missing"
+            f"{question}: {entry['answered']}/{entry['denominator']} answered, "
+            f"{unavailable} unavailable{exceeded_note}, {entry['missing']} missing"
         )
     return f"{report['universe_id']} @ {report['cutoff']}: " + "; ".join(parts)

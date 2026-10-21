@@ -527,18 +527,44 @@ def run_supply_chain_exposure(
             )
         floor_failure = universe.lane_failure()
         joined = 0
+        model_extracted = 0
+        replayed = 0
+        context_window_exceeded = 0
+        exceeded_filings: tuple[str, ...] = ()
         if floor_failure is None:
-            joined = materialize_universe_supply_chain_exposure(
+            sc_report = materialize_universe_supply_chain_exposure(
                 connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
             )
+            joined = int(sc_report)
+            model_extracted = int(getattr(sc_report, "model_extracted", 0))
+            replayed = int(getattr(sc_report, "replayed", 0))
+            context_window_exceeded = int(getattr(sc_report, "context_window_exceeded", 0))
+            exceeded_filings = tuple(getattr(sc_report, "exceeded_filings", ()))
         connection.commit()
 
-    context.log.info("published %s supply-chain exposure rows for %s", joined, config.universe)
+    if context_window_exceeded > 0:
+        context.log.error(
+            "supply chain exposure: %s 10-K filing(s) exceeded 1M context window for %s: %s",
+            context_window_exceeded,
+            config.universe,
+            ", ".join(exceeded_filings[:MAX_UNMAPPED_LOGGED]),
+        )
+    context.log.info(
+        "published %s supply-chain exposure rows for %s (model_extracted=%s, replayed=%s, context_window_exceeded=%s)",
+        joined,
+        config.universe,
+        model_extracted,
+        replayed,
+        context_window_exceeded,
+    )
     summary: dict[str, Any] = {
         "universe": config.universe,
         "run_id": head.run_id,
         "rows": joined,
         JOINED_ISSUERS: joined,
+        "model_extracted": model_extracted,
+        "replayed": replayed,
+        "context_window_exceeded": context_window_exceeded,
         UNMAPPED_ISSUERS: len(universe.unmapped),
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
         WIDE_ROW_ISSUERS: universe.wide_row_issuers,
@@ -546,6 +572,10 @@ def run_supply_chain_exposure(
     if floor_failure is not None:
         summary[LANE_FAILURE] = floor_failure
         summary[VERDICT_TEXT] = f"supply chain: {floor_failure}"
+    elif context_window_exceeded > 0:
+        limit_failure = f"{context_window_exceeded} of {joined} filings exceeded 1M context window"
+        summary[LANE_FAILURE] = f"supply chain: {limit_failure}"
+        summary[VERDICT_TEXT] = f"supply chain: {limit_failure}"
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -689,13 +719,21 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
         connection.commit()
-        outcome.summary = f"report persisted for {report['universe_id']}"
+        q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
+        exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
+        if exceeded_q3 > 0:
+            outcome.summary = (
+                f"report persisted for {report['universe_id']} ({exceeded_q3} filing(s) exceeded 1M context window)"
+            )
+        else:
+            outcome.summary = f"report persisted for {report['universe_id']}"
     context.log.info("question coverage %s: %s", report_id, summary_line(report))
     context.add_output_metadata(
         {
             "report_id": report_id,
             "universe_id": report["universe_id"],
             "denominator": report["denominator"],
+            "q3_context_window_exceeded": exceeded_q3,
             **{f"{q}_answered": entry["answered"] for q, entry in report["questions"].items()},
             **{f"{q}_missing": entry["missing"] for q, entry in report["questions"].items()},
         }

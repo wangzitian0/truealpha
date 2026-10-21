@@ -39,6 +39,7 @@ from truealpha_contracts.issuer_modules_mart import (
     IssuerModuleUnavailable,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
+    issuer_identity_sql,
 )
 from truealpha_contracts.metric_node_read import (
     MetricNodeValueReport,
@@ -286,17 +287,14 @@ class PostgresCompanyProfileReader:
         gppe_row: dict[str, Any] | None = None
         themes: list[dict[str, Any]] = []
 
-        cand = resolve_issuer_resolution_candidates(issuer_id)
-        clean_issuer = cand["clean_issuer"]
-        token = cand["token"]
-        upper_issuer = cand["upper_issuer"]
-        upper_token = cand["upper_token"]
+        clean_issuer = issuer_id.strip()
+        issuer_params = (clean_issuer, clean_issuer, clean_issuer)
 
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """
+                        f"""
                         select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
                                to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
                                d.tier,
@@ -317,44 +315,32 @@ class PostgresCompanyProfileReader:
                             where ei.entity_id::text = d.issuer_id
                             limit 1
                         ) ei on true
-                        where d.issuer_id = %s
-                           or d.issuer_id in (
-                               select entity_id::text from mart.entity_identity
-                               where legacy_id in (%s, %s)
-                                  or upper(current_ticker) in (%s, %s)
-                                  or upper(legacy_id) in (%s, %s)
-                           )
+                        where {issuer_identity_sql("d.issuer_id", "%s")}
                         order by d.cutoff_at desc
                         limit 1
                         """,
-                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
+                        issuer_params,
                     )
                     decision_row = cur.fetchone()
 
                     cur.execute(
-                        """
+                        f"""
                         select gppe::text as gppe,
                                operating_branch,
                                capital_adjusted_gross_profit::text as capital_adjusted_gross_profit,
                                coalesce(availability_status, availability, 'unavailable') as availability_status,
                                reason_codes
                         from mart.topt_gppe_results g
-                        where g.issuer_id = %s
-                           or g.issuer_id in (
-                               select entity_id::text from mart.entity_identity
-                               where legacy_id in (%s, %s)
-                                  or upper(current_ticker) in (%s, %s)
-                                  or upper(legacy_id) in (%s, %s)
-                           )
+                        where {issuer_identity_sql("g.issuer_id", "%s")}
                         order by g.cutoff desc, g.created_at desc
                         limit 1
                         """,
-                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
+                        issuer_params,
                     )
                     gppe_row = cur.fetchone()
 
                     cur.execute(
-                        """
+                        f"""
                         select theme_id,
                                theme,
                                theme_share,
@@ -375,19 +361,13 @@ class PostgresCompanyProfileReader:
                                    p.confidence::text as confidence,
                                    coalesce(p.availability_status, 'unavailable') as availability_status
                             from mart.issuer_theme_purity p
-                            where (p.issuer_id = %s
-                               or p.issuer_id in (
-                                   select entity_id::text from mart.entity_identity
-                                   where legacy_id in (%s, %s)
-                                      or upper(current_ticker) in (%s, %s)
-                                      or upper(legacy_id) in (%s, %s)
-                               ))
+                            where {issuer_identity_sql("p.issuer_id", "%s")}
                               and p.partition_id is not null
                             order by p.theme_id, p.cutoff desc, p.created_at desc
                         ) latest_per_theme
                         order by raw_share desc nulls last, theme asc
                         """,
-                        (clean_issuer, clean_issuer, token, upper_issuer, upper_token, upper_issuer, upper_token),
+                        issuer_params,
                     )
                     themes = [
                         {
@@ -542,18 +522,6 @@ def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
         "upper_token": upper_token,
         "clean_upper": clean_upper,
         "name_pattern": name_pattern,
-    }
-
-
-def resolve_issuer_resolution_candidates(issuer_id: str) -> dict[str, str]:
-    """Resolve candidate identifiers for issuer company 360 queries."""
-    clean_issuer = issuer_id.strip()
-    token = clean_issuer.split(":")[-1].strip()
-    return {
-        "clean_issuer": clean_issuer,
-        "token": token,
-        "upper_issuer": clean_issuer.upper(),
-        "upper_token": token.upper(),
     }
 
 

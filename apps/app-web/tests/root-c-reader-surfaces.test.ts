@@ -222,9 +222,12 @@ const adapter = new StrategyRunReadAdapter(
   assert(executedSqls.length === 4, `expected 4 entity detail queries, got ${executedSqls.length}`);
   for (const sql of executedSqls) {
     assert(
-      sql.includes("select entity_id::text from mart.entity_identity where legacy_id = $1") &&
-        sql.includes("select legacy_id from mart.entity_identity where entity_id::text = $1"),
-      "entity detail queries must resolve issuer aliases bidirectionally (legacy_id <-> entity_id) via bidirectionalIssuerPredicate",
+      sql.includes("select ei.entity_id::text from mart.entity_identity ei") &&
+        sql.includes("select ei.legacy_id from mart.entity_identity ei") &&
+        sql.includes("ei.current_ticker") &&
+        sql.includes("ei.cik") &&
+        sql.includes("ei.lei"),
+      "entity detail queries must resolve issuer aliases bidirectionally across UUID, legacy_id, ticker, CIK, and LEI via bidirectionalIssuerPredicate",
     );
   }
 
