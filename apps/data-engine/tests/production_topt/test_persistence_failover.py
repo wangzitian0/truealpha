@@ -14,9 +14,11 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -58,7 +60,20 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import seed_rate_for_cutoff  # noqa: E402
+
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
+
+
+def _stored_rate(connection):
+    """The rate of CUTOFF as the tick resolves it: a stored observation, read back with its lineage (#1255)."""
+    from data_engine.datahub.risk_free import risk_free_rate_at
+
+    seed_rate_for_cutoff(connection, CUTOFF, "0.05")
+    return risk_free_rate_at(connection, CUTOFF)
+
+
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
 # the rest are non-financial. All three OperatingBranch members must flow through the
 # harness: the 2026-08-14 staging tick crashed on the INSURANCE branch precisely
@@ -520,7 +535,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
         connection,
         cutoff=CUTOFF,
         executed_at=CUTOFF,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=_stored_rate(connection),
         capture_run_id=plan.run_id,
         plausibility_refusals={},
     )
@@ -637,7 +652,7 @@ def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silen
         connection,
         cutoff=CUTOFF,
         executed_at=CUTOFF,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=_stored_rate(connection),
         capture_run_id=plan.run_id,
         plausibility_refusals={},
     )
