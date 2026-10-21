@@ -3,18 +3,23 @@
  *
  * The HTML of an App Router page ends with `<script>self.__next_f.push([1,"..."])</script>`
  * tags. Their strings, joined in order, are the React Server Components (flight) stream.
- * A row is `<hex id>:<payload>` and ends with a newline. An element is `["$", type, key, props]`.
- * A child `"$L<hex id>"` is a lazy reference: "the element in the row with this id, which may
- * not have arrived yet". The async `AppChrome` row and the table rows that Flight outlines are
- * such references.
+ * A row is `<hex id>:<payload>`. Most rows end with a newline. A text or binary row is
+ * `<hex id>:<tag><hex byte length>,<bytes>` and has no newline.
+ * An element is `["$", type, key, props]`. A child `"$L<hex id>"` is a lazy reference to the
+ * element in another row, which may not have arrived yet. The async `AppChrome` row and the
+ * table rows that Flight outlines are such references.
  *
- * Next 15.5 bundles a React copy that hydrates wrongly when the browser holds a lazy reference
- * under a host element (`div`, `tbody`, ...) and the row is still missing: React replays the host
- * element and claims a server node twice. It raises error #418 and renders the page again on the
- * client. The deployed server delivers the `AppChrome` row last, so the window was open on about one
- * visit in ten. A loopback server delivers all rows in one burst, so CI never saw it.
+ * The React copy in Next 15.5.18 (19.2.0-canary-0bdb9206-20250818) has a defect. Its
+ * `replayBeginWork` does not rewind the hydration cursor for a host element (`div`, `tbody`, ...).
+ * The React copy in Next 16.4.2 (19.3.0-canary-278794d7-20261002) rewinds it. A host element can
+ * hold a lazy child whose row is missing when the browser starts to hydrate. The older React copy
+ * then replays the host element and takes a second server node. It raises error #418 and renders
+ * the page again on the client. The deployed server sends the `AppChrome` row last, so the
+ * window was open on about one visit in ten. A loopback server sends all rows in one burst,
+ * so CI never saw it.
+ *
  * This proxy opens the window on purpose. It sends the document without the rows that a host
- * element references lazily, waits, and then sends those rows in a script of their own.
+ * element references lazily. It waits. Then it sends those rows in a script of their own.
  *
  * This module has no side effects at import. `tests/late-row-proxy.test.ts` drives it.
  */
@@ -39,20 +44,35 @@ export function readFlightScripts(html) {
   }));
 }
 
+/** Row tags with a byte length: text (T) and the binary tags of React Flight. */
+const LENGTH_PREFIXED_TAGS = new Set(["T", "A", "O", "o", "U", "S", "s", "L", "l", "G", "g", "M", "m", "V"]);
+const isHexDigit = (byte) => (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66);
+
 /**
  * @param {string} stream the joined flight stream
- * @returns {{ id: string, text: string }[]} the rows; `text` includes the id and the final newline
+ * @returns {{ id: string, text: string }[]} the rows in stream order. `text` includes the id. The
+ *   texts joined are the stream, byte for byte: a line that is not a row gets the id "".
  */
 export function splitRows(stream) {
+  const bytes = Buffer.from(stream, "utf8");
   const rows = [];
   let start = 0;
-  for (let newline = stream.indexOf("\n"); newline !== -1; newline = stream.indexOf("\n", start)) {
-    const line = stream.slice(start, newline + 1);
-    const id = ROW_START.exec(line)?.[1];
-    // A line without an id continues a text row. It belongs to the row before it.
-    if (id === undefined && rows.length > 0) rows[rows.length - 1].text += line;
-    else if (id !== undefined) rows.push({ id, text: line });
-    start = newline + 1;
+  while (start < bytes.length) {
+    let colon = start;
+    while (colon < bytes.length && isHexDigit(bytes[colon])) colon += 1;
+    const hasHeader = bytes[colon] === 0x3a;
+    let end = -1;
+    if (hasHeader && LENGTH_PREFIXED_TAGS.has(String.fromCharCode(bytes[colon + 1]))) {
+      const comma = bytes.indexOf(0x2c, colon + 2);
+      const length = comma === -1 ? Number.NaN : Number.parseInt(bytes.toString("latin1", colon + 2, comma), 16);
+      if (Number.isInteger(length) && comma + 1 + length <= bytes.length) end = comma + 1 + length;
+    }
+    if (end === -1) {
+      const newline = bytes.indexOf(0x0a, start);
+      end = newline === -1 ? bytes.length : newline + 1;
+    }
+    rows.push({ id: hasHeader ? bytes.toString("latin1", start, colon) : "", text: bytes.toString("utf8", start, end) });
+    start = end;
   }
   return rows;
 }
@@ -117,7 +137,9 @@ const scriptFor = (text) => `<script>self.__next_f.push([1,${JSON.stringify(text
 export function splitAtLateRows(html) {
   const scripts = readFlightScripts(html);
   if (scripts.length === 0) return null;
-  const rows = splitRows(scripts.map((script) => script.text).join(""));
+  const stream = scripts.map((script) => script.text).join("");
+  const rows = splitRows(stream);
+  if (rows.map((row) => row.text).join("") !== stream) throw new Error("splitRows lost part of the flight stream");
   const lateIds = findHostLazyRows(rows);
   const lateRows = rows.filter((row) => lateIds.has(row.id));
   if (lateRows.length === 0) return null;
@@ -135,12 +157,13 @@ export function splitAtLateRows(html) {
  * waits `holdMs`, then sends `late`. Other responses pass through.
  *
  * @param {{ origin: string, holdMs: number }} options
- * @returns {Promise<{ url: string, stats: { held: number, unheld: string[] }, close: () => Promise<void> }>}
- *   `stats.unheld` lists the documents that had no late row to hold back
+ * @returns {Promise<{ url: string, stats: { held: string[], unheld: string[] }, close: () => Promise<void> }>}
+ *   `stats.held` lists the request paths of the documents that were held, one entry per document.
+ *   `stats.unheld` lists the documents that had no late row to hold back.
  */
 export async function startLateRowProxy({ origin, holdMs }) {
   const target = new URL(origin);
-  const stats = { held: 0, unheld: /** @type {string[]} */ ([]) };
+  const stats = { held: /** @type {string[]} */ ([]), unheld: /** @type {string[]} */ ([]) };
 
   const server = http.createServer((request, response) => {
     const headers = { ...request.headers, host: target.host };
@@ -157,6 +180,7 @@ export async function startLateRowProxy({ origin, holdMs }) {
           return;
         }
         const chunks = [];
+        answer.on("error", () => response.destroy());
         answer.on("data", (chunk) => chunks.push(chunk));
         answer.on("end", () => {
           const html = Buffer.concat(chunks).toString("utf8");
@@ -170,13 +194,17 @@ export async function startLateRowProxy({ origin, holdMs }) {
             response.end(html);
             return;
           }
-          stats.held += 1;
+          stats.held.push(request.url ?? "");
           response.write(split.early);
           setTimeout(() => response.end(split.late), holdMs);
         });
       },
     );
     upstream.on("error", (error) => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
       response.writeHead(502);
       response.end(String(error));
     });
