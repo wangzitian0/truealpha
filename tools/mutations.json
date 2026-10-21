@@ -856,6 +856,310 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "staging-line/same-step-comparison-flipped",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "if streak and streak[-1][1].same_step(failure):",
+      "replace": "if streak and not streak[-1][1].same_step(failure):",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/threshold-of-three",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "SAME_STEP_FAILURES = 2\n",
+      "replace": "SAME_STEP_FAILURES = 3\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/stage-ignored-in-the-same-step",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "self.stage == other.stage and self.step == other.step",
+      "replace": "self.step == other.step",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/unnamed-step-never-matches",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "return self.stage == other.stage and self.step == other.step",
+      "replace": "return bool(self.step) and self.stage == other.stage and self.step == other.step",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/green-walk-never-lifts-the-stop",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "if failure is None or (last_green is not None and failure.at <= last_green):",
+      "replace": "if failure is None:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/newest-release-walked-green-is-ignored",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "if not ordered or ordered[-1].walked_green:",
+      "replace": "if not ordered:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/stop-is-not-latched",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "if tripped is None and len(streak) >= same_step_failures:\n            tripped = streak[0]",
+      "replace": "if len(streak) >= same_step_failures:\n            tripped = streak[0]\n        elif tripped is not None and len(streak) < same_step_failures:\n            tripped = None",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/decide-ignores-the-staging-red-rule",
+      "guard": "common/runtime/tests/test_auto_release.py",
+      "file": "common/runtime/src/truealpha_tools/auto_release.py",
+      "find": "    red = staging_line.staging_red(facts.releases)\n    if red is not None:",
+      "replace": "    red = None\n    if red is not None:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_auto_release.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/auto-release-reports-staging-red",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/auto-release-staging.yml",
+      "find": "--github-output \"$GITHUB_OUTPUT\" --report-staging-red",
+      "replace": "--github-output \"$GITHUB_OUTPUT\"",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-line/in-flight-rerun-lifts-the-stop",
+      "guard": "common/runtime/tests/test_staging_line.py",
+      "file": "common/runtime/src/truealpha_tools/staging_line.py",
+      "find": "            if not failed:\n                return None",
+      "replace": "            if not failed or any(run.in_flight for run in runs):\n                return None",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_line.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/window-keeps-the-oldest-tags",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "names = sorted(set(known), key=_order)[-recent:]",
+      "replace": "names = sorted(set(known), key=_order)[:recent]",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/failed-tag-pushes-not-read",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "for name in sorted(_failed_tag_pushes(repo, get))",
+      "replace": "for name in sorted(set())",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/keeps-the-oldest-pushes-of-a-tag",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "[-CI_ATTEMPTS_PER_TAG:]",
+      "replace": "[:CI_ATTEMPTS_PER_TAG]",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/walk-step-not-checked",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "if walk and conclusion == \"success\" and not reader.walk_step_passed(run_id):",
+      "replace": "if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/older-pushes-hold-the-deploys",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "                    deploys=stage_runs(reader, deploys.get(name, [])) if newest else (),",
+      "replace": "                    deploys=stage_runs(reader, deploys.get(name, [])),",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-history/summary-job-names-the-step",
+      "guard": "common/runtime/tests/test_release_history.py",
+      "file": "common/runtime/src/truealpha_tools/release_history.py",
+      "find": "if job.get(\"conclusion\") == \"failure\" and job.get(\"name\") != SUMMARY_JOB",
+      "replace": "if job.get(\"conclusion\") == \"failure\"",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_history.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-issue/dedupe-reads-the-last-text-only",
+      "guard": "common/runtime/tests/test_staging_issue.py",
+      "file": "common/runtime/src/truealpha_tools/staging_issue.py",
+      "find": "if any(state_marker(red) in text for text in texts):",
+      "replace": "if state_marker(red) in texts[-1]:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_issue.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "staging-issue/newest-issue-gets-the-comment",
+      "guard": "common/runtime/tests/test_staging_issue.py",
+      "file": "common/runtime/src/truealpha_tools/staging_issue.py",
+      "find": "return sorted(red, key=lambda issue: int(issue[\"number\"]))  # type: ignore[call-overload]",
+      "replace": "return sorted(red, key=lambda issue: -int(issue[\"number\"]))  # type: ignore[call-overload]",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_staging_issue.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "auto-release/closing-failure-blocks-the-release",
+      "guard": "common/runtime/tests/test_auto_release.py",
+      "file": "common/runtime/src/truealpha_tools/auto_release.py",
+      "find": "            if red is None:",
+      "replace": "            if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_auto_release.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

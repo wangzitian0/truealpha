@@ -10,25 +10,16 @@ name: auto-release-staging
 # second, independent lock — test_cut_release.py).
 #
 # `tools/auto_release.py` holds every reason NOT to release even after the
-# quiet period below (its own docstring enumerates the six, checked in
+# quiet period below (its own docstring enumerates the seven, checked in
 # order); this workflow is only its trigger, the wait, and the one command it
 # is allowed to run on `release=true`.
 #
-# The quiet period is a DEBOUNCE, not a sleep-then-hope: every green push to
-# main starts its own 20-minute wait, then the checkout below and
-# `tools/auto_release.py` re-read main HEAD fresh (the checkout from git,
-# the tool from the GitHub API) rather than trusting anything captured at
-# trigger time. A push whose wait elapses only to find main has moved on
-# defers — that later push's own green run already started an independent
-# wait, and only the newest one can still find itself at HEAD when it wakes.
-# The `release` job's own concurrency group (below) is the second half: it
-# serialises the actual decide-and-tag step so two overlapping waits can
-# never race the same tag number, even if both somehow reached it together.
-#
-# workflow_run executes this file from the default branch with a write
-# token (main-health.yml's own comment on the same trigger type) — nothing
-# from the triggering run reaches a `run:` block directly, only through
-# `env:`.
+# #1468 F1: one of those reasons is "staging is red". Two releases in a row
+# failed at the same step, and no walk has passed since. On 2026-10-19 and
+# 2026-10-20 the train cut 16 tags in 22 hours, and only one hand-cut tag
+# walked green. The train now cuts no tag, exits green with that reason, and
+# keeps one issue open that names the step. A green walk of any tag resumes
+# it. The rule is in `common/runtime/src/truealpha_tools/staging_line.py`.
 
 on:
   workflow_run:
@@ -54,6 +45,9 @@ permissions:
   actions: write
   # `gh pr view` / the review-thread GraphQL query, for the derived --prs batch.
   pull-requests: read
+  # #1468 F1: `tools/auto_release.py --report-staging-red` opens, comments on and closes the one
+  # "Staging red since <tag>" issue (`gh issue list/create/comment/close`).
+  issues: write
 
 concurrency:
   group: auto-release-staging
@@ -139,9 +133,11 @@ jobs:
         # nothing installed but the checkout above. `--daily-cap` is left at
         # its default (4, the owner's bound) so the number lives in exactly
         # one place; test_auto_release.py pins that default.
+        # `--report-staging-red` keeps the staging-red issue in step with the run history (#1468).
+        # Run the same command by hand without that flag to replay the decision read-only.
         run: |
           python3 tools/auto_release.py --repo "$GITHUB_REPOSITORY" --trigger-sha "$TRIGGER_SHA" \
-            --github-output "$GITHUB_OUTPUT"
+            --github-output "$GITHUB_OUTPUT" --report-staging-red
 
       - name: Cut the release (staging only)
         if: steps.decide.outputs.release == 'true'

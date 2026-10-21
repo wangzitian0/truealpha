@@ -28,7 +28,9 @@ in `data_engine.lanes.capture`, per its own docstring's promise.
 
 from __future__ import annotations
 
+import json
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
@@ -36,6 +38,8 @@ import pytest
 from truealpha_runtime.testing import load_tool
 
 auto_release = load_tool("auto_release")
+from truealpha_tools.staging_line import StageRun, StagingRelease  # noqa: E402
+
 ReleaseTag = auto_release.ReleaseTag
 Facts = auto_release.Facts
 Decision = auto_release.Decision
@@ -70,6 +74,18 @@ def tag(name: str, commit: str = TRIGGER, tagged_at: datetime | None = NOON, aut
     return ReleaseTag(name=name, commit=commit, tagged_at=tagged_at, message=message)
 
 
+CI_STEP = "images_release / plan::Select available images"
+
+
+def _red_ci_push(minute: int) -> StagingRelease:
+    """One push of v0.0.6 whose own ci-required run failed in the same job."""
+    when = NOON - timedelta(minutes=60 - minute)
+    return StagingRelease("v0.0.6", when, ci=(StageRun("failure", when, CI_STEP, minute),))
+
+
+RED_RELEASES = (_red_ci_push(0), _red_ci_push(20))
+
+
 def facts(**overrides) -> Facts:
     base = dict(trigger_sha=TRIGGER, main_head=TRIGGER, head_green=True, tags=(), in_flight=(), now=NOON)
     base.update(overrides)
@@ -102,21 +118,52 @@ def test_reason_3_head_already_released_by_hand() -> None:
     assert "already released as v0.0.5" in result.reason
 
 
-def test_reason_4_inside_the_nightly_tick_window() -> None:
+def test_reason_4_staging_is_red() -> None:
+    """#1468 F1: two releases in a row failed at one step and no walk passed since. The reason
+    names the stage and the step, and it says what lifts the stop."""
+    result = decide(facts(tags=(tag("v0.0.5", commit=OTHER),), releases=RED_RELEASES))
+    assert result.release is False
+    assert result.tag == ""
+    assert "staging is red since v0.0.6" in result.reason
+    assert "ci-required / images_release / plan / Select available images" in result.reason
+    assert "until a walk of any tag passes" in result.reason
+
+
+def test_a_stopped_train_beats_the_tick_window_the_daily_cap_and_a_release_in_flight() -> None:
+    """A red staging line is the reason an operator needs to read. The three later reasons would
+    hide it. The first three reasons still win: they say that this run is moot."""
+    inside = datetime(2026, 9, 22, 22, 50, tzinfo=UTC)
+    today_auto_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(DEFAULT_DAILY_CAP))
+    stacked = facts(
+        now=inside, tags=today_auto_tags, in_flight=("Deploy staging v0.0.9 (run 1)",), releases=RED_RELEASES
+    )
+    assert "staging is red" in decide(stacked).reason
+    assert "main moved on" in decide(replace(stacked, main_head=OTHER)).reason
+    assert "no green ci-required" in decide(replace(stacked, head_green=False)).reason
+    assert "already released as" in decide(replace(stacked, tags=(tag("v0.0.5", commit=TRIGGER),))).reason
+
+
+def test_a_green_walk_in_the_history_lets_the_train_release_again() -> None:
+    walked = StagingRelease("v0.0.7", NOON - timedelta(minutes=5), walks=(StageRun("success", NOON, "", 9),))
+    result = decide(facts(tags=(tag("v0.0.5", commit=OTHER),), releases=(*RED_RELEASES, walked)))
+    assert result.release is True
+
+
+def test_reason_5_inside_the_nightly_tick_window() -> None:
     inside = datetime(2026, 9, 22, 22, 50, tzinfo=UTC)
     result = decide(facts(now=inside, tags=(tag("v0.0.5", commit=OTHER),)))
     assert result.release is False
     assert "tick window" in result.reason
 
 
-def test_reason_5_daily_cap_reached() -> None:
+def test_reason_6_daily_cap_reached() -> None:
     today_auto_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(DEFAULT_DAILY_CAP))
     result = decide(facts(tags=today_auto_tags))
     assert result.release is False
     assert f"daily cap reached: {DEFAULT_DAILY_CAP}" in result.reason
 
 
-def test_reason_6_a_release_is_already_in_flight() -> None:
+def test_reason_7_a_release_is_already_in_flight() -> None:
     result = decide(facts(in_flight=("Deploy staging v0.0.9 (run 42, in_progress)",)))
     assert result.release is False
     assert "already in flight" in result.reason
@@ -291,8 +338,25 @@ def test_read_tags_passes_refs_tags_to_git(monkeypatch: pytest.MonkeyPatch) -> N
 # --- gather()/main(): the wiring, with a faked GitHub and a faked git -------
 
 
-def _get_for(*, main_sha: str, green: bool, deploy_runs=(), walk_runs=(), tag_ci_runs=(), head_ci_runs=None):
+def _get_for(
+    *,
+    main_sha: str,
+    green: bool,
+    deploy_runs=(),
+    walk_runs=(),
+    tag_ci_runs=(),
+    head_ci_runs=None,
+    jobs=None,
+    jobs_calls=None,
+):
+    jobs = jobs or {}
+    jobs_calls = jobs_calls if jobs_calls is not None else []
+
     def get(path: str):
+        if "/actions/runs/" in path and "/jobs?" in path:
+            run_id = int(path.split("/actions/runs/")[1].split("/")[0])
+            jobs_calls.append(run_id)
+            return {"jobs": jobs.get(run_id, [])}
         if path == f"/repos/{REPO}/commits/main":
             return {"sha": main_sha}
         if "workflows/ci-required.yml/runs" in path and "status=success" in path:
@@ -500,3 +564,237 @@ def test_write_outputs_flattens_a_multiline_reason(tmp_path: Path) -> None:
     assert "existing=1" in content, "append, never truncate — another step may already have written to it"
     assert "reason=line one line two\n" in content
     assert "release=false" in content
+
+
+# --- the staging-red history: read from the run lists, rule applied, issue kept in step -----
+
+
+def _run(run_id: int, title: str, conclusion: str, created: str, updated: str, branch: str = "main") -> dict:
+    return {
+        "id": run_id,
+        "display_title": title,
+        "status": "completed" if conclusion else "in_progress",
+        "conclusion": conclusion or None,
+        "created_at": created,
+        "updated_at": updated,
+        "head_branch": branch,
+    }
+
+
+def _job(name: str, step: str) -> dict:
+    return {"name": name, "conclusion": "failure", "steps": [{"name": step, "conclusion": "failure"}]}
+
+
+def _red_history_get(jobs_calls: list[int] | None = None):
+    """v0.0.5 failed its staging deploy. Then v0.0.6 was pushed twice and failed its own CI both
+    times, in the job `images_release / plan`. The `ci-required` summary job failed too."""
+    summary = _job("ci-required", "Reject any failed, cancelled, or missing dependency")
+    return _get_for(
+        main_sha=TRIGGER,
+        green=True,
+        deploy_runs=[
+            _run(104, "Deploy staging v0.0.5", "failure", "2026-09-22T08:00:00Z", "2026-09-22T08:05:00Z"),
+            _run(105, "Deploy staging v0.0.5", "failure", "2026-09-22T08:10:00Z", "2026-09-22T08:15:00Z"),
+            _run(90, "Deploy prod v0.0.5", "failure", "2026-09-22T08:20:00Z", "2026-09-22T08:25:00Z"),
+        ],
+        tag_ci_runs=[
+            _run(150, "ci-required", "success", "2026-09-22T07:50:00Z", "2026-09-22T07:55:00Z", "v0.0.5"),
+            _run(201, "ci-required", "failure", "2026-09-22T09:00:00Z", "2026-09-22T09:05:00Z", "v0.0.6"),
+            _run(202, "ci-required", "failure", "2026-09-22T09:30:00Z", "2026-09-22T09:35:00Z", "v0.0.6"),
+            _run(300, "ci-required", "failure", "2026-09-22T09:40:00Z", "2026-09-22T09:41:00Z", "some-feature-branch"),
+        ],
+        jobs={
+            104: [_job("request", "Dispatch the validated request to infra2")],
+            105: [_job("request", "Confirm the staging release carries its data engine")],
+            201: [summary, _job("images_release / plan", "Select available images")],
+            202: [summary, _job("images_release / plan", "Select available images")],
+        },
+        jobs_calls=jobs_calls if jobs_calls is not None else [],
+    )
+
+
+V0_0_5 = tag("v0.0.5", commit=OTHER)
+
+
+def _git_with_v0_0_5(args):
+    return _for_each_ref_blob([("v0.0.5", OTHER, "", "1758000000", "v0.0.5\n\nPRs: 1")])
+
+
+def test_gather_carries_the_releases_into_the_facts() -> None:
+    result = gather(REPO, TRIGGER, get=_red_history_get(), run=_git_with_v0_0_5, now=NOON)
+    assert [r.tag for r in result.releases] == ["v0.0.5", "v0.0.6", "v0.0.6"]
+
+
+class IssueDesk:
+    """A fake `gh issue` CLI. It records each call and answers the three reads."""
+
+    def __init__(self, *, open_issues: list[dict] | None = None, last_text: str = "") -> None:
+        self.open_issues = open_issues or []
+        self.last_text = last_text
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        verb = args[2]
+        if verb == "list":
+            return json.dumps(self.open_issues)
+        if verb == "view":
+            return json.dumps({"body": self.last_text, "comments": []})
+        if verb == "create":
+            return "https://github.com/wangzitian0/truealpha/issues/9999\n"
+        return ""
+
+    def verbs(self) -> list[str]:
+        return [call[2] for call in self.calls]
+
+
+RED_TITLE = "[truealpha] Staging red since v0.0.6: ci-required / images_release / plan / Select available images"
+
+
+def _main_red(tmp_path: Path, *args: str, desk: IssueDesk, capsys: pytest.CaptureFixture) -> tuple[int, str, str]:
+    output = tmp_path / "gh_output"
+    output.write_text("", encoding="utf-8")
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER, "--github-output", str(output), *args],
+        get=_red_history_get(),
+        run=_git_with_v0_0_5,
+        gh=desk,
+    )
+    out = capsys.readouterr()
+    return code, out.out, output.read_text(encoding="utf-8")
+
+
+def test_main_exits_green_and_says_why_when_the_train_is_stopped(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """A stopped train is a decision and no failure: exit 0, `release=false`, and a reason line."""
+    desk = IssueDesk()
+    code, out, written = _main_red(tmp_path, desk=desk, capsys=capsys)
+    assert code == 0
+    assert "release=false" in written and "tag=\n" in written
+    assert "skip: staging is red since v0.0.6" in out
+    assert "staging line: red since v0.0.6" in out
+    assert desk.calls == [], "without --report-staging-red the run is a read-only replay"
+
+
+def test_main_opens_one_issue_with_the_title_of_the_rule(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    desk = IssueDesk()
+    code, out, _ = _main_red(tmp_path, "--report-staging-red", desk=desk, capsys=capsys)
+    assert code == 0
+    assert desk.verbs() == ["list", "create"]
+    create = desk.calls[1]
+    assert create[create.index("--title") + 1] == RED_TITLE
+    body = create[create.index("--body") + 1]
+    assert "tools/cut_release.sh" in body and "walk-release.yml" in body
+    assert "issues/9999" in out
+
+
+def test_main_comments_on_the_open_issue_and_never_opens_a_second_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    desk = IssueDesk(open_issues=[{"number": 41, "title": RED_TITLE}], last_text="older text")
+    code, _, _ = _main_red(tmp_path, "--report-staging-red", desk=desk, capsys=capsys)
+    assert code == 0
+    assert desk.verbs() == ["list", "view", "comment"]
+    assert "create" not in desk.verbs()
+    assert desk.calls[2][3] == "41"
+
+
+def test_main_does_not_repeat_a_comment_that_holds_the_same_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    first = IssueDesk()
+    _main_red(tmp_path, "--report-staging-red", desk=first, capsys=capsys)
+    marker = first.calls[1][first.calls[1].index("--body") + 1].splitlines()[-1]
+    assert marker.startswith("<!-- staging-red-state: ")
+    second = IssueDesk(open_issues=[{"number": 41, "title": RED_TITLE}], last_text=f"text\n{marker}")
+    code, out, _ = _main_red(tmp_path, "--report-staging-red", desk=second, capsys=capsys)
+    assert code == 0
+    assert second.verbs() == ["list", "view"]
+    assert "#41 already holds this state" in out
+
+
+def test_main_ignores_an_open_issue_whose_title_is_not_a_staging_red_title(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    desk = IssueDesk(open_issues=[{"number": 5, "title": "Staging red since last week: who knows"}])
+    _main_red(tmp_path, "--report-staging-red", desk=desk, capsys=capsys)
+    assert desk.verbs() == ["list", "create"]
+
+
+def test_main_closes_the_issue_when_the_train_runs_again(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    desk = IssueDesk(open_issues=[{"number": 41, "title": RED_TITLE}])
+    output = tmp_path / "gh_output"
+    output.write_text("", encoding="utf-8")
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER, "--github-output", str(output), "--report-staging-red"],
+        get=_get_for(main_sha=TRIGGER, green=True),
+        run=_git_with_v0_0_5,
+        gh=desk,
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert desk.verbs() == ["list", "close"]
+    assert desk.calls[1][3] == "41"
+    assert "staging line: open" in out
+    assert "release=true" in output.read_text(encoding="utf-8")
+
+
+def test_main_prints_the_staging_line_on_a_normal_run(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER],
+        get=_get_for(main_sha=TRIGGER, green=True),
+        run=_git_with_v0_0_5,
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "release: main HEAD" in out
+    assert "staging line: open; no staging release was found" in out
+
+
+def test_main_fails_loud_when_the_red_state_cannot_get_an_owner(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """The hold itself is safe. A red state that no issue names is the defect of #1468, so a
+    failing `gh` turns the run red instead of passing in silence."""
+
+    def broken(args):
+        raise subprocess.CalledProcessError(1, args)
+
+    output = tmp_path / "gh_output"
+    output.write_text("", encoding="utf-8")
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER, "--github-output", str(output), "--report-staging-red"],
+        get=_red_history_get(),
+        run=_git_with_v0_0_5,
+        gh=broken,
+    )
+    assert code == 1
+    assert "could not update the staging-red issue" in capsys.readouterr().err
+    assert "release=false" in output.read_text(encoding="utf-8"), "the hold is written before the report"
+
+
+def test_a_failing_issue_search_on_an_open_line_never_blocks_a_release(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Closing an issue is housekeeping. `release=true` is decided, and the cut step must run."""
+
+    def broken(args):
+        raise subprocess.CalledProcessError(1, args, stderr="HTTP 502")
+
+    output = tmp_path / "gh_output"
+    output.write_text("", encoding="utf-8")
+    code = main(
+        ["--repo", REPO, "--trigger-sha", TRIGGER, "--github-output", str(output), "--report-staging-red"],
+        get=_get_for(main_sha=TRIGGER, green=True),
+        run=_git_with_v0_0_5,
+        gh=broken,
+    )
+    assert code == 0
+    assert "::warning::could not close the staging-red issue" in capsys.readouterr().err
+    assert "release=true" in output.read_text(encoding="utf-8")
+
+
+def test_an_error_carries_the_standard_error_of_the_failed_command(capsys: pytest.CaptureFixture) -> None:
+    def broken(args):
+        raise subprocess.CalledProcessError(1, args, stderr="Resource not accessible by integration")
+
+    code = main(["--repo", REPO, "--trigger-sha", TRIGGER], get=_get_for(main_sha=TRIGGER, green=True), run=broken)
+    assert code == 1
+    assert "Resource not accessible by integration" in capsys.readouterr().err
