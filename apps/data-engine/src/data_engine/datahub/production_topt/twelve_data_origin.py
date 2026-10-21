@@ -573,8 +573,10 @@ def carries_data(http_status: int | None, body: bytes) -> bool:
         payload = json.loads(body.decode())
     except (UnicodeDecodeError, ValueError):
         return False
-    return isinstance(payload, Mapping) and payload.get("status") != "error" and not (
-        http_status is not None and http_status >= 400
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("status") != "error"
+        and not (http_status is not None and http_status >= 400)
     )
 
 

@@ -105,7 +105,9 @@ def _yahoo_chart() -> bytes:
     closes = [float(CLOSE)] * len(days)
     quote = {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [1000] * len(days)}
     payload = {
-        "chart": {"result": [{"timestamp": stamps, "indicators": {"quote": [quote], "adjclose": [{"adjclose": closes}]}}]}
+        "chart": {
+            "result": [{"timestamp": stamps, "indicators": {"quote": [quote], "adjclose": [{"adjclose": closes}]}}]
+        }
     }
     return json.dumps(payload).encode()
 
@@ -141,7 +143,9 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
         issuer_id, instrument_id, listing_id, ticker = plan.coordinates[subject_id]
         # Dual-class listings share one CIK, as GOOG and GOOGL do: one issuer, two listings.
         issuer_ticker = "GOOGL" if ticker == "GOOG" else ticker
-        cik_by_ticker.setdefault(ticker, 100000 + sorted({c[3] for c in plan.coordinates.values()}).index(issuer_ticker))
+        cik_by_ticker.setdefault(
+            ticker, 100000 + sorted({c[3] for c in plan.coordinates.values()}).index(issuer_ticker)
+        )
         if semantic_type == "market-price":
             price_targets[work_item_id] = MarketPriceTarget(
                 symbol=ticker,

@@ -32,9 +32,7 @@ class LandedKeys(Protocol):
         """The bytes landed under ``key``, or None. A hit counts as one reuse."""
         ...
 
-    def land(
-        self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None
-    ) -> None:
+    def land(self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None) -> None:
         """Record ``body`` as the landing of ``key``."""
         ...
 
@@ -52,9 +50,7 @@ class MemoryLandedKeys:
             self.reuses[key] = self.reuses.get(key, 0) + 1
         return body
 
-    def land(
-        self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None
-    ) -> None:
+    def land(self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None) -> None:
         self.bodies[key] = body
 
 
@@ -125,9 +121,7 @@ class PostgresLandedKeys:
 
         return self._attempt(read)
 
-    def land(
-        self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None
-    ) -> None:
+    def land(self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None) -> None:
         from truealpha_contracts.models import DataSource
 
         from data_engine import raw_store

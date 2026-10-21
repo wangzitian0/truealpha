@@ -890,7 +890,9 @@ def landed(key: FetchKey) -> bytes | None:
         return None
 
 
-def land(key: FetchKey, body: bytes, *, content_type: str = "application/json", fetched_at: datetime | None = None) -> None:
+def land(
+    key: FetchKey, body: bytes, *, content_type: str = "application/json", fetched_at: datetime | None = None
+) -> None:
     """Record ``body`` as the landing of ``key``, on the connection that survives a rollback."""
     if settings.external_call_ledger == "off":
         return
