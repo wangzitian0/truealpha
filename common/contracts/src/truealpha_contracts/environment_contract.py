@@ -123,14 +123,16 @@ class MeasuredProcessMemory(_StrictFrozenModel):
     ``grpc_server_hwm_mib`` is the ``VmHWM`` of the first process. ``fresh_import_hwm_mib`` is the
     ``VmHWM`` of a fresh interpreter that imports ``data_engine.dagster_defs``: no run is smaller.
     ``container_peak_mib`` is the ``memory.peak`` of the cgroup while ``runs_at_peak`` in-process runs
-    overlapped, ``waiting_runs_at_peak`` of them only waiting for other runs. The peak does not split
-    into one size per run: it fixes no size for a working run."""
+    overlapped, ``waiting_runs_at_peak`` of them only waiting for other runs. That peak does not split
+    into one size per run. ``working_run_hwm_mib`` is the largest ``VmHWM`` of any run process that the
+    sensor sampled: the size of a working run, read directly."""
 
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
     method: str = Field(min_length=1)
     grpc_server_hwm_mib: float = Field(gt=0)
     fresh_import_hwm_mib: float = Field(gt=0)
+    working_run_hwm_mib: float = Field(gt=0)
     container_peak_mib: float = Field(gt=0)
     runs_at_peak: int = Field(ge=1)
     waiting_runs_at_peak: int = Field(ge=0)
@@ -144,8 +146,8 @@ class CodeServerCapacity(_StrictFrozenModel):
     queue admits ``concurrent_runs`` runs; at least 2, because a run that waits for other runs holds a
     slot while it waits. Each run executes in ``processes_per_run`` processes (1 when its job uses the
     in-process executor). The memory left inside ``utilization_limit`` of the ceiling, divided over the
-    slots, is the budget of one run (``run_mib``). The budget is a decision, not a measurement: the
-    nightly verdict compares every run process with it. A run cannot be smaller than a fresh import.
+    slots, is the budget of one run (``run_mib``). The budget is a decision, not a measurement. It must
+    cover the measured working run, and the nightly verdict compares every run process with it.
     """
 
     description: str = Field(min_length=1)
@@ -166,6 +168,11 @@ class CodeServerCapacity(_StrictFrozenModel):
             )
         if self.concurrent_runs < 2:
             raise ValueError("the queue needs 2 slots: a waiting run and the run it waits for")
+        if self.run_mib < self.measured.working_run_hwm_mib:
+            raise ValueError(
+                f"the budget of one run, {self.run_mib} MiB, is below the measured working run,"
+                f" {self.measured.working_run_hwm_mib} MiB: the slots do not fit inside the utilization limit"
+            )
         if self.run_mib < self.measured.fresh_import_hwm_mib:
             raise ValueError(
                 f"the budget of one run, {self.run_mib} MiB, is below a fresh import,"

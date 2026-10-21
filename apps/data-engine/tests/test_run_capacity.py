@@ -77,6 +77,21 @@ def test_the_demand_fits_inside_the_utilization_limit_of_the_ceiling() -> None:
     )
 
 
+def test_the_slots_fit_the_measured_working_run_inside_the_utilization_limit() -> None:
+    """The measured size of a working run, not the budget: the server and every slot at that size fit (#1467)."""
+    runs = _queue().max_concurrent_runs
+
+    held = CAPACITY.server_mib + runs * CAPACITY.processes_per_run * CAPACITY.measured.working_run_hwm_mib
+
+    assert held <= CAPACITY.utilization_limit * CAPACITY.ceiling_mib, (
+        f"{runs} working runs of {CAPACITY.measured.working_run_hwm_mib} MiB and the server hold {held:.0f} MiB"
+        f" of {CAPACITY.ceiling_mib} MiB: more than {CAPACITY.utilization_limit:.0%}"
+    )
+    assert CAPACITY.server_mib + (runs + 1) * CAPACITY.measured.working_run_hwm_mib > (
+        CAPACITY.utilization_limit * CAPACITY.ceiling_mib
+    ), "one more slot would not fit: the limit is the largest that fits the measured run"
+
+
 def test_one_more_run_than_the_limit_would_pass_the_utilization_limit() -> None:
     """The limit is the largest that fits. A lower one gives each run a larger budget."""
     assert _held_mib(_queue().max_concurrent_runs + 1) > CAPACITY.utilization_limit * CAPACITY.ceiling_mib
