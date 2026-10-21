@@ -304,6 +304,8 @@ def _pg_execute(sql: str, params=()):
 
     try:
         return _pg().execute(sql, params)
+    except psycopg.errors.UndefinedColumn:
+        raise  # a statement error: a fresh connection would meet the same schema
     except psycopg.Error:
         try:
             if _pg_conn is not None:
@@ -313,24 +315,35 @@ def _pg_execute(sql: str, params=()):
         return _pg().execute(sql, params)
 
 
-_INSERT_SQL = """
-insert into staging.api_call_ledger
-    (source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,
-     payload_sha256, byte_length, cost, capacity_window_id, run_key)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-"""
+#: The columns of every ledger row. The columns of `_ATTEMPT_COLUMNS` exist only after the migration
+#: `20261021T0900_datahub_ledger_model_attempt_columns.sql`: only a record that sets one of them
+#: uses `_INSERT_ATTEMPT_SQL`, so the rows of every other source never depend on the migration.
+_BASE_COLUMNS = (
+    "source",
+    "endpoint",
+    "caller",
+    "called_at",
+    "ok",
+    "status_code",
+    "error",
+    "duration_ms",
+    "request_uri",
+    "payload_sha256",
+    "byte_length",
+    "cost",
+    "capacity_window_id",
+    "run_key",
+)
+_ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
 
-#: The row of a model attempt (#1444) also carries three columns that exist only after the
-#: migration `20261021T0900_datahub_ledger_model_attempt_columns.sql`. Only a record that sets
-#: one of them uses this statement, so the rows of every other source never depend on the
-#: migration.
-_INSERT_ATTEMPT_SQL = """
-insert into staging.api_call_ledger
-    (source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,
-     payload_sha256, byte_length, cost, capacity_window_id, run_key, attempt, provider_code, request_params)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-"""
-_BASE_COLUMN_COUNT = 14  # the columns of `_INSERT_SQL`; the attempt columns follow them in the parameters
+
+def _insert_statement(columns: tuple[str, ...]) -> str:
+    placeholders = ["%s::jsonb" if column == "request_params" else "%s" for column in columns]
+    return f"insert into staging.api_call_ledger ({', '.join(columns)}) values ({', '.join(placeholders)})"
+
+
+_INSERT_SQL = _insert_statement(_BASE_COLUMNS)
+_INSERT_ATTEMPT_SQL = _insert_statement(_BASE_COLUMNS + _ATTEMPT_COLUMNS)
 
 
 def _insert_params(record: CallRecord) -> tuple:
@@ -354,7 +367,7 @@ def _insert_params(record: CallRecord) -> tuple:
 
 
 def _attempt_params(record: CallRecord) -> tuple:
-    """The values of the three attempt columns, or an empty tuple for a record that sets none of them."""
+    """The values of `_ATTEMPT_COLUMNS`, or an empty tuple for a record that sets none of them."""
     if record.attempt is None and record.provider_code is None and record.request_params is None:
         return ()
     return (
@@ -378,7 +391,7 @@ def postgres_writer(record: CallRecord) -> None:
         _pg_execute(_insert_sql(record), _insert_params(record))
     except psycopg.errors.UndefinedColumn:
         log.warning("api_call_ledger lacks the attempt columns; writing the row without them")
-        _pg_execute(_INSERT_SQL, _insert_params(record)[:_BASE_COLUMN_COUNT])
+        _pg_execute(_INSERT_SQL, _insert_params(record)[: len(_BASE_COLUMNS)])
 
 
 class MemoryLedger(list[CallRecord]):

@@ -153,6 +153,15 @@ class ModelHTTPError(RuntimeError):
         self.provider_code = provider_code
 
 
+class ModelCapacityRefused(ModelHTTPError):
+    """The pacer found no concurrency slot or rate window before the deadline of the call. Nothing
+    was sent. It is a `ModelHTTPError` so that every caller that defers a cell on an unavailable
+    provider defers it on this too (#1444). The status is 429: the limit is ours, not the provider's."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(429, f"{SOURCE}: {detail}")
+
+
 class ModelContextLimitError(ModelHTTPError):
     """Raised when a prompt exceeds the model's context ceiling (1M tokens for glm-5.3-flash).
 
@@ -557,7 +566,7 @@ def _call_provider(
             last = _attempt(
                 attempt=attempt,
                 pacer=pacer,
-                max_wait_seconds=budget.remaining_seconds(),
+                remaining_seconds=budget.remaining_seconds,
                 send=send,
                 url=url,
                 headers=headers,
@@ -565,9 +574,9 @@ def _call_provider(
                 request_params=request_params,
                 caller=caller,
             )
-        except gateway.CapacityExceeded:
+        except gateway.CapacityExceeded as refusal:
             if last is None:
-                raise
+                raise ModelCapacityRefused(refusal.reason) from refusal
             return last
         wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
         if wait is None:
@@ -586,7 +595,7 @@ def _attempt(
     *,
     attempt: int,
     pacer: model_policy.ModelPacer | None,
-    max_wait_seconds: float,
+    remaining_seconds: Callable[[], float],
     send: Transport,
     url: str,
     headers: dict[str, str],
@@ -599,7 +608,7 @@ def _attempt(
     usage: dict[str, Any] = {}
     provider_code: str | None = None
     with (
-        pacer.admitted(max_wait_seconds) if pacer is not None else nullcontext(),
+        pacer.admitted(remaining_seconds) if pacer is not None else nullcontext(),
         record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
     ):
         call.attempt = attempt

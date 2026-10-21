@@ -55,6 +55,10 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
         return KeyHealth(True, "answered", None, f"answered: the seated key works (served {served_model or 'model'})")
     if isinstance(error, llm.ModelNotConfigured):
         return KeyHealth(False, "not-configured", None, "not-configured: no model provider key is seated")
+    if isinstance(error, llm.ModelCapacityRefused):
+        return KeyHealth(
+            False, "provider-error", None, "provider-error: no call slot or rate window before the deadline"
+        )
     if isinstance(error, llm.ModelHTTPError):
         status = error.status_code
         if status in AUTH_REJECTED:

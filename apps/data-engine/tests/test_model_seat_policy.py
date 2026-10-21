@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -207,12 +210,12 @@ class SpyPacer:
         self.admissions = 0
         self.held = 0
 
-    def admitted(self, max_wait_seconds: float):
+    def admitted(self, remaining_seconds):
         spy = self
 
         class _Slot:
             def __enter__(self) -> None:
-                self._inner = spy._pacer.admitted(max_wait_seconds)
+                self._inner = spy._pacer.admitted(remaining_seconds)
                 self._inner.__enter__()
                 spy.admissions += 1
                 spy.held += 1
@@ -241,6 +244,47 @@ def test_every_attempt_is_admitted_and_no_slot_is_held_while_the_call_waits(worl
     ask(Transport([(429, rate_limited()), (429, rate_limited()), (200, OK_BODY)], world))
     assert spy.admissions == len(call_ledger) == 3
     assert held_during_waits and set(held_during_waits) == {0}, "a waiting call holds no concurrency slot"
+
+
+def test_a_call_that_finds_no_slot_before_its_deadline_is_refused_and_sends_nothing(
+    world, call_ledger, monkeypatch
+) -> None:
+    """The wait for a concurrency slot counts against the deadline too. Real time, one second."""
+    in_environment(monkeypatch, "staging")  # one concurrent call
+    monkeypatch.setattr(model_policy, "retry_spec", lambda: RETRY.model_copy(update={"deadline_seconds": 1}))
+    holding, release = threading.Event(), threading.Event()
+
+    def blocked(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        holding.set()
+        release.wait(timeout=30)
+        return 200, OK_BODY
+
+    first = threading.Thread(target=ask, args=(blocked,))
+    first.start()
+    assert holding.wait(timeout=10)
+    outcome: list[BaseException] = []
+
+    def second_call() -> None:
+        try:
+            ask(Transport([(200, OK_BODY)]))
+        except BaseException as error:  # noqa: BLE001 - the test reads the type
+            outcome.append(error)
+
+    second = threading.Thread(target=second_call)
+    second.start()
+    second.join(timeout=15)
+    release.set()
+    first.join(timeout=15)
+    assert not second.is_alive(), "a call waits for a slot until its deadline, not for ever"
+    (refused,) = outcome
+    assert isinstance(refused, llm.ModelCapacityRefused) and refused.status_code == 429
+    assert [row.attempt for row in call_ledger] == [1], "only the call that held the slot made a request"
+
+
+def test_the_probe_names_a_refusal_by_the_pacer_and_not_a_provider_answer() -> None:
+    health = model_key_health.classify(llm.ModelCapacityRefused("no concurrency slot before the deadline of the call"))
+    assert (health.ok, health.outcome, health.status_code) == (False, "provider-error", None)
+    assert "HTTP" not in health.summary and "slot or rate window" in health.summary
 
 
 @pytest.mark.parametrize(
@@ -394,6 +438,27 @@ def test_the_ledger_insert_maps_each_value_to_its_own_column(world, call_ledger,
     ] * 2
 
 
+def test_an_unknown_column_is_a_statement_error_and_is_not_asked_again(monkeypatch) -> None:
+    """A fresh connection meets the same schema, so the statement runs once."""
+    import psycopg
+
+    class Connection:
+        closed = False
+        executions = 0
+
+        def execute(self, sql: str, params: tuple = ()) -> None:
+            Connection.executions += 1
+            raise psycopg.errors.UndefinedColumn("no such column")
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(gateway, "_pg", lambda: Connection())
+    with pytest.raises(psycopg.errors.UndefinedColumn):
+        gateway._pg_execute("select 1")
+    assert Connection.executions == 1
+
+
 def test_a_row_of_another_source_does_not_depend_on_the_attempt_columns() -> None:
     record = gateway.CallRecord(source="sec", endpoint="submissions", caller="t", called_at=datetime.now(UTC))
     assert gateway._insert_sql(record) == gateway._INSERT_SQL
@@ -510,11 +575,18 @@ def test_the_schedule_of_each_live_environment_runs_in_its_own_slot(environment)
     assert len(others) == len(SEAT.environments), "no two live environments share a probe minute"
 
 
-def test_the_deployed_schedule_is_built_for_the_environment_of_the_process() -> None:
-    schedule = quality.defs.get_schedule_def("model_key_health_schedule")
-    assert (
-        schedule.cron_schedule == quality.build_model_key_health_schedule(gateway.capacity_environment()).cron_schedule
+@pytest.mark.parametrize("environment", sorted(SEAT.environments))
+def test_a_process_of_each_environment_deploys_the_schedule_of_its_own_slot(environment) -> None:
+    """The real wiring: import the lane in a fresh process whose APP_ENV names the environment.
+    A CI process (APP_ENV=ci) is not listed in the contract and cannot tell the slots apart."""
+    code = (
+        "from data_engine.lanes import quality; "
+        "print(quality.defs.get_schedule_def('model_key_health_schedule').cron_schedule)"
     )
+    env = {**os.environ, "APP_ENV": environment}
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert done.stdout.strip().splitlines()[-1] == SEAT.probe_cron(environment)
 
 
 def test_every_probe_slot_ends_before_the_release_fetch_proof_starts() -> None:

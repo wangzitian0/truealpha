@@ -27,7 +27,7 @@ import json
 import random
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -135,18 +135,29 @@ class ModelPacer:
         )
 
     @contextmanager
-    def admitted(self, max_wait_seconds: float) -> Iterator[None]:
+    def admitted(self, remaining_seconds: Callable[[], float]) -> Iterator[None]:
         """Hold one concurrency slot for the attempt. Wait first for the slot, then for the window.
 
-        The rate wait comes second so that the window counts the moment the attempt starts. It
-        stops after ``max_wait_seconds`` with ``CapacityExceeded``: the caller passes the time left
-        to the deadline of its call. A thread that waits for the slot is not bounded by it; every
-        holder of a slot ends within its attempt timeout."""
-        with self._slots:
-            with self._admission:
-                self._gate.max_wait_seconds = max_wait_seconds
+        The rate wait comes second so that the window counts the moment the attempt starts. Every
+        wait stops at the deadline of the call with ``CapacityExceeded``: ``remaining_seconds``
+        is read again after each wait, so a wait for the slot shortens the wait for the window."""
+        self._acquire(self._slots, remaining_seconds, "concurrency slot")
+        try:
+            self._acquire(self._admission, remaining_seconds, "admission lock")
+            try:
+                self._gate.max_wait_seconds = remaining_seconds()
                 self._gate.admit(self.seat)
+            finally:
+                self._admission.release()
             yield
+        finally:
+            self._slots.release()
+
+    def _acquire(
+        self, lock: threading.BoundedSemaphore | threading.Lock, remaining_seconds: Callable[[], float], what: str
+    ) -> None:
+        if not lock.acquire(timeout=max(0.0, remaining_seconds())):
+            raise gateway.CapacityExceeded(self.seat, f"no {what} before the deadline of the call")
 
 
 _pacers: dict[str, ModelPacer] = {}
