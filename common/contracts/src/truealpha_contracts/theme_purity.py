@@ -58,8 +58,7 @@ class ThemeDefinition(BaseModel):
 
 
 #: v0 themes. Three, not thirty: each one costs a classifier call per segment per issuer,
-#: and a theme nobody reads is spend with no reader. They are the ones init.md §0 and
-#: vision.md actually name.
+#: and a theme nobody reads is spend with no reader. They are the ones init.md §0 names.
 #:
 #: `minimum_classified_share` is 0.80 rather than 1.0 because a partition can be accepted
 #: with a small residual and a classifier is entitled to decline on a genuinely ambiguous

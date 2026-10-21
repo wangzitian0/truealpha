@@ -12,7 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 INIT = (ROOT / "init.md").read_text()
-VISION = (ROOT / "vision.md").read_text()
 A3 = (ROOT / "docs" / "architecture-decisions" / "A3-source-governance.md").read_text()
 
 FORBIDDEN = {
@@ -52,9 +51,9 @@ def test_init_md_states_the_decision(name: str, phrase: str) -> None:
     assert phrase in INIT, f"init.md lacks: {name}"
 
 
-def test_vision_counts_a_low_score_value_as_produced() -> None:
-    assert "stale, unresolved, or low-confidence placeholder" not in VISION
-    assert "A computed value with a low confidence score" in VISION
+def test_the_success_section_counts_a_low_score_value_as_produced() -> None:
+    assert "stale, unresolved, or low-confidence placeholder" not in INIT
+    assert "A computed value with a low confidence score" in INIT
 
 
 def test_a3_does_not_block_a_source_without_a_falsifier() -> None:

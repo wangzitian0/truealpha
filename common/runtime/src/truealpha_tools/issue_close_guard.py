@@ -141,7 +141,6 @@ NON_PRODUCT_FILES = {
     "CLAUDE.md",
     "GEMINI.md",
     "init.md",
-    "vision.md",
     "README.md",
     ".gitignore",
     ".gitattributes",

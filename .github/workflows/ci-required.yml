@@ -134,7 +134,7 @@ jobs:
               # #1412: a document starts this lane only when a test reads it, and
               # test_a_document_selects_the_lanes_that_read_it_and_no_other derives
               # the readers from the tests. Every top-level markdown file is read:
-              # by the reintroduction sweep, or by name (init.md, vision.md, README.md,
+              # by the reintroduction sweep, or by name (init.md, README.md,
               # CLAUDE.md). Three files under docs/ are read by name. Other files
               # under docs/ start no lane.
               - '*.md'
