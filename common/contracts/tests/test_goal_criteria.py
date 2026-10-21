@@ -91,7 +91,61 @@ def test_every_root_lists_its_acceptance_ids_without_a_gap() -> None:
         assert found == list(range(1, len(found) + 1)), f"R{root}: {found}"
     # The acceptance tables of #1417 to #1421 on 2026-10-20: A1-A8, B1-B10, C1-C7, D1-D6, E1-E10.
     # B11 joined on 2026-10-20 with the runtime-shape verdict of the code server (#1467).
-    assert {root: len(found) for root, found in numbers.items()} == {"1": 8, "2": 11, "3": 7, "4": 6, "5": 10}
+    # B12 (the S&P 500 membership from the IVV holdings) and D7 (the backtest window) joined on 2026-10-21.
+    assert {root: len(found) for root, found in numbers.items()} == {"1": 8, "2": 12, "3": 7, "4": 7, "5": 10}
+
+
+def _criterion(criterion_id: str):
+    return load_goal_criteria().by_id()[criterion_id]
+
+
+def test_the_m0_of_root_two_is_topt_and_qqq_and_the_s_and_p_500_is_the_next_tier() -> None:
+    """Owner decision of 2026-10-21: production runs TOPT and QQQ first, each key fetched once."""
+    m0, b1 = _criterion("R2.M0"), _criterion("R2.B1")
+
+    assert m0.tier == "M0" and "TOPT and QQQ" in m0.statement and "fetch key is fetched once" in m0.statement
+    assert "S&P 500" not in m0.statement, "the S&P 500 is the next tier, not the M0"
+    assert b1.tier == "M1" and "S&P 500" in b1.statement and "next production tier" in b1.statement
+
+
+def test_the_s_and_p_500_criterion_names_the_unlock_that_the_contract_holds() -> None:
+    """The prose and the machine-readable unlock say the same: the verdict name and the number of nights."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    unlock = load_environment_contract().unlock_of("sp500", "production")
+
+    assert unlock is not None
+    statement = _criterion("R2.B1").statement
+    assert unlock.verdict.name in statement
+    assert f"{unlock.verdict.consecutive_green_nights} consecutive nights" in statement
+    assert f"{unlock.end_to_end.universe.upper()} runs end to end on {unlock.end_to_end.environment}" in statement
+
+
+def test_the_s_and_p_500_membership_comes_from_the_ivv_holdings_and_the_filing_is_the_oracle() -> None:
+    criterion = _criterion("R2.B12")
+
+    assert "IVV N-PORT holdings" in criterion.statement
+    assert (criterion.tier, criterion.status, criterion.oracle) == ("M1", "pending", "filing")
+
+
+def test_the_backtest_window_is_a_pending_m1_criterion_with_twelve_cutoffs_now_and_twenty_years_ideal() -> None:
+    criterion = _criterion("R4.D7")
+
+    assert (criterion.tier, criterion.status) == ("M1", "pending")
+    assert "parameter of the definition" in criterion.statement
+    assert "12 quarterly cutoffs" in criterion.statement and "20 years" in criterion.statement
+
+
+def test_the_seventy_percent_rule_is_not_restated_in_the_data_files() -> None:
+    """#1484: the rule lives in `UTILIZATION_CEILING`. A data file points to it and states no number."""
+    data = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
+    criteria = (data / "goal_criteria.v1.json").read_text()
+    capacity = json.dumps(json.loads((data / "environment_contract.v1.json").read_text())["code_server_capacity"])
+    rule = re.compile(r"\b70 ?%|\b0\.7\b|utilization_limit")
+
+    assert rule.search(criteria) is None
+    assert rule.search(capacity) is None
+    assert "UTILIZATION_CEILING" in criteria and "UTILIZATION_CEILING" in capacity
 
 
 def test_the_fixture_reach_test_backs_r5_e2() -> None:
