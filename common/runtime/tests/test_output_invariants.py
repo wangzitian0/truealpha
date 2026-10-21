@@ -16,11 +16,12 @@ against a database that the migration chain builds (#1346).
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import psycopg
@@ -416,6 +417,8 @@ class SeededIssuer:
     available: bool = True
     #: The reason codes of an unavailable core result. None gives the default of its shape.
     reasons: tuple[str, ...] | None = None
+    #: The period end of the revenue that the core result divided by. None stores no period.
+    revenue_period_end: date | None = None
 
 
 def _issuer(
@@ -424,9 +427,10 @@ def _issuer(
     facts_complete: bool = True,
     available: bool = True,
     reasons: tuple[str, ...] | None = None,
+    revenue_period_end: date | None = None,
 ) -> SeededIssuer:
     listings = tuple(f"listing:xnas:{ticker}" for ticker in tickers)
-    return SeededIssuer(f"issuer:{name}", listings, facts_complete, available, reasons)
+    return SeededIssuer(f"issuer:{name}", listings, facts_complete, available, reasons, revenue_period_end)
 
 
 def _singles(state: str, count: int, *, facts_complete: bool = True, available: bool = True) -> list[SeededIssuer]:
@@ -532,7 +536,8 @@ def _seed_issuer(
             capital_adjusted_gross_profit, gppe, tier, target_ps_lower, target_ps_upper,
             target_ps_midpoint, current_ps, valuation_gap, confidence, freshness, reason_codes,
             input_observation_ids, gppe_invocation_id, gppe_result_id, gppe_definition_id,
-            gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload
+            gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload,
+            revenue_period_end
         ) values (
             %(result_id)s, %(result_sha)s, %(invocation)s, %(snapshot)s, %(run)s, %(release)s,
             %(universe)s, 'v1', %(seed)s, '2026-03-31T20:00:00Z', %(issuer)s, %(instrument)s, %(listing)s,
@@ -540,7 +545,8 @@ def _seed_issuer(
             %(value)s, %(value)s, %(tier)s, %(value)s, %(value)s,
             %(value)s, %(value)s, %(value)s, 0.9, 'fresh', %(reasons)s,
             %(observations)s, %(gppe_invocation)s, %(gppe_result)s, %(gppe_definition)s,
-            %(seed)s, %(tier_definition)s, %(seed)s, '{}'::jsonb
+            %(seed)s, %(tier_definition)s, %(seed)s, '{}'::jsonb,
+            %(revenue_period_end)s
         )
         """,
         {
@@ -564,6 +570,7 @@ def _seed_issuer(
             "gppe_result": f"topt-gppe-result:{_digest('gppe', snapshot_id, issuer.issuer_id)}",
             "gppe_definition": f"gppe-definition:{SEED_SHA256}",
             "tier_definition": f"three-tier-definition:{SEED_SHA256}",
+            "revenue_period_end": issuer.revenue_period_end,
         },
     )
 
@@ -687,9 +694,11 @@ class _Borrowed:
         return None
 
 
-def _parity_verdict(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
-    """Run the shipped invariant through `check`, with coverage required as on real data."""
-    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == PARITY_INVARIANT]
+def _parity_verdict(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], invariant_id: str = PARITY_INVARIANT
+) -> tuple[int, str]:
+    """Run a shipped invariant through `check`, with coverage required as on real data."""
+    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == invariant_id]
     code = check(
         "postgresql://borrowed",
         require_coverage=True,
@@ -944,3 +953,100 @@ def test_an_unscheduled_manual_qqq_head_on_staging_does_not_fail_scheduled_topt_
     code, output = _parity_verdict(conn, capsys)
     assert code == 0, output
     assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
+
+
+# --- revenue-period-is-recent on a migrated database (#1457) -------------------------------
+#
+# Production QQQ served annual revenue of 2018 for CPRT and XEL at a cutoff of 2026-10-19. The
+# plausibility gate judged the value, not its age. The invariant reads `revenue_period_end`
+# of the available core results of every scheduled head.
+REVENUE_INVARIANT = "revenue-period-is-recent"
+#: The cutoff that `_seed_issuer` gives every core result.
+SEEDED_CUTOFF = date(2026, 3, 31)
+REVENUE_UNIVERSE = "universe:topt-us-2026-03-31"
+
+
+def _months_before(day: date, months: int) -> date:
+    """The day `months` calendar months before `day`. A shorter month clamps to its last day."""
+    year, month_index = divmod(day.year * 12 + day.month - 1 - months, 12)
+    return date(year, month_index + 1, min(day.day, calendar.monthrange(year, month_index + 1)[1]))
+
+
+def test_a_head_whose_revenue_periods_are_recent_passes(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    issuers = [
+        _issuer("current", "cur0", revenue_period_end=date(2025, 12, 31)),
+        _issuer("lagging", "lag0", revenue_period_end=date(2024, 12, 31)),
+    ]
+    _seed_head(conn, REVENUE_UNIVERSE, issuers)
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 0, output
+    assert f"ok       {REVENUE_INVARIANT}: 2 row(s) examined" in output
+
+
+def test_a_revenue_period_from_2018_fails_and_names_the_issuer(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The injected row is the XEL of production: an available result on a revenue of 2018-12-31.
+
+    Red without the invariant: no check judged the age of a served revenue (#1457).
+    """
+    issuers = [
+        _issuer("current", "cur0", revenue_period_end=date(2025, 12, 31)),
+        _issuer("xel", "xel0", revenue_period_end=date(2018, 12, 31)),
+    ]
+    run_id = _seed_head(conn, REVENUE_UNIVERSE, issuers)
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 1, output
+    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert f"Offending rows: {REVENUE_UNIVERSE} {run_id} issuer:xel 2018-12-31 2026-03-31" in output
+
+
+def test_the_limit_is_the_named_constant_and_it_is_18_months(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A period that ends exactly on the limit passes. A period that ends one day before it fails."""
+    assert _module.REVENUE_MAX_AGE_MONTHS == 18
+    limit = _months_before(SEEDED_CUTOFF, _module.REVENUE_MAX_AGE_MONTHS)
+    assert limit == date(2024, 9, 30)
+    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("edge", "edge0", revenue_period_end=limit)])
+    assert _parity_verdict(conn, capsys, REVENUE_INVARIANT)[0] == 0
+
+    conn.rollback()
+    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("late", "late0", revenue_period_end=limit - timedelta(days=1))])
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+    assert code == 1, output
+    assert f"issuer:late {limit - timedelta(days=1)} 2026-03-31" in output
+
+
+def test_an_unavailable_result_with_a_named_reason_may_carry_an_old_period(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Only an available result is served. An unavailable result names its reason in `reason_codes`."""
+    issuers = [
+        _issuer("current", "cur0", revenue_period_end=date(2025, 12, 31)),
+        _issuer("refused", "ref0", available=False, reasons=("stale_input",), revenue_period_end=date(2018, 12, 31)),
+    ]
+    _seed_head(conn, REVENUE_UNIVERSE, issuers)
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 0, output
+    assert f"ok       {REVENUE_INVARIANT}: 1 row(s) examined" in output
+
+
+def test_a_head_that_states_no_revenue_period_proves_nothing(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A result with no stored period has an unknown age. The invariant says so, and coverage fails it."""
+    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("undated", "und0")])
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 1, output
+    assert f"EMPTY    {REVENUE_INVARIANT}: examined 0 rows, so it proved nothing" in output

@@ -75,6 +75,11 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
 # every invariant below silently changed population.
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
+#: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
+#: A 10-K is due 90 days after the fiscal year ends, and a late filer gets 15 more days. So the newest
+#: annual period of a current filer ends at most about 15 months before a cutoff. 18 months leaves
+#: a margin of 3 months. Production QQQ served periods that were 94 and 98 months old.
+REVENUE_MAX_AGE_MONTHS = 18
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
@@ -693,6 +698,49 @@ INVARIANTS: tuple[Invariant, ...] = (
             from mart.served_head h
             where h.factor_id = 'gross_profit_per_employee'
               and mart.is_head_scheduled(h.universe_id, h.environment)
+        """,
+    ),
+    Invariant(
+        id="revenue-period-is-recent",
+        claim=(
+            f"an available core result of a scheduled governed head carries a revenue whose period ends "
+            f"at most {REVENUE_MAX_AGE_MONTHS} months before the cutoff of its run — an older period is a "
+            "stale figure that the head serves as a current one (#1457)"
+        ),
+        # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
+        # divided by. Only an available result is served. A result with a named reason is
+        # unavailable (its `reason_codes` are not empty), so it needs no exemption here. A result
+        # with no stored period (a snapshot from before #534) is not examined: its age is unknown,
+        # and `--require-coverage` fails a head where no result states its period.
+        # Production QQQ served CPRT at 2018-07-31 and XEL at 2018-12-31 for a cutoff of 2026-10-19.
+        # The plausibility gate judged the value only. CPRT had a ratio above its limit. XEL did not.
+        # `select distinct` counts a result one time, also when two invocations wrote results for a run.
+        violations=f"""
+            with heads as (
+                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+                from mart.served_head h
+                where h.factor_id = 'gross_profit_per_employee'
+                  and mart.is_head_scheduled(h.universe_id, h.environment)
+            )
+            select distinct heads.universe_id, r.run_id, r.issuer_id,
+                   r.revenue_period_end::text as revenue_period_end,
+                   (r.cutoff at time zone 'UTC')::date::text as cutoff
+            from heads
+            join mart.topt_core_results r on r.run_id = heads.run_id
+            where r.availability = 'available'
+              and r.revenue_period_end is not null
+              and r.revenue_period_end
+                  < ((r.cutoff at time zone 'UTC')::date - interval '{REVENUE_MAX_AGE_MONTHS} months')::date
+            order by 1, 2, 3
+        """,
+        population="""
+            select count(distinct (r.run_id, r.issuer_id))
+            from mart.served_head h
+            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            where h.factor_id = 'gross_profit_per_employee'
+              and mart.is_head_scheduled(h.universe_id, h.environment)
+              and r.availability = 'available'
+              and r.revenue_period_end is not null
         """,
     ),
 )
