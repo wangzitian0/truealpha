@@ -124,8 +124,8 @@ class MeasuredProcessMemory(_StrictFrozenModel):
     ``VmHWM`` of a fresh interpreter that imports ``data_engine.dagster_defs``: no run is smaller.
     ``container_peak_mib`` is the ``memory.peak`` of the cgroup while ``runs_at_peak`` in-process runs
     overlapped, ``waiting_runs_at_peak`` of them only waiting for other runs. That peak does not split
-    into one size per run. ``working_run_hwm_mib`` is the largest ``VmHWM`` of any run process that the
-    sensor sampled: the size of a working run, read directly."""
+    into one size per run. ``working_run_hwm_mib`` is the largest ``VmHWM`` of any process except the code
+    server that the sensor sampled: the size of a working run, read directly."""
 
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
@@ -137,6 +137,15 @@ class MeasuredProcessMemory(_StrictFrozenModel):
     runs_at_peak: int = Field(ge=1)
     waiting_runs_at_peak: int = Field(ge=0)
     source: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _a_working_run_is_not_smaller_than_a_fresh_import(self) -> Self:
+        if self.working_run_hwm_mib < self.fresh_import_hwm_mib:
+            raise ValueError(
+                f"a working run, {self.working_run_hwm_mib} MiB, is below a fresh import,"
+                f" {self.fresh_import_hwm_mib} MiB: one of the two readings is wrong"
+            )
+        return self
 
 
 class CodeServerCapacity(_StrictFrozenModel):
@@ -161,7 +170,7 @@ class CodeServerCapacity(_StrictFrozenModel):
     measured: MeasuredProcessMemory
 
     @model_validator(mode="after")
-    def _server_covers_the_measurement_and_the_budget_covers_an_import(self) -> Self:
+    def _server_and_budget_cover_the_measurements(self) -> Self:
         if self.server_mib < self.measured.grpc_server_hwm_mib:
             raise ValueError(
                 f"server_mib {self.server_mib} is below the measured {self.measured.grpc_server_hwm_mib} MiB"
@@ -172,11 +181,6 @@ class CodeServerCapacity(_StrictFrozenModel):
             raise ValueError(
                 f"the budget of one run, {self.run_mib} MiB, is below the measured working run,"
                 f" {self.measured.working_run_hwm_mib} MiB: the slots do not fit inside the utilization limit"
-            )
-        if self.run_mib < self.measured.fresh_import_hwm_mib:
-            raise ValueError(
-                f"the budget of one run, {self.run_mib} MiB, is below a fresh import,"
-                f" {self.measured.fresh_import_hwm_mib} MiB: the ceiling is too small for {self.concurrent_runs} runs"
             )
         return self
 
