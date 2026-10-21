@@ -376,3 +376,24 @@ def test_context_window_exceeded_logs_alert_records_413_refusal_and_raises_model
     (row,) = conn.inserts
     assert row[12] == 413  # status_code
     assert "context_window_exceeded" in json.loads(row[16])["reason"]
+
+
+def test_is_context_limit_response_distinguishes_context_overflow_from_unrelated_400_errors():
+    from data_engine.sources.llm import _is_context_limit_response
+
+    assert _is_context_limit_response(413, b"{}") is True
+    assert (
+        _is_context_limit_response(
+            400,
+            b'{"error":{"code":"context_length_exceeded","message":"This model maximum context length is 1000000"}}',
+        )
+        is True
+    )
+    # Unrelated 400 validation errors mentioning max_tokens or digits 1210 in request_id must NOT match
+    assert (
+        _is_context_limit_response(
+            400,
+            b'{"error":{"code":"invalid_request_error","param":"max_tokens","request_id":"req_121099"}}',
+        )
+        is False
+    )

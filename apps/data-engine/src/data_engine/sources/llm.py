@@ -293,27 +293,44 @@ def _estimate_prompt_tokens(task: ModelTask, user_content: str) -> int:
     return int(total_chars / _CHARS_PER_TOKEN_FLOOR)
 
 
+_CONTEXT_LIMIT_CODES = frozenset(
+    {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "tokens_limit_reached",
+        "prompt_too_long",
+    }
+)
+_CONTEXT_LIMIT_PHRASES = (
+    "context_length_exceeded",
+    "context window",
+    "maximum context length",
+    "prompt is too long",
+    "tokens_limit_reached",
+    "maximum input length",
+    "exceeds the maximum number of tokens",
+)
+
+
 def _is_context_limit_response(status: int, body: bytes) -> bool:
     """True when a provider 400/413 error indicates the prompt exceeded the model's context window."""
     if status == 413:
         return True
     if status != 400:
         return False
-    lower = body.decode("utf-8", errors="ignore").lower()
-    return any(
-        marker in lower
-        for marker in (
-            "context_length_exceeded",
-            "context window",
-            "maximum context length",
-            "max_tokens",
-            "prompt is too long",
-            "tokens_limit_reached",
-            "token limit",
-            "1210",
-            "input length",
-        )
-    )
+    text = body.decode("utf-8", errors="ignore")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        nested = parsed.get("error")
+        err = nested if isinstance(nested, dict) else parsed
+        code = str(err.get("code") or "").strip().lower()
+        if code in _CONTEXT_LIMIT_CODES:
+            return True
+    lower = text.lower()
+    return any(phrase in lower for phrase in _CONTEXT_LIMIT_PHRASES)
 
 
 #: The FIRST answer is the answer (§9: replay reuses the stored result). Before this read

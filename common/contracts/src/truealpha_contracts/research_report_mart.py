@@ -40,7 +40,7 @@ from truealpha_contracts.issuer_modules_mart import (
     IssuerModuleReader,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
-    resolve_issuer_id_candidates,
+    resolve_issuer_id_candidates_batch,
 )
 from truealpha_contracts.research_report import (
     EvidenceTrace,
@@ -505,11 +505,21 @@ class MartResearchReadRepository:
         for decision in decisions:
             by_issuer[decision.issuer_id] = decision
             by_issuer.setdefault(decision.issuer_id.upper(), decision)
+        unmatched = [
+            entity_id
+            for entity_id in request.target_entity_ids
+            if by_issuer.get(entity_id) is None and by_issuer.get(entity_id.upper()) is None
+        ]
+        resolved_batch: dict[str, tuple[str, ...]] = (
+            resolve_issuer_id_candidates_batch(self._database_url, unmatched)
+            if unmatched and self._database_url is not None
+            else {}
+        )
         subjects: list[ReportSubject] = []
         for entity_id in request.target_entity_ids:
             matched: StrategyRunDecision | None = by_issuer.get(entity_id) or by_issuer.get(entity_id.upper())
-            if matched is None and self._database_url is not None:
-                for candidate in resolve_issuer_id_candidates(self._database_url, entity_id):
+            if matched is None:
+                for candidate in resolved_batch.get(entity_id.strip(), ()):
                     matched = by_issuer.get(candidate) or by_issuer.get(candidate.upper())
                     if matched is not None:
                         break
