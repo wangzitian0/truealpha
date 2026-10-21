@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import runpy
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,7 @@ from truealpha_contracts.environment_contract import (
     CodeServerCapacity,
     EnvironmentContract,
     JobRunTimeBasis,
+    ModelSeatContract,
     load_environment_contract,
     load_sentinel_known_answers,
 )
@@ -280,3 +282,89 @@ def test_a_measurement_of_a_working_run_below_a_fresh_import_is_refused() -> Non
 
     with pytest.raises(ValidationError, match="below a fresh import"):
         _capacity(measured=measured)
+
+
+# --- the model seat: one retry policy, per-environment pacing, probe slots (#1444) ----------
+
+
+def _seat(**changes: object) -> dict[str, object]:
+    """The shipped model seat as plain data, with ``changes`` laid over it."""
+    return {**load_environment_contract().model_seat.model_dump(mode="json"), **changes}
+
+
+def _retry(**changes: object) -> dict[str, object]:
+    return {**load_environment_contract().model_seat.retry.model_dump(mode="json"), **changes}
+
+
+def test_every_environment_that_calls_live_vendors_declares_model_seat_limits() -> None:
+    contract = load_environment_contract()
+    live = {name for name, spec in contract.environments.items() if spec.live_vendor_calls}
+    assert live == {"staging", "production"}
+    for name in live:
+        limits = contract.model_seat.limits_for(name)
+        assert limits is not None and limits.max_concurrent_calls >= 1 and limits.calls_per_minute >= 1
+    assert contract.model_seat.limits_for("dev") is None
+
+
+def test_the_shipped_retry_waits_at_least_ninety_seconds_with_no_random_extra() -> None:
+    retry = load_environment_contract().model_seat.retry
+    assert [retry.base_backoff_seconds(n) for n in range(1, retry.max_attempts)] == [5, 10, 20, 40, 40, 40]
+    assert retry.base_total_wait_seconds == 155 >= retry.min_total_wait_seconds == 90
+    assert retry.deadline_seconds >= retry.min_total_wait_seconds
+
+
+def test_probe_slots_of_the_two_live_environments_differ_by_at_least_the_retry_deadline() -> None:
+    seat = load_environment_contract().model_seat
+    production, staging = seat.probe_cron("production"), seat.probe_cron("staging")
+    assert production != staging
+    minutes = sorted(seat.probe_offset_minutes(name) for name in ("production", "staging"))
+    assert minutes[1] - minutes[0] >= seat.retry.deadline_seconds / 60
+    assert production == f"{seat.probe_offset_minutes('production')} {seat.probe.hour_utc} * * *"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"retry": _retry(max_attempts=3)}, "below min_total_wait_seconds"),
+        ({"retry": _retry(max_backoff_seconds=5, max_attempts=7)}, "below min_total_wait_seconds"),
+        ({"retry": _retry(deadline_seconds=60)}, "deadline_seconds 60 is below"),
+        ({"retry": _retry(transient_provider_codes=["1302", "1113"])}, "transient and terminal"),
+        ({"retry": _retry(jitter_percent=-1)}, "greater than or equal to 0"),
+        (
+            {
+                "environments": {
+                    "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0},
+                    "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 4},
+                }
+            },
+            "closer than slot_minutes",
+        ),
+        (
+            {
+                "environments": {
+                    "production": {"max_concurrent_calls": 0, "calls_per_minute": 10, "probe_offset_minutes": 0}
+                }
+            },
+            "greater than or equal to 1",
+        ),
+        ({"probe": {"hour_utc": 6, "slot_minutes": 4}}, "below the retry deadline"),
+    ],
+)
+def test_a_model_seat_that_breaks_a_rule_is_refused(changes: dict[str, object], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ModelSeatContract.model_validate_json(json.dumps(_seat(**changes)))
+
+
+def test_a_live_environment_without_model_seat_limits_is_refused() -> None:
+    data = load_environment_contract().model_dump(mode="json")
+    data["model_seat"]["environments"].pop("staging")
+    with pytest.raises(ValidationError, match="staging calls live vendors and declares no model seat limits"):
+        EnvironmentContract.model_validate_json(json.dumps(data))
+    data = load_environment_contract().model_dump(mode="json")
+    data["model_seat"]["environments"]["qa"] = {
+        "max_concurrent_calls": 1,
+        "calls_per_minute": 1,
+        "probe_offset_minutes": 30,
+    }
+    with pytest.raises(ValidationError, match="name unknown environments"):
+        EnvironmentContract.model_validate_json(json.dumps(data))

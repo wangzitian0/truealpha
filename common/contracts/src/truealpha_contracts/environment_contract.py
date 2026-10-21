@@ -8,6 +8,7 @@ from this contract so no environment schedule or vendor share is hand-mirrored.
 The contract also holds the measured run times of every deployed Dagster job. The data-engine
 run launcher derives each run's maximum runtime from them (#1442). It holds the memory capacity
 of the Dagster code server, and the data-engine run queue limit derives from it (#1467).
+It holds the retry policy, the per-environment pacing and the probe slots of the model seat (#1444).
 """
 
 from __future__ import annotations
@@ -206,6 +207,109 @@ class CodeServerCapacity(_StrictFrozenModel):
         return self.concurrent_runs - 1
 
 
+class ModelRetrySpec(_StrictFrozenModel):
+    """The one retry policy of every model call (#1444).
+
+    A transient answer is HTTP 429 without a terminal provider code, or any answer with a transient
+    provider code. The wait before retry ``n`` (1-based) is ``min(initial x factor^(n-1), max)``
+    seconds. A random extra of at most ``jitter_percent`` is added to it and never taken away, so the
+    waits of a full run always sum to at least ``min_total_wait_seconds``.
+    """
+
+    transient_http_statuses: tuple[int, ...] = Field(min_length=1)
+    transient_provider_codes: tuple[str, ...]
+    terminal_provider_codes: tuple[str, ...]
+    max_attempts: int = Field(ge=2)
+    initial_backoff_seconds: int = Field(ge=1)
+    backoff_factor: int = Field(ge=1)
+    max_backoff_seconds: int = Field(ge=1)
+    jitter_percent: int = Field(ge=0, le=100)
+    min_total_wait_seconds: int = Field(ge=1)
+    deadline_seconds: int = Field(ge=1)
+
+    def base_backoff_seconds(self, retry: int) -> int:
+        """The wait before retry ``retry`` (1-based) without the random extra."""
+        if retry < 1:
+            raise ValueError(f"retry is 1-based, got {retry}")
+        return min(self.initial_backoff_seconds * self.backoff_factor ** (retry - 1), self.max_backoff_seconds)
+
+    @property
+    def base_total_wait_seconds(self) -> int:
+        """The waits of a call that uses every attempt, without the random extra."""
+        return sum(self.base_backoff_seconds(retry) for retry in range(1, self.max_attempts))
+
+    @model_validator(mode="after")
+    def _the_policy_outlasts_one_rate_window(self) -> Self:
+        overlap = set(self.transient_provider_codes) & set(self.terminal_provider_codes)
+        if overlap:
+            raise ValueError(f"a provider code cannot be transient and terminal: {sorted(overlap)}")
+        if self.base_total_wait_seconds < self.min_total_wait_seconds:
+            raise ValueError(
+                f"the waits sum to {self.base_total_wait_seconds} s, below min_total_wait_seconds "
+                f"{self.min_total_wait_seconds}"
+            )
+        if self.deadline_seconds < self.min_total_wait_seconds:
+            raise ValueError(
+                f"deadline_seconds {self.deadline_seconds} is below min_total_wait_seconds {self.min_total_wait_seconds}"
+            )
+        return self
+
+
+class ModelProbeSlots(_StrictFrozenModel):
+    """The UTC hour of the nightly key probe and the width of one environment's slot (#1444)."""
+
+    hour_utc: int = Field(ge=0, le=23)
+    slot_minutes: int = Field(ge=1)
+
+
+class ModelSeatEnvironmentLimits(_StrictFrozenModel):
+    """What one environment may spend of the shared model account (#1444)."""
+
+    max_concurrent_calls: int = Field(ge=1)
+    calls_per_minute: int = Field(ge=1)
+    probe_offset_minutes: int = Field(ge=0, le=59)
+
+
+class ModelSeatContract(_StrictFrozenModel):
+    """Retry, pacing and probe slots of the model seat. All environments share one account (#1444)."""
+
+    description: str = Field(min_length=1)
+    seat: str = Field(min_length=1)
+    shared_credential: str = Field(min_length=1)
+    measured_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    source: str = Field(min_length=1)
+    retry: ModelRetrySpec
+    probe: ModelProbeSlots
+    environments: Mapping[str, ModelSeatEnvironmentLimits] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _probe_slots_hold_the_whole_retry_deadline(self) -> Self:
+        slot_floor = math.ceil(self.retry.deadline_seconds / 60)
+        if self.probe.slot_minutes < slot_floor:
+            raise ValueError(
+                f"slot_minutes {self.probe.slot_minutes} is below the retry deadline of {slot_floor} minutes"
+            )
+        offsets = sorted(limits.probe_offset_minutes for limits in self.environments.values())
+        for earlier, later in zip(offsets, offsets[1:], strict=False):
+            if later - earlier < self.probe.slot_minutes:
+                raise ValueError(
+                    f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}"
+                )
+        return self
+
+    def limits_for(self, environment: str) -> ModelSeatEnvironmentLimits | None:
+        """The limits of ``environment``, or None when the environment is not listed (dev, ci)."""
+        return self.environments.get(environment)
+
+    def probe_offset_minutes(self, environment: str) -> int:
+        limits = self.limits_for(environment)
+        return 0 if limits is None else limits.probe_offset_minutes
+
+    def probe_cron(self, environment: str) -> str:
+        """The daily cron of the key probe of ``environment``, derived from the slot table."""
+        return f"{self.probe_offset_minutes(environment)} {self.probe.hour_utc} * * *"
+
+
 class EnvironmentContract(_StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
@@ -215,6 +319,7 @@ class EnvironmentContract(_StrictFrozenModel):
     shared_physical_seats: Mapping[str, SharedSeatSpec]
     run_time_bounds: RunTimeBounds
     code_server_capacity: CodeServerCapacity
+    model_seat: ModelSeatContract
 
     @model_validator(mode="after")
     def _validate_sentinels_and_environments(self) -> Self:
@@ -229,6 +334,12 @@ class EnvironmentContract(_StrictFrozenModel):
         for job_name, basis in self.run_time_bounds.jobs.items():
             if basis.estimate_tick is not None and not self._tick_listings(basis.estimate_tick):
                 raise ValueError(f"{job_name}: no environment declares the tick {basis.estimate_tick!r}")
+        for env_name, spec in self.environments.items():
+            if spec.live_vendor_calls and self.model_seat.limits_for(env_name) is None:
+                raise ValueError(f"{env_name} calls live vendors and declares no model seat limits")
+        unknown = sorted(set(self.model_seat.environments) - set(self.environments))
+        if unknown:
+            raise ValueError(f"model seat limits name unknown environments: {unknown}")
         return self
 
     def _tick_listings(self, tick: str) -> list[int]:
