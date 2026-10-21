@@ -184,6 +184,7 @@ _BASE_CAPACITY: dict[str, object] = {
         "method": "test",
         "grpc_server_hwm_mib": 236.0,
         "fresh_import_hwm_mib": 180.0,
+        "working_run_hwm_mib": 380.0,
         "container_peak_mib": 1186.0,
         "runs_at_peak": 3,
         "waiting_runs_at_peak": 2,
@@ -215,7 +216,7 @@ def test_the_declared_server_and_budget_cover_what_was_measured() -> None:
     measured = capacity.measured
 
     assert capacity.server_mib >= measured.grpc_server_hwm_mib
-    assert capacity.run_mib >= measured.fresh_import_hwm_mib
+    assert capacity.run_mib >= measured.working_run_hwm_mib >= measured.fresh_import_hwm_mib
     assert measured.waiting_runs_at_peak < measured.runs_at_peak, "a peak with only waiting runs would prove no size"
 
 
@@ -231,10 +232,11 @@ def test_the_fixed_capacity_gives_two_slots_and_a_budget_of_417_mib() -> None:
     ("changes", "budget"),
     [
         ({"ceiling_mib": 2048}, 596),
-        ({"concurrent_runs": 3}, 278),
-        ({"concurrent_runs": 4}, 208),
-        ({"processes_per_run": 2, "ceiling_mib": 2048}, 298),
-        ({"server_processes": 2}, 297),
+        ({"ceiling_mib": 1429}, 380),
+        ({"concurrent_runs": 3, "ceiling_mib": 2048}, 397),
+        ({"concurrent_runs": 4, "ceiling_mib": 4096}, 656),
+        ({"processes_per_run": 2, "ceiling_mib": 4096}, 656),
+        ({"server_processes": 2, "ceiling_mib": 2048}, 476),
         ({"utilization_limit": 0.5, "ceiling_mib": 2048}, 392),
     ],
 )
@@ -248,7 +250,9 @@ def test_the_run_budget_follows_each_input_of_the_derivation(changes: dict[str, 
         {"utilization_limit": 0.71},
         {"utilization_limit": 1.0},
         {"concurrent_runs": 1},
+        {"concurrent_runs": 3},
         {"concurrent_runs": 5},
+        {"ceiling_mib": 1426},
         {"server_mib": 235},
         {"ceiling_mib": 768},
         {"ceiling_mib": 0},
@@ -257,12 +261,22 @@ def test_the_run_budget_follows_each_input_of_the_derivation(changes: dict[str, 
         "above-the-70-percent-rule",
         "full-utilization",
         "one-slot-cannot-wait-for-another-run",
-        "budget-below-a-fresh-import",
+        "three-slots-do-not-fit-the-measured-working-run",
+        "five-slots-do-not-fit-the-measured-working-run",
+        "budget-one-mib-below-the-measured-working-run",
         "server-below-the-measured-peak",
-        "ceiling-too-small-for-two-imports",
+        "ceiling-too-small-for-two-working-runs",
         "no-ceiling",
     ],
 )
 def test_a_capacity_that_breaks_a_rule_is_refused(changes: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         _capacity(**changes)
+
+
+def test_a_measurement_of_a_working_run_below_a_fresh_import_is_refused() -> None:
+    """One of the two readings is wrong. A run is the import plus its work."""
+    measured = {**_BASE_CAPACITY["measured"], "working_run_hwm_mib": 100.0}  # type: ignore[dict-item]
+
+    with pytest.raises(ValidationError, match="below a fresh import"):
+        _capacity(measured=measured)
