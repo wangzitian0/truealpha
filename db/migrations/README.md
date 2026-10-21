@@ -3,10 +3,10 @@
 `db/apply_migrations.sh` applies `db/migrations/*.sql` in shell glob order, then
 `db/roles.sql`. It is the only thing that does: CI, the compose initdb hook, the
 Makefile, the VPS bootstrap and every llm-service container boot all run that one file
-(#984, `libs/runtime/tests/test_migration_applier.py`). The filename is the ordering
+(#984, `common/runtime/tests/test_migration_applier.py`). The filename is the ordering
 key, and it is permanent once an environment has run it.
 
-Two forms are legal; `libs/runtime/tests/test_migration_chain.py` enforces both.
+Two forms are legal; `common/runtime/tests/test_migration_chain.py` enforces both.
 
 | form | status | example |
 |---|---|---|

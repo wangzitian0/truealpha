@@ -36,7 +36,7 @@ Observed problems:
 
 2. **Storage is abstracted behind a port.** The evidence chain is modeled as a
    backend-neutral **provenance graph** (nodes + typed edges + bitemporal stamps) exposed
-   through a repository port in `libs/contracts`. Short-term backend: **Postgres (RDS)**.
+   through a repository port in `common/contracts`. Short-term backend: **Postgres (RDS)**.
    Future backend: a **graph database**, added as a second adapter with no change to
    factors or consumers.
 
@@ -61,7 +61,7 @@ data itself, and it is queryable.
 
 ## The storage-neutral evidence model (the heart of "通用")
 
-Modeled once in `libs/contracts`, independent of any backend:
+Modeled once in `common/contracts`, independent of any backend:
 
 - **Evidence nodes** (kinds): `raw_fetch`, `source_vintage`, `normalized_observation`,
   `snapshot`, `factor_invocation`, `materialized_result`, `capture_run`, `obligation`,
@@ -119,7 +119,7 @@ input identity, never the backend, edges, or hashes.
 **Phase 0 — Sign-off & ADR (this doc).** Owner approves the red-line amendment. Foundational
 to Gate 0 semantic/data closure (#56/#57–#61). No code depends on unfrozen interfaces first.
 
-**Phase 1 — Backend-neutral evidence model (`libs/contracts`).** Define node/edge/bitemporal
+**Phase 1 — Backend-neutral evidence model (`common/contracts`).** Define node/edge/bitemporal
 DTOs, the three ports, `ProvenanceClosure`, and `CurrentPointer`. Pure contracts + fixture
 conformance; no backend. This is the reusable core. (Feeds #58 executable lineage
 contracts.)

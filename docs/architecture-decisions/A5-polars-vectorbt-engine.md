@@ -1,11 +1,13 @@
 # A5 — The Polars AST replaces Qlib as the factor-expression oracle; VectorBT was selected and never adopted
 
+File name: `A5-polars-vectorbt-engine.md` keeps `vectorbt` because other documents link to it. The repository never adopted VectorBT (Decision 2).
+
 Status: Accepted. Owner decision 2026-09-23, carried out by #969. Supersedes `init.md` rule 25's
 selection of Qlib, which had been in force since 2026-07-17.
 Date: 2026-09-23
 Correction 2026-10-12 (#1239): the repository does not use VectorBT. See Decision 2.
 Amended 2026-10-13 (#758): the Polars AST compiler is a test-time oracle in
-`libs/factors/tests/support/expression_oracle`. No deployed path imports it. The backtest engine is
+`common/factors/tests/support/expression_oracle`. No deployed path imports it. The backtest engine is
 `factors.backtest.engine`. See Decisions 1 and 2.
 
 ## Context
@@ -26,7 +28,7 @@ The implementation had already forked away from that contract:
   into the Dagster composition root, and no contract document was amended.
 - An agent session on 2026-09-21 recorded in its own memory that it had purged Qlib and written
   `ADR-004-polars-vectorbt-stack.md`. Neither happened in this repository: the ADR directory has
-  only ever contained A0–A4, and `libs/factors/src/factors/qlib_engine.py` had exactly one commit
+  only ever contained A0–A4, and `libs/factors/src/factors/qlib_engine.py` had exactly one commit <!-- doc-drift: history -->
   in its entire history (`a767053`, 2026-07-17) and was never deleted.
 
 So by 2026-09-23 the repository held two expression engines with the same six operators, a contract
@@ -40,18 +42,18 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 1. **The Polars AST replaces Qlib as the factor-expression engine.** Factor expressions are versioned
    `truealpha_contracts.ast` definitions compiled to `polars.Expr`. Amended 2026-10-13 (#758): the
-   native Decimal implementations in `libs/factors` are the computation. The compiler is a test-time
-   reproducibility oracle in `libs/factors/tests/support/expression_oracle`. The cross-check tests of
+   native Decimal implementations in `common/factors` are the computation. The compiler is a test-time
+   reproducibility oracle in `common/factors/tests/support/expression_oracle`. The cross-check tests of
    `gross_profit_per_employee`, `price_to_sales` and `peg` compile each expression through it and check
    that it reproduces the Decimal value. After #758 deleted the top-k adapter, no deployed path called
-   the compiler, so it moved out of `libs/factors/src`.
+   the compiler, so it moved out of `common/factors/src`.
 2. **VectorBT was selected as the backtest/portfolio-simulation engine and never adopted.** The
    `vectorbt` package was never in `uv.lock`. The backtest engine is `factors.backtest.engine` (#758).
    It is a Decimal simulation that reads its execution, transaction-cost, total-return and sizing rules
    from the strategy definition. Each run pins it by `ENGINE_ID` in its `run_id` (ADR A6, status update
    2026-10-13).
 3. **Every engine-independent constraint from the old rule 25 carries over unchanged.** Neither
-   engine is a data or semantic authority. Only `libs/factors` adapters may invoke them. They
+   engine is a data or semantic authority. Only `common/factors` adapters may invoke them. They
    receive provenance-neutral inputs projected from durable PIT snapshots and the explicit
    post-decision market-event stream. Neither may crawl or select vintages, resolve membership,
    infer confidence or lineage, combine adjusted prices with explicit actions, or replace Decimal
@@ -95,8 +97,8 @@ The mandated reproducibility proof was nominally required and effectively dorman
   instead.
 - The `ExecutionEvidence` type that recorded which exact build produced a cross-check goes with the
   Qlib module. The cross-check itself survives as an ordinary test assertion.
-- The S8/S9 Qlib records in `governance/batches/`, `governance/leases/` and
-  `governance/evidence/` were frozen history. #1061 deleted them from the tree because nothing
+- The S8/S9 Qlib records in `governance/batches/`, `governance/leases/` and <!-- doc-drift: history -->
+  `governance/evidence/` were frozen history. #1061 deleted them from the tree because nothing <!-- doc-drift: history -->
   read them. They stay in git history (`governance/README.md`). This ADR does not rewrite what
   happened.
 

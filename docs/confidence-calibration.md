@@ -5,12 +5,12 @@ continuous, explainable score and shows how it responds to source independence,
 freshness, semantic quality, lineage, completeness, and conflict. It is not a
 Production threshold or a claim that the full TOPT universe is calibrated.
 
-Status 2026-10-19 (#1333 / #1352): `libs/factors/src/factors/confidence.py`
+Implementation (#1333, #1352): `common/factors/src/factors/confidence.py`
 (`evaluate_continuous_confidence` and `verify_confidence_calibration_report`) is
 called by `apps/data-engine/src/data_engine/datahub/confidence_report.py` on
 every governed head to compute deterministic `0-1` `confidence` and `0-100`
 `score_100` alongside each cell's consensus band. The DTOs live in
-`libs/contracts/src/truealpha_contracts/confidence.py`.
+`common/contracts/src/truealpha_contracts/confidence.py`.
 
 Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
@@ -49,9 +49,9 @@ score_100 = 100 * confidence
 ```
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
-report are content-addressed in the DTOs of `libs/contracts`. The formula
+report are content-addressed in the DTOs of `common/contracts`. The formula
 implementation (`evaluate_continuous_confidence`) and the report verifier
-(`verify_confidence_calibration_report`) live in `libs/factors/src/factors/confidence.py`,
+(`verify_confidence_calibration_report`) live in `common/factors/src/factors/confidence.py`,
 so computation stays out of the contracts and application layers. It uses `Decimal`
 and rejects binary floats.
 Freshness, availability, applicability, quality state, and reason codes remain
@@ -83,7 +83,7 @@ artifact and provider-response hashes into the confidence input.
 The Twelve Data response hashes are recorded, but the raw response bytes are
 not checked in. Consequently `transport_integrity=0` for that origin: it remains
 visible in lineage and agreement statistics but contributes no independent
-source support. Required-component completeness is derived as `5/7` because
+source support. Required-component completeness is derived as 5/7 because
 adjusted close and corporate-action reconciliation are missing. This is why the
 anchor is 51.4702 rather than the previously overstated 74.5972.
 
@@ -98,7 +98,7 @@ independent acquisition evidence.
 The next revision should settle these policy decisions before any Production
 threshold is frozen:
 
-1. Calibrate the `8/2` reliability prior and no-history `0.8` ceiling from held-out outcomes.
+1. Calibrate the 8/2 reliability prior and no-history `0.8` ceiling from held-out outcomes.
 2. Define cadence-specific freshness half-lives per semantic requirement.
 3. Derive agreement from field-level robust disagreement and versioned tolerances.
 4. Register canonical source-origin groups and independently review their weights.

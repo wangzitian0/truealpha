@@ -38,7 +38,7 @@ NOT evidence of a clean review — AGENTS.md rule 4 says so explicitly, and #714
 proved it: merged at 04:31:32, Copilot's review arrived at 04:32:11. Thirty-nine
 seconds. One of the three findings in it was that
 `working-directory: apps/app-web` made a bare `tools/warm_surface.sh` resolve
-to `apps/app-web/tools/...`; `Deploy staging v0.0.38` died with exit 127 and
+inside `apps/app-web`; `Deploy staging v0.0.38` died with exit 127 and
 another lane spent a PR fixing it (#717).
 
 Before merging, require that a review has been SUBMITTED for the current head,

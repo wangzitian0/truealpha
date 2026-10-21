@@ -295,7 +295,7 @@ UUIDs without touching them.
     `legacy-id` resolution.
 - **Consumers that parse id prefixes today** switch to alias lookups in PR-4:
   - `sec_financial_adapter` (CIK, predecessor lookup);
-  - `standards/planner`;
+  - `standards/planner.py`;
   - `confidence_report._CIK_ID`;
   - `theme_purity`;
   - `canary_oracles`, which has literal `issuer:cik:` ids;
@@ -315,7 +315,7 @@ UUIDs without touching them.
     staging` — which is why #954's App-side twin never ran.
   - Since #1337 the view calls neither helper. One set-based pass (`20261015T0900`) gives
     the survivor and the alias end of every row, as the helpers give them at `'infinity'`.
-    `libs/runtime/tests/test_entity_identity_view.py` compares the view with the definition
+    `common/runtime/tests/test_entity_identity_view.py` compares the view with the definition
     that calls the helpers.
   - **Every consumer that returns an entity coordinate translates it here.** This list is
     not the guard; `apps/llm-service/tests/test_mcp_identity_leak.py` is. It enumerates
