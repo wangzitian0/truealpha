@@ -31,9 +31,11 @@ colliding inside the sink after a wasted round of vendor calls.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -69,6 +71,9 @@ from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import store_risk_free_series  # noqa: E402
+
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
 _RELEASE_OBLIGATIONS = 42
@@ -87,6 +92,8 @@ _BANK_TICKER = "JPM"
 @pytest.fixture(scope="module")
 def tick_database_url():
     with isolated_test_database("degraded") as target_url:
+        # The core engine reads the risk-free rate of the cutoff from the stored series (#1255).
+        store_risk_free_series(target_url)
         yield target_url
 
 
