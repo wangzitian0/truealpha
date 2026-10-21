@@ -101,7 +101,7 @@ jobs:
   walk:
     needs: resolve
     if: ${{ needs.resolve.outputs.applicable == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # not ubuntu-latest: Playwright cannot install chromium on 26.04
     timeout-minutes: 15
     permissions:
       actions: write   # save the Playwright cache; read-only cannot populate it
