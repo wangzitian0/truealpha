@@ -243,7 +243,7 @@ def test_no_hardcoded_risk_free_rate_or_margin_gate_in_runtime_code() -> None:
 
     The live strategy definition (large_model_value_v0_definition_1_0_0.json) is the sole
     source of parameters for valuation bands, midpoint, and risk-free rates. Runtime code
-    in apps/ and libs/ must not declare hardcoded literals for these values.
+    in apps/ and common/ must not declare hardcoded literals for these values.
     """
     risk_free_pattern = re.compile(r"\bRISK_FREE_RATE\s*=\s*(?:Decimal\([\"']0\.05[\"']\)|0\.05)")
     margin_gate_pattern = re.compile(
