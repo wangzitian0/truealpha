@@ -23,11 +23,10 @@ We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板�
 
 ### 1. Three gate classes (fail-safe technical baselines only)
 A gate belongs to one of three classes. Everything else is a dashboard.
-- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit test execution.
-- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect (SQL rows or an HTTP response).
+- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, focused unit test execution, and the review-finding budget of `AGENTS.md` Rule 4 (High = 0, Medium <= 2, Low <= 4).
+- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect and that `main` still deploys (SQL rows or an HTTP response).
 - **Class 3, staging evidence before a production deploy:** a production deploy of a release waits for the staging evidence of that same release.
 - Third-party and AI reviewer feedback is **advisory**: infrastructure timeouts, reviewer platform errors, or unclassified review comments log warnings and never fail-close PR readiness.
-- The one stated exception to "everything else is a dashboard" is the review-finding budget of `AGENTS.md` Rule 4 (High = 0, Medium <= 2, Low <= 4).
 - Mechanical text policing (regex matching on PR closing keywords, automated bot reopen scripts) is abolished.
 
 ### 2. Strong Dashboards (Radical Observability as Primary Governance)
