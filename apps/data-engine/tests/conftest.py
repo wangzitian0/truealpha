@@ -13,6 +13,7 @@ import os
 
 import pytest
 from data_engine.sources import gateway
+from data_engine.sources.landed_keys import MemoryLandedKeys
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +21,16 @@ def call_ledger(monkeypatch) -> gateway.MemoryLedger:
     ledger = gateway.MemoryLedger()
     monkeypatch.setattr(gateway, "_writer", ledger)
     return ledger
+
+
+@pytest.fixture(autouse=True)
+def landed_keys(monkeypatch) -> MemoryLandedKeys:
+    """The index of landed fetch keys (#1411 K3) lives in memory, never in a warehouse: a unit test
+    must not open a database connection or read an object store as a side effect. A test that wants
+    the deployed index builds `PostgresLandedKeys` over its own isolated database."""
+    index = MemoryLandedKeys()
+    monkeypatch.setattr(gateway, "_landed_keys", index)
+    return index
 
 
 @pytest.fixture(autouse=True)

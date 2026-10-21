@@ -70,11 +70,13 @@ from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.source_registrations import (
     LEDGER_CAPACITIES,
     CapacityDeclaration,
     environment_share,
 )
+from data_engine.sources.landed_keys import LandedKeys, PostgresLandedKeys
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -218,6 +220,8 @@ class CallRecord:
     duration_ms: int | None = None
     run_key: str | None = None
     capacity_window_id: str | None = None
+    #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
+    fetch_key: str | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -287,31 +291,47 @@ def _pg():
     return _pg_conn
 
 
+def _pg_reset() -> None:
+    """Drop the cached connection, so the next `_pg()` opens a fresh one."""
+    global _pg_conn
+    try:
+        if _pg_conn is not None:
+            _pg_conn.close()
+    finally:
+        _pg_conn = None
+
+
 def _pg_execute(sql: str, params=()):
     """Execute on the cached connection, reconnecting once on failure. psycopg
     marks a silently dropped connection closed only AFTER an operation fails on
     it, so the first statement after a DB restart/network blip raises — one
     fresh-connection retry covers that without hiding a genuinely down DB
     (the retry's exception propagates)."""
-    global _pg_conn
     import psycopg
 
     try:
         return _pg().execute(sql, params)
     except psycopg.Error:
-        try:
-            if _pg_conn is not None:
-                _pg_conn.close()
-        finally:
-            _pg_conn = None
+        _pg_reset()
         return _pg().execute(sql, params)
 
 
-_INSERT_SQL = """
+_INSERT_COLUMNS = (
+    "source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,"
+    " payload_sha256, byte_length, cost, capacity_window_id, run_key"
+)
+#: A call without a fetch key (every call before #1411 K7) is written with the columns that every
+#: schema of the ledger has. Only a keyed call needs the ``fetch_key`` column, so a code server that
+#: starts before the migration replay never fails an unkeyed audit row.
+_INSERT_SQL = f"""
 insert into staging.api_call_ledger
-    (source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,
-     payload_sha256, byte_length, cost, capacity_window_id, run_key)
+    ({_INSERT_COLUMNS})
 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+_INSERT_KEYED_SQL = f"""
+insert into staging.api_call_ledger
+    ({_INSERT_COLUMNS}, fetch_key)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -334,8 +354,23 @@ def _insert_params(record: CallRecord) -> tuple:
     )
 
 
+def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
+    """The ledger INSERT for ``record`` and its parameters."""
+    params = _insert_params(record)
+    if record.fetch_key is None:
+        return _INSERT_SQL, params
+    return _INSERT_KEYED_SQL, (*params, record.fetch_key)
+
+
 def postgres_writer(record: CallRecord) -> None:
-    _pg_execute(_INSERT_SQL, _insert_params(record))
+    import psycopg
+
+    sql, params = _insert_statement(record)
+    try:
+        _pg_execute(sql, params)
+    except psycopg.errors.UndefinedColumn:
+        log.warning("staging.api_call_ledger has no fetch_key column yet; the call is recorded without its key")
+        _pg_execute(_INSERT_SQL, _insert_params(record))
 
 
 class MemoryLedger(list[CallRecord]):
@@ -638,6 +673,8 @@ def _exact_cost(cost: Decimal | int) -> Decimal:
 
 
 _active: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("external_call_active", default=None)
+#: The fetch key of the `fetch_once` that is making its one external request (#1411 K3).
+_fetch_key: contextvars.ContextVar[str | None] = contextvars.ContextVar("external_call_fetch_key", default=None)
 
 
 @contextmanager
@@ -685,6 +722,7 @@ def record_call(
         cost=_exact_cost(cost),
         run_key=_run_key.get(),
         capacity_window_id=capacity_window_id(source, called_at),
+        fetch_key=_fetch_key.get(),
     )
     token = _active.set(record)
     try:
@@ -819,6 +857,78 @@ def urlopen(
         return status, body
 
 
+# --- landed keys (#1411 K3): each key is fetched once -----------------------------------
+
+_landed_keys: LandedKeys = PostgresLandedKeys(_pg, _pg_reset)
+
+
+def set_landed_keys(index: LandedKeys) -> LandedKeys:
+    """Swap the index of landed keys (tests; local probes without a warehouse). Returns the previous one."""
+    global _landed_keys
+    previous, _landed_keys = _landed_keys, index
+    return previous
+
+
+def utc_day() -> str:
+    """The current UTC day, ISO form: the ``as_of`` of a vendor document that has no version of its own."""
+    return _utcnow().date().isoformat()
+
+
+def landed(key: FetchKey) -> bytes | None:
+    """The bytes that landed under ``key``, or None when the key has not landed.
+
+    The index outlives the process: a key that landed in an earlier tick, an earlier run or an
+    earlier container is served here with no external call. A lookup that fails reads as a miss
+    and is logged, because dedup never decides whether a caller may fetch. With the ledger off
+    (a local probe with no warehouse) nothing is landed and nothing is found."""
+    if settings.external_call_ledger == "off":
+        return None
+    try:
+        return _landed_keys.lookup(key)
+    except Exception:  # noqa: BLE001 - an index outage costs one call, which the ledger records
+        log.exception("landed-key lookup failed for %s; the key will be fetched", key.ledger_key)
+        return None
+
+
+def land(key: FetchKey, body: bytes, *, content_type: str = "application/json", fetched_at: datetime | None = None) -> None:
+    """Record ``body`` as the landing of ``key``, on the connection that survives a rollback."""
+    if settings.external_call_ledger == "off":
+        return
+    try:
+        _landed_keys.land(
+            key,
+            body,
+            content_type=content_type,
+            fetched_at=fetched_at or _utcnow(),
+            run_key=_run_key.get(),
+        )
+    except Exception:  # noqa: BLE001 - the vendor answered; a failed landing costs a later refetch, not this call
+        log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
+
+
+def fetch_once(
+    key: FetchKey, fetch: Callable[[], bytes], *, content_type: str = "application/json"
+) -> bytes:
+    """The bytes of ``key``: from the index when it landed, else from ``fetch()`` once.
+
+    ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
+    `SourceGateway.call`). The ledger row of that request carries the key, and the nightly
+    verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
+    failed or refused call is tried again by the next caller. A ``fetch`` whose answer must not
+    be kept (an error body with status 200) raises, or the caller uses `landed` and `land`."""
+    hit = landed(key)
+    if hit is not None:
+        return hit
+    started = _utcnow()
+    token = _fetch_key.set(key.ledger_key)
+    try:
+        body = fetch()
+    finally:
+        _fetch_key.reset(token)
+    land(key, body, content_type=content_type, fetched_at=started)
+    return body
+
+
 # --- the explicit gateway (#740): one gate, rows on the caller's connection ------------
 
 
@@ -894,7 +1004,7 @@ class SourceGateway:
             return result
 
     def _write(self, record: CallRecord) -> None:
-        self.connection.execute(_INSERT_SQL, _insert_params(record))
+        self.connection.execute(*_insert_statement(record))
 
     def _recorded_since(self, source: str, since: datetime) -> int:
         row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()

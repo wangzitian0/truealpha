@@ -3,6 +3,7 @@ rule, landing with evidence, and probe mode writing nothing."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -126,7 +127,8 @@ class FakeStore:
 class _Response:
     def __init__(self, *, json_body=None, content: bytes = b"") -> None:
         self._json = json_body
-        self.content = content
+        # An httpx response carries the same document as bytes and as parsed JSON.
+        self.content = content if json_body is None else json.dumps(json_body).encode()
 
     def raise_for_status(self) -> None:
         return None

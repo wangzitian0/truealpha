@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -34,12 +35,23 @@ def ticker_cik_index(http: httpx.Client | None = None) -> dict[str, int]:
     Resolving a universe one ticker at a time re-downloads this file per lookup; a
     capture run reads it once and indexes.
     """
-    if http is None:
-        with client() as c:
-            return ticker_cik_index(c)
-    resp = gateway.http_get(http, "sec", "company_tickers", TICKERS_URL, caller="sec.ticker_cik_index")
+    key = FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
+
+    def fetch() -> bytes:
+        if http is None:
+            with client() as c:
+                return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
+        return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
+
+    rows = json.loads(gateway.fetch_once(key, fetch).decode())
+    return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
+
+
+def _get(http: httpx.Client, endpoint: str, url: str, caller: str) -> bytes:
+    """One SEC request through the gateway and ledger; the verbatim body of a successful answer."""
+    resp = gateway.http_get(http, "sec", endpoint, url, caller=caller)
     resp.raise_for_status()
-    return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in resp.json().values()}
+    return bytes(resp.content)
 
 
 def ticker_to_cik(ticker: str) -> int:
@@ -60,14 +72,16 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     This is issuer *registry* metadata, not reported financial data: it is what says
     an issuer is a depository institution rather than a manufacturer.
     """
-    if http is None:
-        with client() as c:
-            return fetch_company_submissions(cik, c)
-    resp = gateway.http_get(
-        http, "sec", "submissions", SUBMISSIONS_URL.format(cik=cik), caller="sec.fetch_company_submissions"
-    )
-    resp.raise_for_status()
-    return dict(resp.json())
+    key = FetchKey("sec", "submissions", f"issuer:cik:{cik:010d}", gateway.utc_day())
+
+    def fetch() -> bytes:
+        url = SUBMISSIONS_URL.format(cik=cik)
+        if http is None:
+            with client() as c:
+                return _get(c, "submissions", url, "sec.fetch_company_submissions")
+        return _get(http, "submissions", url, "sec.fetch_company_submissions")
+
+    return dict(json.loads(gateway.fetch_once(key, fetch).decode()))
 
 
 def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> tuple[bytes, dict[str, Any]]:
@@ -78,14 +92,17 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
     describes our rendering rather than the vendor's document, and a reparse under a
     corrected mapping would be replaying our own output.
     """
-    if http is not None:
-        resp = gateway.http_get(
-            http, "sec", "companyfacts", COMPANY_FACTS_URL.format(cik=cik), caller="sec.fetch_company_facts_response"
-        )
-        resp.raise_for_status()
-        return resp.content, json.loads(resp.content.decode())
-    with client() as c:
-        return fetch_company_facts_response(cik, c)
+    key = FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
+
+    def fetch() -> bytes:
+        url = COMPANY_FACTS_URL.format(cik=cik)
+        if http is None:
+            with client() as c:
+                return _get(c, "companyfacts", url, "sec.fetch_company_facts_response")
+        return _get(http, "companyfacts", url, "sec.fetch_company_facts_response")
+
+    body = gateway.fetch_once(key, fetch)
+    return body, json.loads(body.decode())
 
 
 def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:

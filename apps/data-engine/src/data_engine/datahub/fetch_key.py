@@ -1,19 +1,22 @@
-"""Canonical FetchKey and LandedKeyIndex cache-aside (#1411 K3).
+"""Canonical FetchKey (#1411 K3).
 
-One physical external resource is identified by a canonical ``FetchKey``:
-``(seat, endpoint, canonical_entity_id, as_of)``. Before issuing a vendor HTTP/SDK
-call, a caller or adapter checks the ``LandedKeyIndex`` (or process/session cache).
-When the key has already landed for the current ``as_of`` axis, the landed payload is
-returned with zero external calls.
+One physical external resource has one canonical ``FetchKey``:
+``(seat, endpoint, canonical_entity_id, as_of)``. The source gateway reads the persisted
+index of landed keys (`sources.landed_keys`) before it makes a vendor or SEC call. A key
+that landed is served from stored bytes with no external call (`gateway.fetch_once`).
+
+Each ``as_of`` names the axis on which the resource can change: a settled session for a
+price, an accession for a filing, a UTC day for a vendor document without a version.
+One fetch of a key makes exactly one external request. A caller that needs two requests
+uses two keys, because the ledger counts requests per key.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from dataclasses import dataclass
 
-T = TypeVar("T")
+#: Separator of the ledger form. A key part holds none (``__post_init__`` refuses it).
+KEY_SEPARATOR = "|"
 
 
 @dataclass(frozen=True)
@@ -30,74 +33,15 @@ class FetchKey:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"FetchKey.{field_name} must be a non-empty string, got {value!r}")
+            if KEY_SEPARATOR in value:
+                raise ValueError(f"FetchKey.{field_name} must not contain {KEY_SEPARATOR!r}, got {value!r}")
 
     @property
     def source_record_id(self) -> str:
+        """The record id under which the landed bytes sit in ``raw.fetches``."""
         return f"{self.endpoint}:{self.canonical_entity_id}:{self.as_of}"
 
-
-@dataclass
-class LandedKeyIndex:
-    """Cache-aside index for canonical ``FetchKey`` lookups within a run or across
-    ``raw.fetches`` (#1411 K3).
-    """
-
-    connection: Any = None
-    _entries: dict[FetchKey, Any] = field(default_factory=dict)
-    hits: int = 0
-    misses: int = 0
-
-    def get_or_fetch(self, key: FetchKey, fetcher: Callable[[], T]) -> T:
-        """Return the landed value for ``key`` if present, otherwise invoke ``fetcher()`` once."""
-        if key in self._entries:
-            self.hits += 1
-            return self._entries[key]
-        if self.connection is not None:
-            db_hit = self._lookup_raw_fetch(key)
-            if db_hit is not None:
-                self.hits += 1
-                self._entries[key] = db_hit
-                return db_hit  # type: ignore[return-value]
-        self.misses += 1
-        result = fetcher()
-        self._entries[key] = result
-        return result
-
-    def put(self, key: FetchKey, value: Any) -> None:
-        """Record a landed value under ``key``."""
-        self._entries[key] = value
-
-    def contains(self, key: FetchKey) -> bool:
-        if key in self._entries:
-            return True
-        if self.connection is not None:
-            return self._lookup_raw_fetch(key) is not None
-        return False
-
-    def clear(self) -> None:
-        self._entries.clear()
-        self.hits = 0
-        self.misses = 0
-
-    def _lookup_raw_fetch(self, key: FetchKey) -> bytes | None:
-        try:
-            from data_engine import raw_store
-
-            row = self.connection.execute(
-                """
-                select id
-                from raw.fetches
-                where source = %s and source_record_id in (%s, %s)
-                order by fetched_at desc
-                limit 1
-                """,
-                (key.seat, key.source_record_id, f"{key.endpoint}:{key.canonical_entity_id}"),
-            ).fetchone()
-            if row is None:
-                return None
-            return raw_store.get_payload(self.connection, int(row[0]))
-        except Exception:  # noqa: BLE001 - fall back to in-memory cache when raw.fetches or S3 is unavailable
-            return None
-
-
-DEFAULT_LANDED_KEY_INDEX = LandedKeyIndex()
+    @property
+    def ledger_key(self) -> str:
+        """The form written to ``staging.api_call_ledger.fetch_key`` and named by the verdict."""
+        return KEY_SEPARATOR.join((self.seat, self.endpoint, self.canonical_entity_id, self.as_of))

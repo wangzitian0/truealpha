@@ -24,6 +24,7 @@ became public — never the fetch clock (rule 12 corollary).
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.headcount import record_headcount
 from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
 from data_engine.raw_store import insert_fetch
@@ -45,6 +47,8 @@ from data_engine.sources.sec import SUBMISSIONS_URL
 
 ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
+#: The ``as_of`` of a document that a filed accession fixes for ever.
+ACCESSION_AS_OF = "accession"
 SUBMISSIONS_OVERFLOW_URL = "https://data.sec.gov/submissions/{name}"
 EXTRACTION_SOURCE = "10k-extraction"
 # Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
@@ -238,26 +242,32 @@ def parse_as_of(text: str | None) -> date | None:
     return None
 
 
+def _fetch_bytes_via_gateway(
+    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, entity: str, as_of: str
+) -> bytes:
+    """One SEC document as bytes, fetched once per key (#1411 K3, K5).
+
+    The key is the issuer or filing (``entity``) and the axis on which it changes (``as_of``).
+    A second caller for the same key, in this run or a later one, reads the landed bytes."""
+    from data_engine.sources import gateway as gw_mod
+
+    def fetch() -> bytes:
+        if gateway_instance is not None:
+            return gateway_instance.call("sec", endpoint, lambda: _get_bytes(http, url))
+        response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
+        response.raise_for_status()
+        return bytes(response.content)
+
+    return gw_mod.fetch_once(FetchKey("sec", endpoint, entity, as_of), fetch, content_type="application/octet-stream")
+
+
 def _fetch_json_via_gateway(
-    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str
+    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, entity: str
 ) -> dict[str, Any]:
     from data_engine.sources import gateway as gw_mod
 
-    if gateway_instance is not None:
-        return gateway_instance.call("sec", endpoint, lambda: _get_json(http, url))
-    response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
-    response.raise_for_status()
-    return dict(response.json())
-
-
-def _fetch_bytes_via_gateway(http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str) -> bytes:
-    from data_engine.sources import gateway as gw_mod
-
-    if gateway_instance is not None:
-        return gateway_instance.call("sec", endpoint, lambda: _get_bytes(http, url))
-    response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
-    response.raise_for_status()
-    return bytes(response.content)
+    body = _fetch_bytes_via_gateway(http, gateway_instance, endpoint, url, entity=entity, as_of=gw_mod.utc_day())
+    return dict(json.loads(body.decode()))
 
 
 def _annual_filing_from_index(
@@ -280,12 +290,12 @@ def _annual_filing_from_index(
         accession = index_block["accessionNumber"][index].replace("-", "")
         document = index_block["primaryDocument"][index]
         url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
-        body = _fetch_bytes_via_gateway(http, gateway, "archive", url)
+        # A filed accession never changes (an amendment is a new accession): the key holds for ever.
+        body = _fetch_bytes_via_gateway(
+            http, gateway, "archive", url, entity=f"filing:{cik:010d}:{accession}:{document}", as_of=ACCESSION_AS_OF
+        )
         return FilingDocument(cik, accession, form, filing_date, document, url, body)
     return None
-
-
-_FILING_CACHE_BY_CLIENT: dict[tuple[int, int, date, tuple[str, ...]], FilingDocument | None] = {}
 
 
 def _latest_filing_for_forms(
@@ -297,18 +307,15 @@ def _latest_filing_for_forms(
     allowed_forms: Collection[str],
 ) -> FilingDocument | None:
     cutoff_date = cutoff.astimezone(UTC).date()
-    cache_key = (id(http), cik, cutoff_date, tuple(sorted(allowed_forms)))
-    if http is not None and cache_key in _FILING_CACHE_BY_CLIENT:
-        return _FILING_CACHE_BY_CLIENT[cache_key]
-    submissions = _fetch_json_via_gateway(http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik))
+    submissions = _fetch_json_via_gateway(
+        http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), entity=f"issuer:cik:{cik:010d}"
+    )
     filings = submissions.get("filings") or {}
     recent = filings.get("recent") or {}
     found = _annual_filing_from_index(
         cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
     )
     if found is not None:
-        if http is not None:
-            _FILING_CACHE_BY_CLIENT[cache_key] = found
         return found
     for file_meta in filings.get("files") or ():
         name = file_meta.get("name")
@@ -322,16 +329,14 @@ def _latest_filing_for_forms(
             except ValueError:
                 pass
         overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
-        overflow = _fetch_json_via_gateway(http, gateway, "submissions", overflow_url)
+        overflow = _fetch_json_via_gateway(
+            http, gateway, "submissions", overflow_url, entity=f"issuer:cik:{cik:010d}:{name}"
+        )
         found = _annual_filing_from_index(
             cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
         )
         if found is not None:
-            if http is not None:
-                _FILING_CACHE_BY_CLIENT[cache_key] = found
             return found
-    if http is not None:
-        _FILING_CACHE_BY_CLIENT[cache_key] = None
     return None
 
 
@@ -419,12 +424,6 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
         }
         for member, val in sorted(by_member.items())
     ]
-
-
-def _get_json(http: Any, url: str) -> dict[str, Any]:
-    response = http.get(url)
-    response.raise_for_status()
-    return dict(response.json())
 
 
 def _get_bytes(http: Any, url: str) -> bytes:
