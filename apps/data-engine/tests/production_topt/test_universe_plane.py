@@ -608,3 +608,135 @@ def test_a_self_pinned_corpus_refuses_rows_that_do_not_reproduce_its_sha() -> No
 
     with pytest.raises(ValueError, match="universe corpus instrument mapping drift"):
         corpus_list_version(corpus)
+
+
+# -- the listing exchange of a multi-exchange source (#1411 K6, #1418) -------------------------
+
+_UNKNOWN_EXCHANGE = "unresolved_listing_exchange"
+
+
+@pytest.fixture
+def in_memory_objects(monkeypatch):
+    """The raw bytes of a landed fetch go to memory, so the test needs no object store."""
+    from data_engine import raw_store
+    from truealpha_runtime.testing import InMemoryRawObjectStore
+
+    store = InMemoryRawObjectStore()
+    monkeypatch.setattr(raw_store, "object_store", lambda: store)
+
+
+def _land_constituents(connection, etf: str, rows: list[tuple[str, int, str]]) -> None:
+    """Land one constituent refresh of `etf`: (ticker, cik, figi) rows with raw lineage."""
+    from data_engine import raw_store
+
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id=f"index-constituents:{etf}:exchange-test",
+        body=f"constituents of {etf}".encode(),
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for ticker, cik, figi in rows:
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (etf, date(2026, 8, 17), DataSource.NASDAQ_INDEX.value, fetch_id, ticker, ticker, cik, figi, fetched_at),
+        )
+
+
+def _identity_store_lists(connection, mic_ticker: str) -> None:
+    """The identity store holds one listing entity with a `mic-ticker` alias such as `XNAS:ZQNX`."""
+    legacy_id = f"listing:{mic_ticker.lower()}"
+    entity_id = connection.execute(
+        "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
+    ).fetchone()[0]
+    for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        connection.execute(
+            """
+            insert into staging.entity_aliases
+                (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                 method, confidence, mapping_version)
+            values (%s, %s, %s, '-infinity', null, %s, 'test', 'test', 'asserted', 1, 'test')
+            """,
+            (entity_id, scheme, value, datetime(2026, 1, 1, tzinfo=UTC)),
+        )
+
+
+def test_a_constituent_with_no_known_exchange_is_excluded_by_name_and_gets_no_listing(connection, in_memory_objects) -> None:
+    """#1411 K6. The S&P 500 lists NYSE and Nasdaq names. No default exchange stands in for a missing fact.
+
+    ZQUN is in no identity alias, no QQQ row and no TOPT corpus row. Red on main: the denominator
+    held `listing:xnys:zqun`, a listing identity that no source asserted.
+    """
+    _land_constituents(
+        connection,
+        "sp500",
+        [
+            ("AAPL", 320193, "bbg000b9xry4"),
+            ("JPM", 19617, "bbg000dmbxr2"),
+            ("ZQNX", 9990001, "bbg0zqnx0001"),
+            ("ZQUN", 9990002, "bbg0zqun0001"),
+        ],
+    )
+    _identity_store_lists(connection, "XNAS:ZQNX")
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+    listings = {row[3]: row[2] for row in denominator["instruments"]}
+    assert listings == {
+        "AAPL": "listing:xnas:aapl",
+        "JPM": "listing:xnys:jpm",
+        "ZQNX": "listing:xnas:zqnx",
+    }, "the identity store and the corpus name the exchange; no other ticker gets a listing"
+    assert denominator["excluded"] == [
+        {"ticker": "ZQUN", "issuer_id": "issuer:cik:0009990002", "reason": _UNKNOWN_EXCHANGE}
+    ]
+    assert not any(row[2].startswith("listing:xnys:zqun") for row in denominator["instruments"])
+    assert denominator["instrument_count"] == 3 and denominator["obligation_count"] == 12
+
+
+def test_a_single_exchange_source_keeps_the_exchange_that_it_declares(connection, in_memory_objects) -> None:
+    """The canary lists Nasdaq names only, and it says so. Its members need no identity alias."""
+    assert UNIVERSE_SOURCES["canary"].mic == "xnas" and UNIVERSE_SOURCES["qqq"].mic == "xnas"
+    assert UNIVERSE_SOURCES["sp500"].mic is None, "a multi-exchange source declares no exchange"
+    _land_constituents(connection, "canary", [("HBAN", 49196, "bbg000bhp8x8"), ("CINF", 20286, "bbg000bd7q91")])
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["canary"], report_date=date(2026, 6, 30))
+
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "CINF": "listing:xnas:cinf",
+        "HBAN": "listing:xnas:hban",
+    }
+    assert denominator["excluded"] == []
+
+
+def test_a_multi_exchange_source_with_no_resolvable_constituent_fails_loud(connection, in_memory_objects) -> None:
+    _land_constituents(connection, "sp500", [("ZQUN", 9990002, "bbg0zqun0001")])
+
+    with pytest.raises(LookupError, match="no listing exchange resolved"):
+        build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+
+def test_the_membership_route_skips_the_constituent_that_the_denominator_excluded(connection, in_memory_objects) -> None:
+    """The confidence report grades the same listings as the denominator holds.
+
+    Red on main: the route stamped the source's `xnys` on every S&P 500 name, and graded
+    `listing:xnys:aapl` and `listing:xnys:zqun`, two listings that the denominator never held.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("AAPL", 320193, "bbg000b9xry4"), ("ZQUN", 9990002, "bbg0zqun0001")])
+
+    origins, notes = load_index_membership(
+        connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC)
+    )
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnas:aapl"}
+    assert notes["constituents_without_listing_exchange"] == ["ZQUN"]
+    assert notes["constituent_count"] == 2

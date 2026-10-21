@@ -25,6 +25,7 @@ weekly refresh publishes a new version only when the mapping actually changed.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.request
@@ -41,6 +42,8 @@ from truealpha_contracts.models import DataSource
 from data_engine import raw_store
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.sources import gateway
+
+log = logging.getLogger(__name__)
 
 _TUPLE_FIELDS = ["issuer_id", "instrument_id", "listing_id", "ticker"]
 _BROWSER_HEADERS = {
@@ -60,7 +63,11 @@ class UniverseSource:
     index_api: str  # the operator's constituents endpoint ("" for a static-member source)
     universe_prefix: str  # e.g. "qqq-us" -> universe:qqq-us-<report_date>
     label: str
-    mic: str = "xnas"
+    # The one exchange that lists EVERY member, or None for a multi-exchange source. A source
+    # declares it only when its definition entails it (the Nasdaq-100 lists Nasdaq names; the
+    # canary is a hand-picked Nasdaq list). A multi-exchange source (the S&P 500) leaves it None,
+    # so each constituent resolves through the identity store or leaves the denominator (#1411 K6).
+    mic: str | None
     # A hand-picked membership (#648 canary): the list itself is versioned operator
     # configuration and lands as the fetch body; CIK/FIGI still resolve through the
     # same live SEC/OpenFIGI paths as an index-fed source, so identity lineage is
@@ -81,6 +88,7 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         index_api="https://api.nasdaq.com/api/quote/list-type/nasdaq100",
         universe_prefix="qqq-us",
         label="Nasdaq-100 (QQQ) constituents, from the index operator's API",
+        mic="xnas",
         nport_ticker="QQQ",
     ),
     "sp500": UniverseSource(
@@ -88,7 +96,7 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         index_api="https://api.nasdaq.com/api/quote/list-type/sp500",
         universe_prefix="sp500-us",
         label="S&P 500 constituents, from the index constituent plane",
-        mic="xnys",
+        mic=None,
         nport_ticker="IVV",
     ),
     # #648: five hand-picked issuers, one per real code branch, all XNAS so the
@@ -104,6 +112,7 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         index_api="",
         universe_prefix="canary-us",
         label="Deploy-verification canary: five issuers spanning every operating branch",
+        mic="xnas",
         static_members=("AAPL", "GOOGL", "GOOG", "ASML", "HBAN", "CINF"),
     ),
 }
@@ -326,83 +335,70 @@ def refresh_etf_constituents(
     return len(rows)
 
 
-def _resolve_listing_mics(
-    connection: Connection[Any],
-    tickers: Sequence[str],
-    *,
-    default_mic: str,
-) -> dict[str, str]:
-    """Resolve the primary exchange MIC (`xnas` vs `xnys`) per ticker (#1411 K6 D4).
+#: The reason a constituent leaves the denominator: no source names the exchange that lists it.
+UNRESOLVED_LISTING_EXCHANGE = "unresolved_listing_exchange"
 
-    A multi-exchange index such as `sp500` contains both NYSE and Nasdaq listings.
-    Stamping every constituent with `source.mic` (`xnys`) mints a second listing identity
-    (`listing:xnys:aapl`) for every Nasdaq constituent that already lives under
-    `listing:xnas:aapl` in `qqq` and `topt`.
 
-    Resolution precedence:
-    1. `staging.entity_aliases` where `scheme = 'mic-ticker'` (`<MIC>:<TICKER>`).
-    2. Landed `qqq` constituents in `staging.etf_constituent_facts` (all `xnas`).
-    3. The governed TOPT corpus (`corpus.v1.json`) listing identities.
-    4. Fallback to `default_mic`.
+def resolve_listing_mics(
+    connection: Connection[Any], source: UniverseSource, tickers: Sequence[str]
+) -> dict[str, str | None]:
+    """The primary exchange MIC (`xnas` vs `xnys`) of each ticker, or None when no source names it (#1411 K6).
+
+    A multi-exchange index such as `sp500` contains both NYSE and Nasdaq listings. A MIC that no
+    source asserted would mint a listing identity (`listing:xnys:aapl`) beside the real one
+    (`listing:xnas:aapl`). So a ticker with no evidence gets None, and the caller excludes it by name.
+
+    Evidence, from the weakest to the strongest (a stronger source overrides a weaker one):
+    1. `source.mic`, when the source declares that one exchange lists every member.
+    2. The governed TOPT corpus (`corpus.v1.json`) listing identities.
+    3. Landed `qqq` constituents in `staging.etf_constituent_facts` (the Nasdaq-100 lists Nasdaq names).
+    4. `staging.entity_aliases` where `scheme = 'mic-ticker'` (`<MIC>:<TICKER>`), the identity store.
+    A failed read raises. It never turns into a smaller denominator.
     """
+    from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+
+    wanted = {ticker.upper() for ticker in tickers}
     mics: dict[str, str] = {}
-    upper_tickers = [t.upper() for t in tickers]
+    if source.mic is not None:
+        mics.update(dict.fromkeys(wanted, source.mic))
 
-    # 3. Seed from TOPT corpus first (lowest priority among explicit sources)
-    try:
-        from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+    for row in load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["instruments"]:
+        listing_id, ticker = str(row[2]), str(row[3]).upper()
+        parts = listing_id.split(":")
+        if ticker in wanted and len(parts) == 3 and parts[0] == "listing":
+            mics[ticker] = parts[1].lower()
 
-        topt_instruments = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["instruments"]
-        for row in topt_instruments:
-            listing_id, ticker = str(row[2]), str(row[3]).upper()
-            parts = listing_id.split(":")
-            if len(parts) == 3 and parts[0] == "listing":
-                mics[ticker] = parts[1].lower()
-    except Exception:  # noqa: BLE001
-        pass
+    if wanted:
+        with connection.transaction():
+            qqq_rows = connection.execute(
+                """
+                select distinct upper(ticker)
+                from staging.etf_constituent_facts
+                where etf_symbol = 'qqq' and upper(ticker) = any(%s)
+                """,
+                (sorted(wanted),),
+            ).fetchall()
+            alias_rows = connection.execute(
+                """
+                select value
+                from staging.entity_aliases
+                where scheme = 'mic-ticker'
+                  and split_part(upper(value), ':', 2) = any(%s)
+                order by transaction_time desc
+                """,
+                (sorted(wanted),),
+            ).fetchall()
+        for (ticker,) in qqq_rows:
+            mics[str(ticker).upper()] = "xnas"
+        seen_alias: set[str] = set()
+        for (alias_value,) in alias_rows:
+            mic_part, _, ticker_part = str(alias_value).partition(":")
+            ticker = ticker_part.upper()
+            if mic_part and ticker and ticker not in seen_alias:
+                seen_alias.add(ticker)
+                mics[ticker] = mic_part.lower()
 
-    # 2. Override/enrich with landed QQQ constituents (Nasdaq-100 = xnas)
-    if default_mic != "xnas" and upper_tickers:
-        try:
-            with connection.transaction():
-                qqq_rows = connection.execute(
-                    """
-                    select distinct upper(ticker)
-                    from staging.etf_constituent_facts
-                    where etf_symbol = 'qqq' and upper(ticker) = any(%s)
-                    """,
-                    (upper_tickers,),
-                ).fetchall()
-            for (t,) in qqq_rows:
-                mics[str(t).upper()] = "xnas"
-        except Exception:  # noqa: BLE001
-            pass
-
-    # 1. Authoritative KG `staging.entity_aliases` (`scheme = 'mic-ticker'`)
-    if upper_tickers:
-        try:
-            with connection.transaction():
-                alias_rows = connection.execute(
-                    """
-                    select value
-                    from staging.entity_aliases
-                    where scheme = 'mic-ticker'
-                      and split_part(upper(value), ':', 2) = any(%s)
-                    order by transaction_time desc
-                    """,
-                    (upper_tickers,),
-                ).fetchall()
-            seen_alias: set[str] = set()
-            for (alias_val,) in alias_rows:
-                mic_part, _, ticker_part = str(alias_val).partition(":")
-                t_up = ticker_part.upper()
-                if mic_part and t_up and t_up not in seen_alias:
-                    seen_alias.add(t_up)
-                    mics[t_up] = mic_part.lower()
-        except Exception:  # noqa: BLE001
-            pass
-
-    return {t: mics.get(t.upper(), default_mic) for t in tickers}
+    return {ticker: mics.get(ticker.upper()) for ticker in tickers}
 
 
 def build_denominator(connection: Connection[Any], source: UniverseSource, *, report_date: date) -> dict[str, Any]:
@@ -426,7 +422,7 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
     ).fetchall()
     if not rows:
         raise LookupError(f"no landed constituents for {source.etf}; run the refresh first")
-    mics = _resolve_listing_mics(connection, [str(r[0]) for r in rows], default_mic=source.mic)
+    mics = resolve_listing_mics(connection, source, [str(r[0]) for r in rows])
     instruments = [
         [
             f"issuer:cik:{int(cik):010d}",
@@ -435,7 +431,24 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
             ticker,
         ]
         for ticker, cik, figi in rows
+        if mics[ticker] is not None
     ]
+    # A constituent whose exchange no source names is not valued under a guessed exchange.
+    # It leaves the denominator by name, and the payload shows it.
+    excluded = [
+        {"ticker": ticker, "issuer_id": f"issuer:cik:{int(cik):010d}", "reason": UNRESOLVED_LISTING_EXCHANGE}
+        for ticker, cik, _figi in rows
+        if mics[ticker] is None
+    ]
+    if excluded:
+        log.warning(
+            "%s: %d constituents have no known listing exchange and leave the denominator: %s",
+            source.etf,
+            len(excluded),
+            ", ".join(item["ticker"] for item in excluded),
+        )
+    if not instruments:
+        raise LookupError(f"no listing exchange resolved for any constituent of {source.etf}")
     issuer_ids = {row[0] for row in instruments}
     return {
         "universe_id": f"universe:{source.universe_prefix}-{report_date.isoformat()}",
@@ -451,6 +464,7 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
         "instruments": instruments,
         "instrument_mapping_sha256": canonical_sha256({"fields": _TUPLE_FIELDS, "instruments": instruments}),
         "identity_assertions": [],
+        "excluded": excluded,
     }
 
 
