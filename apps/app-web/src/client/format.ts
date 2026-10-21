@@ -97,6 +97,33 @@ export function formatPercentFromFraction(value: string | number | null | undefi
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
 }
 
+/**
+ * A yield as a percent with two decimals: `0.0426` → `4.26%`, `0.05` → `5.00%`.
+ *
+ * The mart serves an exact decimal fraction. The shift of the decimal point by two places works on
+ * the digits of the string, so the display carries no binary-float error. Digits beyond the second
+ * decimal of the percent are cut, and the exact string stays in the `title` of the cell. A text that
+ * is not a plain decimal returns null (callers render "—").
+ */
+export function formatYieldPercent(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (match === null) return null;
+  const [, sign, whole, fraction = ""] = match;
+  const shifted = fraction.padEnd(2, "0");
+  const integerPart = `${whole}${shifted.slice(0, 2)}`.replace(/^0+(?=\d)/, "");
+  const decimalPart = shifted.slice(2).padEnd(2, "0").slice(0, 2);
+  return `${sign}${integerPart}.${decimalPart}%`;
+}
+
+/** An instant as `2026-10-20 20:31 UTC`, or null when it is not a valid date. */
+export function formatUtcMinute(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return `${parsed.toISOString().slice(0, 10)} ${parsed.toISOString().slice(11, 16)} UTC`;
+}
+
 /** Tailwind text color for a signed quantity (positive = favorable gap). */
 export function signColor(value: string | number | null | undefined): string {
   const n = toFinite(value);

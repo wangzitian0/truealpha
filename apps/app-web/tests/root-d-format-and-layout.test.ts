@@ -868,6 +868,7 @@ const { default: DocumentDetailPage } = await import("../src/app/research/librar
     "src/app/admin/universes/page.tsx",
     "src/app/admin/page.tsx",
     "src/app/admin/datahub/page.tsx",
+    "src/app/admin/macro/page.tsx",
     "src/app/research/themes/page.tsx",
     "src/app/research/trace/page.tsx",
     "src/app/research/page.tsx",
