@@ -173,6 +173,18 @@ LISTINGS_DISAGREE = "listings_disagree_on_splits"
 SHARE_COUNT_UNDATED = "share_count_undated"
 SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
 CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+#: Every reason above. `factors.production_topt.ToptCoreReasonCode` registers the same strings
+#: (#1277), so a core result names the cause that the live path found. A test holds the two equal.
+LIVE_UNAVAILABLE_REASONS = (
+    NO_SPLIT_ADJUSTED_SERIES,
+    NO_UNADJUSTED_SERIES,
+    SPLIT_DERIVATION_FAILED,
+    SERIES_DO_NOT_COVER,
+    LISTINGS_DISAGREE,
+    SHARE_COUNT_UNDATED,
+    SHARE_BASIS_AMBIGUOUS,
+    CLOSE_JUMP_BEYOND_SERIES,
+)
 
 #: The smallest common split, 3-for-2, moves a close by the factor 1.5. When the stored series end
 #: before the close's session, a close at x1.5 or more, or at x0.667 or less, of the last stored
@@ -370,6 +382,7 @@ __all__ = [
     "CLOSE_JUMP_LIMIT",
     "COVER",
     "LISTINGS_DISAGREE",
+    "LIVE_UNAVAILABLE_REASONS",
     "NO_SPLIT_ADJUSTED_SERIES",
     "NO_UNADJUSTED_SERIES",
     "SERIES_DO_NOT_COVER",

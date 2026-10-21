@@ -303,7 +303,10 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   issuer with `missing_market_value_input`, and the tick log names the reason. The series may end
   one session before the close's session. Then the close must stay strictly within a factor of 1.5
   of the last stored close (ADR A6). The filed count never stands beside a close of another share
-  basis.
+  basis. The TOPT core engine follows the same rule (#1277). `_snapshot_member` drops the count of a
+  listing whose series cannot prove the splits, or whose symbols have no stored bar. The core result
+  is then unavailable, and its `reason_codes` hold the reason of `share_basis`
+  (`LIVE_UNAVAILABLE_REASONS`, for example `no_split_adjusted_series`).
 - **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
   computation (rule 3): `staging.evidence_nodes` / `evidence_edges`.

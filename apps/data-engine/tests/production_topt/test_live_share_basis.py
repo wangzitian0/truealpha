@@ -8,6 +8,10 @@ the market-data lane stores them in production.
 
 The fixture universe is the 21-listing TOPT corpus. Every issuer files 10,000,000 shares on
 2026-02-01 (a cover count dated 2026-01-20), and every listing closes at 40 on 2026-03-31.
+
+The tick values each issuer twice, with the same share basis. The strategy seed writes
+`mart.strategy_decisions` (#1262). The TOPT core engine writes `mart.topt_core_results` (#1277).
+The last section of this file reads the core rows.
 """
 
 from __future__ import annotations
@@ -55,6 +59,8 @@ TICK = datetime(2026, 4, 1, 22, 15, tzinfo=UTC)
 CLOSE = Decimal("40")
 FILED_SHARES = Decimal("10000000")
 REVENUE = Decimal("100000000")
+#: The gross profit of a non-financial issuer in the fixture. The core divides its market value by it.
+GROSS_PROFIT = Decimal("210000000")
 #: The share count is a cover-page count dated 2026-01-20 and filed on 2026-02-01.
 COVER_DATE = date(2026, 1, 20)
 FILED = date(2026, 2, 1)
@@ -96,7 +102,7 @@ def _bundle(branch: OperatingBranch, *, cik: int) -> FinancialFactsBundle:
     financial = branch is OperatingBranch.FINANCIAL
     accession = f"0000{cik}-26-000001"
     return FinancialFactsBundle(
-        gross_profit=Decimal("80000000") if financial else Decimal("210000000"),
+        gross_profit=Decimal("80000000") if financial else GROSS_PROFIT,
         total_assets=Decimal("200000000"),
         shares_outstanding=FILED_SHARES,
         revenue=REVENUE,
@@ -185,10 +191,13 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
 def _with_series(url: str, shapes: dict[str, SeriesShape]) -> None:
     """Both daily series of every TOPT symbol the market-data lane stores, SERIES_START to SESSION.
 
-    A symbol that `shapes` omits closes at 40 in both series on every session.
+    A symbol that `shapes` omits closes at 40 in both series on every session. The symbol of
+    `NO_SERIES` has no stored bar in either series.
     """
     with psycopg.connect(url) as connection:
         for symbol in DEFAULT_TOPT_SYMBOLS:
+            if symbol == NO_SERIES:
+                continue
             store_daily_series(connection, symbol, shapes.get(symbol, _flat), first=SERIES_START, last=SESSION)
         connection.commit()
 
@@ -218,11 +227,14 @@ SHAPES: dict[str, SeriesShape] = {
     # LLY's series also end one session early, at 400. The close of 40 is a tenfold drop.
     "LLY": lambda day: (CLOSE * 10, CLOSE * 10) if day < SESSION else (None, None),
 }
+#: The symbol that has no stored bar at all, as GOOG and the QQQ names outside TOPT have none in production.
+NO_SERIES = "XOM"
 #: The symbols with an unknown share basis, and the reason the tick names for each.
 UNAVAILABLE = {
     "MSFT": "no_split_adjusted_series",
     "WMT": "split_derivation_failed",
     "LLY": "close_jump_beyond_series",
+    NO_SERIES: "no_split_adjusted_series",
 }
 
 
@@ -366,8 +378,8 @@ def test_a_symbol_without_its_split_adjusted_series_makes_the_issuer_unavailable
     assert msft.shares is None, f"no share row may stand beside a close of an unknown basis, got {msft}"
     assert msft.exclusion_reason == "missing_market_value_input"
     assert msft.market_value is None
-    named = [message for message in tick.warnings if "no_split_adjusted_series" in message]
-    assert len(named) == 1 and "MSFT" in named[0], tick.warnings
+    named = [message for message in tick.warnings if "no_split_adjusted_series" in message and "MSFT" in message]
+    assert len(named) == 1, tick.warnings
 
 
 def test_an_ambiguous_ratio_step_of_one_symbol_makes_only_its_issuer_unavailable(tick: Tick) -> None:
@@ -466,3 +478,80 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
     parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
     assert tool.check(tick.url, require_coverage=True, invariants=(parity,), exemptions={}) == 0, capsys.readouterr()
     assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
+# -- acceptance of #1277: the same tick, read from the core results -----------------------------
+
+
+@dataclass(frozen=True)
+class Core:
+    """What the tick wrote to `mart.topt_core_results` for one issuer."""
+
+    availability: str
+    reason_codes: tuple[str, ...]
+    current_pgp: Decimal | None
+    current_ps: Decimal | None
+
+
+def _core(tick: Tick, ticker: str) -> Core:
+    with psycopg.connect(tick.url) as reader:
+        row = reader.execute(
+            """
+            select r.availability, r.reason_codes, r.current_pgp, r.current_ps
+            from mart.topt_core_results r
+            where r.run_id = %s
+              and r.issuer_id = (
+                  select distinct p.normalized_payload ->> 'issuer_id'
+                  from raw.capture_obligations ob
+                  join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+                  join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+                  where ob.run_id = %s and p.normalized_payload ->> 'ticker' = %s
+              )
+            """,
+            (tick.metadata["capture_run_id"], tick.metadata["capture_run_id"], ticker),
+        ).fetchone()
+    assert row is not None, f"the tick wrote no core result for {ticker}"
+    return Core(
+        row[0], tuple(row[1]), None if row[2] is None else Decimal(row[2]), None if row[3] is None else Decimal(row[3])
+    )
+
+
+def _places(value: Decimal | None) -> Decimal | None:
+    """A multiple at 12 decimal places. The engine divides at 34 digits, and a test at 28 would differ."""
+    return None if value is None else value.quantize(Decimal("1e-12"))
+
+
+def test_a_split_after_the_filing_gives_the_core_price_to_gross_profit_on_the_post_split_basis(tick: Tick) -> None:
+    """#1277 acceptance a. NVDA splits 10:1 on 2026-03-02, after its count was filed on 2026-02-01.
+
+    The core divides the market value by the gross profit. The market value is the post-split
+    count of 100,000,000 shares at 40. The control AAPL has no split and keeps its filed count.
+    Red without the share basis in `_snapshot_member`: the core multiplied the pre-split count by
+    the post-split close, and the P/GP of NVDA was ten times too small.
+    """
+    nvda, control = _core(tick, "NVDA"), _core(tick, "AAPL")
+
+    assert nvda.availability == "available" and nvda.reason_codes == ()
+    assert _places(nvda.current_pgp) == _places(CLOSE * FILED_SHARES * 10 / GROSS_PROFIT), nvda
+    assert nvda.current_ps == CLOSE * FILED_SHARES * 10 / REVENUE, nvda
+    assert _places(control.current_pgp) == _places(CLOSE * FILED_SHARES / GROSS_PROFIT), control
+
+
+def test_a_listing_without_its_series_makes_the_core_result_unavailable_with_the_named_reason(tick: Tick) -> None:
+    """#1277 acceptance b. Each issuer of `UNAVAILABLE` has stored series that cannot prove its splits,
+    or none at all. The core result is unavailable and names the cause. It holds no multiple.
+
+    Red on main: the core named `missing_shares_outstanding` for each of them, which does not say
+    whether the filing has no share count or the series have no bars.
+    """
+    for ticker, reason in UNAVAILABLE.items():
+        core = _core(tick, ticker)
+        assert core.availability == "unavailable", (ticker, core)
+        assert core.reason_codes == (reason,), (ticker, core)
+        assert core.current_pgp is None and core.current_ps is None, (ticker, core)
+
+
+def test_the_core_keeps_the_filed_count_when_the_series_prove_that_no_split_happened(tick: Tick) -> None:
+    """The control of the two tests above. JNJ's series end one session early and its close holds still."""
+    jnj = _core(tick, "JNJ")
+
+    assert jnj.availability == "available"
+    assert _places(jnj.current_pgp) == _places(CLOSE * FILED_SHARES / GROSS_PROFIT), jnj

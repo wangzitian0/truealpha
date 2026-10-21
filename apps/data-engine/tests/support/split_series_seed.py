@@ -21,6 +21,7 @@ from data_engine.datahub.market_prices import (
     insert_market_prices_daily,
     is_xnys_trading_day,
 )
+from data_engine.datahub.share_basis import SplitHistory
 
 #: The (unadjusted close, split-adjusted close) of one symbol on one session. None stores no bar.
 SeriesShape = Callable[[date], tuple[Decimal | None, Decimal | None]]
@@ -76,3 +77,12 @@ def share_count_vintage(*, filed: date, own_date: date, accession: str = "000010
         "period_end": own_date.isoformat(),
         "statement_form": "10-K",
     }
+
+
+def flat_history(symbol: str = "TEST", *, close: Decimal = Decimal("40")) -> SplitHistory:
+    """A split history that proves no split in any window a test uses (2000 to 2100).
+
+    For a test that builds a snapshot member and asks nothing about shares. The member builder
+    never keeps a filed count without a history, so such a test names its history.
+    """
+    return SplitHistory(symbol, (), date(2000, 1, 1), date(2100, 1, 1), close)
