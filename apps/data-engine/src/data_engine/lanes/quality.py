@@ -24,6 +24,11 @@ scheduled or forced tick of the current deployment fetched from every registered
 itself. Production's boot canary reuses the night's observations, so nothing else shows that
 a promoted release's fetch path works.
 
+The fifth is the runtime shape of the code server (`quality.runtime_shape`, #1467): whether the
+memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, or a new
+peak above 70% of its ceiling. The run reads the cgroup of the container it executes in, which is the
+code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
+
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
 daily delivery report shows a red, stale or missing one. The names a run
@@ -40,12 +45,14 @@ from pathlib import Path
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
-from data_engine.quality import surface_proof
+from data_engine.lanes.triggers import boot_deployment
+from data_engine.quality import runtime_shape, surface_proof
 from data_engine.quality.nightly_verdicts import (
     TICK_TAG,
     check_name,
@@ -55,6 +62,11 @@ from data_engine.quality.nightly_verdicts import (
     verdict,
 )
 from data_engine.sources import gateway
+
+#: Run tag of a job whose run waits for other runs to finish (`_await_settled`). The run queue of
+#: `dagster.yaml` caps the runs that carry it below the queue limit, so a run that they wait for always
+#: finds a slot (#1467). `test_run_capacity.py` holds every job that waits to this tag.
+WAITS_FOR_RUNS_TAG = "truealpha/waits_for_runs"
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
 # 00:15 UTC: after the canary (23:47) has published, before anything reads the day's head.
@@ -94,18 +106,25 @@ RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 # until the deployment's first scheduled or forced tick has finished.
 RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 
+RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
+# 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last one,
+# the release fetch proof, runs at 06:15), and before the delivery report (07:00) reads the verdict.
+RUNTIME_SHAPE_CRON = "30 6 * * *"
+
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
 REPORT_SURFACE_VERDICT = "report_surface_proof"
 CONFIDENCE_REPORT_VERDICT = "datahub_confidence_report"
 MODEL_KEY_HEALTH_VERDICT = "model_key_health"
 RELEASE_FETCH_PROOF_VERDICT = "release_fetch_proof"
+RUNTIME_SHAPE_VERDICT = "runtime_shape"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
     *(check_name(CONFIDENCE_REPORT_VERDICT, universe) for universe in CONFIDENCE_REPORT_UNIVERSES),
     MODEL_KEY_HEALTH_VERDICT,
     RELEASE_FETCH_PROOF_VERDICT,
+    RUNTIME_SHAPE_VERDICT,
 )
 
 #: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
@@ -350,10 +369,12 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
     return json.dumps({"status": "pass", "surfaces": [surface.line for surface in surfaces]})
 
 
-@dg.job(name=OUTPUT_INVARIANTS_JOB_NAME)
+@dg.job(name=OUTPUT_INVARIANTS_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
 def output_invariants_job() -> None:
     # Two independent verdicts in one nightly run: the numbers are possible (the suite), and
-    # every surface serves the head the pointer names (the proof). Neither waits on the other.
+    # every surface serves the head the pointer names (the proof). Neither depends on the other, and a
+    # failure of one does not stop the other. The in-process executor runs them one after the other;
+    # the second wait for a settled universe ends at once when the first saw every universe settle.
     run_output_invariants()
     run_report_surface_proof()
 
@@ -449,7 +470,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
     return json.dumps({"status": "pass", "report_id": report_id, "summary": summary_line(report)})
 
 
-@dg.job(name=CONFIDENCE_REPORT_JOB_NAME)
+@dg.job(name=CONFIDENCE_REPORT_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
 def datahub_confidence_report_job() -> None:
     run_confidence_report()
 
@@ -549,6 +570,70 @@ def release_fetch_proof_schedule(context: dg.ScheduleEvaluationContext) -> dg.Ru
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
+@dg.op
+def run_runtime_shape(context: dg.OpExecutionContext) -> str:
+    """Judge the memory cgroup of this container against the declared capacity (#1467).
+
+    The run executes in the code server container, so the cgroup it reads is the one that holds the gRPC
+    server and every other run. The sensor `runtime_shape_sampler` keeps the totals between two checks, so
+    a container that a deploy replaced still counts. A fact that cannot be read is a red verdict, never a
+    green one."""
+    tick = tick_of(context)
+    with verdict(RUNTIME_SHAPE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+        judgement = runtime_shape.check(
+            context.instance,
+            tick=tick.isoformat() if tick is not None else None,
+            capacity=load_environment_contract().code_server_capacity,
+        )
+        context.log.info(f"runtime shape: {judgement.summary}")
+        context.add_output_metadata({"red": len(judgement.red), **judgement.facts})
+        outcome.summary = judgement.summary
+        if judgement.red:
+            raise dg.Failure(f"runtime shape: {judgement.summary} (#1467, #28 V5)")
+    return json.dumps({"red": list(judgement.red), "summary": judgement.summary})
+
+
+@dg.job(name=RUNTIME_SHAPE_JOB_NAME)
+def runtime_shape_job() -> None:
+    run_runtime_shape()
+
+
+@dg.schedule(
+    job=runtime_shape_job,
+    cron_schedule=RUNTIME_SHAPE_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def runtime_shape_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    tick = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
+RUNTIME_SHAPE_SAMPLER_NAME = "runtime_shape_sampler"
+RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS = runtime_shape.SAMPLE_INTERVAL_SECONDS
+
+
+@dg.sensor(
+    name=RUNTIME_SHAPE_SAMPLER_NAME,
+    minimum_interval_seconds=RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def runtime_shape_sampler_sensor(context: dg.SensorEvaluationContext):
+    """Fold the memory cgroup of the code server into the totals of `runtime_shape` (#1467).
+
+    Dagster evaluates a sensor inside the code server process, so the cgroup it reads is the one that holds
+    every run. A deploy replaces the container and its counters; this sensor keeps what the old container
+    showed, with a loss of at most one interval. It launches no run."""
+    tracker = runtime_shape.sample(
+        context.instance,
+        deployment=boot_deployment(),
+        capacity=load_environment_contract().code_server_capacity,
+    )
+    yield dg.SkipReason(
+        f"sampled: {tracker.kills} OOM kill(s) and {tracker.peaks_over_limit} peak(s) over the limit so far"
+    )
+
+
 OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
 OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
 
@@ -594,12 +679,19 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
 
 
 defs = dg.Definitions(
-    jobs=[output_invariants_job, datahub_confidence_report_job, model_key_health_job, release_fetch_proof_job],
+    jobs=[
+        output_invariants_job,
+        datahub_confidence_report_job,
+        model_key_health_job,
+        release_fetch_proof_job,
+        runtime_shape_job,
+    ],
     schedules=[
         output_invariants_schedule,
         datahub_confidence_report_schedule,
         model_key_health_schedule,
         release_fetch_proof_schedule,
+        runtime_shape_schedule,
     ],
-    sensors=[output_invariants_on_advance_sensor],
+    sensors=[output_invariants_on_advance_sensor, runtime_shape_sampler_sensor],
 )

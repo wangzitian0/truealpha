@@ -15,6 +15,13 @@ operator commands and tests that address `data_engine.dagster_defs` working, and
 are also what makes each lane statically reachable for `tools/reachability_ratchet.py`
 (`LANE_MODULES` is resolved by `import_module`, which an AST walk cannot follow).
 
+Every job runs in the in-process executor (#1467). The code server container holds the gRPC server
+and every run process in one memory cgroup. The default executor starts one more process per step,
+and each process that imports this module holds the size that the contract measured. One process per run is the premise of
+`code_server_capacity` in `environment_contract.v1.json`, which derives the run queue limit of
+`dagster.yaml`. The jobs are linear chains, except `output_invariants_check`: its two independent
+steps wait for the same condition and work for seconds, so one after the other costs seconds.
+
 `dagster.yaml` loads the run launcher by module name (#1442). The import of
 `MonitoredRunLauncher` below makes that module statically reachable too, and
 `test_dagster_instance_config.py` holds the name in `dagster.yaml` equal to this class.
@@ -130,12 +137,17 @@ __all__ = [
 init_telemetry()
 
 
+def with_in_process_executor(definitions: dg.Definitions) -> dg.Definitions:
+    """Return `definitions` with the in-process executor as the default executor of every job (#1467)."""
+    return dg.Definitions.merge(definitions, dg.Definitions(executor=dg.in_process_executor))
+
+
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
     """Build the deployable Dagster Definitions across all registered lanes (#731, #67)."""
-    return dg.Definitions.merge(*lane_definitions(app_env).values())
+    return with_in_process_executor(dg.Definitions.merge(*lane_definitions(app_env).values()))
 
 
-defs = dg.Definitions.merge(*lane_definitions().values())
+defs = with_in_process_executor(dg.Definitions.merge(*lane_definitions().values()))
 
 
 # -- retired fixture canary (tests only; never deployed) -------------------------------

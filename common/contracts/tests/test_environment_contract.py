@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.environment_contract import (
+    CodeServerCapacity,
     EnvironmentContract,
     JobRunTimeBasis,
     load_environment_contract,
@@ -164,3 +165,84 @@ def test_max_runtime_is_margin_times_the_longest_success_over_all_environments()
 def test_a_job_declares_exactly_one_valid_run_time_basis(basis: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         JobRunTimeBasis.model_validate(basis)
+
+
+#: A fixed capacity for the tests of the derivation. It does not read the contract, so a new
+#: measurement in the contract cannot change what these tests expect of the formula.
+_BASE_CAPACITY: dict[str, object] = {
+    "description": "test",
+    "ceiling_mib": 1536,
+    "ceiling_source": "test",
+    "utilization_limit": 0.7,
+    "process_mib": 240,
+    "server_processes": 1,
+    "processes_per_run": 1,
+    "measured": {
+        "at": "2026-10-20",
+        "environment": "staging",
+        "method": "test",
+        "grpc_server_hwm_mib": 229.5,
+        "spawned_process_hwm_mib": 213.3,
+        "source": "test",
+    },
+}
+
+
+def _capacity(**changes: object) -> CodeServerCapacity:
+    """The fixed capacity with `changes` applied, validated again (#1467)."""
+    return CodeServerCapacity.model_validate({**_BASE_CAPACITY, **changes})
+
+
+def test_the_declared_run_limit_is_the_largest_that_fits_inside_the_utilization_limit() -> None:
+    """Whatever the contract declares: the server and `max_concurrent_runs` runs fit, one more run does not."""
+    capacity = load_environment_contract().code_server_capacity
+    per_run = capacity.processes_per_run * capacity.process_mib
+    held = capacity.server_processes * capacity.process_mib + capacity.max_concurrent_runs * per_run
+
+    assert capacity.usable_mib <= capacity.ceiling_mib * capacity.utilization_limit
+    assert held <= capacity.usable_mib < held + per_run
+    assert capacity.max_waiting_runs == capacity.max_concurrent_runs - 1 >= 1
+
+
+def test_the_run_limit_of_the_fixed_capacity_is_three() -> None:
+    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. Three runs of 240 MiB fit in the other 835 MiB."""
+    capacity = _capacity()
+
+    assert (capacity.usable_mib, capacity.max_concurrent_runs, capacity.max_waiting_runs) == (1075, 3, 2)
+
+
+@pytest.mark.parametrize(
+    ("changes", "runs"),
+    [
+        ({"ceiling_mib": 2048}, 4),
+        ({"ceiling_mib": 1280}, 2),
+        ({"process_mib": 300, "ceiling_mib": 2048}, 3),
+        ({"processes_per_run": 2, "ceiling_mib": 2048}, 2),
+        ({"server_processes": 2, "ceiling_mib": 2048}, 3),
+        ({"utilization_limit": 0.5, "ceiling_mib": 2048}, 3),
+    ],
+)
+def test_the_run_limit_follows_each_input_of_the_derivation(changes: dict[str, object], runs: int) -> None:
+    assert _capacity(**changes).max_concurrent_runs == runs
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"utilization_limit": 0.71},
+        {"utilization_limit": 1.0},
+        {"process_mib": 229},
+        {"ceiling_mib": 768},
+        {"ceiling_mib": 0},
+    ],
+    ids=[
+        "above-the-70-percent-rule",
+        "full-utilization",
+        "below-the-measured-peak",
+        "ceiling-admits-one-run",
+        "no-ceiling",
+    ],
+)
+def test_a_capacity_that_breaks_a_rule_is_refused(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _capacity(**changes)

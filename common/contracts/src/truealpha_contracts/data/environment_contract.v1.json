@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "1.1.0",
-  "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, shared vendor capacity demand (#1416), and the maximum runtime of every Dagster job (#1442).",
+  "contract_version": "1.2.0",
+  "description": "Single source of truth for per-environment universes, tick schedules, sentinel set, shared vendor capacity demand (#1416), the maximum runtime of every Dagster job (#1442), and the memory capacity of the Dagster code server (#1467).",
   "sentinels": [
     {
       "ticker": "AAPL",
@@ -345,6 +345,9 @@
           }
         }
       },
+      "runtime_shape_check": {
+        "unmeasured": "No run in the window: the job merged on 2026-10-20 (#1467). It reads three cgroup files. Measure it after its first runs."
+      },
       "sp500_live_pipeline": {
         "estimate_tick": "sp500"
       },
@@ -404,6 +407,23 @@
           }
         }
       }
+    }
+  },
+  "code_server_capacity": {
+    "description": "The memory that the Dagster code server container gives to its processes, and the run limit that follows from it (#1467). Every run executes inside the code server container, in the same cgroup as the gRPC server. The queue limit of dagster.yaml is derived here: max_concurrent_runs = floor((floor(ceiling_mib x utilization_limit) - server_processes x process_mib) / (processes_per_run x process_mib)). Tests hold dagster.yaml equal to that value and hold the deployed jobs to processes_per_run. The nightly verdict runtime_shape reads the real memory.max, memory.peak and oom_kill of the container and fails when the ceiling is lower than declared here, when the peak of a container rises above utilization_limit of memory.max, or when a kill or an unplanned restart is seen. A sensor keeps the counters of containers that a deploy replaced.",
+    "ceiling_mib": 1536,
+    "ceiling_source": "infra2 truealpha/truealpha/20.data_engine/compose.yaml, x-dagster-service mem_limit, one value for staging and production (infra2#1342)",
+    "utilization_limit": 0.7,
+    "process_mib": 240,
+    "server_processes": 1,
+    "processes_per_run": 1,
+    "measured": {
+      "at": "2026-10-20",
+      "environment": "staging",
+      "method": "VmHWM in /proc/<pid>/status of each process in the code server container, read with docker exec. The spawned processes are run workers and step workers under the multiprocess executor. An in-process run is both in one process: its size is not measured here, and the runtime_shape verdict is the standing check of the whole cgroup.",
+      "grpc_server_hwm_mib": 229.5,
+      "spawned_process_hwm_mib": 213.3,
+      "source": "https://github.com/wangzitian0/truealpha/issues/1467"
     }
   }
 }

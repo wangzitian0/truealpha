@@ -90,7 +90,8 @@ def test_every_root_lists_its_acceptance_ids_without_a_gap() -> None:
         found = sorted(numbers[str(root)])
         assert found == list(range(1, len(found) + 1)), f"R{root}: {found}"
     # The acceptance tables of #1417 to #1421 on 2026-10-20: A1-A8, B1-B10, C1-C7, D1-D6, E1-E10.
-    assert {root: len(found) for root, found in numbers.items()} == {"1": 8, "2": 10, "3": 7, "4": 6, "5": 10}
+    # B11 joined on 2026-10-20 with the runtime-shape verdict of the code server (#1467).
+    assert {root: len(found) for root, found in numbers.items()} == {"1": 8, "2": 11, "3": 7, "4": 6, "5": 10}
 
 
 def test_the_fixture_reach_test_backs_r5_e2() -> None:

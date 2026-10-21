@@ -122,6 +122,7 @@ with seed (artifact_key, lane, schedule_name, universe_like, family, served_to, 
     ('datahub-confidence-report', 'quality', 'datahub_confidence_report_schedule', null, 'daily', 'operators', false),
     ('model-key-health', 'quality', 'model_key_health_schedule', null, 'daily', 'operators', false),
     ('release-fetch-proof', 'quality', 'release_fetch_proof_schedule', null, 'daily', 'operators', false),
+    ('runtime-shape', 'quality', 'runtime_shape_schedule', null, 'daily', 'operators', false),
     ('entity-identity', 'entity_identity', null, null, 'weekly', 'consumers', false),
     ('triggers', 'triggers', null, null, 'daily', 'internal', false),
     ('facts:filing-derived', 'capture', null, null, 'quarterly', 'consumers', false)

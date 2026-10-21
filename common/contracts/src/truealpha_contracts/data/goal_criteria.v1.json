@@ -232,6 +232,17 @@
       "pending_on": "#1418"
     },
     {
+      "id": "R2.B11",
+      "root": "#1418",
+      "tier": "M1",
+      "statement": "The memory cgroup of the Dagster code server, which holds every run and the gRPC server, shows no OOM kill and a peak of at most 70% of its ceiling. The run limit of dagster.yaml derives from the declared ceiling and the measured size of one process.",
+      "threshold": "0 OOM kills; peak at most 70% of memory.max",
+      "window": "7 consecutive nights",
+      "oracle": "platform",
+      "status": "backed",
+      "verdict_keys": ["runtime_shape"]
+    },
+    {
       "id": "R2.M0",
       "root": "#1418",
       "tier": "M0",
