@@ -668,7 +668,9 @@ def _identity_store_lists(connection, mic_ticker: str) -> None:
         )
 
 
-def test_a_constituent_with_no_known_exchange_is_excluded_by_name_and_gets_no_listing(connection, in_memory_objects) -> None:
+def test_a_constituent_with_no_known_exchange_is_excluded_by_name_and_gets_no_listing(
+    connection, in_memory_objects
+) -> None:
     """#1411 K6. The S&P 500 lists NYSE and Nasdaq names. No default exchange stands in for a missing fact.
 
     ZQUN is in no identity alias, no QQQ row and no TOPT corpus row. Red on main: the denominator
@@ -723,7 +725,9 @@ def test_a_multi_exchange_source_with_no_resolvable_constituent_fails_loud(conne
         build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
 
 
-def test_the_membership_route_skips_the_constituent_that_the_denominator_excluded(connection, in_memory_objects) -> None:
+def test_the_membership_route_skips_the_constituent_that_the_denominator_excluded(
+    connection, in_memory_objects
+) -> None:
     """The confidence report grades the same listings as the denominator holds.
 
     Red on main: the route stamped the source's `xnys` on every S&P 500 name, and graded
@@ -733,9 +737,7 @@ def test_the_membership_route_skips_the_constituent_that_the_denominator_exclude
 
     _land_constituents(connection, "sp500", [("AAPL", 320193, "bbg000b9xry4"), ("ZQUN", 9990002, "bbg0zqun0001")])
 
-    origins, notes = load_index_membership(
-        connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC)
-    )
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
 
     assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnas:aapl"}
     assert notes["constituents_without_listing_exchange"] == ["ZQUN"]
