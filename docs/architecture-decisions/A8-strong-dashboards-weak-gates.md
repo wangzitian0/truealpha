@@ -1,8 +1,8 @@
 # A8 — Strong Dashboards, Weak Gates: Observability over Deadlocking Blockers
 
-Status: Accepted (in force; `AGENTS.md` Rule 4 and Rule 6 updated 2026-10-12)
+Status: Accepted (in force; `AGENTS.md` Rule 4 and Rule 6 updated 2026-10-12 and revised 2026-10-21)
 Date: 2026-10-12
-Extends: `AGENTS.md` Rule 4 ("How work happens"), Rule 6 ("Closed means deployed, real, and evidenced"), and ADR A2
+Extends: `AGENTS.md` Rule 4 ("How work happens"), Rule 6 ("Closed means verified on staging with real data"), and ADR A2
 
 ## Context
 
@@ -21,9 +21,13 @@ Over successive iterations, defensive engineering mechanisms degenerated into br
 
 We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板优于门禁，强看板，弱门禁)**.
 
-### 1. Weak Gates (Fail-Safe Technical Baselines Only)
-- Merge and CI gates enforce strictly essential technical invariants: compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit test execution.
+### 1. Three gate classes (fail-safe technical baselines only)
+A gate belongs to one of three classes. Everything else is a dashboard.
+- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit test execution.
+- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect (SQL rows or an HTTP response).
+- **Class 3, staging evidence before a production deploy:** a production deploy of a release waits for the staging evidence of that same release.
 - Third-party and AI reviewer feedback is **advisory**: infrastructure timeouts, reviewer platform errors, or unclassified review comments log warnings and never fail-close PR readiness.
+- The one stated exception to "everything else is a dashboard" is the review-finding budget of `AGENTS.md` Rule 4 (High = 0, Medium <= 2, Low <= 4).
 - Mechanical text policing (regex matching on PR closing keywords, automated bot reopen scripts) is abolished.
 
 ### 2. Strong Dashboards (Radical Observability as Primary Governance)
@@ -34,7 +38,8 @@ We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板�
 - Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. A migration creates each one: `mart.served_head` (pointer freshness), `mart.question_coverage_report` (question coverage), and `mart.nightly_verdicts` (nightly check verdicts). The web surfaces above and the health endpoints read these models.
 
 ### 3. Issue Lifecycle and Verification
-- Issues are closed when an agent or engineer independently verifies deployment reality on the relevant dashboard or via physical read-only probes (SQL rows / HTTP responses).
+- Issues are closed when staging verifies the change: an agent or engineer reads the relevant dashboard or runs a physical read-only probe (SQL rows / HTTP responses), and `/close` walks the acceptance rows (ADR A2).
+- Production state is not an issue state. The release checklist that infra2 owns records it.
 - Reopening is driven by physical regressions identified on the dashboard or by operational failure, not by arbitrary comment text parsers.
 
 ## Consequences

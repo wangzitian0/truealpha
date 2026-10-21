@@ -1,9 +1,10 @@
 # A2 — Acceptance criteria are standing checks, and they cover the whole scope
 
-Status: Accepted (in force; `AGENTS.md` rule 7 is this ADR, and every issue closed since
-2026-07-30 is judged against it. Header corrected 2026-09-08.)
+Status: Accepted (in force). Revised 2026-10-21: the acceptance procedure moved from
+`AGENTS.md` rule 7 to the skills `smoke` and `close`. Every issue closed since 2026-07-30 is
+judged against this ADR.
 Date: 2026-07-30
-Extends: `AGENTS.md` rule 6 ("Closed means deployed, real, and evidenced")
+Extends: `AGENTS.md` rule 6 ("Closed means verified on staging with real data")
 
 ## Context
 
@@ -46,7 +47,7 @@ authored five days later without it.
 
 ## Decision
 
-`AGENTS.md` rule 7 states two rules, both checkable while reading an issue:
+Four statements. Each one is checkable while you read an issue and its closing walk.
 
 1. **Every scope item has a matching acceptance criterion.** A deliverable named in the body
    must be asserted by exactly one criterion. A deliverable with no criterion is deleted from
@@ -54,11 +55,17 @@ authored five days later without it.
 2. **A criterion is a check that runs again, not a run that happened.** Acceptance is a named
    CI step, test, or gate that turns red on the next regression. A one-time manual walk, a
    hand-run script, or a measurement taken on a single production run is *evidence* under
-   rule 6 and is *not* acceptance under rule 7.
-
-Auto-closing with `Closes #N` asserts both rules were evaluated. An issue carrying a
-criterion a merge cannot prove references its issue with a plain `#N` and is closed by hand,
-with a comment walking the criteria in order.
+   rule 6 and is *not* acceptance.
+3. **A criterion must be able to fail where production calls.** The check fails without the
+   change. It calls the entry point that production calls, with the arguments that production
+   passes. A check that supplies an argument the production caller omits proves the parameter,
+   not the wiring (#284).
+4. **Acceptance is its own procedure, run by two skills.** `/smoke` runs the section
+   "Acceptance checks" after an edit: it names each check, runs it, runs it without the change,
+   and reads its call path. `/close` runs the section 2.6 before an issue closes: it walks every
+   deliverable and checks that the completion comment names only code that exists on the merge
+   commit. Issue and PR text carry no acceptance. `Closes #N` closes the issue when the merge
+   completes it and asserts nothing else. `Refs #N` leaves the issue to the `/close` walk.
 
 ## Consequences
 
@@ -67,9 +74,11 @@ with a comment walking the criteria in order.
 - Some criteria become impossible to write cheaply, which is information. "Administrator sees
   an admin nav" is hard to assert without a two-principal browser walk — and the absence of
   that walk is exactly why the gap survived nine days across two issues.
-- Rule 6 is unchanged and still governs *closing*: deployed, real, evidenced. Rule 7 governs
-  what the acceptance list is allowed to contain. An issue can satisfy 6 and fail 7 — #494
-  did.
+- Rule 6 governs *closing*: verified on staging with real data. `/smoke` and `/close` govern
+  what the acceptance list is allowed to contain. An issue can satisfy rule 6 and fail the
+  walk — #494 did.
+- The steps no longer sit in resident text. A change to the procedure is a skill edit, not an
+  `AGENTS.md` edit.
 - Not retroactive by itself. #371, #494 and #495 are reopened with criteria rewritten to this
   form; earlier closed issues stay closed unless a concrete gap surfaces.
 
@@ -79,3 +88,5 @@ with a comment walking the criteria in order.
   was exactly that, lived outside the repository, and stopped being applied within five days.
 - **Forbidding `Closes #N` entirely.** Rejected as too blunt — most issues are genuinely
   provable by a merge, and losing auto-closure on those costs bookkeeping for no safety.
+- **The covenant as `AGENTS.md` rule 7 (the first form of this ADR).** Replaced on 2026-10-21.
+  Resident text holds criteria only, and the steps live in the skills that run them.
