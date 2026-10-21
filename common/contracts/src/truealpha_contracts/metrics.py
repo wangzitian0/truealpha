@@ -59,7 +59,7 @@ class MetricSpec(BaseModel):
     source_priority: tuple[DataSource, ...] = Field(min_length=1)
     description: str = Field(min_length=1)
     # Gross profit is defined differently for financial vs non-financial
-    # issuers (init.md section 0.2) — the parser branches, the metric name does not.
+    # issuers (init.md section 0) — the parser branches, the metric name does not.
     financial_issuer_split: bool = False
 
     @model_validator(mode="after")

@@ -2,7 +2,7 @@
  * #494 P0a: the strategy claim ceiling, always on screen wherever strategy
  * outputs render (rankings, strategy decisions). The deployed strategy runs
  * carry claim_ceiling='preview' — screened candidates with NO realized-PnL
- * evidence (init.md section 0.5: the success state "does not by itself prove …
+ * evidence (init.md section 0: the success state "does not by itself prove …
  * positive alpha"). Deliberately not dismissable and not conditional on
  * data state: if the page shows strategy output, the ceiling shows.
  */
