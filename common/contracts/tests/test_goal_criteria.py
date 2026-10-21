@@ -128,12 +128,16 @@ def test_the_s_and_p_500_membership_comes_from_the_ivv_holdings_and_the_filing_i
     assert (criterion.tier, criterion.status, criterion.oracle) == ("M1", "pending", "filing")
 
 
-def test_the_backtest_window_is_a_pending_m1_criterion_with_twelve_cutoffs_now_and_twenty_years_ideal() -> None:
-    criterion = _criterion("R4.D7")
+def test_the_backtest_window_is_a_pending_m1_criterion_and_the_history_floor_of_d5_stays() -> None:
+    """Owner decision of 2026-10-21: the window is a parameter of the definition; 12 quarterly cutoffs now, 20 years
+    ideal. D5 (at least 60 months of history) is a separate floor and stays pending and unchanged."""
+    window, history = _criterion("R4.D7"), _criterion("R4.D5")
 
-    assert (criterion.tier, criterion.status) == ("M1", "pending")
-    assert "parameter of the definition" in criterion.statement
-    assert "12 quarterly cutoffs" in criterion.statement and "20 years" in criterion.statement
+    assert (window.tier, window.status) == ("M1", "pending")
+    assert "parameter of the strategy definition" in window.statement
+    assert "12 quarterly cutoffs" in window.statement and "240 months" in window.statement
+    assert (history.tier, history.status, history.threshold) == ("M1", "pending", "at least 60 months")
+    assert history.statement.startswith("Backtest history covers at least 60 months")
 
 
 def test_the_seventy_percent_rule_is_not_restated_in_the_data_files() -> None:
