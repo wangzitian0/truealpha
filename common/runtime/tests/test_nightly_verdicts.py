@@ -430,6 +430,20 @@ def test_a_universe_that_the_contract_does_not_list_keeps_its_checks() -> None:
     assert sorted(kept) == ["runtime_shape", "theme_purity@universe-list:nasdaq100"]
 
 
+def test_the_tool_and_the_contract_agree_on_which_checks_an_environment_expects() -> None:
+    """The tool is stdlib only and cannot import the contract model. It reads the same JSON. Its rule and
+    `EnvironmentContract.expects_verdict` must give one answer for every check and environment."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    contract = load_environment_contract()
+    for environment in ("staging", "production", "prod"):
+        expected, _ = _module.expectations_for(
+            "v0.0.70", _main_set, environment=environment, contract_reader=_main_contract
+        )
+        assert expected is not None
+        assert set(expected) == {name for name in EXPECTED if contract.expects_verdict(name, environment)}, environment
+
+
 def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expects_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

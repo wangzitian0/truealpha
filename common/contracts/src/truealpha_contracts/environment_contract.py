@@ -368,6 +368,23 @@ class EnvironmentContract(_StrictFrozenModel):
         key = universe.removeprefix("universe-list:")
         return next((entry.unlock for entry in spec.universes if entry.key == key), None)
 
+    def expects_verdict(self, check: str, environment: str | None) -> bool:
+        """Whether ``environment`` records the nightly verdict ``check``.
+
+        A per-universe name (``check@universe``) of a universe that some environment lists is recorded
+        only where the environment schedules that universe: staging runs TOPT only, so it records no
+        QQQ verdict. Any other name, and any environment that the contract does not name, records it.
+        """
+        _, at, universe = check.partition("@")
+        if not at:
+            return True
+        key = universe.removeprefix("universe-list:")
+        if key not in {entry.key for spec in self.environments.values() for entry in spec.universes}:
+            return True
+        if self.normalize_environment(environment) not in self.environments:
+            return True
+        return self.universe_status(key, environment) == "scheduled"
+
     def is_universe_scheduled(self, universe: str, environment: str) -> bool:
         """Whether ``universe`` has an active schedule in ``environment`` (#1416 E1).
 

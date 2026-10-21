@@ -200,6 +200,31 @@ def test_a_universe_list_that_breaks_a_rule_is_refused(mutate, message: str) -> 
         _contract_with(mutate)
 
 
+@pytest.mark.parametrize(
+    ("check", "environment", "expected"),
+    [
+        ("theme_purity@universe-list:qqq", "production", True),
+        ("theme_purity@universe-list:qqq", "prod", True),
+        ("theme_purity@universe-list:qqq", "staging", False),
+        ("question_coverage@universe-list:qqq", "staging", False),
+        ("datahub_confidence_report@universe-list:qqq", "staging", False),
+        ("datahub_confidence_report@universe-list:qqq", "production", True),
+        ("theme_purity@topt", "staging", True),
+        ("theme_purity@topt", "production", True),
+        ("theme_purity@universe-list:sp500", "production", False),
+        ("runtime_shape", "staging", True),
+        ("theme_purity@universe:adhoc", "staging", True),
+        ("theme_purity@universe-list:qqq", "dev", True),
+        ("theme_purity@universe-list:qqq", None, True),
+    ],
+)
+def test_an_environment_records_the_per_universe_verdicts_of_the_universes_it_schedules(
+    check: str, environment: str | None, expected: bool
+) -> None:
+    """Staging runs TOPT only (owner decision of 2026-10-21). An unnamed environment shows every name."""
+    assert load_environment_contract().expects_verdict(check, environment) is expected
+
+
 def test_a_stopped_universe_needs_the_unlock_to_be_built_from_the_model() -> None:
     with pytest.raises(ValidationError, match="needs an unlock"):
         EnvironmentUniverse(key="sp500", status="stopped")

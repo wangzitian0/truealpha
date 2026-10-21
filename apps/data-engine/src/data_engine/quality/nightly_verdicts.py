@@ -37,9 +37,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
-from data_engine.environment_universes import contract_universe_names, scheduled_universe_names
+from data_engine.environment_universes import rule_environment
 
 log = logging.getLogger(__name__)
 
@@ -86,17 +87,11 @@ def check_name(check: str, universe: str | None = None) -> str:
 def is_registered(name: str, declared: Collection[str]) -> bool:
     """Whether the process environment records the verdict ``name``.
 
-    A lane declares every name it can record in any environment (``declared``). A per-universe name
-    (``check@universe``) of a contract universe is recorded only in an environment whose contract
-    schedules that universe: staging runs TOPT only, so it records no QQQ verdict (owner decision of
-    2026-10-21). The names of a universe that the contract does not list are not recorded either.
+    A lane declares every name it can record in any environment (``declared``). The contract then decides
+    per environment (``EnvironmentContract.expects_verdict``): staging runs TOPT only, so it records no QQQ
+    verdict (owner decision of 2026-10-21). An environment that the contract does not name follows staging.
     """
-    if name not in declared:
-        return False
-    _, _, universe = name.partition("@")
-    if universe not in contract_universe_names():
-        return not universe
-    return universe in scheduled_universe_names()
+    return name in declared and load_environment_contract().expects_verdict(name, rule_environment())
 
 
 def is_valid_name(name: str) -> bool:

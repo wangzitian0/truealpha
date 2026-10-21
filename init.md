@@ -130,7 +130,8 @@ answers one question, with the smallest scope that can prove the answer false.
 - **Staging proves accuracy.** It runs every code path on live data for the TOPT universe
   plus the sentinel listings outside TOPT, and the dashboards and the sentinel known answers
   agree.
-- **Production pursues completeness.** It runs the S&P 500 (`vision.md`), the strategy
+- **Production pursues completeness.** It runs TOPT and QQQ, then the S&P 500 when its
+  unlock holds (`vision.md`; the contract lists the universes and the unlock), the strategy
   included, and keeps the accuracy checks of staging.
 
 Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime

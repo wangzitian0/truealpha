@@ -36,7 +36,7 @@ def scheduled_universe_names(app_env: str | None = None) -> tuple[str, ...]:
 def any_environment_universe_names() -> tuple[str, ...]:
     """The universes that at least one environment runs on a schedule, in contract order.
 
-    A lane declares the verdicts of these universes. ``is_registered_in_environment`` then drops the
+    A lane declares the verdicts of these universes. ``nightly_verdicts.is_registered`` then drops the
     verdicts of a universe that the process environment does not run.
     """
     contract = load_environment_contract()
@@ -44,9 +44,3 @@ def any_environment_universe_names() -> tuple[str, ...]:
     for environment in contract.environments:
         keys.extend(key for key in contract.scheduled_universes(environment) if key not in keys)
     return tuple(universe_name(key) for key in keys)
-
-
-def contract_universe_names() -> frozenset[str]:
-    """Every universe that some environment lists, scheduled or stopped."""
-    contract = load_environment_contract()
-    return frozenset(universe_name(entry.key) for spec in contract.environments.values() for entry in spec.universes)
