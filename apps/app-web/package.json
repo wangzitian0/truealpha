@@ -13,7 +13,7 @@
     "@smithy/node-http-handler": "^4.9.7",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.3",
-    "next": "16.4.2",
+    "next": "15.5.18",
     "pg": "^8.22.0",
     "react": "^18",
     "react-dom": "^18"
