@@ -19,7 +19,7 @@ from truealpha_contracts.standards import MetricStandard
 from data_engine.datahub.canonical_issuer import is_preferred_issuer_ticker, signed_predecessor_ciks
 from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
-from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
 
 TOPT_UNIVERSE = "topt"
 
@@ -70,6 +70,18 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
                 cik = None
         else:
             cik = None
+            try:
+                entity_uuid = lookup_entity(
+                    connection, issuer_id, "issuer", as_of=date.today(), known_at=datetime.now(UTC)
+                )
+                if entity_uuid is not None:
+                    _cik_val = alias_of(
+                        connection, entity_uuid, "cik", valid_at=date.today(), known_at=datetime.now(UTC)
+                    )
+                    if _cik_val is not None:
+                        cik = int(_cik_val)
+            except Exception:  # noqa: BLE001
+                cik = None
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)
     predecessors = signed_predecessor_ciks(connection, {issuer_id: issuer_id for issuer_id in issuers})
     return [

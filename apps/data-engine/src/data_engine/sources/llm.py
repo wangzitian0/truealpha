@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import urllib.request
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -40,9 +41,14 @@ from data_engine.config import settings
 from data_engine.sources import gateway
 from data_engine.sources.gateway import record_call
 
+logger = logging.getLogger(__name__)
+
 SOURCE = "filing-extraction-model"
 ENDPOINT = "chat.completions"
 PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
+MAX_CONTEXT_TOKENS = 1_000_000
+_CHARS_PER_TOKEN_FLOOR = 2.5
+_COMPACT_REQUEST_BYTE_THRESHOLD = 16_384
 
 INSTRUCTIONS = (
     "You select the company-wide total employee headcount from candidate sentences taken "
@@ -88,6 +94,8 @@ class ModelTask:
     #: Enough for a short JSON answer. A classification over a handful of segments needs
     #: more room than a single chosen integer, so it is per task rather than global.
     max_tokens: int = 300
+    timeout_seconds: int = 60
+    max_context_tokens: int = MAX_CONTEXT_TOKENS
 
     @property
     def prompt_sha256(self) -> str:
@@ -141,6 +149,30 @@ class ModelHTTPError(RuntimeError):
     def __init__(self, status_code: int, message: str) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class ModelContextLimitError(ModelHTTPError):
+    """Raised when a prompt exceeds the model's context ceiling (1M tokens for glm-5.3-flash).
+
+    Never swallowed as an empty extraction: the caller records `context_window_exceeded`
+    on the mart row, alerts in the logs, and marks the nightly verdict and daily report.
+    """
+
+    def __init__(
+        self,
+        *,
+        cik: int,
+        accession: str,
+        estimated_tokens: int,
+        max_context_tokens: int,
+        detail: str,
+        status_code: int = 413,
+    ) -> None:
+        super().__init__(status_code, detail)
+        self.cik = cik
+        self.accession = accession
+        self.estimated_tokens = estimated_tokens
+        self.max_context_tokens = max_context_tokens
 
 
 @dataclass(frozen=True)
@@ -200,18 +232,85 @@ def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate],
     return build_chat_request(HEADCOUNT_TASK, user, model=model)
 
 
-def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+def _gateway_transport(url: str, headers: dict[str, str], body: bytes, *, timeout: int = 60) -> tuple[int, bytes]:
     """The provider call through the external call ledger (rule 6). Nested inside the
     `record_call` block in `select_headcount`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=60, cost=0)
+    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=timeout, cost=0)
     return int(status or 0), response
+
+
+def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
+    """Return the request payload persisted in `staging.model_invocations.request`.
+
+    Full 10-K prompts are 150 KB to 800 KB; storing the raw filing text inside every Postgres
+    JSONB row bloats the table when the immutable filing already lives in `raw.fetches` / S3.
+    For user prompts over 16 KB, replace the user content with a deterministic SHA-256 + length
+    digest while keeping `request_sha256` and the compact `_without_model` replay key identical.
+    """
+    messages = request_body.get("messages")
+    if not isinstance(messages, list):
+        return request_body
+    compacted_messages: list[dict[str, Any]] = []
+    changed = False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            compacted_messages.append(msg)
+            continue
+        content = msg.get("content")
+        if msg.get("role") == "user" and isinstance(content, str):
+            raw_bytes = content.encode("utf-8")
+            if len(raw_bytes) > _COMPACT_REQUEST_BYTE_THRESHOLD:
+                changed = True
+                compacted_messages.append(
+                    {
+                        "role": "user",
+                        "content_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                        "content_chars": len(content),
+                        "content_bytes": len(raw_bytes),
+                    }
+                )
+                continue
+        compacted_messages.append(msg)
+    if not changed:
+        return request_body
+    return {**request_body, "messages": compacted_messages}
 
 
 def _without_model(request_body: dict[str, Any]) -> dict[str, Any]:
     """The request minus the model name: what was asked, whoever was asked to answer it."""
-    return {key: value for key, value in request_body.items() if key != "model"}
+    stored = _stored_request(request_body)
+    return {key: value for key, value in stored.items() if key != "model"}
+
+
+def _estimate_prompt_tokens(task: ModelTask, user_content: str) -> int:
+    """Conservative token estimate (2.5 chars/token floor) to catch >1M token filings pre-flight."""
+    total_chars = len(task.instructions) + len(user_content)
+    return int(total_chars / _CHARS_PER_TOKEN_FLOOR)
+
+
+def _is_context_limit_response(status: int, body: bytes) -> bool:
+    """True when a provider 400/413 error indicates the prompt exceeded the model's context window."""
+    if status == 413:
+        return True
+    if status != 400:
+        return False
+    lower = body.decode("utf-8", errors="ignore").lower()
+    return any(
+        marker in lower
+        for marker in (
+            "context_length_exceeded",
+            "context window",
+            "maximum context length",
+            "max_tokens",
+            "prompt is too long",
+            "tokens_limit_reached",
+            "token limit",
+            "1210",
+            "input length",
+        )
+    )
 
 
 #: The FIRST answer is the answer (§9: replay reuses the stored result). Before this read
@@ -401,31 +500,78 @@ def _ask(
     raising it."""
     request_bytes = _request_bytes(request_body)
     request_sha256 = hashlib.sha256(request_bytes).hexdigest()
+    stored_request = _stored_request(request_body)
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"}
     started_at = now()
     usage: dict[str, Any] = {}
     payload: dict[str, Any] = {}
-    with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
-        status, body = (transport or _gateway_transport)(url, headers, request_bytes)
-        call.observe(status_code=status, body=body)
-        if status >= 400:
-            call.fail(f"HTTP {status}: {body[:200]!r}")
-        else:
-            payload = json.loads(body.decode())
-            usage = payload.get("usage") or {}
-            call.cost = Decimal(int(usage.get("total_tokens") or 0))
-    completed_at = now()
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
-    served_model = str(payload["model"]) if payload.get("model") else None
-    if status >= 400:
-        # A vendor error is still an invocation that happened: recorded with its status and
-        # body as a refusal, excluded from replay so the next run asks again.
-        decision = refusal(f"HTTP {status}: {body[:200]!r}")
+    user_text = next(
+        (
+            str(m.get("content", ""))
+            for m in request_body.get("messages", [])
+            if isinstance(m, dict) and m.get("role") == "user"
+        ),
+        "",
+    )
+    estimated_tokens = _estimate_prompt_tokens(task, user_text)
+    context_limit_exceeded = estimated_tokens > task.max_context_tokens
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    served_model: str | None
+    if context_limit_exceeded:
+        status = 413
+        limit_msg = (
+            f"context_window_exceeded: cik={cik} accession={accession} standard={standard} "
+            f"estimated_tokens={estimated_tokens} exceeds max_context_tokens={task.max_context_tokens} "
+            f"(chars={len(user_text)})"
+        )
+        logger.error("LLM context ceiling exceeded (>1M tokens): %s", limit_msg)
+        body = json.dumps(
+            {
+                "error": {
+                    "code": "context_window_exceeded",
+                    "message": limit_msg,
+                    "estimated_tokens": estimated_tokens,
+                    "max_context_tokens": task.max_context_tokens,
+                }
+            }
+        ).encode("utf-8")
+        prompt_tokens = estimated_tokens
+        completion_tokens = 0
+        served_model = None
+        decision = refusal(limit_msg)
     else:
-        content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        decision = parse(content)
+        default_transport = partial(_gateway_transport, timeout=task.timeout_seconds)
+        with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
+            status, body = (transport or default_transport)(url, headers, request_bytes)
+            call.observe(status_code=status, body=body)
+            if status >= 400:
+                call.fail(f"HTTP {status}: {body[:200]!r}")
+            else:
+                payload = json.loads(body.decode())
+                usage = payload.get("usage") or {}
+                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        served_model = str(payload["model"]) if payload.get("model") else None
+        if status >= 400:
+            if _is_context_limit_response(status, body):
+                context_limit_exceeded = True
+                limit_msg = (
+                    f"context_window_exceeded: cik={cik} accession={accession} standard={standard} "
+                    f"HTTP {status}: {body[:200]!r}"
+                )
+                logger.error("LLM provider rejected prompt for exceeding context window: %s", limit_msg)
+                decision = refusal(limit_msg)
+            else:
+                # A vendor error is still an invocation that happened: recorded with its status and
+                # body as a refusal, excluded from replay so the next run asks again.
+                decision = refusal(f"HTTP {status}: {body[:200]!r}")
+        else:
+            content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            decision = parse(content)
+    completed_at = now()
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(
         {
@@ -483,12 +629,21 @@ def _ask(
                 completion_tokens,
                 Decimal(int(usage.get("total_tokens") or 0)),
                 json.dumps(decision, sort_keys=True),
-                json.dumps(request_body, sort_keys=True, ensure_ascii=False),
+                json.dumps(stored_request, sort_keys=True, ensure_ascii=False),
                 _jsonb_or_null(body),
                 started_at,
                 completed_at,
                 served_model,
             ),
+        )
+    if context_limit_exceeded:
+        return invocation, ModelContextLimitError(
+            cik=cik,
+            accession=accession,
+            estimated_tokens=estimated_tokens,
+            max_context_tokens=task.max_context_tokens,
+            detail=f"{SOURCE}: context_window_exceeded (cik={cik}, accession={accession}, estimated_tokens={estimated_tokens})",
+            status_code=status,
         )
     if status >= 400:
         return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
@@ -836,3 +991,186 @@ def as_selector(
         return as_selection(selection)
 
     return select
+
+
+SUPPLY_CHAIN_PROMPT_VERSION = "supply-chain-extract:v1"
+SUPPLY_CHAIN_INSTRUCTIONS = (
+    "You extract explicitly named external supply-chain partner organizations (suppliers and "
+    "customers) from an issuer's annual SEC 10-K filing text. Rules: "
+    "1. Extract ONLY specific, named third-party companies or corporate groups (e.g., 'Taiwan "
+    "Semiconductor Manufacturing Company Limited', 'SK Hynix Inc.', 'McKesson Corporation'). "
+    "2. Never extract generic groups ('third parties', 'various suppliers', 'cloud providers', "
+    "'retail customers', 'government agencies'), internal segments, subsidiaries of the issuer, "
+    "auditors, or executive biographies. "
+    "3. Set relation_type to 'supplier' when the partner manufactures, fabricates, supplies "
+    "components/materials/foundry services to, or is a subcontractor for the issuer. "
+    "4. Set relation_type to 'customer' when the partner buys from, distributes for, or accounts "
+    "for revenue of the issuer. "
+    "5. Provide the canonical corporate name in partner_name, optional ticker if known or null, "
+    "optional revenue_share_pct (0 to 100 numeric) if explicitly stated or null, and a verbatim "
+    "evidence_quote (<=240 chars) from the filing text. Deduplicate partners by canonical company "
+    "and relation_type. "
+    'Respond ONLY with a JSON object of this shape: {"partners": [{"partner_name": <str>, '
+    '"ticker": <str|null>, "relation_type": <"supplier"|"customer">, '
+    '"revenue_share_pct": <number|null>, "evidence_quote": <str>}]}'
+)
+SUPPLY_CHAIN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "partners": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "partner_name": {"type": "string"},
+                    "ticker": {"type": ["string", "null"]},
+                    "relation_type": {"type": "string", "enum": ["supplier", "customer"]},
+                    "revenue_share_pct": {"type": ["number", "null"]},
+                    "evidence_quote": {"type": "string"},
+                },
+                "required": ["partner_name", "relation_type", "evidence_quote"],
+            },
+        }
+    },
+    "required": ["partners"],
+}
+SUPPLY_CHAIN_TASK = ModelTask(
+    prompt_version=SUPPLY_CHAIN_PROMPT_VERSION,
+    instructions=SUPPLY_CHAIN_INSTRUCTIONS,
+    response_schema=SUPPLY_CHAIN_SCHEMA,
+    max_tokens=2400,
+    timeout_seconds=180,
+    max_context_tokens=MAX_CONTEXT_TOKENS,
+)
+
+
+@dataclass(frozen=True)
+class ExtractedSupplyChainPartner:
+    partner_name: str
+    ticker: str | None
+    relation_type: str  # "supplier" | "customer"
+    revenue_share_pct: Decimal | None
+    evidence_quote: str
+
+
+@dataclass(frozen=True)
+class SupplyChainExtraction:
+    partners: tuple[ExtractedSupplyChainPartner, ...]
+    invocation: ModelInvocation
+
+    @property
+    def extractor(self) -> str:
+        return self.invocation.extractor
+
+
+def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
+    """Parse and validate the model's extracted supply-chain partner list."""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
+    objects = parsed if isinstance(parsed, list) else [parsed]
+    if not all(isinstance(entry, dict) for entry in objects):
+        return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
+    raw_items: list[Any] = []
+    for entry in objects:
+        found = entry.get("partners")
+        if isinstance(found, list):
+            raw_items.extend(found)
+    partners: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("partner_name") or "").strip()
+        rel = str(item.get("relation_type") or "").strip().lower()
+        quote = str(item.get("evidence_quote") or "").strip()[:240]
+        if not name or rel not in ("supplier", "customer") or not quote:
+            continue
+        key = (rel, name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        raw_ticker = item.get("ticker")
+        ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
+        raw_share = item.get("revenue_share_pct")
+        share_str: str | None = None
+        if isinstance(raw_share, int | float | str) and not isinstance(raw_share, bool):
+            try:
+                val = Decimal(str(raw_share))
+                if Decimal("0") <= val <= Decimal("100"):
+                    share_str = str(val)
+            except Exception:  # noqa: BLE001
+                share_str = None
+        partners.append(
+            {
+                "partner_name": name,
+                "ticker": ticker,
+                "relation_type": rel,
+                "revenue_share_pct": share_str,
+                "evidence_quote": quote,
+            }
+        )
+    return {"partners": partners, "reason": "ok"}
+
+
+def extract_supply_chain_partners(
+    connection: Any | None,
+    *,
+    cik: int,
+    accession: str,
+    issuer_label: str,
+    filing_text: str,
+    caller: str = "supply_chain_extraction",
+    standard: str = "supply_chain",
+    persist: bool = True,
+    transport: Transport | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> SupplyChainExtraction:
+    """Ask the seated 1M-context model (`glm-5.3-flash`) to extract named suppliers and customers
+    from the full 10-K plain text. Raises `ModelContextLimitError` if the prompt exceeds 1M tokens.
+    """
+    user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{filing_text}"
+    invocation = invoke(
+        connection,
+        task=SUPPLY_CHAIN_TASK,
+        cik=cik,
+        accession=accession,
+        user_content=user,
+        caller=caller,
+        standard=standard,
+        parse=_parse_supply_chain_partners,
+        refusal=lambda detail: {"partners": [], "reason": detail},
+        persist=persist,
+        transport=transport,
+        now=now,
+    )
+    raw_partners = invocation.decision.get("partners") or []
+    partners: list[ExtractedSupplyChainPartner] = []
+    for item in raw_partners:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("partner_name") or "").strip()
+        rel = str(item.get("relation_type") or "").strip().lower()
+        quote = str(item.get("evidence_quote") or "").strip()
+        if not name or rel not in ("supplier", "customer"):
+            continue
+        raw_ticker = item.get("ticker")
+        ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
+        raw_share = item.get("revenue_share_pct")
+        share: Decimal | None = None
+        if raw_share is not None:
+            try:
+                share = Decimal(str(raw_share))
+            except Exception:  # noqa: BLE001
+                share = None
+        partners.append(
+            ExtractedSupplyChainPartner(
+                partner_name=name,
+                ticker=ticker,
+                relation_type=rel,
+                revenue_share_pct=share,
+                evidence_quote=quote,
+            )
+        )
+    return SupplyChainExtraction(partners=tuple(partners), invocation=invocation)

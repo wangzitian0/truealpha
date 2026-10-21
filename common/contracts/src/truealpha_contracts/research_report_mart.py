@@ -40,6 +40,7 @@ from truealpha_contracts.issuer_modules_mart import (
     IssuerModuleReader,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
+    resolve_issuer_id_candidates,
 )
 from truealpha_contracts.research_report import (
     EvidenceTrace,
@@ -476,6 +477,7 @@ class MartResearchReadRepository:
             raise TypeError(
                 "MartResearchReadRepository requires database_url, or both strategy_repository and issuer_modules"
             )
+        self._database_url = database_url
         self._strategy_repository = strategy_repository
         self._issuer_modules = issuer_modules
 
@@ -499,12 +501,20 @@ class MartResearchReadRepository:
             ordered = sorted(decisions, key=_ranking_sort_key)
             return tuple(_ranking_subject(decision, report.source, report.corpus_sha256) for decision in ordered)
 
-        by_issuer = {decision.issuer_id: decision for decision in decisions}
+        by_issuer: dict[str, StrategyRunDecision] = {}
+        for decision in decisions:
+            by_issuer[decision.issuer_id] = decision
+            by_issuer.setdefault(decision.issuer_id.upper(), decision)
         subjects: list[ReportSubject] = []
         for entity_id in request.target_entity_ids:
-            decision = by_issuer.get(entity_id)
-            if decision is None:
+            matched: StrategyRunDecision | None = by_issuer.get(entity_id) or by_issuer.get(entity_id.upper())
+            if matched is None and self._database_url is not None:
+                for candidate in resolve_issuer_id_candidates(self._database_url, entity_id):
+                    matched = by_issuer.get(candidate) or by_issuer.get(candidate.upper())
+                    if matched is not None:
+                        break
+            if matched is None:
                 subjects.append(_missing_subject(entity_id, "subject_not_in_strategy_run"))
             else:
-                subjects.append(_company_subject(decision, report.source, report.corpus_sha256, self._issuer_modules))
+                subjects.append(_company_subject(matched, report.source, report.corpus_sha256, self._issuer_modules))
         return tuple(subjects)

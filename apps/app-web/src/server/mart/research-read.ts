@@ -982,9 +982,9 @@ export class StrategyRunReadAdapter {
 	}
 
 	/**
-	 * Resolves a route issuer coordinate (UUID or legacy_id) to the coordinate carried by
-	 * the strategy run's decisions via `mart.entity_identity`. Returns `issuerId` without
-	 * querying Postgres when `decisions` already contains `issuerId` or is empty.
+	 * Resolves a route issuer coordinate (UUID, ticker, CIK, LEI, or legacy_id) to the
+	 * coordinate carried by the strategy run's decisions via `mart.entity_identity`. Returns
+	 * `issuerId` without querying Postgres when `decisions` already contains `issuerId` or is empty.
 	 */
 	private async resolveDecisionIssuerId(
 		issuerId: string,
@@ -1000,8 +1000,9 @@ export class StrategyRunReadAdapter {
 			const result = await this.runWithClient((client) =>
 				client.query(
 					`select entity_id::text as entity_id, legacy_id
-					 from mart.entity_identity
-					 where entity_id::text = $1 or legacy_id = $1`,
+					 from mart.entity_identity ei
+					 cross join (select btrim($1::text) as q) inp
+					 where ${this.identityMatchSql()}`,
 					[issuerId],
 				),
 			);
@@ -1123,8 +1124,13 @@ export class StrategyRunReadAdapter {
 		};
 	}
 
+	private identityMatchSql(): string {
+		return `(ei.entity_id::text = lower(inp.q) or ei.legacy_id = inp.q or upper(ei.legacy_id) = upper(inp.q) or upper(ei.current_ticker) = upper(inp.q) or (inp.q ~* '^listing:[0-9a-z]{4}:[0-9a-z.\\-]+$' and upper(ei.current_ticker) = upper(split_part(inp.q, ':', 3))) or (regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i') ~ '^[0-9]{1,10}$' and ei.cik = lpad(regexp_replace(inp.q, '^(?:issuer:cik:|company:cik:|cik:)', '', 'i'), 10, '0')) or upper(ei.lei) = upper(regexp_replace(inp.q, '^(?:issuer:lei:|company:lei:|lei:)', '', 'i')))`;
+	}
+
 	private bidirectionalIssuerPredicate(column: string): string {
-		return `(${column} = $1 or ${column} in (select entity_id::text from mart.entity_identity where legacy_id = $1) or ${column} in (select legacy_id from mart.entity_identity where entity_id::text = $1 and legacy_id is not null))`;
+		const match = this.identityMatchSql();
+		return `(${column} = $1 or ${column} in (select ei.entity_id::text from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ${match}) or ${column} in (select ei.legacy_id from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ei.legacy_id is not null and ${match}))`;
 	}
 
 	async entityThemePurity(

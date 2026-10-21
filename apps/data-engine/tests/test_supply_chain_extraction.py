@@ -1,18 +1,21 @@
-"""Unit tests for supply_chain_extraction module (#772)."""
+"""Unit tests for supply_chain_extraction module (#772, #1354)."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from data_engine.datahub.canonical_issuer import CanonicalIssuer
 from data_engine.datahub.standards.supply_chain_extraction import (
+    SupplyChainRunReport,
     extract_supply_chain_relationships,
     materialize_supply_chain_exposure,
     materialize_universe_supply_chain_exposure,
 )
+from data_engine.sources import llm
 from factors.base.supply_chain_exposure import (
     SupplyChainPartner,
     supply_chain_exposure,
@@ -22,6 +25,39 @@ from factors.base.supply_chain_exposure import (
 def _issuer_id(name: str) -> str:
     """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
+
+
+class _StubLLMGateway:
+    """Deterministic stub for `data_engine.sources.llm` in unit tests."""
+
+    def __init__(
+        self,
+        partners: tuple[llm.ExtractedSupplyChainPartner, ...] = (),
+        *,
+        replayed: bool = False,
+        error: Exception | None = None,
+    ) -> None:
+        self._partners = partners
+        self._replayed = replayed
+        self._error = error
+
+    def extract_supply_chain_partners(self, _conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
+        if self._error is not None:
+            raise self._error
+        inv = llm.ModelInvocation(
+            decision={"partners": []},
+            model="glm-5.3-flash",
+            provider="zhipu-glm-coding-plan",
+            prompt_sha256="a" * 64,
+            request_sha256="b" * 64,
+            response_sha256="c" * 64,
+            prompt_tokens=1200,
+            completion_tokens=80,
+            invocation_id="model-invocation:" + "d" * 64,
+            replayed=self._replayed,
+            served_model="glm-5.3-flash",
+        )
+        return llm.SupplyChainExtraction(partners=self._partners, invocation=inv)
 
 
 class _MockCursor:
@@ -76,13 +112,11 @@ def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> N
     )
     assert count == 2
     assert len(conn.executed) == 2
-    # Row 1: dict
     sql1, params1 = conn.executed[0]
     assert "insert into mart.issuer_supply_chain_exposure" in sql1
     assert params1[1] == _issuer_id("aapl")
     assert params1[3] == Decimal("0.85")
     assert params1[11] == "available"
-    # Row 2: factor record
     _, params2 = conn.executed[1]
     assert params2[1] == _issuer_id("nvda")
     assert params2[3] == Decimal("0.25")
@@ -90,36 +124,52 @@ def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> N
     assert params2[11] == "available"
 
 
-def test_extract_supply_chain_relationships_directions_and_entities() -> None:
-    """Consolidated: tests sentence parsing, relation direction rules, and entity name extraction."""
-    # 1. Empty text check
+def test_extract_supply_chain_relationships_via_llm_gateway() -> None:
+    """Tests full-10K LLM extraction, deduplication, and direction rules."""
     assert extract_supply_chain_relationships("", issuer_id="test", filing_date=date(2026, 1, 1), accession="000") == ()
 
-    # 2. Directions and named entity extraction
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=Decimal("15.0"),
+                evidence_quote="The company supplies to Apple Inc. as its primary distribution partner.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Acme Corp",
+                ticker=None,
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="We also purchase raw materials from Acme Corp for our semiconductor needs.",
+            ),
+        )
+    )
     text = (
         "Item 1. Business\n"
         "The company supplies to Apple Inc. as its primary distribution partner.\n"
         "We also purchase raw materials from Acme Corp for our semiconductor needs.\n"
-        "We rely on a single supplier for our key semiconductor chips.\n"
-        "Our largest customer accounts for 15% of net revenues.\n"
     )
     edges = extract_supply_chain_relationships(
         text,
-        issuer_id="issuer:test",
+        issuer_id=_issuer_id("test"),
         filing_date=date(2026, 1, 1),
         accession="0001-00-00",
+        llm_gateway=gateway,
     )
     assert len(edges) == 2
-    # supplies to Apple Inc. -> customer
     assert edges[0].relation_type == "customer"
     assert edges[0].target_entity_name == "Apple Inc."
-    # purchase from Acme Corp -> supplier
+    assert edges[0].target_ticker == "AAPL"
+    assert edges[0].revenue_share_pct == Decimal("15.0")
+    assert edges[0].extractor.startswith("model:glm-5.3-flash:")
     assert edges[1].relation_type == "supplier"
     assert edges[1].target_entity_name == "Acme Corp"
 
 
 def test_extract_supply_chain_adversarial_negative_corpus() -> None:
-    """Adversarial Negative Corpus: generic customer/vendor mentions must NOT produce supply chain edges."""
+    """Adversarial Negative Corpus: when the LLM extracts no named partners, zero edges are returned."""
     negative_text = (
         "Item 1. Business\n"
         "We maintain customer service centers across the country to assist users.\n"
@@ -129,11 +179,12 @@ def test_extract_supply_chain_adversarial_negative_corpus() -> None:
     )
     edges = extract_supply_chain_relationships(
         negative_text,
-        issuer_id="issuer:bank",
+        issuer_id=_issuer_id("bank"),
         filing_date=date(2026, 1, 1),
         accession="0001-00-00",
+        llm_gateway=_StubLLMGateway(partners=()),
     )
-    assert len(edges) == 0, f"False positives detected in negative corpus: {edges}"
+    assert len(edges) == 0
 
 
 def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> None:
@@ -148,9 +199,9 @@ def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> No
         cutoff=datetime.now(tz=UTC),
         issuers=issuers,
     )
+    assert isinstance(total, SupplyChainRunReport)
     assert total == 2
     assert len(conn.executed) == 2
-    # The mock holds no `staging.kg_edges` table, so no extraction exists: both rows say so.
     reasons = [params[9] for _, params in conn.executed]
     assert reasons == [["no_supply_chain_extraction"], ["no_supply_chain_extraction"]]
 
@@ -199,11 +250,24 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
         "Item 1. Business\n"
         "The company supplies to Apple Inc. as its primary distribution partner across North America.\n"
     )
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=None,
+                evidence_quote="The company supplies to Apple Inc. as its primary distribution partner across North America.",
+            ),
+        )
+    )
+    nvda_uuid = _issuer_id("nvda")
     edges = extract_supply_chain_relationships(
         text,
-        issuer_id="company:cik:0001045810",
+        issuer_id=nvda_uuid,
         filing_date=date(2026, 2, 15),
         accession="0001045810-26-000001",
+        llm_gateway=gateway,
     )
     assert len(edges) == 1
     assert Decimal("0.55") < edges[0].confidence < Decimal("0.70")
@@ -244,11 +308,12 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
             return cur
 
     conn = _FilingConn()
-    issuers = [CanonicalIssuer(issuer_id=_issuer_id("nvda"), legacy_id="company:cik:0001045810", ticker="NVDA")]
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
     inserted = persist_extracted_supply_chain_edges(
         conn,  # type: ignore[arg-type]
         issuers=issuers,
         cutoff=datetime(2026, 10, 6, tzinfo=UTC),
+        llm_gateway=gateway,
     )
     assert inserted == 1
     assert any("insert into staging.kg_edges" in q[0] for q in conn.queries)
@@ -257,9 +322,9 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
 def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Standing check: `filing_plain_text` collapses whitespace to a single line, and TOPT issuers
-    use `issuer:lei:...` resolved to CIK via `staging.entity_aliases`. Both supplier (`to_id`) and
-    customer (`from_id`) edges must materialize onto `mart.issuer_supply_chain_exposure`."""
+    """Standing check: `filing_plain_text` collapses whitespace to a single line, TOPT issuers
+    use `issuer:lei:...` resolved to CIK via `staging.entity_aliases`, and LLM-extracted supplier (`to_id`)
+    and customer (`from_id`) edges materialize onto `mart.issuer_supply_chain_exposure` keyed by Canonical UUID."""
     from data_engine import raw_store
     from data_engine.datahub.standards.filing_extraction import filing_plain_text
 
@@ -279,6 +344,22 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
     nvda_uuid = _issuer_id("nvda")
     nvda_legacy = "issuer:lei:549300S4KLFTLO7GSQ80"
     monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: html_10k)
+
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner("TSMC", "TSM", "supplier", None, "We utilize foundries, such as TSMC."),
+            llm.ExtractedSupplyChainPartner(
+                "Samsung Electronics", None, "supplier", None, "Samsung Electronics Co., Ltd."
+            ),
+            llm.ExtractedSupplyChainPartner(
+                "SK Hynix", None, "supplier", None, "We purchase memory from SK Hynix Inc."
+            ),
+            llm.ExtractedSupplyChainPartner("Micron Technology", "MU", "supplier", None, "Micron Technology, Inc."),
+            llm.ExtractedSupplyChainPartner("McKesson Corporation", "MCK", "customer", None, "McKesson Corporation"),
+            llm.ExtractedSupplyChainPartner("Cardinal Health, Inc.", "CAH", "customer", None, "Cardinal Health, Inc."),
+            llm.ExtractedSupplyChainPartner("Cencora, Inc.", "COR", "customer", None, "Cencora, Inc."),
+        )
+    )
 
     class _StatefulGraphConn:
         def __init__(self) -> None:
@@ -302,7 +383,7 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
         def execute(self, sql: str, params: object = None):
             cur = _MockCursor()
             p = tuple(params) if isinstance(params, list | tuple) else ()
-            if "from staging.entity_aliases" in sql:
+            if "from staging.entity_aliases" in sql and "and scheme = 'cik'" in sql:
                 cur.fetchall = lambda: [(nvda_uuid, "0001045810")]  # type: ignore[method-assign]
             elif "from raw.fetches" in sql:
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
@@ -348,16 +429,94 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
         run_id="capture-run:test",
         cutoff=datetime(2026, 10, 20, tzinfo=UTC),
         issuers=issuers,
+        llm_gateway=gateway,
     )
     assert written == 1
+    assert written.model_extracted == 1
+    assert written.context_window_exceeded == 0
     assert len(conn.mart_rows) == 1
     row = conn.mart_rows[0]
-    # (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count, max_partner_share, confidence, reason_codes, extractor, avail, ...)
     assert row[1] == nvda_uuid
     assert row[3] is not None and row[3] > Decimal("0")
-    assert (
-        row[4] == 7
-    )  # 4 suppliers (TSMC, Samsung, SK Hynix, Micron) + 3 customers (McKesson, Cardinal Health, Cencora)
-    assert row[5] == 4  # suppliers_count
-    assert row[6] == 3  # customers_count
+    assert row[4] == 7
+    assert row[5] == 4
+    assert row[6] == 3
+    assert str(row[10]).startswith("model:glm-5.3-flash:")
     assert row[11] == "available"
+
+
+def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When a 10-K exceeds 1M tokens, never silently mark `no_disclosed_suppliers`:
+    log an ERROR, increment `context_window_exceeded`, and write `reason_codes=['context_window_exceeded']`."""
+    from data_engine import raw_store
+
+    nvda_uuid = _issuer_id("nvda")
+    nvda_legacy = "issuer:cik:0001045810"
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>Huge 10-K</body></html>")
+
+    gateway = _StubLLMGateway(
+        error=llm.ModelContextLimitError(
+            cik=1045810,
+            accession="0001045810-26-999999",
+            estimated_tokens=1_250_000,
+            max_context_tokens=1_000_000,
+            detail="filing-extraction-model: context_window_exceeded",
+        )
+    )
+
+    class _ExceedConn:
+        def __init__(self) -> None:
+            self.mart_rows: list[tuple[object, ...]] = []
+
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _RegCur()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        999,
+                        "filing-document:CIK0001045810:0001045810-26-999999",
+                        "s3://truealpha-raw/raw/sec/huge.htm",
+                        datetime(2026, 2, 26, tzinfo=UTC),
+                        {"cik": 1045810, "form": "10-K", "accession": "0001045810-26-999999", "plain_text": "X" * 200},
+                    )
+                ]
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
+            return cur
+
+    conn = _ExceedConn()
+    with caplog.at_level("ERROR"):
+        report = materialize_universe_supply_chain_exposure(
+            conn,  # type: ignore[arg-type]
+            run_id="capture-run:exceed",
+            cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+            issuers=[CanonicalIssuer(issuer_id=nvda_uuid, legacy_id=nvda_legacy, ticker="NVDA")],
+            llm_gateway=gateway,
+        )
+
+    assert report == 1
+    assert report.context_window_exceeded == 1
+    assert report.exceeded_filings == ("NVDA:0001045810-26-999999",)
+    assert "exceeded 1M context window" in caplog.text
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[1] == nvda_uuid
+    assert row[3] is None  # exposure_score
+    assert row[9] == ["context_window_exceeded"]
+    assert row[11] == "unavailable"
