@@ -203,6 +203,8 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 		`#418 must fail its route like every other page error: ${JSON.stringify(ledger.failures)}`,
 	);
 
+	// The walk reads the verdict of a route before it starts the next one.
+	ledger.problems();
 	ledger.startRoute("member", "/research/rankings");
 	assert(ledger.failures.length === 0, `a new route starts with no page errors: ${JSON.stringify(ledger.failures)}`);
 	ledger.record(REACT_418, "/research/rankings");
@@ -215,6 +217,22 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 		JSON.stringify(ledger.problems()) === JSON.stringify([`pageerror: ${REACT_418}`]),
 		`the route verdict must carry the #418 as a problem, so that the walk exits non-zero: ${JSON.stringify(ledger.problems())}`,
 	);
+
+	// A page error that comes after the verdict of a route is not lost: the next route reports it.
+	ledger.record("Minified React error #423", "/research/rankings");
+	ledger.startRoute("member", "/research/themes");
+	assert(
+		JSON.stringify(ledger.problems()) === JSON.stringify(["pageerror: Minified React error #423"]),
+		`a late page error must reach the next verdict: ${JSON.stringify(ledger.problems())}`,
+	);
+	// After the last route of a pass, lateProblems() reports it. A read is reported once.
+	ledger.record("Minified React error #425", "/research/themes");
+	const late = ledger.lateProblems();
+	assert(
+		JSON.stringify(late) === JSON.stringify(["pageerror after the last route: Minified React error #425"]),
+		`a page error after the last verdict must fail the pass: ${JSON.stringify(late)}`,
+	);
+	assert(ledger.lateProblems().length === 0, "a late page error is reported once");
 }
 
 // ─── (d) every walk navigation goes through gotoStable ───────────────────────

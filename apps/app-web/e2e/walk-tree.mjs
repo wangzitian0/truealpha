@@ -552,6 +552,11 @@ async function walkRoutes(browser, { role, email, password }, pageErrors) {
       console.log(`ok   [${role}] ${path}`);
     }
   }
+  // A page error that came after the verdict of the last route still fails the pass.
+  for (const problem of pageErrors.lateProblems()) {
+    failures += 1;
+    console.log(`FAIL [${role}] ${problem}`);
+  }
   await context.close();
   return failures;
 }
@@ -571,9 +576,9 @@ try {
   // #540/#811: the sign-out journey lives in its own module so a test can drive it
   // against a fake browser. It logs in once more, for its own session.
   failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
-  // #1468: the CI server delivers every flight row in one burst, so only this pass opens the
-  // window in which the deployed surface raised React #418. It runs against the seeded fixture
-  // only: the deployed surface has the window by itself, and the proxy cannot sit in front of it.
+  // #1468: the CI server sends every flight row in one burst. Only this pass opens the window
+  // that raised React #418 on the deployed surface. It runs on the seeded loopback fixture only.
+  // The deployed surface has the window already, and the proxy cannot sit in front of it.
   if (SEEDED_FIXTURE && DATA_STATE === "populated") {
     const race = await runHydrationRace({ browser, base: BASE, email: EMAIL, password: PASSWORD });
     for (const problem of race.problems) console.log(`FAIL ${problem}`);

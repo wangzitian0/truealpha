@@ -220,9 +220,10 @@ const VIEWPORT = { width: 1440, height: 900 };
 /** Logs in once and returns the signed-in storage state (the session cookie).
  *
  * One login for both halves, not one each. The login route allows 10 attempts
- * per IP per 5 minutes, and a walk already spends up to two on its route
- * passes. A login per half would make it four, so three walks re-dispatched
- * inside five minutes from one runner IP would hit 429. Sharing the cookie is
+ * per IP per 5 minutes, and a walk already spends up to three: two route
+ * passes and the hydration race check on a loopback server. A login per half
+ * would make it five, so two walks re-dispatched inside five minutes from one
+ * runner IP would hit 429. Sharing the cookie is
  * safe because the logout route clears only the caller's cookie. There is no
  * server-side revocation (see its header). So one context's sign-out leaves
  * the other context's copy valid. If revocation is added, give each half its

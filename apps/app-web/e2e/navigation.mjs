@@ -93,32 +93,46 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
 }
 
 /**
- * Collects the page errors of a walk, one list per route. Every page error fails its route.
+ * Collects the page errors of a walk. Every page error fails a route.
  *
  * React error #418 ("Hydration failed because the server rendered HTML didn't match the client")
- * is a page error like any other. The walk ignored it from 8711285a until #1468. The cause was a
- * React bug in Next 15.5 (see late-row-proxy.mjs), and Next 16.4.2 removed it. An ignored #418
- * hid a real defect: React throws away the server markup and renders the page again on the client.
+ * is a page error like any other. The walk ignored it from 8711285a until #1468. An ignored #418
+ * hides a real defect: React throws away the server markup and renders the page again on the client.
+ * The race check (hydration-race.mjs) shows #418 on Next 15.5.18 and none on Next 16.4.2.
+ *
+ * A page error can arrive after the walk read the verdict of a route. The ledger keeps it in
+ * `unread`. The next route reports it, and `lateProblems()` reports it at the end of a pass.
  */
 export function createPageErrorLedger() {
-  /** @type {{ role: string, path: string } | null} */
-  let current = null;
+  /** @type {string | null} */
+  let currentPath = null;
+  /** The page errors of the current route. */
   /** @type {string[]} */
   const failures = [];
+  /** The page errors that no verdict has reported yet. */
+  /** @type {string[]} */
+  let unread = [];
   return {
-    /** The page errors of the current route. */
     failures,
     /** @returns {string[]} the problems that the page errors of the current route add to its verdict */
     problems() {
+      unread = [];
       return failures.map((error) => `pageerror: ${error}`);
     },
+    /** @returns {string[]} the problems of page errors that came after the last verdict */
+    lateProblems() {
+      const late = unread.map((error) => `pageerror after the last route: ${error}`);
+      unread = [];
+      return late;
+    },
     /**
-     * @param {string} role
+     * @param {string} _role
      * @param {string} path
      */
-    startRoute(role, path) {
-      current = { role, path };
+    startRoute(_role, path) {
+      currentPath = path;
       failures.length = 0;
+      failures.push(...unread);
     },
     /**
      * @param {string} message
@@ -126,7 +140,9 @@ export function createPageErrorLedger() {
      */
     record(message, pagePath) {
       // assertTraceRendersDecisionInputs opens /research first, so an error can come from another page.
-      failures.push(current !== null && pagePath !== current.path ? `${message} (raised on ${pagePath})` : message);
+      const text = currentPath !== null && pagePath !== currentPath ? `${message} (raised on ${pagePath})` : message;
+      failures.push(text);
+      unread.push(text);
     },
   };
 }

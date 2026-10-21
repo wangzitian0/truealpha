@@ -2,9 +2,9 @@
  * #1468: the proxy that opens the hydration-race window in the CI walk.
  *
  * `e2e/hydration-race.mjs` visits pages through `e2e/late-row-proxy.mjs`. The proxy must hold back
- * exactly the rows that a host element references lazily, must lose no row, and must report a page
- * that has nothing to hold back. A proxy that held back nothing would turn the CI check green by
- * testing nothing. This file proves the proxy on synthetic pages and on a real Next 16.4.2 page.
+ * exactly the rows that a host element references lazily. It must lose no byte. It must report a
+ * page with nothing to hold back, because a proxy that holds nothing tests nothing.
+ * This file proves the proxy on synthetic pages and on a real Next 16.4.2 page.
  * The browser half (RED on Next 15.5.18, GREEN on Next 16.4.2) is the walk itself.
  *
  * Run standalone: `bun run tests/late-row-proxy.test.ts`.
@@ -26,10 +26,13 @@ const MODULES = '1:I[9766,[],""]\n3:I[8924,[],"Boundary"]\n';
 const ROOT = '0:["$","header",null,{"children":["$","div",null,{"children":[["$","span",null,{"children":"x"}],"$L2"]}]}]\n';
 const CHROME = '2:["$","div",null,{"children":"chrome"}]\n';
 
-/** The rows of a document, whichever script holds them. */
+const flightText = (html: string) => proxy.readFlightScripts(html).map((script: { text: string }) => script.text).join("");
+
+/** The rows of a document that has only newline-terminated rows, split by a plain newline split that
+ * does not use `splitRows`, so that a defect of `splitRows` cannot hide itself. */
 function rowsOf(html: string): string[] {
-	return proxy.splitRows(proxy.readFlightScripts(html).map((script: { text: string }) => script.text).join(""))
-		.map((row: { text: string }) => row.text)
+	return flightText(html)
+		.split(/(?<=\n)/)
 		.sort();
 }
 
@@ -99,13 +102,45 @@ function rowsOf(html: string): string[] {
 	assert(split !== null, "the real page must have a late row: AppChrome is a lazy child of the header div");
 	assert(split.rows.includes("2"), `row 2 (the AppChrome output) must be late: ${JSON.stringify(split.rows)}`);
 	// The server markup also carries the chrome; only the flight rows move.
-	const flightText = (html: string) => proxy.readFlightScripts(html).map((script: { text: string }) => script.text).join("");
 	assert(!flightText(split.early).includes("data-signed-in-as"), "the early flight rows must not carry the signed-in chrome");
 	assert(flightText(split.late).includes("data-signed-in-as"), "the late flight rows must carry the signed-in chrome");
 	assert(
 		JSON.stringify(rowsOf(split.early + split.late)) === JSON.stringify(rowsOf(real)),
 		"the real page must keep all its rows",
 	);
+	// The rows must cover the stream byte for byte, whatever the row format.
+	const stream = flightText(real);
+	assert(
+		proxy.splitRows(stream).map((row: { text: string }) => row.text).join("") === stream,
+		"splitRows must return every byte of the real stream",
+	);
+}
+
+// ─── (f2) text rows have a byte length and no newline; nothing may be lost or swallowed ───
+{
+	// "é" has two bytes; the length 6 counts bytes, and the text holds a newline and a row-like line.
+	const textRow = "7:T6,é\n9:x";
+	const stream = ":HL[\"/a.css\",\"style\"]\n" + MODULES + ROOT + textRow + CHROME + "tail without newline";
+	const rows = proxy.splitRows(stream);
+	assert(rows.map((row: { text: string }) => row.text).join("") === stream, "splitRows must cover the stream byte for byte");
+	assert(
+		JSON.stringify(rows.map((row: { id: string }) => row.id)) === JSON.stringify(["", "1", "3", "0", "7", "2", ""]),
+		`the hint row, the text row and the tail get their own entries: ${JSON.stringify(rows.map((row: { id: string }) => row.id))}`,
+	);
+	assert(rows[4].text === textRow, `the text row is exactly its header and its 6 bytes: ${JSON.stringify(rows[4].text)}`);
+
+	// A text row right before the late row must not swallow it.
+	const split = proxy.splitAtLateRows(page(MODULES + ROOT + textRow + CHROME));
+	assert(split !== null && split.rows.join() === "2", `row 2 after a text row is still late: ${JSON.stringify(split?.rows)}`);
+	assert(
+		flightText(split.early + split.late).length === (MODULES + ROOT + textRow + CHROME).length,
+		"a text row survives the split",
+	);
+	// A text row at the end, with no newline, must not be dropped.
+	const tail = proxy.splitAtLateRows(page(MODULES + ROOT + CHROME + "8:T3,abc"));
+	assert(tail !== null && flightText(tail.early).endsWith("8:T3,abc"), "a text row at the end stays in the early part");
+	// A row with a bad length is kept as a line, not dropped.
+	assert(proxy.splitRows("5:Tzz,abc\n").map((row: { text: string }) => row.text).join("") === "5:Tzz,abc\n", "a bad length must not lose bytes");
 }
 
 // ─── (g) the proxy: holds the late part for holdMs, loses no byte, and counts what it did not hold ───
@@ -162,7 +197,7 @@ function rowsOf(html: string): string[] {
 		const rsc = await get("/rsc", { rsc: "1" });
 		assert(rsc.body === held && rsc.lastAt < HOLD_MS, "a request with the rsc header passes through at once");
 
-		assert(front.stats.held === 1, `one document was held: ${front.stats.held}`);
+		assert(JSON.stringify(front.stats.held) === '["/held"]', `one document was held: ${JSON.stringify(front.stats.held)}`);
 		assert(front.stats.unheld.length === 0, `no document is unheld yet: ${JSON.stringify(front.stats.unheld)}`);
 		const unheld = await get("/plain");
 		assert(unheld.body === plain, "a page without a late row is delivered unchanged");

@@ -1,15 +1,16 @@
 /**
  * The hydration-race check of the CI walk (#1468).
  *
- * The deployed walk raised React error #418 on 2 to 5 routes per run, and the CI walk on a loopback
- * server never did. A loopback server delivers all flight rows in one burst. The deployed server
- * delivers the last row (`AppChrome`) later, so the browser can start to hydrate while a row is
- * missing. The React copy in Next 15.5 then claimed a server node twice (see late-row-proxy.mjs).
+ * The deployed walk raised React error #418 on 2 to 5 routes per run. The CI walk on a loopback
+ * server never did. A loopback server sends all flight rows in one burst. The deployed server sends
+ * the last row (`AppChrome`) later, so the browser can start to hydrate while a row is missing.
+ * The React copy in Next 15.5 then took a second server node (see late-row-proxy.mjs).
  *
- * This check puts the late-row proxy in front of the server, visits routes many times, and fails
- * on any page error. One visit on Next 15.5.18 failed with a chance of about one in five (measured:
- * 9 of 40 visits). With 24 visits the chance that all pass is below 1 in 300. On Next 16.4.2 the
- * measured count is 0 of 110 visits. This module has no side effects at import.
+ * This check puts the late-row proxy in front of the server and visits routes many times.
+ * It fails on any page error, on a retry of the navigation, and on a visit that the proxy did not hold.
+ * Measured on Next 15.5.18, one visit in about four failed: 5 to 7 of 24 visits in each of 6 runs.
+ * So all 24 visits pass with a chance below 1 in 200. On Next 16.4.2, 0 of 144 visits failed.
+ * This module has no side effects at import. `tests/hydration-race.test.ts` drives it.
  */
 
 import { startLateRowProxy } from "./late-row-proxy.mjs";
@@ -38,7 +39,8 @@ const firstLine = (error) => String(error?.message ?? error).split("\n")[0].slic
  *   routes?: readonly string[],
  *   visitsPerRoute?: number,
  *   holdMs?: number,
- * }} options
+ *   navigate?: (page: any, url: string, options: { log: (line: string) => void }) => Promise<unknown>,
+ * }} options `navigate` is `gotoStable`. A test replaces it.
  * @returns {Promise<{ problems: string[], visits: number, held: number }>}
  */
 export async function runHydrationRace({
@@ -49,6 +51,7 @@ export async function runHydrationRace({
   routes = RACE_ROUTES,
   visitsPerRoute = RACE_VISITS_PER_ROUTE,
   holdMs = RACE_HOLD_MS,
+  navigate = gotoStable,
 }) {
   const proxy = await startLateRowProxy({ origin: base, holdMs });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -66,7 +69,8 @@ export async function runHydrationRace({
           const errors = [];
           page.on("pageerror", (error) => errors.push(firstLine(error)));
           try {
-            await gotoStable(page, `${proxy.url}${route}`, { log: () => {} });
+            // A retry means that the first navigation did not hydrate. It is a failure, not a pass.
+            await navigate(page, `${proxy.url}${route}`, { log: (line) => errors.push(`navigation retried: ${line.trim()}`) });
             // A recoverable hydration error is reported after the first commit.
             await page.waitForTimeout(300);
           } catch (error) {
@@ -78,16 +82,20 @@ export async function runHydrationRace({
         }),
       );
     }
-    const visits = visitList.length;
-    // A proxy that held nothing back tests nothing (GREEN-WHILE-EMPTY).
-    if (proxy.stats.held < visits || proxy.stats.unheld.length > 0) {
-      problems.push(
-        `[hydration-race] the proxy held a late flight row for ${proxy.stats.held} of ${visits} documents; ` +
-          `documents without a late row: ${proxy.stats.unheld.join(", ") || "none"}. ` +
-          "If no page has a late row any more, the cause of #1468 is gone: delete this check.",
-      );
+    // A proxy that held nothing back tests nothing (GREEN-WHILE-EMPTY). Count per route.
+    for (const route of routes) {
+      const held = proxy.stats.held.filter((path) => path === route).length;
+      if (held < visitsPerRoute) {
+        problems.push(
+          `[hydration-race] ${route}: the proxy held a late flight row for ${held} of ${visitsPerRoute} visits. ` +
+            (held === 0
+              ? "No document of this route has a lazy child under a host element, or the row parser no longer reads the flight format. " +
+                "If the first is true, the cause of #1468 is gone: delete this check."
+              : "Some visits reached the server without the proxy."),
+        );
+      }
     }
-    return { problems, visits, held: proxy.stats.held };
+    return { problems, visits: visitList.length, held: proxy.stats.held.length };
   } finally {
     await context.close();
     await proxy.close();
