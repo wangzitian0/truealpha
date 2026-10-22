@@ -484,6 +484,8 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
     parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
     assert tool.check(tick.url, require_coverage=True, invariants=(parity,), exemptions={}) == 0, capsys.readouterr()
     assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
+
+
 # -- acceptance of #1277: the same tick, read from the core results -----------------------------
 
 
