@@ -62,6 +62,7 @@ from zoneinfo import ZoneInfo
 from truealpha_contracts.models import DataSource
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
 from data_engine.datahub.production_topt.sec_financial_adapter import (
@@ -77,6 +78,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
     MOOMOO_KLINE_VALUE_KEY,
 )
+from data_engine.sources import gateway
 
 KLINE_ORIGIN = MOOMOO_KLINE_ORIGIN
 KLINE_PARSER_VERSION = MOOMOO_KLINE_PARSER_VERSION
@@ -298,10 +300,19 @@ class MoomooKlineFetcher:
         return quote
 
     def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
-        bars = self._client.history_kline(
-            moomoo_code(symbol), start=cutoff - timedelta(days=_KLINE_LOOKBACK_DAYS), end=cutoff
+        # One key per symbol and settled session (#1411 K3): the second tick, the second universe and
+        # the canary read the landed bars, so OpenD is asked once for them.
+        key = FetchKey(
+            "moomoo", f"history_kline?lookback={_KLINE_LOOKBACK_DAYS}", f"symbol:{symbol}", cutoff.isoformat()
         )
-        return parse_settled_close(canonical_bytes(bars), partition=cutoff)
+
+        def fetch() -> bytes:
+            bars = self._client.history_kline(
+                moomoo_code(symbol), start=cutoff - timedelta(days=_KLINE_LOOKBACK_DAYS), end=cutoff
+            )
+            return canonical_bytes(bars)
+
+        return parse_settled_close(gateway.fetch_once(key, fetch), partition=cutoff)
 
 
 def moomoo_kline_origin() -> CorroboratingOrigin | None:
@@ -481,9 +492,19 @@ class MoomooFinancialsFetcher:
 
     def _fetch(self, symbol: str, cutoff: date) -> FinancialFactAssertion | None:
         code = moomoo_code(symbol)
-        income = self._client.financial_statements(code, statement_type=INCOME_STATEMENT)
-        balance = self._client.financial_statements(code, statement_type=BALANCE_SHEET)
+        # One key per statement: each is one OpenD request and one ledger row (#1411 K3). The statements
+        # have no version of their own, so the axis is the UTC day.
+        income = self._statement(code, symbol, "income", INCOME_STATEMENT)
+        balance = self._statement(code, symbol, "balance_sheet", BALANCE_SHEET)
         return parse_annual_financials(canonical_bytes({"income": income, "balance_sheet": balance}), cutoff=cutoff)
+
+    def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
+        key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())
+
+        def fetch() -> bytes:
+            return canonical_bytes(self._client.financial_statements(code, statement_type=statement_type))
+
+        return json.loads(gateway.fetch_once(key, fetch).decode())
 
 
 def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:

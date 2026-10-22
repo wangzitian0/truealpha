@@ -52,6 +52,7 @@ how a tick counts what its gate refused without any adapter having to report it.
 from __future__ import annotations
 
 import contextvars
+import functools
 import hashlib
 import json
 import logging
@@ -70,11 +71,13 @@ from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.source_registrations import (
     LEDGER_CAPACITIES,
     CapacityDeclaration,
     environment_share,
 )
+from data_engine.sources.landed_keys import LandedKeys, PostgresLandedKeys
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -224,6 +227,8 @@ class CallRecord:
     provider_code: str | None = None
     #: The request parameters without any secret: model, thinking type, max_tokens (#1444).
     request_params: dict[str, Any] | None = None
+    #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
+    fetch_key: str | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -243,6 +248,11 @@ class CallRecord:
             return
         self.payload_sha256 = digest
         self.byte_length = len(raw)
+        # An answer that the fetch refuses to keep (a window that is not final) is not a counted fetch:
+        # the request is asked again on purpose, so its row carries no key (#1411 K7).
+        accept = _fetch_accept.get()
+        if self.fetch_key is not None and accept is not None and not _accepts(accept, raw):
+            self.fetch_key = None
 
     def fail(self, error: str) -> None:
         """Mark the call failed with a vendor-side reason (a 4xx body, a bad return code)."""
@@ -293,13 +303,22 @@ def _pg():
     return _pg_conn
 
 
+def _pg_reset() -> None:
+    """Drop the cached connection, so the next `_pg()` opens a fresh one."""
+    global _pg_conn
+    try:
+        if _pg_conn is not None:
+            _pg_conn.close()
+    finally:
+        _pg_conn = None
+
+
 def _pg_execute(sql: str, params=()):
     """Execute on the cached connection, reconnecting once on failure. psycopg
     marks a silently dropped connection closed only AFTER an operation fails on
     it, so the first statement after a DB restart/network blip raises — one
     fresh-connection retry covers that without hiding a genuinely down DB
     (the retry's exception propagates)."""
-    global _pg_conn
     import psycopg
 
     try:
@@ -307,17 +326,13 @@ def _pg_execute(sql: str, params=()):
     except psycopg.errors.UndefinedColumn:
         raise  # a statement error: a fresh connection would meet the same schema
     except psycopg.Error:
-        try:
-            if _pg_conn is not None:
-                _pg_conn.close()
-        finally:
-            _pg_conn = None
+        _pg_reset()
         return _pg().execute(sql, params)
 
 
-#: The columns of every ledger row. The columns of `_ATTEMPT_COLUMNS` exist only after the migration
-#: `20261021T0900_datahub_ledger_model_attempt_columns.sql`: only a record that sets one of them
-#: uses `_INSERT_ATTEMPT_SQL`, so the rows of every other source never depend on the migration.
+#: The columns of every ledger row. Two groups of columns exist only after a migration, and a record
+#: that sets none of them is written with `_BASE_COLUMNS` alone. So a code server that starts before the
+#: migration replay never fails an ordinary audit row (rows of the other sources never depend on a migration).
 _BASE_COLUMNS = (
     "source",
     "endpoint",
@@ -334,50 +349,59 @@ _BASE_COLUMNS = (
     "capacity_window_id",
     "run_key",
 )
+#: A model attempt (#1444): `20261021T0900_datahub_ledger_model_attempt_columns.sql`.
 _ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
+#: A keyed fetch (#1411 K7): `20261021T1200_datahub_landed_fetch_keys.sql`.
+_KEY_COLUMNS = ("fetch_key",)
 
 
-def _insert_statement(columns: tuple[str, ...]) -> str:
+@functools.cache
+def _statement(columns: tuple[str, ...]) -> str:
     placeholders = ["%s::jsonb" if column == "request_params" else "%s" for column in columns]
     return f"insert into staging.api_call_ledger ({', '.join(columns)}) values ({', '.join(placeholders)})"
 
 
-_INSERT_SQL = _insert_statement(_BASE_COLUMNS)
-_INSERT_ATTEMPT_SQL = _insert_statement(_BASE_COLUMNS + _ATTEMPT_COLUMNS)
+_INSERT_SQL = _statement(_BASE_COLUMNS)
+_INSERT_ATTEMPT_SQL = _statement(_BASE_COLUMNS + _ATTEMPT_COLUMNS)
+_INSERT_KEYED_SQL = _statement(_BASE_COLUMNS + _KEY_COLUMNS)
+
+
+def _value(record: CallRecord, column: str) -> Any:
+    if column == "ok":
+        return bool(record.ok)
+    if column == "request_params":
+        return None if record.request_params is None else json.dumps(record.request_params, sort_keys=True)
+    return getattr(record, column)
 
 
 def _insert_params(record: CallRecord) -> tuple:
-    """The values in the order of `_BASE_COLUMNS`, then those of `_ATTEMPT_COLUMNS` when set."""
-    base = tuple(bool(record.ok) if column == "ok" else getattr(record, column) for column in _BASE_COLUMNS)
-    return (*base, *_attempt_params(record))
+    """The values of `_BASE_COLUMNS`, in their order."""
+    return tuple(_value(record, column) for column in _BASE_COLUMNS)
 
 
-def _attempt_params(record: CallRecord) -> tuple:
-    """The values of `_ATTEMPT_COLUMNS`, or an empty tuple for a record that sets none of them."""
-    if record.attempt is None and record.provider_code is None and record.request_params is None:
-        return ()
-    return (
-        record.attempt,
-        record.provider_code,
-        None if record.request_params is None else json.dumps(record.request_params, sort_keys=True),
-    )
-
-
-def _insert_sql(record: CallRecord) -> str:
-    return _INSERT_SQL if not _attempt_params(record) else _INSERT_ATTEMPT_SQL
+def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
+    """The ledger INSERT for ``record`` and its parameters: the base columns, and the columns of
+    each group that the record sets."""
+    columns = _BASE_COLUMNS
+    if any(getattr(record, column) is not None for column in _ATTEMPT_COLUMNS):
+        columns += _ATTEMPT_COLUMNS
+    if record.fetch_key is not None:
+        columns += _KEY_COLUMNS
+    return _statement(columns), tuple(_value(record, column) for column in columns)
 
 
 def postgres_writer(record: CallRecord) -> None:
     """Write one row. The data-engine and the llm-service deploy together, and only the llm-service
-    applies the migrations at boot. A model row that meets the schema before the migration loses
-    its three attempt columns for that window and keeps the rest."""
+    applies the migrations at boot. A row that meets the schema before its migration loses the
+    columns of that group for the window and keeps the rest."""
     import psycopg
 
+    sql, params = _insert_statement(record)
     try:
-        _pg_execute(_insert_sql(record), _insert_params(record))
+        _pg_execute(sql, params)
     except psycopg.errors.UndefinedColumn:
-        log.warning("api_call_ledger lacks the attempt columns; writing the row without them")
-        _pg_execute(_INSERT_SQL, _insert_params(record)[: len(_BASE_COLUMNS)])
+        log.warning("staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without")
+        _pg_execute(_INSERT_SQL, _insert_params(record))
 
 
 class MemoryLedger(list[CallRecord]):
@@ -680,6 +704,14 @@ def _exact_cost(cost: Decimal | int) -> Decimal:
 
 
 _active: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("external_call_active", default=None)
+#: The fetch key of the `fetch_once` that is making its one external request (#1411 K3).
+_fetch_key: contextvars.ContextVar[str | None] = contextvars.ContextVar("external_call_fetch_key", default=None)
+#: The rule that decides whether the answer of that request may be kept (`fetch_once(accept=...)`).
+_fetch_accept: contextvars.ContextVar[Callable[[bytes], bool] | None] = contextvars.ContextVar(
+    "external_call_fetch_accept", default=None
+)
+#: True inside a probe: a forced run that asks every vendor again and uses no index (`probe_scope`).
+_probe: contextvars.ContextVar[bool] = contextvars.ContextVar("external_call_probe", default=False)
 
 
 @contextmanager
@@ -727,6 +759,7 @@ def record_call(
         cost=_exact_cost(cost),
         run_key=_run_key.get(),
         capacity_window_id=capacity_window_id(source, called_at),
+        fetch_key=_fetch_key.get(),
     )
     token = _active.set(record)
     try:
@@ -861,6 +894,133 @@ def urlopen(
         return status, body
 
 
+# --- landed keys (#1411 K3): each key is fetched once -----------------------------------
+
+
+def _accepts(accept: Callable[[bytes], bool], body: bytes) -> bool:
+    """Whether ``accept`` keeps ``body``. A rule that raises on an answer it cannot read refuses it."""
+    try:
+        return bool(accept(body))
+    except Exception:  # noqa: BLE001 - an unreadable answer is not a final one
+        log.exception("the accept rule of a fetch raised; the answer is treated as not final")
+        return False
+
+
+@contextmanager
+def probe_scope(active: bool = True) -> Iterator[None]:
+    """Make every keyed fetch in the block a probe when ``active``.
+
+    A forced tick (`force_fetch`, #874) exists to prove that the deployed release reaches its vendors
+    (`quality.release_fetch_proof`). A probe therefore asks the vendor again, carries no fetch key, and
+    neither reads nor writes the index of landed keys. The verdict lists its rows as unkeyed."""
+    token = _probe.set(active)
+    try:
+        yield
+    finally:
+        _probe.reset(token)
+
+
+_landed_keys: LandedKeys = PostgresLandedKeys(_pg, _pg_reset)
+
+
+def utc_day() -> str:
+    """The current UTC day, ISO form: the ``as_of`` of a vendor document that has no version of its own."""
+    return _utcnow().date().isoformat()
+
+
+def landed(key: FetchKey) -> bytes | None:
+    """The bytes that landed under ``key``, or None when the key has not landed.
+
+    The index outlives the process: a key that landed in an earlier tick, an earlier run or an
+    earlier container is served here with no external call. A lookup that fails reads as a miss
+    and is logged, because dedup never decides whether a caller may fetch. With the ledger off
+    (a local probe with no warehouse) nothing is landed and nothing is found."""
+    if settings.external_call_ledger == "off" or _probe.get():
+        return None
+    try:
+        return _landed_keys.lookup(key)
+    except Exception:  # noqa: BLE001 - an index outage costs one call, which the ledger records
+        log.exception("landed-key lookup failed for %s; the key will be fetched", key.ledger_key)
+        return None
+
+
+def land(
+    key: FetchKey, body: bytes, *, content_type: str = "application/json", fetched_at: datetime | None = None
+) -> None:
+    """Record ``body`` as the landing of ``key``, on the connection that survives a rollback."""
+    if settings.external_call_ledger == "off" or _probe.get():
+        return
+    try:
+        _landed_keys.land(
+            key,
+            body,
+            content_type=content_type,
+            fetched_at=fetched_at or _utcnow(),
+            run_key=_run_key.get(),
+        )
+    except Exception:  # noqa: BLE001 - the vendor answered; a failed landing costs a later refetch, not this call
+        log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
+
+
+def current_fetch_key() -> str | None:
+    """The ledger form of the key of the `fetch_once` that is making a request now, or None.
+
+    A caller that writes its own ledger row (the moomoo SDK wrapper) reads it here."""
+    return _fetch_key.get()
+
+
+@contextmanager
+def fetching(key: FetchKey, accept: Callable[[bytes], bool] | None = None) -> Iterator[None]:
+    """Stamp the ledger row of the ONE external request in the block with ``key``.
+
+    ``accept`` is the rule that keeps an answer. A request whose answer it refuses is recorded without
+    the key. In a probe nothing is stamped. For a caller that decides itself whether the answer may be
+    kept (`landed`, then `fetching`, then `land`). `fetch_once` is the short form."""
+    if _probe.get():
+        yield
+        return
+    key_token = _fetch_key.set(key.ledger_key)
+    accept_token = _fetch_accept.set(accept)
+    try:
+        yield
+    finally:
+        _fetch_accept.reset(accept_token)
+        _fetch_key.reset(key_token)
+
+
+def fetch_once(
+    key: FetchKey,
+    fetch: Callable[[], bytes],
+    *,
+    content_type: str = "application/json",
+    keep: bool = True,
+    accept: Callable[[bytes], bool] | None = None,
+) -> bytes:
+    """The bytes of ``key``: from the index when it landed, else from ``fetch()`` once.
+
+    ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
+    `SourceGateway.call`). The ledger row of that request carries the key, and the nightly
+    verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
+    failed or refused call is tried again by the next caller.
+
+    ``accept`` judges the answer. An answer it refuses (an error body with status 200, a window whose
+    session has not settled) goes to the caller, stays out of the index, and its ledger row carries no
+    key, because the next caller asks again on purpose. ``keep=False`` is the same for a request that is
+    not final at all: no key, nothing read from or written to the index. Inside a `probe_scope` every
+    request is like that. A caller that needs more control uses `landed`, `fetching` and `land`."""
+    if not keep or _probe.get():
+        return fetch()
+    hit = landed(key)
+    if hit is not None:
+        return hit
+    started = _utcnow()
+    with fetching(key, accept):
+        body = fetch()
+    if accept is None or _accepts(accept, body):
+        land(key, body, content_type=content_type, fetched_at=started)
+    return body
+
+
 # --- the explicit gateway (#740): one gate, rows on the caller's connection ------------
 
 
@@ -936,7 +1096,22 @@ class SourceGateway:
             return result
 
     def _write(self, record: CallRecord) -> None:
-        self.connection.execute(_insert_sql(record), _insert_params(record))
+        sql, params = _insert_statement(record)
+        if sql == _INSERT_SQL or not hasattr(self.connection, "transaction"):
+            self.connection.execute(sql, params)
+            return
+        # A row with a migrated column needs it. A failed statement would abort the caller's
+        # transaction, so that insert runs in its own savepoint and falls back to the base row.
+        import psycopg
+
+        try:
+            with self.connection.transaction():
+                self.connection.execute(sql, params)
+        except psycopg.errors.UndefinedColumn:
+            log.warning(
+                "staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without"
+            )
+            self.connection.execute(_INSERT_SQL, _insert_params(record))
 
     def _recorded_since(self, source: str, since: datetime) -> int:
         row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()

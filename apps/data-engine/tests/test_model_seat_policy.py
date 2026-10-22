@@ -575,7 +575,8 @@ def test_the_ledger_insert_maps_each_value_to_its_own_column(world, call_ledger,
     ask(Transport([(429, rate_limited("1302")), (200, OK_BODY)], world))
     rows = []
     for record in call_ledger:
-        columns, params = _columns(gateway._insert_sql(record)), gateway._insert_params(record)
+        sql, params = gateway._insert_statement(record)
+        columns = _columns(sql)
         assert len(columns) == len(params), "one value for each column"
         rows.append(dict(zip(columns, params, strict=True)))
     assert [(row["attempt"], row["provider_code"], row["status_code"]) for row in rows] == [
@@ -612,10 +613,24 @@ def test_an_unknown_column_is_a_statement_error_and_is_not_asked_again(monkeypat
     assert Connection.executions == 1
 
 
-def test_a_row_of_another_source_does_not_depend_on_the_attempt_columns() -> None:
+def test_a_row_of_another_source_does_not_depend_on_a_migrated_column() -> None:
     record = gateway.CallRecord(source="sec", endpoint="submissions", caller="t", called_at=datetime.now(UTC))
-    assert gateway._insert_sql(record) == gateway._INSERT_SQL
-    assert len(gateway._insert_params(record)) == len(_columns(gateway._INSERT_SQL))
+    sql, params = gateway._insert_statement(record)
+    assert sql == gateway._INSERT_SQL and params == gateway._insert_params(record)
+    assert len(params) == len(_columns(gateway._INSERT_SQL))
+
+
+def test_each_group_of_migrated_columns_is_written_only_by_a_record_that_sets_one_of_them() -> None:
+    """The model attempt columns (#1444) and the fetch key column (#1411 K7) come from two migrations."""
+    called_at = datetime.now(UTC)
+    attempt = gateway.CallRecord(source=llm.SOURCE, endpoint="e", caller="t", called_at=called_at, attempt=1)
+    keyed = gateway.CallRecord(source="sec", endpoint="e", caller="t", called_at=called_at, fetch_key="k")
+    both = gateway.CallRecord(source="x", endpoint="e", caller="t", called_at=called_at, attempt=2, fetch_key="k")
+    assert gateway._insert_statement(attempt)[0] == gateway._INSERT_ATTEMPT_SQL
+    assert gateway._insert_statement(keyed)[0] == gateway._INSERT_KEYED_SQL
+    sql, params = gateway._insert_statement(both)
+    assert _columns(sql) == [*gateway._BASE_COLUMNS, *gateway._ATTEMPT_COLUMNS, *gateway._KEY_COLUMNS]
+    assert len(params) == len(_columns(sql)) and params[-1] == "k" and params[len(gateway._BASE_COLUMNS)] == 2
 
 
 def test_a_model_row_survives_a_schema_that_lacks_the_attempt_columns(monkeypatch) -> None:

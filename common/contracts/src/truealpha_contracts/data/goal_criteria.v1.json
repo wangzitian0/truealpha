@@ -131,9 +131,9 @@
       "threshold": "0 duplicate keys",
       "window": "per environment per day",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1411 K3"
+      "status": "partial",
+      "verdict_keys": ["fetch_keys_once"],
+      "pending_on": "#1411 K3: the N-PORT, OpenFIGI, universe-list and price-lane calls carry no fetch key yet"
     },
     {
       "id": "R2.B3",
