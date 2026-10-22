@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -324,6 +324,47 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
     return False
 
 
+# ---- The share count: the report reads the verdict of the frozen snapshot (#1346) ----
+# The single place that decides share readiness is the frozen snapshot. `_snapshot_member` and
+# `share_basis.live_on_close_basis` drop a count that the stored series cannot put on the share
+# basis of the close, and the core then marks the whole issuer unavailable. The report reads that
+# verdict and does not decide it. A payload can carry a share count that the snapshot dropped.
+# Then `_has_usable_value` says yes and the core says no. The nightly invariant
+# `quality-report-matches-core-results` caught that on the QQQ head of 2026-10-20 (listing xnas:wdc).
+# The report reads the snapshot member, not `mart.topt_core_results`: the invariant compares the
+# two, and a report that read the results would make the invariant true by construction.
+_FROZEN_FACTOR_INPUTS_SQL = """
+    select member.factor_input
+    from staging.topt_core_snapshots snapshot
+    join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
+    where snapshot.run_id = %s
+"""
+
+
+def observations_without_share_count(factor_inputs: Iterable[Mapping[str, Any]]) -> frozenset[str]:
+    """The financial-fact observations of every issuer whose frozen share count is unavailable.
+
+    A factor input is the JSON of `ToptCoreSnapshotInput`. Its market-value components hold the
+    share metric of each listing, and the `input_id` of that metric is the financial-fact
+    observation of the listing. The core makes the whole issuer unavailable when one component
+    has no count (`compute_topt_core`), so every listing of that issuer is dropped. A run with no
+    frozen snapshot gives no factor input and so an empty set.
+    """
+    dropped: set[str] = set()
+    for factor_input in factor_inputs:
+        shares = [component["shares_outstanding"] for component in factor_input["market_value_components"]]
+        if any(metric["availability"] == "unavailable" for metric in shares):
+            dropped.update(metric["input_id"] for metric in shares)
+    return frozenset(dropped)
+
+
+def _observation_usable(
+    semantic_type: str, payload: dict[str, Any] | None, *, observation_id: str, share_dropped: frozenset[str]
+) -> bool:
+    """Is this observation usable: its payload carries the value, and the snapshot kept its share count?"""
+    return _has_usable_value(semantic_type, payload) and observation_id not in share_dropped
+
+
 # ---- Class-B plausibility: single-source semantics get domain falsifiers (#578) ----
 # A financial-fact cell has no second vendor to disagree with it, so its
 # corroboration is accounting identity and domain bounds. Each rule returns its
@@ -509,6 +550,9 @@ def build_report(
         (run_id,),
     ).fetchall()
 
+    share_dropped = observations_without_share_count(
+        factor_input for (factor_input,) in conn.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,)).fetchall()
+    )
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
     market_price_cells: dict[str, str] = {}
@@ -539,7 +583,9 @@ def build_report(
         if confidence is not None:
             cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
         if not cell.available:
-            cell.available = _has_usable_value(semantic_type, payload)
+            cell.available = _observation_usable(
+                semantic_type, payload, observation_id=observation_id, share_dropped=share_dropped
+            )
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
