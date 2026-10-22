@@ -75,6 +75,18 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
 # every invariant below silently changed population.
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
+#: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
+#: A 10-K is due 90 days after the fiscal year ends. A late filer gets 15 more days (Form 12b-25).
+#: Just before a filing, the newest annual period of a current filer is the year before.
+#: It ended 12 months and 105 days earlier, which is 15 months and 14 days.
+#: So 18 months leaves a margin of 2 months and 16 days.
+#: Production QQQ served periods of 94 and 98 months.
+#: The strategy gate `eligibility.maximum_input_age_days` is 455 days. It counts the days since an input became knowable.
+#: A revenue period ends at most 105 days before its filing. So 455 + 105 days is 560 days, which is 18.4 months.
+#: The two limits agree within half a month.
+#: The strategy gate does not stop a stale revenue.
+#: The knowable time of a financial fact is the latest filing among its inputs (parser identity v9).
+REVENUE_MAX_AGE_MONTHS = 18
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
@@ -693,6 +705,63 @@ INVARIANTS: tuple[Invariant, ...] = (
             from mart.served_head h
             where h.factor_id = 'gross_profit_per_employee'
               and mart.is_head_scheduled(h.universe_id, h.environment)
+        """,
+    ),
+    Invariant(
+        id="revenue-period-is-recent",
+        claim=(
+            f"each available core result of a scheduled governed head has a revenue period that ends at most "
+            f"{REVENUE_MAX_AGE_MONTHS} months before the cutoff of its run, and each such head states a revenue "
+            "period in at least one of its results — an older period is a stale figure that the head serves as "
+            "a current one, and a head with no stated period has an unknown age (#1457)"
+        ),
+        # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
+        # divided by. Only an available result is served. A result with a named reason is
+        # unavailable (its `reason_codes` are not empty), so it needs no exemption here.
+        # Two findings, each one row:
+        #   <issuer>                             the period of an available result is older than the limit.
+        #   no-result-states-a-revenue-period    a scheduled head serves available results and no one
+        #                                        of them states a period. Its age is unknown for the
+        #                                        whole head. Another head with dated results cannot
+        #                                        hide it. A snapshot from before #534 stores no period.
+        # A result with no period inside a head that has other dated results is not judged alone.
+        # Production QQQ served CPRT at 2018-07-31 and XEL at 2018-12-31 for a cutoff of 2026-10-19.
+        # The plausibility gate judged the value only. CPRT had a ratio above its limit. XEL did not.
+        # `select distinct` counts a result one time, also when two invocations wrote results for a run.
+        violations=f"""
+            with heads as (
+                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+                from mart.served_head h
+                where h.factor_id = 'gross_profit_per_employee'
+                  and mart.is_head_scheduled(h.universe_id, h.environment)
+            ),
+            served as (
+                select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end,
+                       (r.cutoff at time zone 'UTC')::date as cutoff
+                from heads
+                join mart.topt_core_results r on r.run_id = heads.run_id
+                where r.availability = 'available'
+            )
+            select universe_id, run_id, issuer_id, revenue_period_end::text, cutoff::text
+            from served
+            where revenue_period_end < (cutoff - interval '{REVENUE_MAX_AGE_MONTHS} months')::date
+            union all
+            select distinct universe_id, run_id, 'no-result-states-a-revenue-period', '-', '-'
+            from served head_rows
+            where not exists (
+                select 1 from served dated
+                where dated.run_id = head_rows.run_id and dated.revenue_period_end is not null
+            )
+            order by 1, 2, 3
+        """,
+        population="""
+            select count(distinct (r.run_id, r.issuer_id))
+            from mart.served_head h
+            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            where h.factor_id = 'gross_profit_per_employee'
+              and mart.is_head_scheduled(h.universe_id, h.environment)
+              and r.availability = 'available'
+              and r.revenue_period_end is not null
         """,
     ),
 )

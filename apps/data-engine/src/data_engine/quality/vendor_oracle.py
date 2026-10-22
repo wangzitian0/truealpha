@@ -53,6 +53,7 @@ _REVENUE_CONCEPTS = (
     "Revenues",
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "RegulatedAndUnregulatedOperatingRevenue",
     "SalesRevenueNet",
     "SalesRevenueGoodsNet",
     "SalesRevenueServicesNet",
