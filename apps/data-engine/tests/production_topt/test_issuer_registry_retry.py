@@ -107,21 +107,25 @@ def test_submissions_that_are_not_a_json_object_name_the_issuer_and_do_not_raise
 
 
 def test_a_200_answer_that_is_not_a_json_object_does_not_land_and_the_next_caller_asks_again(
-    monkeypatch, pauses
+    monkeypatch, pauses, call_ledger, landed_keys
 ) -> None:
     """The index of landed keys serves a landed key for the whole UTC day (#1411). An answer that is not the
     submissions of the issuer must stay out of it, or the issuer stays unavailable until the day ends."""
+    monkeypatch.setattr(gateway, "utc_day", lambda: "2026-10-22")  # one key for the whole test, at any hour
+    key = sec.submissions_key(1)
     script = lambda cik, attempt: httpx.Response(200, json=["not", "an", "object"]) if attempt == 1 else ok("6021")  # noqa: E731
     socket, first = read(monkeypatch, script, [1])
 
     assert "not a JSON object" in first.unavailable[1]
-    assert gateway.landed(sec.submissions_key(1)) is None, "the refused answer is not in the index"
+    assert landed_keys.bodies == {}, "the refused answer is not in the index"
+    assert [(row.ok, row.fetch_key) for row in call_ledger] == [(True, None)], "the refused row carries no key"
 
     second = issuer_registry.resolve_issuer_classifications({"T1": 1})
 
     assert socket.reads == [1, 1], "the second caller asked SEC again"
     assert second.unavailable == {}
-    assert gateway.landed(sec.submissions_key(1)) is not None, "the accepted answer landed"
+    assert set(landed_keys.bodies) == {key}, "the accepted answer landed"
+    assert [(row.ok, row.fetch_key) for row in call_ledger] == [(True, None), (True, key.ledger_key)]
 
 
 def test_a_spent_budget_names_the_issuer_and_does_not_raise(monkeypatch, pauses) -> None:
