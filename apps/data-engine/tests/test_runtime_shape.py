@@ -493,23 +493,26 @@ def test_an_event_of_old_state_is_not_updated_or_renamed_by_a_process_with_its_i
     assert after.over_events == legacy.over_events
 
 
-@pytest.mark.parametrize("missing", [{"oom_kill": None}, {"peak": None}], ids=["memory.events", "memory.peak"])
+@pytest.mark.parametrize(
+    "missing",
+    [{"oom_kill": None}, {"peak": None}, {"memory_max": None}, {"server": None}, {"boot_id": None}],
+    ids=["memory.events", "memory.peak", "memory.max", "server-process", "boot-id"],
+)
 def test_a_reading_with_a_missing_fact_changes_neither_the_totals_nor_the_names(
     tmp_path: Path, missing: dict[str, None]
 ) -> None:
-    """The container is readable, so the event `2:2` matches. The fold adds nothing, so the event must stay as
-    it was: its size, and the job of the run that is started now."""
+    """The fold returns the same tracker, and the event `2:2` stays as it was: its size, and its job although
+    a run with this process is started now. Only the missing boot id hides the container."""
     instance = dg.DagsterInstance.ephemeral()
     first = _sample(instance, _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS, pid=2))
     assert [event.job for event in first.over_events] == [runtime_shape.UNKNOWN_JOB]
     _run(instance, "head_reports_pipeline", 2)
     larger = (BIG_PROCESS + 30 * MIB) // 1024
     reading = _reading(tmp_path / "b", start_ticks=1, processes={2: larger}, **missing)
-    assert reading.container == first.container.id and reading.largest_process_id == "2:2"  # type: ignore[union-attr]
+    assert reading.container in (None, first.container.id) and reading.largest_process_id == "2:2"  # type: ignore[union-attr]
 
-    after = _sample(instance, reading)
-
-    assert after == first
+    assert _fold(first, reading) is first, "a reading with a missing fact returns the tracker itself"
+    assert _sample(instance, reading) == first
 
 
 def test_an_event_without_a_container_in_old_state_loads_and_round_trips() -> None:
@@ -1445,18 +1448,18 @@ def test_the_three_texts_of_the_finding_have_no_sentence_of_their_own(tmp_path: 
 
 
 def test_the_worst_case_text_fits_the_published_summary_with_the_longest_deployed_job_names(tmp_path: Path) -> None:
-    """Every kept event of a different job (the longest deployed names), sizes at the declared ceiling, the
-    largest 4-digit count: the longest finding alone. It must pass `bounded` unchanged, with the `failed: `
-    prefix of the row."""
+    """The longest deployed job names, the largest sizes on the longest names, sizes at the declared ceiling,
+    a count of three days of samples: the longest finding alone. It must pass `bounded` unchanged, with the
+    `failed: ` prefix of the row."""
     from data_engine.dagster_defs import defs
 
     kept, distinct = runtime_shape.MAX_OVER_EVENTS, runtime_shape.MAX_NAMED_JOBS + 2
     names = sorted({job.name for job in defs.resolve_all_job_defs()}, key=len, reverse=True)[:distinct]
-    assert len(names) == distinct, "the deployed job names are the input of this test"
-    events = [
-        _over(names[index % distinct], CAPACITY.ceiling_mib - kept + index, pid=10 + index) for index in range(kept)
+    assert len(names) == distinct <= kept, "the deployed job names are the input of this test"
+    events = [  # the i-th longest name gets the i-th largest size, so the named jobs are the longest ones
+        _over(names[index % distinct], CAPACITY.ceiling_mib - index % distinct, pid=10 + index) for index in range(kept)
     ]
-    count = 10**4 - 1
+    count = 3 * 24 * 3600 // runtime_shape.SAMPLE_INTERVAL_SECONDS  # a count rises by one per sample at most
     tracker = _tracker_with_events(*events, count=count)
 
     text = _judge(_container(tmp_path, "a", ticks=1), tracker=tracker, baseline=NOTHING).red[0]
