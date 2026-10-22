@@ -40,6 +40,7 @@ from production_topt.test_degraded_capture_forced import (  # noqa: E402
     _quote,
 )
 from production_topt.test_plausibility_tick import _HEAD_SQL, _LISTING_SQL  # noqa: E402
+from macro_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import store_topt_series  # noqa: E402
 
 #: The settled session the tick prices on.
@@ -68,6 +69,8 @@ _SUBMISSIONS_PATH = re.compile(r"/submissions/CIK(\d{10})\.json$")
 def tick_database_url():
     with isolated_test_database("registry_unavailable_tick") as target_url:
         store_topt_series(target_url)
+        # The tick reads the risk-free rate of its cutoff from the stored series (#1255).
+        store_risk_free_series(target_url)
         yield target_url
 
 
