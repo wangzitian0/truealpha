@@ -61,11 +61,12 @@ Four statements. Each one is checkable while you read an issue and its closing w
    passes. A check that supplies an argument the production caller omits proves the parameter,
    not the wiring (#284).
 4. **Acceptance is its own procedure, run by two skills.** `/smoke` runs the section
-   "Acceptance checks" after an edit: it names each check, runs it, runs it without the change,
-   and reads its call path. `/close` runs the section 2.6 before an issue closes: it walks every
-   deliverable and checks that the completion comment names only code that exists on the merge
-   commit. Issue and PR text carry no acceptance. `Closes #N` closes the issue when the merge
-   completes it and asserts nothing else. `Refs #N` leaves the issue to the `/close` walk.
+   "Acceptance checks" after an edit. It names each check, runs it, runs it without the change,
+   and reads its call path. `/close` runs the section 2.6 on the merge commit. It walks every
+   deliverable and checks that the completion comment names only code that exists there.
+   Issue and PR text carry no acceptance. `Closes #N` closes the issue when the merge
+   completes it and asserts nothing else. `/close` reopens an issue that the merge closed if a
+   row fails. `Refs #N` leaves the issue open until the walk passes.
 
 ## Consequences
 
@@ -75,8 +76,8 @@ Four statements. Each one is checkable while you read an issue and its closing w
   an admin nav" is hard to assert without a two-principal browser walk — and the absence of
   that walk is exactly why the gap survived nine days across two issues.
 - Rule 6 governs *closing*: verified on staging with real data. `/smoke` and `/close` govern
-  what the acceptance list is allowed to contain. An issue can satisfy rule 6 and fail the
-  walk — #494 did.
+  what the acceptance list is allowed to contain. An issue can pass its staging check and fail
+  the walk. #494 failed the former rule 7 in the same way.
 - The steps no longer sit in resident text. A change to the procedure is a skill edit, not an
   `AGENTS.md` edit.
 - Not retroactive by itself. #371, #494 and #495 are reopened with criteria rewritten to this

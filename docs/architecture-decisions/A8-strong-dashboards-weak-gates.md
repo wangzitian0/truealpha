@@ -21,10 +21,10 @@ Over successive iterations, defensive engineering mechanisms degenerated into br
 
 We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板优于门禁，强看板，弱门禁)**.
 
-### 1. Three gate classes (fail-safe technical baselines only)
+### 1. Three gate classes
 A gate belongs to one of three classes. Everything else is a dashboard.
-- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, focused unit test execution, and the review-finding budget of `AGENTS.md` Rule 4 (High = 0, Medium <= 2, Low <= 4).
-- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect and that `main` still deploys (SQL rows or an HTTP response).
+- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit tests. It also holds the review-finding budget and the independent review of gate and release code (`AGENTS.md` Rule 4).
+- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect. It also shows that `main` still deploys.
 - **Class 3, staging evidence before a production deploy:** a production deploy of a release waits for the staging evidence of that same release.
 - Third-party and AI reviewer feedback is **advisory**: infrastructure timeouts, reviewer platform errors, or unclassified review comments log warnings and never fail-close PR readiness.
 - Mechanical text policing (regex matching on PR closing keywords, automated bot reopen scripts) is abolished.
@@ -37,7 +37,7 @@ A gate belongs to one of three classes. Everything else is a dashboard.
 - Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. A migration creates each one: `mart.served_head` (pointer freshness), `mart.question_coverage_report` (question coverage), and `mart.nightly_verdicts` (nightly check verdicts). The web surfaces above and the health endpoints read these models.
 
 ### 3. Issue Lifecycle and Verification
-- Issues are closed when staging verifies the change: an agent or engineer reads the relevant dashboard or runs a physical read-only probe (SQL rows / HTTP responses), and `/close` walks the acceptance rows (ADR A2).
+- An agent or engineer independently verifies the change on staging. The verifier reads the relevant dashboard or runs a read-only probe (SQL rows, HTTP responses). Then `/close` walks the acceptance rows (ADR A2) and the issue closes.
 - Production state is not an issue state. The release process that infra2 owns records it (`docs/ssot/ops.pipeline.md` in wangzitian0/infra2).
 - Reopening is driven by physical regressions identified on the dashboard or by operational failure, not by arbitrary comment text parsers.
 
