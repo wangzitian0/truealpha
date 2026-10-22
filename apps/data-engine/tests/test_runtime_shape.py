@@ -409,8 +409,53 @@ def test_an_over_size_process_counts_again_in_a_new_container_even_with_the_same
     assert [event.size for event in grown.over_events] == [BIG_PROCESS, BIG_PROCESS + 20 * MIB], "the newest copy grows"
 
 
-def test_a_process_whose_event_was_dropped_by_eight_newer_ones_counts_again(tmp_path: Path) -> None:
-    """The documented cap: an event is kept while it is among the newest MAX_OVER_EVENTS."""
+def test_a_process_that_grows_past_the_budget_in_a_new_container_counts_even_when_an_old_event_has_its_id(
+    tmp_path: Path,
+) -> None:
+    """The common shape of an id collision: the process starts small and grows in the later samples.
+
+    Container A holds the event `2:2`. Container B has its own process `2:2`, first under the budget, then
+    over it. It must count and get an event of its own; the event of A must not change."""
+    instance = dg.DagsterInstance.ephemeral()
+    first = _sample(instance, _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS, pid=2))
+    small = _sample(instance, _container(tmp_path, "b", ticks=2, process_bytes=RUN_BYTES - MIB, pid=2), deployment="B")
+    assert small.processes_over_size == first.processes_over_size == 1, "under the budget: no count yet"
+
+    grown = _sample(
+        instance, _container(tmp_path, "c", ticks=2, process_bytes=BIG_PROCESS + 20 * MIB, pid=2), deployment="B"
+    )
+
+    assert grown.processes_over_size == 2
+    assert [(event.container, event.size) for event in grown.over_events] == [
+        (first.container.id, BIG_PROCESS),  # type: ignore[union-attr]
+        (grown.container.id, BIG_PROCESS + 20 * MIB),  # type: ignore[union-attr]
+    ]
+
+
+def test_the_event_of_an_old_container_is_not_updated_or_renamed_by_a_process_of_a_new_one(tmp_path: Path) -> None:
+    """Container A has the event `2:2` with an unknown job. In container B a process `2:2` runs under the
+    budget, for the job `head_reports_pipeline`. The event of A must stay as it was."""
+    instance = dg.DagsterInstance.ephemeral()
+    first = _sample(instance, _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS, pid=2))
+    assert [event.job for event in first.over_events] == [runtime_shape.UNKNOWN_JOB]
+    _run(instance, "head_reports_pipeline", 2)
+
+    after = _sample(instance, _container(tmp_path, "b", ticks=2, process_bytes=RUN_BYTES - MIB, pid=2), deployment="B")
+
+    assert after.over_events == first.over_events
+
+
+def test_an_event_without_a_container_in_old_state_loads_and_never_matches_a_new_process() -> None:
+    state = Tracker.from_json(
+        _tracker_json(over_events=[{"process_id": "2:2", "job": "topt_live_pipeline", "size": 412 * MIB}])
+    )
+
+    assert state.over_events == (runtime_shape.OverEvent("2:2", "topt_live_pipeline", 412 * MIB, container=""),)
+    assert Tracker.from_json(state.to_json()) == state
+
+
+def test_a_process_whose_event_was_dropped_by_newer_ones_counts_again(tmp_path: Path) -> None:
+    """The documented cap: an event is kept while it is among the newest `MAX_OVER_EVENTS`."""
     instance = dg.DagsterInstance.ephemeral()
     _sample(instance, _container(tmp_path, "first", ticks=1, process_bytes=BIG_PROCESS, pid=50))
     for pid in range(60, 60 + runtime_shape.MAX_OVER_EVENTS):
@@ -530,8 +575,7 @@ def test_a_process_larger_than_the_declared_run_size_is_red_and_does_not_invent_
     verdict = _judge(_container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
 
     assert verdict.red == (
-        f"1 run process(es) passed the run budget {CAPACITY.run_mib} MiB (size and job not recorded);"
-        " the run limit assumes that budget",
+        f"1 run process(es) passed the run budget {CAPACITY.run_mib} MiB (size and job not recorded)",
     )
     assert verdict.facts["processes_over_size"] == 1
     assert verdict.facts["largest_process_mib"] == CAPACITY.run_mib + 1
@@ -1079,7 +1123,9 @@ def test_the_sampler_records_an_event_with_the_job_of_the_process_that_passed_th
     sampled = _sample(instance, _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS + 5 * MIB, pid=4242))
 
     assert sampled.processes_over_size == 1
-    assert sampled.over_events == (runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 5 * MIB),)
+    assert sampled.over_events == (
+        runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 5 * MIB, f"{BOOT_ID}:1"),
+    )
     assert runtime_shape.load_tracker(instance) == sampled, "the events are stored with the tracker"
 
 
@@ -1119,7 +1165,9 @@ def test_a_process_that_keeps_growing_raises_the_size_of_its_event_and_keeps_its
 
     grown = _sample(instance, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS + 40 * MIB, pid=4242))
 
-    assert grown.over_events == (runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB),)
+    assert grown.over_events == (
+        runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB, f"{BOOT_ID}:1"),
+    )
     assert grown.processes_over_size == 1
 
 
@@ -1217,7 +1265,9 @@ def test_a_known_job_is_not_looked_up_again_when_the_process_grows_even_after_it
     grown = _sample(instance, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS + 40 * MIB, pid=4242))
 
     assert looked == [], "a known job costs no lookup"
-    assert grown.over_events == (runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB),)
+    assert grown.over_events == (
+        runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB, f"{BOOT_ID}:1"),
+    )
 
 
 def test_an_event_with_an_unknown_job_is_looked_up_again_while_its_process_grows(tmp_path: Path) -> None:
@@ -1228,7 +1278,9 @@ def test_an_event_with_an_unknown_job_is_looked_up_again_while_its_process_grows
 
     grown = _sample(instance, _container(tmp_path, "b", ticks=1, process_bytes=BIG_PROCESS + 40 * MIB, pid=4242))
 
-    assert grown.over_events == (runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB),)
+    assert grown.over_events == (
+        runtime_shape.OverEvent("4242:4242", "topt_live_pipeline", BIG_PROCESS + 40 * MIB, f"{BOOT_ID}:1"),
+    )
 
 
 def test_an_unknown_event_is_not_looked_up_for_another_process_that_is_under_the_budget(
@@ -1305,18 +1357,39 @@ def test_a_night_with_eight_events_of_one_job_fits_the_published_summary(tmp_pat
     assert "topt_live_pipeline (8x, up to 412 MiB)" in published
 
 
-def test_the_worst_case_text_fits_the_published_summary_with_the_longest_job_names(tmp_path: Path) -> None:
-    """12 counts, 5 jobs with names of 35 characters, 4 counts without an event: the longest finding alone."""
-    names = [f"a_very_long_job_name_for_the_test_{letter}" for letter in "abcde"]
-    assert {len(name) for name in names} == {35}
-    events = [_over(names[index % 5], 410 + index, pid=10 + index) for index in range(8)]
-    tracker = _tracker_with_events(*events, count=12)
+def test_the_three_texts_of_the_finding_end_the_same_way_with_the_count_and_no_sentence_of_their_own(
+    tmp_path: Path,
+) -> None:
+    """One event, no event and several events: each ends with its count or its names, none with a sentence
+    that the others lack."""
+    reading = _container(tmp_path, "a", ticks=1)
+    one = _judge(reading, tracker=_tracker_with_events(_over("topt_live_pipeline", 412)), baseline=NOTHING).red[0]
+    none = _judge(reading, tracker=Tracker(processes_over_size=1), baseline=NOTHING).red[0]
+    several = _judge(
+        reading, tracker=_tracker_with_events(_over("a_job", 412), _over("b_job", 420, pid=3)), baseline=NOTHING
+    ).red[0]
+
+    budget = CAPACITY.run_mib
+    assert one == f"a run process held 412 MiB (job topt_live_pipeline), above the run budget {budget} MiB (1 time(s))"
+    assert none == f"1 run process(es) passed the run budget {budget} MiB (size and job not recorded)"
+    assert several.endswith("b_job (1x, up to 420 MiB), a_job (1x, up to 412 MiB)")
+
+
+def test_the_worst_case_text_fits_the_published_summary_with_the_longest_deployed_job_names(tmp_path: Path) -> None:
+    """The five longest names of the deployed jobs, 4-digit sizes, a 4-digit count and counts without an event:
+    the longest finding alone. It must pass `bounded` unchanged, with the `failed: ` prefix of the row."""
+    from data_engine.dagster_defs import defs
+
+    names = sorted({job.name for job in defs.resolve_all_job_defs()}, key=len, reverse=True)[:5]
+    assert len(names) == 5 and len(names[0]) >= 36, "the deployed job names are the input of this test"
+    events = [_over(names[index % 5], 1530 + index, pid=10 + index) for index in range(8)]
+    tracker = _tracker_with_events(*events, count=9999)
 
     text = _judge(_container(tmp_path, "a", ticks=1), tracker=tracker, baseline=NOTHING).red[0]
 
     published = nightly_verdicts.bounded("failed: " + text)
-    assert published == "failed: " + text, "the finding alone is not cut"
-    assert f"{CAPACITY.run_mib} MiB (12 time(s))" in published and published.endswith("4 more not named")
+    assert published == "failed: " + text, f"the finding alone is cut at {nightly_verdicts.SUMMARY_LIMIT} characters"
+    assert f"{CAPACITY.run_mib} MiB (9999 time(s))" in published and published.endswith("9991 more not named")
 
 
 def test_the_text_names_the_three_largest_jobs_and_counts_the_others(tmp_path: Path) -> None:
@@ -1350,8 +1423,7 @@ def test_the_red_text_does_not_name_an_old_size_when_state_has_no_event(tmp_path
     verdict = _judge(_container(tmp_path, "b", ticks=1), tracker=tracker, baseline=NOTHING)
 
     assert verdict.red == (
-        f"1 run process(es) passed the run budget {CAPACITY.run_mib} MiB (size and job not recorded);"
-        " the run limit assumes that budget",
+        f"1 run process(es) passed the run budget {CAPACITY.run_mib} MiB (size and job not recorded)",
     )
 
 
