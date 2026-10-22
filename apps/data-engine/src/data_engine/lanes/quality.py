@@ -125,8 +125,9 @@ RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 
 RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
-# 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last one,
-# the job run health, runs at 06:20), and before the delivery report (07:00) reads the verdict.
+# 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last ones,
+# the fetch keys check and the job run health, run at 06:20), and before the delivery report (07:00)
+# reads the verdict.
 RUNTIME_SHAPE_CRON = "30 6 * * *"
 
 FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"

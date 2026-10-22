@@ -1712,7 +1712,7 @@ def test_the_runtime_shape_check_follows_every_nightly_check_and_precedes_the_re
     check fires before the report. The shape verdict then reads a finished night."""
     checks = _deployed_check_crons()
     assert "release_fetch_proof" in checks, "the release fetch proof is in the scan"
-    assert "job_run_health_check" in checks, "the last check before the shape check is in the scan"
+    assert "job_run_health_check" in checks, "a last check before the shape check is in the scan"
     assert _deployed_shape_cron() == quality.RUNTIME_SHAPE_CRON
 
     assert order_violations(_deployed_shape_cron(), _report_cron(), checks) == []
