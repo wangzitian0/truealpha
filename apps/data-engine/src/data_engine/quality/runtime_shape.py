@@ -42,8 +42,9 @@ The nightly verdict is red on any of these:
   budget is what is left inside the utilization limit when the queue is full, so a larger run
   breaks the premise of the limit. A run that ends between two samples after its peak is not seen,
   and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
-  process at each sample: a smaller over-size process beside a larger one, and a largest process
-  that alternates between two over-size processes, are counted by that rule and not once each;
+  process at each sample, and each counted process keeps an event (the newest `MAX_OVER_EVENTS`). A
+  smaller over-size process beside a larger one is not seen until it is the largest. A process whose
+  event was dropped by eight newer ones, and that is the largest again, counts again;
 * the container was replaced without a change of the deployment. The kernel may kill the server
   process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
   does not show the kill. A deploy replaces the container too, but it changes the deployment.
@@ -417,7 +418,9 @@ def _fold_sizes(
     over, worst_process = tracker.processes_over_size, tracker.worst_process
     if size > run_limit:
         worst_process = max(worst_process, size)  # a process that grows after it passed the budget raises the record
-        named = any(event.process_id == reading.largest_process_id for event in tracker.over_events)
+        named = not fresh_container and any(
+            event.process_id == reading.largest_process_id for event in tracker.over_events
+        )
         if not named and (reading.largest_process_id != before_id or before_size <= run_limit):
             over += 1
     server_over, worst_server = tracker.servers_over_size, tracker.worst_server
@@ -540,10 +543,7 @@ def _over_size_text(tracker: Tracker, count: int, capacity: CodeServerCapacity) 
     rest = len(largest_first) - MAX_NAMED_JOBS
     more_jobs = f", and {rest} other job(s)" if rest > 0 else ""
     more_counts = f"; {unnamed} more not named" if unnamed else ""
-    return (
-        f"run processes passed the run budget {budget} MiB ({count} time(s)): {named}{more_jobs}{more_counts};"
-        " the run limit assumes that budget"
-    )
+    return f"run processes passed the run budget {budget} MiB ({count} time(s)): {named}{more_jobs}{more_counts}"
 
 
 def judge(
@@ -639,7 +639,9 @@ def job_of_process(instance: dg.DagsterInstance, process_id: str) -> str:
     """The job whose started run executes in the process `process_id` (`pid:start ticks`), or `UNKNOWN_JOB`.
 
     The in-process executor logs `Executing steps in process (pid: N)` as an engine event of its run, so
-    the pid of a run process names its run (a run that is started or canceling). At most a few runs are started at one time (the queue limit).
+    the pid of a run process names its run (a run that is started or canceling). The run monitor fails a
+    run that a kill left started within about two minutes, so only a few runs are candidates. An event
+    whose job is unknown is looked up again at every sample (30 s) while its process is the largest.
     A lookup that fails is logged and answers `UNKNOWN_JOB`: the sensor must not fail on it."""
     pid = process_id.split(":", 1)[0]
     if not pid.isdigit():
@@ -670,7 +672,7 @@ def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tra
     if folded.processes_over_size > before.processes_over_size:
         job = job_of_process(instance, process_id)
         return replace(folded, over_events=(*events, OverEvent(process_id, job, size))[-MAX_OVER_EVENTS:])
-    index = next((i for i, event in enumerate(events) if event.process_id == process_id), None)
+    index = next((i for i in range(len(events) - 1, -1, -1) if events[i].process_id == process_id), None)
     if index is None:
         return folded
     event = events[index]

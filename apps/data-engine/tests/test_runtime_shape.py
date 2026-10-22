@@ -393,11 +393,34 @@ def test_the_same_pid_with_other_start_ticks_is_another_process(tmp_path: Path) 
 
 
 def test_an_over_size_process_counts_again_in_a_new_container_even_with_the_same_pid_and_ticks(tmp_path: Path) -> None:
-    """`_container` names the process `2:2` in every container, as a restart that reuses pid and ticks would."""
-    first = _fold(Tracker(), _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
-    second = _fold(first, _container(tmp_path, "b", ticks=2, process_bytes=BIG_PROCESS), deployment="B")
+    """`_container` names the process `2:2` in every container, as a restart that reuses pid and ticks would.
+
+    It runs through `sample`, the path of production: the event of the first container is kept, and the
+    process of the new container must still count and get an event of its own."""
+    instance = dg.DagsterInstance.ephemeral()
+    first = _sample(instance, _container(tmp_path, "a", ticks=1, process_bytes=BIG_PROCESS))
+    second = _sample(instance, _container(tmp_path, "b", ticks=2, process_bytes=BIG_PROCESS + 7 * MIB), deployment="B")
 
     assert (first.processes_over_size, second.processes_over_size) == (1, 2)
+    assert [event.size for event in second.over_events] == [BIG_PROCESS, BIG_PROCESS + 7 * MIB]
+
+    grown = _sample(instance, _container(tmp_path, "c", ticks=2, process_bytes=BIG_PROCESS + 20 * MIB), deployment="B")
+
+    assert [event.size for event in grown.over_events] == [BIG_PROCESS, BIG_PROCESS + 20 * MIB], "the newest copy grows"
+
+
+def test_a_process_whose_event_was_dropped_by_eight_newer_ones_counts_again(tmp_path: Path) -> None:
+    """The documented cap: an event is kept while it is among the newest MAX_OVER_EVENTS."""
+    instance = dg.DagsterInstance.ephemeral()
+    _sample(instance, _container(tmp_path, "first", ticks=1, process_bytes=BIG_PROCESS, pid=50))
+    for pid in range(60, 60 + runtime_shape.MAX_OVER_EVENTS):
+        _sample(instance, _container(tmp_path, f"p{pid}", ticks=1, process_bytes=BIG_PROCESS, pid=pid))
+
+    again = _sample(instance, _container(tmp_path, "again", ticks=1, process_bytes=BIG_PROCESS + 30 * MIB, pid=50))
+
+    assert again.processes_over_size == 1 + runtime_shape.MAX_OVER_EVENTS + 1
+    assert len(again.over_events) == runtime_shape.MAX_OVER_EVENTS
+    assert again.over_events[-1].process_id == "50:50"
 
 
 def test_the_largest_process_record_starts_again_in_a_new_container(tmp_path: Path) -> None:
@@ -530,7 +553,9 @@ def test_the_facts_keep_the_record_of_the_largest_size_across_containers(tmp_pat
     assert any(f"the code server held {SERVER_BYTES // MIB + 7} MiB" in reason for reason in verdict.red)
     assert (tracker.worst_process, tracker.worst_server) == (big, SERVER_BYTES + 7 * MIB)
     assert verdict.facts["worst_process_mib"] == big // MIB
-    assert not any(f"{big // MIB} MiB" in reason for reason in verdict.red if "run process" in reason)
+    run_process_reasons = [reason for reason in verdict.red if "run process" in reason]
+    assert len(run_process_reasons) == 1, "the finding exists, so the negative check below has something to check"
+    assert f"{big // MIB} MiB" not in run_process_reasons[0]
 
 
 def test_a_code_server_larger_than_its_declared_size_is_red(tmp_path: Path) -> None:
@@ -1261,8 +1286,7 @@ def test_the_red_text_groups_the_processes_of_the_night_by_job_largest_first(tmp
     size_a, size_b = (BIG_PROCESS + 5 * MIB) // MIB, (BIG_PROCESS + 9 * MIB) // MIB
     assert verdict.red[0] == (
         f"run processes passed the run budget {CAPACITY.run_mib} MiB (2 time(s)): "
-        f"head_reports_pipeline (1x, up to {size_b} MiB), topt_live_pipeline (1x, up to {size_a} MiB); "
-        "the run limit assumes that budget"
+        f"head_reports_pipeline (1x, up to {size_b} MiB), topt_live_pipeline (1x, up to {size_a} MiB)"
     )
 
 
@@ -1283,6 +1307,20 @@ def test_a_night_with_eight_events_of_one_job_fits_the_published_summary(tmp_pat
     assert "topt_live_pipeline (8x, up to 412 MiB)" in published
 
 
+def test_the_worst_case_text_fits_the_published_summary_with_the_longest_job_names(tmp_path: Path) -> None:
+    """12 counts, 5 jobs with names of 35 characters, 4 counts without an event: the longest finding alone."""
+    names = [f"a_very_long_job_name_for_the_test_{letter}" for letter in "abcde"]
+    assert {len(name) for name in names} == {35}
+    events = [_over(names[index % 5], 410 + index, pid=10 + index) for index in range(8)]
+    tracker = _tracker_with_events(*events, count=12)
+
+    text = _judge(_container(tmp_path, "a", ticks=1), tracker=tracker, baseline=NOTHING).red[0]
+
+    published = nightly_verdicts.bounded("failed: " + text)
+    assert published == "failed: " + text, "the finding alone is not cut"
+    assert f"{CAPACITY.run_mib} MiB (12 time(s))" in published and published.endswith("4 more not named")
+
+
 def test_the_text_names_the_three_largest_jobs_and_counts_the_others(tmp_path: Path) -> None:
     events = [_over(f"job_{size}", size, pid=size) for size in (410, 420, 430, 440, 450)]
     tracker = _tracker_with_events(*events)
@@ -1293,6 +1331,7 @@ def test_the_text_names_the_three_largest_jobs_and_counts_the_others(tmp_path: P
         "job_450 (1x, up to 450 MiB), job_440 (1x, up to 440 MiB), job_430 (1x, up to 430 MiB), and 2 other job(s)"
         in text
     )
+    assert text.endswith("and 2 other job(s)")
 
 
 def test_the_text_says_how_many_counts_have_no_event(tmp_path: Path) -> None:
@@ -1301,7 +1340,7 @@ def test_the_text_says_how_many_counts_have_no_event(tmp_path: Path) -> None:
 
     text = _judge(_container(tmp_path, "a", ticks=1), tracker=tracker, baseline=NOTHING).red[0]
 
-    assert "(3 time(s)): topt_live_pipeline (1x, up to 450 MiB); 2 more not named;" in text
+    assert text.endswith("(3 time(s)): topt_live_pipeline (1x, up to 450 MiB); 2 more not named")
     assert text.startswith("run processes passed the run budget")
 
 
