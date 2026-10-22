@@ -16,7 +16,7 @@
 
 import type { PoolClient } from "pg";
 import type { ReadState } from "@/server/read-state";
-import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, withOpsReader } from "./ops";
+import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, UNDEFINED_TABLE, withOpsReader } from "./ops";
 
 /** The window of the counts. The verdict `job_run_health` judges the same 7 days. */
 export const PIPELINE_WINDOW_DAYS = 7;
@@ -80,9 +80,6 @@ export type PipelineOutcome = ReadState<PipelineOverview>;
 export interface PipelinePrincipal {
   principalKind: "member" | "administrator" | "service";
 }
-
-/** PostgreSQL error code of a relation that does not exist. */
-const UNDEFINED_TABLE = "42P01";
 
 /** One scan of `dagster.runs`: counts of the window, and the newest SUCCESS and FAILURE of all time. */
 export const JOBS_SQL = `
@@ -199,18 +196,28 @@ async function readVerdicts(client: Pick<PoolClient, "query">): Promise<Verdicts
   }
 }
 
+/** The sha of a run plan that records no build (a run before 2026-09-07), as `mart.data_engine_identity` spells it. */
+const UNKNOWN_BUILD = "unknown";
+
 interface Release {
   release: PipelineRelease | null;
   unreadable: string | null;
 }
 
-/** The release is the build of the newest run and the start of its current stretch. A build with no recorded sha has no age. */
+/**
+ * The release is the build of the newest run and the start of its current stretch. No row, or no view, is no
+ * release and no notice: no run has recorded its build yet. Every other reason that the age is missing gets a
+ * notice with its cause, because "no run has recorded its build" would be false.
+ */
 async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<Release> {
   try {
     const build = await loadDataEngineBuild(client);
-    if (build === null || build.gitSha === "unknown") return { release: null, unreadable: null };
+    if (build === null) return { release: null, unreadable: null };
+    if (build.gitSha === UNKNOWN_BUILD) {
+      return { release: null, unreadable: "the newest run plan records no build sha" };
+    }
     const since = await loadReleaseStart(client, build.gitSha);
-    if (since === null) return { release: null, unreadable: null };
+    if (since === null) return { release: null, unreadable: `the run plans hold no start for the build ${build.gitSha}` };
     return { release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 }, unreadable: null };
   } catch (error) {
     return { release: null, unreadable: message(error) };

@@ -78,8 +78,9 @@ export interface OpsPointerRow {
 
 /** #712: which data-engine build produced the newest run, from
  * `mart.data_engine_identity`. `null` when the view has no rows (no run recorded
- * yet) or when the database predates the view (the 2026-09-07 migration); a run
- * recorded before the identity was stamped reads "unknown"/"unknown", not null. */
+ * yet), when the database predates the view (the 2026-09-07 migration), or, on `/admin`,
+ * when the read failed (a missing grant, a timeout); a run recorded before the identity
+ * was stamped reads "unknown"/"unknown", not null. */
 export interface OpsDataEngineBuild {
   gitSha: string;
   imageDigest: string;
@@ -109,6 +110,9 @@ export type OpsOverviewOutcome = ReadState<OpsOverview>;
  * (a database that predates the 2026-09-07 migration). Any other failure, a missing grant or a timeout, propagates:
  * each caller says what it does with it.
  */
+/** PostgreSQL error code of a relation that does not exist. */
+export const UNDEFINED_TABLE = "42P01";
+
 export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Promise<OpsDataEngineBuild | null> {
   let identityResult;
   try {
@@ -117,7 +121,7 @@ export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Pr
         "order by created_at desc limit 1",
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "42P01") return null;
+    if ((error as { code?: string }).code === UNDEFINED_TABLE) return null;
     throw error;
   }
   const row = identityResult.rows[0];

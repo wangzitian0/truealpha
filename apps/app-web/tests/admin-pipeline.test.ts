@@ -332,7 +332,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   }
 }
 
-// --- the start of the stretch is null although a build exists: no age, nothing unreadable ---
+// --- the start of the stretch is null although a build exists: no age, and the page says so ---
 {
   __setTestOpsClient({
     query: async (sql: string) => {
@@ -350,10 +350,11 @@ type QueryCall = { sql: string; params?: unknown[] };
     },
   } as never);
   const outcome = await loadPipelineOverview({ principalKind: "administrator" });
-  assert(outcome.kind === "ready" && outcome.data.release === null && outcome.data.unreadable.release === null, "null start");
+  assert(outcome.kind === "ready" && outcome.data.release === null, "null start has no age");
+  assert(outcome.data.unreadable.release?.includes("no start for the build abc") === true, "and the page says so");
 }
 
-// --- a build with no recorded sha has no age, and says nothing is unreadable ---
+// --- a build with no recorded sha has no age, and the page says why ---
 {
   __setTestOpsClient({
     query: async (sql: string) => {
@@ -373,7 +374,8 @@ type QueryCall = { sql: string; params?: unknown[] };
     },
   } as never);
   const outcome = await loadPipelineOverview({ principalKind: "administrator" });
-  assert(outcome.kind === "ready" && outcome.data.release === null && outcome.data.unreadable.release === null, "unknown build");
+  assert(outcome.kind === "ready" && outcome.data.release === null, "unknown build has no age");
+  assert(outcome.data.unreadable.release?.includes("no build sha") === true, "and says why, not that no run exists");
 }
 
 // --- empty: Dagster has its tables and no finished run ---
