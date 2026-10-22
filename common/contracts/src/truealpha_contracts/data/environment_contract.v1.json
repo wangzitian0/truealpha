@@ -242,6 +242,9 @@
           }
         }
       },
+      "job_run_health_check": {
+        "unmeasured": "No run in the window: the job merged on 2026-10-21 (#1466). It reads one table of run records. Measure it after its first runs."
+      },
       "macro_data_refresh_pipeline": {
         "unmeasured": "No run in the window: the lane is new in #1255. The first run makes one request per year since 2000 at 1 request per second. Measure it after its first runs."
       },

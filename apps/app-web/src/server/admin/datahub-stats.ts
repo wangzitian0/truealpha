@@ -389,15 +389,61 @@ export interface DatahubStats {
   recentCalls: RecentCallRow[];
 }
 
-const NIGHTLY_VERDICTS_SQL = `
+/**
+ * The CURRENT verdict of each check: the newest row per `check_name`. The order is the health endpoint's
+ * (`llm_service.main.NIGHTLY_VERDICTS_SQL`) and the data engine's (`nightly_verdicts.NEWEST_SQL`): `ran_at`,
+ * then `recorded_at`. The table keeps every night, so a bare `order by check_name` listed the whole history,
+ * and the page showed the same check once per night (#1466). The history of one check is one click away:
+ * `NIGHTLY_VERDICT_HISTORY_SQL`.
+ */
+export const NIGHTLY_VERDICTS_SQL = `
+  select distinct on (check_name)
+         check_name,
+         to_char(ran_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as ran_at,
+         ok,
+         summary,
+         dagster_run_id
+  from mart.nightly_verdicts
+  order by check_name, ran_at desc, recorded_at desc
+`;
+
+/** Every recorded verdict of one check, newest first. The bound keeps a year of nights on screen. */
+export const NIGHTLY_VERDICT_HISTORY_SQL = `
   select check_name,
          to_char(ran_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as ran_at,
          ok,
          summary,
          dagster_run_id
   from mart.nightly_verdicts
-  order by check_name
+  where check_name = $1
+  order by ran_at desc, recorded_at desc
+  limit 400
 `;
+
+/** The shape of a verdict name (`mart.nightly_verdicts.check_name`, `nightly_verdicts.is_valid_name`). */
+const CHECK_NAME = /^[a-z0-9_]+(@[a-z0-9_.:-]+)?$/;
+
+/** The history of one check, or null when `check` is not a verdict name (the page then shows no history). */
+export async function loadVerdictHistory(
+  check: string,
+  principal: { principalKind: "member" | "administrator" | "service" } | null,
+): Promise<NightlyVerdictRow[] | null> {
+  if (principal === null || principal.principalKind !== "administrator" || !CHECK_NAME.test(check)) return null;
+  return withOpsReader(async (client) => {
+    const result = await client.query<NightlyVerdictRow>(NIGHTLY_VERDICT_HISTORY_SQL, [check]);
+    return result.rows.map(verdictRow);
+  });
+}
+
+function verdictRow(row: NightlyVerdictRow): NightlyVerdictRow {
+  return {
+    check_name: row.check_name,
+    ran_at: row.ran_at,
+    ok: Boolean(row.ok),
+    summary: row.summary ?? "",
+    dagster_run_id: row.dagster_run_id ?? null,
+  };
+}
 
 const HEADS_SQL = `
   select h.environment, h.universe_id, h.sequence, h.advanced_at::text as advanced_at,
@@ -625,13 +671,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
     return {
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
-      nightlyVerdicts: nightlyVerdicts.rows.map((row) => ({
-        check_name: row.check_name,
-        ran_at: row.ran_at,
-        ok: Boolean(row.ok),
-        summary: row.summary ?? "",
-        dagster_run_id: row.dagster_run_id ?? null,
-      })),
+      nightlyVerdicts: nightlyVerdicts.rows.map(verdictRow),
       heads: heads.rows.map((row: HeadDbRow) => {
         const parsedAvail =
           row.availability !== null && row.availability !== undefined

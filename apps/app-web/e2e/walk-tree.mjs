@@ -323,6 +323,20 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
   const leak = mainText.match(/\bundefined\b|\[object Object\]|\bNaN\b/);
   if (leak) problems.push(`/admin/datahub shows "${leak[0]}"`);
 
+  // #1466: the verdict table lists the CURRENT verdict of each check, so no check name appears twice.
+  const verdictHeading = page.getByRole("heading", { name: /^Standing check verdicts/i });
+  if ((await verdictHeading.count()) > 0) {
+    const checkNames = await verdictHeading.first().evaluate((node) => {
+      const container = node.closest("div")?.parentElement;
+      if (!container) return [];
+      return Array.from(container.querySelectorAll("tbody tr td:first-child")).map((td) => td.innerText.trim());
+    });
+    const repeated = checkNames.filter((name, index) => checkNames.indexOf(name) !== index);
+    if (repeated.length > 0) {
+      problems.push(`/admin/datahub verdict table lists a check more than once: ${[...new Set(repeated)].join(", ")}`);
+    }
+  }
+
   const sourcesHeading = page.getByRole("heading", { name: /^Sources$/i });
   if ((await sourcesHeading.count()) > 0) {
     const sourceNames = await sourcesHeading.first().evaluate((node) => {
@@ -334,6 +348,28 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
     if (sweepLeaks.length > 0) {
       problems.push(`/admin/datahub Sources table includes timestamped sweep run(s): ${sweepLeaks.join(", ")}`);
     }
+  }
+}
+
+/** #1466: /admin/pipeline says something in every state. With Dagster tables it lists a row per job and shows
+ * both verdict cards and the release age; without them (the CI database) it says that the history is unavailable.
+ * Either way the page leaks no `undefined`, `[object Object]` or `NaN`. */
+async function assertPipelineHealth(page, path, problems, role) {
+  if (path !== "/admin/pipeline" || role !== "administrator") return;
+  if ((await page.getByRole("heading", { name: /^Pipeline$/i }).count()) === 0) {
+    problems.push("missing /admin/pipeline heading");
+    return;
+  }
+  const mainText = await page.locator("main").innerText();
+  const leak = mainText.match(/\bundefined\b|\[object Object\]|\bNaN\b/);
+  if (leak) problems.push(`/admin/pipeline shows "${leak[0]}"`);
+  const jobRows = await page.locator("tr[data-job]").count();
+  if (jobRows > 0) {
+    for (const marker of ['[data-verdict="job_run_health"]', '[data-verdict="runtime_shape"]', "[data-release-age]"]) {
+      if ((await page.locator(marker).count()) === 0) problems.push(`/admin/pipeline lists jobs but has no ${marker}`);
+    }
+  } else if (!/Run history unavailable|No finished run|Error loading the pipeline health/.test(mainText)) {
+    problems.push("/admin/pipeline lists no job and does not say why");
   }
 }
 
@@ -514,6 +550,7 @@ async function checkRoute(page, path, role, pageErrors) {
   await assertCurrentNavLink(page, path, problems);
   await assertFunnelSaysSomething(page, path, problems, role);
   await assertDatahubPlantHealth(page, path, problems, role);
+  await assertPipelineHealth(page, path, problems, role);
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
