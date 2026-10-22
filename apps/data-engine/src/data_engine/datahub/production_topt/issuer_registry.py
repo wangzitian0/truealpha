@@ -127,17 +127,21 @@ class IssuerClassification:
 #: Attempts to read one issuer's submissions (#1323). Three attempts wait 1 s, then 2 s.
 REGISTRY_ATTEMPTS = 3
 REGISTRY_BACKOFF_SECONDS = 1.0
-#: Issuers in a row whose read failed in a way the next issuer may share: a timeout after every
-#: attempt, a block (403), a spent budget. At this count the registry is down. Each remaining issuer
-#: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no
-#: more. A long outage costs one read timeout (`REGISTRY_READ_TIMEOUT_SECONDS`) for each issuer instead of three.
+#: Issuers in a row whose read failed in a way that the next issuer may share. Examples: a timeout after
+#: every attempt, a block (403), a spent budget. At this count the registry is down. Each remaining issuer
+#: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no more.
+#: A long outage costs one read timeout (`REGISTRY_READ_TIMEOUT_SECONDS`) for each issuer, not three.
 REGISTRY_OUTAGE_AFTER = 3
-#: Seconds that one submissions read may wait for the host (#1323). `sec.client()` waits 30 s, which is the
-#: right limit for a company-facts read (staging, 35 days: the longest was 73 s) and far too long here. Staging
-#: call ledger, 2026-09-16 to 2026-10-21: 3340 submissions reads, median 226 ms, 99th percentile 623 ms, longest
-#: successful read 3602 ms, one failure: the 30 s timeout of the tick on 2026-10-20 22:45. 10 s is 2.8 times the
-#: longest successful read. A read that waits longer is a read that failed. This bounds the time of a pass
-#: without leaving an issuer unread: a host that never answers costs 10 s for each issuer after the breaker trips.
+#: Seconds that one submissions read may wait for the host (#1323). `sec.client()` waits 30 s. That limit fits a
+#: company-facts read (the longest on staging in 35 days: 73 s), which is a large document. A submissions read
+#: is small. Source: the call ledger of the staging database, 2026-09-16 to 2026-10-21, TOPT and QQQ ticks
+#: (`select duration_ms, ok from staging.api_call_ledger where source = 'sec' and endpoint = 'submissions'`):
+#: 3340 reads, median 226 ms, 99th percentile 623 ms, longest successful read 3602 ms. One read failed: the
+#: 30 s timeout of the tick on 2026-10-20 22:45. 10 s is 2.8 times the longest successful read.
+#: The timeout does not bound the time of a pass. One failing issuer costs 3 x 10 s + 3 s of waits. A sustained
+#: outage costs 269 s for 20 issuers and 84 minutes for 500, and every issuer is still read. A host that
+#: fails two issuers in a row and answers the third never trips the breaker, and the run monitor of Dagster ends the
+#: run after `max_runtime_seconds`. That cost is accepted: a cap would leave issuers unread while the host recovers.
 REGISTRY_READ_TIMEOUT_SECONDS = 10.0
 #: The payload key of a financial-fact observation whose issuer the registry could not classify.
 UNAVAILABLE_PAYLOAD_KEY = "registry_unavailable"

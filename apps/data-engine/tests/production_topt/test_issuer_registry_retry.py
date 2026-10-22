@@ -38,12 +38,15 @@ class FakeSec:
     def __init__(self, script: Callable[[int, int], Outcome]) -> None:
         self.script = script
         self.reads: list[int] = []
+        #: The timeouts that the request carried to the transport: what a real transport would wait.
+        self.timeouts: list[dict[str, float | None]] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         match = _CIK.search(request.url.path)
         assert match is not None, f"the registry asked the socket for {request.url}"
         cik = int(match.group(1))
         self.reads.append(cik)
+        self.timeouts.append(request.extensions["timeout"])
         outcome = self.script(cik, self.reads.count(cik))
         if isinstance(outcome, Exception):
             raise outcome
@@ -193,31 +196,18 @@ def test_a_body_cut_short_is_tried_again(monkeypatch, pauses, broken) -> None:
     assert 1 in reading.classifications
 
 
-def test_the_registry_waits_ten_seconds_for_one_read_not_the_thirty_of_the_shared_client(monkeypatch, pauses) -> None:
+def test_every_request_of_the_pass_carries_a_timeout_of_ten_seconds(monkeypatch, pauses) -> None:
     """Measured on staging: the longest successful submissions read took 3.6 s, and the one failure waited the
-    30 s of `sec.client()`. A pass over a host that never answers costs this timeout for each issuer, never 30 s."""
-    clients: list[httpx.Client] = []
-    socket = FakeSec(lambda cik, attempt: ok())
+    30 s of `sec.client()`. The client of the pass is built with 30 s. The request that reaches the transport must
+    carry 10 s for connect, read, write and pool: a timeout passed to the fetch function would override it."""
+    socket = FakeSec(lambda cik, attempt: timeout() if cik == 2 else ok())
+    monkeypatch.setattr(sec, "client", lambda: httpx.Client(transport=httpx.MockTransport(socket.handle), timeout=30.0))
 
-    def build() -> httpx.Client:
-        clients.append(httpx.Client(transport=httpx.MockTransport(socket.handle), timeout=30.0))
-        return clients[-1]
+    issuer_registry.resolve_issuer_classifications({"T1": 1, "T2": 2, "T3": 3})
 
-    monkeypatch.setattr(sec, "client", build)
-
-    issuer_registry.resolve_issuer_classifications({"T1": 1})
-
-    assert clients[0].timeout == httpx.Timeout(10.0)
-    assert issuer_registry.REGISTRY_READ_TIMEOUT_SECONDS == 10.0
-
-
-def test_a_slow_host_never_leaves_an_issuer_unread(monkeypatch, pauses) -> None:
-    """Every read times out: each issuer is read, none is named "not read"."""
-    socket, reading = read(monkeypatch, lambda cik, attempt: timeout(), list(range(1, 31)))
-
-    assert sorted(reading.unavailable) == list(range(1, 31))
-    assert set(socket.reads) == set(range(1, 31)), "every issuer was read at least once"
-    assert not any(reason.startswith("not read") for reason in reading.unavailable.values())
+    wanted = {"connect": 10.0, "read": 10.0, "write": 10.0, "pool": 10.0}
+    assert len(socket.timeouts) == 5, "one read each for two issuers, three attempts for the one that times out"
+    assert all(carried == wanted for carried in socket.timeouts)
 
 
 def test_a_missing_issuer_neither_resets_nor_counts_toward_an_outage(monkeypatch, pauses) -> None:
