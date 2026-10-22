@@ -23,6 +23,16 @@ consumer reads the rate that was knowable at its cutoff. That rate is the one of
 a rate that the Treasury publishes late on the day of the run is not needed before the next run.
 The schedule runs in production and in staging. Elsewhere the job runs only by hand.
 
+First load of an environment: launch ``macro_data_refresh_pipeline`` once, by hand, after the first
+deploy that carries this lane. Use the launchpad with an empty run config (``{}``). The job takes no run
+config. The first run makes one request per calendar year from 2000 to the current year (27 requests in
+2026, about one per second, so about half a minute). Measured on the live files on 2026-10-22, it stores
+6,701 observations of ``us_treasury_bill_3_month`` and 6,704 of each of the two other series. The counts
+grow by one per business day. A reader of the rate (every capture tick and the nightly backtest, see
+``tests/test_macro_refresh_precedes_the_readers.py``) fails closed while the series is empty. So this launch
+comes before the first night. A boot canary tick that starts at the deploy, before the launch, fails once
+at the rate. It keeps its capture and its build identity.
+
 Manual replay: launch ``macro_data_refresh_pipeline`` from the Dagster UI launchpad, or through
 GraphQL. The job takes no run config. A replay on the same UTC day makes no request, because the files
 of that day have landed. A replay on a later day fetches the files again and appends the new or
