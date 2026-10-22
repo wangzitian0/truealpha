@@ -382,7 +382,7 @@ def _insert_params(record: CallRecord) -> tuple:
 def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
     """The ledger INSERT for ``record`` and its parameters: the base columns, and the columns of
     each group that the record sets."""
-    columns = _BASE_COLUMNS
+    columns: tuple[str, ...] = _BASE_COLUMNS
     if any(getattr(record, column) is not None for column in _ATTEMPT_COLUMNS):
         columns += _ATTEMPT_COLUMNS
     if record.fetch_key is not None:
