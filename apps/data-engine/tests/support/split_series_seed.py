@@ -55,6 +55,15 @@ def store_flat_daily_series(
         store_daily_series(connection, symbol, lambda _day: (close, close), first=first, last=last)
 
 
+def store_flat_topt_series(connection: Any, *, last: date, first: date = date(2026, 1, 2)) -> None:
+    """Flat series of every TOPT symbol in one open transaction, for a test that freezes a core snapshot.
+
+    The member builder never keeps a filed count without series that prove the splits (#1277). A test
+    that expects an available core result stores the series first. `last` is on or after the close session.
+    """
+    store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=first, last=last)
+
+
 def store_topt_series(database_url: str, *, first: date = date(2025, 12, 1), last: date = date(2026, 9, 30)) -> None:
     """Flat series of every symbol the market-data lane stores, committed to one test database.
 
