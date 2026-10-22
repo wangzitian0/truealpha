@@ -96,8 +96,12 @@ declare
     row_json constant jsonb := to_jsonb(new);
     pointer bigint;
 begin
-    -- A mistyped column name must fail loudly. It would read as NULL and pass every insert.
-    if tg_nargs <> 1 or not row_json ? tg_argv[0] then
+    -- A trigger without its column name, or with a mistyped one, must fail loudly. It would read as NULL
+    -- and pass every insert.
+    if tg_nargs <> 1 then
+        raise exception '% takes exactly one argument, the column of the fetch pointer', tg_name;
+    end if;
+    if not row_json ? tg_argv[0] then
         raise exception '%.% is not a column of the row', tg_table_name, tg_argv[0];
     end if;
     pointer := (row_json ->> tg_argv[0])::bigint;

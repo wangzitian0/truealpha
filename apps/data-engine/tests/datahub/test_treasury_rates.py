@@ -909,8 +909,20 @@ def test_the_pointer_check_fails_loudly_on_a_trigger_without_an_argument(connect
         "execute function mart.require_stored_fetch()"
     )
 
-    with pytest.raises(psycopg.errors.RaiseException, match="is not a column"):
+    with pytest.raises(psycopg.errors.RaiseException, match="takes exactly one argument"):
         connection.execute("insert into pointer_probe_bare values (1)")
+
+
+def test_the_pointer_check_fails_loudly_on_a_trigger_with_two_arguments(connection) -> None:
+    """Two arguments are not a column name: the message says so, not that the first column is unknown."""
+    connection.execute("create temp table pointer_probe_two (id bigint)")
+    connection.execute(
+        "create trigger probe before insert on pointer_probe_two for each row "
+        "execute function mart.require_stored_fetch('id', 'extra')"
+    )
+
+    with pytest.raises(psycopg.errors.RaiseException, match="takes exactly one argument"):
+        connection.execute("insert into pointer_probe_two values (1)")
 
 
 def test_the_fetch_time_is_read_after_the_answer_arrives(connection) -> None:

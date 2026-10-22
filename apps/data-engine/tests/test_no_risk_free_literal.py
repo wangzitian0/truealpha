@@ -48,7 +48,7 @@ SCANNED_ROOTS = (
 #: The data files of the contracts. The golden decision set holds explicit rates for the known-answer replay.
 DATA_ROOT = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
 ALLOWED_DATA_PATHS = {("large_model_value_v0_definition_1_0_0.json", ("golden_decision_set", "risk_free_rates"))}
-_NAME = re.compile(r"risk_?free|(^|_)t_?bill(_|$)|treasury_(bill_)?rate|(^|_)rf_?rate", re.IGNORECASE)
+_NAME = re.compile(r"risk_?free|(^|_)t_?bills?(\d|_|$)|treasury_(bill_)?rate|(^|_)rf_?rate", re.IGNORECASE)
 #: Calls that take the rate. A literal argument, zero too, would hand them a number the code made up.
 CONSUMERS = {"GppeV0Definition", "evaluate_cutoff", "run_strategy_replay_for_cutoff"}
 
@@ -179,14 +179,7 @@ def risk_free_literals(source: str) -> list[tuple[int, str]]:
     """(line, name) of every violation of rules 1 to 4 in `source`."""
     tree = ast.parse(source)
     bindings = list(_bindings(tree))
-    counters = {
-        name for node in ast.walk(tree) if isinstance(node, ast.AugAssign) for name in _target_names(node.target)
-    }
-    literal_names = {
-        name
-        for name, value, _ in bindings
-        if _whole_value_is_literal(value) and _literal_value(value) and name not in counters
-    }
+    literal_names = {name for name, value, _ in bindings if _whole_value_is_literal(value) and _literal_value(value)}
     violations: list[tuple[int, str]] = []
     for name, value, line in bindings:
         if not _NAME.search(name):
@@ -286,6 +279,9 @@ def _scanned_files() -> list[Path]:
         "class A:\n    @property\n    def treasury_bill_rate(self):\n        return 0.05",
         "rf_rate = 0.05",
         "t_bill_rate = Decimal('0.05')",
+        "tbill3m = 0.05",
+        "t_bills = 0.05",
+        "r = 0.05\nr += 0\nevaluate_cutoff(inputs, definition, cutoff, r)",
         "risk_free_rate += 0.01",
         "(risk_free_rate := Decimal('0.05'))",
     ],
@@ -320,6 +316,9 @@ def _scanned_files() -> list[Path]:
         "property-return",
         "rf-rate-name",
         "t-bill-name",
+        "tbill-with-digits",
+        "t-bills-plural",
+        "literal-kept-by-a-zero-increment",
         "augmented-assignment",
         "walrus",
     ],
@@ -342,7 +341,6 @@ def test_the_scan_finds_a_numeric_risk_free_literal(source: str) -> None:
         "MAX_RATE_LAG_DAYS = 2 * macro_registration_for(INSTRUMENT).max_age_days",
         "default_bill = 5\nnet_billing_days = 30",
         "def risk_free_rate():\n    return rows[-1].value",
-        "n += 1\nevaluate_cutoff(inputs, definition, cutoff, n)",
     ],
     ids=[
         "resolved",
@@ -356,7 +354,6 @@ def test_the_scan_finds_a_numeric_risk_free_literal(source: str) -> None:
         "lag-days",
         "names-with-bill-inside",
         "returned-index",
-        "counter-passed",
     ],
 )
 def test_the_scan_leaves_a_resolved_rate_a_declared_zero_and_other_names_alone(source: str) -> None:

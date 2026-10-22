@@ -6,7 +6,8 @@ after the refresh of its night is safe. A reader that fires before the refresh o
 series that is a day old, and on the first night after a deploy it reads an empty series.
 
 The test finds the readers in the code. It does not list them from memory. A module that calls
-`risk_free_rate_at` is a reader, and the test names the job that runs it. A new reader module
+`risk_free_rate_at`, or a function that reaches it (`run_topt_pipeline`, `run_core_strategy_backtest`,
+`sweep_core_strategy_backtest`), is a reader, and the test names the job that runs it. A new reader module
 turns the test red until its job is named here.
 
 The order is measured on the clock of one night: the number of hours from the refresh to the reader,
@@ -27,21 +28,32 @@ SOURCE = REPO / "apps" / "data-engine" / "src"
 MAX_HOURS_AFTER_THE_REFRESH = 6
 
 
-def _jobs_of_the_readers() -> dict[str, set[str]]:
-    """The readers by module, with the Dagster jobs that run them.
+#: The functions that read the rate, or reach a function that does.
+READER_FUNCTIONS = {
+    "risk_free_rate_at",
+    "run_topt_pipeline",
+    "run_core_strategy_backtest",
+    "sweep_core_strategy_backtest",
+}
 
-    `run_topt_pipeline` reads the rate once per capture tick (TOPT, QQQ, S&P 500 and the canary).
-    `run_core_strategy_backtest` reads one rate per cutoff of the nightly backtest."""
+
+def _jobs_of_the_readers() -> dict[str, set[str]]:
+    """The modules that read the rate, with the Dagster jobs that run them.
+
+    `run_topt_pipeline` reads the rate once per capture tick (TOPT, QQQ, S&P 500 and the canary). Its caller
+    is the capture lane. `run_core_strategy_backtest` reads one rate per cutoff. Its caller is the nightly
+    backtest lane. The modules that define the two functions call `risk_free_rate_at` or each other."""
+    ticks = {tick.job_name for tick in capture.TICKS}
     return {
-        "apps/data-engine/src/data_engine/datahub/production_topt/composition.py": {
-            tick.job_name for tick in capture.TICKS
-        },
+        "apps/data-engine/src/data_engine/datahub/production_topt/composition.py": ticks,
+        "apps/data-engine/src/data_engine/lanes/capture.py": ticks,
         "apps/data-engine/src/data_engine/datahub/backtest.py": {backtest.BACKTEST_JOB_NAME},
+        "apps/data-engine/src/data_engine/lanes/backtest.py": {backtest.BACKTEST_JOB_NAME},
     }
 
 
 def _modules_that_read_the_rate() -> set[str]:
-    """Every file under src that calls `risk_free_rate_at`, except the module that defines it."""
+    """Every file under src that calls a reader function, except the module that defines `risk_free_rate_at`."""
     found = set()
     for path in SOURCE.rglob("*.py"):
         if path.name == "risk_free.py":
@@ -49,7 +61,7 @@ def _modules_that_read_the_rate() -> set[str]:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Call):
                 name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-                if name == "risk_free_rate_at":
+                if name in READER_FUNCTIONS:
                     found.add(path.relative_to(REPO).as_posix())
     return found
 
@@ -116,7 +128,7 @@ def test_the_refresh_fires_before_every_reader_of_its_night() -> None:
 
 
 def test_the_deployed_order_in_hours_after_the_refresh() -> None:
-    """The measured order, so a reader of the next lane can see where it sits (UTC, production and staging)."""
+    """The measured order, so a reader of the next lane can see where it sits (UTC, the environment of the test)."""
     jobs = {job for names in _jobs_of_the_readers().values() for job in names}
     refresh = _deployed_refresh_cron()
     (refresh_minute,) = _minutes_of_day(refresh)
