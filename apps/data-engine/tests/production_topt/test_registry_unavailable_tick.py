@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections import Counter
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -220,7 +221,7 @@ def test_the_next_unforced_tick_asks_the_registry_again(
 def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empty_eligible_set_refuses_the_run(
     tick_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every read times out. Three issuers spend three attempts each, the 17 others one attempt each, and the run
+    """Every read times out. Three issuers spend three attempts each, the 18 others one attempt each, and the run
     is refused: the empty eligible set is the only run refusal."""
     socket, _pauses = _arm_registry(monkeypatch, timing_out_tickers=None)
     monkeypatch.setattr(settings, "database_url", tick_database_url)
@@ -233,7 +234,13 @@ def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empt
     with pytest.raises(dg.Failure, match="all 20 decisions are excluded"):
         run_topt_live_tick(dg.build_op_context(), config)
 
-    assert len(socket.submissions_reads) == 3 * 3 + 17, "three issuers spend three attempts each, 17 get one"
+    # `_offline_routes` gives each of the 21 listings its own fake CIK (GOOG and GOOGL are two listings of one
+    # issuer, so 21 CIKs stand for 20 issuers). The three lowest CIKs spend three attempts. Each of the 18 others
+    # gets one attempt, and none is left unread: 3 x 3 + 18 = 27 reads.
+    ciks = sorted(set(socket.cik_by_ticker.values()))
+    assert len(ciks) == 21
+    assert Counter(socket.submissions_reads) == {cik: 3 if cik in ciks[:3] else 1 for cik in ciks}
+    assert len(socket.submissions_reads) == 3 * 3 + 18
     with psycopg.connect(tick_database_url) as reader:
         assert reader.execute(_HEAD_SQL).fetchone() == head_before, "the pointer stays on the previous accepted run"
 
