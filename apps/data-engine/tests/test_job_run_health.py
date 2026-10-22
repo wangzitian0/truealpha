@@ -376,3 +376,4 @@ def test_the_verdict_is_registered_once_and_the_schedule_runs_before_runtime_sha
     )
     assert request.tags[TICK_TAG] == "2026-10-22T06:20:00+00:00"
     assert quality.JOB_RUN_HEALTH_CRON == "20 6 * * *"
+    assert quality.job_run_health_schedule.cron_schedule == quality.JOB_RUN_HEALTH_CRON
