@@ -32,6 +32,7 @@ from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import store_risk_free_series  # noqa: E402
 from production_topt.test_degraded_capture_forced import (  # noqa: E402
     _arm,
     _bundle,
@@ -40,7 +41,6 @@ from production_topt.test_degraded_capture_forced import (  # noqa: E402
     _quote,
 )
 from production_topt.test_plausibility_tick import _HEAD_SQL, _LISTING_SQL  # noqa: E402
-from macro_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import store_topt_series  # noqa: E402
 
 #: The settled session the tick prices on.
