@@ -2034,29 +2034,52 @@ def test_a_run_whose_listings_have_no_stored_series_never_values_a_filed_count(c
     assert {item.current_pgp for item in results} == {None}
 
 
-def test_every_reason_of_the_live_share_basis_is_a_registered_core_reason_code() -> None:
+def test_the_reasons_of_the_live_share_basis_are_exactly_the_registered_share_basis_codes() -> None:
     """`_snapshot_member` turns the reason of `live_on_close_basis` into a core reason code.
 
-    An unregistered reason raises at the tick. This test raises first. It reads each reason that
-    `share_basis` builds into an `Unavailable(NAME, ...)` and holds it registered in the core (#1277).
+    An unregistered reason raises at the tick, after the capture is committed. This test raises first.
+    It reads each reason that `share_basis` builds into an `Unavailable(...)`: a named constant or a
+    string literal. The reasons equal the registered share-basis codes, in both directions (#1277).
     """
     import ast
     import inspect
 
     from data_engine.datahub import share_basis
+    from factors.production_topt import SHARE_BASIS_REASON_CODES
 
-    reasons = {
-        getattr(share_basis, node.args[0].id)
-        for node in ast.walk(ast.parse(inspect.getsource(share_basis)))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "Unavailable"
-        and isinstance(node.args[0], ast.Name)
-    }
-    registered = {code.value for code in ToptCoreReasonCode}
+    reasons: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(share_basis))):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Unavailable"):
+            continue
+        reason = node.args[0] if node.args else next(item.value for item in node.keywords if item.arg == "reason")
+        if isinstance(reason, ast.Constant) and isinstance(reason.value, str):
+            reasons.add(reason.value)
+        elif isinstance(reason, ast.Name):
+            reasons.add(getattr(share_basis, reason.id))
+        # Another expression, such as `gaps[0].reason`, passes on a reason that another call built.
+    registered = {code.value for code in SHARE_BASIS_REASON_CODES}
 
-    assert len(reasons) == 8, f"the reader found {sorted(reasons)}"
-    assert reasons <= registered, sorted(reasons - registered)
+    assert reasons, "the reader found no reason"
+    assert reasons == registered, (
+        f"only in share_basis: {sorted(reasons - registered)}; only registered: {sorted(registered - reasons)}"
+    )
+    assert registered <= {code.value for code in ToptCoreReasonCode}
+
+
+def test_a_member_with_an_empty_history_drops_its_count_by_name() -> None:
+    """`freeze_snapshot` passes `()` for an issuer that has no listing ticker. `live_on_close_basis` names it."""
+    rows = _member_rows_for_probe(
+        shares_outstanding="10000000",
+        shares_period_end="2026-01-20",
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 2, 1), own_date=date(2026, 1, 20))
+        },
+    )
+
+    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", rows, histories=())
+
+    assert member.shares_outstanding.value is None
+    assert member.shares_outstanding.unavailable_reason is ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
 
 
 def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_confidence(

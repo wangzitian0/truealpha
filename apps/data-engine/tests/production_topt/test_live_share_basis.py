@@ -67,6 +67,8 @@ FILED = date(2026, 2, 1)
 #: The stored series start here, before the basis date of every share count.
 SERIES_START = date(2025, 12, 1)
 _BANK_TICKER = "JPM"
+#: The payload of this ticker has `shares_period_end` and no vintage entry for the share count.
+NO_VINTAGE_TICKER = "MA"
 
 
 def _flat(_day: date) -> tuple[Decimal | None, Decimal | None]:
@@ -98,7 +100,7 @@ def _company_facts(shares: Decimal, *, accession: str) -> bytes:
     ).encode()
 
 
-def _bundle(branch: OperatingBranch, *, cik: int) -> FinancialFactsBundle:
+def _bundle(branch: OperatingBranch, *, cik: int, vintaged: bool = True) -> FinancialFactsBundle:
     financial = branch is OperatingBranch.FINANCIAL
     accession = f"0000{cik}-26-000001"
     return FinancialFactsBundle(
@@ -110,7 +112,11 @@ def _bundle(branch: OperatingBranch, *, cik: int) -> FinancialFactsBundle:
         raw_bytes=_company_facts(FILED_SHARES, accession=accession),
         knowable_at=datetime.combine(FILED, datetime.min.time(), tzinfo=UTC),
         shares_period_end=COVER_DATE,
-        vintages={"shares_outstanding": share_count_vintage(filed=FILED, own_date=COVER_DATE, accession=accession)},
+        vintages=(
+            {"shares_outstanding": share_count_vintage(filed=FILED, own_date=COVER_DATE, accession=accession)}
+            if vintaged
+            else {}
+        ),
     )
 
 
@@ -177,7 +183,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
     price = MarketPriceAdapter(price_targets, quote)
     financial = SecFinancialFactAdapter(
         sec_targets,
-        lambda cik, cutoff, branch: _bundle(branch, cik=cik),
+        lambda cik, cutoff, branch: _bundle(branch, cik=cik, vintaged=cik != cik_by_ticker[NO_VINTAGE_TICKER]),
         headcount_extractor=PostgresHeadcountExtractor(connection),
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
@@ -524,8 +530,9 @@ def test_a_split_after_the_filing_gives_the_core_price_to_gross_profit_on_the_po
 
     The core divides the market value by the gross profit. The market value is the post-split
     count of 100,000,000 shares at 40. The control AAPL has no split and keeps its filed count.
-    Red without the share basis in `_snapshot_member`: the core multiplied the pre-split count by
-    the post-split close, and the P/GP of NVDA was ten times too small.
+    This test was green on main already: #1309 put the count on the basis of the close for listings
+    that have stored series. It is the standing check through the deployed tick. With the adjustment
+    removed from `_snapshot_member` it fails, because the P/GP of NVDA is then ten times too small.
     """
     nvda, control = _core(tick, "NVDA"), _core(tick, "AAPL")
 
@@ -555,3 +562,21 @@ def test_the_core_keeps_the_filed_count_when_the_series_prove_that_no_split_happ
 
     assert jnj.availability == "available"
     assert _places(jnj.current_pgp) == _places(CLOSE * FILED_SHARES / GROSS_PROFIT), jnj
+
+
+# -- one rule dates a share count: the strategy seed and the core agree (#1277 review) -------------
+
+
+def test_a_count_with_no_vintage_entry_is_dated_alike_by_the_strategy_seed_and_the_core(tick: Tick) -> None:
+    """The payload of MA holds `shares_period_end` and no vintage entry for the count.
+
+    `share_count_entry` dates it for both builders: the own date from the payload, the filing date from
+    the time at which the observation became knowable. No split lies in the window, so both keep the
+    filed count. Red before the shared function: the strategy seed passed no entry and excluded MA
+    with `missing_market_value_input`, while the core dated the count and valued MA.
+    """
+    served, core = _served(tick, NO_VINTAGE_TICKER), _core(tick, NO_VINTAGE_TICKER)
+
+    assert served.exclusion_reason is None and served.shares == FILED_SHARES, served
+    assert core.availability == "available", core
+    assert _places(core.current_pgp) == _places(served.market_value / GROSS_PROFIT), (served, core)

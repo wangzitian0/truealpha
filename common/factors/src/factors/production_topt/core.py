@@ -135,6 +135,22 @@ class ToptCoreReasonCode(StrEnum):
     CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
 
 
+#: The reason codes above that name a share count with no proven share basis (#1277). A test holds this set
+#: equal to the reasons that `data_engine.datahub.share_basis` builds into `Unavailable(...)`.
+SHARE_BASIS_REASON_CODES = frozenset(
+    {
+        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
+        ToptCoreReasonCode.NO_UNADJUSTED_SERIES,
+        ToptCoreReasonCode.SPLIT_DERIVATION_FAILED,
+        ToptCoreReasonCode.SPLIT_SERIES_DO_NOT_COVER_THE_WINDOW,
+        ToptCoreReasonCode.LISTINGS_DISAGREE_ON_SPLITS,
+        ToptCoreReasonCode.SHARE_COUNT_UNDATED,
+        ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
+        ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
+    }
+)
+
+
 class ToptMetricInput(_FrozenModel):
     """One provenance-neutral value selected into an exact snapshot."""
 

@@ -49,7 +49,6 @@ from data_engine.datahub.production_topt.status_dimensions import (
     source_evidence_status_for,
 )
 from data_engine.datahub.share_basis import (
-    SHARES_KEY,
     LiveShareCount,
     OnCloseBasis,
     SplitHistory,
@@ -57,6 +56,7 @@ from data_engine.datahub.share_basis import (
     live_on_close_basis,
     split_history,
 )
+from data_engine.datahub.share_count_entry import share_count_entry
 
 log = logging.getLogger(__name__)
 
@@ -471,22 +471,6 @@ def _cell(row: _ObservationRow) -> ToptCellQualityInput:
     )
 
 
-def _share_entry(financial: FinancialFactPayload, knowable_at: datetime) -> Mapping[str, Any]:
-    """The share-count vintage entry passed to `share_basis.live_on_close_basis` (#1277)."""
-    entry = (financial.vintage or {}).get(SHARES_KEY)
-    if isinstance(entry, Mapping):
-        if entry.get("period_end") and entry.get("filed"):
-            return entry
-        merged = dict(entry)
-    else:
-        merged = {}
-    if financial.shares_period_end is not None and not merged.get("period_end"):
-        merged["period_end"] = financial.shares_period_end.isoformat()
-    if merged.get("period_end") and not merged.get("filed"):
-        merged["filed"] = knowable_at.astimezone(UTC).date().isoformat()
-    return merged
-
-
 def _observation_documents(connection: Connection[Any], observation_id: str) -> list[dict[str, Any]]:
     """The stored company-facts documents behind one financial-fact observation (#1277)."""
     rows = connection.execute(
@@ -775,7 +759,7 @@ class PostgresToptCoreRepository:
                 LiveShareCount(
                     shares=shares_value,
                     knowable_at=financial_row.knowable_at,
-                    entry=_share_entry(financial, financial_row.knowable_at),
+                    entry=share_count_entry(financial.vintage, financial.shares_period_end, financial_row.knowable_at),
                     close_session=market_row.knowable_at.astimezone(UTC).date(),
                     close_knowable_at=market_row.knowable_at,
                     close=price.close,

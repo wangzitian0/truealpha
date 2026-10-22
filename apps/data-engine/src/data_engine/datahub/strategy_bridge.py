@@ -55,6 +55,7 @@ from data_engine.datahub.share_basis import (
     live_on_close_basis,
     split_history,
 )
+from data_engine.datahub.share_count_entry import share_count_entry
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import bind_strategy_run_to_capture, write_replay
 
@@ -355,7 +356,7 @@ def _counts_on_close_basis(
             LiveShareCount(
                 shares=Decimal(str(payload[SHARES_KEY])),
                 knowable_at=observed_at,
-                entry=(payload.get("vintage") or {}).get(SHARES_KEY),
+                entry=share_count_entry(payload.get("vintage"), payload.get("shares_period_end"), observed_at),
                 close_session=close_observed_at.astimezone(UTC).date(),
                 close_knowable_at=close_observed_at,
                 close=Decimal(str(close_payload["close"])),
