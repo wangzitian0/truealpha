@@ -329,3 +329,41 @@ def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypa
     waits.clear()
     TwelveDataQuoteFetcher("k", throttle_seconds=8, today=_AFTER)("AAPL", _SETTLED_DAY)
     assert waits == [], "no request was sent, so there is no minute to wait out"
+
+
+def test_the_series_of_a_session_with_no_end_of_day_yet_is_not_landed_while_that_session_is_today(
+    vendor, call_ledger, landed_keys
+) -> None:
+    """`/eod` has no data and `today == cutoff`: the series row is still forming, so it must not outlive the day.
+
+    Red without the `final` rule on the no-end-of-day branch: the next day read the forming row from the
+    index and attached no bar."""
+    answers, asked = vendor
+    answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_PARTITION)("AAPL", _PARTITION)
+    assert landed_keys.bodies == {}, "a window that ends today landed"
+    assert [row.fetch_key for row in call_ledger] == [None, None]
+
+    next_day = date(2026, 9, 14)
+    answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=next_day)("AAPL", _PARTITION)
+    assert len(asked) == 4, "the next day asked for the series again"
+    assert len(landed_keys.bodies) == 1, "the series of a session that has ended landed"
+
+
+def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_has_no_key(
+    vendor, call_ledger, landed_keys
+) -> None:
+    """The end of day settled the session, but the series window has not published that row yet."""
+    lagging = json.dumps(
+        {"values": [{"datetime": "2026-09-10", "open": "1", "high": "1", "low": "1", "close": "1"}], "status": "ok"}
+    ).encode()
+    answers, asked = vendor
+    answers.extend([(200, _SETTLED_EOD), (200, lagging), (200, _SETTLED_SERIES)])
+
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    assert len(landed_keys.bodies) == 1, "only the end of day landed"
+    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+
+    assert len(asked) == 3 and len(landed_keys.bodies) == 2, "the series was asked again and then landed"
+    assert [row.fetch_key is None for row in call_ledger] == [False, True, False]

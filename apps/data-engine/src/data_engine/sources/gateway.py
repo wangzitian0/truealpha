@@ -241,6 +241,11 @@ class CallRecord:
             return
         self.payload_sha256 = digest
         self.byte_length = len(raw)
+        # An answer that the fetch refuses to keep (a window that is not final) is not a counted fetch:
+        # the request is asked again on purpose, so its row carries no key (#1411 K7).
+        accept = _fetch_accept.get()
+        if self.fetch_key is not None and accept is not None and not _accepts(accept, raw):
+            self.fetch_key = None
 
     def fail(self, error: str) -> None:
         """Mark the call failed with a vendor-side reason (a 4xx body, a bad return code)."""
@@ -675,6 +680,12 @@ def _exact_cost(cost: Decimal | int) -> Decimal:
 _active: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("external_call_active", default=None)
 #: The fetch key of the `fetch_once` that is making its one external request (#1411 K3).
 _fetch_key: contextvars.ContextVar[str | None] = contextvars.ContextVar("external_call_fetch_key", default=None)
+#: The rule that decides whether the answer of that request may be kept (`fetch_once(accept=...)`).
+_fetch_accept: contextvars.ContextVar[Callable[[bytes], bool] | None] = contextvars.ContextVar(
+    "external_call_fetch_accept", default=None
+)
+#: True inside a probe: a forced run that asks every vendor again and uses no index (`probe_scope`).
+_probe: contextvars.ContextVar[bool] = contextvars.ContextVar("external_call_probe", default=False)
 
 
 @contextmanager
@@ -859,6 +870,29 @@ def urlopen(
 
 # --- landed keys (#1411 K3): each key is fetched once -----------------------------------
 
+
+def _accepts(accept: Callable[[bytes], bool], body: bytes) -> bool:
+    """Whether ``accept`` keeps ``body``. A rule that raises on an answer it cannot read refuses it."""
+    try:
+        return bool(accept(body))
+    except Exception:  # noqa: BLE001 - an unreadable answer is not a final one
+        return False
+
+
+@contextmanager
+def probe_scope(active: bool = True) -> Iterator[None]:
+    """Make every keyed fetch in the block a probe when ``active``.
+
+    A forced tick (`force_fetch`, #874) exists to prove that the deployed release reaches its vendors
+    (`quality.release_fetch_proof`). A probe therefore asks the vendor again, carries no fetch key, and
+    neither reads nor writes the index of landed keys. The verdict lists its rows as unkeyed."""
+    token = _probe.set(active)
+    try:
+        yield
+    finally:
+        _probe.reset(token)
+
+
 _landed_keys: LandedKeys = PostgresLandedKeys(_pg, _pg_reset)
 
 
@@ -874,7 +908,7 @@ def landed(key: FetchKey) -> bytes | None:
     earlier container is served here with no external call. A lookup that fails reads as a miss
     and is logged, because dedup never decides whether a caller may fetch. With the ledger off
     (a local probe with no warehouse) nothing is landed and nothing is found."""
-    if settings.external_call_ledger == "off":
+    if settings.external_call_ledger == "off" or _probe.get():
         return None
     try:
         return _landed_keys.lookup(key)
@@ -887,7 +921,7 @@ def land(
     key: FetchKey, body: bytes, *, content_type: str = "application/json", fetched_at: datetime | None = None
 ) -> None:
     """Record ``body`` as the landing of ``key``, on the connection that survives a rollback."""
-    if settings.external_call_ledger == "off":
+    if settings.external_call_ledger == "off" or _probe.get():
         return
     try:
         _landed_keys.land(
@@ -909,16 +943,22 @@ def current_fetch_key() -> str | None:
 
 
 @contextmanager
-def fetching(key: FetchKey) -> Iterator[None]:
+def fetching(key: FetchKey, accept: Callable[[bytes], bool] | None = None) -> Iterator[None]:
     """Stamp the ledger row of the ONE external request in the block with ``key``.
 
-    For a caller that decides itself whether the answer may be kept (`landed`, then `fetching`,
-    then `land`). `fetch_once` is the short form."""
-    token = _fetch_key.set(key.ledger_key)
+    ``accept`` is the rule that keeps an answer. A request whose answer it refuses is recorded without
+    the key. In a probe nothing is stamped. For a caller that decides itself whether the answer may be
+    kept (`landed`, then `fetching`, then `land`). `fetch_once` is the short form."""
+    if _probe.get():
+        yield
+        return
+    key_token = _fetch_key.set(key.ledger_key)
+    accept_token = _fetch_accept.set(accept)
     try:
         yield
     finally:
-        _fetch_key.reset(token)
+        _fetch_accept.reset(accept_token)
+        _fetch_key.reset(key_token)
 
 
 def fetch_once(
@@ -936,20 +976,20 @@ def fetch_once(
     verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
     failed or refused call is tried again by the next caller.
 
-    ``accept`` judges the answer before it lands. An answer it refuses (an error body with status
-    200, a window whose session has not settled) goes to the caller and stays out of the index.
-    ``keep=False`` is for a request whose answer is not final at all: it is made without a key,
-    reads nothing from the index and writes nothing to it. Its row is unkeyed, and the verdict lists
-    it as such. A caller that needs more control uses `landed`, `fetching` and `land`."""
-    if not keep:
+    ``accept`` judges the answer. An answer it refuses (an error body with status 200, a window whose
+    session has not settled) goes to the caller, stays out of the index, and its ledger row carries no
+    key, because the next caller asks again on purpose. ``keep=False`` is the same for a request that is
+    not final at all: no key, nothing read from or written to the index. Inside a `probe_scope` every
+    request is like that. A caller that needs more control uses `landed`, `fetching` and `land`."""
+    if not keep or _probe.get():
         return fetch()
     hit = landed(key)
     if hit is not None:
         return hit
     started = _utcnow()
-    with fetching(key):
+    with fetching(key, accept):
         body = fetch()
-    if accept is None or accept(body):
+    if accept is None or _accepts(accept, body):
         land(key, body, content_type=content_type, fetched_at=started)
     return body
 

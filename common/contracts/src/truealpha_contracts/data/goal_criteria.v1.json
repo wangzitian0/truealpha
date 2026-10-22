@@ -130,7 +130,7 @@
       "statement": "No fetch key is fetched twice per environment per day.",
       "threshold": "0 duplicate keys",
       "window": "per environment per day",
-      "oracle": "platform",
+      "oracle": "repository",
       "status": "partial",
       "verdict_keys": ["fetch_keys_once"],
       "pending_on": "#1411 K3: the N-PORT, OpenFIGI, universe-list and price-lane calls carry no fetch key yet"

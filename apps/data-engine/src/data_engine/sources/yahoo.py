@@ -135,6 +135,8 @@ def _session_is_final(body: bytes, end: date) -> bool:
     bar would then stand in for the session. An ``end`` that is no XNYS session needs no bar."""
     from data_engine.datahub.market_prices import is_xnys_trading_day, xnys_session_close_utc
 
+    if end > gateway._utcnow().date():
+        return False
     if not is_xnys_trading_day(end):
         return True
     if gateway._utcnow() < xnys_session_close_utc(end):

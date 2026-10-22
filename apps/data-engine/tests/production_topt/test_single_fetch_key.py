@@ -217,20 +217,69 @@ def test_k3_a_window_that_is_not_final_is_asked_each_time_without_a_key(call_led
     assert [row.fetch_key for row in call_ledger] == [None, None], "an unfinished window is not a counted key"
 
 
-def test_k3_an_answer_that_the_caller_refuses_reaches_the_caller_and_stays_out_of_the_index(
+def test_k3_an_answer_that_the_caller_refuses_stays_out_of_the_index_and_its_row_carries_no_key(
     call_ledger, landed_keys
 ) -> None:
+    """A refused answer is asked again on purpose, so it is not a counted fetch of the key."""
     key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
     answers = [b'{"status":"error"}', b'{"close":"1"}']
+    socket: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        socket.append(str(request.url))
+        return httpx.Response(200, content=answers.pop(0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
 
     def fetch() -> bytes:
-        return answers.pop(0)
+        return bytes(gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test").content)
 
     accept = lambda body: b"error" not in body  # noqa: E731 - the one rule under test
     assert gateway.fetch_once(key, fetch, accept=accept) == b'{"status":"error"}'
     assert landed_keys.bodies == {}
     assert gateway.fetch_once(key, fetch, accept=accept) == b'{"close":"1"}'
     assert landed_keys.bodies == {key: b'{"close":"1"}'}
+    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key]
+    assert len(socket) == 2
+
+
+def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_alone(call_ledger, landed_keys) -> None:
+    """A forced tick proves that the release reaches its vendors (`release_fetch_proof`)."""
+    key = FetchKey("sec", "companyfacts", "issuer:cik:0000320193", "2026-10-16")
+    landed_keys.bodies[key] = b'{"landed":"yesterday"}'
+    socket: list[str] = []
+    client = _socket(socket)
+
+    def fetch() -> bytes:
+        return bytes(gateway.http_get(client, "sec", "companyfacts", "https://data.sec.gov/x", caller="test").content)
+
+    with gateway.probe_scope(True):
+        assert gateway.fetch_once(key, fetch) == b'{"cik":1652044}'
+        assert gateway.landed(key) is None
+        gateway.land(key, b"ignored")
+    assert socket == ["https://data.sec.gov/x"], "the probe must reach the vendor socket"
+    assert [row.fetch_key for row in call_ledger] == [None]
+    assert landed_keys.bodies == {key: b'{"landed":"yesterday"}'} and landed_keys.reuses == {}
+    # Outside the probe the landed key is served again, with no request.
+    assert gateway.fetch_once(key, fetch) == b'{"landed":"yesterday"}' and len(socket) == 1
+
+
+def test_k5_the_standards_crosswalk_read_asks_the_index_before_it_admits_a_call(landed_keys) -> None:
+    """`ticker_cik_index(http, via=gateway)`: the admission and the ledger row happen only on a miss."""
+    calls: list[str] = []
+
+    class StandardsGateway:
+        def call(self, source: str, endpoint: str, fn: Any) -> Any:
+            calls.append(f"{source}/{endpoint}")
+            return fn()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"0":{"ticker":"AAPL","cik_str":320193}}')
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert sec.ticker_cik_index(http, via=StandardsGateway()) == {"AAPL": 320193}  # type: ignore[arg-type]
+    assert sec.ticker_cik_index(http, via=StandardsGateway()) == {"AAPL": 320193}  # type: ignore[arg-type]
+    assert calls == ["sec/company_tickers"], "the second read must not be admitted as a call"
 
 
 # --- Yahoo: a chart lands only when its session is final and its bar is in it -----------
@@ -291,15 +340,33 @@ def test_k3_yahoo_does_not_land_a_chart_before_the_close_of_its_session(yahoo_so
 
 
 def test_k3_yahoo_does_not_land_a_closed_session_whose_bar_the_vendor_has_not_published(
-    yahoo_socket, landed_keys
+    yahoo_socket, landed_keys, call_ledger
 ) -> None:
-    """Yahoo can lag after the close. The chart then ends one session early and must be asked again."""
+    """Yahoo can lag after the close. The chart then ends one session early and must be asked again.
+
+    The first, refused request is a request that is asked again on purpose: its row has no key, so
+    `fetch_keys_once` does not count the second request as a duplicate."""
     yahoo_socket.extend([_chart("2026-03-27", "2026-03-30"), _chart("2026-03-30", "2026-03-31")])
     after_close = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
     _fetch_chart(date(2026, 3, 31), after_close)
     assert landed_keys.bodies == {}
     _fetch_chart(date(2026, 3, 31), after_close)
     assert len(landed_keys.bodies) == 1 and yahoo_socket == []
+    assert [row.fetch_key is None for row in call_ledger] == [True, False]
+
+
+def test_k3_yahoo_does_not_land_a_window_that_ends_after_today(yahoo_socket, landed_keys) -> None:
+    """A future `end` has no session to settle: whatever the vendor answers is not final."""
+    from data_engine.sources import yahoo
+
+    now = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
+    gateway_now = gateway._utcnow
+    gateway._utcnow = lambda: now  # type: ignore[assignment]
+    try:
+        assert yahoo._session_is_final(_chart("2026-03-31"), date(2026, 4, 4)) is False  # a Saturday
+        assert yahoo._session_is_final(_chart("2026-03-31"), date(2026, 3, 31)) is True
+    finally:
+        gateway._utcnow = gateway_now  # type: ignore[assignment]
 
 
 def test_k5_the_vendor_oracle_reads_the_company_facts_that_the_adapter_landed(monkeypatch) -> None:

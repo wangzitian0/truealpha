@@ -23,8 +23,11 @@ a caller that does not name its key cannot prove it fetched once. The number is 
 A request whose answer is not final (a window that ends today) is made without a key, so it is
 listed as unkeyed and never counted as a duplicate.
 
-A forced tick (`force_fetch`) reads the same index. It does not ask the vendors again for a key that
-landed. A key that must be fetched again is deleted from `staging.landed_fetch_keys` by an operator.
+A forced tick (`force_fetch`) is a probe: it asks the vendors again, its rows carry no key, and it
+neither reads nor writes the index. A request whose answer the fetch refuses to keep (a chart whose
+session has not closed, an answer without the session's row) is asked again on purpose, so its row carries
+no key either. Both are listed as unkeyed. A key that must be fetched again is deleted from
+`staging.landed_fetch_keys` by an operator.
 """
 
 from __future__ import annotations

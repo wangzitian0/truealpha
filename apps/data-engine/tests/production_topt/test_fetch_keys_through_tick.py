@@ -1,14 +1,16 @@
-"""Two live ticks on one day make no repeated vendor request (#1411 K3/K5/K7, #1418 R2.B2).
+"""Ticks of one cutoff on one day make no repeated vendor request (#1411 K3/K5/K7, #1418 R2.B2).
 
-These tests drive the deployed Dagster op `run_topt_live_tick` twice with the same cutoff. The
-second tick sets `force_fetch`, as staging's boot canary and an operator do: the adapters then
-ask their vendors again instead of reusing the committed observations (#635). The vendors are a
-fake HTTP socket under the deployed clients: the real `sec` and `yahoo` clients, the real source
+These tests drive the deployed Dagster op `run_topt_live_tick` three times with the same cutoff.
+The second tick cannot reuse the committed observations (#635 reuses them for twelve hours; the
+window is set to zero here, as when one origin of a run was refused and the next tick has to ask
+every origin again). The adapters then ask their vendors again. The third tick sets `force_fetch`,
+as staging's boot canary and an operator do: it is a probe that must reach the vendors. The vendors
+are a fake HTTP socket under the deployed clients: the real `sec` and `yahoo` clients, the real source
 gateway, the real call ledger and the real index of landed keys, all in an isolated database.
 
-What the tests judge is the socket and the ledger. A request that reaches the socket twice, or a
-fetch key with two successful ledger rows on one UTC day, fails them. The nightly verdict
-`fetch_keys_once` reads the same ledger and names the key when a duplicate is injected.
+What the tests judge is the socket and the ledger. A request that reaches the socket again for a key
+that landed, or a fetch key with two successful ledger rows on one UTC day, fails them. The nightly
+verdict `fetch_keys_once` reads the same ledger and names the key when a duplicate is injected.
 """
 
 from __future__ import annotations
@@ -208,11 +210,12 @@ class Ticks:
     vendors: FakeVendors
     requests_after_first: Counter[str]
     requests_after_second: Counter[str]
+    requests_after_third: Counter[str]
 
 
 @pytest.fixture(scope="module")
 def ticks() -> Iterator[Ticks]:
-    """Two deployed ticks of one cutoff in an isolated database, with the deployed ledger and index."""
+    """Three deployed ticks of one cutoff in an isolated database, with the deployed ledger and index."""
     from data_engine.datahub import a1_evidence
 
     with isolated_test_database("fetchkeys") as url, pytest.MonkeyPatch.context() as monkeypatch:
@@ -244,9 +247,12 @@ def ticks() -> Iterator[Ticks]:
         try:
             _tick(force_fetch=False)
             first = Counter(vendors.requests)
-            _tick(force_fetch=True)
+            monkeypatch.setattr(composition, "_REUSE_MAX_AGE", timedelta(0))
+            _tick(force_fetch=False)
             second = Counter(vendors.requests)
-            yield Ticks(url, date.fromisoformat(day), vendors, first, second)
+            _tick(force_fetch=True)
+            third = Counter(vendors.requests)
+            yield Ticks(url, date.fromisoformat(day), vendors, first, second, third)
         finally:
             gateway._pg_reset()
 
@@ -264,13 +270,34 @@ def test_the_first_tick_asks_each_vendor_key_once(ticks: Ticks) -> None:
 
 
 def test_a_second_tick_of_the_same_cutoff_makes_zero_repeated_vendor_requests(ticks: Ticks) -> None:
-    """Acceptance. The forced tick asks the adapters again; every key is served from the index.
+    """Acceptance. The second tick asks its adapters again; every key is served from the index.
 
-    Red without the index of landed keys: the forced tick asked SEC for every company-facts
+    Red without the index of landed keys: the second tick asked SEC for every company-facts
     document and Yahoo for every chart a second time.
     """
     added = ticks.requests_after_second - ticks.requests_after_first
     assert dict(added) == {}, f"the second tick reached the vendor socket again: {dict(added)}"
+
+
+def test_a_forced_tick_is_a_probe_that_reaches_every_vendor_and_leaves_unkeyed_rows(ticks: Ticks) -> None:
+    """The boot canary forces a fetch to prove that the release reaches its vendors (`release_fetch_proof`).
+
+    Red when the index serves a forced tick: the release proof then passes with no vendor call."""
+    probed = ticks.requests_after_third - ticks.requests_after_second
+    first = ticks.requests_after_first
+    assert set(probed) == set(first), "the probe must ask every path of the first tick again"
+    # GOOG and GOOGL share one CIK: the first tick asks it once, and a probe has no index to share it by.
+    assert all(probed[path] >= first[path] for path in first)
+    with psycopg.connect(ticks.url) as connection:
+        unkeyed = connection.execute(
+            "select count(*) from staging.api_call_ledger "
+            "where fetch_key is null and ok and source in ('sec', 'yahoo') and caller not like 'injected-%'"
+        ).fetchone()[0]
+        keyed = connection.execute(
+            "select count(*) from staging.api_call_ledger where fetch_key is not null and ok and caller not like 'injected-%'"
+        ).fetchone()[0]
+    assert unkeyed == sum(probed.values()), "each probe request is a ledger row without a key"
+    assert keyed == sum(ticks.requests_after_first.values()), "the first tick is the only keyed fetch of each key"
 
 
 def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) -> None:

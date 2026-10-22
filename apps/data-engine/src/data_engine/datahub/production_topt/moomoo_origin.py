@@ -301,8 +301,7 @@ class MoomooKlineFetcher:
 
     def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
         # One key per symbol and settled session (#1411 K3): the second tick, the second universe and
-        # the canary read the landed bars. The key also keeps moomoo's 30-day distinct-stock quota
-        # from being asked the same stock twice.
+        # the canary read the landed bars, so OpenD is asked once for them.
         key = FetchKey(
             "moomoo", f"history_kline?lookback={_KLINE_LOOKBACK_DAYS}", f"symbol:{symbol}", cutoff.isoformat()
         )
