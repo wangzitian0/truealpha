@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.lanes import production_only_schedule_status
@@ -30,8 +31,11 @@ def _is_source_refresh_enabled(source) -> bool:
     """Refresh the constituents and the N-PORT holdings of a universe that the process environment runs.
 
     The contract is the only source of "scheduled" and "stopped" (#67, #1310): a stopped universe, and
-    a universe that the environment does not list, are not refreshed.
+    a universe that the environment does not list, are not refreshed. A source that the contract does not
+    name at all (a universe added before the contract lists it) is refreshed: the contract has no rule for it.
     """
+    if source.etf not in load_environment_contract().known_tick_keys:
+        return True
     return is_universe_scheduled(source.etf, settings.app_env)
 
 

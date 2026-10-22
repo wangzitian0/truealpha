@@ -1062,19 +1062,26 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
         def __init__(self, etf: str) -> None:
             self.etf = etf
 
+    UNLISTED = "universe-the-contract-does-not-list"
+
     def enabled() -> dict[str, bool]:
-        return {etf: universe_refresh._is_source_refresh_enabled(_Source(etf)) for etf in ("qqq", "sp500", "canary")}
+        return {
+            etf: universe_refresh._is_source_refresh_enabled(_Source(etf))
+            for etf in ("qqq", "sp500", "canary", UNLISTED)
+        }
 
     monkeypatch.setattr(settings, "app_env", "production")
-    assert enabled() == {"qqq": True, "sp500": False, "canary": True}, SP500_STOPPED_BECAUSE
+    assert enabled() == {"qqq": True, "sp500": False, "canary": True, UNLISTED: True}, SP500_STOPPED_BECAUSE
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True}
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}
 
     monkeypatch.setattr(capture, "load_environment_contract", lambda: unlocked)
     monkeypatch.setattr(settings, "app_env", "production")
-    assert enabled() == {"qqq": True, "sp500": True, "canary": True}, "the contract unlocks the SP500"
+    assert enabled() == {"qqq": True, "sp500": True, "canary": True, UNLISTED: True}, "the contract unlocks the SP500"
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True}, "staging does not list the SP500"
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}, (
+        "staging does not list the SP500"
+    )
 
 
 @pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
