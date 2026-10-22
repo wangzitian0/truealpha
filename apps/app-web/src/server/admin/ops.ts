@@ -85,8 +85,6 @@ export interface OpsDataEngineBuild {
   imageDigest: string;
   runId: string;
   createdAt: string;
-  /** The first time any run recorded this build: the age of the release is the time since then (#1466). */
-  firstRunAt: string;
 }
 
 export interface OpsOverview {
@@ -106,31 +104,53 @@ export interface OpsOverview {
 export type OpsOverviewOutcome = ReadState<OpsOverview>;
 
 /**
- * The data-engine build behind the newest run, and when a run first recorded that build. The one reader
- * of `mart.data_engine_identity` for the Operate world: `/admin` and `/admin/pipeline` both call it (#1466).
- * `null` when the view has no row or does not exist (a database that predates the 2026-09-07 migration).
+ * The data-engine build behind the newest run. The one reader of `mart.data_engine_identity` for the Operate
+ * world: `/admin` and `/admin/pipeline` both call it (#1466). `null` when the view has no row or does not exist
+ * (a database that predates the 2026-09-07 migration).
  */
 export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Promise<OpsDataEngineBuild | null> {
   try {
-    const result = await client.query(
-      "select n.run_id, n.git_sha, n.image_digest, n.created_at, " +
-        "(select min(i.created_at) from mart.data_engine_identity i where i.git_sha = n.git_sha) as first_run_at " +
-        "from (select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
-        "order by created_at desc limit 1) n",
+    const identityResult = await client.query(
+      "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
+        "order by created_at desc limit 1",
     );
-    const row = result.rows[0];
-    if (row === undefined) return null;
-    const createdAt = new Date(row.created_at).toISOString();
-    return {
-      gitSha: String(row.git_sha),
-      imageDigest: String(row.image_digest),
-      runId: String(row.run_id),
-      createdAt,
-      firstRunAt: row.first_run_at === null || row.first_run_at === undefined ? createdAt : new Date(row.first_run_at).toISOString(),
-    };
+    const row = identityResult.rows[0];
+    return row === undefined
+      ? null
+      : {
+          gitSha: String(row.git_sha),
+          imageDigest: String(row.image_digest),
+          runId: String(row.run_id),
+          createdAt: new Date(row.created_at).toISOString(),
+        };
   } catch {
+    // The view arrives with the 2026-09-07 migration; a database that predates it
+    // reports the build as unknown rather than failing the whole overview.
     return null;
   }
+}
+
+/**
+ * When the current stretch of a build began: the first run of `$1` after the newest run of any other build.
+ * A revert (A, B, A) starts a new stretch at the second A, and a rebuild of the same sha extends the stretch.
+ * The release age of `/admin/pipeline` is the time since then (#1466). `tests/test_pipeline_event_log_sql.py`
+ * runs this text on the view over real run plans.
+ */
+export const RELEASE_START_SQL = `
+  select min(i.created_at) as since
+  from mart.data_engine_identity i
+  where i.git_sha = $1
+    and i.created_at > coalesce(
+      (select max(j.created_at) from mart.data_engine_identity j where j.git_sha <> $1),
+      '-infinity'::timestamptz
+    )
+`;
+
+/** The start of the current stretch of `gitSha`, ISO 8601, or null when the view has no run of it. Errors propagate. */
+export async function loadReleaseStart(client: Pick<PoolClient, "query">, gitSha: string): Promise<string | null> {
+  const result = await client.query(RELEASE_START_SQL, [gitSha]);
+  const since = result.rows[0]?.since;
+  return since === null || since === undefined ? null : new Date(since).toISOString();
 }
 
 export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<OpsOverviewOutcome> {

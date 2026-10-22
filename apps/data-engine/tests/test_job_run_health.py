@@ -101,17 +101,46 @@ def test_two_failures_with_a_success_between_are_green() -> None:
 
 
 def test_a_weekly_schedule_shows_its_pair_across_the_thirty_days() -> None:
-    """A weekly job has one scheduled run in 7 days. Its last two scheduled runs are a week apart, and a manual
-    run in the window must not hide them."""
-    weekly = (
-        runs_of("weekly", "ff", scheduled=True, end=NOW - timedelta(days=14))[:1]
-        + runs_of("weekly", "f", scheduled=True, end=NOW - timedelta(days=7))
-        + runs_of("weekly", "s", scheduled=False, end=NOW - timedelta(hours=2))
-    )
+    """A weekly job has one scheduled run in 7 days. Its last two scheduled runs are a week apart. The newest run
+    is inside the window and failed, so the pair is red."""
+    weekly = runs_of("weekly", "f", end=NOW - timedelta(days=13)) + runs_of("weekly", "f", end=NOW - timedelta(days=6))
     judgement = job_run_health.judge(newest_first(FLEET, weekly), now=NOW)
 
     assert [job.job for job in judgement.red] == ["weekly"]
     assert judgement.red[0].red == ("last 2 scheduled runs failed",)
+
+
+def test_a_later_success_of_any_trigger_clears_the_pair() -> None:
+    """Two failed scheduled runs, then a manual re-run that succeeded: the job runs again."""
+    weekly = (
+        runs_of("weekly", "f", end=NOW - timedelta(days=13))
+        + runs_of("weekly", "f", end=NOW - timedelta(days=6))
+        + runs_of("weekly", "s", scheduled=False, end=NOW - timedelta(hours=2))
+    )
+    judgement = job_run_health.judge(newest_first(FLEET, weekly), now=NOW)
+
+    assert judgement.red == ()
+
+
+def test_a_manual_failure_after_the_pair_keeps_it_red() -> None:
+    weekly = (
+        runs_of("weekly", "f", end=NOW - timedelta(days=13))
+        + runs_of("weekly", "f", end=NOW - timedelta(days=6))
+        + runs_of("weekly", "f", scheduled=False, end=NOW - timedelta(hours=2))
+    )
+    judgement = job_run_health.judge(newest_first(FLEET, weekly), now=NOW)
+
+    assert [job.job for job in judgement.red] == ["weekly"]
+
+
+def test_a_removed_schedule_with_one_manual_success_in_the_window_is_green() -> None:
+    """The pair is 25 days old, the schedule is gone, and a backfill succeeded this week."""
+    stale = runs_of("backfilled", "ff", end=NOW - timedelta(days=25)) + runs_of(
+        "backfilled", "s", scheduled=False, end=NOW - timedelta(days=2)
+    )
+    judgement = job_run_health.judge(newest_first(FLEET, stale), now=NOW)
+
+    assert judgement.red == ()
 
 
 def test_a_job_with_no_run_in_the_window_is_not_judged() -> None:

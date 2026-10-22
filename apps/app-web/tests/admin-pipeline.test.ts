@@ -7,8 +7,8 @@
  * Run standalone: `bun run tests/admin-pipeline.test.ts`.
  */
 
-import { __setTestOpsClient } from "../src/server/admin/ops";
-import { firstErrorLine, loadPipelineOverview } from "../src/server/admin/pipeline";
+import { RELEASE_START_SQL, __setTestOpsClient } from "../src/server/admin/ops";
+import { FAILURE_EVENTS_SQL, JOBS_SQL, firstErrorLine, loadPipelineOverview } from "../src/server/admin/pipeline";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -138,6 +138,13 @@ type QueryCall = { sql: string; params?: unknown[] };
           ],
         };
       }
+      if (sql === RELEASE_START_SQL) {
+        assert(
+          JSON.stringify(params) === JSON.stringify(["0123456789abcdef0123456789abcdef01234567"]),
+          "the start of the stretch is asked for the sha of the newest run",
+        );
+        return { rows: [{ since: firstSeen }] };
+      }
       if (sql.includes("mart.data_engine_identity")) {
         return {
           rows: [
@@ -146,7 +153,6 @@ type QueryCall = { sql: string; params?: unknown[] };
               git_sha: "0123456789abcdef0123456789abcdef01234567",
               image_digest: "sha256:00f7",
               created_at: recent,
-              first_run_at: firstSeen,
             },
           ],
         };
@@ -159,6 +165,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(outcome.kind === "ready", `administrator reads the overview, got ${outcome.kind}`);
   const { jobs, jobRunHealth, runtimeShape, release, windowDays } = outcome.data;
   assert(windowDays === WINDOW_DAYS_FOR_TEST, "the window is 7 days, like the verdict");
+  assert(calls[0].sql === JOBS_SQL, "the loader sends the exported text that the real-database test runs");
   assert(calls[0].params?.[0] === WINDOW_DAYS_FOR_TEST, "the runs query is bound to the window");
   assert(calls[0].params?.[1] === 100, "a job with no finished run for 100 days is not listed (a quarterly job stays)");
 
@@ -180,6 +187,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(idle?.runs === 0 && idle.successRate === null, "no run in the window reads null, never 100%");
 
   const eventCall = calls.find((call) => call.sql.includes("from dagster.event_logs"));
+  assert(eventCall?.sql === FAILURE_EVENTS_SQL, "the loader sends the exported text that the real-database test runs");
   assert(
     JSON.stringify(eventCall?.params) === JSON.stringify([["run-failed-1"]]),
     "the event log is read only for the newest failed run of each job",
@@ -240,9 +248,65 @@ type QueryCall = { sql: string; params?: unknown[] };
   } as never);
   const outcome = await loadPipelineOverview({ principalKind: "administrator" });
   assert(outcome.kind === "ready", "an unreadable event log must not hide the counts");
-  assert(outcome.data.eventLogUnreadable?.includes("permission denied") === true, "the page is told why");
+  assert(outcome.data.unreadable.eventLog?.includes("permission denied") === true, "the page is told why");
+  assert(outcome.data.unreadable.verdicts === null && outcome.data.unreadable.release === null, "the other parts were read");
   const job = outcome.data.jobs[0];
   assert(job.failures === 1 && job.lastFailure?.runId === "run-9" && job.lastFailure.firstError === null, "counts stand");
+}
+
+// --- the verdicts or the release cannot be read: the counts stand, and the page says which part is missing ---
+{
+  __setTestOpsClient({
+    query: async (sql: string, params?: unknown[]) => {
+      if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+      if (sql.includes("from dagster.runs")) {
+        return {
+          rows: [
+            { job: "a_job", successes: 3, failures: 0, last_success: "2026-10-21T01:00:00Z", last_failure: null, last_failure_run_id: null },
+          ],
+        };
+      }
+      if (sql.includes("mart.nightly_verdicts")) {
+        throw Object.assign(new Error("permission denied for table nightly_verdicts"), { code: "42501" });
+      }
+      if (sql === RELEASE_START_SQL) throw new Error("canceling statement due to statement timeout");
+      if (sql.includes("mart.data_engine_identity")) {
+        return {
+          rows: [{ run_id: "r", git_sha: "abc", image_digest: "sha256:1", created_at: "2026-10-21T01:00:00Z" }],
+        };
+      }
+      void params;
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready", "an unreadable verdict table or release must not hide the counts");
+  assert(outcome.data.unreadable.verdicts?.includes("permission denied") === true, "the verdicts say why they are missing");
+  assert(outcome.data.unreadable.release?.includes("statement timeout") === true, "a timeout is told, never reported as no build");
+  assert(outcome.data.jobs.length === 1 && outcome.data.release === null, "the counts stand and the release is missing");
+}
+
+// --- a build with no recorded sha has no age, and says nothing is unreadable ---
+{
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+      if (sql.includes("from dagster.runs")) {
+        return {
+          rows: [{ job: "a_job", successes: 1, failures: 0, last_success: "2026-10-21T01:00:00Z", last_failure: null, last_failure_run_id: null }],
+        };
+      }
+      if (sql === RELEASE_START_SQL) throw new Error("must not ask for the start of an unknown build");
+      if (sql.includes("mart.data_engine_identity")) {
+        return {
+          rows: [{ run_id: "r", git_sha: "unknown", image_digest: "unknown", created_at: "2026-10-21T01:00:00Z" }],
+        };
+      }
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready" && outcome.data.release === null && outcome.data.unreadable.release === null, "unknown build");
 }
 
 // --- empty: Dagster has its tables and no finished run ---

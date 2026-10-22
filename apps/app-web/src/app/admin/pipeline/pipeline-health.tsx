@@ -68,7 +68,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
     );
   }
 
-  const { windowDays, eventLogUnreadable, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
+  const { windowDays, unreadable, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
 
   return (
     <section aria-labelledby="pipeline-heading" className="space-y-6">
@@ -79,9 +79,9 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
         <p className="mt-2 text-sm text-gray-500">
           Finished runs (success or failure) of every Dagster job in the last {windowDays} days, from{" "}
           <span className="font-mono">dagster.runs</span>. The nightly verdict{" "}
-          <span className="font-mono">job_run_health</span> judges the same window: red when the last two scheduled
-          runs of a job failed, or when its failure rate is above that of the other jobs. This page shows the counts and
-          the error line; it does not judge.
+          <span className="font-mono">job_run_health</span> judges these runs: red when the last two scheduled runs of a
+          job (of the last 30 days) failed and its newest run failed, or when its failure rate over {windowDays} days is
+          above that of the other jobs. This page shows the counts and the error line; it does not judge.
         </p>
       </div>
 
@@ -101,10 +101,24 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
         </div>
       </dl>
 
-      {eventLogUnreadable !== null && (
-        <p role="status" className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300" data-event-log-unreadable="true">
-          The Dagster event log could not be read, so the error lines are missing: {eventLogUnreadable}
-        </p>
+      {(
+        [
+          ["event-log", "The Dagster event log could not be read, so the error lines are missing", unreadable.eventLog],
+          ["verdicts", "The verdicts could not be read", unreadable.verdicts],
+          ["release", "The run plans could not be read, so the release age is missing", unreadable.release],
+        ] as const
+      ).map(
+        ([part, words, reason]) =>
+          reason !== null && (
+            <p
+              key={part}
+              role="status"
+              className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300"
+              data-unreadable={part}
+            >
+              {words}: {reason}
+            </p>
+          ),
       )}
 
       <div className="overflow-x-auto rounded-xl border border-border">
@@ -139,7 +153,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
                 <td className="px-4 py-2 font-mono text-xs text-gray-300" title={job.lastFailure?.runId}>
                   {job.lastFailure === null
                     ? "—"
-                    : (job.lastFailure.firstError ?? (eventLogUnreadable === null ? "no error text in the event log" : "—"))}
+                    : (job.lastFailure.firstError ?? (unreadable.eventLog === null ? "no error text in the event log" : "—"))}
                 </td>
               </tr>
             ))}

@@ -30,7 +30,7 @@ const ready: PipelineOutcome = {
   kind: "ready",
   data: {
     windowDays: 7,
-    eventLogUnreadable: null,
+    unreadable: { eventLog: null, verdicts: null, release: null },
     appGitSha: "fedcba9876543210fedcba9876543210fedcba98",
     jobRunHealth: { ok: false, ranAt: "2026-10-21T06:45:00.000Z", summary: "head_reports_pipeline (3 of 13 runs failed)" },
     runtimeShape: { ok: null, ranAt: "2026-10-21T06:30:00.000Z", summary: "pending" },
@@ -90,12 +90,20 @@ const ready: PipelineOutcome = {
   assert(!/undefined|NaN|\[object Object\]/.test(words), "the view leaks no undefined, NaN or [object Object]");
 }
 
-// --- the event log is unreadable: the counts stand and the page says why the lines are missing ---
+// --- a part cannot be read: the counts stand and the page says which part is missing and why ---
 {
-  const unreadable: PipelineOutcome = { kind: "ready", data: { ...ready.data, eventLogUnreadable: "permission denied for table event_logs" } };
+  const unreadable: PipelineOutcome = {
+    kind: "ready",
+    data: {
+      ...ready.data,
+      unreadable: { eventLog: "permission denied for table event_logs", verdicts: "statement timeout", release: null },
+    },
+  };
   const html = render(unreadable);
-  assert(html.includes('data-event-log-unreadable="true"'), "the notice is marked");
-  assert(text(html).includes("The Dagster event log could not be read") && text(html).includes("permission denied"), "the notice names the cause");
+  assert(html.includes('data-unreadable="event-log"') && html.includes('data-unreadable="verdicts"'), "a notice per part");
+  assert(!html.includes('data-unreadable="release"'), "no notice for a part that was read");
+  assert(text(html).includes("The Dagster event log could not be read") && text(html).includes("permission denied"), "event log cause");
+  assert(text(html).includes("The verdicts could not be read") && text(html).includes("statement timeout"), "verdict cause");
   assert(!text(html).includes("no error text in the event log"), "a missing line is not blamed on the event log");
   assert((html.match(/<tr[^>]*data-job="/g) ?? []).length === 3, "the rows stay");
 }

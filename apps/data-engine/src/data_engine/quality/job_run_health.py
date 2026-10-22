@@ -13,10 +13,12 @@ cancelled says nothing about the job.
 
 A job is red on either of these:
 
-* its last two scheduled runs both failed. A scheduled run carries the Dagster tag
-  `dagster/schedule_name`. Two failures in a row with the same trigger are not chance. The two runs
-  come from the last `BASELINE_DAYS` days, so a weekly schedule can show them. A job needs at least
-  one finished run in the last `WINDOW_DAYS` days to be judged at all;
+* its last two scheduled runs both failed, and its newest run of any trigger failed too. A scheduled run
+  carries the Dagster tag `dagster/schedule_name`. Two failures in a row with the same trigger are not
+  chance. The two runs come from the last `BASELINE_DAYS` days, so a weekly schedule can show them. A later
+  success of any trigger, a manual re-run for example, clears the rule: the job runs again. A job needs at
+  least one finished run in the last `WINDOW_DAYS` days to be judged at all, so a schedule that someone
+  removed does not stay red;
 * its failure rate over `WINDOW_DAYS` days is higher than the failure rate of all other jobs over
   `BASELINE_DAYS` days. "Higher" means that the lower end of the 95% Wilson interval of the job's rate
   lies above the rate of the other jobs. The job needs at least `MIN_RUNS` runs, because an interval
@@ -145,12 +147,12 @@ def _rate_of(runs: Iterable[Run]) -> float | None:
     return sum(run.failed for run in counted) / len(counted) if counted else None
 
 
-def _red_reasons(window: list[Run], in_a_row: int, others_rate: float | None) -> tuple[str, ...]:
-    """The rules, for the runs of one job in the window and its scheduled failures in a row."""
+def _red_reasons(window: list[Run], in_a_row: int, newest_failed: bool, others_rate: float | None) -> tuple[str, ...]:
+    """The rules, for the runs of one job in the window, its scheduled failures in a row and its newest run."""
     failures = sum(run.failed for run in window)
     low, high = wilson(failures, len(window))
     reasons: list[str] = []
-    if in_a_row >= 2:
+    if in_a_row >= 2 and newest_failed:
         reasons.append(f"last {in_a_row} scheduled runs failed")
     if others_rate is not None and len(window) >= MIN_RUNS and failures >= MIN_FAILURES and low > others_rate:
         reasons.append(f"{failures} of {len(window)} runs failed, {low:.0%} to {high:.0%} against {others_rate:.0%}")
@@ -181,7 +183,7 @@ def judge(runs: Iterable[Run], *, now: datetime) -> Judgement:
                 interval=wilson(failures, len(window)),
                 scheduled_in_a_row=in_a_row,
                 others_rate=others_rate,
-                red=_red_reasons(window, in_a_row, others_rate),
+                red=_red_reasons(window, in_a_row, history[0].failed, others_rate),
             )
         )
     return Judgement(

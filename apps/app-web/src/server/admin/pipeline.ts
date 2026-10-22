@@ -16,11 +16,11 @@
 
 import type { PoolClient } from "pg";
 import type { ReadState } from "@/server/read-state";
-import { loadDataEngineBuild, RUNS_UNAVAILABLE_MESSAGE, withOpsReader } from "./ops";
+import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, withOpsReader } from "./ops";
 
 /** The window of the counts. The verdict `job_run_health` judges the same 7 days. */
 export const PIPELINE_WINDOW_DAYS = 7;
-/** A job whose newest finished run is older than this has left the deployment (a quarterly job runs every 91 days; staging held a job from July). */
+/** A job whose newest finished run is older than this has left the deployment. A quarterly job runs every 91 days. */
 export const PIPELINE_LISTED_DAYS = 100;
 
 export interface PipelineFailure {
@@ -50,15 +50,24 @@ export interface PipelineVerdict {
 
 export interface PipelineRelease {
   gitSha: string;
-  /** When a run of this build first recorded itself. */
+  /** When the current stretch of this build began: its first run after the newest run of another build. */
   since: string;
   ageHours: number;
 }
 
+export interface PipelineUnreadable {
+  /** The event log: the first error lines are missing. */
+  eventLog: string | null;
+  /** `mart.nightly_verdicts`: both verdict cards are missing. */
+  verdicts: string | null;
+  /** The run plans behind the release age. */
+  release: string | null;
+}
+
 export interface PipelineOverview {
   windowDays: number;
-  /** Why the first error lines are missing (the event log could not be read), or null when it was read. */
-  eventLogUnreadable: string | null;
+  /** Why a part of the page is missing, or null when it was read. The counts stand when a part fails. */
+  unreadable: PipelineUnreadable;
   jobs: PipelineJobRow[];
   jobRunHealth: PipelineVerdict | null;
   runtimeShape: PipelineVerdict | null;
@@ -93,15 +102,16 @@ export const JOBS_SQL = `
 `;
 
 /**
- * The first step failure of each run, or its run failure when no step failed (a run killed by the run
- * monitor). Dagster stores the run failure as `PIPELINE_FAILURE`: `DagsterEventType.RUN_FAILURE` has that value.
+ * The first failure event of each run. Dagster writes the step failure before the run failure, so a run whose op
+ * raised gives its step failure, and a run killed by the run monitor gives its run failure. Dagster stores the run
+ * failure as `PIPELINE_FAILURE`: `DagsterEventType.RUN_FAILURE` has that value.
  * `tests/test_pipeline_event_log_sql.py` runs this text against real Dagster run storage.
  */
 export const FAILURE_EVENTS_SQL = `
   select distinct on (run_id) run_id, dagster_event_type, event
   from dagster.event_logs
   where run_id = any($1::text[]) and dagster_event_type in ('STEP_FAILURE', 'PIPELINE_FAILURE')
-  order by run_id, (dagster_event_type = 'STEP_FAILURE') desc, id
+  order by run_id, id
 `;
 
 const VERDICT_SQL = `
@@ -167,10 +177,44 @@ async function readVerdict(client: Pick<PoolClient, "query">, check: string): Pr
   };
 }
 
-async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<PipelineRelease | null> {
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface Verdicts {
+  jobRunHealth: PipelineVerdict | null;
+  runtimeShape: PipelineVerdict | null;
+  unreadable: string | null;
+}
+
+async function readVerdicts(client: Pick<PoolClient, "query">): Promise<Verdicts> {
+  try {
+    return {
+      jobRunHealth: await readVerdict(client, "job_run_health"),
+      runtimeShape: await readVerdict(client, "runtime_shape"),
+      unreadable: null,
+    };
+  } catch (error) {
+    return { jobRunHealth: null, runtimeShape: null, unreadable: message(error) };
+  }
+}
+
+interface Release {
+  release: PipelineRelease | null;
+  unreadable: string | null;
+}
+
+/** The release is the build of the newest run and the start of its current stretch. A build with no recorded sha has no age. */
+async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<Release> {
   const build = await loadDataEngineBuild(client);
-  if (build === null) return null;
-  return { gitSha: build.gitSha, since: build.firstRunAt, ageHours: (now - new Date(build.firstRunAt).getTime()) / 3_600_000 };
+  if (build === null || build.gitSha === "unknown") return { release: null, unreadable: null };
+  try {
+    const since = await loadReleaseStart(client, build.gitSha);
+    if (since === null) return { release: null, unreadable: null };
+    return { release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 }, unreadable: null };
+  } catch (error) {
+    return { release: null, unreadable: message(error) };
+  }
 }
 
 interface FailureLines {
@@ -190,7 +234,7 @@ async function readFailureLines(client: Pick<PoolClient, "query">, runIds: strin
     return { lines, unreadable: null };
   } catch (error) {
     // A missing grant or a timeout on the event log must not hide the counts. The page says why the lines are missing.
-    return { lines, unreadable: error instanceof Error ? error.message : String(error) };
+    return { lines, unreadable: message(error) };
   }
 }
 
@@ -237,15 +281,17 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
         .map((row) => row.last_failure_run_id)
         .filter((id): id is string => typeof id === "string");
       const failures = await readFailureLines(client, failedRunIds);
+      const verdicts = await readVerdicts(client);
+      const release = await readRelease(client, Date.now());
       return {
         kind: "ready",
         data: {
           windowDays: PIPELINE_WINDOW_DAYS,
-          eventLogUnreadable: failures.unreadable,
+          unreadable: { eventLog: failures.unreadable, verdicts: verdicts.unreadable, release: release.unreadable },
           jobs: grouped.rows.map((row) => jobRow(row, failures.lines)),
-          jobRunHealth: await readVerdict(client, "job_run_health"),
-          runtimeShape: await readVerdict(client, "runtime_shape"),
-          release: await readRelease(client, Date.now()),
+          jobRunHealth: verdicts.jobRunHealth,
+          runtimeShape: verdicts.runtimeShape,
+          release: release.release,
           appGitSha: process.env.GIT_COMMIT_SHA || "unknown",
         },
       };
