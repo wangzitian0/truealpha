@@ -608,3 +608,423 @@ def test_a_self_pinned_corpus_refuses_rows_that_do_not_reproduce_its_sha() -> No
 
     with pytest.raises(ValueError, match="universe corpus instrument mapping drift"):
         corpus_list_version(corpus)
+
+
+# -- the listing exchange of a multi-exchange source (#1411 K6, #1418) -------------------------
+
+_UNKNOWN_EXCHANGE = "unresolved_listing_exchange"
+
+
+@pytest.fixture
+def in_memory_objects(monkeypatch):
+    """The raw bytes of a landed fetch go to memory, so the test needs no object store."""
+    from data_engine import raw_store
+    from truealpha_runtime.testing import InMemoryRawObjectStore
+
+    store = InMemoryRawObjectStore()
+    monkeypatch.setattr(raw_store, "object_store", lambda: store)
+
+
+def _land_constituents(connection, etf: str, rows: list[tuple[str, int, str]]) -> None:
+    """Land one constituent refresh of `etf`: (ticker, cik, figi) rows with raw lineage."""
+    from data_engine import raw_store
+
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id=f"index-constituents:{etf}:exchange-test",
+        body=f"constituents of {etf}".encode(),
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for ticker, cik, figi in rows:
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (etf, date(2026, 8, 17), DataSource.NASDAQ_INDEX.value, fetch_id, ticker, ticker, cik, figi, fetched_at),
+        )
+
+
+def _identity_store_lists(connection, mic_ticker: str) -> None:
+    """The identity store holds one listing entity with a `mic-ticker` alias such as `XNAS:ZQNX`."""
+    legacy_id = f"listing:{mic_ticker.lower()}"
+    entity_id = connection.execute(
+        "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
+    ).fetchone()[0]
+    for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        connection.execute(
+            """
+            insert into staging.entity_aliases
+                (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                 method, confidence, mapping_version)
+            values (%s, %s, %s, '-infinity', null, %s, 'test', 'test', 'asserted', 1, 'test')
+            """,
+            (entity_id, scheme, value, datetime(2026, 1, 1, tzinfo=UTC)),
+        )
+
+
+def test_a_constituent_with_no_known_exchange_is_excluded_by_name_and_gets_no_listing(
+    connection, in_memory_objects
+) -> None:
+    """#1411 K6. The S&P 500 lists NYSE and Nasdaq names. No default exchange stands in for a missing fact.
+
+    ZQUN is in no identity alias, no QQQ row and no TOPT corpus row. Red on main: the denominator
+    held `listing:xnys:zqun`, a listing identity that no source asserted.
+    """
+    _land_constituents(
+        connection,
+        "sp500",
+        [
+            ("AAPL", 320193, "bbg000b9xry4"),
+            ("JPM", 19617, "bbg000dmbxr2"),
+            ("ZQNX", 9990001, "bbg0zqnx0001"),
+            ("ZQUN", 9990002, "bbg0zqun0001"),
+        ],
+    )
+    _identity_store_lists(connection, "XNAS:ZQNX")
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+    listings = {row[3]: row[2] for row in denominator["instruments"]}
+    assert listings == {
+        "AAPL": "listing:xnas:aapl",
+        "JPM": "listing:xnys:jpm",
+        "ZQNX": "listing:xnas:zqnx",
+    }, "the identity store and the corpus name the exchange; no other ticker gets a listing"
+    assert denominator["excluded"] == [
+        {"ticker": "ZQUN", "issuer_id": "issuer:cik:0009990002", "reason": _UNKNOWN_EXCHANGE}
+    ]
+    assert not any(row[2].startswith("listing:xnys:zqun") for row in denominator["instruments"])
+    assert denominator["instrument_count"] == 3 and denominator["obligation_count"] == 12
+
+
+def test_a_single_exchange_source_keeps_the_exchange_that_it_declares(connection, in_memory_objects) -> None:
+    """The canary lists Nasdaq names only, and it says so. Its members need no identity alias."""
+    assert UNIVERSE_SOURCES["canary"].mic == "xnas" and UNIVERSE_SOURCES["qqq"].mic == "xnas"
+    assert UNIVERSE_SOURCES["sp500"].mic is None, "a multi-exchange source declares no exchange"
+    _land_constituents(connection, "canary", [("HBAN", 49196, "bbg000bhp8x8"), ("CINF", 20286, "bbg000bd7q91")])
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["canary"], report_date=date(2026, 6, 30))
+
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "CINF": "listing:xnas:cinf",
+        "HBAN": "listing:xnas:hban",
+    }
+    assert denominator["excluded"] == []
+
+
+def test_a_multi_exchange_source_with_no_resolvable_constituent_fails_loud(connection, in_memory_objects) -> None:
+    _land_constituents(connection, "sp500", [("ZQUN", 9990002, "bbg0zqun0001")])
+
+    with pytest.raises(LookupError, match="no listing exchange resolved"):
+        build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+
+def test_the_membership_route_skips_the_constituent_that_the_denominator_excluded(
+    connection, in_memory_objects
+) -> None:
+    """The confidence report grades the same listings as the denominator holds.
+
+    Red on main: the route stamped the source's `xnys` on every S&P 500 name, and graded
+    `listing:xnys:aapl` and `listing:xnys:zqun`, two listings that the denominator never held.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("AAPL", 320193, "bbg000b9xry4"), ("ZQUN", 9990002, "bbg0zqun0001")])
+
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnas:aapl"}
+    assert notes["constituents_without_listing_exchange"] == ["ZQUN"]
+    assert notes["constituent_count"] == 2
+
+
+# -- the order of the evidence, the validity of an alias, and the failed read (#1411 K6 review) --
+#
+# Every ticker below is one that no ambient alias, QQQ row or TOPT corpus row names, so a shared
+# database cannot change a result. The TOPT corpus is replaced by a corpus that this test writes.
+
+
+@pytest.fixture
+def corpus_rows(monkeypatch):
+    """Replace the TOPT corpus of the resolver with `(ticker, mic)` rows that a test names."""
+    from data_engine.datahub.production_topt import universe_plane
+
+    def install(*rows: tuple[str, str]) -> None:
+        instruments = [
+            [
+                f"issuer:test:{ticker.lower()}",
+                f"security:test:{ticker.lower()}",
+                f"listing:{mic}:{ticker.lower()}",
+                ticker,
+            ]
+            for ticker, mic in rows
+        ]
+        corpus = {"topt_denominator": {"instruments": instruments}}
+        monkeypatch.setattr(universe_plane, "load_corpus", lambda _name: corpus)
+
+    install()
+    return install
+
+
+def _resolve(connection, source_name: str, *tickers: str, **kwargs) -> dict[str, str | None]:
+    from data_engine.datahub.production_topt.universe_plane import resolve_listing_mics
+
+    return resolve_listing_mics(connection, UNIVERSE_SOURCES[source_name], list(tickers), **kwargs)
+
+
+def _alias(
+    connection,
+    mic_ticker: str,
+    *,
+    valid_from: date | None = None,
+    valid_to: date | None = None,
+    recorded: datetime = datetime(2026, 1, 1, tzinfo=UTC),
+    retracted_from: date | None = None,
+    retraction_known: datetime = datetime(2026, 6, 1, tzinfo=UTC),
+) -> None:
+    """One `mic-ticker` alias of a new listing entity.
+
+    It is valid from `valid_from` (always, by default) to `valid_to` (open, by default), and it became
+    known at `recorded`. A retraction from `retracted_from` ends it, and that became known at
+    `retraction_known`."""
+    legacy_id = f"listing:{mic_ticker.lower()}"
+    entity_id = connection.execute(
+        "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
+    ).fetchone()[0]
+    mic_alias_id = None
+    for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        is_mic = scheme == "mic-ticker"
+        alias_id = connection.execute(
+            """
+            insert into staging.entity_aliases
+                (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                 method, confidence, mapping_version)
+            values (%s, %s, %s, coalesce(%s::date, '-infinity'::date), %s, %s, 'test', 'test', 'asserted', 1, 'test')
+            returning alias_id
+            """,
+            (entity_id, scheme, value, valid_from if is_mic else None, valid_to if is_mic else None, recorded),
+        ).fetchone()[0]
+        if is_mic:
+            mic_alias_id = alias_id
+    if retracted_from is not None:
+        connection.execute(
+            "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
+            "values (%s, %s, 'listing moved', %s, 'test', 'test')",
+            (mic_alias_id, retracted_from, retraction_known),
+        )
+
+
+def test_each_kind_of_evidence_names_the_exchange_alone(connection, in_memory_objects, corpus_rows) -> None:
+    """Deleting a block of the resolver turns one line of this test red."""
+    corpus_rows(("ZQE1", "xnys"))
+    _land_constituents(connection, "qqq", [("ZQE2", 9990012, "bbg0zqe20001")])
+    _alias(connection, "XNYS:ZQE3")
+
+    assert _resolve(connection, "sp500", "ZQE1") == {"ZQE1": "xnys"}, "the corpus"
+    assert _resolve(connection, "sp500", "ZQE2") == {"ZQE2": "xnas"}, "the landed QQQ rows"
+    assert _resolve(connection, "sp500", "ZQE3") == {"ZQE3": "xnys"}, "the identity store"
+    assert _resolve(connection, "canary", "ZQE4") == {"ZQE4": "xnas"}, "the exchange that the source declares"
+    assert _resolve(connection, "sp500", "ZQE5") == {"ZQE5": None}, "no evidence"
+
+
+def test_the_evidence_overrides_in_the_documented_order(connection, in_memory_objects, corpus_rows) -> None:
+    """One case for each adjacent pair: source < corpus < landed QQQ rows < identity store."""
+    corpus_rows(("ZQP1", "xnys"), ("ZQP2", "xnys"), ("ZQP3", "xnys"))
+    _land_constituents(connection, "qqq", [("ZQP2", 9990022, "bbg0zqp20001"), ("ZQP3", 9990023, "bbg0zqp30001")])
+    _alias(connection, "XNYS:ZQP3")
+
+    assert _resolve(connection, "canary", "ZQP1") == {"ZQP1": "xnys"}, "the corpus beats the exchange of the source"
+    assert _resolve(connection, "sp500", "ZQP2") == {"ZQP2": "xnas"}, "the QQQ rows beat the corpus"
+    assert _resolve(connection, "sp500", "ZQP3") == {"ZQP3": "xnys"}, "the identity store beats the QQQ rows"
+
+
+def test_an_alias_that_ended_or_was_retracted_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """A retracted `XNYS` alias must not beat the `xnas` that the QQQ rows give. Red on the first review:
+    the resolver read the raw alias rows and took the newest."""
+    _land_constituents(connection, "qqq", [("ZQV1", 9990031, "bbg0zqv10001"), ("ZQV2", 9990032, "bbg0zqv20001")])
+    _alias(connection, "XNYS:ZQV1", valid_to=date(2020, 1, 1))
+    _alias(connection, "XNYS:ZQV2", retracted_from=date(2020, 1, 1))
+    _alias(connection, "XNYS:ZQV3", retracted_from=date(2020, 1, 1))
+
+    resolved = _resolve(connection, "sp500", "ZQV1", "ZQV2", "ZQV3")
+
+    assert resolved == {"ZQV1": "xnas", "ZQV2": "xnas", "ZQV3": None}
+
+
+def test_an_alias_is_read_as_known_at_the_time_asked(connection, in_memory_objects, corpus_rows) -> None:
+    """The retraction became known on 2026-06-01. Before that day the alias still counts."""
+    _land_constituents(connection, "qqq", [("ZQV4", 9990034, "bbg0zqv40001")])
+    _alias(connection, "XNYS:ZQV4", retracted_from=date(2020, 1, 1))
+
+    before = _resolve(connection, "sp500", "ZQV4", valid_at=date(2026, 5, 1), known_at=datetime(2026, 5, 1, tzinfo=UTC))
+    after = _resolve(connection, "sp500", "ZQV4", valid_at=date(2026, 7, 1), known_at=datetime(2026, 7, 1, tzinfo=UTC))
+
+    assert before == {"ZQV4": "xnys"}
+    assert after == {"ZQV4": "xnas"}
+
+
+def test_an_alias_that_starts_after_the_day_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.valid_from <= valid_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW1", 9990061, "bbg0zqw10001")])
+    _alias(connection, "XNYS:ZQW1", valid_from=date(2030, 1, 1))
+    known = datetime(2026, 7, 1, tzinfo=UTC)
+
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2026, 5, 1), known_at=known) == {"ZQW1": "xnas"}
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2031, 1, 1), known_at=known) == {"ZQW1": "xnys"}
+
+
+def test_an_alias_recorded_after_the_time_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.transaction_time <= known_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW2", 9990062, "bbg0zqw20001")])
+    _alias(connection, "XNYS:ZQW2", recorded=datetime(2026, 6, 1, tzinfo=UTC))
+
+    before = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 5, 1), known_at=datetime(2026, 5, 1, tzinfo=UTC))
+    after = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 7, 1), known_at=datetime(2026, 7, 1, tzinfo=UTC))
+
+    assert before == {"ZQW2": "xnas"}
+    assert after == {"ZQW2": "xnys"}
+
+
+def test_the_membership_route_reads_the_identity_store_as_known_at_its_cutoff(
+    connection, in_memory_objects, corpus_rows
+) -> None:
+    """The confidence report asks the resolver for the day and the knowledge of its cutoff.
+
+    Only the identity store names these two tickers: the corpus is empty and no QQQ row exists.
+    ZQC1: a retraction that ended the alias before the cutoff became known only after it. ZQC2: the
+    alias ends on a day after the cutoff. Today is after both. Without `known_at=cutoff` the first
+    ticker has no exchange, and without `valid_at=cutoff.date()` and `known_at=cutoff` the second has none.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("ZQC1", 9990071, "bbg0zqc10001"), ("ZQC2", 9990072, "bbg0zqc20001")])
+    _alias(connection, "XNYS:ZQC1", retracted_from=date(2026, 8, 1), retraction_known=datetime(2026, 10, 1, tzinfo=UTC))
+    _alias(connection, "XNYS:ZQC2", valid_to=date(2026, 9, 15))
+
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnys:zqc1", "listing:xnys:zqc2"}
+    assert notes["constituents_without_listing_exchange"] == []
+
+
+class _FailingReads:
+    """A connection whose read of one table fails. Everything else goes to the real connection."""
+
+    def __init__(self, inner, table: str) -> None:
+        self._inner, self._table = inner, table
+
+    def transaction(self):
+        return self._inner.transaction()
+
+    def execute(self, sql, params=None):
+        if self._table in sql:
+            raise psycopg.OperationalError(f"injected read failure of {self._table}")
+        return self._inner.execute(sql, params)
+
+
+@pytest.mark.parametrize("table", ["staging.etf_constituent_facts", "staging.entity_aliases"])
+def test_a_failed_read_of_the_evidence_raises_and_never_shrinks_the_denominator(
+    connection, corpus_rows, table: str
+) -> None:
+    with pytest.raises(psycopg.OperationalError, match="injected read failure"):
+        _resolve(_FailingReads(connection, table), "sp500", "ZQF1")
+
+
+def test_a_failed_read_of_the_corpus_raises(connection, monkeypatch) -> None:
+    from data_engine.datahub.production_topt import universe_plane
+
+    def unreadable(_name: str) -> dict:
+        raise FileNotFoundError("the TOPT corpus is not in the image")
+
+    monkeypatch.setattr(universe_plane, "load_corpus", unreadable)
+
+    with pytest.raises(FileNotFoundError, match="not in the image"):
+        _resolve(connection, "sp500", "ZQF2")
+
+
+# -- the exclusion is visible where the operator looks (#1411 K6 review) --------------------------
+
+_UNKNOWN_TICKERS = [f"ZQU{index}" for index in range(1, 8)]
+_REFRESH_ROWS = [("ZQR1", 9990041, "bbg0zqr10001")] + [
+    (ticker, 9990050 + index, f"bbg0zqu{index:05d}") for index, ticker in enumerate(_UNKNOWN_TICKERS, start=1)
+]
+
+
+def _exchange_source():
+    from data_engine.datahub.production_topt.universe_plane import UniverseSource
+
+    return UniverseSource(etf="exctest", index_api="", universe_prefix="exctest-us", label="exchange test", mic=None)
+
+
+def _landing(rows: list[tuple[str, int, str]]):
+    """A stand-in for `refresh_etf_constituents`: it lands `rows` as the constituents of the source."""
+
+    def land(connection, source, openfigi_api_key: str = "") -> int:
+        _land_constituents(connection, source.etf, rows)
+        return len(rows)
+
+    return land
+
+
+def test_the_refresh_summary_names_the_count_and_the_first_excluded_tickers(
+    connection, in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    from data_engine.datahub.production_topt import universe_plane
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS))
+
+    outcome = universe_plane.refresh_and_publish(
+        connection, _exchange_source(), report_date=date(2026, 6, 30), note="exchange test"
+    )
+
+    assert "7 constituents excluded, no listing exchange known" in outcome
+    assert "(first 5: ZQU1, ZQU2, ZQU3, ZQU4, ZQU5)" in outcome and "ZQU6" not in outcome
+    assert [item["ticker"] for item in outcome.excluded] == _UNKNOWN_TICKERS
+    assert {item["reason"] for item in outcome.excluded} == {"unresolved_listing_exchange"}
+
+
+def test_the_refresh_summary_of_a_universe_without_exclusions_says_nothing_of_them(
+    connection, in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    from data_engine.datahub.production_topt import universe_plane
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS[:1]))
+
+    outcome = universe_plane.refresh_and_publish(
+        connection, _exchange_source(), report_date=date(2026, 6, 30), note="exchange test"
+    )
+
+    assert "excluded" not in outcome and outcome.excluded == ()
+
+
+def test_the_refresh_op_reports_the_exclusion_in_its_output_metadata(
+    in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    """Through the deployed op, with its own connection and commit, in a database of its own."""
+    import dagster as dg
+    from data_engine.datahub.production_topt import holdings_enrichment, universe_plane
+    from data_engine.lanes.universe_refresh import refresh_universes_op
+    from truealpha_runtime.testing import isolated_test_database
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "UNIVERSE_SOURCES", {"exctest": _exchange_source()})
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS))
+    monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda *_args, **_kwargs: "skipped")
+    with isolated_test_database("universe_refresh") as url:
+        monkeypatch.setattr(settings, "database_url", url)
+        context = dg.build_op_context()
+
+        refresh_universes_op(context)
+
+    metadata = context.get_output_metadata("result")
+    assert metadata is not None and "constituents_excluded" in metadata, "the op reported no exclusion"
+    reported = metadata["constituents_excluded"].value
+    assert reported == {"exctest": {"count": 7, "tickers": _UNKNOWN_TICKERS, "reason": "unresolved_listing_exchange"}}
