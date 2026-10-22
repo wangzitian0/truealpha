@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import urllib.parse
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -262,6 +263,41 @@ def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_al
     assert landed_keys.bodies == {key: b'{"landed":"yesterday"}'} and landed_keys.reuses == {}
     # Outside the probe the landed key is served again, with no request.
     assert gateway.fetch_once(key, fetch) == b'{"landed":"yesterday"}' and len(socket) == 1
+
+
+def test_k3_a_probe_stamps_no_key_on_the_paths_that_call_fetching_directly(call_ledger, landed_keys) -> None:
+    """Twelve Data calls `landed`, `fetching` and `land`; moomoo reads `current_fetch_key()` for its own row.
+
+    Red when `fetching` stamps inside a probe: the rows of a forced tick would then count as fetches."""
+    key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
+    socket: list[str] = []
+    client = _socket(socket)
+    with gateway.probe_scope(True):
+        with gateway.fetching(key):
+            assert gateway.current_fetch_key() is None
+            gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test")
+        gateway.land(key, b"ignored")
+    assert [row.fetch_key for row in call_ledger] == [None] and landed_keys.bodies == {}
+    with gateway.fetching(key):
+        assert gateway.current_fetch_key() == key.ledger_key
+    assert gateway.current_fetch_key() is None, "the stamp ends with the block"
+
+
+def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledger, landed_keys, caplog) -> None:
+    """A rule that cannot read a valid answer must not stay silent: it would unkey every call of a seat."""
+    key = FetchKey("yahoo", "chart", "symbol:AAPL", "2026-10-16")
+    client = _socket([])
+
+    def fetch() -> bytes:
+        return bytes(gateway.http_get(client, "yahoo", "chart", "https://q.example/x", caller="test").content)
+
+    def broken(_body: bytes) -> bool:
+        raise RuntimeError("calendar unavailable")
+
+    with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
+        assert gateway.fetch_once(key, fetch, accept=broken) == b'{"cik":1652044}'
+    assert "the accept rule of a fetch raised" in caplog.text
+    assert landed_keys.bodies == {} and [row.fetch_key for row in call_ledger] == [None]
 
 
 def test_k5_the_standards_crosswalk_read_asks_the_index_before_it_admits_a_call(landed_keys) -> None:

@@ -331,24 +331,34 @@ def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypa
     assert waits == [], "no request was sent, so there is no minute to wait out"
 
 
-def test_the_series_of_a_session_with_no_end_of_day_yet_is_not_landed_while_that_session_is_today(
-    vendor, call_ledger, landed_keys
-) -> None:
-    """`/eod` has no data and `today == cutoff`: the series row is still forming, so it must not outlive the day.
+def test_the_series_of_a_session_with_no_end_of_day_is_never_kept_or_keyed(vendor, call_ledger, landed_keys) -> None:
+    """`/eod` has no data: the series answers for the last settled session and names no row of its own.
 
-    Red without the `final` rule on the no-end-of-day branch: the next day read the forming row from the
-    index and attached no bar."""
+    It shares its key with the settled branch, so keeping it would serve a row-less series to a later
+    settled fetch. Red when this branch lands: the next day then read the stale body and attached no bar."""
     answers, asked = vendor
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
     TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_PARTITION)("AAPL", _PARTITION)
-    assert landed_keys.bodies == {}, "a window that ends today landed"
+    assert landed_keys.bodies == {}, "a series without an end of day landed"
     assert [row.fetch_key for row in call_ledger] == [None, None]
 
     next_day = date(2026, 9, 14)
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
     TwelveDataQuoteFetcher("k", throttle_seconds=0, today=next_day)("AAPL", _PARTITION)
     assert len(asked) == 4, "the next day asked for the series again"
-    assert len(landed_keys.bodies) == 1, "the series of a session that has ended landed"
+    assert landed_keys.bodies == {} and [row.fetch_key for row in call_ledger] == [None] * 4
+
+
+def test_a_series_answer_without_a_list_of_rows_keeps_the_settled_close_and_is_not_landed(
+    vendor, call_ledger, landed_keys
+) -> None:
+    """`{"values": null}` is an answer that holds no row. The settled close of `/eod` survives it."""
+    answers, _asked = vendor
+    answers.extend([(200, _SETTLED_EOD), (200, json.dumps({"values": None, "status": "ok"}).encode())])
+    quote = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    assert quote is not None and quote.close == Decimal("332.26999")
+    assert len(landed_keys.bodies) == 1, "only the end of day landed"
+    assert [row.fetch_key is None for row in call_ledger] == [False, True]
 
 
 def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_has_no_key(

@@ -89,7 +89,9 @@ class ToptLiveTickConfig(dg.Config):
     never sets it. The run fetches every obligation instead of reusing observations
     committed in the last twelve hours (#635), under a capture identity of its own.
     A forced run is a probe (#1411): it asks every vendor again, its ledger rows carry no fetch
-    key, and it neither reads nor writes the index of landed keys. The release fetch proof depends on it.
+    key, and it neither reads nor writes the index of landed keys. The release fetch proof depends
+    on it. One exception stands: the Twelve Data origin still reads a settled bar from
+    `staging.market_prices_daily` before it asks (#1411 K4).
     Launch it through the admin page or Dagster GraphQL
     (docs/datahub-quality-report.md). The run plan, the quality report and this op's
     output metadata record `forced_fetch`.

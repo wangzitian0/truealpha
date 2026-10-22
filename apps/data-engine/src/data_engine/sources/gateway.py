@@ -876,6 +876,7 @@ def _accepts(accept: Callable[[bytes], bool], body: bytes) -> bool:
     try:
         return bool(accept(body))
     except Exception:  # noqa: BLE001 - an unreadable answer is not a final one
+        log.exception("the accept rule of a fetch raised; the answer is treated as not final")
         return False
 
 

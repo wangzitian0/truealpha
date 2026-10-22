@@ -527,7 +527,7 @@ class TwelveDataQuoteFetcher:
             try:
                 # The row of the partition date is still forming while `today` is that date, so a
                 # window that ends there is not final: it is neither read from nor written to the index.
-                series = self._get(_TIME_SERIES_URL, series_params, final=today > cutoff, must_hold=cutoff)
+                series = self._get(_TIME_SERIES_URL, series_params, final=today > cutoff, must_hold=settled.as_of)
             except (TwelveDataError, gateway.CapacityExceeded) as error:
                 log.warning(
                     "twelve-data bar for %s not attached (%s: %s); the settled close corroborates alone",
@@ -538,7 +538,9 @@ class TwelveDataQuoteFetcher:
                 return settled
             is_provisional = settled.as_of == cutoff and today == cutoff
             return attach_settled_bar(series, settled=settled, is_provisional=is_provisional)
-        series = self._get(_TIME_SERIES_URL, series_params, final=today > cutoff)
+        # Without an end of day the window answers for the last settled session, which no row of the
+        # answer names. It shares its key with the settled branch above, so it is never kept (#1411).
+        series = self._get(_TIME_SERIES_URL, series_params, final=False)
         # No end of day for the partition date itself. Resolve the last session that HAS
         # settled — the same session the primary resolves to on a weekend or holiday.
         return parse_last_settled_close(series, partition=cutoff)
@@ -607,10 +609,12 @@ class TwelveDataQuoteFetcher:
 
 
 def holds_row(body: bytes, session: date) -> bool:
-    """Whether a Twelve Data series answer holds the row of ``session``."""
+    """Whether a Twelve Data series answer holds the row of ``session``. An unreadable answer holds none."""
     try:
-        values = json.loads(body.decode()).get("values", [])
+        values = json.loads(body.decode()).get("values")
     except (UnicodeDecodeError, ValueError, AttributeError):
+        return False
+    if not isinstance(values, list):
         return False
     return any(isinstance(row, Mapping) and str(row.get("datetime", ""))[:10] == session.isoformat() for row in values)
 

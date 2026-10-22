@@ -3,7 +3,7 @@
 ``staging.landed_fetch_keys`` holds one row per `FetchKey` that landed. The bytes sit in
 ``raw.fetches`` and object storage, so a key that landed is served with no external call, in
 the same process, in a later process and in a later run. `sources.gateway` reads this index
-before every keyed vendor or SEC call (`gateway.fetch_once`).
+before every keyed vendor or SEC call (`gateway.fetch_once`). A probe (`gateway.probe_scope`) does not read it.
 
 Two implementations share one shape (``lookup``, ``land``):
 
