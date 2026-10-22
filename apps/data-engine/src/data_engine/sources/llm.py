@@ -48,6 +48,8 @@ SOURCE = model_policy.seat_contract().seat  # "filing-extraction-model": the con
 ENDPOINT = "chat.completions"
 PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
 MAX_CONTEXT_TOKENS = 1_000_000
+#: The `finish_reason` of an answer that the provider cut off at `max_tokens`.
+FINISH_REASON_CUT_OFF = "length"
 _CHARS_PER_TOKEN_FLOOR = 2.5
 _COMPACT_REQUEST_BYTE_THRESHOLD = 16_384
 
@@ -97,6 +99,9 @@ class ModelTask:
     max_tokens: int = 300
     timeout_seconds: int = 60
     max_context_tokens: int = MAX_CONTEXT_TOKENS
+    #: False for a task that needs only proof that the provider answered (the key probe): an answer
+    #: cut off at `max_tokens` is then still an answer, and no failure.
+    answer_required: bool = True
 
     @property
     def prompt_sha256(self) -> str:
@@ -161,6 +166,18 @@ class ModelCapacityRefused(ModelHTTPError):
 
     def __init__(self, detail: str) -> None:
         super().__init__(429, f"{SOURCE}: {detail}")
+
+
+class ModelOutputTruncated(ModelHTTPError):
+    """The provider cut its answer off at `max_tokens`, so the answer holds no complete JSON (#1444).
+
+    The invocation is recorded as a refusal and is never replayed. Raised so that every caller that
+    defers a cell on an unavailable provider counts it as a model error and leaves the cell open,
+    instead of reading the refusal as the decision of the model. The status is the provider's: 200."""
+
+    def __init__(self, max_tokens: int) -> None:
+        super().__init__(200, f"{SOURCE}: the answer was cut off at max_tokens {max_tokens}")
+        self.max_tokens = max_tokens
 
 
 class ModelContextLimitError(ModelHTTPError):
@@ -395,7 +412,7 @@ def _is_context_limit_response(status: int, body: bytes) -> bool:
 #:
 #: Both ways are tried for the request of EVERY known decoding version (#1444, `model_decoding`),
 #: so an answer stored under an older version replays for an ask in the current one. The first
-#: answered ask still wins. An answer that the provider cut off (`finish_reason` is `length`)
+#: answered ask still wins. An answer that the provider cut off (`finish_reason` is `FINISH_REASON_CUT_OFF`)
 #: is not an answer: it is read from the stored response and never replayed.
 def _replay_sql(versions: int) -> str:
     same_digest = " or ".join(["(request_sha256 = %s and model = %s)"] * versions)
@@ -406,7 +423,7 @@ select invocation_id, decision, response_sha256, prompt_tokens, completion_token
 from staging.model_invocations
 where subject_cik = %s and accession = %s
   and status_code is not null and status_code < 400
-  and coalesce(response -> 'choices' -> 0 ->> 'finish_reason', '') <> 'length'
+  and coalesce(response -> 'choices' -> 0 ->> 'finish_reason', '') <> '{FINISH_REASON_CUT_OFF}'
   and ({same_digest}
        or (served_model = %s and (request - 'model') in ({same_question})))
 order by id asc
@@ -588,6 +605,7 @@ def _call_provider(
     request_body: dict[str, Any],
     decoding: model_decoding.DecodingVersion,
     timeout_seconds: int,
+    answer_required: bool,
     caller: str,
     transport: Transport | None,
 ) -> _ProviderAnswer:
@@ -613,6 +631,7 @@ def _call_provider(
             request_bytes=request_bytes,
             request_params=request_params,
             caller=caller,
+            answer_required=answer_required,
         )
     finally:
         _attempt_timeout.reset(token)
@@ -628,6 +647,7 @@ def _retry_loop(
     request_bytes: bytes,
     request_params: dict[str, Any],
     caller: str,
+    answer_required: bool,
 ) -> _ProviderAnswer:
     last: _ProviderAnswer | None = None
     while True:
@@ -643,6 +663,7 @@ def _retry_loop(
                 request_bytes=request_bytes,
                 request_params=request_params,
                 caller=caller,
+                answer_required=answer_required,
             )
         except gateway.CapacityExceeded as refusal:
             if last is None:
@@ -672,6 +693,7 @@ def _attempt(
     request_bytes: bytes,
     request_params: dict[str, Any],
     caller: str,
+    answer_required: bool,
 ) -> _ProviderAnswer:
     """One attempt: admitted by the pacer, one ledger row, the answer read."""
     payload: dict[str, Any] = {}
@@ -695,24 +717,28 @@ def _attempt(
             call.cost = Decimal(int(usage.get("total_tokens") or 0))
             call.completion_tokens = _token_count(usage.get("completion_tokens"))
             call.reasoning_tokens = _token_count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
-            if ((payload.get("choices") or [{}])[0]).get("finish_reason") == "length":
-                call.fail("finish_reason=length: the answer was cut at max_tokens")
+            if answer_required and _cut_off(payload):
+                call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
     return _ProviderAnswer(status, body, payload, usage, provider_code)
+
+
+def _cut_off(payload: dict[str, Any]) -> bool:
+    return ((payload.get("choices") or [{}])[0]).get("finish_reason") == FINISH_REASON_CUT_OFF
 
 
 def _answer_decision(
     payload: dict[str, Any],
     max_tokens: int,
+    answer_required: bool,
     parse: Callable[[str], dict[str, Any]],
     refusal: Callable[[str], dict[str, Any]],
 ) -> dict[str, Any]:
     """The decision of an answered call. An answer that the provider cut off at ``max_tokens`` has
     no complete JSON, and with thinking on the reasoning can use the whole limit (#1444). It is a
     refusal, and the replay never reads it as an answer (`_replay_sql`)."""
-    choice = (payload.get("choices") or [{}])[0]
-    if choice.get("finish_reason") == "length":
-        return refusal(f"truncated: finish_reason=length at max_tokens {max_tokens}")
-    return parse((choice.get("message") or {}).get("content") or "")
+    if answer_required and _cut_off(payload):
+        return refusal(f"truncated: finish_reason={FINISH_REASON_CUT_OFF} at max_tokens {max_tokens}")
+    return parse(((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
 
 
 def _token_count(value: Any) -> int | None:
@@ -790,6 +816,7 @@ def _ask(
             request_body=request_body,
             decoding=decoding,
             timeout_seconds=task.timeout_seconds,
+            answer_required=task.answer_required,
             caller=caller,
             transport=transport,
         )
@@ -817,7 +844,7 @@ def _ask(
                 # body as a refusal, excluded from replay so the next run asks again.
                 decision = refusal(f"HTTP {status}: {body[:200]!r}")
         else:
-            decision = _answer_decision(payload, request_body["max_tokens"], parse, refusal)
+            decision = _answer_decision(payload, request_body["max_tokens"], task.answer_required, parse, refusal)
     completed_at = now()
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(
@@ -894,6 +921,8 @@ def _ask(
         )
     if status >= 400:
         return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
+    if task.answer_required and _cut_off(payload):
+        return invocation, ModelOutputTruncated(request_body["max_tokens"])
     return invocation, None
 
 

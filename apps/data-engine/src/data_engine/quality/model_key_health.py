@@ -34,6 +34,8 @@ PROBE_TASK = llm.ModelTask(
     max_tokens=16,
     #: The probe slots of the contract assume this timeout for one attempt.
     timeout_seconds=model_policy.seat_contract().probe.attempt_timeout_seconds,
+    #: A 2xx answer proves the key. An answer cut off at the 16 tokens is still that proof (#1444).
+    answer_required=False,
 )
 
 #: The statuses that mean the provider refused the CREDENTIAL, not the request.

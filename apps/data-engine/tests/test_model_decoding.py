@@ -12,6 +12,7 @@ No test reaches the live provider. The replay tests need Postgres and run in CI.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import uuid
@@ -48,10 +49,22 @@ V1_DIGESTS = {
     ),
 }
 
+#: A task that needs a whole answer; the key probe asks only for proof that the provider answered.
+TASK = dataclasses.replace(model_key_health.PROBE_TASK, answer_required=True)
+
 OK = json.dumps(
     {
         "model": "glm-served",
         "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 9, "total_tokens": 29},
+    }
+).encode()
+
+
+OK_WITHOUT_FINISH_REASON = json.dumps(
+    {
+        "model": "glm-served",
+        "choices": [{"message": {"content": '{"ok": true}'}}],
         "usage": {"prompt_tokens": 20, "completion_tokens": 9, "total_tokens": 29},
     }
 ).encode()
@@ -216,13 +229,41 @@ def cut_off(completion_tokens: int = 16) -> bytes:
     ).encode()
 
 
-def test_an_answer_cut_off_at_max_tokens_is_a_refusal_and_a_failed_ledger_row(monkeypatch, call_ledger) -> None:
+def test_an_answer_cut_off_at_max_tokens_is_an_error_and_a_failed_ledger_row(monkeypatch, call_ledger) -> None:
     in_environment(monkeypatch, "staging", decoding="v2")
-    invocation = ask(transport=Capture(cut_off()))
-    assert invocation.decision["answered"] is False and "finish_reason=length" in invocation.decision["reason"]
+    with pytest.raises(llm.ModelOutputTruncated) as raised:
+        llm.invoke(
+            None,
+            task=TASK,
+            cik=0,
+            accession="",
+            user_content="ping",
+            caller="t",
+            standard="t",
+            parse=lambda text: {"answered": bool(text)},
+            refusal=lambda detail: {"answered": False, "reason": detail},
+            persist=False,
+            transport=Capture(cut_off()),
+        )
+    assert isinstance(raised.value, llm.ModelHTTPError), "callers that defer a cell on a model error defer this one"
     (row,) = call_ledger
     assert row.ok is False and row.status_code == 200 and "finish_reason=length" in (row.error or "")
     assert row.completion_tokens == 16
+
+
+def test_the_key_probe_counts_an_answer_cut_off_at_its_tiny_limit_as_proof_of_the_key(monkeypatch, call_ledger) -> None:
+    in_environment(monkeypatch, "staging", decoding="v2")
+    ask(transport=Capture(cut_off()))
+    (row,) = call_ledger
+    assert row.ok is True, "no failure for the adoption rule: the probe asks for proof, not for an answer"
+
+
+def test_the_probe_verdict_is_green_when_the_answer_is_cut_off(monkeypatch) -> None:
+    in_environment(monkeypatch, "staging", decoding="v2")
+    # `probe` builds its own transport through the gateway; replace the module seam it calls through.
+    monkeypatch.setattr(llm, "_gateway_transport", lambda url, headers, body: (200, cut_off()))
+    health = model_key_health.probe()
+    assert (health.ok, health.outcome) == (True, "answered")
 
 
 # --- replay across versions (Postgres; CI) --------------------------------------------------------------
@@ -268,7 +309,7 @@ def stored(connection: Any, cik: int, accession: str) -> list[tuple[str, str | N
 def invoke_at(connection: Any, cik: int, accession: str, transport: Any, content: str = "ping") -> Any:
     return llm.invoke(
         connection,
-        task=model_key_health.PROBE_TASK,
+        task=TASK,
         cik=cik,
         accession=accession,
         user_content=content,
@@ -284,7 +325,8 @@ def invoke_at(connection: Any, cik: int, accession: str, transport: Any, content
 def test_an_answer_stored_under_v1_replays_when_the_environment_moves_to_v2(monkeypatch, warehouse) -> None:
     cik, accession = fresh()
     in_environment(monkeypatch, "production")
-    first = invoke_at(warehouse, cik, accession, Capture())
+    # An old row may hold a response without a finish_reason: it must still replay.
+    first = invoke_at(warehouse, cik, accession, Capture(OK_WITHOUT_FINISH_REASON))
     assert first.replayed is False and stored(warehouse, cik, accession) == [("disabled", None)]
     in_environment(monkeypatch, "staging", decoding="v2")
     replayed = invoke_at(warehouse, cik, accession, never)
@@ -316,8 +358,8 @@ def test_a_question_nobody_answered_is_asked_in_the_version_of_its_environment(m
 def test_a_cut_off_answer_is_stored_but_never_replayed(monkeypatch, warehouse) -> None:
     cik, accession = fresh()
     in_environment(monkeypatch, "staging", decoding="v2")
-    cut = invoke_at(warehouse, cik, accession, Capture(cut_off()))
-    assert cut.decision["answered"] is False
+    with pytest.raises(llm.ModelOutputTruncated):
+        invoke_at(warehouse, cik, accession, Capture(cut_off()))
     retry = Capture()
     again = invoke_at(warehouse, cik, accession, retry)
     assert len(retry.bodies) == 1, "the cut-off answer is not replayed: the question is asked again"
@@ -365,3 +407,37 @@ def test_the_replay_looks_for_the_request_of_every_known_version(monkeypatch) ->
     ]
     assert [p for p in params if isinstance(p, str) and len(p) == 64] == digests
     assert "finish_reason" in sql and "<> 'length'" in sql
+
+
+def test_the_lock_on_a_question_is_the_same_in_every_version(monkeypatch) -> None:
+    """A process that still asks in v1 and one that asks in v2 must wait for each other."""
+    locks: list[str] = []
+
+    class Connection:
+        autocommit = False
+
+        def execute(self, sql: str, params: tuple = ()) -> Any:
+            if sql.startswith("select pg_advisory_xact_lock("):
+                locks.append(params[0])
+
+            class Rows:
+                def fetchone(self) -> None:
+                    return None
+
+            return Rows()
+
+    for environment, decoding in (("production", None), ("staging", "v2")):
+        in_environment(monkeypatch, environment, decoding=decoding)
+        llm.invoke(
+            Connection(),
+            task=TASK,
+            cik=1,
+            accession="a",
+            user_content="ping",
+            caller="t",
+            standard="t",
+            parse=lambda text: {},
+            refusal=lambda detail: {},
+            transport=Capture(),
+        )
+    assert len(locks) == 2 and locks[0] == locks[1]
