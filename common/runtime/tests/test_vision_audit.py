@@ -180,3 +180,52 @@ def test_vision_audit_fails_gate_1_when_report_surface_proof_fails(
     g1 = next(g for g in report.gates if g.gate_id == "#29")
     assert g1.verified is False
     assert g1.status == "OPEN"
+
+
+def _verdicts_without(*dropped: str) -> list[Any]:
+    everything = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+    return [verdict for verdict in everything if verdict.check not in dropped]
+
+
+def test_gate_2_asks_staging_for_the_topt_coverage_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Staging runs TOPT only (owner decision of 2026-10-21): it records no QQQ coverage verdict."""
+    verdicts = _verdicts_without("question_coverage@universe-list:qqq")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="staging")
+
+    gate_2 = next(g for g in report.gates if g.gate_id == "#30")
+    assert gate_2.verified is True and gate_2.status == "VERIFIED"
+    assert "qqq" not in gate_2.evidence
+    assert report.all_passed is True
+
+
+def test_gate_2_asks_production_for_the_qqq_coverage_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    verdicts = _verdicts_without("question_coverage@universe-list:qqq")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="production")
+
+    gate_2 = next(g for g in report.gates if g.gate_id == "#30")
+    assert gate_2.verified is False and gate_2.status == "OPEN"
+    assert "universe-list:qqq coverage: missing" in gate_2.evidence
+    assert report.all_passed is False
+
+
+def test_gate_2_stays_open_when_the_topt_coverage_is_missing_in_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    verdicts = _verdicts_without("question_coverage@topt")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="staging")
+
+    gate_2 = next(g for g in report.gates if g.gate_id == "#30")
+    assert gate_2.verified is False
+    assert "topt coverage: missing" in gate_2.evidence

@@ -1075,3 +1075,24 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
     assert enabled() == {"qqq": True, "sp500": True, "canary": True}, "the contract unlocks the SP500"
     monkeypatch.setattr(settings, "app_env", "staging")
     assert enabled() == {"qqq": False, "sp500": False, "canary": True}, "staging does not list the SP500"
+
+
+@pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
+def test_an_environment_the_contract_does_not_name_runs_the_topt_tick_and_the_canary_only(app_env: str) -> None:
+    """A mistyped APP_ENV must never start the production schedules (QQQ, the S&P 500). It takes the rule of staging."""
+    from data_engine.environment_universes import rule_environment, scheduled_universe_names
+
+    rows = _schedule_rows(dagster_defs.build_definitions(app_env))
+
+    assert rule_environment(app_env) == "staging"
+    assert scheduled_universe_names(app_env) == ("topt",)
+    assert rows["topt_live_schedule"][1] == "RUNNING" and rows["canary_daily_schedule"][1] == "RUNNING"
+    assert rows["qqq_live_schedule"][1] == "STOPPED" and rows["sp500_live_schedule"][1] == "STOPPED"
+    assert rows["universe_refresh_schedule"][1] == "STOPPED"
+
+
+def test_the_production_alias_prod_is_production_for_the_universe_names() -> None:
+    from data_engine.environment_universes import rule_environment, scheduled_universe_names
+
+    assert rule_environment("prod") == rule_environment(" Production ") == "production"
+    assert scheduled_universe_names("prod") == ("topt", "universe-list:qqq")

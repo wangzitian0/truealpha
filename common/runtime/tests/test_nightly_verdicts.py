@@ -430,6 +430,129 @@ def test_a_universe_that_the_contract_does_not_list_keeps_its_checks() -> None:
     assert sorted(kept) == ["runtime_shape", "theme_purity@universe-list:nasdaq100"]
 
 
+def test_the_alias_prod_reads_the_production_entry_of_the_contract() -> None:
+    """A contract in which production schedules TOPT only and staging schedules TOPT and QQQ. The alias `prod`
+    must drop the QQQ checks as `production` does; an alias that fell through to "unknown" would keep them."""
+    contract = json.dumps(
+        {
+            "environments": {
+                "staging": {
+                    "universes": [{"key": "topt", "status": "scheduled"}, {"key": "qqq", "status": "scheduled"}]
+                },
+                "production": {"universes": [{"key": "topt", "status": "scheduled"}]},
+            }
+        }
+    )
+
+    expected = {
+        environment: set(
+            _module.expectations_for(
+                "v0.0.70", _main_set, environment=environment, contract_reader=lambda ref: contract
+            )[0]
+        )
+        for environment in ("staging", "production", "prod")
+    }
+
+    assert expected["prod"] == expected["production"]
+    assert set(_qqq_checks()) <= expected["staging"]
+    assert not set(_qqq_checks()) & expected["prod"]
+
+
+@pytest.mark.parametrize(
+    "universes",
+    [
+        [1],
+        "topt",
+        [{"key": "topt"}],
+        [{"status": "scheduled"}],
+        [{"key": "topt", "status": "running"}],
+        [{"key": 7, "status": "scheduled"}],
+    ],
+    ids=["entry-not-an-object", "not-a-list", "no-status", "no-key", "unknown-status", "key-not-text"],
+)
+def test_a_universe_list_the_tool_cannot_read_bounds_every_check(universes: object) -> None:
+    """Unknown is not green: a malformed list must not drop a check silently."""
+    contract = json.dumps({"environments": {"staging": {"universes": universes}}})
+    expectations, source = _module.expectations_for(
+        "v0.0.70", _main_set, environment="staging", contract_reader=lambda ref: contract
+    )
+
+    assert expectations is not None and set(expectations) == set(EXPECTED)
+    assert "every universe is bounded" in source
+
+
+def _release_repo(tmp_path: Path, tag: str = "v0.0.70") -> Path:
+    """A scratch git repository whose tag holds the expectations file and the contract of main."""
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    for relative in (_module.RELEASE_EXPECTATIONS_PATH, _module.RELEASE_CONTRACT_PATH):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "release")
+    git("tag", tag)
+    return tmp_path
+
+
+def _health_without_qqq(reference: datetime):
+    """Both environments report the verdicts that staging records: no QQQ check, each 7 hours old at `reference`."""
+    qqq = set(_qqq_checks())
+    verdicts = [
+        {"check": name, "ran_at": (reference - timedelta(hours=7)).isoformat(), "ok": True, "summary": "ok"}
+        for name in sorted(EXPECTED)
+        if name not in qqq
+    ]
+
+    def get(url: str) -> tuple[int, str]:
+        return 200, json.dumps({"git_sha": "v0.0.70", "data_engine_git_sha": "v0.0.70", "nightly_verdicts": verdicts})
+
+    return get
+
+
+def test_the_delivery_report_asks_each_environment_for_the_universes_its_release_schedules(tmp_path: Path) -> None:
+    """Through `delivery_report.verdict_section`, the call that the daily report makes: real git, the release's
+    own expectations file and contract. Without the wiring, staging is red on the three QQQ checks."""
+    delivery_report = load_tool("delivery_report")
+    repo = _release_repo(tmp_path)
+
+    def gh(path: str) -> str:
+        raise delivery_report.InputUnavailable(path)
+
+    lines = delivery_report.verdict_section(_health_without_qqq(NOW), gh, str(repo), NOW)
+
+    staging = [line for line in lines if line.startswith("- staging:")]
+    production = [line for line in lines if line.startswith("- production:")]
+    assert len(staging) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED) - 3} expected checks are green" in staging[0]
+    assert len(production) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED)} expected checks are green" in production[0]
+    red = [line for line in lines if "red, stale or missing" in line]
+    assert len(red) == 3 and all(any(name in line for line in red) for name in _qqq_checks())
+    assert all("production" not in line or "staging" not in line for line in red)
+
+
+def test_the_command_line_asks_each_environment_for_the_universes_its_release_schedules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through `main([...])`, the entry point of `tools/nightly_verdicts.py`."""
+    import infra2_sdk.deploy
+
+    repo = _release_repo(tmp_path)
+    monkeypatch.setattr(infra2_sdk.deploy, "default_http_get", lambda: _health_without_qqq(datetime.now(UTC)))
+
+    def run(environment: str) -> int:
+        return _module.main([URL, "--environment", environment, "--repo", str(repo)])
+
+    assert run("staging") == 0
+    assert run("production") == 1
+
+
 def test_the_tool_and_the_contract_agree_on_which_checks_an_environment_expects() -> None:
     """The tool is stdlib only and cannot import the contract model. It reads the same JSON. Its rule and
     `EnvironmentContract.expects_verdict` must give one answer for every check and environment."""

@@ -129,21 +129,34 @@ def universe_key_of(check: str) -> str | None:
     return universe.removeprefix("universe-list:") if at else None
 
 
+def _universe_entries(spec: object) -> list[dict[str, str]]:
+    """The ``universes`` of one environment, or [] when it lists none. A shape this tool cannot read raises."""
+    entries = spec.get("universes", []) if isinstance(spec, dict) else None
+    ok = isinstance(entries, list) and all(
+        isinstance(entry, dict)
+        and isinstance(entry.get("key"), str)
+        and entry.get("status") in ("scheduled", "stopped")
+        for entry in entries
+    )
+    if not ok:
+        raise VerdictCheckFailure("the environment contract lists universes in a shape this tool cannot read")
+    return entries  # type: ignore[return-value]
+
+
 def scheduled_universes(contract_text: str, environment: str) -> tuple[frozenset[str], frozenset[str]] | None:
     """(the universe keys that ``environment`` schedules, every universe key of the contract).
 
     None when the contract predates the universe list or does not name ``environment``: nothing is
-    dropped then.
+    dropped then. Raises ``VerdictCheckFailure`` for a list in a shape this tool cannot read: the caller then
+    bounds every check.
     """
     environments = json.loads(contract_text).get("environments", {})
     name = "production" if environment.strip().lower() == "prod" else environment.strip().lower()
     spec = environments.get(name)
-    if not isinstance(spec, dict) or not isinstance(spec.get("universes"), list):
+    if not isinstance(spec, dict) or "universes" not in spec:
         return None
-    known = frozenset(
-        entry["key"] for other in environments.values() for entry in other.get("universes", []) if "key" in entry
-    )
-    scheduled = frozenset(entry["key"] for entry in spec["universes"] if entry.get("status") == "scheduled")
+    known = frozenset(entry["key"] for other in environments.values() for entry in _universe_entries(other))
+    scheduled = frozenset(entry["key"] for entry in _universe_entries(spec) if entry["status"] == "scheduled")
     return scheduled, known
 
 
@@ -280,7 +293,7 @@ def expectations_for(
     try:
         contract_text = contract_reader(release)
         universes = scheduled_universes(contract_text, environment) if contract_text is not None else None
-    except (VerdictCheckFailure, json.JSONDecodeError, AttributeError) as exc:
+    except (VerdictCheckFailure, json.JSONDecodeError, AttributeError, TypeError) as exc:
         return (
             expectations,
             f"{source}; the contract of {release} could not be read ({exc}), so every universe is bounded",

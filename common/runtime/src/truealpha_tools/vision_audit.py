@@ -15,6 +15,7 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from data_engine.environment_universes import scheduled_universe_names
 from data_engine.lanes.capture import is_head_scheduled
 from infra2_sdk.deploy import default_http_get
 
@@ -171,13 +172,18 @@ def audit_vision(
         )
     )
 
-    # Gate 2 (#30): Research Questions & Entity Coverage
-    cov_qqq = verdicts_by_check.get("question_coverage@universe-list:qqq")
-    cov_topt = verdicts_by_check.get("question_coverage@topt")
-    g2_verified = cov_qqq is not None and cov_qqq.ok is True and cov_topt is not None and cov_topt.ok is True
+    # Gate 2 (#30): Research Questions & Entity Coverage. The environment contract lists the universes
+    # that the environment runs (staging runs TOPT only), and each of them needs a green coverage verdict.
+    coverage = {
+        universe: verdicts_by_check.get(f"question_coverage@{universe}") for universe in scheduled_universe_names(env)
+    }
+    g2_verified = bool(coverage) and all(verdict is not None and verdict.ok is True for verdict in coverage.values())
     g2_evidence = (
-        f"qqq coverage: {cov_qqq.summary if cov_qqq else 'missing'}; "
-        f"topt coverage: {cov_topt.summary if cov_topt else 'missing'}"
+        "; ".join(
+            f"{universe} coverage: {verdict.summary if verdict else 'missing'}"
+            for universe, verdict in coverage.items()
+        )
+        or f"the contract schedules no universe in {env}"
     )
     gates.append(
         GateAuditResult(

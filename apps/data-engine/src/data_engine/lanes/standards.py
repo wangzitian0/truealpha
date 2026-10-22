@@ -925,8 +925,12 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
             f"armed on {build[:19]}; a catch-up waits for the next evaluation, clear of the deploy walk"
         )
         return
+    universes = scheduled_universe_names()
+    if not universes:
+        yield dg.SkipReason("the environment contract schedules no universe in this environment")
+        return
     with psycopg.connect(settings.database_url) as connection:
-        missing = never_backfilled(connection, universes=scheduled_universe_names(), standards=standards_to_run(""))
+        missing = never_backfilled(connection, universes=universes, standards=standards_to_run(""))
     if not missing:
         yield dg.SkipReason("every registered standard has completed a backfill over every universe here")
         return
