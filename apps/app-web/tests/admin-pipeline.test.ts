@@ -38,14 +38,17 @@ const STEP_FAILURE = JSON.stringify({
   },
 });
 
-/** A RUN_FAILURE of a run that the run monitor killed: no step failed and the error is null. */
+/**
+ * The run failure of a run that the run monitor killed, as Dagster 1.13 stores it: the event type is
+ * `PIPELINE_FAILURE` (the value of `DagsterEventType.RUN_FAILURE`), no step failed and there is no error data.
+ */
 const RUN_FAILURE = JSON.stringify({
   __class__: "EventLogEntry",
   dagster_event: {
     __class__: "DagsterEvent",
-    event_type_value: "RUN_FAILURE",
+    event_type_value: "PIPELINE_FAILURE",
     message: "Run timed out due to taking longer than 10800 seconds to complete.",
-    event_specific_data: { __class__: "JobFailureData", error: null },
+    event_specific_data: null,
   },
 });
 
@@ -136,7 +139,17 @@ type QueryCall = { sql: string; params?: unknown[] };
         };
       }
       if (sql.includes("mart.data_engine_identity")) {
-        return { rows: [{ git_sha: "0123456789abcdef0123456789abcdef01234567", since: firstSeen }] };
+        return {
+          rows: [
+            {
+              run_id: "capture-run:e",
+              git_sha: "0123456789abcdef0123456789abcdef01234567",
+              image_digest: "sha256:00f7",
+              created_at: recent,
+              first_run_at: firstSeen,
+            },
+          ],
+        };
       }
       throw new Error(`unexpected query: ${sql}`);
     },
@@ -147,7 +160,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   const { jobs, jobRunHealth, runtimeShape, release, windowDays } = outcome.data;
   assert(windowDays === WINDOW_DAYS_FOR_TEST, "the window is 7 days, like the verdict");
   assert(calls[0].params?.[0] === WINDOW_DAYS_FOR_TEST, "the runs query is bound to the window");
-  assert(calls[0].params?.[1] === 30, "a job with no finished run for 30 days is not listed");
+  assert(calls[0].params?.[1] === 100, "a job with no finished run for 100 days is not listed (a quarterly job stays)");
 
   const head = jobs.find((job) => job.job === "head_reports_pipeline");
   assert(head !== undefined, "a job with failures is listed");
@@ -198,6 +211,38 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(outcome.kind === "ready", "a healthy fleet is ready");
   assert(!eventLogRead, "with no failed run there is nothing to read in the event log");
   assert(outcome.data.jobRunHealth === null && outcome.data.release === null, "a missing verdict or build reads null");
+}
+
+// --- the event log cannot be read: the counts stand, the page says why the error lines are missing ---
+{
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+      if (sql.includes("from dagster.runs")) {
+        return {
+          rows: [
+            {
+              job: "a_job",
+              successes: 3,
+              failures: 1,
+              last_success: "2026-10-21T01:00:00Z",
+              last_failure: "2026-10-21T02:00:00Z",
+              last_failure_run_id: "run-9",
+            },
+          ],
+        };
+      }
+      if (sql.includes("from dagster.event_logs")) {
+        throw Object.assign(new Error("permission denied for table event_logs"), { code: "42501" });
+      }
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready", "an unreadable event log must not hide the counts");
+  assert(outcome.data.eventLogUnreadable?.includes("permission denied") === true, "the page is told why");
+  const job = outcome.data.jobs[0];
+  assert(job.failures === 1 && job.lastFailure?.runId === "run-9" && job.lastFailure.firstError === null, "counts stand");
 }
 
 // --- empty: Dagster has its tables and no finished run ---

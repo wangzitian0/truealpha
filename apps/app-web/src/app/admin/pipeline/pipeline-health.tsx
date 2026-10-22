@@ -68,7 +68,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
     );
   }
 
-  const { windowDays, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
+  const { windowDays, eventLogUnreadable, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
 
   return (
     <section aria-labelledby="pipeline-heading" className="space-y-6">
@@ -101,6 +101,12 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
         </div>
       </dl>
 
+      {eventLogUnreadable !== null && (
+        <p role="status" className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300" data-event-log-unreadable="true">
+          The Dagster event log could not be read, so the error lines are missing: {eventLogUnreadable}
+        </p>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <caption className="sr-only">Run health per Dagster job, last {windowDays} days</caption>
@@ -131,7 +137,9 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
                   {job.lastFailure === null ? "never" : ago(job.lastFailure.at, now)}
                 </td>
                 <td className="px-4 py-2 font-mono text-xs text-gray-300" title={job.lastFailure?.runId}>
-                  {job.lastFailure === null ? "—" : (job.lastFailure.firstError ?? "no error text in the event log")}
+                  {job.lastFailure === null
+                    ? "—"
+                    : (job.lastFailure.firstError ?? (eventLogUnreadable === null ? "no error text in the event log" : "—"))}
                 </td>
               </tr>
             ))}

@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { PipelineHealth } from "../src/components/pipeline-health";
+import { PipelineHealth } from "../src/app/admin/pipeline/pipeline-health";
 import { RUNS_UNAVAILABLE_MESSAGE } from "../src/server/admin/ops";
 import type { PipelineOutcome } from "../src/server/admin/pipeline";
 
@@ -30,6 +30,7 @@ const ready: PipelineOutcome = {
   kind: "ready",
   data: {
     windowDays: 7,
+    eventLogUnreadable: null,
     appGitSha: "fedcba9876543210fedcba9876543210fedcba98",
     jobRunHealth: { ok: false, ranAt: "2026-10-21T06:45:00.000Z", summary: "head_reports_pipeline (3 of 13 runs failed)" },
     runtimeShape: { ok: null, ranAt: "2026-10-21T06:30:00.000Z", summary: "pending" },
@@ -83,9 +84,20 @@ const ready: PipelineOutcome = {
   assert(words.includes("no run"), "a job with no run in the window reads no run, never 100%");
   assert(words.includes("never"), "a job without a failure reads never");
   assert(html.includes('data-verdict="job_run_health"') && html.includes('data-verdict="runtime_shape"'), "both verdict cards");
-  assert(words.includes("red") && words.includes("pending"), "a red verdict reads red and a pending one reads pending");
+  assert(/data-verdict="job_run_health">red</.test(html), "a red verdict reads red in its card");
+  assert(/data-verdict="runtime_shape">pending</.test(html), "a pending verdict reads pending in its card");
   assert(html.includes('data-release-age="true"') && words.includes("2.1d"), "the release age is printed");
   assert(!/undefined|NaN|\[object Object\]/.test(words), "the view leaks no undefined, NaN or [object Object]");
+}
+
+// --- the event log is unreadable: the counts stand and the page says why the lines are missing ---
+{
+  const unreadable: PipelineOutcome = { kind: "ready", data: { ...ready.data, eventLogUnreadable: "permission denied for table event_logs" } };
+  const html = render(unreadable);
+  assert(html.includes('data-event-log-unreadable="true"'), "the notice is marked");
+  assert(text(html).includes("The Dagster event log could not be read") && text(html).includes("permission denied"), "the notice names the cause");
+  assert(!text(html).includes("no error text in the event log"), "a missing line is not blamed on the event log");
+  assert((html.match(/<tr[^>]*data-job="/g) ?? []).length === 3, "the rows stay");
 }
 
 // --- the other states say something ---
@@ -103,9 +115,10 @@ const walk = readFileSync(new URL("../e2e/walk-tree.mjs", import.meta.url), "utf
 const sentences = walk.match(/!\/(Run history unavailable[^/]*)\/\.test\(mainText\)/);
 assert(sentences !== null, "e2e/walk-tree.mjs no longer asserts the sentences of /admin/pipeline as a regular expression");
 const sentencePattern = new RegExp(sentences[1]);
-for (const [state, words] of [["unavailable", unavailable], ["empty", empty], ["error", failed]] as const) {
+for (const [state, words] of [["unavailable", unavailable], ["empty", empty]] as const) {
   assert(sentencePattern.test(words), `the walk would reject the ${state} state of /admin/pipeline: "${words}"`);
 }
+assert(!sentencePattern.test(failed), "the walk must reject the error state of /admin/pipeline");
 const markers = walk.match(/for \(const marker of \[(.*)\]\) \{/);
 assert(markers !== null, "e2e/walk-tree.mjs no longer lists the markers of /admin/pipeline as an array literal");
 const html = render(ready);

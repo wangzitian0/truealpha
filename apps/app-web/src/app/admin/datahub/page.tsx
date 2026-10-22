@@ -16,6 +16,15 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
+/** A pending verdict (`ok = null`) is neither green nor red. */
+function verdictLabel(ok: boolean | null): string {
+  return ok === null ? "pending" : ok ? "ok" : "fail";
+}
+
+function verdictStyle(ok: boolean | null): string {
+  return ok === null ? "text-gray-400" : ok ? "text-emerald-400" : "text-rose-400";
+}
+
 function shortRun(id: string): string {
   return id.length > 24 ? `${id.slice(0, 24)}…` : id;
 }
@@ -668,9 +677,7 @@ export default async function AdminDatahubPage({
                       {v.check_name}
                     </Link>
                   </td>
-                  <td className={`pr-4 font-medium ${v.ok ? "text-emerald-400" : "text-rose-400"}`}>
-                    {v.ok ? "ok" : "fail"}
-                  </td>
+                  <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
                   <td className="pr-4 text-gray-400">
                     {v.ran_at}
                   </td>
@@ -711,7 +718,7 @@ export default async function AdminDatahubPage({
               <tbody>
                 {history.map((v) => (
                   <tr key={`${v.ran_at}-${v.dagster_run_id ?? ""}`} className="border-t border-border" data-history-row="true">
-                    <td className={`pr-4 font-medium ${v.ok ? "text-emerald-400" : "text-rose-400"}`}>{v.ok ? "ok" : "fail"}</td>
+                    <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
                     <td className="pr-4 text-gray-400">{v.ran_at}</td>
                     <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
                       {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}

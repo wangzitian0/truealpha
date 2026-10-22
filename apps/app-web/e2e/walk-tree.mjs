@@ -368,8 +368,9 @@ async function assertPipelineHealth(page, path, problems, role) {
     for (const marker of ['[data-verdict="job_run_health"]', '[data-verdict="runtime_shape"]', "[data-release-age]"]) {
       if ((await page.locator(marker).count()) === 0) problems.push(`/admin/pipeline lists jobs but has no ${marker}`);
     }
-  } else if (!/Run history unavailable|No finished run|Error loading the pipeline health/.test(mainText)) {
-    problems.push("/admin/pipeline lists no job and does not say why");
+  } else if (!/Run history unavailable|No finished run/.test(mainText)) {
+    // An error state is a problem too: the page loaded nothing and the walk must say so.
+    problems.push("/admin/pipeline lists no job and does not say why (an error state counts as a failure)");
   }
 }
 

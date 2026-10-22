@@ -16,12 +16,12 @@
 
 import type { PoolClient } from "pg";
 import type { ReadState } from "@/server/read-state";
-import { RUNS_UNAVAILABLE_MESSAGE, withOpsReader } from "./ops";
+import { loadDataEngineBuild, RUNS_UNAVAILABLE_MESSAGE, withOpsReader } from "./ops";
 
 /** The window of the counts. The verdict `job_run_health` judges the same 7 days. */
 export const PIPELINE_WINDOW_DAYS = 7;
-/** A job whose newest finished run is older than this has left the deployment (staging held a job from July). */
-export const PIPELINE_LISTED_DAYS = 30;
+/** A job whose newest finished run is older than this has left the deployment (a quarterly job runs every 91 days; staging held a job from July). */
+export const PIPELINE_LISTED_DAYS = 100;
 
 export interface PipelineFailure {
   runId: string;
@@ -57,6 +57,8 @@ export interface PipelineRelease {
 
 export interface PipelineOverview {
   windowDays: number;
+  /** Why the first error lines are missing (the event log could not be read), or null when it was read. */
+  eventLogUnreadable: string | null;
   jobs: PipelineJobRow[];
   jobRunHealth: PipelineVerdict | null;
   runtimeShape: PipelineVerdict | null;
@@ -74,7 +76,7 @@ export interface PipelinePrincipal {
 const UNDEFINED_TABLE = "42P01";
 
 /** One scan of `dagster.runs`: counts of the window, and the newest SUCCESS and FAILURE of all time. */
-const JOBS_SQL = `
+export const JOBS_SQL = `
   select r.pipeline_name as job,
          count(*) filter (where r.status = 'SUCCESS' and r.create_timestamp >= w.since)::int as successes,
          count(*) filter (where r.status = 'FAILURE' and r.create_timestamp >= w.since)::int as failures,
@@ -90,11 +92,15 @@ const JOBS_SQL = `
   order by r.pipeline_name
 `;
 
-/** The first step failure of each run, or its run failure when no step failed (a run killed by the monitor). */
-const FAILURE_EVENTS_SQL = `
+/**
+ * The first step failure of each run, or its run failure when no step failed (a run killed by the run
+ * monitor). Dagster stores the run failure as `PIPELINE_FAILURE`: `DagsterEventType.RUN_FAILURE` has that value.
+ * `tests/test_pipeline_event_log_sql.py` runs this text against real Dagster run storage.
+ */
+export const FAILURE_EVENTS_SQL = `
   select distinct on (run_id) run_id, dagster_event_type, event
   from dagster.event_logs
-  where run_id = any($1::text[]) and dagster_event_type in ('STEP_FAILURE', 'RUN_FAILURE')
+  where run_id = any($1::text[]) and dagster_event_type in ('STEP_FAILURE', 'PIPELINE_FAILURE')
   order by run_id, (dagster_event_type = 'STEP_FAILURE') desc, id
 `;
 
@@ -104,15 +110,6 @@ const VERDICT_SQL = `
   where check_name = $1
   order by ran_at desc, recorded_at desc
   limit 1
-`;
-
-/** The newest build, and the first time any run recorded that build. */
-const RELEASE_SQL = `
-  with newest as (
-    select git_sha from mart.data_engine_identity order by created_at desc limit 1
-  )
-  select n.git_sha, (select min(i.created_at) from mart.data_engine_identity i where i.git_sha = n.git_sha) as since
-  from newest n
 `;
 
 interface ErrorInfo {
@@ -171,29 +168,30 @@ async function readVerdict(client: Pick<PoolClient, "query">, check: string): Pr
 }
 
 async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<PipelineRelease | null> {
-  try {
-    const result = await client.query(RELEASE_SQL);
-    const row = result.rows[0];
-    if (row === undefined || row.since === null || row.since === undefined) return null;
-    const since = iso(row.since);
-    return { gitSha: String(row.git_sha), since, ageHours: (now - new Date(since).getTime()) / 3_600_000 };
-  } catch {
-    // The view arrives with the 2026-09-07 migration; an older database reports no release.
-    return null;
-  }
+  const build = await loadDataEngineBuild(client);
+  if (build === null) return null;
+  return { gitSha: build.gitSha, since: build.firstRunAt, ageHours: (now - new Date(build.firstRunAt).getTime()) / 3_600_000 };
 }
 
-async function readFailureLines(
-  client: Pick<PoolClient, "query">,
-  runIds: string[],
-): Promise<Map<string, string | null>> {
+interface FailureLines {
+  lines: Map<string, string | null>;
+  /** The reason the event log could not be read. The counts of the page stand; the error lines are missing. */
+  unreadable: string | null;
+}
+
+async function readFailureLines(client: Pick<PoolClient, "query">, runIds: string[]): Promise<FailureLines> {
   const lines = new Map<string, string | null>();
-  if (runIds.length === 0) return lines;
-  const result = await client.query(FAILURE_EVENTS_SQL, [runIds]);
-  for (const row of result.rows) {
-    lines.set(String(row.run_id), firstErrorLine(String(row.event)));
+  if (runIds.length === 0) return { lines, unreadable: null };
+  try {
+    const result = await client.query(FAILURE_EVENTS_SQL, [runIds]);
+    for (const row of result.rows) {
+      lines.set(String(row.run_id), firstErrorLine(String(row.event)));
+    }
+    return { lines, unreadable: null };
+  } catch (error) {
+    // A missing grant or a timeout on the event log must not hide the counts. The page says why the lines are missing.
+    return { lines, unreadable: error instanceof Error ? error.message : String(error) };
   }
-  return lines;
 }
 
 function jobRow(row: Record<string, unknown>, lines: Map<string, string | null>): PipelineJobRow {
@@ -238,12 +236,13 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
       const failedRunIds = grouped.rows
         .map((row) => row.last_failure_run_id)
         .filter((id): id is string => typeof id === "string");
-      const lines = await readFailureLines(client, failedRunIds);
+      const failures = await readFailureLines(client, failedRunIds);
       return {
         kind: "ready",
         data: {
           windowDays: PIPELINE_WINDOW_DAYS,
-          jobs: grouped.rows.map((row) => jobRow(row, lines)),
+          eventLogUnreadable: failures.unreadable,
+          jobs: grouped.rows.map((row) => jobRow(row, failures.lines)),
           jobRunHealth: await readVerdict(client, "job_run_health"),
           runtimeShape: await readVerdict(client, "runtime_shape"),
           release: await readRelease(client, Date.now()),

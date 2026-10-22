@@ -76,7 +76,8 @@ export interface ValidationRow {
 export interface NightlyVerdictRow {
   check_name: string;
   ran_at: string;
-  ok: boolean;
+  /** null is a pending verdict: the check ran and could not judge yet. It is neither ok nor a failure. */
+  ok: boolean | null;
   summary: string;
   dagster_run_id: string | null;
 }
@@ -439,7 +440,7 @@ function verdictRow(row: NightlyVerdictRow): NightlyVerdictRow {
   return {
     check_name: row.check_name,
     ran_at: row.ran_at,
-    ok: Boolean(row.ok),
+    ok: row.ok === null || row.ok === undefined ? null : Boolean(row.ok),
     summary: row.summary ?? "",
     dagster_run_id: row.dagster_run_id ?? null,
   };

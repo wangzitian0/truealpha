@@ -14,7 +14,9 @@ cancelled says nothing about the job.
 A job is red on either of these:
 
 * its last two scheduled runs both failed. A scheduled run carries the Dagster tag
-  `dagster/schedule_name`. Two failures in a row with the same trigger are not chance;
+  `dagster/schedule_name`. Two failures in a row with the same trigger are not chance. The two runs
+  come from the last `BASELINE_DAYS` days, so a weekly schedule can show them. A job needs at least
+  one finished run in the last `WINDOW_DAYS` days to be judged at all;
 * its failure rate over `WINDOW_DAYS` days is higher than the failure rate of all other jobs over
   `BASELINE_DAYS` days. "Higher" means that the lower end of the 95% Wilson interval of the job's rate
   lies above the rate of the other jobs. The job needs at least `MIN_RUNS` runs, because an interval
@@ -81,7 +83,7 @@ class JobHealth:
     failures: int
     #: The 95% Wilson interval of failures / runs.
     interval: tuple[float, float]
-    #: The newest scheduled runs that failed one after the other.
+    #: The newest scheduled runs of the last `BASELINE_DAYS` days that failed one after the other.
     scheduled_in_a_row: int
     #: Failure rate of all other jobs over `BASELINE_DAYS` days, or None when no other job ran.
     others_rate: float | None
@@ -144,6 +146,7 @@ def _rate_of(runs: Iterable[Run]) -> float | None:
 
 
 def _red_reasons(window: list[Run], in_a_row: int, others_rate: float | None) -> tuple[str, ...]:
+    """The rules, for the runs of one job in the window and its scheduled failures in a row."""
     failures = sum(run.failed for run in window)
     low, high = wilson(failures, len(window))
     reasons: list[str] = []
@@ -158,14 +161,17 @@ def judge(runs: Iterable[Run], *, now: datetime) -> Judgement:
     """The verdict over `runs` (finished runs, newest first) as of `now`."""
     baseline_start = now - timedelta(days=BASELINE_DAYS)
     window_start = now - timedelta(days=WINDOW_DAYS)
-    kept = [run for run in runs if baseline_start <= run.created_at <= now]
+    kept = sorted(
+        (run for run in runs if baseline_start <= run.created_at <= now), key=lambda r: r.created_at, reverse=True
+    )
     jobs: list[JobHealth] = []
     for job in sorted({run.job for run in kept}):
-        window = [run for run in kept if run.job == job and run.created_at >= window_start]
+        history = [run for run in kept if run.job == job]
+        window = [run for run in history if run.created_at >= window_start]
         if not window:
             continue
         others_rate = _rate_of(run for run in kept if run.job != job)
-        in_a_row = scheduled_failures_in_a_row(window)
+        in_a_row = scheduled_failures_in_a_row(history)
         failures = sum(run.failed for run in window)
         jobs.append(
             JobHealth(

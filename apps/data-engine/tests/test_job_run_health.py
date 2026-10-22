@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -97,6 +98,43 @@ def test_two_failures_with_a_success_between_are_green() -> None:
     judgement = job_run_health.judge(newest_first(FLEET, runs_of("nightly", "sssfsf")), now=NOW)
 
     assert judgement.red == ()
+
+
+def test_a_weekly_schedule_shows_its_pair_across_the_thirty_days() -> None:
+    """A weekly job has one scheduled run in 7 days. Its last two scheduled runs are a week apart, and a manual
+    run in the window must not hide them."""
+    weekly = (
+        runs_of("weekly", "ff", scheduled=True, end=NOW - timedelta(days=14))[:1]
+        + runs_of("weekly", "f", scheduled=True, end=NOW - timedelta(days=7))
+        + runs_of("weekly", "s", scheduled=False, end=NOW - timedelta(hours=2))
+    )
+    judgement = job_run_health.judge(newest_first(FLEET, weekly), now=NOW)
+
+    assert [job.job for job in judgement.red] == ["weekly"]
+    assert judgement.red[0].red == ("last 2 scheduled runs failed",)
+
+
+def test_a_job_with_no_run_in_the_window_is_not_judged() -> None:
+    """The pair of a job that ran last 20 days ago says nothing about this week: the job is not in the verdict."""
+    stale = runs_of("stale", "ff", scheduled=True, end=NOW - timedelta(days=20))
+    judgement = job_run_health.judge(newest_first(FLEET, stale), now=NOW)
+
+    assert [job.job for job in judgement.jobs] == ["fleet_job"]
+
+
+def test_the_input_order_does_not_change_the_verdict() -> None:
+    runs = newest_first(FLEET, runs_of("nightly", "ssssff"))
+
+    assert job_run_health.judge(reversed(runs), now=NOW) == job_run_health.judge(runs, now=NOW)
+
+
+def test_the_window_of_the_admin_page_is_the_window_of_the_verdict() -> None:
+    """One definition: `/admin/pipeline` counts the same days as the verdict judges."""
+    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/admin/pipeline.ts").read_text()
+    match = re.search(r"export const PIPELINE_WINDOW_DAYS = (\d+);", source)
+
+    assert match is not None
+    assert int(match.group(1)) == job_run_health.WINDOW_DAYS
 
 
 def test_manual_failures_are_not_a_scheduled_pair() -> None:
@@ -271,16 +309,20 @@ def test_a_pair_of_scheduled_failures_injected_into_that_history_turns_it_red(
 def test_runs_that_did_not_finish_and_runs_a_person_cancelled_say_nothing_about_a_job(
     run_storage_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Two scheduled failures with a cancelled run between them are two failures in a row. If the cancelled run
+    counted as a success, the pair would be broken and the verdict would stay green."""
     healthy = [row for row in fixture_rows() if row[0] not in VERDICT_JOBS]
     unfinished = [
-        ("model_key_health", status, TICK - timedelta(hours=hours), True)
-        for hours, status in ((8, "CANCELED"), (4, "CANCELED"), (2, "STARTED"))
+        ("model_key_health", status, TICK - timedelta(minutes=minutes), True)
+        for minutes, status in ((120, "FAILURE"), (90, "CANCELED"), (60, "FAILURE"), (30, "STARTED"))
     ]
     load_runs(run_storage_url, healthy + unfinished)
 
     verdict = run_check(run_storage_url, monkeypatch)
 
-    assert verdict["ok"] is True
+    assert verdict["ok"] is False
+    assert verdict["output"]["red"] == ["model_key_health"]
+    assert "model_key_health (last 2 scheduled runs failed)" in verdict["summary"]
 
 
 def test_a_history_with_no_finished_run_is_pending_not_green(
