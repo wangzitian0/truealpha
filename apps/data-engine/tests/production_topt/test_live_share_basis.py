@@ -440,11 +440,11 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
 ) -> None:
     """Production calls `build_report` after `freeze_snapshot` and `materialize` (`composition.run_topt_pipeline`).
 
-    This test reads the report row that the deployed op persisted. MSFT, WMT and LLY have no proven
-    share basis in this fixture, and their financial facts are complete, so the core marks exactly their
-    issuers unavailable. The report lists none of their listings as complete, and the nightly invariant
-    `quality-report-matches-core-results` holds on the rows. Red when the report is built before the
-    snapshot is frozen: it then reads no verdict and lists the three listings complete.
+    This test reads the report row that the deployed op persisted. The symbols of `UNAVAILABLE` have no
+    proven share basis in this fixture, and their financial facts are complete, so the core marks exactly
+    their issuers unavailable. The report lists none of their listings as complete, and the nightly
+    invariant `quality-report-matches-core-results` holds on the rows. Red when the report is built
+    before the snapshot is frozen: it then reads no verdict and lists those listings complete.
     """
     run_id = tick.metadata["capture_run_id"]
     with psycopg.connect(tick.url) as reader:
