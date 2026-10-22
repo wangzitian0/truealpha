@@ -5,7 +5,9 @@ pipeline (#27) can persist it inside the same transaction as the capture it
 grades. Computes, over the exact requested denominator, the terminal/coverage/
 availability/freshness/independent-reconciliation/lineage/mean-confidence
 figures from the capture tables, and persists one append-only
-`mart.datahub_quality_report` row.
+`mart.datahub_quality_report` row. One input is not a capture table: the share count of a financial
+fact. The report reads the verdict of the frozen core snapshot for it (#1346), so the snapshot must
+exist before the report is built. `composition.run_topt_pipeline` freezes, materializes, then grades.
 
 `independent_reconciliation` is computed by the accepted fusion engine
 `reconcile_source_assertions` (#343): every multi-source market-price cell's
@@ -45,7 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -324,6 +326,51 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
     return False
 
 
+# ---- The share count: the report reads one part of the core verdict from the frozen snapshot (#1346) ----
+# The frozen snapshot decides share readiness. `_snapshot_member` and `share_basis.live_on_close_basis`
+# drop a count that the stored series cannot put on the share basis of the close.
+# The core then marks the whole issuer unavailable. The report reads that one fact and does not decide it.
+# A payload can carry a share count that the snapshot dropped.
+# Then `_has_usable_value` says yes and the core says no.
+# The nightly invariant `quality-report-matches-core-results` showed this on 2026-10-20 (listing xnas:wdc).
+# The report reads the snapshot member, not `mart.topt_core_results`.
+# The invariant compares the two. A report that read the results would make it true by construction.
+# Other gaps remain, and they are tracked on #1346. The report does not read these parts of the verdict.
+# The core marks an issuer unavailable for a missing or non-positive market price.
+# It does so for a stale or unknown cell, and for a non-positive input.
+# A listing with one of these faults is still complete in the report.
+_FROZEN_FACTOR_INPUTS_SQL = """
+    select member.factor_input
+    from staging.topt_core_snapshots snapshot
+    join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
+    where snapshot.run_id = %s
+"""
+
+
+def observations_without_share_count(factor_inputs: Iterable[Mapping[str, Any]]) -> frozenset[str]:
+    """The financial-fact observations of every issuer whose frozen share count is unavailable.
+
+    A factor input is the JSON of `ToptCoreSnapshotInput`. Its market-value components hold the
+    share metric of each listing, and the `input_id` of that metric is the financial-fact
+    observation of the listing. The core makes the whole issuer unavailable when one component
+    has no count (`compute_topt_core`), so every listing of that issuer is dropped. A run with no
+    frozen snapshot gives no factor input and so an empty set.
+    """
+    dropped: set[str] = set()
+    for factor_input in factor_inputs:
+        shares = [component["shares_outstanding"] for component in factor_input["market_value_components"]]
+        if any(metric["availability"] == "unavailable" for metric in shares):
+            dropped.update(metric["input_id"] for metric in shares)
+    return frozenset(dropped)
+
+
+def _observation_usable(
+    semantic_type: str, payload: dict[str, Any] | None, *, observation_id: str, share_dropped: frozenset[str]
+) -> bool:
+    """Is this observation usable: its payload carries the value, and the snapshot kept its share count?"""
+    return _has_usable_value(semantic_type, payload) and observation_id not in share_dropped
+
+
 # ---- Class-B plausibility: single-source semantics get domain falsifiers (#578) ----
 # A financial-fact cell has no second vendor to disagree with it, so its
 # corroboration is accounting identity and domain bounds. Each rule returns its
@@ -456,6 +503,10 @@ def build_report(
 
     `object_store` is where lineage pointers are dereferenced; it defaults to the deployed
     S3 store, so the deployed call site needs no argument and tests can inject.
+
+    Call it after `freeze_snapshot`. A financial-fact observation is usable when its payload
+    carries the values and the frozen snapshot kept the share count of its issuer (#1346).
+    A run with no frozen snapshot gives the payload-only grade.
     """
     status = conn.execute(
         """
@@ -509,6 +560,9 @@ def build_report(
         (run_id,),
     ).fetchall()
 
+    share_dropped = observations_without_share_count(
+        factor_input for (factor_input,) in conn.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,)).fetchall()
+    )
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
     market_price_cells: dict[str, str] = {}
@@ -539,7 +593,9 @@ def build_report(
         if confidence is not None:
             cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
         if not cell.available:
-            cell.available = _has_usable_value(semantic_type, payload)
+            cell.available = _observation_usable(
+                semantic_type, payload, observation_id=observation_id, share_dropped=share_dropped
+            )
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:

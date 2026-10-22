@@ -42,7 +42,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import OperatingBranch
-from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
+from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database, load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from split_series_seed import SeriesShape, share_count_vintage, store_daily_series  # noqa: E402
@@ -407,3 +407,57 @@ def test_a_close_that_jumps_beyond_the_series_makes_the_issuer_unavailable_with_
     assert lly.shares is None and lly.exclusion_reason == "missing_market_value_input", lly
     named = [message for message in tick.warnings if "close_jump_beyond_series" in message]
     assert len(named) == 1 and "LLY" in named[0] and "0.1000" in named[0], tick.warnings
+
+
+# -- #1346: the persisted report of the tick agrees with the core --------------------------------
+
+
+def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_count_the_core_dropped(
+    tick: Tick, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Production calls `build_report` after `freeze_snapshot` and `materialize` (`composition.run_topt_pipeline`).
+
+    This test reads the report row that the deployed op persisted. MSFT, WMT and LLY have no proven
+    share basis in this fixture, and their financial facts are complete, so the core marks exactly their
+    issuers unavailable. The report lists none of their listings as complete, and the nightly invariant
+    `quality-report-matches-core-results` holds on the rows. Red when the report is built before the
+    snapshot is frozen: it then reads no verdict and lists the three listings complete.
+    """
+    run_id = tick.metadata["capture_run_id"]
+    with psycopg.connect(tick.url) as reader:
+        subjects = {
+            row[0]
+            for row in reader.execute("select subject_id from raw.capture_obligations where run_id = %s", (run_id,))
+        }
+        persisted = reader.execute(
+            "select payload from mart.datahub_quality_report where run_id = %s order by created_at desc limit 1",
+            (run_id,),
+        ).fetchone()
+        dropped = {
+            row[0]
+            for row in reader.execute(
+                """
+                select distinct ob.subject_id
+                from raw.capture_obligations ob
+                join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+                join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+                where ob.run_id = %s and p.normalized_payload ->> 'ticker' = any(%s)
+                """,
+                (run_id, sorted(UNAVAILABLE)),
+            )
+        }
+        unavailable_issuers = reader.execute(
+            "select count(distinct issuer_id) from mart.topt_core_results where run_id = %s and availability = 'unavailable'",
+            (run_id,),
+        ).fetchone()
+    assert persisted is not None and unavailable_issuers is not None
+    complete = set(persisted[0]["factor_availability"]["gross_profit_per_employee"]["complete_subject_ids"])
+
+    assert len(dropped) == len(UNAVAILABLE), "one listing for each symbol without a proven share basis"
+    assert unavailable_issuers[0] == len(UNAVAILABLE), "the core marks exactly those issuers unavailable"
+    assert subjects - complete == dropped
+
+    tool = load_tool("output_invariants")
+    parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
+    assert tool.check(tick.url, require_coverage=True, invariants=(parity,), exemptions={}) == 0, capsys.readouterr()
+    assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
