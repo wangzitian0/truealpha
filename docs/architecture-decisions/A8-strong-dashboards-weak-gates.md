@@ -1,8 +1,8 @@
 # A8 — Strong Dashboards, Weak Gates: Observability over Deadlocking Blockers
 
-Status: Accepted (in force; `AGENTS.md` Rule 4 and Rule 6 updated 2026-10-12)
+Status: Accepted (in force; `AGENTS.md` Rule 4 and Rule 6 updated 2026-10-12 and revised 2026-10-21)
 Date: 2026-10-12
-Extends: `AGENTS.md` Rule 4 ("How work happens"), Rule 6 ("Closed means deployed, real, and evidenced"), and ADR A2
+Extends: `AGENTS.md` Rule 4 ("How work happens"), Rule 6 ("Closed means verified on staging with real data"), and ADR A2
 
 ## Context
 
@@ -21,8 +21,11 @@ Over successive iterations, defensive engineering mechanisms degenerated into br
 
 We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板优于门禁，强看板，弱门禁)**.
 
-### 1. Weak Gates (Fail-Safe Technical Baselines Only)
-- Merge and CI gates enforce strictly essential technical invariants: compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit test execution.
+### 1. Three gate classes
+A gate belongs to one of three classes. Everything else is a dashboard.
+- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit tests. It also holds the review-finding budget and the independent review of gate and release code (`AGENTS.md` Rule 4).
+- **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect. It also shows that `main` still deploys.
+- **Class 3, staging evidence before a production deploy:** a production deploy of a release waits for the staging evidence of that same release.
 - Third-party and AI reviewer feedback is **advisory**: infrastructure timeouts, reviewer platform errors, or unclassified review comments log warnings and never fail-close PR readiness.
 - Mechanical text policing (regex matching on PR closing keywords, automated bot reopen scripts) is abolished.
 
@@ -34,7 +37,8 @@ We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板�
 - Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. A migration creates each one: `mart.served_head` (pointer freshness), `mart.question_coverage_report` (question coverage), and `mart.nightly_verdicts` (nightly check verdicts). The web surfaces above and the health endpoints read these models.
 
 ### 3. Issue Lifecycle and Verification
-- Issues are closed when an agent or engineer independently verifies deployment reality on the relevant dashboard or via physical read-only probes (SQL rows / HTTP responses).
+- An agent or engineer independently verifies the change on staging. The verifier reads the relevant dashboard or runs a read-only probe (SQL rows, HTTP responses). Then `/close` walks the acceptance rows (ADR A2) and the issue closes.
+- Production state is not an issue state. The release process that infra2 owns records it (`docs/ssot/ops.pipeline.md` in wangzitian0/infra2).
 - Reopening is driven by physical regressions identified on the dashboard or by operational failure, not by arbitrary comment text parsers.
 
 ## Consequences
