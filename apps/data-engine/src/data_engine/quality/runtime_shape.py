@@ -675,8 +675,10 @@ def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tra
     raises the size of that event as it grows. An event with an unknown job is looked up again while its
     process is the largest, because the run may not have been started yet or the read may have failed once.
     A known job is never looked up again."""
+    if reading.container is None:
+        return folded  # the fold added nothing for this reading, and the names must not change either
     events, process_id, size = folded.over_events, reading.largest_process_id, reading.largest_process or 0
-    container = reading.container or ""
+    container = reading.container
     if folded.processes_over_size > before.processes_over_size:
         job = job_of_process(instance, process_id)
         return replace(folded, over_events=(*events, OverEvent(process_id, job, size, container))[-MAX_OVER_EVENTS:])
