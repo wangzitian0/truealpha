@@ -130,9 +130,9 @@ try {
   await addObservation(FRESH, 1, "0.0400", originalFetch, 3, 2); // the original value of the newest date
   await addObservation(FRESH, 1, "0.0411", revisedFetch, 1, 1); // the revised value, recorded later
 
-  // 6. The window and the age count UTC days. A session in another time zone must not move them. The zone
-  // is chosen so that its local date differs from the UTC date at every hour of the run: before 11:00 UTC
-  // it is 11 hours behind UTC, from 11:00 UTC it is 14 hours ahead.
+  // 6. The window and the age count UTC days. A session in another time zone must not move them.
+  // The zone has a local date that differs from the UTC date at every hour of the run.
+  // Before 11:00 UTC the zone is 11 hours behind UTC. From 11:00 UTC it is 14 hours ahead.
   const utcHour: number = (await admin.query("select extract(hour from now() at time zone 'UTC')::int as h")).rows[0].h;
   await admin.query(`set local timezone = '${utcHour < 11 ? "Pacific/Pago_Pago" : "Pacific/Kiritimati"}'`);
   const zoneDiffers: boolean = (
