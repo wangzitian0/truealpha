@@ -1324,7 +1324,13 @@ def load_index_membership(
 
     # The denominator leaves out a constituent whose exchange no source names (#1411 K6).
     # So the membership route skips it as well, and the notes name it.
-    mics = resolve_listing_mics(connection, source, [str(ticker) for ticker, _weight, _knowable_at in constituents])
+    mics = resolve_listing_mics(
+        connection,
+        source,
+        [str(ticker) for ticker, _weight, _knowable_at in constituents],
+        valid_at=cutoff.date(),
+        known_at=cutoff,
+    )
     unresolved_exchange: list[str] = []
     for ticker, weight, knowable_at in constituents:
         mic = mics[str(ticker)]

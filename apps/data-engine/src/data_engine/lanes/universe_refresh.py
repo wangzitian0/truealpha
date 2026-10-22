@@ -44,13 +44,26 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
 
     # Every vendor call in the refresh is attributed to this Dagster run in the
     # external call ledger (#729) and admitted by the rule-6 gate first.
-    with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
-        _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish)
+    # The constituents that left a denominator for want of a listing exchange, by universe (#1411 K6).
+    # The op reports them as output metadata, also when a later step of the refresh fails.
+    excluded: dict[str, dict[str, object]] = {}
+    try:
+        with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
+            _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish, excluded)
+    finally:
+        context.add_output_metadata({"constituents_excluded": dg.MetadataValue.json(excluded)})
 
 
 def _refresh_universes(
-    context: dg.OpExecutionContext, universe_sources, latest_quarter_end, refresh_and_publish
+    context: dg.OpExecutionContext,
+    universe_sources,
+    latest_quarter_end,
+    refresh_and_publish,
+    excluded_by_universe: dict[str, dict[str, object]] | None = None,
 ) -> None:
+    """Refresh each active universe. `excluded_by_universe` collects the excluded constituents of each."""
+    if excluded_by_universe is None:
+        excluded_by_universe = {}
     active_sources = [source for source in universe_sources.values() if _is_source_refresh_enabled(source)]
     failures: list[tuple[str, Exception]] = []
     # Each universe rides its own connection and transaction so a single index endpoint failure
@@ -66,6 +79,14 @@ def _refresh_universes(
                     openfigi_api_key=settings.openfigi_api_key,
                 )
                 context.log.info(outcome)
+                excluded = getattr(outcome, "excluded", ())
+                if excluded:
+                    excluded_by_universe[source.etf] = {
+                        "count": len(excluded),
+                        "tickers": [item["ticker"] for item in excluded],
+                        "reason": excluded[0]["reason"],
+                    }
+                    context.log.warning(f"constituents[{source.etf}] excluded: {outcome}")
                 connection.commit()
         except Exception as error:  # noqa: BLE001 — per-universe isolation, re-raised below
             context.log.error(

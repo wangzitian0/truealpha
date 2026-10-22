@@ -40,7 +40,7 @@ from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
 
 from data_engine import raw_store
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, corpus_list_version, load_corpus
 from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)
@@ -340,7 +340,12 @@ UNRESOLVED_LISTING_EXCHANGE = "unresolved_listing_exchange"
 
 
 def resolve_listing_mics(
-    connection: Connection[Any], source: UniverseSource, tickers: Sequence[str]
+    connection: Connection[Any],
+    source: UniverseSource,
+    tickers: Sequence[str],
+    *,
+    valid_at: date | None = None,
+    known_at: datetime | None = None,
 ) -> dict[str, str | None]:
     """The primary exchange MIC (`xnas` vs `xnys`) of each ticker, or None when no source names it (#1411 K6).
 
@@ -353,10 +358,13 @@ def resolve_listing_mics(
     2. The governed TOPT corpus (`corpus.v1.json`) listing identities.
     3. Landed `qqq` constituents in `staging.etf_constituent_facts` (the Nasdaq-100 lists Nasdaq names).
     4. `staging.entity_aliases` where `scheme = 'mic-ticker'` (`<MIC>:<TICKER>`), the identity store.
+       Only an alias that is valid on `valid_at`, as known at `known_at`, counts. An alias that
+       has ended (`valid_to`) or has a retraction does not (`staging.entity_alias_valid_to`).
+       Both default to now.
     A failed read raises. It never turns into a smaller denominator.
     """
-    from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
-
+    known_at = known_at or datetime.now(UTC)
+    valid_at = valid_at or known_at.date()
     wanted = {ticker.upper() for ticker in tickers}
     mics: dict[str, str] = {}
     if source.mic is not None:
@@ -380,13 +388,16 @@ def resolve_listing_mics(
             ).fetchall()
             alias_rows = connection.execute(
                 """
-                select value
-                from staging.entity_aliases
-                where scheme = 'mic-ticker'
-                  and split_part(upper(value), ':', 2) = any(%s)
-                order by transaction_time desc
+                select alias.value
+                from staging.entity_aliases alias
+                where alias.scheme = 'mic-ticker'
+                  and split_part(upper(alias.value), ':', 2) = any(%s)
+                  and alias.valid_from <= %s
+                  and coalesce(%s < staging.entity_alias_valid_to(alias.alias_id, %s), true)
+                  and alias.transaction_time <= %s
+                order by alias.transaction_time desc
                 """,
-                (sorted(wanted),),
+                (sorted(wanted), valid_at, valid_at, known_at, known_at),
             ).fetchall()
         for (ticker,) in qqq_rows:
             mics[str(ticker).upper()] = "xnas"
@@ -523,6 +534,37 @@ def latest_quarter_end(as_of: date) -> date:
     return max(q for q in quarter_ends if q < as_of)
 
 
+#: How many excluded tickers the summary line names. The payload and the output metadata hold all of them.
+EXCLUDED_NAMES_SHOWN = 5
+
+
+class RefreshOutcome(str):
+    """The summary line of one refresh. It is a string for the log, and it carries the excluded constituents.
+
+    A constituent whose listing exchange no source names leaves the denominator (#1411 K6). The line names
+    the count and the first `EXCLUDED_NAMES_SHOWN` tickers, so the operator sees the exclusion where the
+    run reports. `excluded` holds the same items as the `excluded` key of the denominator payload.
+    """
+
+    excluded: tuple[dict[str, str], ...]
+
+    def __new__(cls, text: str, excluded: Sequence[dict[str, str]] = ()) -> RefreshOutcome:
+        outcome = super().__new__(cls, text)
+        outcome.excluded = tuple(excluded)
+        return outcome
+
+
+def _summary(text: str, excluded: Sequence[dict[str, str]]) -> RefreshOutcome:
+    if not excluded:
+        return RefreshOutcome(text)
+    names = ", ".join(item["ticker"] for item in excluded[:EXCLUDED_NAMES_SHOWN])
+    return RefreshOutcome(
+        f"{text}; {len(excluded)} constituents excluded, no listing exchange known "
+        f"(first {min(len(excluded), EXCLUDED_NAMES_SHOWN)}: {names})",
+        excluded,
+    )
+
+
 def refresh_and_publish(
     connection: Connection[Any],
     source: UniverseSource,
@@ -530,7 +572,7 @@ def refresh_and_publish(
     report_date: date,
     note: str,
     openfigi_api_key: str = "",
-) -> str:
+) -> RefreshOutcome:
     """One refresh cycle: fetch+land, then publish ONLY when membership changed.
 
     The single entrypoint the operator script and the scheduled job share — the
@@ -539,11 +581,13 @@ def refresh_and_publish(
     when nothing changed.
     """
     landed = refresh_etf_constituents(connection, source, openfigi_api_key=openfigi_api_key)
-    fresh_sha = build_denominator(connection, source, report_date=report_date)["instrument_mapping_sha256"]
-    if fresh_sha == current_head_mapping_sha(connection, source):
-        return f"{source.etf}: {landed} rows landed; membership unchanged, head kept"
+    fresh = build_denominator(connection, source, report_date=report_date)
+    if fresh["instrument_mapping_sha256"] == current_head_mapping_sha(connection, source):
+        return _summary(f"{source.etf}: {landed} rows landed; membership unchanged, head kept", fresh["excluded"])
     contract_id, sequence = publish_universe_list(connection, source, report_date=report_date, note=note)
-    return f"{source.etf}: {landed} rows landed; published {contract_id} at sequence {sequence}"
+    return _summary(
+        f"{source.etf}: {landed} rows landed; published {contract_id} at sequence {sequence}", fresh["excluded"]
+    )
 
 
 def resolve_universe_corpus(connection: Connection[Any], head_kind: str) -> dict[str, Any]:
