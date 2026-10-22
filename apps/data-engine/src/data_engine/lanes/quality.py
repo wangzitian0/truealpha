@@ -118,9 +118,10 @@ RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
 RUNTIME_SHAPE_CRON = "30 6 * * *"
 
 FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"
-# 06:45 UTC: after every tick and nightly check of the night has finished (runtime shape at 06:30),
-# and before the delivery report (07:00) reads the verdict. The check judges the UTC day that ended.
-FETCH_KEYS_ONCE_CRON = "45 6 * * *"
+# 06:20 UTC: after the release fetch proof (06:15), and before the runtime shape check (06:30), which
+# runs after every other nightly check (#1484). The check judges the UTC day that ended, and the
+# ledger of that day is complete at 00:00 UTC.
+FETCH_KEYS_ONCE_CRON = "20 6 * * *"
 
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
