@@ -52,8 +52,8 @@ Only a tick-tagged run (the schedule) moves the baseline, and only forward. A ma
 growth since the last scheduled check and consumes nothing. A re-execution of the latest tick returns
 the verdict that the tick already has; a re-execution of an older tick judges and saves nothing.
 
-`memory.peak` counts page cache that the cgroup holds. The summary shows counts and sizes only,
-because the verdict is published on `/health`.
+`memory.peak` counts page cache that the cgroup holds. The summary shows counts, sizes and job names
+(code identifiers) only, because the verdict is published on `/health`.
 """
 
 from __future__ import annotations
@@ -99,6 +99,15 @@ def _texts(value: object) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"not a list: {value!r}")
     return tuple(_text(item) for item in value)
+
+
+def _over_events(value: object) -> tuple[OverEvent, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"not a list: {value!r}")
+    return tuple(
+        OverEvent(process_id=_text(item["process_id"]), job=_text(item["job"]), size=_count(item["size"]))
+        for item in value
+    )
 
 
 def _count(value: object) -> int:
@@ -150,6 +159,19 @@ class Container:
     peak: int
 
 
+#: How many over-budget processes the tracker names. The newest stay.
+MAX_OVER_EVENTS = 8
+
+
+@dataclass(frozen=True)
+class OverEvent:
+    """A run process that passed the run budget: its id (`pid:start ticks`), the job of its run and its size (bytes)."""
+
+    process_id: str
+    job: str
+    size: int
+
+
 @dataclass(frozen=True)
 class Tracker:
     """Totals over the life of all containers. Written by the sampler only."""
@@ -173,10 +195,10 @@ class Tracker:
     #: They never restart with a container, so a red verdict names the size that made it red.
     worst_process: int = 0
     worst_server: int = 0
-    #: The process (`pid:start ticks`) of `worst_process` and the Dagster job of its run, found when the
-    #: record last rose. Empty in state from before the job was recorded.
-    worst_process_id: str = ""
-    worst_job: str = ""
+    #: The processes that passed the run budget, oldest first, each with the job that runs in it. The
+    #: newest `processes_over_size - baseline` of them are the ones of a night. State from before the
+    #: jobs were recorded has none.
+    over_events: tuple[OverEvent, ...] = ()
     #: When the sensor last ran (ISO 8601, UTC). Empty before the first sample.
     sampled_at: str = ""
 
@@ -209,8 +231,7 @@ class Tracker:
                 largest_process=_count(data.get("largest_process", 0)),
                 worst_process=_count(data.get("worst_process", 0)),
                 worst_server=_count(data.get("worst_server", 0)),
-                worst_process_id=_text(data.get("worst_process_id", "")),
-                worst_job=_text(data.get("worst_job", "")),
+                over_events=_over_events(data.get("over_events", [])),
                 sampled_at=_text(data["sampled_at"]),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
@@ -407,8 +428,7 @@ def _fold_sizes(
         servers_over_size=server_over,
         worst_process=worst_process,
         worst_server=worst_server,
-        worst_process_id=tracker.worst_process_id,
-        worst_job=tracker.worst_job,
+        over_events=tracker.over_events,
         largest_process=size if fresh_container else max(tracker.largest_process, size),
     )
 
@@ -481,6 +501,20 @@ def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
     return []
 
 
+def _over_size_text(tracker: Tracker, count: int, capacity: CodeServerCapacity) -> str:
+    """The finding for `count` run processes over the budget since the last check: the newest events name them.
+
+    State from before the jobs were recorded has no events. The record of the largest size then stands in,
+    with the job unknown."""
+    events = tracker.over_events[-count:]
+    if not events:
+        subject, held = "a run process held", f"{round(tracker.worst_process / MIB)} MiB (job {UNKNOWN_JOB})"
+    else:
+        subject = "a run process held" if len(events) == 1 else "run processes held"
+        held = " and ".join(f"{round(event.size / MIB)} MiB (job {event.job})" for event in events)
+    return f"{subject} {held}, above the run budget {capacity.run_mib} MiB ({count} time(s)); the run limit assumes that budget"
+
+
 def judge(
     reading: Reading,
     *,
@@ -531,18 +565,14 @@ def judge(
     if peaks:
         red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
     if too_big:
-        red.append(
-            f"a run process held {round(tracker.worst_process / MIB)} MiB (job {tracker.worst_job or UNKNOWN_JOB}),"
-            f" above the run budget"
-            f" {capacity.run_mib} MiB ({too_big} time(s)); the run limit assumes that budget"
-        )
+        red.append(_over_size_text(tracker, too_big, capacity))
     if server_big:
         red.append(
             f"the code server held {round(tracker.worst_server / MIB)} MiB, above the declared"
             f" {capacity.server_mib} MiB ({server_big} time(s))"
         )
 
-    # The verdict is published on /health: counts and sizes only, never a path or an error text.
+    # The verdict is published on /health: counts, sizes and job names only, never a path or an error text.
     if red:
         summary = "; ".join(red)
     else:
@@ -596,6 +626,28 @@ def job_of_process(instance: dg.DagsterInstance, process_id: str) -> str:
     return UNKNOWN_JOB
 
 
+def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tracker, reading: Reading) -> Tracker:
+    """`folded` with the job of each run process that passed the budget (one event per count).
+
+    A new count adds an event with the job found now. The process of the newest event, while it stays the
+    largest and over the budget, raises the size of that event; an event with an unknown job is looked up
+    again, because the run may not have been started or the read may have failed at the first sample."""
+    events, process_id, size = folded.over_events, reading.largest_process_id, reading.largest_process or 0
+    if folded.processes_over_size > before.processes_over_size:
+        job = job_of_process(instance, process_id)
+        return replace(folded, over_events=(*events, OverEvent(process_id, job, size))[-MAX_OVER_EVENTS:])
+    if events and events[-1].process_id == process_id and size > events[-1].size:
+        newest = events[-1]
+        job = newest.job if newest.job != UNKNOWN_JOB else job_of_process(instance, process_id)
+        return replace(folded, over_events=(*events[:-1], OverEvent(process_id, job, size)))
+    if events and events[-1].process_id == process_id and events[-1].job == UNKNOWN_JOB:
+        newest = events[-1]
+        return replace(
+            folded, over_events=(*events[:-1], OverEvent(process_id, job_of_process(instance, process_id), newest.size))
+        )
+    return folded
+
+
 def sample(
     instance: dg.DagsterInstance,
     *,
@@ -615,14 +667,9 @@ def sample(
         log.warning("the runtime shape tracker is not readable; the totals restart")
         tracker = Tracker()
     current = read() if reading is None else reading
-    folded = fold(tracker, current, deployment=deployment, capacity=capacity)
-    if folded.worst_process > tracker.worst_process:
-        # A process over the budget raised the record: name the job that runs in it.
-        folded = replace(
-            folded,
-            worst_process_id=current.largest_process_id,
-            worst_job=job_of_process(instance, current.largest_process_id),
-        )
+    folded = _name_over_events(
+        instance, tracker, fold(tracker, current, deployment=deployment, capacity=capacity), current
+    )
     folded = replace(folded, sampled_at=(now or datetime.now(UTC)).isoformat())
     instance.run_storage.set_cursor_values({TRACKER_KEY: folded.to_json()})
     return folded
