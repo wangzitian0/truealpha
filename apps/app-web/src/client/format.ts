@@ -113,7 +113,26 @@ export function formatYieldPercent(value: string | null | undefined): string | n
   const shifted = fraction.padEnd(2, "0");
   const integerPart = `${whole}${shifted.slice(0, 2)}`.replace(/^0+(?=\d)/, "");
   const decimalPart = shifted.slice(2).padEnd(2, "0").slice(0, 2);
-  return `${sign}${integerPart}.${decimalPart}%`;
+  // A value that cuts to zero has no sign: `-0.00001` reads `0.00%`, never `-0.00%`.
+  const signed = /^0+$/.test(`${integerPart}${decimalPart}`) ? "" : sign;
+  return `${signed}${integerPart}.${decimalPart}%`;
+}
+
+/** The unit that the catalog `mart.macro_series` states for a yield: an annualized decimal fraction. */
+export const ANNUALIZED_FRACTION_UNIT = "annualized_decimal_fraction";
+
+/**
+ * A macro value in the unit that its series declares. An annualized decimal fraction reads as a percent.
+ * Any other unit, and a fraction that is not a plain decimal, reads as the exact value followed by the
+ * unit, so a value is never shown as a percent when the catalog says that it is something else.
+ */
+export function formatMacroValue(unit: string, value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (unit === ANNUALIZED_FRACTION_UNIT) {
+    const percent = formatYieldPercent(value);
+    if (percent !== null) return percent;
+  }
+  return `${value} ${unit}`;
 }
 
 /** An instant as `2026-10-20 20:31 UTC`, or null when it is not a valid date. */

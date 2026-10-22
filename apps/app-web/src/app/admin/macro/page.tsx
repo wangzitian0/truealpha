@@ -8,7 +8,7 @@
  * `mart.macro_series_status`, the view that the nightly verdict `macro_freshness` reads too.
  */
 
-import { formatCell, formatUtcMinute, formatYieldPercent } from "@/client/format";
+import { formatCell, formatMacroValue, formatUtcMinute } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadMacroPanel, type MacroSeries } from "@/server/admin/macro";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -75,7 +75,7 @@ export default async function MacroPage() {
               className="mt-3 text-3xl font-bold tracking-tight"
               title={item.latest === null ? undefined : item.latest.value}
             >
-              {formatCell(item.latest === null ? null : formatYieldPercent(item.latest.value))}
+              {formatCell(item.latest === null ? null : formatMacroValue(item.unit, item.latest.value))}
             </p>
             <p className="mt-1 text-sm text-gray-400">
               {item.latest === null ? "no observation" : `observed ${item.latest.observationDate}`}
@@ -127,7 +127,7 @@ export default async function MacroPage() {
                       const value = valueOf.get(`${date}|${item.seriesId}`) ?? null;
                       return (
                         <td key={item.seriesId} className="py-1 pr-4 text-right tabular-nums" title={value ?? undefined}>
-                          {formatCell(formatYieldPercent(value))}
+                          {formatCell(formatMacroValue(item.unit, value))}
                         </td>
                       );
                     })}

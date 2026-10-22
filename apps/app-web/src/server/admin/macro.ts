@@ -1,7 +1,7 @@
 /**
  * #1255: the macro base data loader for /admin/macro. Administrator-only.
  *
- * It reads three mart relations through `mart_readonly` and computes nothing:
+ * It reads two mart views through `mart_readonly` and computes nothing:
  *
  *   mart.macro_series_status   one row per series: the newest observation, its source and fetch time,
  *                              its age in calendar days and the limit that its registration declares
@@ -53,12 +53,14 @@ export interface MacroPanel {
 
 export type MacroOutcome = ReadState<MacroPanel>;
 
+// The date comes out as `observation_day`, formatted by `to_char`, so the text does not depend on the
+// DateStyle of the server. The `order by` names the column `observation_date`, never the text.
 export const STATUS_SQL =
-  "select series_id, label, unit, source_id, max_age_days, observation_date::text as observation_date, " +
+  "select series_id, label, unit, source_id, max_age_days, to_char(observation_date, 'YYYY-MM-DD') as observation_day, " +
   "value::text as value, source, fetched_at, age_days, is_fresh from mart.macro_series_status order by series_id";
 
 export const MONTHS_SQL =
-  "select series_id, observation_date::text as observation_date, value::text as value " +
+  "select series_id, to_char(observation_date, 'YYYY-MM-DD') as observation_day, value::text as value " +
   "from mart.macro_series_current " +
   "where observation_date >= ((now() at time zone 'UTC')::date - interval '12 months')::date " +
   "order by observation_date desc, series_id";
@@ -71,7 +73,7 @@ function text(value: unknown): string {
   return String(value);
 }
 
-/** The SQL casts dates to text, so the driver never builds a Date in the server's time zone. */
+/** The SQL formats dates as text, so the driver never builds a Date in the server's time zone. */
 function day(value: unknown): string {
   return String(value).slice(0, 10);
 }
@@ -94,10 +96,10 @@ export async function loadMacroPanel(principal: MacroPrincipal | null): Promise<
       sourceId: String(row.source_id),
       maxAgeDays: Number(row.max_age_days),
       latest:
-        row.observation_date === null || row.observation_date === undefined
+        row.observation_day === null || row.observation_day === undefined
           ? null
           : {
-              observationDate: day(row.observation_date),
+              observationDate: day(row.observation_day),
               value: text(row.value),
               source: String(row.source),
               fetchedAt: text(row.fetched_at),
@@ -107,7 +109,7 @@ export async function loadMacroPanel(principal: MacroPrincipal | null): Promise<
     }));
     const months: MacroObservationRow[] = monthRows.map((row) => ({
       seriesId: String(row.series_id),
-      observationDate: day(row.observation_date),
+      observationDate: day(row.observation_day),
       value: text(row.value),
     }));
     return { kind: "ready", data: { series, months } };
