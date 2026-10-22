@@ -46,6 +46,7 @@ from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
+from data_engine.datahub.risk_free import RiskFreeRate
 from data_engine.datahub.share_basis import (
     SHARES_KEY,
     LiveShareCount,
@@ -427,13 +428,14 @@ def run_strategy_replay_for_cutoff(
     *,
     cutoff: datetime,
     executed_at: datetime,
-    risk_free_rate: Decimal,
+    risk_free_rate: RiskFreeRate,
     capture_run_id: str,
     plausibility_refusals: Mapping[str, ExclusionReason],
 ) -> tuple[str, int, str]:
     """Evaluate the frozen strategy over the captured staging inputs for one cutoff and
-    persist ``mart.strategy_runs``/``mart.strategy_decisions``. The risk-free rate is the
-    same 0.05 the GPPE materialization pins, supplied explicitly by the caller.
+    persist ``mart.strategy_runs``/``mart.strategy_decisions``. The caller supplies the measured
+    risk-free rate. The tick passes the rate that its core materialization used (#1255), so one tick
+    reads one rate. The run records the lineage of the rate and the rate is part of the run identity.
 
     ``capture_run_id`` is the capture this evaluation belongs to, and the run is bound to
     it (#877): a cutoff alone can name two captures since forced ticks (#874) exist, so
@@ -454,7 +456,7 @@ def run_strategy_replay_for_cutoff(
         issuer_inputs,
         definition=definition,
         cutoff_at=cutoff,
-        risk_free_rate=risk_free_rate,
+        risk_free_rate=risk_free_rate.value,
         plausibility_refusals=plausibility_refusals,
     )
     cutoff_key = cutoff.astimezone(UTC).isoformat()
@@ -464,7 +466,12 @@ def run_strategy_replay_for_cutoff(
     )
     snapshot_id = gateway.snapshot_id(cutoff)
     run_id, decision_ids = write_replay(
-        connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
+        connection,
+        decisions,
+        definition,
+        executed_at=executed_at,
+        snapshot_id=snapshot_id,
+        risk_free_rate=risk_free_rate,
     )
     bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
     return run_id, len(decision_ids), snapshot_id

@@ -1,5 +1,7 @@
 import os
-from datetime import UTC, datetime
+import sys
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -12,6 +14,9 @@ from data_engine.strategy_replay_repository import (
     write_strategy_run,
 )
 from truealpha_contracts.common import canonical_sha256
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from macro_seed import seed_risk_free_rate, stub_rate  # noqa: E402
 
 _EXECUTED_AT = datetime(2026, 7, 18, 12, 0, 0, tzinfo=UTC)
 
@@ -250,3 +255,81 @@ def test_the_labor_efficiency_metric_is_persisted_outside_the_decisions_identity
         "select labor_efficiency_metric from mart.strategy_decisions where strategy_decision_id = %s", (named_id,)
     ).fetchone()
     assert name == "gppe_banking_tce_v1"
+
+
+# -- #1255: the measured risk-free rate is part of the run ----------------------------------------------
+
+
+def _rate(connection, value: str, observation_date, *, knowable_at=None):
+    """A stored observation read back with its lineage."""
+    from data_engine.datahub.risk_free import risk_free_rate_at
+
+    seed_risk_free_rate(connection, observation_date, value, knowable_at=knowable_at)
+    return risk_free_rate_at(connection, datetime(2026, 7, 31, 22, 15, tzinfo=UTC))
+
+
+def test_two_rates_make_two_runs_and_one_rate_makes_one_run(connection) -> None:
+    """A forced tick can see a newer Treasury observation than the scheduled tick did. Their decisions share
+    cutoff and issuer, so one run id for two rates would meet the unique key of the first run's decisions.
+    Red when the rate leaves the run identity."""
+    _, definition = run()
+    first = _rate(connection, "0.0426", date(2026, 7, 30))
+    again = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=first)
+    assert write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=first) == again
+
+    newer = _rate(connection, "0.0431", date(2026, 7, 30), knowable_at=datetime(2026, 7, 31, 1, 0, tzinfo=UTC))
+    assert newer.value != first.value
+    other = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=newer)
+    assert other != again
+
+    plain = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    assert plain not in (again, other), "a run without a measured rate is a different run"
+
+
+def test_the_run_row_names_the_series_value_date_source_and_fetch(connection) -> None:
+    _, definition = run()
+    rate = _rate(connection, "0.0426", date(2026, 7, 30))
+
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=rate)
+
+    row = connection.execute(
+        "select risk_free_series_id, risk_free_value, risk_free_observation_date, risk_free_source, risk_free_fetch_id "
+        "from mart.strategy_runs where strategy_run_id = %s",
+        (run_id,),
+    ).fetchone()
+    assert row == ("us_treasury_bill_3_month", rate.value, date(2026, 7, 30), "us-treasury", rate.fetch_id)
+    fixture_run = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    assert connection.execute(
+        "select risk_free_series_id, risk_free_value, risk_free_fetch_id from mart.strategy_runs "
+        "where strategy_run_id = %s",
+        (fixture_run,),
+    ).fetchone() == (None, None, None), "a fixture run uses the explicit rates of its corpus and names no series"
+
+
+def test_a_run_cannot_name_a_fetch_that_is_not_stored(connection) -> None:
+    """The fetch pointer of the lineage is checked by a trigger (a foreign key would lock `raw.fetches`).
+
+    Red when the trigger on `mart.strategy_runs` is dropped."""
+    from dataclasses import replace
+
+    _, definition = run()
+    rate = replace(_rate(connection, "0.0426", date(2026, 7, 30)), fetch_id=2_000_000_000)
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="risk_free_fetch_id"):
+        write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=rate)
+
+
+def test_the_identity_does_not_depend_on_the_database_row_of_the_fetch() -> None:
+    """The fetch id is a row pointer of one database. Two environments that read the same observation make the same run."""
+    from dataclasses import replace
+
+    from data_engine.strategy_replay_repository import _run_payload
+
+    _, definition = run()
+    one = stub_rate("0.0426", date(2026, 7, 30))
+    other_database = replace(one, fetch_id=987654)
+
+    assert _run_payload(definition, executed_at=_EXECUTED_AT, risk_free_rate=one) == _run_payload(
+        definition, executed_at=_EXECUTED_AT, risk_free_rate=other_database
+    )
+    assert "risk_free" not in _run_payload(definition, executed_at=_EXECUTED_AT), "a fixture run keeps its identity"

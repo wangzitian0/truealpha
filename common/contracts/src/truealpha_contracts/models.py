@@ -34,6 +34,9 @@ class DataSource(StrEnum):
     # membership itself, landed like any vendor so universe list versions carry
     # raw lineage (#539 data-driven universes).
     NASDAQ_INDEX = "nasdaq-index"
+    # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): the macro base data and the
+    # measured risk-free rate of the core strategy. The value is also the ledger seat name.
+    US_TREASURY = "us-treasury"
     # Not a vendor at all: a projection of the accepted release manifest, for cells
     # (listing identity, universe membership) whose value IS the frozen scope rather
     # than something fetched. Named explicitly so those bytes land under their own

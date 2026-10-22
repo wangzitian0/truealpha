@@ -45,6 +45,7 @@ from factors.production_topt import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database, load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import seed_rate_for_cutoff  # noqa: E402
 from split_series_seed import SeriesShape, share_count_vintage, store_daily_series  # noqa: E402
 
 #: The settled session every listing closes on. The corpus partition starts on it.
@@ -263,6 +264,10 @@ def tick() -> Iterator[Tick]:
         monkeypatch.setattr(composition, "build_routes", _routes)
         monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: ())
         _with_series(url, SHAPES)
+        with psycopg.connect(url) as connection:
+            # The tick reads the risk-free rate of its cutoff from the stored series (#1255).
+            seed_rate_for_cutoff(connection, TICK)
+            connection.commit()
         seed_log = logging.getLogger("data_engine.datahub.strategy_bridge")
         handler = _Warnings()
         seed_log.addHandler(handler)
