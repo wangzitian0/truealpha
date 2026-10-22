@@ -163,3 +163,5 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # only the current vintage. The 20:07 projection and the 21:45 backtest would then resolve no
 # issuer before the 22:15 tick writes the new vintage. The v6 -> v7 bump for `ProfitLoss` also
 # changed what a null meant. A ruleset edit alone does not change it.
+# The same holds for #1457: `revenue` gained `RegulatedAndUnregulatedOperatingRevenue`, and the
+# ruleset moved to production-topt-concepts:v4. No parser vintage changed.

@@ -30,7 +30,7 @@ _KIND = "concept-mapping"
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v3",
+        "version": "production-topt-concepts:v4",
         "mappings": (
             {
                 # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
@@ -41,6 +41,10 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 # tag `Revenues` for each later year. There it can add only stale figures.
                 # `segment_extraction` reads this list. The vendor oracle keeps a wider list on purpose.
                 # `apps/data-engine/tests/test_revenue_concepts.py` states each difference and its reason.
+                # #1457: XEL tags its revenue as `Revenues` and as the Excluding form up to FY2018. From
+                # FY2019 on it tags only `RegulatedAndUnregulatedOperatingRevenue`, the utility total. Without
+                # that concept the latest annual period of XEL was FY2018, seven years old. It is last, so it
+                # never replaces a figure of an earlier concept for the same period.
                 "field": "revenue",
                 "unit": "USD",
                 "kind": "synonym",
@@ -48,6 +52,7 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "RevenueFromContractWithCustomerExcludingAssessedTax"},
                     {"taxonomy": "us-gaap", "concept": "Revenues"},
                     {"taxonomy": "us-gaap", "concept": "RevenueFromContractWithCustomerIncludingAssessedTax"},
+                    {"taxonomy": "us-gaap", "concept": "RegulatedAndUnregulatedOperatingRevenue"},
                 ),
             },
             {

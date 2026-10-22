@@ -26,6 +26,12 @@ added on main is not demanded of a production release that lags by design and do
 it yet, and a release that predates the file bounds nothing. When the release cannot be
 resolved here, main's set is used — a false red beats a silent miss.
 
+A per-universe check (`theme_purity@universe-list:qqq`) is expected only in an environment whose
+contract schedules that universe. The contract is read AS THE SAME RELEASE DECLARED IT
+(`environment_contract.v1.json`): staging runs TOPT only, so it is not asked for a QQQ verdict
+(owner decision of 2026-10-21). A release whose contract predates the universe list bounds every
+check, as before.
+
 Exit codes:
   0 - every expected check's newest verdict is green and within twice its cadence, or the
       environment serves a release that predates the report
@@ -62,6 +68,8 @@ DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-releas
 EXPECTATIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "nightly_verdicts.json"
 #: The same file as a release's tree names it.
 RELEASE_EXPECTATIONS_PATH = "tools/nightly_verdicts.json"
+#: The environment contract as a release's tree names it. It lists the universes of each environment.
+RELEASE_CONTRACT_PATH = "common/contracts/src/truealpha_contracts/data/environment_contract.v1.json"
 #: A daily check that missed one tick is late; one that missed two has stopped.
 STALE_AFTER_CADENCES = 2
 #: Clock skew allowed between the environment and this runner. A verdict dated further
@@ -115,6 +123,57 @@ def load_expectations(path: Path = EXPECTATIONS_PATH) -> dict[str, Expectation]:
     return parse_expectations(path.read_text(encoding="utf-8"))
 
 
+def universe_key_of(check: str) -> str | None:
+    """The universe key of a per-universe check: ``theme_purity@universe-list:qqq`` gives ``qqq``."""
+    _, at, universe = check.partition("@")
+    return universe.removeprefix("universe-list:") if at else None
+
+
+def _universe_entries(spec: object) -> list[dict[str, str]]:
+    """The ``universes`` of one environment, or [] when it lists none. A shape this tool cannot read raises."""
+    entries = spec.get("universes", []) if isinstance(spec, dict) else None
+    ok = isinstance(entries, list) and all(
+        isinstance(entry, dict)
+        and isinstance(entry.get("key"), str)
+        and entry.get("status") in ("scheduled", "stopped")
+        for entry in entries
+    )
+    if not ok:
+        raise VerdictCheckFailure("the environment contract lists universes in a shape this tool cannot read")
+    return entries  # type: ignore[return-value]
+
+
+def scheduled_universes(contract_text: str, environment: str) -> tuple[frozenset[str], frozenset[str]] | None:
+    """(the universe keys that ``environment`` schedules, every universe key of the contract).
+
+    None when the contract predates the universe list or does not name ``environment``: nothing is
+    dropped then. Raises ``VerdictCheckFailure`` for a list in a shape this tool cannot read: the caller then
+    bounds every check.
+    """
+    environments = json.loads(contract_text).get("environments", {})
+    name = "production" if environment.strip().lower() == "prod" else environment.strip().lower()
+    spec = environments.get(name)
+    if not isinstance(spec, dict) or "universes" not in spec:
+        return None
+    known = frozenset(entry["key"] for other in environments.values() for entry in _universe_entries(other))
+    scheduled = frozenset(entry["key"] for entry in _universe_entries(spec) if entry["status"] == "scheduled")
+    return scheduled, known
+
+
+def expected_in(
+    expectations: dict[str, Expectation], scheduled: frozenset[str], known: frozenset[str]
+) -> dict[str, Expectation]:
+    """``expectations`` without the per-universe checks of a universe that the environment does not schedule.
+
+    A universe that the contract does not list at all keeps its checks: a false red beats a silent miss.
+    """
+    return {
+        name: expectation
+        for name, expectation in expectations.items()
+        if (key := universe_key_of(name)) is None or key not in known or key in scheduled
+    }
+
+
 def _known(value: object) -> str | None:
     text = str(value or "")
     return text if text and text != "unknown" else None
@@ -165,8 +224,12 @@ ReleaseReader = Callable[[str], str | None]
 
 
 def git_release_reader(
-    repo: str = ".", run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+    repo: str = ".",
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    path: str = RELEASE_EXPECTATIONS_PATH,
 ) -> ReleaseReader:
+    """Read the file ``path`` as the tree of a release ref holds it."""
+
     def read(ref: str) -> str | None:
         if ref.startswith("-"):
             raise VerdictCheckFailure(f"{ref!r} is not a release ref")
@@ -182,7 +245,7 @@ def git_release_reader(
         # "The release predates the file" passes the check, so it must be a positive answer
         # (the tree lists no such path), never whatever a failed `git show` happens to mean.
         listed = run(
-            ["git", "-C", repo, "ls-tree", "--name-only", commit, "--", RELEASE_EXPECTATIONS_PATH],
+            ["git", "-C", repo, "ls-tree", "--name-only", commit, "--", path],
             capture_output=True,
             text=True,
             check=False,
@@ -192,20 +255,30 @@ def git_release_reader(
         if not listed.stdout.strip():
             return None
         shown = run(
-            ["git", "-C", repo, "show", f"{commit}:{RELEASE_EXPECTATIONS_PATH}"],
+            ["git", "-C", repo, "show", f"{commit}:{path}"],
             capture_output=True,
             text=True,
             check=False,
         )
         if shown.returncode != 0:
-            raise VerdictCheckFailure(f"cannot read {RELEASE_EXPECTATIONS_PATH} at {ref}: {shown.stderr.strip()[:120]}")
+            raise VerdictCheckFailure(f"cannot read {path} at {ref}: {shown.stderr.strip()[:120]}")
         return shown.stdout
 
     return read
 
 
-def expectations_for(release: str | None, reader: ReleaseReader) -> tuple[dict[str, Expectation] | None, str]:
-    """(what the deployed release records, where that answer came from)."""
+def expectations_for(
+    release: str | None,
+    reader: ReleaseReader,
+    *,
+    environment: str = "",
+    contract_reader: ReleaseReader | None = None,
+) -> tuple[dict[str, Expectation] | None, str]:
+    """(what the deployed release records in ``environment``, where that answer came from).
+
+    With an ``environment`` and a ``contract_reader``, the per-universe checks of a universe that the
+    release's contract does not schedule in that environment are dropped.
+    """
     if release is None:
         return load_expectations(), "the release identity is unreadable, so main's set is bounded"
     try:
@@ -214,7 +287,23 @@ def expectations_for(release: str | None, reader: ReleaseReader) -> tuple[dict[s
         return load_expectations(), f"{exc}; main's set is bounded"
     if text is None:
         return None, f"{release} predates {RELEASE_EXPECTATIONS_PATH}"
-    return parse_expectations(text), f"as {release} declares them"
+    expectations, source = parse_expectations(text), f"as {release} declares them"
+    if not environment or contract_reader is None:
+        return expectations, source
+    try:
+        contract_text = contract_reader(release)
+        universes = scheduled_universes(contract_text, environment) if contract_text is not None else None
+    except (VerdictCheckFailure, json.JSONDecodeError, AttributeError, TypeError) as exc:
+        return (
+            expectations,
+            f"{source}; the contract of {release} could not be read ({exc}), so every universe is bounded",
+        )
+    if universes is None:
+        return expectations, source
+    kept = expected_in(expectations, *universes)
+    if len(kept) == len(expectations):
+        return kept, source
+    return kept, f"{source}; the universes {environment} schedules: {', '.join(sorted(universes[0])) or 'none'}"
 
 
 def _gh_api(path: str) -> str:
@@ -368,6 +457,7 @@ def check_nightly_verdicts(
     environment: str = "",
     http_get: HttpGet | None = None,
     reader: ReleaseReader | None = None,
+    contract_reader: ReleaseReader | None = None,
     now: datetime | None = None,
     first_declared: FirstDeclared | None = None,
 ) -> int:
@@ -385,7 +475,9 @@ def check_nightly_verdicts(
     if report.verdicts is None:
         print(f"{name} serves a release that predates nightly_verdicts on /api/health; nothing to bound yet")
         return 0
-    expectations, source = expectations_for(report.release, reader)
+    expectations, source = expectations_for(
+        report.release, reader, environment=environment, contract_reader=contract_reader
+    )
     if expectations is None:
         print(f"{name}: the data engine release {source}; nothing to bound yet")
         return 0
@@ -435,6 +527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.url,
         environment=arguments.environment,
         reader=git_release_reader(arguments.repo),
+        contract_reader=git_release_reader(arguments.repo, path=RELEASE_CONTRACT_PATH),
         first_declared=first_declared,
     )
 

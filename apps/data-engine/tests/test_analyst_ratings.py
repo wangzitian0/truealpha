@@ -69,6 +69,13 @@ def _isolated_moomoo_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(mm, "throttle", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _production_environment(monkeypatch):
+    """The universes of these tests include QQQ. Production runs QQQ and records its verdicts. Staging runs
+    TOPT only and records none (the environment contract)."""
+    monkeypatch.setattr(settings, "app_env", "production")
+
+
 def _sample(ticker: str) -> dict[str, Any]:
     """The `get_research_analyst_consensus` payload captured from the real OpenD gateway."""
     captured = json.loads((SAMPLES / f"{ticker}.json").read_text())["analyst_consensus"]

@@ -57,7 +57,8 @@ run_monitoring:
 # the kernel killed the container and every run in it stayed STARTED. Every job now uses the
 # in-process executor (data_engine.dagster_defs), so a run is one process.
 # The two numbers below are a projection of `code_server_capacity` in environment_contract.v1.json,
-# which holds the ceiling, the utilization limit, the size of the server and the number of slots.
+# which holds the ceiling, the server margin and the number of slots. The usable share of the ceiling
+# is the constant UTILIZATION_CEILING in environment_contract.py.
 # The memory left beside the server, divided over the slots, is the budget of one run. The nightly
 # verdict runtime_shape compares every run process with that budget.
 # test_run_capacity.py holds this file equal to the contract.

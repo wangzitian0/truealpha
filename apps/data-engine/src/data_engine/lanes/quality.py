@@ -26,8 +26,8 @@ a promoted release's fetch path works.
 
 The fifth is the runtime shape of the code server (`quality.runtime_shape`, #1467): whether the
 memory cgroup that holds every run and the gRPC server saw an OOM kill, an unplanned restart, a new
-peak above 70% of its ceiling, or a process larger than its budget. The run reads the cgroup of the container it executes in, which is the
-code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
+peak above `UTILIZATION_CEILING` of its ceiling, or a process larger than its budget. The run reads the
+cgroup of the container it executes in, which is the code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
@@ -49,6 +49,7 @@ from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
+from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
@@ -93,7 +94,8 @@ CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
 # The report waits for a settled universe first, like the surface proof: a slow QQQ tick
 # can still commit after 00:20, and the pointer sensor then rewrites that head's reports.
 CONFIDENCE_REPORT_CRON = "45 0 * * *"
-CONFIDENCE_REPORT_UNIVERSES = ("universe-list:qqq", "topt")
+#: The confidence report runs for the universes that the process environment schedules (the contract
+#: lists them: staging runs TOPT only). `scheduled_universe_names()` gives them at the time of the tick.
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
 
@@ -129,7 +131,7 @@ RUNTIME_SHAPE_VERDICT = "runtime_shape"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
-    *(check_name(CONFIDENCE_REPORT_VERDICT, universe) for universe in CONFIDENCE_REPORT_UNIVERSES),
+    *(check_name(CONFIDENCE_REPORT_VERDICT, universe) for universe in any_environment_universe_names()),
     MODEL_KEY_HEALTH_VERDICT,
     RELEASE_FETCH_PROOF_VERDICT,
     RUNTIME_SHAPE_VERDICT,
@@ -491,7 +493,7 @@ def datahub_confidence_report_job() -> None:
 )
 def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
     executed_at = context.scheduled_execution_time.isoformat()
-    for universe in CONFIDENCE_REPORT_UNIVERSES:
+    for universe in scheduled_universe_names():
         yield dg.RunRequest(
             run_key=f"{executed_at}:{universe}",
             run_config=dg.RunConfig(

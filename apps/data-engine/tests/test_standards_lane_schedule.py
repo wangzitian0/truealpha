@@ -13,11 +13,23 @@ from datetime import UTC, datetime
 
 import dagster as dg
 import pytest
+from data_engine.config import settings
 from data_engine.lanes.standards import (
-    STANDARD_BACKFILL_UNIVERSES,
     standard_backfill_pipeline_job,
     standard_backfill_schedule,
 )
+
+#: What each environment runs (the contract lists them): production runs TOPT and QQQ, staging TOPT only.
+UNIVERSES_BY_ENVIRONMENT = [
+    pytest.param("production", ("topt", "universe-list:qqq"), id="production"),
+    pytest.param("staging", ("topt",), id="staging"),
+]
+
+
+@pytest.fixture(autouse=True)
+def _production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production runs TOPT and QQQ. A test of another environment sets its own after this fixture."""
+    monkeypatch.setattr(settings, "app_env", "production")
 
 
 def test_the_job_chains_all_modules_to_coverage() -> None:
@@ -34,13 +46,17 @@ def test_the_job_chains_all_modules_to_coverage() -> None:
     ]
 
 
-def test_every_run_request_configures_every_op_for_its_universe() -> None:
+@pytest.mark.parametrize(("app_env", "universes"), UNIVERSES_BY_ENVIRONMENT)
+def test_every_run_request_configures_every_op_for_its_universe(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, universes: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(settings, "app_env", app_env)
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 13, 9, 7, tzinfo=UTC))
     requests = list(standard_backfill_schedule.evaluate_tick(context).run_requests)
     assert [request.run_key for request in requests] == [
-        f"2026-09-13T09:07:00+00:00:{universe}" for universe in STANDARD_BACKFILL_UNIVERSES
+        f"2026-09-13T09:07:00+00:00:{universe}" for universe in universes
     ]
-    for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
+    for request, universe in zip(requests, universes, strict=True):
         ops = request.run_config["ops"]
         assert set(ops) == {
             "run_standard_backfill",
@@ -211,12 +227,16 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     )
 
 
-def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> None:
+@pytest.mark.parametrize(("app_env", "universes"), UNIVERSES_BY_ENVIRONMENT)
+def test_the_daily_head_reports_job_configures_every_op_for_its_universe(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, universes: tuple[str, ...]
+) -> None:
     """#855 C1/C2: module 6 and the coverage report follow TODAY's head every day, not only
     the Sunday backfill — otherwise /research/themes and /admin/datahub serve yesterday's head
     while /research/rankings serves today's (measured on staging 2026-09-16)."""
     from data_engine.lanes.standards import head_reports_pipeline_job, head_reports_schedule
 
+    monkeypatch.setattr(settings, "app_env", app_env)
     assert [node.name for node in head_reports_pipeline_job.graph.node_defs] == [
         "head_reports_start",
         "run_theme_purity",
@@ -228,9 +248,9 @@ def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> No
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 16, 23, 30, tzinfo=UTC))
     requests = list(head_reports_schedule.evaluate_tick(context).run_requests)
     assert [request.run_key for request in requests] == [
-        f"2026-09-16T23:30:00+00:00:{universe}" for universe in STANDARD_BACKFILL_UNIVERSES
+        f"2026-09-16T23:30:00+00:00:{universe}" for universe in universes
     ]
-    for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
+    for request, universe in zip(requests, universes, strict=True):
         ops = request.run_config["ops"]
         assert set(ops) == {
             "head_reports_start",
@@ -389,7 +409,7 @@ def test_a_head_first_seen_with_its_reports_written_is_not_relaunched(monkeypatc
 
 
 def test_a_universe_with_no_governed_head_launches_nothing(monkeypatch) -> None:
-    """Staging runs no QQQ tick: no head, no run, and no cursor entry to trip over later."""
+    """A universe without a governed head: no run, and no cursor entry to trip over later."""
     _pointer(monkeypatch, heads={"topt": TOPT_NEW, "universe-list:qqq": None}, stored={TOPT_ID: TOPT_NEW})
     data = _tick({"topt": TOPT_NEW})
     assert list(data.run_requests) == [] and data.skip_message
@@ -602,6 +622,50 @@ def test_nothing_is_launched_where_every_standard_has_been_backfilled(monkeypatc
     _catchup(monkeypatch, missing=[])
     (skip,) = list(standard_backfill_catchup_sensor(dg.build_sensor_context(cursor=BUILD)))
     assert isinstance(skip, dg.SkipReason)
+
+
+@pytest.mark.parametrize(
+    ("app_env", "universes"),
+    [("production", ("topt", "universe-list:qqq")), ("staging", ("topt",)), ("typo-in-app-env", ("topt",))],
+)
+def test_the_catchup_asks_only_for_the_universes_the_environment_schedules(
+    monkeypatch, app_env: str, universes: tuple[str, ...]
+) -> None:
+    """Staging runs TOPT only. An environment that the contract does not name takes the rule of staging."""
+    from data_engine.lanes import standards
+
+    asked: list[tuple[str, ...]] = []
+    _catchup(monkeypatch, missing=[])
+    monkeypatch.setattr(standards, "never_backfilled", lambda _c, *, universes, **_k: asked.append(universes) or [])
+    monkeypatch.setattr(settings, "app_env", app_env)
+
+    list(standards.standard_backfill_catchup_sensor(dg.build_sensor_context(cursor=BUILD)))
+
+    assert asked == [universes]
+
+
+def test_the_catchup_says_so_when_the_environment_schedules_no_universe(monkeypatch) -> None:
+    """Preview runs no universe. The sensor must not report that every standard has been backfilled."""
+    from data_engine.lanes import standards
+
+    _catchup(monkeypatch, missing=[("topt", "segment_revenue")])
+    monkeypatch.setattr(settings, "app_env", "preview")
+
+    (skip,) = list(standards.standard_backfill_catchup_sensor(dg.build_sensor_context(cursor=BUILD)))
+
+    assert isinstance(skip, dg.SkipReason)
+    assert "schedules no universe" in skip.skip_message and "completed a backfill" not in skip.skip_message
+
+
+def test_the_head_reports_sensor_follows_the_heads_of_the_universes_the_environment_schedules(monkeypatch) -> None:
+    """Staging runs TOPT only: a QQQ head in its database launches no run and enters no cursor."""
+    monkeypatch.setattr(settings, "app_env", "staging")
+    _pointer(monkeypatch, heads={"topt": TOPT_NEW, "universe-list:qqq": QQQ_HEAD}, stored={})
+
+    data = _tick({"topt": TOPT_OLD})
+
+    assert [request.run_key for request in data.run_requests] == [f"head:topt:{TOPT_NEW}"]
+    assert _cursor(data) == {"topt": TOPT_NEW}
 
 
 def _db():

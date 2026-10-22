@@ -86,7 +86,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     registered_semantic_types,
     registration_for,
 )
-from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource
+from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
 from data_engine.datahub.quality_report import (
     FIELD_RECONCILIATION_POLICIES,
     FIELD_UNITS,
@@ -1322,8 +1322,22 @@ def load_index_membership(
                 )
             )
 
+    # The denominator leaves out a constituent whose exchange no source names (#1411 K6).
+    # So the membership route skips it as well, and the notes name it.
+    mics = resolve_listing_mics(
+        connection,
+        source,
+        [str(ticker) for ticker, _weight, _knowable_at in constituents],
+        valid_at=cutoff.date(),
+        known_at=cutoff,
+    )
+    unresolved_exchange: list[str] = []
     for ticker, weight, knowable_at in constituents:
-        assert_route(f"listing:{source.mic}:{str(ticker).lower()}", NASDAQ_INDEX_ORIGIN, 0, weight, knowable_at)
+        mic = mics[str(ticker)]
+        if mic is None:
+            unresolved_exchange.append(str(ticker))
+            continue
+        assert_route(f"listing:{mic}:{str(ticker).lower()}", NASDAQ_INDEX_ORIGIN, 0, weight, knowable_at)
     unresolved: list[str] = []
     for listing_id, holding_name, _isin, weight, report_period, transaction_time in holdings:
         vintage = {"report_period": report_period.isoformat(), "filed": transaction_time.astimezone(UTC).isoformat()}
@@ -1334,6 +1348,7 @@ def load_index_membership(
     notes = {
         "constituents_as_of": None if not constituents else constituents[0][2].astimezone(UTC).isoformat(),
         "constituent_count": len(constituents),
+        "constituents_without_listing_exchange": sorted(unresolved_exchange),
         "constituents_with_weight": sum(1 for _, weight, _ in constituents if weight is not None),
         "fund_id": None if fund is None else str(fund[0]),
         "holdings_vintage": vintage or None,

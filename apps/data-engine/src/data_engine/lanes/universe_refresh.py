@@ -6,10 +6,11 @@ from datetime import UTC, datetime
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.lanes import production_only_schedule_status
-from data_engine.lanes.capture import SP500_SCHEDULE_STATUS
+from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
 # -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
@@ -27,10 +28,15 @@ SP500_UNIVERSE_REFRESH_CRON = "37 8 * * 6"
 
 
 def _is_source_refresh_enabled(source) -> bool:
-    """Skip automatic constituent and N-PORT refresh for SP500 while SP500_SCHEDULE_STATUS is STOPPED (#67, #1310)."""
-    if getattr(source, "etf", None) == "sp500" and SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED:
-        return False
-    return True
+    """Refresh the constituents and the N-PORT holdings of a universe that the process environment runs.
+
+    The contract is the only source of "scheduled" and "stopped" (#67, #1310): a stopped universe, and
+    a universe that the environment does not list, are not refreshed. A source that the contract does not
+    name at all (a universe added before the contract lists it) is refreshed: the contract has no rule for it.
+    """
+    if source.etf not in load_environment_contract().known_tick_keys:
+        return True
+    return is_universe_scheduled(source.etf, settings.app_env)
 
 
 @dg.op
@@ -44,13 +50,28 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
 
     # Every vendor call in the refresh is attributed to this Dagster run in the
     # external call ledger (#729) and admitted by the rule-6 gate first.
-    with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
-        _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish)
+    # The constituents that left a denominator for want of a listing exchange, by universe (#1411 K6).
+    # A run that ends well reports them as output metadata. A run that fails a step keeps no metadata
+    # (a Dagster 1.13 step failure carries none), so `_refresh_universes` also logs a warning for each
+    # universe at once. That log line survives a failure.
+    excluded: dict[str, dict[str, object]] = {}
+    try:
+        with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
+            _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish, excluded)
+    finally:
+        context.add_output_metadata({"constituents_excluded": dg.MetadataValue.json(excluded)})
 
 
 def _refresh_universes(
-    context: dg.OpExecutionContext, universe_sources, latest_quarter_end, refresh_and_publish
+    context: dg.OpExecutionContext,
+    universe_sources,
+    latest_quarter_end,
+    refresh_and_publish,
+    excluded_by_universe: dict[str, dict[str, object]] | None = None,
 ) -> None:
+    """Refresh each active universe. `excluded_by_universe` collects the excluded constituents of each."""
+    if excluded_by_universe is None:
+        excluded_by_universe = {}
     active_sources = [source for source in universe_sources.values() if _is_source_refresh_enabled(source)]
     failures: list[tuple[str, Exception]] = []
     # Each universe rides its own connection and transaction so a single index endpoint failure
@@ -66,6 +87,14 @@ def _refresh_universes(
                     openfigi_api_key=settings.openfigi_api_key,
                 )
                 context.log.info(outcome)
+                excluded = getattr(outcome, "excluded", ())
+                if excluded:
+                    excluded_by_universe[source.etf] = {
+                        "count": len(excluded),
+                        "tickers": [item["ticker"] for item in excluded],
+                        "reason": excluded[0]["reason"],
+                    }
+                    context.log.warning(f"constituents[{source.etf}] excluded: {outcome}")
                 connection.commit()
         except Exception as error:  # noqa: BLE001 — per-universe isolation, re-raised below
             context.log.error(
@@ -135,12 +164,12 @@ def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.Sched
 def build_sp500_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.ScheduleDefinition:
     """Build the staggered Saturday UTC schedule for SP500 constituent refresh (#67, #1310).
 
-    Follows `SP500_SCHEDULE_STATUS` while the SP500 plane stays gated (#67 / #206 / #1310).
+    Follows the status of the SP500 universe in the contract (#67 / #206 / #1310).
     """
     status = (
-        SP500_SCHEDULE_STATUS
-        if SP500_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED
-        else production_only_schedule_status(app_env)
+        dg.DefaultScheduleStatus.RUNNING
+        if is_universe_scheduled("sp500", app_env)
+        else dg.DefaultScheduleStatus.STOPPED
     )
 
     @dg.schedule(
