@@ -1,8 +1,11 @@
 """Test support: the deployed SEC financial-fact route over stored company-facts bytes (#1379, #1457).
 
 `build_route` is the route that a capture runs. This helper replaces only its two SEC reads and the
-issuer classification, so the ruleset is the shipped default, as in production with no governed head.
-The route needs no database and makes no network call.
+issuer classification. The route makes no network call.
+
+With no `connection`, the route needs no database. The ruleset is then the shipped default, as in
+production with no governed head. With a `connection`, `resolve_ruleset` reads the governed head first,
+as a capture does, and the head can differ from the default.
 """
 
 from __future__ import annotations

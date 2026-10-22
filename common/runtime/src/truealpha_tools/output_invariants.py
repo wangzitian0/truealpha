@@ -76,14 +76,16 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # every invariant below silently changed population.
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
 #: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
-#: The rule: a 10-K is due 90 days after the fiscal year ends, and a late filer gets 15 more days
-#: (Form 12b-25). The last moment before a filing, the newest annual period of a current filer is the
-#: year before: it ended 12 months and 105 days earlier, which is 15 months and 14 days. 18 months
-#: leaves a margin of 2 months and 16 days. Production QQQ served periods of 94 and 98 months.
-#: The relation to the strategy: `eligibility.maximum_input_age_days` (455) counts the days since an
-#: input became knowable. A revenue period ends about 90 days before its filing. So 455 + 90 days is
-#: 545 days, which is 18 months. The two limits agree. The strategy limit does not stop a stale revenue,
-#: because the knowable time of a financial fact is the latest filing among its inputs (parser identity v9).
+#: A 10-K is due 90 days after the fiscal year ends. A late filer gets 15 more days (Form 12b-25).
+#: Just before a filing, the newest annual period of a current filer is the year before.
+#: It ended 12 months and 105 days earlier, which is 15 months and 14 days.
+#: So 18 months leaves a margin of 2 months and 16 days.
+#: Production QQQ served periods of 94 and 98 months.
+#: The strategy gate `eligibility.maximum_input_age_days` is 455 days. It counts the days since an input became knowable.
+#: A revenue period ends at most 105 days before its filing. So 455 + 105 days is 560 days, which is 18.4 months.
+#: The two limits agree within half a month.
+#: The strategy gate does not stop a stale revenue.
+#: The knowable time of a financial fact is the latest filing among its inputs (parser identity v9).
 REVENUE_MAX_AGE_MONTHS = 18
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
@@ -708,9 +710,10 @@ INVARIANTS: tuple[Invariant, ...] = (
     Invariant(
         id="revenue-period-is-recent",
         claim=(
-            f"an available core result of a scheduled governed head carries a revenue whose period ends "
-            f"at most {REVENUE_MAX_AGE_MONTHS} months before the cutoff of its run — an older period is a "
-            "stale figure that the head serves as a current one (#1457)"
+            f"each available core result of a scheduled governed head has a revenue period that ends at most "
+            f"{REVENUE_MAX_AGE_MONTHS} months before the cutoff of its run, and each such head states a revenue "
+            "period in at least one of its results — an older period is a stale figure that the head serves as "
+            "a current one, and a head with no stated period has an unknown age (#1457)"
         ),
         # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
         # divided by. Only an available result is served. A result with a named reason is

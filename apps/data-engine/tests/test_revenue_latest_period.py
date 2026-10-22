@@ -19,9 +19,10 @@ Each issuer changed its revenue concept after 2018:
 * XEL moved to `RegulatedAndUnregulatedOperatingRevenue`, the utility total. The ruleset did not
   list it. XEL reports no other revenue concept after FY2018. The latest annual period was FY2018.
 
-The route below is the one the capture runs (`build_route`), with the shipped default ruleset. The
-fixtures hold verbatim SEC rows and name their source document and its sha256. No test here makes a
-network call.
+The route below is the one the capture runs (`build_route`). Most tests run it with no connection, so the
+ruleset is the shipped default. One test runs it with a connection and a published head, because the
+head wins over the default. The fixtures hold verbatim SEC rows and name their source document and its
+sha256. No test here makes a network call.
 """
 
 from __future__ import annotations

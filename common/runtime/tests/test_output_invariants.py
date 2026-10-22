@@ -1071,6 +1071,26 @@ def test_a_head_with_dated_results_cannot_hide_a_head_with_none(
     assert f"universe:canary-us-2026-06-30 {undated_run} no-result-states-a-revenue-period - -" in output
 
 
+def test_a_head_with_some_dated_and_some_undated_results_is_not_judged_on_the_undated_rows(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One head, two available results. One states a fresh period and one states none.
+
+    The invariant judges a head with no period at all. It does not judge one undated row of a head that
+    states other periods. A rule that flagged a head for ANY undated row would turn this test red.
+    """
+    _seed_head(
+        conn,
+        REVENUE_UNIVERSE,
+        [_issuer("dated", "dat0", revenue_period_end=date(2025, 12, 31)), _issuer("undated", "und0")],
+    )
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 0, output
+    assert f"ok       {REVENUE_INVARIANT}: 1 row(s) examined" in output
+
+
 def test_a_head_whose_results_are_all_unavailable_is_not_judged_by_this_invariant(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
