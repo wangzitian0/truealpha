@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import init_telemetry
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -302,6 +303,9 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                         "summary": str(summary),
                     }
                     for check, ran_at, ok, summary in connection.execute(NIGHTLY_VERDICTS_SQL).fetchall()
+                    # The table is append-only: the rows of a check that this environment no longer records
+                    # (staging runs TOPT only) stay in it, and a stale row must not read as a stopped check.
+                    if load_environment_contract().expects_verdict(str(check), settings.app_env)
                 ]
             except psycopg.Error:
                 connection.rollback()

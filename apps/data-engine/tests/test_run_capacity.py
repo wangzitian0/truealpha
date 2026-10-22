@@ -35,7 +35,7 @@ from dagster._core.instance.ref import InstanceRef
 from dagster._grpc.client import DagsterGrpcClient
 from data_engine.dagster_defs import build_definitions, defs, with_in_process_executor
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
-from truealpha_contracts.environment_contract import CodeServerCapacity, load_environment_contract
+from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity, load_environment_contract
 
 DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 CAPACITY: CodeServerCapacity = load_environment_contract().code_server_capacity
@@ -68,12 +68,12 @@ def test_the_queue_limit_is_the_number_of_slots_that_the_contract_declares() -> 
 
 
 def test_the_demand_fits_inside_the_utilization_limit_of_the_ceiling() -> None:
-    """The runs that the queue admits, beside the server, hold at most 70% of the ceiling (#1418)."""
+    """The runs that the queue admits, beside the server, hold at most UTILIZATION_CEILING of the ceiling (#1418)."""
     runs = _queue().max_concurrent_runs
 
-    assert _held_mib(runs) <= CAPACITY.utilization_limit * CAPACITY.ceiling_mib, (
+    assert _held_mib(runs) <= UTILIZATION_CEILING * CAPACITY.ceiling_mib, (
         f"{runs} concurrent runs hold {_held_mib(runs)} MiB of {CAPACITY.ceiling_mib} MiB:"
-        f" more than {CAPACITY.utilization_limit:.0%}"
+        f" more than {UTILIZATION_CEILING:.0%}"
     )
 
 
@@ -86,19 +86,19 @@ def _held_at_the_measured_run(runs: int) -> float:
 def test_the_slots_fit_the_measured_working_run_inside_the_utilization_limit() -> None:
     """The measured size of a working run, not the budget: the server and every slot at that size fit (#1467)."""
     runs = _queue().max_concurrent_runs
-    limit = CAPACITY.utilization_limit * CAPACITY.ceiling_mib
+    limit = UTILIZATION_CEILING * CAPACITY.ceiling_mib
 
     assert _held_at_the_measured_run(runs) <= limit, (
         f"{runs} working runs of {CAPACITY.measured.working_run_hwm_mib} MiB and the server hold"
         f" {_held_at_the_measured_run(runs):.0f} MiB of {CAPACITY.ceiling_mib} MiB: more than"
-        f" {CAPACITY.utilization_limit:.0%}"
+        f" {UTILIZATION_CEILING:.0%}"
     )
     assert _held_at_the_measured_run(runs + 1) > limit, "one more slot would not fit the measured run"
 
 
 def test_one_more_run_than_the_limit_would_pass_the_utilization_limit() -> None:
     """The limit is the largest that fits. A lower one gives each run a larger budget."""
-    assert _held_mib(_queue().max_concurrent_runs + 1) > CAPACITY.utilization_limit * CAPACITY.ceiling_mib
+    assert _held_mib(_queue().max_concurrent_runs + 1) > UTILIZATION_CEILING * CAPACITY.ceiling_mib
 
 
 def test_the_default_queue_limit_of_dagster_does_not_fit_the_ceiling(tmp_path: Path) -> None:

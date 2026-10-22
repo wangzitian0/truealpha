@@ -281,19 +281,49 @@ def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkey
     assert [(row["check"], row["ok"]) for row in written] == [("output_invariants", True)]
 
 
-def test_the_confidence_report_records_a_verdict_per_universe(monkeypatch, written) -> None:
+@pytest.mark.parametrize(
+    ("app_env", "universes"),
+    [("production", ("topt", "universe-list:qqq")), ("prod", ("topt", "universe-list:qqq")), ("staging", ("topt",))],
+)
+def test_the_confidence_report_records_a_verdict_for_each_universe_the_environment_runs(
+    monkeypatch, written, app_env: str, universes: tuple[str, ...]
+) -> None:
+    """The contract lists the universes of each environment: staging runs TOPT only, so a QQQ report launched
+    by hand records no verdict there (owner decision of 2026-10-21)."""
     from data_engine.datahub import confidence_report
 
+    monkeypatch.setattr(settings, "app_env", app_env)
     monkeypatch.setattr(psycopg, "connect", _Sink())
     monkeypatch.setattr(confidence_report, "compile_report", lambda *_a, **_k: None)
-    for universe in quality.CONFIDENCE_REPORT_UNIVERSES:
+    for universe in ("topt", "universe-list:qqq"):
         config = quality.ConfidenceReportConfig(executed_at="2026-09-16T00:45:00+00:00", universe=universe)
         quality.run_confidence_report(dg.build_op_context(), config)
     assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
-        (f"datahub_confidence_report@{universe}", True, "no governed head; no report")
-        for universe in quality.CONFIDENCE_REPORT_UNIVERSES
+        (f"datahub_confidence_report@{universe}", True, "no governed head; no report") for universe in universes
     ]
     assert all(row["ran_at"] == datetime.fromisoformat("2026-09-16T00:45:00+00:00") for row in written)
+
+
+@pytest.mark.parametrize(
+    ("check", "universe"),
+    [
+        (standards.THEME_PURITY_VERDICT, "universe-list:qqq"),
+        (standards.QUESTION_COVERAGE_VERDICT, "universe-list:qqq"),
+        (quality.CONFIDENCE_REPORT_VERDICT, "universe-list:qqq"),
+    ],
+)
+def test_staging_records_no_qqq_verdict_and_production_does(written, monkeypatch, check: str, universe: str) -> None:
+    """The three QQQ verdicts of #1410 are registered from the contract, per environment."""
+    name = nightly_verdicts.check_name(check, universe)
+    declared = {*standards.NIGHTLY_VERDICTS, *quality.NIGHTLY_VERDICTS}
+    assert name in declared, "every environment declares the name; the contract decides where it is recorded"
+
+    for app_env, recorded in (("staging", False), ("production", True)):
+        monkeypatch.setattr(settings, "app_env", app_env)
+        written.clear()
+        with nightly_verdicts.verdict(name, registered=declared, run_id="r", tick=None):
+            pass
+        assert bool(written) is recorded, app_env
 
 
 def test_a_crashing_confidence_report_is_a_red_verdict(monkeypatch, written) -> None:
@@ -481,6 +511,8 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     from data_engine.datahub import question_coverage
     from data_engine.datahub.production_topt import theme_purity
 
+    monkeypatch.setattr(settings, "app_env", "production")  # production runs TOPT and QQQ
+
     class _NoHead(_Sink):
         def execute(self, *_a: Any, **_k: Any) -> _NoHead:
             return self
@@ -551,14 +583,14 @@ def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written
     # The run the pointer sensor launches: it recomputes, so the purity op is the first to ask
     # for the head (the fallback's start op would ask first, and fail before purity ran).
     request = standards.head_reports_request(
-        standards.STANDARD_BACKFILL_UNIVERSES[0],
+        "topt",
         "2026-09-16T23:30:00+00:00",
         run_key="head:test",
         only_if_stale=False,
     )
     result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config, raise_on_error=False)
     assert not result.success
-    universe = standards.STANDARD_BACKFILL_UNIVERSES[0]
+    universe = "topt"
     assert [(row["check"], row["ok"]) for row in written] == [(f"theme_purity@{universe}", False)]
     assert written[0]["summary"].startswith("failed: RuntimeError — see Dagster run ")
     # Coverage never ran, so it wrote nothing: its verdict goes stale and the tool names it.

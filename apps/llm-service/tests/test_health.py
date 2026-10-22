@@ -154,6 +154,33 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
     assert {"status", "git_sha", "data_engine_parser", "data_engine_git_sha", "governed_pointers"} <= set(payload)
 
 
+def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_not_schedule(monkeypatch) -> None:
+    """Staging runs TOPT only (owner decision of 2026-10-21). The verdict table is append-only, so the QQQ
+    rows that staging wrote before stay in it. /health reports them in production and not in staging."""
+    from datetime import UTC, datetime
+
+    import psycopg
+    from llm_service.config import settings
+
+    ran = datetime(2026, 10, 19, 0, 45, tzinfo=UTC)
+    rows = [
+        ("theme_purity@topt", ran, True, "ok"),
+        ("theme_purity@universe-list:qqq", ran, True, "ok"),
+        ("question_coverage@universe-list:qqq", ran, True, "ok"),
+        ("datahub_confidence_report@universe-list:qqq", ran, True, "ok"),
+        ("runtime_shape", ran, True, "ok"),
+    ]
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _VerdictsOnly(rows))
+
+    monkeypatch.setattr(settings, "app_env", "staging")
+    staging = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
+    monkeypatch.setattr(settings, "app_env", "production")
+    production = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
+
+    assert staging == ["theme_purity@topt", "runtime_shape"]
+    assert production == [row[0] for row in rows]
+
+
 def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
     """release_fetch_proof records `ok = null` until the deployment's first fetching tick has
     run. Coerced by `bool()`, the pending proof read as a failed check and paged every deploy."""

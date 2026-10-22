@@ -306,6 +306,293 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
     )
 
 
+# --- one list per environment: the contract says which universes an environment runs ---
+
+
+def _main_contract(_ref: str) -> str:
+    """The deployed release declares exactly main's environment contract."""
+    return (REPO_ROOT / _module.RELEASE_CONTRACT_PATH).read_text(encoding="utf-8")
+
+
+def _universe_checks() -> list[str]:
+    return sorted(name for name in EXPECTED if _module.universe_key_of(name) is not None)
+
+
+def _qqq_checks() -> list[str]:
+    return [name for name in EXPECTED if _module.universe_key_of(name) == "qqq"]
+
+
+def test_the_per_universe_checks_of_the_qqq_universe_are_the_three_the_owner_named() -> None:
+    assert _qqq_checks() == [
+        "datahub_confidence_report@universe-list:qqq",
+        "question_coverage@universe-list:qqq",
+        "theme_purity@universe-list:qqq",
+    ]
+
+
+def test_staging_is_not_asked_for_a_qqq_verdict_and_production_is(capsys: pytest.CaptureFixture[str]) -> None:
+    """Staging runs TOPT only (owner decision of 2026-10-21). The same report is red in production."""
+    qqq = set(_qqq_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+
+    def run(environment: str) -> int:
+        return check(
+            URL,
+            environment=environment,
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=_main_contract,
+        )
+
+    assert run("staging") == 0, capsys.readouterr().err
+    assert run("production") == 1
+    err = capsys.readouterr().err
+    assert all(f"{name}: no verdict at all" in err for name in sorted(qqq)), err
+    assert run("prod") == 1, "the alias of production is production"
+
+
+def test_a_report_that_holds_the_staging_checks_only_is_green_in_staging_with_the_expected_count(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    qqq = set(_qqq_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=_main_contract,
+        )
+        == 0
+    )
+    assert f"all {len(EXPECTED) - len(qqq)} nightly checks are green" in capsys.readouterr().out
+
+
+def test_a_release_whose_contract_predates_the_universe_list_is_asked_for_every_check() -> None:
+    """The release that staging serves before this change records the QQQ checks: they stay bounded there."""
+    old_contract = json.dumps({"environments": {"staging": {"strategy_universe": "topt"}}})
+    verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
+
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=lambda ref: old_contract,
+        )
+        == 1
+    )
+    assert (
+        check(
+            URL,
+            environment="staging",
+            http_get=_health(verdicts),
+            now=NOW,
+            reader=_main_set,
+            contract_reader=lambda ref: None,
+        )
+        == 1
+    ), "a release without the contract file is asked for every check"
+
+
+def test_an_unreadable_contract_bounds_every_check_rather_than_none(capsys: pytest.CaptureFixture[str]) -> None:
+    verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
+
+    def broken(ref: str) -> str:
+        raise _module.VerdictCheckFailure(f"cannot read the contract at {ref}")
+
+    code = check(
+        URL,
+        environment="staging",
+        http_get=_health(verdicts),
+        now=NOW,
+        reader=_main_set,
+        contract_reader=broken,
+    )
+    assert code == 1
+    assert "every universe is bounded" in capsys.readouterr().err
+
+
+def test_a_universe_that_the_contract_does_not_list_keeps_its_checks() -> None:
+    """A false red beats a silent miss: a check of an unknown universe is still bounded."""
+    expectations = {
+        "theme_purity@universe-list:nasdaq100": _module.Expectation("theme_purity@universe-list:nasdaq100", 24, "j"),
+        "theme_purity@universe-list:qqq": _module.Expectation("theme_purity@universe-list:qqq", 24, "j"),
+        "runtime_shape": _module.Expectation("runtime_shape", 24, "j"),
+    }
+    kept = _module.expected_in(expectations, frozenset({"topt"}), frozenset({"topt", "qqq"}))
+
+    assert sorted(kept) == ["runtime_shape", "theme_purity@universe-list:nasdaq100"]
+
+
+def test_the_alias_prod_reads_the_production_entry_of_the_contract() -> None:
+    """A contract in which production schedules TOPT only and staging schedules TOPT and QQQ. The alias `prod`
+    must drop the QQQ checks as `production` does; an alias that fell through to "unknown" would keep them."""
+    contract = json.dumps(
+        {
+            "environments": {
+                "staging": {
+                    "universes": [{"key": "topt", "status": "scheduled"}, {"key": "qqq", "status": "scheduled"}]
+                },
+                "production": {"universes": [{"key": "topt", "status": "scheduled"}]},
+            }
+        }
+    )
+
+    expected = {
+        environment: set(
+            _module.expectations_for(
+                "v0.0.70", _main_set, environment=environment, contract_reader=lambda ref: contract
+            )[0]
+        )
+        for environment in ("staging", "production", "prod")
+    }
+
+    assert expected["prod"] == expected["production"]
+    assert set(_qqq_checks()) <= expected["staging"]
+    assert not set(_qqq_checks()) & expected["prod"]
+
+
+@pytest.mark.parametrize(
+    "universes",
+    [
+        [1],
+        "topt",
+        [{"key": "topt"}],
+        [{"status": "scheduled"}],
+        [{"key": "topt", "status": "running"}],
+        [{"key": 7, "status": "scheduled"}],
+    ],
+    ids=["entry-not-an-object", "not-a-list", "no-status", "no-key", "unknown-status", "key-not-text"],
+)
+def test_a_universe_list_the_tool_cannot_read_bounds_every_check(universes: object) -> None:
+    """Unknown is not green: a malformed list must not drop a check silently."""
+    contract = json.dumps({"environments": {"staging": {"universes": universes}}})
+    expectations, source = _module.expectations_for(
+        "v0.0.70", _main_set, environment="staging", contract_reader=lambda ref: contract
+    )
+
+    assert expectations is not None and set(expectations) == set(EXPECTED)
+    assert "every universe is bounded" in source
+
+
+def _release_repo(tmp_path: Path, tag: str = "v0.0.70") -> Path:
+    """A scratch git repository whose tag holds the expectations file and the contract of main."""
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    for relative in (_module.RELEASE_EXPECTATIONS_PATH, _module.RELEASE_CONTRACT_PATH):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "release")
+    git("tag", tag)
+    return tmp_path
+
+
+def _health_without_qqq(reference: datetime):
+    """Both environments report the verdicts that staging records: no QQQ check, each 7 hours old at `reference`."""
+    qqq = set(_qqq_checks())
+    verdicts = [
+        {"check": name, "ran_at": (reference - timedelta(hours=7)).isoformat(), "ok": True, "summary": "ok"}
+        for name in sorted(EXPECTED)
+        if name not in qqq
+    ]
+
+    def get(url: str) -> tuple[int, str]:
+        return 200, json.dumps({"git_sha": "v0.0.70", "data_engine_git_sha": "v0.0.70", "nightly_verdicts": verdicts})
+
+    return get
+
+
+def test_the_delivery_report_asks_each_environment_for_the_universes_its_release_schedules(tmp_path: Path) -> None:
+    """Through `delivery_report.verdict_section`, the call that the daily report makes: real git, the release's
+    own expectations file and contract. Without the wiring, staging is red on the three QQQ checks."""
+    delivery_report = load_tool("delivery_report")
+    repo = _release_repo(tmp_path)
+
+    def gh(path: str) -> str:
+        raise delivery_report.InputUnavailable(path)
+
+    lines = delivery_report.verdict_section(_health_without_qqq(NOW), gh, str(repo), NOW)
+
+    staging = [line for line in lines if line.startswith("- staging:")]
+    production = [line for line in lines if line.startswith("- production:")]
+    assert len(staging) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED) - 3} expected checks are green" in staging[0]
+    assert len(production) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED)} expected checks are green" in production[0]
+    red = [line for line in lines if "red, stale or missing" in line]
+    assert len(red) == 3 and all(any(name in line for line in red) for name in _qqq_checks())
+    assert all("production" not in line or "staging" not in line for line in red)
+
+
+def test_the_command_line_asks_each_environment_for_the_universes_its_release_schedules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through `main([...])`, the entry point of `tools/nightly_verdicts.py`."""
+    import infra2_sdk.deploy
+
+    repo = _release_repo(tmp_path)
+    monkeypatch.setattr(infra2_sdk.deploy, "default_http_get", lambda: _health_without_qqq(datetime.now(UTC)))
+
+    def run(environment: str) -> int:
+        return _module.main([URL, "--environment", environment, "--repo", str(repo)])
+
+    assert run("staging") == 0
+    assert run("production") == 1
+
+
+def test_the_tool_and_the_contract_agree_on_which_checks_an_environment_expects() -> None:
+    """The tool is stdlib only and cannot import the contract model. It reads the same JSON. Its rule and
+    `EnvironmentContract.expects_verdict` must give one answer for every check and environment."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    contract = load_environment_contract()
+    for environment in ("staging", "production", "prod"):
+        expected, _ = _module.expectations_for(
+            "v0.0.70", _main_set, environment=environment, contract_reader=_main_contract
+        )
+        assert expected is not None
+        assert set(expected) == {name for name in EXPECTED if contract.expects_verdict(name, environment)}, environment
+
+
+def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expects_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The standing check of owner decision 2026-10-21 (staging runs TOPT only). Both sides read the contract:
+    the lanes through `is_registered`, the tool through `expectations_for`. A check that a lane records and
+    the tool does not expect is un-watched; a check that the tool expects and no lane records is red forever."""
+    from data_engine.config import settings
+    from data_engine.lanes import nightly_verdict_names
+    from data_engine.quality.nightly_verdicts import is_registered
+
+    declared = nightly_verdict_names()
+    for environment in ("staging", "production"):
+        monkeypatch.setattr(settings, "app_env", environment)
+        recorded = {name for name in declared if is_registered(name, declared)}
+        expected, _ = _module.expectations_for(
+            "v0.0.70", _main_set, environment=environment, contract_reader=_main_contract
+        )
+        assert expected is not None
+        assert set(expected) == recorded, (
+            f"{environment}: expected but not recorded {sorted(set(expected) - recorded)}; "
+            f"recorded but not expected {sorted(recorded - set(expected))}"
+        )
+    monkeypatch.setattr(settings, "app_env", "staging")
+    assert not {name for name in declared if is_registered(name, declared)} & set(_qqq_checks())
+
+
 def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
     """#1131: the lane ticks on weekdays only, so Friday's verdict is the newest one until Monday night.
 

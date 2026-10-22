@@ -938,10 +938,27 @@ def test_a_head_without_a_core_fails(conn: psycopg.Connection, capsys: pytest.Ca
     assert f"Offending rows: {row}" in output
 
 
+@pytest.mark.parametrize("environment", ["staging", "production", "prod", "preview", "dev", ""])
+@pytest.mark.parametrize("family", ["topt", "qqq", "sp500", "canary", "unknown"])
+def test_the_sql_schedule_predicate_agrees_with_the_environment_contract(
+    conn: psycopg.Connection, family: str, environment: str
+) -> None:
+    """`mart.is_head_scheduled` is the SQL mirror of the contract rule (#1346). It is a copy of the schedule
+    and the contract is the source: a status that changes in the contract must change the function in the
+    same pull request, or this test fails."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    universe_id = f"universe:{family}-us-2026-09-30"
+    row = conn.execute("select mart.is_head_scheduled(%s, %s)", (universe_id, environment)).fetchone()
+
+    assert row is not None
+    assert row[0] is load_environment_contract().is_head_scheduled(universe_id, environment), (family, environment)
+
+
 def test_an_unscheduled_manual_qqq_head_on_staging_does_not_fail_scheduled_topt_head(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """#1346 / #1295: QQQ is manual in staging (#1310 / #1256), so a frozen staging QQQ head
+    """#1346 / #1295: staging runs TOPT only (#1410), so a frozen staging QQQ head
     must not fail output_invariants while the scheduled TOPT head is healthy."""
     conn.execute("update mart.environment_identity set environment = 'staging'")
     _seed_head(conn, "universe:topt-us-2026-03-31", _singles("valued", 3))

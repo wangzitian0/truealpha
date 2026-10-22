@@ -56,8 +56,9 @@ from data_engine.datahub.standards.backfill import run_standard_backfill as _run
 from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 from data_engine.datahub.standards.history import run_standard_history as _run_standard_history
 from data_engine.datahub.standards.planner import universe_issuers
+from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.lanes import production_only_schedule_status
-from data_engine.quality.nightly_verdicts import check_name, newest_is_red, tick_from_config, verdict
+from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -65,7 +66,8 @@ STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # disclosures it fills (annual filings); the planner makes a quiet week cost nothing
 # because a closed cell is never re-fetched.
 STANDARD_BACKFILL_CRON = "7 9 * * 0"
-STANDARD_BACKFILL_UNIVERSES = ("universe-list:qqq", "topt")
+#: The backfill and the head reports run for the universes that the process environment schedules. The
+#: contract lists them (staging runs TOPT only): `scheduled_universe_names()` gives them at the tick.
 
 STANDARD_HISTORY_JOB_NAME = "standard_history_backfill_pipeline"
 # Monday 09:07 UTC: the day after the weekly backfill. The SEC daily budget counts per UTC
@@ -83,7 +85,7 @@ QUESTION_COVERAGE_VERDICT = "question_coverage"
 NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
     check_name(check, universe)
     for check in (THEME_PURITY_VERDICT, QUESTION_COVERAGE_VERDICT)
-    for universe in STANDARD_BACKFILL_UNIVERSES
+    for universe in any_environment_universe_names()
 )
 
 NPORT_MONTHLY_SCHEDULE_NAME = "nport_monthly_schedule"
@@ -123,7 +125,6 @@ __all__ = (
     "QUESTION_COVERAGE_VERDICT",
     "STANDARD_BACKFILL_CRON",
     "STANDARD_BACKFILL_JOB_NAME",
-    "STANDARD_BACKFILL_UNIVERSES",
     "STANDARD_HISTORY_CRON",
     "STANDARD_HISTORY_JOB_NAME",
     "STANDARD_HISTORY_MONTHS",
@@ -401,7 +402,7 @@ def _already_current(context: dg.OpExecutionContext, check: str, config: Standar
     A red newest verdict stays red. The health endpoint reads the newest row, so a green row
     here would hide a failed run. Only a run that does the work writes green again."""
     name = check_name(check, config.universe)
-    if name in NIGHTLY_VERDICTS and newest_is_red(name):
+    if is_registered(name, NIGHTLY_VERDICTS) and newest_is_red(name):
         context.log.info("%s: the newest verdict is red; no green row written over it", name)
     else:
         with verdict(
@@ -814,7 +815,7 @@ def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> 
 )
 def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
     executed_at = context.scheduled_execution_time.isoformat()
-    for universe in STANDARD_BACKFILL_UNIVERSES:
+    for universe in scheduled_universe_names():
         yield dg.RunRequest(
             run_key=f"{executed_at}:{universe}",
             run_config=backfill_run_config(executed_at, universe),
@@ -924,8 +925,12 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
             f"armed on {build[:19]}; a catch-up waits for the next evaluation, clear of the deploy walk"
         )
         return
+    universes = scheduled_universe_names()
+    if not universes:
+        yield dg.SkipReason("the environment contract schedules no universe in this environment")
+        return
     with psycopg.connect(settings.database_url) as connection:
-        missing = never_backfilled(connection, universes=STANDARD_BACKFILL_UNIVERSES, standards=standards_to_run(""))
+        missing = never_backfilled(connection, universes=universes, standards=standards_to_run(""))
     if not missing:
         yield dg.SkipReason("every registered standard has completed a backfill over every universe here")
         return
@@ -1044,7 +1049,7 @@ def head_reports_request(
 )
 def head_reports_schedule(context: dg.ScheduleEvaluationContext):
     executed_at = context.scheduled_execution_time.isoformat()
-    for universe in STANDARD_BACKFILL_UNIVERSES:
+    for universe in scheduled_universe_names():
         yield head_reports_request(universe, executed_at, run_key=f"{executed_at}:{universe}", only_if_stale=True)
 
 
@@ -1083,7 +1088,7 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
     requests: list[dg.RunRequest] = []
     with psycopg.connect(settings.database_url) as connection:
-        for universe in STANDARD_BACKFILL_UNIVERSES:
+        for universe in scheduled_universe_names():
             head = question_coverage.governed_head(connection, universe_prefix=UNIVERSE_PREFIXES[universe])
             if head is None or followed.get(universe) == head.run_id:
                 continue
@@ -1132,7 +1137,7 @@ def _build_standards_plane_schedule(
     def _plane_schedule(context: dg.ScheduleEvaluationContext):
         executed_at = context.scheduled_execution_time.isoformat()
         if job.name == STANDARD_BACKFILL_JOB_NAME:
-            for universe in STANDARD_BACKFILL_UNIVERSES:
+            for universe in scheduled_universe_names():
                 yield dg.RunRequest(
                     run_key=f"{schedule_name}:{executed_at}:{universe}",
                     run_config=backfill_run_config(executed_at, universe),

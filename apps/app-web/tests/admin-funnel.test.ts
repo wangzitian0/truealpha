@@ -204,8 +204,12 @@ const TEST_CONTEXT: AccessContext = {
     "SP500 is unscheduled in staging (#1416)",
   );
   assert(isHeadScheduled("universe:qqq-us-2026-09-30", "production") === true, "QQQ is scheduled in production");
-  assert(isHeadScheduled("universe:qqq-us-2026-09-30", "staging") === false, "QQQ is manual in staging");
+  assert(isHeadScheduled("universe:qqq-us-2026-09-30", "staging") === false, "staging runs TOPT only, so QQQ is not scheduled there");
   assert(isHeadScheduled("universe:topt-us-2026-03-31", "staging") === true, "TOPT is scheduled in staging");
+  assert(
+    isHeadScheduled("universe:nasdaq100-us-2026-09-30", "staging") === true,
+    "a universe key that the contract does not declare fails closed (scheduled)",
+  );
   assert(
     resolveHeadFreshness("stale", "universe:sp500-us-2026-09-30", "production") === "manual",
     "unscheduled SP500 head resolves to manual",

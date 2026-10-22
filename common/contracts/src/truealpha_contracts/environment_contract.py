@@ -5,6 +5,10 @@ Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` fr
 (``apps/app-web/src/contracts/environmentContract.generated.ts``) derive their rules
 from this contract so no environment schedule or vendor share is hand-mirrored.
 
+Each environment holds a list of universes it runs. A universe is ``scheduled`` or ``stopped``.
+A stopped universe names the precondition that unlocks it. No other file says that a universe is
+stopped (owner decision of 2026-10-21).
+
 The contract also holds the measured run times of every deployed Dagster job. The data-engine
 run launcher derives each run's maximum runtime from them (#1442). It holds the memory capacity
 of the Dagster code server, and the data-engine run queue limit derives from it (#1467).
@@ -29,6 +33,8 @@ SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
 TickKey = Literal["topt", "qqq", "sp500", "canary"]
 TickType = Literal["strategy", "fund", "index", "sentinel"]
 EnvironmentKey = Literal["preview", "staging", "production"]
+UniverseKey = Literal["topt", "qqq", "sp500"]
+UniverseStatus = Literal["scheduled", "stopped"]
 
 
 class _StrictFrozenModel(BaseModel):
@@ -44,20 +50,73 @@ class SentinelMember(_StrictFrozenModel):
 
 
 class EnvironmentTickContract(_StrictFrozenModel):
-    scheduled: bool
-    cron: str | None = None
+    """The cron and size of one tick. A universe tick runs when its universe is ``scheduled``.
+
+    A sentinel tick (the canary) is no universe and runs whenever it holds a cron.
+    """
+
+    cron: str = Field(min_length=1)
     tick_type: TickType
     estimated_listings: int = Field(ge=0)
+
+
+class UnlockEndToEnd(_StrictFrozenModel):
+    """The universe that must run end to end in ``environment`` before a stopped universe starts."""
+
+    environment: EnvironmentKey
+    universe: UniverseKey
+
+
+class UnlockVerdict(_StrictFrozenModel):
+    """The nightly verdict that must be green for ``consecutive_green_nights`` nights in a row."""
+
+    name: str = Field(pattern=r"^[a-z0-9_]+$")
+    environment: EnvironmentKey
+    consecutive_green_nights: int = Field(ge=1)
+
+
+class UniverseUnlock(_StrictFrozenModel):
+    """The machine-readable precondition of a stopped universe. Both parts must hold."""
+
+    end_to_end: UnlockEndToEnd
+    verdict: UnlockVerdict
+
+
+class EnvironmentUniverse(_StrictFrozenModel):
+    """One universe of an environment and its status. A stopped universe names its unlock."""
+
+    key: UniverseKey
+    status: UniverseStatus
+    unlock: UniverseUnlock | None = None
+
+    @model_validator(mode="after")
+    def _only_a_stopped_universe_has_an_unlock(self) -> Self:
+        if (self.status == "stopped") != (self.unlock is not None):
+            raise ValueError(
+                f"{self.key}: a {self.status} universe {'needs' if self.status == 'stopped' else 'must not have'} an unlock"
+            )
+        return self
 
 
 class EnvironmentSpec(_StrictFrozenModel):
     environment: EnvironmentKey
     trigger: str = Field(min_length=1)
     live_vendor_calls: bool
-    strategy_universe: str | None = None
-    target_strategy_universe: str | None = None
+    universes: tuple[EnvironmentUniverse, ...]
     ticks: Mapping[str, EnvironmentTickContract]
     planned_daily_demand: Mapping[str, int]
+
+    @model_validator(mode="after")
+    def _universes_and_ticks_agree(self) -> Self:
+        keys = [universe.key for universe in self.universes]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"{self.environment}: a universe is listed twice: {keys}")
+        universe_ticks = {key for key, tick in self.ticks.items() if tick.tick_type != "sentinel"}
+        if universe_ticks != set(keys):
+            raise ValueError(
+                f"{self.environment}: the universes {sorted(keys)} and the universe ticks {sorted(universe_ticks)} differ"
+            )
+        return self
 
 
 class SharedSeatSpec(_StrictFrozenModel):
@@ -122,10 +181,9 @@ class MeasuredProcessMemory(_StrictFrozenModel):
 
     ``grpc_server_hwm_mib`` is the ``VmHWM`` of the first process. ``fresh_import_hwm_mib`` is the
     ``VmHWM`` of a fresh interpreter that imports ``data_engine.dagster_defs``: no run is smaller.
-    ``container_peak_mib`` is the ``memory.peak`` of the cgroup while ``runs_at_peak`` in-process runs
-    overlapped, ``waiting_runs_at_peak`` of them only waiting for other runs. That peak does not split
-    into one size per run. ``working_run_hwm_mib`` is the largest ``VmHWM`` of any process except the code
-    server that the sensor sampled: the size of a working run, read directly."""
+    ``working_run_hwm_mib`` is the largest ``VmHWM`` of any process except the code server that the
+    sensor sampled: the size of a working run, read directly. The ``memory.peak`` of the container
+    is no field here: it counts page cache and splits into no size per run."""
 
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
@@ -133,9 +191,6 @@ class MeasuredProcessMemory(_StrictFrozenModel):
     grpc_server_hwm_mib: float = Field(gt=0)
     fresh_import_hwm_mib: float = Field(gt=0)
     working_run_hwm_mib: float = Field(gt=0)
-    container_peak_mib: float = Field(gt=0)
-    runs_at_peak: int = Field(ge=1)
-    waiting_runs_at_peak: int = Field(ge=0)
     source: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -151,43 +206,46 @@ class MeasuredProcessMemory(_StrictFrozenModel):
 class CodeServerCapacity(_StrictFrozenModel):
     """The memory of the Dagster code server container and the run limit that follows from it (#1467).
 
-    The gRPC server and every run process share one cgroup. The server holds ``server_mib``. The
-    queue admits ``concurrent_runs`` runs; at least 2, because a run that waits for other runs holds a
-    slot while it waits. Each run executes in ``processes_per_run`` processes (1 when its job uses the
-    in-process executor). The memory left inside ``utilization_limit`` of the ceiling, divided over the
-    slots, is the budget of one run (``run_mib``). The budget is a decision, not a measurement. It must
-    cover the measured working run, and the nightly verdict compares every run process with it.
+    The gRPC server and every run process share one cgroup. The processes may hold the share
+    ``UTILIZATION_CEILING`` of the ceiling (``usable_mib``). The server holds ``server_mib``: its
+    measured ``VmHWM`` plus ``server_margin``. The queue admits ``concurrent_runs`` runs; at least 2,
+    because a run that waits for other runs holds a slot while it waits. Each run executes in
+    ``processes_per_run`` processes (1 when its job uses the in-process executor). The memory left
+    inside ``usable_mib``, divided over the slots, is the budget of one run (``run_mib``). The budget
+    is a decision, not a measurement. It must cover the measured working run, and the nightly verdict
+    compares every run process with it.
     """
 
     description: str = Field(min_length=1)
     ceiling_mib: int = Field(ge=1)
     ceiling_source: str = Field(min_length=1)
-    utilization_limit: float = Field(gt=0, le=UTILIZATION_CEILING)
-    server_mib: int = Field(ge=1)
+    server_margin: float = Field(gt=0)
     concurrent_runs: int = Field(ge=1)
     server_processes: int = Field(ge=1)
     processes_per_run: int = Field(ge=1)
     measured: MeasuredProcessMemory
 
     @model_validator(mode="after")
-    def _server_and_budget_cover_the_measurements(self) -> Self:
-        if self.server_mib < self.measured.grpc_server_hwm_mib:
-            raise ValueError(
-                f"server_mib {self.server_mib} is below the measured {self.measured.grpc_server_hwm_mib} MiB"
-            )
+    def _budget_covers_the_measurements(self) -> Self:
         if self.concurrent_runs < 2:
             raise ValueError("the queue needs 2 slots: a waiting run and the run it waits for")
         if self.run_mib < self.measured.working_run_hwm_mib:
             raise ValueError(
                 f"the budget of one run, {self.run_mib} MiB, is below the measured working run,"
-                f" {self.measured.working_run_hwm_mib} MiB: the slots do not fit inside the utilization limit"
+                f" {self.measured.working_run_hwm_mib} MiB: the slots do not fit inside the usable share of the ceiling"
             )
         return self
 
     @property
     def usable_mib(self) -> int:
-        """The memory that the processes may hold: ``utilization_limit`` of the ceiling, rounded down."""
-        return math.floor(Decimal(self.ceiling_mib) * Decimal(str(self.utilization_limit)))
+        """The memory that the processes may hold: ``UTILIZATION_CEILING`` of the ceiling, rounded down."""
+        return math.floor(Decimal(self.ceiling_mib) * Decimal(str(UTILIZATION_CEILING)))
+
+    @property
+    def server_mib(self) -> int:
+        """The memory of the gRPC server: its measured ``VmHWM`` plus ``server_margin``, rounded up."""
+        grown = Decimal(str(self.measured.grpc_server_hwm_mib)) * (1 + Decimal(str(self.server_margin)))
+        return math.ceil(grown)
 
     @property
     def run_mib(self) -> int:
@@ -229,6 +287,16 @@ class EnvironmentContract(_StrictFrozenModel):
         for job_name, basis in self.run_time_bounds.jobs.items():
             if basis.estimate_tick is not None and not self._tick_listings(basis.estimate_tick):
                 raise ValueError(f"{job_name}: no environment declares the tick {basis.estimate_tick!r}")
+        for spec in self.environments.values():
+            for universe in spec.universes:
+                if universe.unlock is None:
+                    continue
+                needed = universe.unlock.end_to_end
+                if self.universe_status(needed.universe, needed.environment) != "scheduled":
+                    raise ValueError(
+                        f"{spec.environment}/{universe.key}: the unlock needs {needed.universe} end to end in"
+                        f" {needed.environment}, and that universe is not scheduled there"
+                    )
         return self
 
     def _tick_listings(self, tick: str) -> list[int]:
@@ -265,33 +333,87 @@ class EnvironmentContract(_StrictFrozenModel):
             return "production"
         return env
 
+    @property
+    def known_tick_keys(self) -> frozenset[str]:
+        """Every tick key that some environment declares."""
+        return frozenset(key for spec in self.environments.values() for key in spec.ticks)
+
+    def universe_status(self, universe: str, environment: str | None) -> UniverseStatus | None:
+        """The status of ``universe`` in ``environment``, or None when that environment does not list it."""
+        spec = self.environments.get(self.normalize_environment(environment))
+        if spec is None:
+            return None
+        key = universe.removeprefix("universe-list:")
+        return next((entry.status for entry in spec.universes if entry.key == key), None)
+
+    def scheduled_universes(self, environment: str | None) -> tuple[UniverseKey, ...]:
+        """The keys of the universes that ``environment`` runs on a schedule, in contract order."""
+        spec = self.environments.get(self.normalize_environment(environment))
+        if spec is None:
+            return ()
+        return tuple(entry.key for entry in spec.universes if entry.status == "scheduled")
+
+    @property
+    def stopped_universe_keys(self) -> frozenset[str]:
+        """The universes that some environment lists as stopped: they wait for their unlock."""
+        return frozenset(
+            entry.key for spec in self.environments.values() for entry in spec.universes if entry.status == "stopped"
+        )
+
+    def unlock_of(self, universe: str, environment: str | None) -> UniverseUnlock | None:
+        """The precondition of a stopped ``universe`` in ``environment``, or None when it is not stopped there."""
+        spec = self.environments.get(self.normalize_environment(environment))
+        if spec is None:
+            return None
+        key = universe.removeprefix("universe-list:")
+        return next((entry.unlock for entry in spec.universes if entry.key == key), None)
+
+    def expects_verdict(self, check: str, environment: str | None) -> bool:
+        """Whether ``environment`` records the nightly verdict ``check``.
+
+        A per-universe name (``check@universe``) of a universe that some environment lists is recorded
+        only where the environment schedules that universe: staging runs TOPT only, so it records no
+        QQQ verdict. Any other name, and any environment that the contract does not name, records it.
+        """
+        _, at, universe = check.partition("@")
+        if not at:
+            return True
+        key = universe.removeprefix("universe-list:")
+        if key not in {entry.key for spec in self.environments.values() for entry in spec.universes}:
+            return True
+        if self.normalize_environment(environment) not in self.environments:
+            return True
+        return self.universe_status(key, environment) == "scheduled"
+
     def is_universe_scheduled(self, universe: str, environment: str) -> bool:
-        """Whether ``universe`` has an active schedule in ``environment`` (#1416 E1)."""
-        env = self.normalize_environment(environment)
-        spec = self.environments.get(env)
+        """Whether ``universe`` has an active schedule in ``environment`` (#1416 E1).
+
+        A universe tick is active when the environment lists the universe as ``scheduled``. A sentinel
+        tick (the canary) is active when the environment declares its cron.
+        """
+        spec = self.environments.get(self.normalize_environment(environment))
         if spec is None:
             return False
         key = universe.removeprefix("universe-list:")
         tick = spec.ticks.get(key)
-        if tick is None or tick.cron is None:
+        if tick is None:
             return False
-        return tick.scheduled
+        return tick.tick_type == "sentinel" or self.universe_status(key, environment) == "scheduled"
 
     def is_head_scheduled(self, universe_id: str, environment: str | None) -> bool:
         """Whether ``universe_id`` has a running schedule in ``environment`` (#1416 E1).
 
         Fails closed (returns True) when ``environment`` is omitted or unrecognised, or when
-        ``universe_id`` does not map to a declared tick key in the contract.
+        ``universe_id`` does not map to a tick key that some environment declares. A tick key that
+        another environment declares and this one does not is not scheduled here.
         """
         env = self.normalize_environment(environment)
-        spec = self.environments.get(env)
-        if spec is None or env == "preview":
+        if env not in self.environments or env == "preview":
             return True
         key = universe_id.removeprefix("universe:").split("-", 1)[0]
-        tick = spec.ticks.get(key)
-        if tick is None:
+        if key not in self.known_tick_keys:
             return True
-        return bool(tick.scheduled and tick.cron is not None)
+        return self.is_universe_scheduled(key, env)
 
     def derived_environment_shares(self, seat: str) -> tuple[tuple[str, int], ...]:
         """Derive percentage shares ``(environment, percent)`` for a shared physical seat (#1416 E3).
