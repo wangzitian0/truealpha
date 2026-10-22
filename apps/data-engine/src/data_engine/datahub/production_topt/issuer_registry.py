@@ -130,15 +130,15 @@ REGISTRY_BACKOFF_SECONDS = 1.0
 #: Issuers in a row whose read failed in a way the next issuer may share: a timeout after every
 #: attempt, a block (403), a spent budget. At this count the registry is down. Each remaining issuer
 #: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no
-#: more. A long outage costs one client timeout (30 s) per issuer instead of three.
+#: more. A long outage costs one read timeout (`REGISTRY_READ_TIMEOUT_SECONDS`) for each issuer instead of three.
 REGISTRY_OUTAGE_AFTER = 3
-#: Elapsed time that one registry pass may spend before it stops reading (#1323). The count above bounds
-#: the attempts and not the time: a host that never answers costs one client timeout (30 s) for each
-#: issuer, so 500 issuers would hold the tick transaction for hours. Dagster ends a run after
-#: `max_runtime_seconds` (10800) without a named refusal. After this budget each issuer that is left is
-#: named unavailable with the reason "not read", and the tick goes on. The pass stays under the budget plus
-#: the cost of one issuer (93 s at most).
-REGISTRY_BUDGET_SECONDS = 180.0
+#: Seconds that one submissions read may wait for the host (#1323). `sec.client()` waits 30 s, which is the
+#: right limit for a company-facts read (staging, 35 days: the longest was 73 s) and far too long here. Staging
+#: call ledger, 2026-09-16 to 2026-10-21: 3340 submissions reads, median 226 ms, 99th percentile 623 ms, longest
+#: successful read 3602 ms, one failure: the 30 s timeout of the tick on 2026-10-20 22:45. 10 s is 2.8 times the
+#: longest successful read. A read that waits longer is a read that failed. This bounds the time of a pass
+#: without leaving an issuer unread: a host that never answers costs 10 s for each issuer after the breaker trips.
+REGISTRY_READ_TIMEOUT_SECONDS = 10.0
 #: The payload key of a financial-fact observation whose issuer the registry could not classify.
 UNAVAILABLE_PAYLOAD_KEY = "registry_unavailable"
 
@@ -164,10 +164,6 @@ class _Read:
 
 def _pause(seconds: float) -> None:
     time.sleep(seconds)
-
-
-def _clock() -> float:
-    return time.monotonic()
 
 
 #: Failures of a read that may clear: a timeout or a reset, and a body that arrived cut short.
@@ -206,24 +202,15 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     A read that fails in a way that may clear is tried again, up to `REGISTRY_ATTEMPTS`. An issuer
     whose read still fails is named in `RegistryReading.unavailable`. The caller excludes that
     issuer: a run that cannot say whether an issuer is a bank must not classify it as anything.
-    One issuer never fails the run (#1323). The registry marks an issuer unavailable without a read
-    only after `REGISTRY_BUDGET_SECONDS` of elapsed time, and it says so in the reason.
+    One issuer never fails the run (#1323). The registry marks an issuer unavailable only after a read of
+    that issuer failed.
     """
     classifications: dict[int, IssuerClassification] = {}
     unavailable: dict[int, str] = {}
     failed_in_a_row = 0
-    started = _clock()
     with sec.client() as http:
+        http.timeout = httpx.Timeout(REGISTRY_READ_TIMEOUT_SECONDS)
         for cik in sorted(set(ciks.values())):
-            if _clock() - started >= REGISTRY_BUDGET_SECONDS:
-                if not any(reason.startswith("not read") for reason in unavailable.values()):
-                    logger.error(
-                        "registry pass spent its %.0f s budget after %d issuers; the others are not read",
-                        REGISTRY_BUDGET_SECONDS,
-                        len(classifications) + len(unavailable),
-                    )
-                unavailable[cik] = f"not read: the registry pass spent its {REGISTRY_BUDGET_SECONDS:.0f} s budget"
-                continue
             read = _read_submissions(
                 cik, http, attempts=1 if failed_in_a_row >= REGISTRY_OUTAGE_AFTER else REGISTRY_ATTEMPTS
             )

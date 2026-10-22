@@ -160,7 +160,7 @@ class ExclusionReason(StrEnum):
     #: The plausibility gate refused this issuer's published row, and the tick published the
     #: others (#1323). One code per issuer rule of the plausibility policy (v4, #1443).
     PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY = "plausibility_refused_node_sign_policy"
-    #: The issuer registry gave no classification after its retries, so the run cannot say which
+    #: The issuer registry gave no classification after its attempts, so the run cannot say which
     #: numerator describes this issuer. The tick excludes only this issuer (#1323).
     REGISTRY_UNAVAILABLE = "registry_unavailable"
 

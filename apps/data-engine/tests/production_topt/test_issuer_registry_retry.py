@@ -193,34 +193,31 @@ def test_a_body_cut_short_is_tried_again(monkeypatch, pauses, broken) -> None:
     assert 1 in reading.classifications
 
 
-def test_a_pass_that_spends_its_time_budget_names_the_issuers_it_did_not_read(monkeypatch, pauses) -> None:
-    """Every read succeeds and takes 50 s. After 180 s the rest are named "not read": the pass is bounded in time."""
-    clock = {"now": 0.0}
-    monkeypatch.setattr(issuer_registry, "_clock", lambda: clock["now"])
+def test_the_registry_waits_ten_seconds_for_one_read_not_the_thirty_of_the_shared_client(monkeypatch, pauses) -> None:
+    """Measured on staging: the longest successful submissions read took 3.6 s, and the one failure waited the
+    30 s of `sec.client()`. A pass over a host that never answers costs this timeout for each issuer, never 30 s."""
+    clients: list[httpx.Client] = []
+    socket = FakeSec(lambda cik, attempt: ok())
 
-    def script(cik: int, attempt: int) -> Outcome:
-        clock["now"] += 50.0
-        return ok()
+    def build() -> httpx.Client:
+        clients.append(httpx.Client(transport=httpx.MockTransport(socket.handle), timeout=30.0))
+        return clients[-1]
 
-    socket, reading = read(monkeypatch, script, list(range(1, 11)))
+    monkeypatch.setattr(sec, "client", build)
 
-    assert sorted(reading.classifications) == [1, 2, 3, 4], "four reads take 200 s, the budget is 180 s"
-    assert sorted(reading.unavailable) == list(range(5, 11))
-    assert all(reason.startswith("not read:") and "180 s budget" in reason for reason in reading.unavailable.values())
-    assert socket.reads == [1, 2, 3, 4], "no read is made after the budget"
+    issuer_registry.resolve_issuer_classifications({"T1": 1})
+
+    assert clients[0].timeout == httpx.Timeout(10.0)
+    assert issuer_registry.REGISTRY_READ_TIMEOUT_SECONDS == 10.0
 
 
-def test_a_pass_inside_its_time_budget_reads_every_issuer(monkeypatch, pauses) -> None:
-    clock = {"now": 0.0}
-    monkeypatch.setattr(issuer_registry, "_clock", lambda: clock["now"])
+def test_a_slow_host_never_leaves_an_issuer_unread(monkeypatch, pauses) -> None:
+    """Every read times out: each issuer is read, none is named "not read"."""
+    socket, reading = read(monkeypatch, lambda cik, attempt: timeout(), list(range(1, 31)))
 
-    def script(cik: int, attempt: int) -> Outcome:
-        clock["now"] += 1.0
-        return ok()
-
-    socket, reading = read(monkeypatch, script, list(range(1, 101)))
-
-    assert len(reading.classifications) == 100 and reading.unavailable == {}
+    assert sorted(reading.unavailable) == list(range(1, 31))
+    assert set(socket.reads) == set(range(1, 31)), "every issuer was read at least once"
+    assert not any(reason.startswith("not read") for reason in reading.unavailable.values())
 
 
 def test_a_missing_issuer_neither_resets_nor_counts_toward_an_outage(monkeypatch, pauses) -> None:

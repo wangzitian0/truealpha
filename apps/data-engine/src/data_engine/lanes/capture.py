@@ -355,7 +355,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         # run. An issuer refusal excludes that issuer's decision with a named reason, and the run
         # publishes the others.
         issuers = judge_issuers(connection, run_id=pipeline.run_id)
-        # #1323: an issuer whose registry read failed after its retries is excluded by name, like a
+        # #1323: an issuer whose registry read failed after its attempts is excluded by name, like a
         # refused issuer. The registry reason wins: the row of that issuer rests on no classification.
         registry_unavailable = _registry_unavailable(context, connection, tick, pipeline.run_id, issuers)
         excluded = {

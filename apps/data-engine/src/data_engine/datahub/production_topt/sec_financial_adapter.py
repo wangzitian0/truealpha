@@ -239,7 +239,7 @@ class SecTarget:
     # Defaults False so a target assembled without the registry cannot inherit a
     # substitution that only holds for ~zero-COGS industries.
     revenue_proxy_allowed: bool = False
-    # True when the issuer registry gave no classification after its retries (#1323). The
+    # True when the issuer registry gave no classification after its attempts (#1323). The
     # operating branch above is then a placeholder. The payload withholds both numerators and
     # carries `UNAVAILABLE_PAYLOAD_KEY`, so the tick excludes the issuer with the reason
     # `registry_unavailable` and publishes the others.
