@@ -298,6 +298,42 @@ def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monk
     assert seen == {"holder": 33, "short": 11, "long": 22}
 
 
+@pytest.mark.parametrize("transport_raises", [False, True], ids=["answers", "raises"])
+def test_the_task_timeout_does_not_outlive_its_call(world, monkeypatch, transport_raises) -> None:
+    """The variable holds the timeout of the call that is running on this thread, and nothing after it."""
+    import dataclasses
+
+    in_environment(monkeypatch, "dev")
+    seen_inside: list[int] = []
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        seen_inside.append(llm._attempt_timeout.get())
+        if transport_raises:
+            raise TimeoutError("timed out")
+        return 200, OK_BODY
+
+    task = dataclasses.replace(model_key_health.PROBE_TASK, timeout_seconds=33)
+    call = {
+        "task": task,
+        "cik": 0,
+        "accession": "",
+        "user_content": "ping",
+        "caller": "t",
+        "standard": "t",
+        "parse": lambda content: {},
+        "refusal": lambda detail: {},
+        "persist": False,
+        "transport": transport,
+    }
+    if transport_raises:
+        with pytest.raises(TimeoutError):
+            llm.invoke(None, **call)
+    else:
+        llm.invoke(None, **call)
+    assert seen_inside == [33]
+    assert llm._attempt_timeout.get() == llm.ModelTask.timeout_seconds, "the timeout of the call was reset"
+
+
 def test_the_default_transport_keeps_the_three_argument_form_that_callers_patch() -> None:
     import inspect
 
