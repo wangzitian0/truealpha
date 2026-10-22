@@ -325,13 +325,18 @@ def test_the_task_timeout_does_not_outlive_its_call(world, monkeypatch, transpor
         "persist": False,
         "transport": transport,
     }
-    if transport_raises:
-        with pytest.raises(TimeoutError):
+    # A value that is neither the task's nor the default: the call must give back exactly this one.
+    before = llm._attempt_timeout.set(47)
+    try:
+        if transport_raises:
+            with pytest.raises(TimeoutError):
+                llm.invoke(None, **call)
+        else:
             llm.invoke(None, **call)
-    else:
-        llm.invoke(None, **call)
-    assert seen_inside == [33]
-    assert llm._attempt_timeout.get() == llm.ModelTask.timeout_seconds, "the timeout of the call was reset"
+        assert seen_inside == [33]
+        assert llm._attempt_timeout.get() == 47, "the timeout that was set before the call is back after it"
+    finally:
+        llm._attempt_timeout.reset(before)
 
 
 def test_the_default_transport_keeps_the_three_argument_form_that_callers_patch() -> None:
