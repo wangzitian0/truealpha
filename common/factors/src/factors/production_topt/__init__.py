@@ -1,6 +1,7 @@
 """Versioned Production TOPT core factor definitions and kernel."""
 
 from factors.production_topt.core import (
+    SHARE_BASIS_REASON_CODES,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -19,6 +20,7 @@ from factors.production_topt.core import (
 )
 
 __all__ = [
+    "SHARE_BASIS_REASON_CODES",
     "GppeV0Definition",
     "MetricAvailability",
     "MetricFreshness",

@@ -60,7 +60,7 @@ from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from split_series_seed import store_flat_daily_series  # noqa: E402
+from split_series_seed import store_flat_daily_series, store_flat_topt_series  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
@@ -562,6 +562,7 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
         broken=_OneBrokenCell(financial_fact_numerator=True),
     )
 
+    store_flat_topt_series(connection, last=CUTOFF.date())
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
@@ -672,6 +673,7 @@ def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_misma
         object_store=store,
         broken=_OneBrokenCell(financial_fact_numerator=True),
     )
+    store_flat_topt_series(connection, last=CUTOFF.date())
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))

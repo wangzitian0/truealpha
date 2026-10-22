@@ -14,9 +14,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -56,6 +58,9 @@ from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import store_flat_topt_series  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
@@ -403,6 +408,8 @@ def _capture(
 def test_executor_run_reconstructs_the_snapshot_and_mart(connection) -> None:
     plan = _capture(connection, version="test-a1")
 
+    # The core drops a filed count that no stored series puts on the basis of the close (#1277).
+    store_flat_topt_series(connection, last=CUTOFF.date())
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     assert len(snapshot.members) == 21

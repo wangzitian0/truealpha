@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -16,6 +17,7 @@ from factors.production_topt import (
     MetricFreshness,
     OperatingBranch,
     ToptCellQualityInput,
+    ToptCoreReasonCode,
     ToptCoreResult,
     ToptCoreSnapshotInput,
     ToptGppeResult,
@@ -47,7 +49,6 @@ from data_engine.datahub.production_topt.status_dimensions import (
     source_evidence_status_for,
 )
 from data_engine.datahub.share_basis import (
-    SHARES_KEY,
     LiveShareCount,
     OnCloseBasis,
     SplitHistory,
@@ -55,6 +56,9 @@ from data_engine.datahub.share_basis import (
     live_on_close_basis,
     split_history,
 )
+from data_engine.datahub.share_count_entry import share_count_entry
+
+log = logging.getLogger(__name__)
 
 # Snapshot invariants are SELF-consistent, never universe literals: the frozen
 # TOPT 20 and a 102-listing plane universe freeze through the same checks
@@ -443,6 +447,7 @@ def _metric(
     unit: str,
     confidence: Decimal | None = None,
     knowable_at: datetime | None = None,
+    unavailable_reason: ToptCoreReasonCode | None = None,
 ) -> ToptMetricInput:
     return ToptMetricInput(
         input_id=row.observation_id,
@@ -453,6 +458,7 @@ def _metric(
         knowable_at=row.knowable_at if knowable_at is None else knowable_at,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
+        unavailable_reason=unavailable_reason,
     )
 
 
@@ -463,22 +469,6 @@ def _cell(row: _ObservationRow) -> ToptCellQualityInput:
         knowable_at=row.knowable_at,
         freshness=row.freshness,
     )
-
-
-def _share_entry(financial: FinancialFactPayload, knowable_at: datetime) -> Mapping[str, Any]:
-    """The share-count vintage entry passed to `share_basis.live_on_close_basis` (#1277)."""
-    entry = (financial.vintage or {}).get(SHARES_KEY)
-    if isinstance(entry, Mapping):
-        if entry.get("period_end") and entry.get("filed"):
-            return entry
-        merged = dict(entry)
-    else:
-        merged = {}
-    if financial.shares_period_end is not None and not merged.get("period_end"):
-        merged["period_end"] = financial.shares_period_end.isoformat()
-    if merged.get("period_end") and not merged.get("filed"):
-        merged["filed"] = knowable_at.astimezone(UTC).date().isoformat()
-    return merged
 
 
 def _observation_documents(connection: Connection[Any], observation_id: str) -> list[dict[str, Any]]:
@@ -559,8 +549,10 @@ class PostgresToptCoreRepository:
             self._snapshot_member(
                 listing_id,
                 by_type,
+                # An issuer without a listing ticker has no history. `live_on_close_basis` then names it.
                 histories=histories_by_issuer.get(
-                    str((by_type.get("listing-identity") or next(iter(by_type.values()))).payload.get("issuer_id", ""))
+                    str((by_type.get("listing-identity") or next(iter(by_type.values()))).payload.get("issuer_id", "")),
+                    (),
                 ),
                 documents=(
                     partial(_observation_documents, self._connection, by_type["financial-fact"].observation_id)
@@ -601,8 +593,8 @@ class PostgresToptCoreRepository:
             return {}
         unadjusted = load_daily_series(self._connection, symbols, adjust=UNADJUSTED)
         split_adjusted = load_daily_series(self._connection, symbols, adjust=SPLIT_ADJUSTED)
-        if not unadjusted and not split_adjusted:
-            return {}
+        # A symbol without a stored bar maps to None, also when no symbol has one. The member
+        # build then names the missing series. It never keeps the filed count (#1277).
         by_symbol = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
         return {
             issuer_id: tuple(by_symbol[symbol] for symbol in sorted(set(names)))
@@ -713,7 +705,7 @@ class PostgresToptCoreRepository:
         listing_id: str,
         by_type: dict[str, _ObservationRow],
         *,
-        histories: Sequence[SplitHistory | Unavailable | None] | None = None,
+        histories: Sequence[SplitHistory | Unavailable | None],
         documents: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
         ruleset: Callable[[], ConceptMappingRuleset] | None = None,
     ) -> SnapshotMember:
@@ -756,15 +748,18 @@ class PostgresToptCoreRepository:
         )
 
         # #1277: put the filed share count on the share basis of the captured close via
-        # `share_basis.live_on_close_basis` (read-only reuse of #1262's split logic).
+        # `share_basis.live_on_close_basis` (read-only reuse of #1262's split logic). The count
+        # never stands beside a close of an unknown basis: when the stored series cannot prove
+        # the splits, or do not exist, the count is dropped and the cause is named.
         shares_value = financial.shares_outstanding
         shares_knowable_at = financial_row.knowable_at
-        if shares_value is not None and price.close is not None and histories:
+        shares_reason: ToptCoreReasonCode | None = None
+        if shares_value is not None and price.close is not None:
             outcome = live_on_close_basis(
                 LiveShareCount(
                     shares=shares_value,
                     knowable_at=financial_row.knowable_at,
-                    entry=_share_entry(financial, financial_row.knowable_at),
+                    entry=share_count_entry(financial.vintage, financial.shares_period_end, financial_row.knowable_at),
                     close_session=market_row.knowable_at.astimezone(UTC).date(),
                     close_knowable_at=market_row.knowable_at,
                     close=price.close,
@@ -776,8 +771,16 @@ class PostgresToptCoreRepository:
             if isinstance(outcome, OnCloseBasis):
                 shares_value = outcome.value
                 shares_knowable_at = outcome.knowable_at
-            elif isinstance(outcome, Unavailable):
+            else:
                 shares_value = None
+                shares_reason = ToptCoreReasonCode(outcome.reason)
+                log.warning(
+                    "share basis: %s gets no share count beside the close %s: %s: %s",
+                    listing_id,
+                    price.close,
+                    outcome.reason,
+                    outcome.detail,
+                )
 
         return SnapshotMember(
             issuer_id=listing.issuer_id,
@@ -828,6 +831,7 @@ class PostgresToptCoreRepository:
                 value=shares_value,
                 unit="shares",
                 knowable_at=shares_knowable_at,
+                unavailable_reason=shares_reason,
             ),
             market_price=_metric(
                 market_row,

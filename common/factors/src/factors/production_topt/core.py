@@ -32,7 +32,15 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LargeModelValueV0Definition, ValuationBasis
@@ -113,6 +121,34 @@ class ToptCoreReasonCode(StrEnum):
     UNKNOWN_FRESHNESS = "unknown_freshness"
     #: #1235: P/GP divides by the operating numerator; zero or negative gives no multiple.
     NONPOSITIVE_GROSS_PROFIT = "nonpositive_gross_profit"
+    #: #1277: a filed share count that cannot be put on the share basis of its close. A split
+    #: between the count's basis date and the close makes the market value wrong by the split
+    #: ratio. The snapshot names the cause, and the filed count is never used. Each value below
+    #: equals one reason of `data_engine.datahub.share_basis`. A test holds the two registered.
+    NO_SPLIT_ADJUSTED_SERIES = "no_split_adjusted_series"
+    NO_UNADJUSTED_SERIES = "no_unadjusted_series"
+    SPLIT_DERIVATION_FAILED = "split_derivation_failed"
+    SPLIT_SERIES_DO_NOT_COVER_THE_WINDOW = "split_series_do_not_cover_the_window"
+    LISTINGS_DISAGREE_ON_SPLITS = "listings_disagree_on_splits"
+    SHARE_COUNT_UNDATED = "share_count_undated"
+    SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
+    CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+
+
+#: The reason codes above that name a share count with no proven share basis (#1277). A test holds this set
+#: equal to the reasons that `data_engine.datahub.share_basis` builds into `Unavailable(...)`.
+SHARE_BASIS_REASON_CODES = frozenset(
+    {
+        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
+        ToptCoreReasonCode.NO_UNADJUSTED_SERIES,
+        ToptCoreReasonCode.SPLIT_DERIVATION_FAILED,
+        ToptCoreReasonCode.SPLIT_SERIES_DO_NOT_COVER_THE_WINDOW,
+        ToptCoreReasonCode.LISTINGS_DISAGREE_ON_SPLITS,
+        ToptCoreReasonCode.SHARE_COUNT_UNDATED,
+        ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
+        ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
+    }
+)
 
 
 class ToptMetricInput(_FrozenModel):
@@ -126,6 +162,17 @@ class ToptMetricInput(_FrozenModel):
     knowable_at: datetime
     freshness: MetricFreshness
     availability: MetricAvailability
+    #: #1277: why an unavailable value is unavailable, when the snapshot builder knows a cause
+    #: that is more exact than "missing". None means no cause is named. The key is absent from
+    #: the serialized form when None, so a snapshot without a named cause keeps its content hash.
+    unavailable_reason: ToptCoreReasonCode | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_reason(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if data.get("unavailable_reason") is None:
+            data.pop("unavailable_reason", None)
+        return data
 
     @field_validator("value", "confidence", mode="before")
     @classmethod
@@ -141,6 +188,8 @@ class ToptMetricInput(_FrozenModel):
     def validate_value(self) -> Self:
         if (self.availability is MetricAvailability.AVAILABLE) != (self.value is not None):
             raise ValueError("metric value must exist exactly when the input is available")
+        if self.unavailable_reason is not None and self.availability is MetricAvailability.AVAILABLE:
+            raise ValueError("an available metric cannot carry an unavailable reason")
         if self.value is not None:
             if not self.value.is_finite():
                 raise ValueError("metric value must be finite")
@@ -722,6 +771,25 @@ def _unavailable_core(
     )
 
 
+def _share_count_reasons(snapshot: ToptCoreSnapshotInput) -> list[ToptCoreReasonCode]:
+    """The reasons that the share counts of the issuer's listings give no market value.
+
+    #1277: a count that the snapshot builder dropped for a named cause reports that cause.
+    A count that no cause explains reports `missing_shares_outstanding`.
+    """
+    shares = [component.shares_outstanding for component in snapshot.market_value_components]
+    dropped = [metric for metric in shares if metric.value is None]
+    if dropped:
+        causes = {metric.unavailable_reason for metric in dropped}
+        reasons = [cause for cause in causes if cause is not None]
+        if None in causes:
+            reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
+        return reasons
+    if any(metric.value is not None and metric.value <= 0 for metric in shares):
+        return [ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING]
+    return []
+
+
 def compute_topt_core(
     snapshot: ToptCoreSnapshotInput,
     gppe_result: ToptGppeResult,
@@ -766,11 +834,7 @@ def compute_topt_core(
         reasons.append(ToptCoreReasonCode(f"missing_{numerator_field}"))
     elif numerator.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT)
-    share_values = tuple(component.shares_outstanding.value for component in snapshot.market_value_components)
-    if any(value is None for value in share_values):
-        reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
-    elif any(value <= 0 for value in share_values if value is not None):
-        reasons.append(ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING)
+    reasons.extend(_share_count_reasons(snapshot))
     price_values = tuple(component.market_price.value for component in snapshot.market_value_components)
     if any(value is None for value in price_values):
         reasons.append(ToptCoreReasonCode.MISSING_MARKET_PRICE)

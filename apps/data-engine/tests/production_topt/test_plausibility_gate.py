@@ -25,7 +25,7 @@ from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import ExclusionReason
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
+from production_topt.test_materialization import _seed_strategy_capture  # noqa: E402
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ def connection():
 
 
 def _materialized_run(connection):
-    _repository, run, _list_version, release_manifest_id, *_ = _seed_complete_production_run(connection)
+    _repository, run, _list_version, release_manifest_id, *_ = _seed_strategy_capture(connection)
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
