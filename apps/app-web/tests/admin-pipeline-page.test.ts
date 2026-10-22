@@ -32,7 +32,7 @@ const ready: PipelineOutcome = {
     windowDays: 7,
     unreadable: { eventLog: null, verdicts: null, release: null },
     appGitSha: "fedcba9876543210fedcba9876543210fedcba98",
-    jobRunHealth: { ok: false, ranAt: "2026-10-21T06:45:00.000Z", summary: "head_reports_pipeline (3 of 13 runs failed)" },
+    jobRunHealth: { ok: false, ranAt: "2026-10-21T06:20:00.000Z", summary: "head_reports_pipeline (3 of 13 runs failed)" },
     runtimeShape: { ok: null, ranAt: "2026-10-21T06:30:00.000Z", summary: "pending" },
     release: { gitSha: "0123456789abcdef0123456789abcdef01234567", since: "2026-10-19T08:00:00.000Z", ageHours: 50 },
     jobs: [

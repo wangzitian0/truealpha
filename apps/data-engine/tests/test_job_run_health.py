@@ -368,11 +368,11 @@ def test_a_history_with_no_finished_run_is_pending_not_green(
 # --- registration ------------------------------------------------------------------------------------------
 
 
-def test_the_verdict_is_registered_once_and_the_schedule_runs_after_runtime_shape() -> None:
+def test_the_verdict_is_registered_once_and_the_schedule_runs_before_runtime_shape() -> None:
     assert quality.NIGHTLY_VERDICTS.count("job_run_health") == 1
     assert quality.job_run_health_schedule.job_name == quality.JOB_RUN_HEALTH_JOB_NAME == "job_run_health_check"
     request = quality.job_run_health_schedule(
-        dg.build_schedule_context(scheduled_execution_time=datetime(2026, 10, 22, 6, 45, tzinfo=UTC))
+        dg.build_schedule_context(scheduled_execution_time=datetime(2026, 10, 22, 6, 20, tzinfo=UTC))
     )
-    assert request.tags[TICK_TAG] == "2026-10-22T06:45:00+00:00"
-    assert quality.JOB_RUN_HEALTH_CRON == "45 6 * * *"
+    assert request.tags[TICK_TAG] == "2026-10-22T06:20:00+00:00"
+    assert quality.JOB_RUN_HEALTH_CRON == "20 6 * * *"

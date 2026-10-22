@@ -136,9 +136,11 @@ FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"
 FETCH_KEYS_ONCE_CRON = "20 6 * * *"
 
 JOB_RUN_HEALTH_JOB_NAME = "job_run_health_check"
-# 06:45 UTC: after the runtime shape check (06:30) and every tick and nightly check of the night, and
-# before the delivery report (07:00) reads the verdict.
-JOB_RUN_HEALTH_CRON = "45 6 * * *"
+# 06:20 UTC: after every tick of the night and after the release fetch proof (06:15) started, and before the
+# runtime shape check (06:30). No nightly check may fire from the shape check to the delivery report (07:00)
+# (#1484), so this check cannot run after the shape check. It counts the finished runs of the 7 days: the
+# shape check of this night counts from the next night.
+JOB_RUN_HEALTH_CRON = "20 6 * * *"
 
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
