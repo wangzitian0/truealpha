@@ -45,7 +45,9 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     # Every vendor call in the refresh is attributed to this Dagster run in the
     # external call ledger (#729) and admitted by the rule-6 gate first.
     # The constituents that left a denominator for want of a listing exchange, by universe (#1411 K6).
-    # The op reports them as output metadata, also when a later step of the refresh fails.
+    # A run that ends well reports them as output metadata. A run that fails a step keeps no metadata
+    # (a Dagster 1.13 step failure carries none), so `_refresh_universes` also logs a warning for each
+    # universe at once. That log line survives a failure.
     excluded: dict[str, dict[str, object]] = {}
     try:
         with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():

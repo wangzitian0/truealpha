@@ -778,32 +778,45 @@ def _resolve(connection, source_name: str, *tickers: str, **kwargs) -> dict[str,
     return resolve_listing_mics(connection, UNIVERSE_SOURCES[source_name], list(tickers), **kwargs)
 
 
-def _alias(connection, mic_ticker: str, *, valid_to: date | None = None, retracted_from: date | None = None) -> None:
-    """One `mic-ticker` alias of a new listing entity. It ends on `valid_to`, or by a retraction from
-    `retracted_from` that became known on 2026-06-01."""
+def _alias(
+    connection,
+    mic_ticker: str,
+    *,
+    valid_from: date | None = None,
+    valid_to: date | None = None,
+    recorded: datetime = datetime(2026, 1, 1, tzinfo=UTC),
+    retracted_from: date | None = None,
+    retraction_known: datetime = datetime(2026, 6, 1, tzinfo=UTC),
+) -> None:
+    """One `mic-ticker` alias of a new listing entity.
+
+    It is valid from `valid_from` (always, by default) to `valid_to` (open, by default), and it became
+    known at `recorded`. A retraction from `retracted_from` ends it, and that became known at
+    `retraction_known`."""
     legacy_id = f"listing:{mic_ticker.lower()}"
     entity_id = connection.execute(
         "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
     ).fetchone()[0]
     mic_alias_id = None
     for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        is_mic = scheme == "mic-ticker"
         alias_id = connection.execute(
             """
             insert into staging.entity_aliases
                 (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
                  method, confidence, mapping_version)
-            values (%s, %s, %s, '-infinity', %s, %s, 'test', 'test', 'asserted', 1, 'test')
+            values (%s, %s, %s, coalesce(%s::date, '-infinity'::date), %s, %s, 'test', 'test', 'asserted', 1, 'test')
             returning alias_id
             """,
-            (entity_id, scheme, value, valid_to if scheme == "mic-ticker" else None, datetime(2026, 1, 1, tzinfo=UTC)),
+            (entity_id, scheme, value, valid_from if is_mic else None, valid_to if is_mic else None, recorded),
         ).fetchone()[0]
-        if scheme == "mic-ticker":
+        if is_mic:
             mic_alias_id = alias_id
     if retracted_from is not None:
         connection.execute(
             "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
             "values (%s, %s, 'listing moved', %s, 'test', 'test')",
-            (mic_alias_id, retracted_from, datetime(2026, 6, 1, tzinfo=UTC)),
+            (mic_alias_id, retracted_from, retraction_known),
         )
 
 
@@ -854,6 +867,50 @@ def test_an_alias_is_read_as_known_at_the_time_asked(connection, in_memory_objec
 
     assert before == {"ZQV4": "xnys"}
     assert after == {"ZQV4": "xnas"}
+
+
+def test_an_alias_that_starts_after_the_day_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.valid_from <= valid_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW1", 9990061, "bbg0zqw10001")])
+    _alias(connection, "XNYS:ZQW1", valid_from=date(2030, 1, 1))
+    known = datetime(2026, 7, 1, tzinfo=UTC)
+
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2026, 5, 1), known_at=known) == {"ZQW1": "xnas"}
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2031, 1, 1), known_at=known) == {"ZQW1": "xnys"}
+
+
+def test_an_alias_recorded_after_the_time_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.transaction_time <= known_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW2", 9990062, "bbg0zqw20001")])
+    _alias(connection, "XNYS:ZQW2", recorded=datetime(2026, 6, 1, tzinfo=UTC))
+
+    before = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 5, 1), known_at=datetime(2026, 5, 1, tzinfo=UTC))
+    after = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 7, 1), known_at=datetime(2026, 7, 1, tzinfo=UTC))
+
+    assert before == {"ZQW2": "xnas"}
+    assert after == {"ZQW2": "xnys"}
+
+
+def test_the_membership_route_reads_the_identity_store_as_known_at_its_cutoff(
+    connection, in_memory_objects, corpus_rows
+) -> None:
+    """The confidence report asks the resolver for the day and the knowledge of its cutoff.
+
+    Only the identity store names these two tickers: the corpus is empty and no QQQ row exists.
+    ZQC1: a retraction that ended the alias before the cutoff became known only after it. ZQC2: the
+    alias ends on a day after the cutoff. Today is after both. Without `known_at=cutoff` the first
+    ticker has no exchange, and without `valid_at=cutoff.date()` and `known_at=cutoff` the second has none.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("ZQC1", 9990071, "bbg0zqc10001"), ("ZQC2", 9990072, "bbg0zqc20001")])
+    _alias(connection, "XNYS:ZQC1", retracted_from=date(2026, 8, 1), retraction_known=datetime(2026, 10, 1, tzinfo=UTC))
+    _alias(connection, "XNYS:ZQC2", valid_to=date(2026, 9, 15))
+
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnys:zqc1", "listing:xnys:zqc2"}
+    assert notes["constituents_without_listing_exchange"] == []
 
 
 class _FailingReads:
