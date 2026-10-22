@@ -122,9 +122,10 @@ export function formatYieldPercent(value: string | null | undefined): string | n
 export const ANNUALIZED_FRACTION_UNIT = "annualized_decimal_fraction";
 
 /**
- * A macro value in the unit that its series declares. An annualized decimal fraction reads as a percent.
- * Any other unit, and a fraction that is not a plain decimal, reads as the exact value followed by the
- * unit, so a value is never shown as a percent when the catalog says that it is something else.
+ * A macro value in the unit of its series.
+ * An annualized decimal fraction reads as a percent.
+ * Any other unit reads as the exact value and the unit.
+ * A fraction that is not a plain decimal reads the same way.
  */
 export function formatMacroValue(unit: string, value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;

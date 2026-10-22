@@ -53,7 +53,7 @@ export interface MacroPanel {
 
 export type MacroOutcome = ReadState<MacroPanel>;
 
-// The date comes out as `observation_day`, formatted by `to_char`, so the text does not depend on the
+// The date comes out as `observation_day`, formatted by `to_char`. So the date text does not depend on the
 // DateStyle of the server. The `order by` names the column `observation_date`, never the text.
 export const STATUS_SQL =
   "select series_id, label, unit, source_id, max_age_days, to_char(observation_date, 'YYYY-MM-DD') as observation_day, " +

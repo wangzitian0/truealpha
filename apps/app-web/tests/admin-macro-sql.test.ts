@@ -16,6 +16,7 @@
  *      series, not by series.
  *   4. The date reads `YYYY-MM-DD` under a server `DateStyle` that is not ISO.
  *   5. The loader reads through `mart_readonly`: the role has `select` on both views.
+ *   6. The window counts UTC days. The loader runs in a session whose local date is not the UTC date.
  * Only the rows of the three test series are asserted, so another row in the catalog cannot change the verdict.
  *
  * Throws when the database is unreachable (ci-web sets DATABASE_URL and TRUEALPHA_REQUIRE_RUNTIME=1).
@@ -128,6 +129,16 @@ try {
   await addObservation(FRESH, 3, "0.0300", originalFetch, 3, 3);
   await addObservation(FRESH, 1, "0.0400", originalFetch, 3, 2); // the original value of the newest date
   await addObservation(FRESH, 1, "0.0411", revisedFetch, 1, 1); // the revised value, recorded later
+
+  // 6. The window and the age count UTC days. A session in another time zone must not move them. The zone
+  // is chosen so that its local date differs from the UTC date at every hour of the run: before 11:00 UTC
+  // it is 11 hours behind UTC, from 11:00 UTC it is 14 hours ahead.
+  const utcHour: number = (await admin.query("select extract(hour from now() at time zone 'UTC')::int as h")).rows[0].h;
+  await admin.query(`set local timezone = '${utcHour < 11 ? "Pacific/Pago_Pago" : "Pacific/Kiritimati"}'`);
+  const zoneDiffers: boolean = (
+    await admin.query(`select current_date <> ${TODAY_SQL} as differs`)
+  ).rows[0].differs;
+  assert(zoneDiffers, "the session date must differ from the UTC date, or the zone check proves nothing");
 
   const outcome = await loadMacroPanel({ principalKind: "administrator" });
   assert(outcome.kind === "ready", `the loader must be ready through mart_readonly: ${JSON.stringify(outcome)}`);
