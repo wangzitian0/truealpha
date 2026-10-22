@@ -13,7 +13,7 @@ a scheduled tick (`dagster/schedule_name`) or a forced one (`force_fetch`, #874)
   this deployment's image digest) holds at least one freshly fetched observation from every
   origin registered and enabled here. Reused observations do not count. A forced run is a probe
   in the gateway (`gateway.probe_scope`, #1411): it asks the vendors itself and reads no landed key.
-  The Twelve Data origin is the exception: it reads a settled bar from `staging.market_prices_daily`.
+  The Twelve Data origin is the exception: it reads a settled bar from the stored price series.
 * **pending** (`ok` is null): no such run exists yet, or it has not finished.
 * **red**: that run failed, or it fetched nothing from an origin (the origin was served only
   by reuse, or it was lost), or its capture names another build.
