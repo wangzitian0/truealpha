@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -168,10 +169,14 @@ class Tracker:
     servers_over_size: int = 0
     #: The largest process of this container so far (bytes). A record to read, not a rule.
     largest_process: int = 0
-    #: The largest run process and the largest code server that were counted over their limit (bytes).
+    #: The largest run process and the largest code server seen over their limit (bytes).
     #: They never restart with a container, so a red verdict names the size that made it red.
     worst_process: int = 0
     worst_server: int = 0
+    #: The process (`pid:start ticks`) of `worst_process` and the Dagster job of its run, found when the
+    #: record last rose. Empty in state from before the job was recorded.
+    worst_process_id: str = ""
+    worst_job: str = ""
     #: When the sensor last ran (ISO 8601, UTC). Empty before the first sample.
     sampled_at: str = ""
 
@@ -204,6 +209,8 @@ class Tracker:
                 largest_process=_count(data.get("largest_process", 0)),
                 worst_process=_count(data.get("worst_process", 0)),
                 worst_server=_count(data.get("worst_server", 0)),
+                worst_process_id=_text(data.get("worst_process_id", "")),
+                worst_job=_text(data.get("worst_job", "")),
                 sampled_at=_text(data["sampled_at"]),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
@@ -384,8 +391,10 @@ def _fold_sizes(
     before_id = "" if fresh_container else tracker.process_id
     before_size = 0 if fresh_container else tracker.process_size
     over, worst_process = tracker.processes_over_size, tracker.worst_process
-    if size > run_limit and (reading.largest_process_id != before_id or before_size <= run_limit):
-        over, worst_process = over + 1, max(worst_process, size)
+    if size > run_limit:
+        worst_process = max(worst_process, size)  # a process that grows after it passed the budget raises the record
+        if reading.largest_process_id != before_id or before_size <= run_limit:
+            over += 1
     server_over, worst_server = tracker.servers_over_size, tracker.worst_server
     if server > server_limit and (fresh_container or tracker.server_size <= server_limit):
         server_over, worst_server = server_over + 1, max(worst_server, server)
@@ -398,6 +407,8 @@ def _fold_sizes(
         servers_over_size=server_over,
         worst_process=worst_process,
         worst_server=worst_server,
+        worst_process_id=tracker.worst_process_id,
+        worst_job=tracker.worst_job,
         largest_process=size if fresh_container else max(tracker.largest_process, size),
     )
 
@@ -521,7 +532,8 @@ def judge(
         red.append(f"the peak rose above {capacity.utilization_limit:.0%} of memory.max {peaks} time(s); {peak}")
     if too_big:
         red.append(
-            f"a run process held {round(tracker.worst_process / MIB)} MiB, above the run budget"
+            f"a run process held {round(tracker.worst_process / MIB)} MiB (job {tracker.worst_job or UNKNOWN_JOB}),"
+            f" above the run budget"
             f" {capacity.run_mib} MiB ({too_big} time(s)); the run limit assumes that budget"
         )
     if server_big:
@@ -556,6 +568,34 @@ def load_baseline(instance: dg.DagsterInstance) -> Baseline | None:
     return None if raw is None else Baseline.from_json(raw)
 
 
+#: The job of a process that no started run claims: a lookup that found nothing, or failed.
+UNKNOWN_JOB = "unknown"
+#: The engine event that the in-process executor writes into the event log of its run.
+_ENGINE_PID = re.compile(r"\(pid: (\d+)\)")
+
+
+def job_of_process(instance: dg.DagsterInstance, process_id: str) -> str:
+    """The job whose started run executes in the process `process_id` (`pid:start ticks`), or `UNKNOWN_JOB`.
+
+    The in-process executor logs `Executing steps in process (pid: N)` as an engine event of its run, so
+    the pid of a run process names its run. At most a few runs are started at one time (the queue limit).
+    A lookup that fails is logged and answers `UNKNOWN_JOB`: the sensor must not fail on it."""
+    pid = process_id.split(":", 1)[0]
+    if not pid.isdigit():
+        return UNKNOWN_JOB
+    try:
+        records = instance.get_run_records(filters=dg.RunsFilter(statuses=[dg.DagsterRunStatus.STARTED]))
+        for record in records:
+            run = record.dagster_run
+            for entry in instance.all_logs(run.run_id, of_type=dg.DagsterEventType.ENGINE_EVENT):
+                found = _ENGINE_PID.search(entry.dagster_event.message or "") if entry.dagster_event else None
+                if found is not None and found.group(1) == pid:
+                    return run.job_name
+    except Exception:  # noqa: BLE001 - the sensor must not fail on a lookup that only adds a name
+        log.exception("could not find the job of process %s", process_id)
+    return UNKNOWN_JOB
+
+
 def sample(
     instance: dg.DagsterInstance,
     *,
@@ -574,7 +614,15 @@ def sample(
     except StateUnreadable:
         log.warning("the runtime shape tracker is not readable; the totals restart")
         tracker = Tracker()
-    folded = fold(tracker, read() if reading is None else reading, deployment=deployment, capacity=capacity)
+    current = read() if reading is None else reading
+    folded = fold(tracker, current, deployment=deployment, capacity=capacity)
+    if folded.worst_process > tracker.worst_process:
+        # A process over the budget raised the record: name the job that runs in it.
+        folded = replace(
+            folded,
+            worst_process_id=current.largest_process_id,
+            worst_job=job_of_process(instance, current.largest_process_id),
+        )
     folded = replace(folded, sampled_at=(now or datetime.now(UTC)).isoformat())
     instance.run_storage.set_cursor_values({TRACKER_KEY: folded.to_json()})
     return folded
