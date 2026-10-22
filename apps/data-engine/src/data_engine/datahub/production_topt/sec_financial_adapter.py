@@ -1467,39 +1467,23 @@ def sec_financial_fetcher(
     branch: OperatingBranch,
     *,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
-    raw_cache: dict[int, tuple[bytes, dict[str, Any]]] | None = None,
 ) -> FinancialFactsBundle:
     """Default fetcher: the real SEC company-facts client, parsed point-in-time.
 
-    When ``raw_cache`` is supplied, ``(body, facts)`` is memoized by ``cik`` so dual-class
-    listings sharing one CIK (`GOOG`/`GOOGL`) fetch ``companyfacts`` once per run (#1411 K5).
-    Imported lazily so the adapter and its tests carry no network dependency.
+    The source gateway fetches ``companyfacts`` once per CIK per UTC day: a second call for the
+    same CIK (GOOG and GOOGL, a second tick, a second universe) reads the landed bytes and makes
+    no SEC request (#1411 K3, K5). Imported lazily so the adapter and its tests carry no network
+    dependency.
     """
-
-    import copy
 
     import httpx
 
-    from data_engine.datahub.fetch_key import FetchKey, LandedKeyIndex
     from data_engine.sources import sec
 
-    if raw_cache is not None and cik in raw_cache:
-        body, cached_facts = raw_cache[cik]
-        facts = copy.deepcopy(cached_facts)
-    else:
-        index = LandedKeyIndex()
-        key = FetchKey(
-            seat="sec",
-            endpoint="companyfacts",
-            canonical_entity_id=f"issuer:cik:{cik:010d}",
-            as_of=cutoff.isoformat(),
-        )
-        try:
-            body, facts = index.get_or_fetch(key, lambda: sec.fetch_company_facts_response(cik))
-        except httpx.HTTPError as error:
-            raise SourceUnavailableError(str(error)) from error
-        if raw_cache is not None:
-            raw_cache[cik] = (body, copy.deepcopy(facts))
+    try:
+        body, facts = sec.fetch_company_facts_response(cik)
+    except httpx.HTTPError as error:
+        raise SourceUnavailableError(str(error)) from error
     bundle = build_bundle(facts, cutoff, branch, raw_bytes=body, ruleset=ruleset)
     if bundle.shares_outstanding is None:
         enriched = _enrich_multi_class_shares(cik, facts, cutoff, branch, ruleset=ruleset)
@@ -1676,10 +1660,9 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     # parsed by ONE ruleset and the observations can name it.
     ruleset = resolve_ruleset(connection)
     second_origin = moomoo_financials_origin()
-    raw_cache: dict[int, tuple[bytes, dict[str, Any]]] = {}
     return SecFinancialFactAdapter(
         targets,
-        partial(sec_financial_fetcher, ruleset=ruleset, raw_cache=raw_cache),
+        partial(sec_financial_fetcher, ruleset=ruleset),
         # No connection means no headcount plane to read, so every issuer resolves
         # `missing_headcount` — an honest gap. Silently substituting a built-in table
         # would put the deployed denominator back in the code, which is what the fact

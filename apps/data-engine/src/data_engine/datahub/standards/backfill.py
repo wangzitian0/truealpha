@@ -69,7 +69,7 @@ def resolve_issuers(
     """The universe's issuers with a CIK each. One SEC crosswalk call when a CIK is missing."""
     issuers = universe_issuers(connection, universe)
     if any(issuer.cik is None for issuer in issuers):
-        index = gateway.call("sec", "company_tickers", lambda: sec.ticker_cik_index(http))
+        index = sec.ticker_cik_index(http, via=gateway)
         issuers = resolve_missing_ciks(issuers, index)
     return issuers
 

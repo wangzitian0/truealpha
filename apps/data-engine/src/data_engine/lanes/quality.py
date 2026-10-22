@@ -29,6 +29,10 @@ memory cgroup that holds every run and the gRPC server saw an OOM kill, an unpla
 peak above `UTILIZATION_CEILING` of its ceiling, or a process larger than its budget. The run reads the
 cgroup of the container it executes in, which is the code server's. The sensor `runtime_shape_sampler` keeps the totals between two nightly runs.
 
+The sixth is the fetch-key check (`quality.fetch_keys_once`, #1411 K7): whether the call ledger of the
+UTC day that just ended shows any fetch key fetched twice. The source gateway serves a key that landed
+from stored bytes; this check proves it from the ledger.
+
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
 daily delivery report shows a red, stale or missing one. The names a run
@@ -53,7 +57,7 @@ from data_engine.environment_universes import any_environment_universe_names, sc
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
-from data_engine.quality import runtime_shape, surface_proof
+from data_engine.quality import fetch_keys_once, runtime_shape, surface_proof
 from data_engine.quality.nightly_verdicts import (
     TICK_TAG,
     check_name,
@@ -113,6 +117,12 @@ RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
 # the release fetch proof, runs at 06:15), and before the delivery report (07:00) reads the verdict.
 RUNTIME_SHAPE_CRON = "30 6 * * *"
 
+FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"
+# 06:20 UTC: after the release fetch proof (06:15), and before the runtime shape check (06:30), which
+# runs after every other nightly check (#1484). The check judges the UTC day that ended, and the
+# ledger of that day is complete at 00:00 UTC.
+FETCH_KEYS_ONCE_CRON = "20 6 * * *"
+
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
 REPORT_SURFACE_VERDICT = "report_surface_proof"
@@ -120,6 +130,7 @@ CONFIDENCE_REPORT_VERDICT = "datahub_confidence_report"
 MODEL_KEY_HEALTH_VERDICT = "model_key_health"
 RELEASE_FETCH_PROOF_VERDICT = "release_fetch_proof"
 RUNTIME_SHAPE_VERDICT = "runtime_shape"
+FETCH_KEYS_ONCE_VERDICT = "fetch_keys_once"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
@@ -127,6 +138,7 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
     MODEL_KEY_HEALTH_VERDICT,
     RELEASE_FETCH_PROOF_VERDICT,
     RUNTIME_SHAPE_VERDICT,
+    FETCH_KEYS_ONCE_VERDICT,
 )
 
 #: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
@@ -611,6 +623,58 @@ def runtime_shape_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunReque
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
+class FetchKeysOnceConfig(dg.Config):
+    """``day`` replays the check for one UTC day (ISO 8601 date). Empty means the day before the tick."""
+
+    day: str | None = None
+
+
+@dg.op
+def run_fetch_keys_once(context: dg.OpExecutionContext, config: FetchKeysOnceConfig) -> str:
+    """Judge the call ledger of the UTC day that ended: no fetch key fetched twice (#1411 K7, #1418 B2).
+
+    Red names the keys. A day with no successful vendor call is pending, not green."""
+    tick = tick_of(context)
+    with verdict(FETCH_KEYS_ONCE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+        day = fetch_keys_once.judged_day(config.day, tick, now=datetime.now(UTC))
+        with psycopg.connect(settings.database_url) as connection:
+            judgement = fetch_keys_once.evaluate(connection, day=day)
+        context.log.info(f"fetch keys once: {judgement.summary}")
+        for key, rows in judgement.duplicates:
+            context.log.warning(f"fetch key fetched {rows} times on {day}: {key}")
+        for source, endpoint, rows in judgement.unkeyed_by_endpoint:
+            context.log.info(f"unkeyed calls on {day}: {source}/{endpoint} x{rows}")
+        context.add_output_metadata(
+            {
+                "day": str(day),
+                "keyed": judgement.keyed,
+                "unkeyed": judgement.unkeyed,
+                "duplicate_keys": len(judgement.duplicates),
+            }
+        )
+        outcome.summary = judgement.summary
+        outcome.pending = judgement.pending
+        if judgement.red:
+            raise dg.Failure(f"fetch keys once: {judgement.summary} (#1411 K7, #1418 B2)")
+    return json.dumps({"day": str(day), "red": judgement.red, "summary": judgement.summary})
+
+
+@dg.job(name=FETCH_KEYS_ONCE_JOB_NAME)
+def fetch_keys_once_job() -> None:
+    run_fetch_keys_once()
+
+
+@dg.schedule(
+    job=fetch_keys_once_job,
+    cron_schedule=FETCH_KEYS_ONCE_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def fetch_keys_once_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    tick = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
 RUNTIME_SHAPE_SAMPLER_NAME = "runtime_shape_sampler"
 RUNTIME_SHAPE_SAMPLER_INTERVAL_SECONDS = runtime_shape.SAMPLE_INTERVAL_SECONDS
 
@@ -688,6 +752,7 @@ defs = dg.Definitions(
         model_key_health_job,
         release_fetch_proof_job,
         runtime_shape_job,
+        fetch_keys_once_job,
     ],
     schedules=[
         output_invariants_schedule,
@@ -695,6 +760,7 @@ defs = dg.Definitions(
         model_key_health_schedule,
         release_fetch_proof_schedule,
         runtime_shape_schedule,
+        fetch_keys_once_schedule,
     ],
     sensors=[output_invariants_on_advance_sensor, runtime_shape_sampler_sensor],
 )

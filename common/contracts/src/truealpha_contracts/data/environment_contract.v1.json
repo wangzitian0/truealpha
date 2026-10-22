@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.5.0",
+  "contract_version": "1.6.0",
   "description": "Single source of truth for the universes each environment runs (a list, with the status of each: scheduled or stopped), their tick schedules, sentinel set, shared vendor capacity demand (#1416), the maximum runtime of every Dagster job (#1442), and the memory capacity of the Dagster code server (#1467).",
   "sentinels": [
     {
@@ -226,6 +226,9 @@
             "longest_minutes": 1.3
           }
         }
+      },
+      "fetch_keys_once_check": {
+        "unmeasured": "No run in the window: the job merged on 2026-10-21 (#1411 K7). It runs three SQL queries over one day of the call ledger. Measure it after its first runs."
       },
       "head_reports_pipeline": {
         "measured": {

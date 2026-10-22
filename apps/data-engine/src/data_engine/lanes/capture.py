@@ -88,6 +88,10 @@ class ToptLiveTickConfig(dg.Config):
     (`triggers.boot_canary_forces_fetch`, owner decision 2026-09-17). A schedule
     never sets it. The run fetches every obligation instead of reusing observations
     committed in the last twelve hours (#635), under a capture identity of its own.
+    A forced run is a probe (#1411): it asks every vendor again, its ledger rows carry no fetch
+    key, and it neither reads nor writes the index of landed keys. The release fetch proof depends
+    on it. One exception stands: the Twelve Data origin still reads a settled bar from the stored
+    price series before it asks (#1411 K4).
     Launch it through the admin page or Dagster GraphQL
     (docs/datahub-quality-report.md). The run plan, the quality report and this op's
     output metadata record `forced_fetch`.
@@ -311,6 +315,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # still logs.
     with (
         gateway.run_scope(f"dagster:{context.run_id}"),
+        gateway.probe_scope(config.force_fetch),
         corroboration_tally() as corroborations,
         _summary_on_failure(context, f"{tick.log_label} {config.executed_at}", corroborations),
         gateway.capacity_scope(),
