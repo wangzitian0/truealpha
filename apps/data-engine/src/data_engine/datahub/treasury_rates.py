@@ -25,10 +25,11 @@ What this module does:
 Single fetch per key (#1411): the key of a request is the file of one year on one UTC day. A key that
 has landed is not fetched again. A manual replay on the same day makes no request.
 
-Point in time: ``knowable_at`` is 00:00 UTC of the day after the observation date. The Treasury obtains
-its input quotes at about 3:30 PM New York time on the observation day. That instant is before 21:00 UTC
-in every season, so the next 00:00 UTC is after the publication. A backtest cutoff never sees a rate of
-its own day.
+Point in time: the ``knowable_at`` of a first observation is 00:00 UTC of the day after the observation
+date. The Treasury obtains its input quotes at about 3:30 PM New York time on the observation day. That
+instant is before 21:00 UTC in every season, so the next 00:00 UTC is after the publication. A backtest
+cutoff never sees a rate of its own day. The ``knowable_at`` of a revised value is the later of that
+instant and the time of the fetch that showed it, so a revision never reaches an earlier cutoff.
 
 Corroboration class B (docs/architecture-decisions/A3): one authoritative origin, domain bounds in
 the parser, and a CHECK constraint on ``knowable_at`` in the table. Rule 19 (init.md): the rights and
@@ -81,8 +82,9 @@ DATE_FORMAT = "%m/%d/%Y"
 CONFIDENCE = Decimal("0.92")
 
 #: The (month, day) from which a past year must hold a row of every series to count as complete.
-#: The Treasury publishes on 24 to 31 December of every year in the files of 2000 to 2026.
-COMPLETE_FROM = (12, 24)
+#: 29 to 31 December hold at least one business day in every year. Every past file from 2000 to 2025 holds
+#: a row of each of the three series from 29 December (checked against the live files on 2026-10-22).
+COMPLETE_FROM = (12, 29)
 
 #: An advisory lock key. It makes two writers (the schedule and a manual replay) take turns.
 _LOCK_NAME = "mart.macro_series_daily"
@@ -303,7 +305,7 @@ def years_to_fetch(
     The current year always. In January, the year before too: a run that failed on the last
     business day of December would otherwise leave that day missing for ever. Each earlier year since
     ``registration.first_year`` that is not complete yet. A year is complete when every series holds a
-    row dated in its last week (``COMPLETE_FROM``). A year that stops earlier, because runs failed at
+    row dated in its last three days (``COMPLETE_FROM``). A year that stops earlier, because runs failed at
     the turn of the year, is fetched again until the hole is filled.
     """
     years = [today.year]
@@ -351,11 +353,12 @@ def _refresh_year(
     store: RawObjectStore | None,
     registration: MacroSourceRegistration,
 ) -> YearResult:
-    fetched_at = clock()
-    key = fetch_key_of(year, on=fetched_at.astimezone(UTC).date())
+    key = fetch_key_of(year, on=clock().astimezone(UTC).date())
     if has_landed(connection, key):
         return YearResult(year=year, inserted=0, fetch_id=None, observations=0, reused=True)
     body = fetch(year)
+    # The time of the answer, read after the request. A revised value is knowable from this instant.
+    fetched_at = clock()
     observations = parse_par_yield_csv(body, year=year, series=registration.series)
     fetch_id = raw_store.insert_fetch(
         connection,

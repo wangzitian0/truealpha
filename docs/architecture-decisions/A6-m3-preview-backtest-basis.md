@@ -138,7 +138,8 @@ The risk-free rate is a measurement now. Decision 3 holds for dividends only.
 
 - Each cutoff reads the 3-month U.S. Treasury par yield from `mart.macro_series_daily`
   (`datahub.risk_free`). It takes the newest observation that was knowable at the cutoff, at most
-  10 days old. A rate is knowable at 00:00 UTC of the day after its observation date.
+  10 days old. A first observation is knowable at 00:00 UTC of the day after its observation date. A
+  revised value is knowable from the moment it was fetched.
 - The run resolves the rate of every cutoff before it decides anything. A cutoff without a rate stops
   the run with `MissingRiskFreeRate`. The run writes no partial headline.
 - The binding lists each rate with its cutoff, its series, its observation date and its source

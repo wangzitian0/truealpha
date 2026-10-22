@@ -5,9 +5,10 @@ Treasury series (`datahub.risk_free`). A literal, a default value or a table in 
 that measurement and pass every test built on its own value. This test scans the code that runs the
 strategy and the data files of the contracts. It fails on a numeric risk-free literal.
 
-What counts as a risk-free binding: a name that contains `risk_free`, `riskfree`, `tbill` or
-`treasury_rate`. The name can be an assignment target (also a dict item `d["risk_free_rate"] = ...`), a
-parameter, a keyword argument or a dict key. Five shapes are violations:
+What counts as a risk-free binding: a name that contains `risk_free`, `riskfree`, `tbill`, `t_bill`,
+`treasury_rate`, `treasury_bill_rate` or `rf_rate`. The name can be an assignment target (also a dict item
+`d["risk_free_rate"] = ...`, an augmented assignment or a walrus), a parameter, a keyword argument, a dict
+key or the name of a function whose return value is a literal. Five shapes are violations:
 
 1. A nonzero numeric literal anywhere on the value side: `Decimal("0.05")`, `0.05`, `Decimal(5) / 100`,
    `float("0.05")`, or a number in a string such as `os.getenv("X", "0.05")`.
@@ -16,7 +17,8 @@ parameter, a keyword argument or a dict key. Five shapes are violations:
 3. A name that the same module binds to a numeric literal, used as the value: `rate = Decimal("0.05")`
    and then `risk_free_rate=rate`.
 4. A numeric literal, zero too, as a positional or keyword argument of a call to a consumer of the
-   rate (`GppeV0Definition`, `evaluate_cutoff`, `run_strategy_replay_for_cutoff`).
+   rate (`GppeV0Definition`, `evaluate_cutoff`, `run_strategy_replay_for_cutoff`), or a name that the
+   module binds to a literal, passed as such an argument.
 5. In a data file: a risk-free key with a number below it, outside the golden decision set.
 
 The one allowed zero is nested: `NamedRateParameter(..., value=Decimal(0))` is the declared Sharpe
@@ -46,7 +48,7 @@ SCANNED_ROOTS = (
 #: The data files of the contracts. The golden decision set holds explicit rates for the known-answer replay.
 DATA_ROOT = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
 ALLOWED_DATA_PATHS = {("large_model_value_v0_definition_1_0_0.json", ("golden_decision_set", "risk_free_rates"))}
-_NAME = re.compile(r"risk_?free|tbill|treasury_rate", re.IGNORECASE)
+_NAME = re.compile(r"risk_?free|t_?bill|treasury_(bill_)?rate|(^|_)rf_?rate", re.IGNORECASE)
 #: Calls that take the rate. A literal argument, zero too, would hand them a number the code made up.
 CONSUMERS = {"GppeV0Definition", "evaluate_cutoff", "run_strategy_replay_for_cutoff"}
 
@@ -129,6 +131,12 @@ def _bindings(tree: ast.AST):
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             for name in _target_names(node.target):
                 yield name, node.value, node.lineno
+        elif isinstance(node, ast.AugAssign):
+            for name in _target_names(node.target):
+                yield name, node.value, node.lineno
+        elif isinstance(node, ast.NamedExpr):
+            for name in _target_names(node.target):
+                yield name, node.value, node.lineno
         elif isinstance(node, ast.keyword) and node.arg is not None:
             yield node.arg, node.value, node.value.lineno
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
@@ -183,8 +191,17 @@ def risk_free_literals(source: str) -> list[tuple[int, str]]:
             callee = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
             if callee in CONSUMERS:
                 for argument in [*node.args, *(k.value for k in node.keywords)]:
-                    if _whole_value_is_literal(argument) or _holds_nonzero_literal(argument):
+                    if (
+                        _whole_value_is_literal(argument)
+                        or _holds_nonzero_literal(argument)
+                        or (isinstance(argument, ast.Name) and argument.id in literal_names)
+                    ):
                         violations.append((argument.lineno, callee))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _NAME.search(node.name):
+            for child in ast.walk(node):
+                if isinstance(child, ast.Return) and child.value is not None:
+                    if _whole_value_is_literal(child.value) or _holds_nonzero_literal(child.value):
+                        violations.append((child.lineno, node.name))
     return sorted(set(violations))
 
 
@@ -253,6 +270,13 @@ def _scanned_files() -> list[Path]:
         "def f(*, risk_free_rate=Decimal(0)): ...",
         "def f(risk_free_rate: Decimal = 0): ...",
         "risk_free_rate: Decimal = Decimal('0')",
+        "D = Decimal('0.05')\nevaluate_cutoff(inputs, definition, cutoff, D)",
+        "def risk_free_rate():\n    return Decimal('0.05')",
+        "class A:\n    @property\n    def treasury_bill_rate(self):\n        return 0.05",
+        "rf_rate = 0.05",
+        "t_bill_rate = Decimal('0.05')",
+        "risk_free_rate += 0.01",
+        "(risk_free_rate := Decimal('0.05'))",
     ],
     ids=[
         "module-constant",
@@ -280,6 +304,13 @@ def _scanned_files() -> list[Path]:
         "zero-keyword-only-default",
         "zero-parameter-default",
         "zero-assignment",
+        "neutral-name-positional",
+        "function-return",
+        "property-return",
+        "rf-rate-name",
+        "t-bill-name",
+        "augmented-assignment",
+        "walrus",
     ],
 )
 def test_the_scan_finds_a_numeric_risk_free_literal(source: str) -> None:
@@ -379,6 +410,7 @@ def test_the_scan_reads_the_code_that_runs_the_strategy() -> None:
         assert required in files, required
 
 
+@pytest.mark.criterion("R2.B6")
 def test_no_strategy_code_holds_a_numeric_risk_free_literal() -> None:
     violations = [
         f"{path.relative_to(REPO).as_posix()}:{line} {name}"

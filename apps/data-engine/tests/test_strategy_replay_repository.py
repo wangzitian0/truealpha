@@ -306,6 +306,19 @@ def test_the_run_row_names_the_series_value_date_source_and_fetch(connection) ->
     ).fetchone() == (None, None, None), "a fixture run uses the explicit rates of its corpus and names no series"
 
 
+def test_a_run_cannot_name_a_fetch_that_is_not_stored(connection) -> None:
+    """The fetch pointer of the lineage is checked by a trigger (a foreign key would lock `raw.fetches`).
+
+    Red when the trigger on `mart.strategy_runs` is dropped."""
+    from dataclasses import replace
+
+    _, definition = run()
+    rate = replace(_rate(connection, "0.0426", date(2026, 7, 30)), fetch_id=2_000_000_000)
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="risk_free_fetch_id"):
+        write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, risk_free_rate=rate)
+
+
 def test_the_identity_does_not_depend_on_the_database_row_of_the_fetch() -> None:
     """The fetch id is a row pointer of one database. Two environments that read the same observation make the same run."""
     from dataclasses import replace

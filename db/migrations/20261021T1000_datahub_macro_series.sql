@@ -65,9 +65,9 @@ $$;
 do $$
 begin
     if obj_description(to_regclass('mart.macro_series_daily'), 'pg_class') is distinct from
-       '#1255: append-only observations of macro series. observation_date is the valid time. knowable_at is the transaction time from the source''s own cut. A revised value is a new row.' then
+       '#1255: append-only observations of macro series. observation_date is the valid time. knowable_at is the transaction time: the source''s own cut for a first observation, the fetch time for a revised value. A revised value is a new row.' then
         comment on table mart.macro_series_daily is
-            '#1255: append-only observations of macro series. observation_date is the valid time. knowable_at is the transaction time from the source''s own cut. A revised value is a new row.';
+            '#1255: append-only observations of macro series. observation_date is the valid time. knowable_at is the transaction time: the source''s own cut for a first observation, the fetch time for a revised value. A revised value is a new row.';
     end if;
 end
 $$;
@@ -93,8 +93,14 @@ $$;
 create or replace function mart.require_stored_fetch() returns trigger
 language plpgsql as $fn$
 declare
-    pointer bigint := (to_jsonb(new) ->> tg_argv[0])::bigint;
+    row_json constant jsonb := to_jsonb(new);
+    pointer bigint;
 begin
+    -- A mistyped column name must fail loudly. It would read as NULL and pass every insert.
+    if not row_json ? tg_argv[0] then
+        raise exception '%.% is not a column of the row', tg_table_name, tg_argv[0];
+    end if;
+    pointer := (row_json ->> tg_argv[0])::bigint;
     if pointer is not null and not exists (select 1 from raw.fetches where id = pointer) then
         raise exception '%.% % is not a row of raw.fetches', tg_table_name, tg_argv[0], pointer
             using errcode = 'foreign_key_violation';

@@ -874,6 +874,18 @@ def test_a_row_must_point_to_a_stored_fetch_and_a_cataloged_series(connection) -
         )
 
 
+def test_the_pointer_check_fails_loudly_on_a_column_name_that_does_not_exist(connection) -> None:
+    """A mistyped column in the trigger arguments would read as NULL and pass every insert."""
+    connection.execute("create temp table pointer_probe (id bigint)")
+    connection.execute(
+        "create trigger probe before insert on pointer_probe for each row "
+        "execute function mart.require_stored_fetch('no_such_column')"
+    )
+
+    with pytest.raises(psycopg.errors.RaiseException, match="no_such_column is not a column"):
+        connection.execute("insert into pointer_probe values (1)")
+
+
 def test_an_empty_table_has_no_rate_for_any_cutoff(connection) -> None:
     with pytest.raises(MissingRiskFreeRate, match="none stored"):
         risk_free_rate_at(connection, datetime(2026, 10, 14, 22, 15, tzinfo=UTC))

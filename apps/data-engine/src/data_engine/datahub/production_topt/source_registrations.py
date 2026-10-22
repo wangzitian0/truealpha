@@ -648,7 +648,8 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         first_year=2000,
         notes=(
             "The Treasury obtains its input quotes at about 3:30 PM New York time on each business day. "
-            "A value is knowable at 00:00 UTC of the next day.",
+            "A first observation is knowable at 00:00 UTC of the next day. A revised value is knowable "
+            "from the moment it was fetched.",
         ),
     ),
 )

@@ -131,14 +131,18 @@ def _vintages(connection) -> None:
     ids=["original", "just-before-first-revision", "first-revision", "just-before-second", "second", "later"],
 )
 def test_the_newest_vintage_that_is_knowable_at_the_cutoff_answers(connection, cutoff: datetime, expected: str) -> None:
-    """A revision seen on 10-16 must not reach a cutoff of 10-14: that is look-ahead."""
+    """A revision seen on 10-16 must not reach a cutoff of 10-14: that is look-ahead.
+
+    Red when the filter `knowable_at <= cutoff` is dropped, or when a revision keeps the original `knowable_at`."""
     _vintages(connection)
 
     assert risk_free_rate_at(connection, cutoff).value == Decimal(expected)
 
 
 def test_a_revision_does_not_change_what_an_earlier_cutoff_saw(connection) -> None:
-    """Red when the reader orders by the insert time alone: the revision would win at the early cutoff."""
+    """The vintage that a cutoff saw does not change when a later revision is stored.
+
+    Red when the filter `knowable_at <= cutoff` is dropped."""
     seed_risk_free_rate(connection, date(2026, 10, 13), "0.0426")
     early = datetime(2026, 10, 14, 22, 15, tzinfo=UTC)
     before = risk_free_rate_at(connection, early)
