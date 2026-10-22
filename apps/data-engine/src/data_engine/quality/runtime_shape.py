@@ -451,7 +451,7 @@ def _fold_sizes(
 
 
 def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeServerCapacity) -> Tracker:
-    """Add one reading to the totals. A reading with a missing fact adds nothing."""
+    """Add one reading to the totals. A reading with a missing fact returns `tracker` itself, unchanged."""
     if reading.oom_kill is None or reading.memory_peak is None or reading.container is None or reading.unreadable:
         return tracker
     previous = tracker.container
@@ -518,7 +518,7 @@ def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
     return []
 
 
-#: The most jobs that the finding names. The summary is published with a bound of 300 characters.
+#: The most jobs that the finding names. The row is cut at `nightly_verdicts.SUMMARY_LIMIT`.
 MAX_NAMED_JOBS = 3
 
 
@@ -675,10 +675,10 @@ def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tra
     raises the size of that event as it grows. An event with an unknown job is looked up again while its
     process is the largest, because the run may not have been started yet or the read may have failed once.
     A known job is never looked up again."""
-    if reading.container is None:
-        return folded  # the fold added nothing for this reading, and the names must not change either
+    if folded is before or folded.container is None:
+        return folded  # the fold took nothing from this reading, so the names must not change either
     events, process_id, size = folded.over_events, reading.largest_process_id, reading.largest_process or 0
-    container = reading.container
+    container = folded.container.id
     if folded.processes_over_size > before.processes_over_size:
         job = job_of_process(instance, process_id)
         return replace(folded, over_events=(*events, OverEvent(process_id, job, size, container))[-MAX_OVER_EVENTS:])
