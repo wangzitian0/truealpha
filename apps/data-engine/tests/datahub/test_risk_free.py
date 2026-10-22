@@ -133,7 +133,8 @@ def _vintages(connection) -> None:
 def test_the_newest_vintage_that_is_knowable_at_the_cutoff_answers(connection, cutoff: datetime, expected: str) -> None:
     """A revision seen on 10-16 must not reach a cutoff of 10-14: that is look-ahead.
 
-    Red when the filter `knowable_at <= cutoff` is dropped, or when a revision keeps the original `knowable_at`."""
+    Red when the filter `knowable_at <= cutoff` is dropped. A writer that stamps a revision with the original
+    `knowable_at` is caught by `test_treasury_rates.py`, where the writer makes the rows."""
     _vintages(connection)
 
     assert risk_free_rate_at(connection, cutoff).value == Decimal(expected)

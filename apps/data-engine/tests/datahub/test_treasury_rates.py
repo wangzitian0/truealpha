@@ -23,7 +23,7 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -788,13 +788,28 @@ def test_a_year_that_lacks_one_series_is_fetched_again(connection) -> None:
     assert years_to_fetch(connection, today=TODAY, registration=FOUR_YEARS) == [2026, 2025, 2024, 2023]
 
 
-def test_a_year_that_stops_before_its_last_week_is_fetched_again(connection) -> None:
-    """Runs that failed across the turn of the year leave a hole at its end. Nothing else would fill it."""
+@pytest.mark.parametrize(
+    ("last_day", "fetched_again"),
+    [
+        (date(2024, 11, 29), True),
+        (date(2024, 12, 24), True),
+        (date(2024, 12, 28), True),
+        (date(2024, 12, 29), False),
+        (date(2024, 12, 31), False),
+    ],
+    ids=["november", "24-december", "28-december", "29-december", "31-december"],
+)
+def test_a_year_that_stops_before_29_december_is_fetched_again(connection, last_day: date, fetched_again: bool) -> None:
+    """Runs that failed across the turn of the year leave a hole at its end. Nothing else would fill it.
+
+    The boundary is `COMPLETE_FROM`: a change to 24 or 28 December turns the 28 December row green."""
     _store_years(connection, 2023, 2025, 2026)
     for series_id in (THREE_MONTH, TWO_YEAR, TEN_YEAR):
-        seed_observation(connection, date(2024, 11, 29), "0.04", series_id=series_id)
+        seed_observation(connection, last_day, "0.04", series_id=series_id)
 
-    assert years_to_fetch(connection, today=TODAY, registration=FOUR_YEARS) == [2026, 2024]
+    expected = [2026, 2024] if fetched_again else [2026]
+    assert years_to_fetch(connection, today=TODAY, registration=FOUR_YEARS) == expected
+    assert treasury_rates.COMPLETE_FROM == (12, 29)
 
 
 def test_the_first_run_of_the_registration_asks_for_each_year_since_its_first_year(connection) -> None:
@@ -884,6 +899,57 @@ def test_the_pointer_check_fails_loudly_on_a_column_name_that_does_not_exist(con
 
     with pytest.raises(psycopg.errors.RaiseException, match="no_such_column is not a column"):
         connection.execute("insert into pointer_probe values (1)")
+
+
+def test_the_pointer_check_fails_loudly_on_a_trigger_without_an_argument(connection) -> None:
+    """With no argument `tg_argv[0]` is NULL and the check would be skipped for every insert."""
+    connection.execute("create temp table pointer_probe_bare (id bigint)")
+    connection.execute(
+        "create trigger probe before insert on pointer_probe_bare for each row "
+        "execute function mart.require_stored_fetch()"
+    )
+
+    with pytest.raises(psycopg.errors.RaiseException, match="is not a column"):
+        connection.execute("insert into pointer_probe_bare values (1)")
+
+
+def test_the_fetch_time_is_read_after_the_answer_arrives(connection) -> None:
+    """A revised value is knowable from the moment the answer arrived, not from the moment the request began.
+
+    The request itself takes five seconds of the test clock. Red when the stored time is read before
+    `fetch()`: a revision would then reach a cutoff five seconds early."""
+    one_year = dataclasses.replace(REGISTRATION, first_year=2026)
+    store = InMemoryRawObjectStore()
+    first_fetch, _ = _years((2026, SAMPLE_2026))
+    refresh_macro_series(
+        connection, today=TODAY, fetch=first_fetch, clock=lambda: NOW, store=store, registration=one_year
+    )
+    revised = SAMPLE_2026.replace(b"10/13/2026,4.10,4.15,4.15,4.26", b"10/13/2026,4.10,4.15,4.15,4.31")
+    started = datetime(2026, 10, 15, 21, 0, tzinfo=UTC)
+    answered = started + timedelta(seconds=5)
+    now = {"value": started}
+
+    def slow_fetch(year: int) -> bytes:
+        now["value"] += timedelta(seconds=5)
+        return revised
+
+    refresh_macro_series(
+        connection,
+        today=date(2026, 10, 15),
+        fetch=slow_fetch,
+        clock=lambda: now["value"],
+        store=store,
+        registration=one_year,
+    )
+
+    row = connection.execute(
+        "select knowable_at, fetched_at from mart.macro_series_daily "
+        f"where series_id = '{THREE_MONTH}' and observation_date = '2026-10-13' order by id desc limit 1"
+    ).fetchone()
+    assert row == (answered, answered)
+    assert connection.execute(
+        "select fetched_at from raw.fetches where source_record_id like '%year:2026:2026-10-15'"
+    ).fetchone() == (answered,)
 
 
 def test_an_empty_table_has_no_rate_for_any_cutoff(connection) -> None:
