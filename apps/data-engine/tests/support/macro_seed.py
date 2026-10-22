@@ -50,9 +50,13 @@ def seed_observation(
     *,
     series_id: str = INSTRUMENT,
     recorded_at: datetime | None = None,
+    knowable_at: datetime | None = None,
     source: str = DataSource.US_TREASURY.value,
 ) -> int:
-    """Store one observation. Return the id of its `raw.fetches` row."""
+    """Store one observation. Return the id of its `raw.fetches` row.
+
+    ``knowable_at`` defaults to the source's cut for the date. A test of a revision names the later
+    instant at which the revised value was first seen, as the production writer does."""
     register_series(connection)
     fetch_id, fetched_at = _land(
         connection, f"test-seed:{series_id}:{observation_date.isoformat()}", f"{observation_date},{value}".encode()
@@ -63,7 +67,7 @@ def seed_observation(
             series_id,
             observation_date,
             Decimal(str(value)),
-            knowable_at_of(observation_date),
+            knowable_at or knowable_at_of(observation_date),
             source,
             fetch_id,
             fetched_at,
@@ -80,9 +84,10 @@ def seed_risk_free_rate(
     rate: Decimal | str = DEFAULT_RATE,
     *,
     recorded_at: datetime | None = None,
+    knowable_at: datetime | None = None,
 ) -> int:
     """Store one observation of the risk-free instrument. Return the id of its `raw.fetches` row."""
-    return seed_observation(connection, observation_date, rate, recorded_at=recorded_at)
+    return seed_observation(connection, observation_date, rate, recorded_at=recorded_at, knowable_at=knowable_at)
 
 
 def seed_rate_for_cutoff(connection: Any, cutoff: datetime, rate: Decimal | str = DEFAULT_RATE) -> date:
@@ -90,6 +95,14 @@ def seed_rate_for_cutoff(connection: Any, cutoff: datetime, rate: Decimal | str 
     observation_date = cutoff.astimezone(UTC).date() - timedelta(days=1)
     seed_risk_free_rate(connection, observation_date, rate)
     return observation_date
+
+
+def stored_rate_for_cutoff(connection: Any, cutoff: datetime, rate: Decimal | str = DEFAULT_RATE) -> RiskFreeRate:
+    """Store the observation of the day before the cutoff and read it back as the tick does, with its lineage."""
+    from data_engine.datahub.risk_free import risk_free_rate_at
+
+    seed_rate_for_cutoff(connection, cutoff, rate)
+    return risk_free_rate_at(connection, cutoff)
 
 
 def stub_rate(rate: Decimal | str = DEFAULT_RATE, observation_date: date = date(2026, 7, 29)) -> RiskFreeRate:

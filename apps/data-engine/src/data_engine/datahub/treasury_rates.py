@@ -80,6 +80,10 @@ DATE_FORMAT = "%m/%d/%Y"
 #: No second origin corroborates it. 0.92 is the grade of a complete SEC filing set.
 CONFIDENCE = Decimal("0.92")
 
+#: The (month, day) from which a past year must hold a row of every series to count as complete.
+#: The Treasury publishes on 24 to 31 December of every year in the files of 2000 to 2026.
+COMPLETE_FROM = (12, 24)
+
 #: An advisory lock key. It makes two writers (the schedule and a manual replay) take turns.
 _LOCK_NAME = "mart.macro_series_daily"
 
@@ -251,6 +255,10 @@ def persist_observations(
     Return how many rows were inserted. The table is append-only, so a revised value is a new row
     and an unchanged value is no row. The advisory lock makes the check and the insert one step
     against a second writer.
+
+    A first observation of a date is knowable from ``knowable_at_of`` its date: the source's own cut.
+    A revised value is knowable from ``fetched_at`` at the earliest, because the source gives no time
+    of the revision. So a cutoff before the fetch still sees the vintage that was stored before it.
     """
     connection.execute("select pg_advisory_xact_lock(hashtext(%s))", (_LOCK_NAME,))
     stored = {
@@ -264,7 +272,7 @@ def persist_observations(
             series_id,
             item.observation_date,
             item.value,
-            knowable_at_of(item.observation_date),
+            _knowable_at(item.observation_date, revised=(series_id, item.observation_date) in stored, seen_at=fetched_at),
             SOURCE.value,
             fetch_id,
             fetched_at,
@@ -279,6 +287,12 @@ def persist_observations(
     return len(fresh)
 
 
+def _knowable_at(observation_date: date, *, revised: bool, seen_at: datetime) -> datetime:
+    """The transaction time of a vintage: the source's cut, or for a revision the moment it was seen."""
+    cut = knowable_at_of(observation_date)
+    return max(cut, seen_at) if revised else cut
+
+
 def years_to_fetch(
     connection: psycopg.Connection[Any], *, today: date, registration: MacroSourceRegistration = REGISTRATION
 ) -> list[int]:
@@ -286,7 +300,9 @@ def years_to_fetch(
 
     The current year always. In January, the year before too: a run that failed on the last
     business day of December would otherwise leave that day missing for ever. Each earlier year since
-    ``registration.first_year`` that does not hold a row of every series yet.
+    ``registration.first_year`` that is not complete yet. A year is complete when every series holds a
+    row dated in its last week (``COMPLETE_FROM``). A year that stops earlier, because runs failed at
+    the turn of the year, is fetched again until the hole is filled.
     """
     years = [today.year]
     if today.month == 1:
@@ -302,7 +318,7 @@ def _holds_every_series(connection: psycopg.Connection[Any], year: int, series_i
     row = connection.execute(
         "select count(distinct series_id) from mart.macro_series_daily "
         "where series_id = any(%s) and observation_date >= %s and observation_date < %s",
-        (list(series_ids), date(year, 1, 1), date(year + 1, 1, 1)),
+        (list(series_ids), date(year, *COMPLETE_FROM), date(year + 1, 1, 1)),
     ).fetchone()
     return bool(row and row[0] == len(series_ids))
 

@@ -50,6 +50,7 @@ from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunReposit
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import stored_rate_for_cutoff  # noqa: E402
 from split_series_seed import share_count_vintage, store_flat_daily_series  # noqa: E402
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
@@ -1584,7 +1585,7 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
         connection,
         cutoff=CUTOFF,
         executed_at=executed_at,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )
@@ -1650,7 +1651,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
         connection,
         cutoff=CUTOFF,
         executed_at=first_executed,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )
@@ -1689,7 +1690,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
         connection,
         cutoff=CUTOFF,
         executed_at=first_executed + timedelta(minutes=5),
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )

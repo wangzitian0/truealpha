@@ -85,12 +85,17 @@ class _Response:
 
 
 def _file(year: int, newest_age_days: int) -> bytes:
-    """A Treasury file of `year`. In the current year the newest row is `newest_age_days` old."""
+    """A Treasury file of `year`. The newest row of all files is `newest_age_days` old.
+
+    The three newest days sit in the file of their own year. A year without such a day holds one old
+    row (or none, for the current year), so the age of the newest row never depends on the date of the run.
+    """
     today = datetime.now(UTC).date()
-    days = (
-        [today - timedelta(days=newest_age_days + n) for n in range(3)] if year == today.year else [date(year, 12, 31)]
-    )
-    rows = [f"{day.month:02d}/{day.day:02d}/{day.year},4.26,4.79,5.21" for day in days if day.year == year]
+    recent = [today - timedelta(days=newest_age_days + n) for n in range(3)]
+    days = [day for day in recent if day.year == year]
+    if not days and year < today.year:
+        days = [date(year, 1, 2)]
+    rows = [f"{day.month:02d}/{day.day:02d}/{day.year},4.26,4.79,5.21" for day in days]
     return "\n".join(['Date,"3 Mo","2 Yr","10 Yr"', *rows]).encode()
 
 
@@ -361,6 +366,9 @@ def test_a_treasury_outage_records_a_red_verdict_without_the_exception_text(
     ((row),) = written
     assert (row["check"], row["ok"]) == ("macro_freshness", False)
     assert row["summary"].startswith("failed: TreasuryRefreshError"), row["summary"]
+    # The summary is published on the public health endpoint: the type, never the text of the error.
+    for leak in ("503", "HTTP", "Treasury answered", "home.treasury.gov", "year"):
+        assert leak not in row["summary"], (leak, row["summary"])
     assert {ledger.status_code for ledger in call_ledger if ledger.source == "us-treasury"} == {503}
 
 

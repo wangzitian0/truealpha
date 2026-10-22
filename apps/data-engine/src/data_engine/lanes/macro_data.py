@@ -3,7 +3,7 @@
 One op loads the U.S. Treasury "Daily Treasury Par Yield Curve Rates" into
 ``mart.macro_series_daily``: the 3-month, 2-year and 10-year par yields. The 3-month yield is the
 risk-free rate of the core strategy (``datahub.risk_free``). The three series are the first macro
-base data of the admin panel ``/admin/macro``. ``datahub.treasury_rates`` holds the client.
+base data. ``datahub.treasury_rates`` holds the client.
 ``MACRO_REGISTRATIONS`` in ``source_registrations.py`` holds the series, the ledger seat, the per-key
 cost and the cadence.
 
@@ -59,7 +59,7 @@ class MacroFreshness:
 
 
 # One definition of "fresh": the view `mart.macro_series_status` states the age in calendar days and
-# the limit of each series. The admin panel reads the same view.
+# the limit of each series.
 _STATUS_SQL = """
 select series_id, observation_date, age_days, max_age_days, is_fresh
 from mart.macro_series_status

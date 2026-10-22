@@ -25,6 +25,7 @@ from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import store_risk_free_series  # noqa: E402
 from production_topt.test_degraded_capture_forced import (  # noqa: E402
     _arm,
     _bundle,
@@ -44,6 +45,8 @@ def tick_database_url():
     with isolated_test_database("plausibility_tick") as target_url:
         # The strategy seed takes each issuer's splits from the stored daily series (#1262).
         store_topt_series(target_url)
+        # The tick reads the risk-free rate of its cutoff from the stored series (#1255).
+        store_risk_free_series(target_url)
         yield target_url
 
 

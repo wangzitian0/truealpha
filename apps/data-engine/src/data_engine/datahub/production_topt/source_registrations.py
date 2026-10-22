@@ -343,12 +343,6 @@ class MacroSourceRegistration:
         if self.max_age_days <= 0:
             raise ValueError(f"{self.source_id}: max_age_days must be positive, got {self.max_age_days}")
 
-    def series_by_id(self, series_id: str) -> MacroSeries:
-        for item in self.series:
-            if item.series_id == series_id:
-                return item
-        raise LookupError(f"{self.source_id} does not carry the series {series_id!r}")
-
 
 # Twelve Data is the second origin behind market-price: its identity lives here (not
 # in the adapter) so the quality report can recognise its vintages from the registry.
@@ -658,11 +652,6 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         ),
     ),
 )
-
-
-def registered_macro_series() -> tuple[tuple[MacroSourceRegistration, MacroSeries], ...]:
-    """Every macro series with the registration that owns it."""
-    return tuple((registration, item) for registration in MACRO_REGISTRATIONS for item in registration.series)
 
 
 def macro_registration_for(series_id: str) -> MacroSourceRegistration:

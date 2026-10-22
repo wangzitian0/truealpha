@@ -12,7 +12,9 @@ Four rules decide the answer:
 1. A cutoff sees only the observations that were knowable at the cutoff. A rate is knowable at
    00:00 UTC of the day after its observation date, so no cutoff sees a rate of its own day.
 2. The newest knowable observation answers.
-3. When one date holds several stored vintages, the newest vintage answers.
+3. When one date holds several stored vintages, the newest vintage that is knowable at the cutoff
+   answers. A revised value is knowable from the moment it was fetched, so a cutoff before that
+   moment still sees the earlier vintage.
 4. An answer that is more than ``MAX_RATE_LAG_DAYS`` old does not count.
 
 A cutoff with no answer raises ``MissingRiskFreeRate``. Its message starts with the reason code of the
@@ -98,7 +100,7 @@ _NEWEST_KNOWABLE_SQL = """
 select value, observation_date, knowable_at, source, fetch_id
 from mart.macro_series_daily
 where series_id = %s and knowable_at <= %s
-order by observation_date desc, recorded_at desc, id desc
+order by observation_date desc, knowable_at desc, recorded_at desc, id desc
 limit 1
 """
 

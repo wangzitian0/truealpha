@@ -6,19 +6,25 @@
 --
 -- `mart.macro_series_daily` holds one row per observation. The rows are append-only. A revised
 -- value for one date is a new row. `observation_date` is the valid time. `knowable_at` is the
--- transaction time: the instant from which the source's publication makes the value known. It comes
--- from the source's own cut and never from the insertion clock. `recorded_at` is the audit time of the
--- insert and no reader orders by it first. `fetched_at` and `source` say when and from where the
--- bytes came. `fetch_id` points to the bytes in `raw.fetches`.
+-- transaction time: the instant from which the value is known. A first observation is knowable from
+-- the source's own cut (00:00 UTC of the day after the observation date). A revised value is knowable
+-- from the moment the source was seen to state it (`fetched_at`), because the source gives no time of
+-- the revision. A reader takes the newest vintage that is knowable at its cutoff, so a revision never
+-- reaches a cutoff before it was seen. `recorded_at` is the audit time of the insert. `fetched_at` and
+-- `source` say when and from where the bytes came. `fetch_id` points to the bytes in `raw.fetches`.
+-- A trigger checks the pointer. A foreign key would lock `raw.fetches` against the writes of a
+-- running tick when the table is created.
 --
 -- `value` is in the unit that the catalog names. For the Treasury yields the unit is an annualized
 -- decimal fraction: 3.65 percent is 0.0365.
 --
--- `mart.macro_series_current` keeps the newest vintage of each date.
+-- `mart.macro_series_current` keeps the newest stored vintage of each date.
 -- `mart.macro_series_status` adds the newest date of each series and its age against the cadence.
--- The admin panel and the nightly verdict `macro_freshness` read the status view.
+-- The nightly verdict `macro_freshness` reads the status view.
 --
--- Every statement here runs on every boot. Each one first asks the catalog whether it has work.
+-- Every statement here runs on every boot. A table or a column is created only when it is missing.
+-- A view is replaced only when its stored definition differs from the definition below, because
+-- `create or replace view` takes an ACCESS EXCLUSIVE lock on the view.
 
 create table if not exists mart.macro_series (
     series_id     text primary key check (series_id ~ '^[a-z0-9_]+$'),
@@ -39,7 +45,7 @@ create table if not exists mart.macro_series_daily (
     value             numeric not null check (value <> 'NaN'),
     knowable_at       timestamptz not null,
     source            text not null check (source <> ''),
-    fetch_id          bigint not null references raw.fetches (id),
+    fetch_id          bigint not null,
     fetched_at        timestamptz not null,
     confidence        numeric not null check (confidence between 0 and 1),
     recorded_at       timestamptz not null default clock_timestamp(),
@@ -83,16 +89,63 @@ begin
 end
 $$;
 
-create or replace view mart.macro_series_current as
+-- The pointer check. TG_ARGV[0] names the column that holds the `raw.fetches` id.
+create or replace function mart.require_stored_fetch() returns trigger
+language plpgsql as $fn$
+declare
+    pointer bigint := (to_jsonb(new) ->> tg_argv[0])::bigint;
+begin
+    if pointer is not null and not exists (select 1 from raw.fetches where id = pointer) then
+        raise exception '%.% % is not a row of raw.fetches', tg_table_name, tg_argv[0], pointer
+            using errcode = 'foreign_key_violation';
+    end if;
+    return new;
+end
+$fn$;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.macro_series_daily'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER require_stored_fetch BEFORE INSERT ON mart.macro_series_daily FOR EACH ROW EXECUTE FUNCTION mart.require_stored_fetch(''fetch_id'')'
+    ) then
+        drop trigger if exists require_stored_fetch on mart.macro_series_daily;
+        create trigger require_stored_fetch
+        before insert on mart.macro_series_daily
+        for each row execute function mart.require_stored_fetch('fetch_id');
+    end if;
+end
+$$;
+
+do $$
+declare
+    wanted constant text := $view$
 select distinct on (series_id, observation_date)
     series_id, observation_date, value, knowable_at, source, fetch_id, fetched_at, confidence, recorded_at
 from mart.macro_series_daily
-order by series_id, observation_date desc, recorded_at desc, id desc;
+order by series_id, observation_date desc, recorded_at desc, id desc
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.macro_series_current') is null
+       or pg_get_viewdef(to_regclass('mart.macro_series_current'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.macro_series_current as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.macro_series_current is
-    '#1255: the newest vintage of each observation date of each macro series.';
+    '#1255: the newest stored vintage of each observation date of each macro series.';
 
-create or replace view mart.macro_series_status as
+do $$
+declare
+    wanted constant text := $view$
 with newest as (
     select distinct on (series_id)
         series_id, observation_date, value, source, fetched_at
@@ -112,7 +165,19 @@ select
     (now() at time zone 'UTC')::date - n.observation_date as age_days,
     coalesce((now() at time zone 'UTC')::date - n.observation_date <= s.max_age_days, false) as is_fresh
 from mart.macro_series s
-left join newest n using (series_id);
+left join newest n using (series_id)
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.macro_series_status') is null
+       or pg_get_viewdef(to_regclass('mart.macro_series_status'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.macro_series_status as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.macro_series_status is
     '#1255: one row per macro series with its newest observation and its age in calendar days (UTC) against max_age_days. A series without an observation has a null date and is not fresh.';
@@ -148,7 +213,7 @@ begin
             add column risk_free_value            numeric,
             add column risk_free_observation_date date,
             add column risk_free_source           text,
-            add column risk_free_fetch_id         bigint references raw.fetches (id);
+            add column risk_free_fetch_id         bigint;
         alter table mart.strategy_runs
             add constraint strategy_runs_risk_free_lineage_whole
             check (
@@ -165,3 +230,20 @@ $$;
 
 comment on column mart.strategy_runs.risk_free_value is
     '#1255: the annualized risk-free rate (decimal fraction) that the run evaluated, from the series named in risk_free_series_id on risk_free_observation_date; null for fixture and preview runs.';
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.strategy_runs'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER require_stored_fetch BEFORE INSERT ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.require_stored_fetch(''risk_free_fetch_id'')'
+    ) then
+        drop trigger if exists require_stored_fetch on mart.strategy_runs;
+        create trigger require_stored_fetch
+        before insert on mart.strategy_runs
+        for each row execute function mart.require_stored_fetch('risk_free_fetch_id');
+    end if;
+end
+$$;

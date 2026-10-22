@@ -179,9 +179,11 @@
       "threshold": "0 constant inputs",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418"
+      "status": "partial",
+      "verdict_keys": [
+        "macro_freshness"
+      ],
+      "pending_on": "consensus growth has no scheduled source with lineage yet (#1418); the risk-free rate is backed by the macro_freshness verdict and the Treasury series of #1255"
     },
     {
       "id": "R2.B7",

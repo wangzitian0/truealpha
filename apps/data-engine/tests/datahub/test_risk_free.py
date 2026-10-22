@@ -111,23 +111,55 @@ def test_no_observation_raises_a_named_error_that_carries_the_reason_code(connec
     assert isinstance(raised.value, RuntimeError)
 
 
-def test_the_newest_vintage_of_a_date_answers(connection) -> None:
-    seed_risk_free_rate(
-        connection, date(2026, 10, 13), "0.0426", recorded_at=datetime(2026, 10, 14, 21, 15, tzinfo=UTC)
-    )
-    seed_risk_free_rate(
-        connection, date(2026, 10, 13), "0.0431", recorded_at=datetime(2026, 10, 16, 21, 15, tzinfo=UTC)
-    )
-    seed_risk_free_rate(
-        connection, date(2026, 10, 13), "0.0420", recorded_at=datetime(2026, 10, 15, 21, 15, tzinfo=UTC)
-    )
-
-    assert risk_free_rate_at(connection, CUTOFF).value == Decimal("0.0431"), (
-        "the newest recorded_at, not the last insert"
-    )
+def _vintages(connection) -> None:
+    """Three vintages of 10-13. The first is the Treasury's own. A revision is knowable from the moment it was seen."""
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0426")  # knowable 10-14 00:00, the source's cut
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0420", knowable_at=datetime(2026, 10, 15, 21, 0, tzinfo=UTC))
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0431", knowable_at=datetime(2026, 10, 16, 21, 0, tzinfo=UTC))
 
 
-def test_the_insert_order_breaks_a_tie_between_two_vintages_of_one_instant(connection) -> None:
+@pytest.mark.parametrize(
+    ("cutoff", "expected"),
+    [
+        (datetime(2026, 10, 14, 22, 15, tzinfo=UTC), "0.0426"),
+        (datetime(2026, 10, 15, 20, 59, tzinfo=UTC), "0.0426"),
+        (datetime(2026, 10, 15, 21, 0, tzinfo=UTC), "0.0420"),
+        (datetime(2026, 10, 16, 20, 59, 59, tzinfo=UTC), "0.0420"),
+        (datetime(2026, 10, 16, 21, 0, tzinfo=UTC), "0.0431"),
+        (datetime(2026, 10, 20, 22, 15, tzinfo=UTC), "0.0431"),
+    ],
+    ids=["original", "just-before-first-revision", "first-revision", "just-before-second", "second", "later"],
+)
+def test_the_newest_vintage_that_is_knowable_at_the_cutoff_answers(connection, cutoff: datetime, expected: str) -> None:
+    """A revision seen on 10-16 must not reach a cutoff of 10-14: that is look-ahead."""
+    _vintages(connection)
+
+    assert risk_free_rate_at(connection, cutoff).value == Decimal(expected)
+
+
+def test_a_revision_does_not_change_what_an_earlier_cutoff_saw(connection) -> None:
+    """Red when the reader orders by the insert time alone: the revision would win at the early cutoff."""
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0426")
+    early = datetime(2026, 10, 14, 22, 15, tzinfo=UTC)
+    before = risk_free_rate_at(connection, early)
+
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0431", knowable_at=datetime(2026, 10, 16, 21, 0, tzinfo=UTC))
+
+    assert risk_free_rate_at(connection, early) == before
+
+
+def test_the_knowable_time_decides_between_vintages_not_the_insert_order(connection) -> None:
+    """A vintage that is loaded late (a backfill of an earlier state) must not outrank a later one.
+
+    Red when the reader orders by the insert time: the vintage stored last would answer."""
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0431", knowable_at=datetime(2026, 10, 16, 21, 0, tzinfo=UTC))
+    seed_risk_free_rate(connection, date(2026, 10, 13), "0.0426")  # the source's own cut, stored second
+
+    assert risk_free_rate_at(connection, datetime(2026, 10, 20, 22, 15, tzinfo=UTC)).value == Decimal("0.0431")
+    assert risk_free_rate_at(connection, datetime(2026, 10, 14, 22, 15, tzinfo=UTC)).value == Decimal("0.0426")
+
+
+def test_the_insert_order_breaks_a_tie_between_two_vintages_knowable_at_one_instant(connection) -> None:
     tied = datetime(2026, 10, 14, 21, 15, tzinfo=UTC)
     seed_risk_free_rate(connection, date(2026, 10, 13), "0.0426", recorded_at=tied)
     seed_risk_free_rate(connection, date(2026, 10, 13), "0.0427", recorded_at=tied)

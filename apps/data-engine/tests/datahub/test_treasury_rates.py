@@ -599,7 +599,20 @@ def test_a_revised_value_is_a_new_vintage_of_that_series_only_and_the_old_one_st
         Decimal("0.0431"),
     ]
     assert len(_rows(connection, f"series_id = '{TWO_YEAR}' and observation_date = '2026-10-13'")) == 1
-    assert risk_free_rate_at(connection, datetime(2026, 10, 14, 22, 15, tzinfo=UTC)).value == Decimal("0.0431")
+    knowable = [
+        row[0]
+        for row in connection.execute(
+            "select knowable_at from mart.macro_series_daily where series_id = %s and observation_date = '2026-10-13' "
+            "order by id",
+            (THREE_MONTH,),
+        ).fetchall()
+    ]
+    assert knowable == [datetime(2026, 10, 14, tzinfo=UTC), datetime(2026, 10, 15, 21, 0, tzinfo=UTC)], (
+        "the first vintage is knowable from the source's cut, the revision from the moment it was fetched"
+    )
+    # Look-ahead check: a cutoff before the revision was fetched keeps the first vintage.
+    assert risk_free_rate_at(connection, datetime(2026, 10, 14, 22, 15, tzinfo=UTC)).value == Decimal("0.0426")
+    assert risk_free_rate_at(connection, datetime(2026, 10, 15, 22, 0, tzinfo=UTC)).value == Decimal("0.0431")
 
 
 def test_a_value_that_returns_to_an_older_vintage_is_stored_again(connection) -> None:
@@ -618,6 +631,8 @@ def test_a_value_that_returns_to_an_older_vintage_is_stored_again(connection) ->
         Decimal("0.0426"),
     ]
     assert risk_free_rate_at(connection, datetime(2026, 10, 20, 22, 15, tzinfo=UTC)).value == Decimal("0.0426")
+    assert risk_free_rate_at(connection, datetime(2026, 10, 15, 22, 0, tzinfo=UTC)).value == Decimal("0.0431")
+    assert risk_free_rate_at(connection, datetime(2026, 10, 14, 22, 0, tzinfo=UTC)).value == Decimal("0.0426")
 
 
 def test_each_row_says_where_and_when_it_came_from_and_points_to_the_bytes(connection) -> None:
@@ -715,13 +730,36 @@ def test_a_failed_fetch_of_the_current_year_still_lets_the_backfill_run_and_then
     assert {row[1].year for row in _rows(connection)} == {2025, 2024, 2023}
 
 
+def test_two_writers_take_turns_on_the_advisory_lock(database) -> None:
+    """Red when the lock is dropped: the check against the stored vintage and the insert would race."""
+    with psycopg.connect(database) as holder, psycopg.connect(database) as writer:
+        holder.execute("truncate mart.macro_series_daily, mart.macro_series, raw.fetches cascade")
+        holder.commit()
+        treasury_rates.register_series(writer)
+        fetch_id = seed_observation(writer, date(2026, 10, 1))
+        writer.commit()
+        holder.execute("select pg_advisory_xact_lock(hashtext(%s))", (treasury_rates._LOCK_NAME,))
+        writer.execute("set lock_timeout = '300ms'")
+        observations = {THREE_MONTH: (Observation(date(2026, 10, 13), Decimal("0.0426")),)}
+
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            treasury_rates.persist_observations(writer, observations, year=2026, fetch_id=fetch_id, fetched_at=NOW)
+        writer.rollback()
+
+        holder.commit()  # the first writer is done: the lock is free
+        writer.execute("set lock_timeout = '300ms'")
+        assert (
+            treasury_rates.persist_observations(writer, observations, year=2026, fetch_id=fetch_id, fetched_at=NOW) == 1
+        )
+
+
 # -- which years a run asks for -------------------------------------------------------------------
 
 
 def _store_years(connection, *years: int, series: tuple[str, ...] = (THREE_MONTH, TWO_YEAR, TEN_YEAR)) -> None:
     for year in years:
         for series_id in series:
-            seed_observation(connection, date(year, 6, 1), "0.04", series_id=series_id)
+            seed_observation(connection, date(year, 12, 29), "0.04", series_id=series_id)
 
 
 @pytest.mark.parametrize(
@@ -748,6 +786,15 @@ def test_a_year_that_lacks_one_series_is_fetched_again(connection) -> None:
     _store_years(connection, 2023, 2024, 2025, 2026, series=(THREE_MONTH, TWO_YEAR))
 
     assert years_to_fetch(connection, today=TODAY, registration=FOUR_YEARS) == [2026, 2025, 2024, 2023]
+
+
+def test_a_year_that_stops_before_its_last_week_is_fetched_again(connection) -> None:
+    """Runs that failed across the turn of the year leave a hole at its end. Nothing else would fill it."""
+    _store_years(connection, 2023, 2025, 2026)
+    for series_id in (THREE_MONTH, TWO_YEAR, TEN_YEAR):
+        seed_observation(connection, date(2024, 11, 29), "0.04", series_id=series_id)
+
+    assert years_to_fetch(connection, today=TODAY, registration=FOUR_YEARS) == [2026, 2024]
 
 
 def test_the_first_run_of_the_registration_asks_for_each_year_since_its_first_year(connection) -> None:

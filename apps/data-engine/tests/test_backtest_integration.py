@@ -525,7 +525,7 @@ def test_the_binding_lists_the_rate_of_each_cutoff_with_its_observation_date(see
 
 
 def test_the_run_states_the_sharpe_rate_by_name_series_and_value(seeded) -> None:
-    """The Sharpe ratio subtracts a declared rate. The run names it, so the page needs no hidden constant."""
+    """The Sharpe ratio subtracts a declared rate. The run names it in its stored payload."""
     payload = _run_row(seeded["connection"], _run_op()["run_id"])["metrics_payload"]
 
     assert payload["sharpe_risk_free"] == {
@@ -580,15 +580,32 @@ def test_a_cutoff_without_a_usable_rate_fails_the_run_and_writes_nothing(seeded_
 
 
 def test_another_rate_series_is_another_run(seeded) -> None:
+    """A vintage that was knowable at the Q3 cutoff (seen on 2024-09-28) changes the rate of Q3, so it is another run."""
     connection = seeded["connection"]
     first = _run_op()
 
-    seed_risk_free_rate(connection, RATE_SEEN[Q3][0], "0.0496")  # a newer vintage of the Q3 observation
+    seed_risk_free_rate(connection, RATE_SEEN[Q3][0], "0.0496", knowable_at=datetime(2024, 9, 28, 12, 0, tzinfo=UTC))
     second = _run_op()
 
     assert second["run_id"] != first["run_id"] and second["inserted"] is True
     rates = _run_row(connection, second["run_id"])["metrics_payload"]["binding"]["risk_free_rates"]
     assert rates[-1]["annualized_rate"] == "0.0496" and rates[0]["annualized_rate"] == "0.0525"
+
+
+def test_a_revision_seen_after_the_cutoffs_does_not_change_the_run(seeded) -> None:
+    """Point in time: a rate revised in 2026 cannot move the Q3 2024 cutoff. The run is the same run.
+
+    Red when the reader takes the newest stored vintage whatever its knowable time.
+    """
+    connection = seeded["connection"]
+    first = _run_op()
+
+    seed_risk_free_rate(connection, RATE_SEEN[Q3][0], "0.0496", knowable_at=datetime(2026, 10, 16, 21, 0, tzinfo=UTC))
+    second = _run_op()
+
+    assert second["run_id"] == first["run_id"] and second["inserted"] is False
+    rates = _run_row(connection, first["run_id"])["metrics_payload"]["binding"]["risk_free_rates"]
+    assert rates[-1]["annualized_rate"] == str(RATE_SEEN[Q3][1])
 
 
 @pytest.mark.parametrize("app_env", ["staging", "production", "prod"])
