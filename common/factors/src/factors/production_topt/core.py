@@ -124,7 +124,7 @@ class ToptCoreReasonCode(StrEnum):
     #: #1277: a filed share count that cannot be put on the share basis of its close. A split
     #: between the count's basis date and the close makes the market value wrong by the split
     #: ratio. The snapshot names the cause, and the filed count is never used. Each value below
-    #: equals one reason of `data_engine.datahub.share_basis` (`LIVE_UNAVAILABLE_REASONS`).
+    #: equals one reason of `data_engine.datahub.share_basis`. A test holds the two registered.
     NO_SPLIT_ADJUSTED_SERIES = "no_split_adjusted_series"
     NO_UNADJUSTED_SERIES = "no_unadjusted_series"
     SPLIT_DERIVATION_FAILED = "split_derivation_failed"

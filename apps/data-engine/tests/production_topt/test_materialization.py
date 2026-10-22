@@ -2037,20 +2037,15 @@ def test_a_run_whose_listings_have_no_stored_series_never_values_a_filed_count(c
 def test_every_reason_of_the_live_share_basis_is_a_registered_core_reason_code() -> None:
     """`_snapshot_member` turns the reason of `live_on_close_basis` into a core reason code.
 
-    An unregistered reason raises at the tick. This test raises first: it holds the reasons that
-    `share_basis` can return equal to the codes that the core registers (#1277).
+    An unregistered reason raises at the tick. This test raises first. It reads each reason that
+    `share_basis` builds into an `Unavailable(NAME, ...)` and holds it registered in the core (#1277).
     """
     import ast
     import inspect
 
     from data_engine.datahub import share_basis
 
-    registered = {code.value for code in ToptCoreReasonCode}
-    declared = set(share_basis.LIVE_UNAVAILABLE_REASONS)
-    assert len(declared) == len(share_basis.LIVE_UNAVAILABLE_REASONS) == 8
-    assert declared <= registered, sorted(declared - registered)
-    # Each `Unavailable(NAME, ...)` that the module builds with a named reason is in the declared tuple.
-    used = {
+    reasons = {
         getattr(share_basis, node.args[0].id)
         for node in ast.walk(ast.parse(inspect.getsource(share_basis)))
         if isinstance(node, ast.Call)
@@ -2058,7 +2053,10 @@ def test_every_reason_of_the_live_share_basis_is_a_registered_core_reason_code()
         and node.func.id == "Unavailable"
         and isinstance(node.args[0], ast.Name)
     }
-    assert used == declared
+    registered = {code.value for code in ToptCoreReasonCode}
+
+    assert len(reasons) == 8, f"the reader found {sorted(reasons)}"
+    assert reasons <= registered, sorted(reasons - registered)
 
 
 def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_confidence(
