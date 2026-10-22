@@ -784,6 +784,28 @@ def test_the_gate_enforces_the_warehouse_ledger_every_process_shares(warehouse_s
         gateway.CapacityGate(capacities={seat: capacity}, environment="production").admit(seat)
 
 
+def test_the_warehouse_ledger_stores_the_attempt_columns_with_their_types(warehouse_seat) -> None:
+    """#1444: attempt, provider code and request parameters reach the table; a row of a source
+    that sets none of them leaves the columns null."""
+    seat = warehouse_seat
+    params = {"model": "m", "thinking": "disabled", "max_tokens": 300}
+    with gateway.record_call(seat, "chat.completions", caller="test") as call:
+        call.observe(status_code=429, body=b"{}")
+        call.attempt, call.provider_code, call.request_params = 2, "1302", params
+        call.fail("HTTP 429")
+    with gateway.record_call(seat, "plain", caller="test") as call:
+        call.observe(status_code=200, body=b"{}")
+    rows = gateway._pg_execute(
+        "select endpoint, attempt, provider_code, request_params, pg_typeof(attempt)::text, "
+        "pg_typeof(request_params)::text from staging.api_call_ledger where source = %s order by id",
+        (seat,),
+    ).fetchall()
+    assert rows == [
+        ("chat.completions", 2, "1302", params, "smallint", "jsonb"),
+        ("plain", None, None, None, "smallint", "jsonb"),
+    ]
+
+
 _NEW_YORK = ZoneInfo("America/New_York")
 
 

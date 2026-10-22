@@ -5,9 +5,20 @@ from pydantic import AliasChoices, Field
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings, database_url_field
 
+#: The environment variable that holds the model provider key. Declared once: the field below
+#: reads it, the manifest lists it, and the "no provider seated" message names it. A key per
+#: environment (#1444) is a different value of this variable in each environment, so no code
+#: names a key.
+LLM_API_KEY_ENV = "LLM_API_KEY"
+
 
 class Settings(RuntimeSettings):
     """Data-source settings layered on the shared runtime contract."""
+
+    @property
+    def llm_api_key_env(self) -> str:
+        """The name of the environment variable that holds the model provider key."""
+        return LLM_API_KEY_ENV
 
     @property
     def capture_environment(self) -> CaptureEnvironment:
@@ -157,6 +168,7 @@ class Settings(RuntimeSettings):
     # travels into every invocation record.
     llm_api_key: str = Field(
         default="",
+        validation_alias=LLM_API_KEY_ENV,
         json_schema_extra={"source": "human", "scope": "project", "empty_ok": True, "sensitive": True, "group": "llm"},
     )
     llm_base_url: str = Field(

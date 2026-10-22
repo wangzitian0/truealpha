@@ -52,6 +52,7 @@ how a tick counts what its gate refused without any adapter having to report it.
 from __future__ import annotations
 
 import contextvars
+import functools
 import hashlib
 import json
 import logging
@@ -220,6 +221,12 @@ class CallRecord:
     duration_ms: int | None = None
     run_key: str | None = None
     capacity_window_id: str | None = None
+    #: The 1-based attempt of one logical model call that retries (#1444); None for other sources.
+    attempt: int | None = None
+    #: The code in the error body of the provider, for example "1302" (#1444).
+    provider_code: str | None = None
+    #: The request parameters without any secret: model, thinking type, max_tokens (#1444).
+    request_params: dict[str, Any] | None = None
     #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
     fetch_key: str | None = None
 
@@ -316,65 +323,84 @@ def _pg_execute(sql: str, params=()):
 
     try:
         return _pg().execute(sql, params)
+    except psycopg.errors.UndefinedColumn:
+        raise  # a statement error: a fresh connection would meet the same schema
     except psycopg.Error:
         _pg_reset()
         return _pg().execute(sql, params)
 
 
-_INSERT_COLUMNS = (
-    "source, endpoint, caller, called_at, ok, status_code, error, duration_ms, request_uri,"
-    " payload_sha256, byte_length, cost, capacity_window_id, run_key"
+#: The columns of every ledger row. Two groups of columns exist only after a migration, and a record
+#: that sets none of them is written with `_BASE_COLUMNS` alone. So a code server that starts before the
+#: migration replay never fails an ordinary audit row (rows of the other sources never depend on a migration).
+_BASE_COLUMNS = (
+    "source",
+    "endpoint",
+    "caller",
+    "called_at",
+    "ok",
+    "status_code",
+    "error",
+    "duration_ms",
+    "request_uri",
+    "payload_sha256",
+    "byte_length",
+    "cost",
+    "capacity_window_id",
+    "run_key",
 )
-#: A call without a fetch key (every call before #1411 K7) is written with the columns that every
-#: schema of the ledger has. Only a keyed call needs the ``fetch_key`` column, so a code server that
-#: starts before the migration replay never fails an unkeyed audit row.
-_INSERT_SQL = f"""
-insert into staging.api_call_ledger
-    ({_INSERT_COLUMNS})
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-"""
-_INSERT_KEYED_SQL = f"""
-insert into staging.api_call_ledger
-    ({_INSERT_COLUMNS}, fetch_key)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-"""
+#: A model attempt (#1444): `20261021T0900_datahub_ledger_model_attempt_columns.sql`.
+_ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
+#: A keyed fetch (#1411 K7): `20261021T1200_datahub_landed_fetch_keys.sql`.
+_KEY_COLUMNS = ("fetch_key",)
+
+
+@functools.cache
+def _statement(columns: tuple[str, ...]) -> str:
+    placeholders = ["%s::jsonb" if column == "request_params" else "%s" for column in columns]
+    return f"insert into staging.api_call_ledger ({', '.join(columns)}) values ({', '.join(placeholders)})"
+
+
+_INSERT_SQL = _statement(_BASE_COLUMNS)
+_INSERT_ATTEMPT_SQL = _statement(_BASE_COLUMNS + _ATTEMPT_COLUMNS)
+_INSERT_KEYED_SQL = _statement(_BASE_COLUMNS + _KEY_COLUMNS)
+
+
+def _value(record: CallRecord, column: str) -> Any:
+    if column == "ok":
+        return bool(record.ok)
+    if column == "request_params":
+        return None if record.request_params is None else json.dumps(record.request_params, sort_keys=True)
+    return getattr(record, column)
 
 
 def _insert_params(record: CallRecord) -> tuple:
-    return (
-        record.source,
-        record.endpoint,
-        record.caller,
-        record.called_at,
-        bool(record.ok),
-        record.status_code,
-        record.error,
-        record.duration_ms,
-        record.request_uri,
-        record.payload_sha256,
-        record.byte_length,
-        record.cost,
-        record.capacity_window_id,
-        record.run_key,
-    )
+    """The values of `_BASE_COLUMNS`, in their order."""
+    return tuple(_value(record, column) for column in _BASE_COLUMNS)
 
 
 def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
-    """The ledger INSERT for ``record`` and its parameters."""
-    params = _insert_params(record)
-    if record.fetch_key is None:
-        return _INSERT_SQL, params
-    return _INSERT_KEYED_SQL, (*params, record.fetch_key)
+    """The ledger INSERT for ``record`` and its parameters: the base columns, and the columns of
+    each group that the record sets."""
+    columns: tuple[str, ...] = _BASE_COLUMNS
+    if any(getattr(record, column) is not None for column in _ATTEMPT_COLUMNS):
+        columns += _ATTEMPT_COLUMNS
+    if record.fetch_key is not None:
+        columns += _KEY_COLUMNS
+    return _statement(columns), tuple(_value(record, column) for column in columns)
 
 
 def postgres_writer(record: CallRecord) -> None:
+    """Write one row. The data-engine and the llm-service deploy together, and only the llm-service
+    applies the migrations at boot. A row that meets the schema before its migration loses the
+    columns of that group for the window and keeps the rest."""
     import psycopg
 
     sql, params = _insert_statement(record)
     try:
         _pg_execute(sql, params)
     except psycopg.errors.UndefinedColumn:
-        log.warning("staging.api_call_ledger has no fetch_key column yet; the call is recorded without its key")
+        log.warning("staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without")
         _pg_execute(_INSERT_SQL, _insert_params(record))
 
 
@@ -1071,18 +1097,20 @@ class SourceGateway:
 
     def _write(self, record: CallRecord) -> None:
         sql, params = _insert_statement(record)
-        if record.fetch_key is None or not hasattr(self.connection, "transaction"):
+        if sql == _INSERT_SQL or not hasattr(self.connection, "transaction"):
             self.connection.execute(sql, params)
             return
-        # A keyed row needs the ``fetch_key`` column. A failed statement would abort the caller's
-        # transaction, so the keyed insert runs in its own savepoint and falls back to the unkeyed row.
+        # A row with a migrated column needs it. A failed statement would abort the caller's
+        # transaction, so that insert runs in its own savepoint and falls back to the base row.
         import psycopg
 
         try:
             with self.connection.transaction():
                 self.connection.execute(sql, params)
         except psycopg.errors.UndefinedColumn:
-            log.warning("staging.api_call_ledger has no fetch_key column yet; the call is recorded without its key")
+            log.warning(
+                "staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without"
+            )
             self.connection.execute(_INSERT_SQL, _insert_params(record))
 
     def _recorded_since(self, source: str, since: datetime) -> int:

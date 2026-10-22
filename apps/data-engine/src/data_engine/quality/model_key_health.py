@@ -9,16 +9,19 @@ The probe asks the smallest question through the same client every model task us
 (`sources.llm.invoke`): the request goes through the source gateway and lands in
 `staging.api_call_ledger` under `CALLER`, and nothing else is persisted (`persist=False`: no
 invocation record, no replay). The verdict classifies the outcome; it never carries the key,
-a fingerprint of it, the provider's error text or its host — only the class and the status.
+a fingerprint of it, the provider's error text or its host — only the class, the status and the
+numeric provider code.
+
+The probe keeps no retry loop. `sources.llm.invoke` applies the one retry policy of the model seat
+(#1444), so the probe and the extraction path wait out a rate limit in the same way.
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 
-from data_engine.sources import llm
+from data_engine.sources import llm, model_policy
 
 CALLER = "watchdog:model-key-health"
 
@@ -29,15 +32,12 @@ PROBE_TASK = llm.ModelTask(
     instructions='Reply with exactly this JSON object and nothing else: {"ok": true}',
     response_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
     max_tokens=16,
+    #: The probe slots of the contract assume this timeout for one attempt.
+    timeout_seconds=model_policy.seat_contract().probe.attempt_timeout_seconds,
 )
 
 #: The statuses that mean the provider refused the CREDENTIAL, not the request.
 AUTH_REJECTED = frozenset({401, 403})
-RATE_LIMITED = 429
-DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
-
-#: Indirected so unit tests can verify retry backoff without sleeping.
-_sleep = time.sleep
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,10 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
         return KeyHealth(True, "answered", None, f"answered: the seated key works (served {served_model or 'model'})")
     if isinstance(error, llm.ModelNotConfigured):
         return KeyHealth(False, "not-configured", None, "not-configured: no model provider key is seated")
+    if isinstance(error, llm.ModelCapacityRefused):
+        return KeyHealth(
+            False, "provider-error", None, "provider-error: no call slot or rate window before the deadline"
+        )
     if isinstance(error, llm.ModelHTTPError):
         status = error.status_code
         if status in AUTH_REJECTED:
@@ -64,7 +68,12 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
                 status,
                 f"auth-rejected: the provider answered HTTP {status}; the seated key is revoked or wrong",
             )
-        return KeyHealth(False, "provider-error", status, f"provider-error: the provider answered HTTP {status}")
+        code = error.provider_code
+        # A provider code is a short number such as 1302. Any other text from the provider stays out.
+        detail = f" (provider code {code})" if code is not None and code.isdigit() else ""
+        return KeyHealth(
+            False, "provider-error", status, f"provider-error: the provider answered HTTP {status}{detail}"
+        )
     if isinstance(error, OSError):
         # URLError, timeouts and refused connections are all OSErrors; their text can name
         # the host, so only the type is kept.
@@ -72,41 +81,27 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
     return KeyHealth(False, "provider-error", None, f"provider-error: unreadable answer ({type(error).__name__})")
 
 
-def probe(
-    *,
-    transport: llm.Transport | None = None,
-    max_attempts: int = 1,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-) -> KeyHealth:
+def probe(*, transport: llm.Transport | None = None) -> KeyHealth:
     """Ask the seated model provider, classify, never raise. Call inside `gateway.run_scope(...)`
-    so every ledger row is attributed to the run that asked. When `max_attempts > 1`, retry
-    transient HTTP 429 rate-limit responses with exponential backoff."""
-    attempts = max(1, max_attempts)
-    health: KeyHealth | None = None
-    for attempt in range(attempts):
-        try:
-            invocation = llm.invoke(
-                None,
-                task=PROBE_TASK,
-                cik=0,
-                accession="",
-                user_content="ping",
-                caller=CALLER,
-                standard="watchdog",
-                parse=_parse,
-                refusal=lambda detail: {"ok": False},
-                persist=False,
-                transport=transport,
-            )
-        except Exception as exc:  # noqa: BLE001 - every failure is a verdict, never a traceback
-            health = classify(exc)
-        else:
-            return classify(None, served_model=invocation.served_model or invocation.model)
-        if health.status_code != RATE_LIMITED or attempt + 1 >= attempts:
-            return health
-        _sleep(retry_backoff_seconds * (2**attempt))
-    assert health is not None
-    return health
+    so every ledger row is attributed to the run that asked. A rate limit is waited out by the
+    retry policy of `sources.llm`, one ledger row per attempt."""
+    try:
+        invocation = llm.invoke(
+            None,
+            task=PROBE_TASK,
+            cik=0,
+            accession="",
+            user_content="ping",
+            caller=CALLER,
+            standard="watchdog",
+            parse=_parse,
+            refusal=lambda detail: {"ok": False},
+            persist=False,
+            transport=transport,
+        )
+    except Exception as exc:  # noqa: BLE001 - every failure is a verdict, never a traceback
+        return classify(exc)
+    return classify(None, served_model=invocation.served_model or invocation.model)
 
 
 def _parse(content: str) -> dict[str, Any]:

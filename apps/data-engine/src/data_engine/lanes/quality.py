@@ -102,9 +102,17 @@ CONFIDENCE_REPORT_CRON = "45 0 * * *"
 #: lists them: staging runs TOPT only). `scheduled_universe_names()` gives them at the time of the tick.
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
-# 06:00 UTC: after every nightly model caller, an hour before the delivery report (07:00) reads
-# the verdict, so a daemon that is merely slow still lands inside the day's check.
-MODEL_KEY_HEALTH_CRON = "0 6 * * *"
+
+
+def model_key_health_cron(environment: str) -> str:
+    """The daily cron of the key probe of ``environment``. The hour and the minute come from the
+    model seat of the environment contract (#1444): the environments probe one shared account, so
+    each takes its own slot. The slots start at 06:00 UTC, after every nightly model caller and
+    an hour before the delivery report (07:00) reads the verdict, so a daemon that is merely slow
+    still lands inside the day's check. The release fetch proof starts at 06:15 and every slot
+    ends before it (`test_every_probe_slot_ends_before_the_release_fetch_proof_starts`)."""
+    return load_environment_contract().model_seat.probe_cron(environment)
+
 
 RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 # 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
@@ -506,9 +514,6 @@ def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
-MODEL_KEY_HEALTH_MAX_ATTEMPTS = 3
-
-
 @dg.op
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
     """One minimal ask of the seated model provider (#876 W2). A rejected key, an erroring or
@@ -520,7 +525,7 @@ def run_model_key_health(context: dg.OpExecutionContext) -> str:
     ) as outcome:
         # The ask lands in the external call ledger attributed to this run (#729).
         with gateway.run_scope(f"dagster:{context.run_id}"):
-            health = probe(max_attempts=MODEL_KEY_HEALTH_MAX_ATTEMPTS)
+            health = probe()
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
         context.add_output_metadata({"outcome": health.outcome, "status_code": health.status_code or 0})
@@ -534,15 +539,24 @@ def model_key_health_job() -> None:
     run_model_key_health()
 
 
-@dg.schedule(
-    job=model_key_health_job,
-    cron_schedule=MODEL_KEY_HEALTH_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
+    """The daily key probe of ``environment``. The slot comes from the contract (`model_key_health_cron`)."""
+
+    @dg.schedule(
+        name="model_key_health_schedule",
+        job=model_key_health_job,
+        cron_schedule=model_key_health_cron(environment),
+        execution_timezone="UTC",
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+    )
+    def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+    return model_key_health_schedule
+
+
+model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
 
 
 @dg.op

@@ -648,7 +648,6 @@ _OK_BODY = json.dumps(
     [
         (401, "auth-rejected", 401),
         (403, "auth-rejected", 403),
-        (429, "provider-error", 429),
         (503, "provider-error", 503),
         (urllib.error.URLError("[Errno 8] nodename nor servname provided: provider.example"), "unreachable", None),
         (TimeoutError("timed out"), "unreachable", None),
@@ -719,28 +718,6 @@ def test_a_working_key_is_a_green_verdict_through_the_deployed_job(monkeypatch, 
     result = quality.model_key_health_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
     assert result.success
     assert [(row["check"], row["ok"]) for row in written] == [("model_key_health", True)]
-
-
-def test_the_deployed_probe_retries_transient_429_before_succeeding(monkeypatch, written, call_ledger) -> None:
-    answers: list[Any] = [429, 429, _OK_BODY]
-    slept: list[float] = []
-
-    def urlopen(request: urllib.request.Request, timeout: float) -> _Answer:
-        answer = answers.pop(0)
-        if isinstance(answer, int):
-            raise urllib.error.HTTPError(
-                request.full_url, answer, "rate limited", {}, io.BytesIO(b'{"error": {"message": "rate limit"}}')
-            )
-        return _Answer(answer)
-
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(settings, "llm_api_key", FAKE_KEY)
-    monkeypatch.setattr(model_key_health, "_sleep", slept.append)
-    result = quality.model_key_health_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
-    assert result.success
-    assert slept == [2.0, 4.0]
-    assert [(row["check"], row["ok"]) for row in written] == [("model_key_health", True)]
-    assert [row.status_code for row in call_ledger] == [429, 429, 200]
 
 
 def test_the_probe_is_scheduled_daily_before_the_watchdog_reads_it() -> None:

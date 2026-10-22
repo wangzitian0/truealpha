@@ -22,7 +22,7 @@
     "note": "the coding plan is sold for coding assistants; the owner accepts this use under the plan's terms or moves to the metered general endpoint (which returned 429 'insufficient balance' on 2026-09-07)"
   },
   "budget": {
-    "capacity_declared": "gateway seat filing-extraction-model: 30 calls / 60 s window, 2000 calls / day (placeholder until the plan's published limits are recorded here)",
+    "capacity_declared": "limits per environment in the model_seat section of common/contracts/src/truealpha_contracts/data/environment_contract.v1.json (#1444): concurrent calls, calls per minute and one retry policy. The account limit is shared with other users and is not measured. No daily budget is declared.",
     "expected_load": "≈ 20 calls per weekly backfill today (17 deferred filings + new listings); ≈ 300 tokens each",
     "cost_field": "staging.api_call_ledger.cost = total tokens per call; staging.model_invocations.cost the same"
   },

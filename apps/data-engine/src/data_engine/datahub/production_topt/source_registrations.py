@@ -332,6 +332,8 @@ def derived_environment_shares(seat: str) -> tuple[tuple[str, int], ...]:
     return load_environment_contract().derived_environment_shares(seat)
 
 
+_MODEL_SEAT = load_environment_contract().model_seat
+
 LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
     {
         # SEC fair access allows at most 10 requests per second per requester and
@@ -394,14 +396,16 @@ LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
             daily_budget=50,
             documented="none published",
         ),
-        # The model and search seats are provider-agnostic placeholders sized for a QQQ
-        # backfill; a provider's real limits replace them in the PR that provisions it
-        # (#70, #732).
-        "filing-extraction-model": CapacityDeclaration(
-            calls_per_window=30,
+        # The model seat: the sum of the per-environment limits of the model seat in the
+        # environment contract (#1444). The account is shared with other users and its own limit is
+        # not measured. The model call path paces each attempt with the limits of its own
+        # environment (`sources.model_policy`), not with this sum. No daily budget is declared: the
+        # ledger of both environments shows no volume quota (252 calls in 5 hours, no refusal).
+        _MODEL_SEAT.seat: CapacityDeclaration(
+            calls_per_window=sum(limits.calls_per_minute for limits in _MODEL_SEAT.environments.values()),
             window_seconds=60,
-            daily_budget=2000,
-            documented="placeholder seat (#70)",
+            concurrency=sum(limits.max_concurrent_calls for limits in _MODEL_SEAT.environments.values()),
+            documented="model_seat of environment_contract.v1.json (#1444): sum over environments; account limit unmeasured",
         ),
         "search": CapacityDeclaration(
             calls_per_window=20,

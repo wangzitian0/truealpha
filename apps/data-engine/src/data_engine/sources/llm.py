@@ -21,6 +21,7 @@ replay, and persistence behaviour above is unchanged and still reached through i
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -38,12 +39,12 @@ from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
-from data_engine.sources import gateway
+from data_engine.sources import gateway, model_policy
 from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
 
-SOURCE = "filing-extraction-model"
+SOURCE = model_policy.seat_contract().seat  # "filing-extraction-model": the contract names the seat
 ENDPOINT = "chat.completions"
 PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
 MAX_CONTEXT_TOKENS = 1_000_000
@@ -138,17 +139,28 @@ Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 
 class ModelNotConfigured(RuntimeError):
-    """No provider seated (empty LLM_API_KEY): the caller keeps the cell deferred."""
+    """No provider seated (the key setting is empty): the caller keeps the cell deferred."""
 
 
 class ModelHTTPError(RuntimeError):
     """The provider answered with an error status. A `RuntimeError`, as it always was, so
     every existing caller is unchanged; the status is carried for a caller that must tell a
-    rejected credential (401/403) from an unavailable provider (#876 W2)."""
+    rejected credential (401/403) from an unavailable provider (#876 W2). The provider code
+    (for example "1302" for a rate limit) is carried for the same reason (#1444)."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code: int, message: str, provider_code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.provider_code = provider_code
+
+
+class ModelCapacityRefused(ModelHTTPError):
+    """The pacer found no concurrency slot or rate window before the deadline of the call. Nothing
+    was sent. It is a `ModelHTTPError` so that every caller that defers a cell on an unavailable
+    provider defers it on this too (#1444). The status is 429: the limit is ours, not the provider's."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(429, f"{SOURCE}: {detail}")
 
 
 class ModelContextLimitError(ModelHTTPError):
@@ -218,8 +230,9 @@ def build_chat_request(task: ModelTask, user_content: str, *, model: str) -> dic
         "messages": [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}],
         "max_tokens": task.max_tokens,
         "temperature": 0,
-        # Deterministic decoding settings are part of the invocation identity (§9); the
-        # provider's reasoning mode is disabled so the answer is the JSON, not a trace.
+        # Deterministic decoding settings are part of the invocation identity (§9). The request
+        # asks for reasoning mode off so that the answer is the JSON, not a trace. Z.ai documents
+        # that GLM-5.3 accepts only `enabled` (#1444); the effect is read from the ledger.
         "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
     }
@@ -232,7 +245,27 @@ def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate],
     return build_chat_request(HEADCOUNT_TASK, user, model=model)
 
 
-_ACTIVE_TIMEOUT_SECONDS = 60
+def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
+    """The request parameters that matter for the model plan, for the ledger row (#1444).
+
+    An allow-list: the headers, the messages and the key never enter it. ``thinking`` is the type
+    that was sent, or None when the request carries no thinking parameter."""
+    thinking = request_body.get("thinking")
+    response_format = request_body.get("response_format")
+    return {
+        "model": request_body.get("model"),
+        "thinking": thinking.get("type") if isinstance(thinking, dict) else None,
+        "max_tokens": request_body.get("max_tokens"),
+        "temperature": request_body.get("temperature"),
+        "response_format": response_format.get("type") if isinstance(response_format, dict) else None,
+    }
+
+
+#: The timeout of one attempt, set by `_call_provider` for the code that runs inside it. A context
+#: variable, not a module global: calls on several threads each keep their own task timeout.
+_attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "llm_attempt_timeout", default=ModelTask.timeout_seconds
+)
 
 
 def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
@@ -240,7 +273,7 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
     `record_call` block in `select_headcount`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_ACTIVE_TIMEOUT_SECONDS, cost=0)
+    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_attempt_timeout.get(), cost=0)
     return int(status or 0), response
 
 
@@ -449,7 +482,7 @@ def invoke(
     recorded decision rather than a hole the caller has to special-case.
     """
     if not is_configured():
-        raise ModelNotConfigured("LLM_API_KEY is not set; no provider seated (#70 scope 1)")
+        raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
     request_body = build_chat_request(task, user_content, model=model)
     ask = partial(
@@ -500,6 +533,132 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
     return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
 
 
+@dataclass(frozen=True)
+class _ProviderAnswer:
+    """The last answer of one logical provider call, after the retry policy has run."""
+
+    status: int
+    body: bytes
+    payload: dict[str, Any]
+    usage: dict[str, Any]
+    provider_code: str | None
+
+
+def _call_provider(
+    *,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_body: dict[str, Any],
+    timeout_seconds: int,
+    caller: str,
+    transport: Transport | None,
+) -> _ProviderAnswer:
+    """Ask the provider until it answers without a transient error (#1444).
+
+    Each attempt is one ledger row with its attempt number, provider code and request parameters.
+    The pacer admits each attempt, so `admit=False` keeps a bound capacity scope from admitting it a
+    second time under another seat figure. A transport error raises after its row is written. The
+    wait for the rate window counts against the deadline: when it ends the wait, the last answer
+    stands."""
+    request_params = _request_params(request_body)
+    budget = model_policy.RetryBudget()
+    pacer = model_policy.pacer_for(gateway.capacity_environment())
+    send = transport or _gateway_transport
+    token = _attempt_timeout.set(timeout_seconds)
+    try:
+        return _retry_loop(
+            budget=budget,
+            pacer=pacer,
+            send=send,
+            url=url,
+            headers=headers,
+            request_bytes=request_bytes,
+            request_params=request_params,
+            caller=caller,
+        )
+    finally:
+        _attempt_timeout.reset(token)
+
+
+def _retry_loop(
+    *,
+    budget: model_policy.RetryBudget,
+    pacer: model_policy.ModelPacer | None,
+    send: Transport,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_params: dict[str, Any],
+    caller: str,
+) -> _ProviderAnswer:
+    last: _ProviderAnswer | None = None
+    while True:
+        attempt = budget.begin_attempt()
+        try:
+            last = _attempt(
+                attempt=attempt,
+                pacer=pacer,
+                remaining_seconds=budget.remaining_seconds,
+                send=send,
+                url=url,
+                headers=headers,
+                request_bytes=request_bytes,
+                request_params=request_params,
+                caller=caller,
+            )
+        except gateway.CapacityExceeded as refusal:
+            if last is None:
+                raise ModelCapacityRefused(refusal.reason) from refusal
+            return last
+        wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
+        if wait is None:
+            return last
+        logger.warning(
+            "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
+            last.status,
+            last.provider_code,
+            attempt,
+            wait,
+        )
+        model_policy.sleep(wait)
+
+
+def _attempt(
+    *,
+    attempt: int,
+    pacer: model_policy.ModelPacer | None,
+    remaining_seconds: Callable[[], float],
+    send: Transport,
+    url: str,
+    headers: dict[str, str],
+    request_bytes: bytes,
+    request_params: dict[str, Any],
+    caller: str,
+) -> _ProviderAnswer:
+    """One attempt: admitted by the pacer, one ledger row, the answer read."""
+    payload: dict[str, Any] = {}
+    usage: dict[str, Any] = {}
+    provider_code: str | None = None
+    with (
+        pacer.admitted(remaining_seconds) if pacer is not None else nullcontext(),
+        record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
+    ):
+        call.attempt = attempt
+        call.request_params = request_params
+        status, body = send(url, headers, request_bytes)
+        call.observe(status_code=status, body=body)
+        if status >= 400:
+            provider_code = model_policy.provider_code(body)
+            call.provider_code = provider_code
+            call.fail(f"HTTP {status}: {body[:200]!r}")
+        else:
+            payload = json.loads(body.decode())
+            usage = payload.get("usage") or {}
+            call.cost = Decimal(int(usage.get("total_tokens") or 0))
+    return _ProviderAnswer(status, body, payload, usage, provider_code)
+
+
 def _ask(
     connection: Any | None,
     *,
@@ -536,6 +695,7 @@ def _ask(
     )
     estimated_tokens = _estimate_prompt_tokens(task, user_text)
     context_limit_exceeded = estimated_tokens > task.max_context_tokens
+    provider_code: str | None = None
     prompt_tokens: int | None
     completion_tokens: int | None
     served_model: str | None
@@ -562,17 +722,22 @@ def _ask(
         served_model = None
         decision = refusal(limit_msg)
     else:
-        global _ACTIVE_TIMEOUT_SECONDS
-        _ACTIVE_TIMEOUT_SECONDS = task.timeout_seconds
-        with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
-            status, body = (transport or _gateway_transport)(url, headers, request_bytes)
-            call.observe(status_code=status, body=body)
-            if status >= 400:
-                call.fail(f"HTTP {status}: {body[:200]!r}")
-            else:
-                payload = json.loads(body.decode())
-                usage = payload.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+        answer = _call_provider(
+            url=url,
+            headers=headers,
+            request_bytes=request_bytes,
+            request_body=request_body,
+            timeout_seconds=task.timeout_seconds,
+            caller=caller,
+            transport=transport,
+        )
+        status, body, payload, usage, provider_code = (
+            answer.status,
+            answer.body,
+            answer.payload,
+            answer.usage,
+            answer.provider_code,
+        )
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         served_model = str(payload["model"]) if payload.get("model") else None
@@ -667,7 +832,7 @@ def _ask(
             status_code=status,
         )
     if status >= 400:
-        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
+        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
     return invocation, None
 
 
