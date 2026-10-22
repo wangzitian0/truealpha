@@ -44,5 +44,10 @@
       ]
     }
   },
-  "replays": []
+  "replays": [
+    {
+      "identity": "production-topt-concept-ruleset",
+      "replay": "The next scheduled ticks write financial-fact payloads under the new ruleset (production-topt-concepts:v4). These ticks are topt_live_pipeline (22:15 UTC production, 22:45 UTC staging) and qqq_live_pipeline (23:20 UTC, production only). They re-read SEC companyfacts. A manual tick within 12 hours of a tick on the old image reuses the old rows unless it sets force_fetch, because reuse keys on parser_version only. strategy_history_projection_pipeline re-projects past cutoffs from stored companyfacts. An environment with a published head (staging.accepted_ruleset_head, kind concept-mapping) keeps the old rules until publish_ruleset(DEFAULT_RULESET) runs there"
+    }
+  ]
 }

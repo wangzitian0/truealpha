@@ -20,27 +20,24 @@ sha256. No test here makes a network call.
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
-from data_engine.config import settings
-from data_engine.datahub.production_topt import issuer_registry
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
-from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     annual_values_by_period_end,
     build_bundle,
-    build_route,
 )
-from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
 from data_engine.datahub.standards import segment_extraction
 from data_engine.quality import vendor_oracle
-from data_engine.sources import sec
 from factors.production_topt import OperatingBranch
-from truealpha_contracts.datahub import CaptureWorkItem
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from sec_route import served_financial_record  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _CRWD_FIXTURE = _TESTS / "fixtures" / "sec" / "CRWD_CIK0001535527.trimmed.json"
@@ -75,44 +72,9 @@ def test_the_deployed_route_reads_crwd_revenue_from_the_including_form(monkeypat
     The route is the one the capture runs (`build_route`), with no database. So the ruleset is the
     shipped default, as in production with no governed head. Only the two SEC reads are replaced.
     """
-    body = _CRWD_FIXTURE.read_bytes()
-
-    def company_facts(cik: int) -> tuple[bytes, dict[str, Any]]:
-        assert cik == _CRWD_CIK
-        return body, json.loads(body)
-
-    monkeypatch.setattr(sec, "fetch_company_facts_response", company_facts)
-    monkeypatch.setattr(
-        issuer_registry,
-        "resolve_issuer_classifications",
-        lambda ciks: {
-            cik: issuer_registry.IssuerClassification(
-                operating_branch=OperatingBranch.NON_FINANCIAL, revenue_proxy_allowed=False
-            )
-            for cik in ciks.values()
-        },
+    outcome = served_financial_record(
+        monkeypatch, _CRWD_FIXTURE.read_bytes(), cik=_CRWD_CIK, ticker="CRWD", cutoff_date=_CUTOFF
     )
-    monkeypatch.setattr(settings, "moomoo_financials_origin_enabled", False)
-    issuer, instrument, listing = f"issuer:cik:{_CRWD_CIK}", "instrument:crwd", "listing:xnas:crwd"
-    work_item = CaptureWorkItem(
-        campaign_id="capture-campaign:" + "1" * 64,
-        source_request_id="source-request:" + "c" * 64,
-        schedule_policy_id="schedule-policy:" + "2" * 64,
-    )
-    context = RouteContext(
-        cutoff=datetime(2026, 10, 15, 23, 20, tzinfo=UTC),
-        cutoff_date=_CUTOFF,
-        price_cutoff_date=_CUTOFF,
-        partition_start=datetime(2026, 10, 14, tzinfo=UTC),
-        universe_published_at=None,
-        coordinates={listing: (issuer, instrument, listing, "CRWD")},
-        connection=None,
-    )
-    cell = RouteCell(work_item.work_item_id, "financial-fact", issuer, instrument, listing, "CRWD")
-
-    outcome = build_route(context, [cell]).fetch(work_item)
-
-    assert isinstance(outcome, FetchSuccess)
     assert outcome.record is not None
     payload = outcome.record.payload
     # Gross profit, total assets and shares equal the stored production payload (#1379).
