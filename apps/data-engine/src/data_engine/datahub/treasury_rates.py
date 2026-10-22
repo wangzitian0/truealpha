@@ -272,7 +272,9 @@ def persist_observations(
             series_id,
             item.observation_date,
             item.value,
-            _knowable_at(item.observation_date, revised=(series_id, item.observation_date) in stored, seen_at=fetched_at),
+            _knowable_at(
+                item.observation_date, revised=(series_id, item.observation_date) in stored, seen_at=fetched_at
+            ),
             SOURCE.value,
             fetch_id,
             fetched_at,
