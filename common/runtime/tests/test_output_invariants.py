@@ -1040,13 +1040,49 @@ def test_an_unavailable_result_with_a_named_reason_may_carry_an_old_period(
     assert f"ok       {REVENUE_INVARIANT}: 1 row(s) examined" in output
 
 
-def test_a_head_that_states_no_revenue_period_proves_nothing(
+def test_a_head_that_states_no_revenue_period_fails_by_name(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A result with no stored period has an unknown age. The invariant says so, and coverage fails it."""
-    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("undated", "und0")])
+    """A result with no stored period has an unknown age. A head where no result states one fails."""
+    run_id = _seed_head(conn, REVENUE_UNIVERSE, [_issuer("undated", "und0")])
 
     code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
 
     assert code == 1, output
-    assert f"EMPTY    {REVENUE_INVARIANT}: examined 0 rows, so it proved nothing" in output
+    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert f"Offending rows: {REVENUE_UNIVERSE} {run_id} no-result-states-a-revenue-period - -" in output
+
+
+def test_a_head_with_dated_results_cannot_hide_a_head_with_none(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two scheduled heads. The first states fresh periods. The second states none.
+
+    Red on the first version: coverage was one count over all heads, so the dated rows of the first
+    head hid the second head.
+    """
+    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("dated", "dat0", revenue_period_end=date(2025, 12, 31))])
+    undated_run = _seed_head(conn, "universe:canary-us-2026-06-30", [_issuer("undated", "und0")])
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 1, output
+    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert f"universe:canary-us-2026-06-30 {undated_run} no-result-states-a-revenue-period - -" in output
+
+
+def test_a_head_whose_results_are_all_unavailable_is_not_judged_by_this_invariant(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nothing is served from this head, so no period is served. Another head carries the coverage."""
+    _seed_head(conn, REVENUE_UNIVERSE, [_issuer("dated", "dat0", revenue_period_end=date(2025, 12, 31))])
+    _seed_head(
+        conn,
+        "universe:canary-us-2026-06-30",
+        [_issuer("refused", "ref0", available=False, reasons=("stale_input",))],
+    )
+
+    code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+
+    assert code == 0, output
+    assert f"ok       {REVENUE_INVARIANT}: 1 row(s) examined" in output

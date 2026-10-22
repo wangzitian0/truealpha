@@ -9,7 +9,7 @@
    "us-gaap:Revenues": "10-K rows, fp FY",
    "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax": "10-K rows, fp FY",
    "us-gaap:CostOfGoodsAndServicesSold": "10-K rows, fp FY",
-   "us-gaap:CostOfGoodsSold": "10-K rows, fp FY",
+   "us-gaap:CostOfGoodsSold": "10-K rows and 10-K/A rows, fp FY",
    "us-gaap:GrossProfit": "10-K rows, fp FY",
    "us-gaap:Assets": "the latest 10-K row and the latest 10-Q row",
    "dei:EntityCommonStockSharesOutstanding": "the latest 10-K row and the latest 10-Q row",

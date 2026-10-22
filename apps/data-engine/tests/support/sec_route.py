@@ -21,8 +21,13 @@ from factors.production_topt import OperatingBranch
 from truealpha_contracts.datahub import CaptureWorkItem
 
 
-def served_financial_record(monkeypatch: Any, body: bytes, *, cik: int, ticker: str, cutoff_date: date) -> FetchSuccess:
-    """The financial-fact record that the route stores for one issuer at one cutoff date."""
+def served_financial_record(
+    monkeypatch: Any, body: bytes, *, cik: int, ticker: str, cutoff_date: date, connection: Any = None
+) -> FetchSuccess:
+    """The financial-fact record that the route stores for one issuer at one cutoff date.
+
+    With no `connection` the ruleset is the shipped default. With one, `resolve_ruleset` reads the
+    governed head first, as the capture does."""
 
     def company_facts(requested_cik: int) -> tuple[bytes, dict[str, Any]]:
         assert requested_cik == cik
@@ -53,7 +58,7 @@ def served_financial_record(monkeypatch: Any, body: bytes, *, cik: int, ticker: 
         partition_start=datetime.combine(cutoff_date - timedelta(days=1), datetime.min.time(), tzinfo=UTC),
         universe_published_at=None,
         coordinates={listing: (issuer, instrument, listing, ticker)},
-        connection=None,
+        connection=connection,
     )
     cell = RouteCell(work_item.work_item_id, "financial-fact", issuer, instrument, listing, ticker)
     outcome = build_route(context, [cell]).fetch(work_item)

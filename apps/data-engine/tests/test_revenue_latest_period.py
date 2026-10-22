@@ -26,18 +26,23 @@ network call.
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import date
 from pathlib import Path
 
+import psycopg
 import pytest
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+from data_engine.config import settings
+from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, publish_ruleset
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from sec_route import served_financial_record  # noqa: E402
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "sec"
-#: The day after the latest 10-K of both issuers was filed (CPRT filed on 2026-09-29).
+#: After the latest 10-K of both issuers. XEL filed its 10-K for FY2025 on 2026-02-25. CPRT filed its
+#: 10-K for FY2026 on 2026-09-29. A cutoff before the second date would not show the CPRT period.
 _CUTOFF = date(2026, 10, 20)
 
 _CASES = [
@@ -118,3 +123,59 @@ def test_the_utility_total_never_replaces_the_figure_of_an_earlier_concept_for_t
     bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL, ruleset=DEFAULT_RULESET)
 
     assert (bundle.revenue, bundle.revenue_period_end) == (900, date(2025, 12, 31))
+
+
+@pytest.fixture
+def connection():
+    try:
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
+    try:
+        active.execute("select 1")
+        yield active
+    finally:
+        active.rollback()
+        active.close()
+
+
+def _ruleset_v3() -> ConceptMappingRuleset:
+    """The ruleset of the images before this change: the default without the utility total."""
+    payload = DEFAULT_RULESET.model_dump(mode="json", exclude={"ruleset_id", "content_sha256"})
+    payload["version"] = "production-topt-concepts:v3"
+    for mapping in payload["mappings"]:
+        if mapping["field"] == "revenue":
+            mapping["concepts"] = [
+                item for item in mapping["concepts"] if item["concept"] != "RegulatedAndUnregulatedOperatingRevenue"
+            ]
+    return ConceptMappingRuleset.model_validate(payload)
+
+
+def test_a_published_head_governs_the_route_until_the_default_is_published(connection, monkeypatch) -> None:
+    """`resolve_ruleset` reads `staging.accepted_ruleset_head` first, and `DEFAULT_RULESET` only when no
+    head is published. So an environment with a head that pins v3 keeps the 2018 revenue of XEL after
+    the deploy. It follows the default once the default is published as the head (`publish_ruleset`).
+
+    The route below is the one the capture runs, with a connection, so the head is read."""
+    v3 = _ruleset_v3()
+    assert v3.content_sha256 != DEFAULT_RULESET.content_sha256
+    body = (_FIXTURES / "XEL_CIK0000072903.trimmed.json").read_bytes()
+
+    def served() -> tuple[str, str, str]:
+        record = served_financial_record(
+            monkeypatch, body, cik=72903, ticker="XEL", cutoff_date=_CUTOFF, connection=connection
+        ).record
+        assert record is not None
+        return record.payload["revenue"], record.payload["revenue_period_end"], record.mapping_version
+
+    publish_ruleset(connection, v3, note="pin the ruleset of the images before #1457")
+    pinned = served()
+    assert pinned[:2] == ("11537000000", "2018-12-31"), "a published head wins over the default"
+    assert pinned[2].endswith(f"+{v3.content_sha256[:12]}"), "the row names the rules of the head"
+
+    publish_ruleset(connection, DEFAULT_RULESET, note="follow the default after #1457")
+    followed = served()
+    assert followed[:2] == ("14669000000", "2025-12-31")
+    assert followed[2].endswith(f"+{DEFAULT_RULESET.content_sha256[:12]}")

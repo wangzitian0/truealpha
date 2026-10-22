@@ -76,9 +76,14 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # every invariant below silently changed population.
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
 #: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
-#: A 10-K is due 90 days after the fiscal year ends, and a late filer gets 15 more days. So the newest
-#: annual period of a current filer ends at most about 15 months before a cutoff. 18 months leaves
-#: a margin of 3 months. Production QQQ served periods that were 94 and 98 months old.
+#: The rule: a 10-K is due 90 days after the fiscal year ends, and a late filer gets 15 more days
+#: (Form 12b-25). The last moment before a filing, the newest annual period of a current filer is the
+#: year before: it ended 12 months and 105 days earlier, which is 15 months and 14 days. 18 months
+#: leaves a margin of 2 months and 16 days. Production QQQ served periods of 94 and 98 months.
+#: The relation to the strategy: `eligibility.maximum_input_age_days` (455) counts the days since an
+#: input became knowable. A revenue period ends about 90 days before its filing. So 455 + 90 days is
+#: 545 days, which is 18 months. The two limits agree. The strategy limit does not stop a stale revenue,
+#: because the knowable time of a financial fact is the latest filing among its inputs (parser identity v9).
 REVENUE_MAX_AGE_MONTHS = 18
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
@@ -709,9 +714,14 @@ INVARIANTS: tuple[Invariant, ...] = (
         ),
         # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
         # divided by. Only an available result is served. A result with a named reason is
-        # unavailable (its `reason_codes` are not empty), so it needs no exemption here. A result
-        # with no stored period (a snapshot from before #534) is not examined: its age is unknown,
-        # and `--require-coverage` fails a head where no result states its period.
+        # unavailable (its `reason_codes` are not empty), so it needs no exemption here.
+        # Two findings, each one row:
+        #   <issuer>                             the period of an available result is older than the limit.
+        #   no-result-states-a-revenue-period    a scheduled head serves available results and no one
+        #                                        of them states a period. Its age is unknown for the
+        #                                        whole head. Another head with dated results cannot
+        #                                        hide it. A snapshot from before #534 stores no period.
+        # A result with no period inside a head that has other dated results is not judged alone.
         # Production QQQ served CPRT at 2018-07-31 and XEL at 2018-12-31 for a cutoff of 2026-10-19.
         # The plausibility gate judged the value only. CPRT had a ratio above its limit. XEL did not.
         # `select distinct` counts a result one time, also when two invocations wrote results for a run.
@@ -721,16 +731,24 @@ INVARIANTS: tuple[Invariant, ...] = (
                 from mart.served_head h
                 where h.factor_id = 'gross_profit_per_employee'
                   and mart.is_head_scheduled(h.universe_id, h.environment)
+            ),
+            served as (
+                select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end,
+                       (r.cutoff at time zone 'UTC')::date as cutoff
+                from heads
+                join mart.topt_core_results r on r.run_id = heads.run_id
+                where r.availability = 'available'
             )
-            select distinct heads.universe_id, r.run_id, r.issuer_id,
-                   r.revenue_period_end::text as revenue_period_end,
-                   (r.cutoff at time zone 'UTC')::date::text as cutoff
-            from heads
-            join mart.topt_core_results r on r.run_id = heads.run_id
-            where r.availability = 'available'
-              and r.revenue_period_end is not null
-              and r.revenue_period_end
-                  < ((r.cutoff at time zone 'UTC')::date - interval '{REVENUE_MAX_AGE_MONTHS} months')::date
+            select universe_id, run_id, issuer_id, revenue_period_end::text, cutoff::text
+            from served
+            where revenue_period_end < (cutoff - interval '{REVENUE_MAX_AGE_MONTHS} months')::date
+            union all
+            select distinct universe_id, run_id, 'no-result-states-a-revenue-period', '-', '-'
+            from served head_rows
+            where not exists (
+                select 1 from served dated
+                where dated.run_id = head_rows.run_id and dated.revenue_period_end is not null
+            )
             order by 1, 2, 3
         """,
         population="""

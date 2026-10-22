@@ -44,5 +44,10 @@
       ]
     }
   },
-  "replays": []
+  "replays": [
+    {
+      "identity": "production-topt-concept-ruleset",
+      "replay": "Live ticks write financial-fact payloads under the new ruleset (production-topt-concepts:v4) from their next run: topt_live_pipeline and qqq_live_pipeline (23:20 UTC) re-read SEC companyfacts and name the rules in mapping_version; strategy_history_projection_pipeline re-projects past cutoffs from stored companyfacts; an environment that holds a published head (staging.accepted_ruleset_head, kind concept-mapping) keeps the old rules until publish_ruleset(DEFAULT_RULESET) runs there"
+    }
+  ]
 }
