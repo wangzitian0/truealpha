@@ -66,7 +66,7 @@ Four statements. Each one is checkable while you read an issue and its closing w
    deliverable and checks that the completion comment names only code that exists there.
    Issue and PR text carry no acceptance. `Closes #N` closes the issue when the merge
    completes it and asserts nothing else. `/close` reopens an issue that the merge closed if a
-   row fails. `Refs #N` leaves the issue open until the walk passes.
+   row fails. `Refs #N` leaves the issue open until the walk passes and staging verifies it.
 
 ## Consequences
 
@@ -89,5 +89,5 @@ Four statements. Each one is checkable while you read an issue and its closing w
   was exactly that, lived outside the repository, and stopped being applied within five days.
 - **Forbidding `Closes #N` entirely.** Rejected as too blunt — most issues are genuinely
   provable by a merge, and losing auto-closure on those costs bookkeeping for no safety.
-- **The covenant as `AGENTS.md` rule 7 (the first form of this ADR).** Replaced on 2026-10-21.
+- **The covenant as `AGENTS.md` rule 7 (the first form of this ADR).** This ADR replaced that form on 2026-10-21.
   Resident text holds criteria only, and the steps live in the skills that run them.
