@@ -229,6 +229,9 @@ class CallRecord:
     request_params: dict[str, Any] | None = None
     #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
     fetch_key: str | None = None
+    #: What the response says it cost in output tokens; reasoning tokens only when it reports them.
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -330,7 +333,7 @@ def _pg_execute(sql: str, params=()):
         return _pg().execute(sql, params)
 
 
-#: The columns of every ledger row. Two groups of columns exist only after a migration, and a record
+#: The columns of every ledger row. Three groups of columns exist only after a migration, and a record
 #: that sets none of them is written with `_BASE_COLUMNS` alone. So a code server that starts before the
 #: migration replay never fails an ordinary audit row (rows of the other sources never depend on a migration).
 _BASE_COLUMNS = (
@@ -351,8 +354,12 @@ _BASE_COLUMNS = (
 )
 #: A model attempt (#1444): `20261021T0900_datahub_ledger_model_attempt_columns.sql`.
 _ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
+#: The output tokens of a model attempt (#1444): `20261021T1100_datahub_ledger_model_token_columns.sql`.
+_TOKEN_COLUMNS = ("completion_tokens", "reasoning_tokens")
 #: A keyed fetch (#1411 K7): `20261021T1200_datahub_landed_fetch_keys.sql`.
 _KEY_COLUMNS = ("fetch_key",)
+#: Each group is written by a record that sets one of its columns.
+_OPTIONAL_GROUPS = (_ATTEMPT_COLUMNS, _TOKEN_COLUMNS, _KEY_COLUMNS)
 
 
 @functools.cache
@@ -383,10 +390,9 @@ def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
     """The ledger INSERT for ``record`` and its parameters: the base columns, and the columns of
     each group that the record sets."""
     columns: tuple[str, ...] = _BASE_COLUMNS
-    if any(getattr(record, column) is not None for column in _ATTEMPT_COLUMNS):
-        columns += _ATTEMPT_COLUMNS
-    if record.fetch_key is not None:
-        columns += _KEY_COLUMNS
+    for group in _OPTIONAL_GROUPS:
+        if any(getattr(record, column) is not None for column in group):
+            columns += group
     return _statement(columns), tuple(_value(record, column) for column in columns)
 
 

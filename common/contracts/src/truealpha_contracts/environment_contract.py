@@ -322,12 +322,19 @@ class ModelProbeSlots(_StrictFrozenModel):
     launch_margin_seconds: int = Field(ge=0)
 
 
+#: The decoding version of the model request that an environment uses unless the contract names
+#: another one (#1444). The versions themselves are defined in `data_engine.sources.model_decoding`.
+DEFAULT_DECODING_VERSION = "v1"
+
+
 class ModelSeatEnvironmentLimits(_StrictFrozenModel):
     """What one environment may spend of the shared model account (#1444)."""
 
     max_concurrent_calls: int = Field(ge=1)
     calls_per_minute: int = Field(ge=1)
     probe_offset_minutes: int = Field(ge=0, le=59)
+    #: The decoding version of the model request in this environment.
+    decoding_version: str = Field(default=DEFAULT_DECODING_VERSION, pattern=r"^v[0-9]+$")
 
 
 class ModelSeatContract(_StrictFrozenModel):
@@ -364,6 +371,11 @@ class ModelSeatContract(_StrictFrozenModel):
     def limits_for(self, environment: str) -> ModelSeatEnvironmentLimits | None:
         """The limits of ``environment``, or None when the environment is not listed (dev, ci)."""
         return self.environments.get(environment)
+
+    def decoding_version_for(self, environment: str) -> str:
+        """The decoding version of ``environment``; an environment that is not listed uses the default."""
+        limits = self.limits_for(environment)
+        return DEFAULT_DECODING_VERSION if limits is None else limits.decoding_version
 
     def probe_offset_minutes(self, environment: str) -> int:
         limits = self.limits_for(environment)

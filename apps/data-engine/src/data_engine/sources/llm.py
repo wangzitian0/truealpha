@@ -39,7 +39,7 @@ from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
-from data_engine.sources import gateway, model_policy
+from data_engine.sources import gateway, model_decoding, model_policy
 from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
@@ -222,19 +222,28 @@ def is_configured() -> bool:
     return bool(settings.llm_api_key)
 
 
-def build_chat_request(task: ModelTask, user_content: str, *, model: str) -> dict[str, Any]:
+def build_chat_request(
+    task: ModelTask,
+    user_content: str,
+    *,
+    model: str,
+    decoding: model_decoding.DecodingVersion | None = None,
+) -> dict[str, Any]:
     """The provider request for any task. Its digest IS the replay key, so everything that
-    could change the answer has to be in here."""
+    could change the answer has to be in here.
+
+    The decoding settings are part of the invocation identity (§9) and come from a named version
+    (`sources.model_decoding`). The default is the version that the environment contract names for
+    this environment. Another version builds the request of its time, so that the replay can find an
+    answer stored under it (#1444)."""
+    version = decoding or model_decoding.for_environment(gateway.capacity_environment())
     return {
         "model": model,
         "messages": [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}],
         "max_tokens": task.max_tokens,
         "temperature": 0,
-        # Deterministic decoding settings are part of the invocation identity (§9). The request
-        # asks for reasoning mode off so that the answer is the JSON, not a trace. Z.ai documents
-        # that GLM-5.3 accepts only `enabled` (#1444); the effect is read from the ledger.
-        "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
+        **version.parameters(),
     }
 
 
@@ -245,7 +254,7 @@ def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate],
     return build_chat_request(HEADCOUNT_TASK, user, model=model)
 
 
-def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
+def _request_params(request_body: dict[str, Any], decoding: model_decoding.DecodingVersion) -> dict[str, Any]:
     """The request parameters that matter for the model plan, for the ledger row (#1444).
 
     An allow-list: the headers, the messages and the key never enter it. ``thinking`` is the type
@@ -254,7 +263,9 @@ def _request_params(request_body: dict[str, Any]) -> dict[str, Any]:
     response_format = request_body.get("response_format")
     return {
         "model": request_body.get("model"),
+        "decoding_version": decoding.name,
         "thinking": thinking.get("type") if isinstance(thinking, dict) else None,
+        "reasoning_effort": request_body.get("reasoning_effort"),
         "max_tokens": request_body.get("max_tokens"),
         "temperature": request_body.get("temperature"),
         "response_format": response_format.get("type") if isinstance(response_format, dict) else None,
@@ -381,17 +392,27 @@ def _is_context_limit_response(status: int, body: bytes) -> bool:
 #:
 #: A row whose `served_model` is null matches only the first way, which was the whole key
 #: before, so existing rows replay as they did.
-_REPLAY_SQL = """
+#:
+#: Both ways are tried for the request of EVERY known decoding version (#1444, `model_decoding`),
+#: so an answer stored under an older version replays for an ask in the current one. The first
+#: answered ask still wins. An answer that the provider cut off (`finish_reason` is `length`)
+#: is not an answer: it is read from the stored response and never replayed.
+def _replay_sql(versions: int) -> str:
+    same_digest = " or ".join(["(request_sha256 = %s and model = %s)"] * versions)
+    same_question = ", ".join(["%s::jsonb"] * versions)
+    return f"""
 select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider,
        served_model, model
 from staging.model_invocations
 where subject_cik = %s and accession = %s
   and status_code is not null and status_code < 400
-  and ((request_sha256 = %s and model = %s)
-       or (served_model = %s and (request - 'model') = %s::jsonb))
+  and coalesce(response -> 'choices' -> 0 ->> 'finish_reason', '') <> 'length'
+  and ({same_digest}
+       or (served_model = %s and (request - 'model') in ({same_question})))
 order by id asc
 limit 1
 """
+
 
 #: One asker per question at a time. The key is the request WITHOUT the model name, the
 #: same scope the replay read matches, so an alias ask and a pinned-name ask for one
@@ -425,15 +446,22 @@ def _replay(
     cik: int,
     accession: str,
     model: str,
-    request_sha256: str,
-    question: str,
+    requests: Sequence[dict[str, Any]],
 ) -> ModelInvocation | None:
     """The first answer the provider gave (status < 400) to an identical prior ask. An
-    identical ask has the same subject, filing, instructions, candidates and decoding
-    settings, asked of the same model; see `_REPLAY_SQL` for the two ways a row matches.
-    A changed candidate set or schema is a different request and is asked again. A vendor
-    error is recorded but never replayed as an answer (review on #754)."""
-    row = connection.execute(_REPLAY_SQL, (cik, accession, request_sha256, model, model, question)).fetchone()
+    identical ask has the same subject, filing, instructions and candidates, asked of the same
+    model, in any known decoding version; ``requests`` holds the request of each version and
+    `_replay_sql` says how a row matches. A changed candidate set or schema is a different
+    request and is asked again. A vendor error is recorded but never replayed as an answer
+    (review on #754)."""
+    params = (
+        cik,
+        accession,
+        *(value for request in requests for value in (_request_sha256(request), model)),
+        model,
+        *(_question(request) for request in requests),
+    )
+    row = connection.execute(_replay_sql(len(requests)), params).fetchone()
     if row is None:
         return None
     decision = row[1] if isinstance(row[1], dict) else json.loads(row[1])
@@ -484,11 +512,13 @@ def invoke(
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
-    request_body = build_chat_request(task, user_content, model=model)
+    decoding = model_decoding.for_environment(gateway.capacity_environment())
+    request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
     ask = partial(
         _ask,
         task=task,
         model=model,
+        decoding=decoding,
         request_body=request_body,
         cik=cik,
         accession=accession,
@@ -506,16 +536,17 @@ def invoke(
         # statement. An explicit transaction holds the lock until the row is written, and
         # commits the row, a recorded refusal included, before the error below is raised.
         with connection.transaction() if getattr(connection, "autocommit", False) else nullcontext():
-            question = json.dumps(_without_model(request_body), sort_keys=True, ensure_ascii=False)
-            _lock_question(connection, cik=cik, accession=accession, question=question)
+            known = [build_chat_request(task, user_content, model=model, decoding=v) for v in model_decoding.KNOWN]
+            # The lock key is the question in the oldest version: it never changes, so a process
+            # that still asks in an older version and one that asks in the current one wait for each other.
+            _lock_question(connection, cik=cik, accession=accession, question=_question(known[0]))
             replayed = _replay(
                 connection,
                 task=task,
                 cik=cik,
                 accession=accession,
                 model=model,
-                request_sha256=_request_sha256(request_body),
-                question=question,
+                requests=known,
             )
             if replayed is not None:
                 return replayed
@@ -523,6 +554,11 @@ def invoke(
     if error is not None:
         raise error
     return invocation
+
+
+def _question(request_body: dict[str, Any]) -> str:
+    """The request without the model name, as the text the lock and the replay compare."""
+    return json.dumps(_without_model(request_body), sort_keys=True, ensure_ascii=False)
 
 
 def _request_sha256(request_body: dict[str, Any]) -> str:
@@ -550,6 +586,7 @@ def _call_provider(
     headers: dict[str, str],
     request_bytes: bytes,
     request_body: dict[str, Any],
+    decoding: model_decoding.DecodingVersion,
     timeout_seconds: int,
     caller: str,
     transport: Transport | None,
@@ -561,7 +598,7 @@ def _call_provider(
     second time under another seat figure. A transport error raises after its row is written. The
     wait for the rate window counts against the deadline: when it ends the wait, the last answer
     stands."""
-    request_params = _request_params(request_body)
+    request_params = _request_params(request_body, decoding)
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
     send = transport or _gateway_transport
@@ -656,7 +693,30 @@ def _attempt(
             payload = json.loads(body.decode())
             usage = payload.get("usage") or {}
             call.cost = Decimal(int(usage.get("total_tokens") or 0))
+            call.completion_tokens = _token_count(usage.get("completion_tokens"))
+            call.reasoning_tokens = _token_count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
+            if ((payload.get("choices") or [{}])[0]).get("finish_reason") == "length":
+                call.fail("finish_reason=length: the answer was cut at max_tokens")
     return _ProviderAnswer(status, body, payload, usage, provider_code)
+
+
+def _answer_decision(
+    payload: dict[str, Any],
+    max_tokens: int,
+    parse: Callable[[str], dict[str, Any]],
+    refusal: Callable[[str], dict[str, Any]],
+) -> dict[str, Any]:
+    """The decision of an answered call. An answer that the provider cut off at ``max_tokens`` has
+    no complete JSON, and with thinking on the reasoning can use the whole limit (#1444). It is a
+    refusal, and the replay never reads it as an answer (`_replay_sql`)."""
+    choice = (payload.get("choices") or [{}])[0]
+    if choice.get("finish_reason") == "length":
+        return refusal(f"truncated: finish_reason=length at max_tokens {max_tokens}")
+    return parse((choice.get("message") or {}).get("content") or "")
+
+
+def _token_count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _ask(
@@ -664,6 +724,7 @@ def _ask(
     *,
     task: ModelTask,
     model: str,
+    decoding: model_decoding.DecodingVersion,
     request_body: dict[str, Any],
     cik: int,
     accession: str,
@@ -727,6 +788,7 @@ def _ask(
             headers=headers,
             request_bytes=request_bytes,
             request_body=request_body,
+            decoding=decoding,
             timeout_seconds=task.timeout_seconds,
             caller=caller,
             transport=transport,
@@ -755,8 +817,7 @@ def _ask(
                 # body as a refusal, excluded from replay so the next run asks again.
                 decision = refusal(f"HTTP {status}: {body[:200]!r}")
         else:
-            content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            decision = parse(content)
+            decision = _answer_decision(payload, request_body["max_tokens"], parse, refusal)
     completed_at = now()
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(

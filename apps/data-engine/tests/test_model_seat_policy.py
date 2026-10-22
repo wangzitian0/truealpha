@@ -554,7 +554,9 @@ def test_each_attempt_records_the_request_parameters_without_the_key(world, call
     assert len(call_ledger) == 2
     expected = {
         "model": settings.llm_model,
+        "decoding_version": "v1",
         "thinking": "disabled",
+        "reasoning_effort": None,
         "max_tokens": model_key_health.PROBE_TASK.max_tokens,
         "temperature": 0,
         "response_format": "json_object",
