@@ -9,9 +9,9 @@ file is scoped to the decision logic only (#583's boundary).
 
 The owner's 2026-09-17 decision ("先在 staging 做吧，prod 回头再说") sets three
 hard constraints. This file is the direct evidence for two of them:
-  - `test_the_daily_cap_defaults_to_four_and_is_enforced_by_todays_auto_tags`
+  - `test_the_daily_cap_is_enforced_by_todays_auto_tags`
     and `test_a_hand_cut_tag_never_counts_against_the_automatic_cap` prove the
-    "at most 4 automatic releases a day" bound.
+    "at most DEFAULT_DAILY_CAP automatic releases a day" bound.
   - `test_reason_1_a_later_push_during_the_quiet_period_defers_to_its_own_run`
     proves the debounce ITSELF: the quiet period is a plain wait in the
     workflow (asserted separately), and what makes it a debounce rather than a
@@ -197,27 +197,31 @@ def test_daily_cap_must_be_non_negative() -> None:
         decide(facts(), daily_cap=-1)
 
 
-def test_the_daily_cap_defaults_to_four_and_is_enforced_by_todays_auto_tags() -> None:
-    """Owner constraint (#1322): at most 10 automatic staging batch releases a day.
-    9 today still releases; the 10th request for today refuses — proving the bound is
-    enforced, not merely declared."""
-    assert DEFAULT_DAILY_CAP == 10
-    nine_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(9))
-    allowed = decide(facts(tags=nine_today))
+def test_the_daily_cap_is_enforced_by_todays_auto_tags() -> None:
+    """At most `DEFAULT_DAILY_CAP` automatic staging releases a day (the rationale is at the constant).
+    One fewer today still releases; the next request for today refuses: the bound is enforced, not declared."""
+    below = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(DEFAULT_DAILY_CAP - 1))
+    allowed = decide(facts(tags=below))
     assert allowed.release is True
 
-    ten_today = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(10))
-    refused = decide(facts(tags=ten_today))
+    at_cap = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=True) for i in range(DEFAULT_DAILY_CAP))
+    refused = decide(facts(tags=at_cap))
     assert refused.release is False
-    assert "daily cap reached: 10" in refused.reason
+    assert f"daily cap reached: {DEFAULT_DAILY_CAP}" in refused.reason
+
+
+def test_the_default_daily_cap_is_ten() -> None:
+    """The value is pinned once. A change of the number must change this line and the measurement at the constant."""
+    assert DEFAULT_DAILY_CAP == 10
 
 
 def test_a_hand_cut_tag_never_counts_against_the_automatic_cap() -> None:
     """A hand-cut release (no AUTO_TRAILER) must never eat into the automatic
     budget — otherwise an operator release could silently starve the
-    automatic path for the rest of the day."""
-    four_hand_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=False) for i in range(4))
-    result = decide(facts(tags=four_hand_tags))
+    automatic path for the rest of the day. As many hand tags as the cap would
+    refuse the release if they counted."""
+    hand_tags = tuple(tag(f"v0.0.{i}", commit=OTHER, auto=False) for i in range(DEFAULT_DAILY_CAP))
+    result = decide(facts(tags=hand_tags))
     assert result.release is True, "hand-cut tags must not be counted by automatic_releases_on"
 
 

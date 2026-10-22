@@ -817,14 +817,16 @@ def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatc
 
 
 def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transactions(monkeypatch) -> None:
-    """While `SP500_SCHEDULE_STATUS` is STOPPED, `_refresh_universes` skips `sp500` (both constituent
+    """While the contract lists `sp500` as stopped, `_refresh_universes` skips `sp500` (both constituent
     refresh and `IVV` N-PORT capture) and gives each active universe its own connection so one
     constituent failure never rolls back another universe's published list."""
     import psycopg
+    from data_engine.config import settings
     from data_engine.datahub.production_topt import holdings_enrichment, nport_holdings
     from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
     from data_engine.lanes import universe_refresh
 
+    monkeypatch.setattr(settings, "app_env", "production")
     commits: list[int] = []
     conn_counter = 0
 
@@ -871,12 +873,13 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
 
 
-# -- #1310: the SP500 schedule stays STOPPED until a Twelve Data budget exists for it ---------------------
+# -- #1310: the SP500 schedule stays STOPPED until the unlock of the contract holds ------------------------
 
 #: Every failure below shows this text, so a person who flips the SP500 status reads the reason first.
 SP500_STOPPED_BECAUSE = (
-    "#1310: one SP500 tick needs about 1,000 Twelve Data credits. Production owns 480 credits a day. "
-    "Keep the SP500 schedule STOPPED until a declared Twelve Data budget for the SP500 tick exists."
+    "environment_contract.v1.json holds the SP500 as stopped until QQQ runs end to end on production and the "
+    "verdict fetch_keys_once is green for 3 consecutive nights. #1310: one SP500 tick needs about 1,000 "
+    "Twelve Data credits, and production owns 480 credits a day."
 )
 
 
@@ -909,7 +912,7 @@ def test_the_sp500_schedule_is_stopped_in_every_environment_and_its_job_stays_re
 
 def test_the_sp500_universe_has_no_schedule_in_any_environment_and_the_qqq_rule_is_unchanged() -> None:
     """#1310: freshness checks skip a head whose lane has no running schedule. SP500 has none.
-    QQQ keeps its rule: scheduled in production, manual in staging."""
+    QQQ keeps its rule: scheduled in production, not run in staging."""
     for environment in ("production", "prod", "staging"):
         assert capture.is_universe_scheduled("sp500", environment) is False, (environment, SP500_STOPPED_BECAUSE)
         assert capture.is_universe_scheduled("universe-list:sp500", environment) is False, environment
@@ -996,3 +999,107 @@ def test_a_stale_sp500_head_is_not_reported_by_the_nightly_served_head_check() -
     assert stale_served_heads(Connection(), environment="production") == [
         "universe:qqq-us-2026-09-30 freshness=stale availability=available (older than 72 hours)"
     ], SP500_STOPPED_BECAUSE
+
+
+# -- #1310: the contract is the only source of "stopped" -----------------------------------------------
+
+
+def test_the_sp500_stop_is_read_from_the_contract_and_from_no_constant() -> None:
+    """The production daemon loads `data_engine.dagster_defs`. A probe loads that module with a contract
+    that differs from the packaged one in one fact: the production status of the SP500 universe. If
+    any code kept a status of its own, the SP500 schedules would stay STOPPED. In staging the SP500
+    stays STOPPED, because the contract does not list the SP500 there."""
+    import os
+    import subprocess
+    import sys
+
+    probe = (
+        "import json\n"
+        "from importlib import resources\n"
+        "from truealpha_contracts import environment_contract as contract_module\n"
+        "raw = json.loads(resources.files('truealpha_contracts.data').joinpath('environment_contract.v1.json').read_text())\n"
+        "raw['environments']['production']['universes'][2] = {'key': 'sp500', 'status': 'scheduled'}\n"
+        "unlocked = contract_module.EnvironmentContract.model_validate_json(json.dumps(raw))\n"
+        "contract_module.load_environment_contract = lambda: unlocked\n"
+        "from data_engine import dagster_defs\n"
+        "rows = {s.name: s.default_status.name for s in dagster_defs.defs.schedules}\n"
+        "print(json.dumps(rows))\n"
+    )
+    statuses: dict[str, dict[str, str]] = {}
+    for app_env in ("production", "staging"):
+        finished = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=Path(__file__).parent,  # a directory without a `.env` file
+            env={**os.environ, "APP_ENV": app_env},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert finished.returncode == 0, finished.stderr
+        statuses[app_env] = json.loads(finished.stdout.splitlines()[-1])
+
+    for schedule in ("sp500_live_schedule", "sp500_universe_refresh_schedule"):
+        assert statuses["production"][schedule] == "RUNNING", f"{schedule} ignores the contract"
+        assert statuses["staging"][schedule] == "STOPPED", f"{schedule} runs in staging"
+
+
+def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_is_source_refresh_enabled` refreshes a universe where the contract schedules it, and the canary
+    where the contract declares its tick. The SP500 waits in production and is absent in staging.
+    Staging runs the TOPT universe only, so it refreshes no QQQ."""
+    from data_engine.config import settings
+    from data_engine.lanes import universe_refresh
+    from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+
+    raw = json.loads(load_environment_contract().model_dump_json())
+    raw["environments"]["production"]["universes"][2] = {"key": "sp500", "status": "scheduled"}
+    unlocked = EnvironmentContract.model_validate_json(json.dumps(raw))
+
+    class _Source:
+        def __init__(self, etf: str) -> None:
+            self.etf = etf
+
+    UNLISTED = "universe-the-contract-does-not-list"
+
+    def enabled() -> dict[str, bool]:
+        return {
+            etf: universe_refresh._is_source_refresh_enabled(_Source(etf))
+            for etf in ("qqq", "sp500", "canary", UNLISTED)
+        }
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    assert enabled() == {"qqq": True, "sp500": False, "canary": True, UNLISTED: True}, SP500_STOPPED_BECAUSE
+    monkeypatch.setattr(settings, "app_env", "staging")
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}
+
+    monkeypatch.setattr(capture, "load_environment_contract", lambda: unlocked)
+    monkeypatch.setattr(settings, "app_env", "production")
+    assert enabled() == {"qqq": True, "sp500": True, "canary": True, UNLISTED: True}, "the contract unlocks the SP500"
+    monkeypatch.setattr(settings, "app_env", "staging")
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}, (
+        "staging does not list the SP500"
+    )
+
+
+@pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
+def test_an_environment_the_contract_does_not_name_runs_the_topt_tick_and_the_canary_only(app_env: str) -> None:
+    """A mistyped APP_ENV must never start the production schedules (QQQ, the S&P 500). It takes the rule of staging."""
+    from data_engine.environment_universes import rule_environment, scheduled_universe_names
+
+    rows = _schedule_rows(dagster_defs.build_definitions(app_env))
+
+    assert rule_environment(app_env) == "staging"
+    assert scheduled_universe_names(app_env) == ("topt",)
+    assert rows["topt_live_schedule"][1] == "RUNNING" and rows["canary_daily_schedule"][1] == "RUNNING"
+    assert rows["qqq_live_schedule"][1] == "STOPPED" and rows["sp500_live_schedule"][1] == "STOPPED"
+    assert rows["universe_refresh_schedule"][1] == "STOPPED"
+
+
+def test_the_production_alias_prod_is_production_for_the_universe_names() -> None:
+    from data_engine.environment_universes import rule_environment, scheduled_universe_names
+
+    assert rule_environment("prod") == rule_environment(" Production ") == "production"
+    assert scheduled_universe_names("prod") == ("topt", "universe-list:qqq")

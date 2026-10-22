@@ -747,3 +747,41 @@ def test_parse_annual_financials_attaches_consensus_profit_growth_from_valuation
     assert assertion is not None
     assert assertion.by_period_end[date(2025, 12, 31)]["consensus_profit_growth"] == Decimal("24.5")
     assert assertion.values.get("consensus_profit_growth") == Decimal("24.5")
+
+
+# -- fetch keys (#1411 K3): the second reader of a landed key never asks OpenD ----------
+
+
+def test_a_second_kline_fetcher_of_the_same_symbol_and_session_makes_no_openD_call() -> None:
+    """A new fetcher (the next tick, the next universe) reads the landed bars of the key it shares."""
+    first, second = _CassetteClient(bars={"US.AAPL": _SETTLED_WINDOW}), _CassetteClient(bars={"US.AAPL": []})
+    quote_one = MoomooKlineFetcher(first)("AAPL", _PARTITION)
+    quote_two = MoomooKlineFetcher(second)("AAPL", _PARTITION)
+    assert quote_one is not None and quote_two == quote_one
+    assert len(first.calls) == 1 and second.calls == [], "the second fetcher reached OpenD for a landed key"
+
+
+def test_the_financials_fetcher_lands_each_statement_under_its_own_key() -> None:
+    """Income statement and balance sheet are two OpenD requests, so they are two keys and two ledger rows."""
+    first, second = _CassetteClient(statements={"US.DDOG": _statements("DDOG")}), _CassetteClient(statements={})
+    one = MoomooFinancialsFetcher(first)("DDOG", _CUTOFF)
+    two = MoomooFinancialsFetcher(second)("DDOG", _CUTOFF)
+    assert one is not None and two == one
+    assert [call[0] for call in first.calls] == ["financial_statements"] * 2
+    assert second.calls == [], "the second fetcher reached OpenD for landed statements"
+
+
+def test_the_moomoo_ledger_row_carries_the_key_of_the_fetch_that_made_the_call(monkeypatch) -> None:
+    """`sources.moomoo._call` writes its own ledger row; the verdict counts it only if it names the key."""
+    from data_engine.config import settings
+    from data_engine.datahub.fetch_key import FetchKey
+    from data_engine.sources import gateway
+
+    rows: list[gateway.CallRecord] = []
+    monkeypatch.setattr(settings, "moomoo_ledger_backend", "postgres")
+    monkeypatch.setattr(gateway, "postgres_writer", rows.append)
+    key = FetchKey("moomoo", "history_kline", "symbol:AAPL", "2026-07-29")
+    with gateway.fetching(key):
+        ledger.record("request_history_kline", "test", True, request_uri="moomoo://US.AAPL")
+    ledger.record("request_history_kline", "test", True, request_uri="moomoo://US.AAPL")
+    assert [row.fetch_key for row in rows] == [key.ledger_key, None]

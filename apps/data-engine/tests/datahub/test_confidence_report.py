@@ -970,7 +970,13 @@ def test_sec_oracle_without_a_fetcher_says_so_instead_of_guessing() -> None:
 # -- the deployed wiring ---------------------------------------------------------------------------
 
 
-def test_the_confidence_job_is_scheduled_after_the_invariants_and_runs_per_universe() -> None:
+@pytest.mark.parametrize(
+    ("app_env", "universes"),
+    [("production", ("topt", "universe-list:qqq")), ("staging", ("topt",))],
+)
+def test_the_confidence_job_is_scheduled_after_the_invariants_and_runs_per_universe_of_the_environment(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, universes: tuple[str, ...]
+) -> None:
     from data_engine.lanes import quality
 
     assert quality.defs.get_job_def(quality.CONFIDENCE_REPORT_JOB_NAME) is not None
@@ -979,8 +985,9 @@ def test_the_confidence_job_is_scheduled_after_the_invariants_and_runs_per_unive
     report_minute, report_hour = schedule.cron_schedule.split()[:2]
     assert (int(report_hour), int(report_minute)) > (int(invariants_hour), int(invariants_minute))
     tick = datetime(2026, 9, 16, 0, 45, tzinfo=UTC)
+    monkeypatch.setattr(settings, "app_env", app_env)
     requests = list(schedule(dg.build_schedule_context(scheduled_execution_time=tick)))
-    assert [r.run_key for r in requests] == [f"{tick.isoformat()}:{u}" for u in quality.CONFIDENCE_REPORT_UNIVERSES]
+    assert [r.run_key for r in requests] == [f"{tick.isoformat()}:{u}" for u in universes]
     for request in requests:
         assert request.run_config["ops"]["run_confidence_report"]["config"]["executed_at"] == tick.isoformat()
 

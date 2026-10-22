@@ -147,8 +147,8 @@ jobs:
           TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
         # Stdlib only (tools/auto_release.py's own docstring) — no `uv sync`,
         # nothing installed but the checkout above. `--daily-cap` is left at
-        # its default (4, the owner's bound) so the number lives in exactly
-        # one place; test_auto_release.py pins that default.
+        # its default (`DEFAULT_DAILY_CAP` in common/runtime/src/truealpha_tools/auto_release.py)
+        # so the number lives in exactly one place.
         # `--report-staging-red` keeps the staging-red issue in step with the run history (#1468).
         # Run the same command by hand without that flag to replay the decision read-only.
         run: |

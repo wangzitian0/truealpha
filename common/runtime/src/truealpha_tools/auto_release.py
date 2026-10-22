@@ -2,7 +2,7 @@
 """Decide whether a quiet, green main HEAD is released to staging now.
 
     python3 tools/auto_release.py --repo wangzitian0/truealpha --trigger-sha <40-hex> \
-        [--daily-cap 4] [--github-output "$GITHUB_OUTPUT"] [--report-staging-red]
+        [--daily-cap N] [--github-output "$GITHUB_OUTPUT"] [--report-staging-red]
 
 `auto-release-staging.yml` runs this after its quiet period and, on `release=true`, runs
 `tools/cut_release.sh <tag> --auto` — the same ceremony an operator runs, without `--prod`.
@@ -36,7 +36,7 @@ not to release even after that quiet period. The first matching reason wins:
    so a release that starts shortly before 22:45 would restart it mid-tick.
    `DEPLOY_LEAD` is that margin. `test_auto_release.py` holds the window against those
    crons.
-6. This UTC day already has `--daily-cap` automatic releases (default 4). They are counted
+6. This UTC day already has `--daily-cap` automatic releases (default `DEFAULT_DAILY_CAP`). They are counted
    from tags whose annotation carries `AUTO_TRAILER`, which `cut_release.sh --auto` writes.
    Hand-cut tags do not count.
 7. A release is already in flight: a `deploy-release.yml` run, a staging surface walk, or a
@@ -78,6 +78,10 @@ from truealpha_tools.staging_line import StagingRelease
 
 #: The annotation line `cut_release.sh --auto` writes; the daily cap counts tags carrying it.
 AUTO_TRAILER = "Release-Trigger: auto-staging"
+#: The most automatic staging releases in one UTC day. This line is the only statement of the number and
+#: of its reason. Measured on 2026-10-21 (git tags, v0.2.31 to v0.2.41): 11 staging releases in 22 hours.
+#: No Dagster run was interrupted by a deploy in that window (Director measurement of `dagster.runs`, #1485).
+#: A change of the number needs a new measurement, not a new sentence in another file.
 DEFAULT_DAILY_CAP = 10
 #: Staging's nightly tick window opens at the TOPT tick (22:45Z) and runs to the end of the
 #: UTC day, past QQQ (23:20Z) and the canary (23:47Z).

@@ -137,7 +137,8 @@ ISSUERS = [
 class _Response:
     def __init__(self, *, json_body: Any = None, content: bytes = b"") -> None:
         self._json = json_body
-        self.content = content
+        # An httpx response carries the same document as bytes and as parsed JSON.
+        self.content = content if json_body is None else json.dumps(json_body).encode()
 
     def raise_for_status(self) -> None:
         return None

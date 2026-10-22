@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -89,21 +90,58 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
     any cutoff more than `period_days` in the past — a backfill would see every price
     cell resolve `FIELD_UNAVAILABLE` rather than an error naming the cause.
     """
+    settled_end = end is not None  # a window that ends today may still change; the index keeps only a fixed end
     end = end or date.today()
     start = end - timedelta(days=period_days)
     params = {"period1": str(_epoch(start)), "period2": str(_epoch(end + timedelta(days=1))), "interval": "1d"}
-    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
-        # Through the external call ledger (#729): the request, its status and the digest
-        # of the body it answered with are recorded before the bytes are parsed or landed.
-        resp = gateway.http_get(
-            client, "yahoo", "chart", CHART_URL.format(symbol=symbol), caller="yahoo.fetch_daily_chart", params=params
-        )
-        resp.raise_for_status()
-        body = resp.content
-        # Decoded with parse_float=Decimal so the response is never routed through a
-        # Python float — that would add a second rounding on top of the vendor's.
-        payload = json.loads(body.decode(), parse_float=Decimal)
+    # One key per symbol, window and settled end date (#1411 K3): a second tick or universe that asks
+    # for the same window reads the landed bytes.
+    key = FetchKey.for_request(
+        "yahoo",
+        "chart",
+        {"symbol": symbol, "interval": "1d", "period_days": str(period_days), "end": end.isoformat()},
+        entity_param="symbol",
+        as_of_params=("end",),
+        default_as_of=gateway.utc_day(),
+    )
+
+    def fetch() -> bytes:
+        with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
+            # Through the external call ledger (#729): the request, its status and the digest
+            # of the body it answered with are recorded before the bytes are parsed or landed.
+            resp = gateway.http_get(
+                client,
+                "yahoo",
+                "chart",
+                CHART_URL.format(symbol=symbol),
+                caller="yahoo.fetch_daily_chart",
+                params=params,
+            )
+            resp.raise_for_status()
+            return bytes(resp.content)
+
+    body = gateway.fetch_once(key, fetch, keep=settled_end, accept=lambda answer: _session_is_final(answer, end))
+    # Decoded with parse_float=Decimal so the response is never routed through a
+    # Python float — that would add a second rounding on top of the vendor's.
+    payload = json.loads(body.decode(), parse_float=Decimal)
     return body, _parse_chart_response(payload)
+
+
+def _session_is_final(body: bytes, end: date) -> bool:
+    """Whether a chart answer settles the session of ``end`` for good, so the index may keep it.
+
+    A session is final once its XNYS close has passed and the chart holds its bar. Before the close the
+    chart sends a bar that still moves (#637). After it, Yahoo can lag and omit the bar, and an older
+    bar would then stand in for the session. An ``end`` that is no XNYS session needs no bar."""
+    from data_engine.datahub.market_prices import is_xnys_trading_day, xnys_session_close_utc
+
+    if end > gateway._utcnow().date():
+        return False
+    if not is_xnys_trading_day(end):
+        return True
+    if gateway._utcnow() < xnys_session_close_utc(end):
+        return False
+    return any(bar.date == end for bar in _parse_chart_response(json.loads(body.decode(), parse_float=Decimal)))
 
 
 def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int = 365) -> list[PriceBar]:

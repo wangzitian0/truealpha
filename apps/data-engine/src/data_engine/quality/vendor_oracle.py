@@ -22,7 +22,13 @@ period end rather than by declaration order.
 
 A checked-in expected value would not do either: a constant is authored by this repository
 too, so it drifts silently the moment the issuer files again. The right-hand side has to
-come over the network at check time.
+come from the vendor.
+
+The oracle reads the SEC document by the same fetch key as the tick (#1411 K5). A document
+that the tick landed on the same UTC day is read from the index, and SEC is asked once. The
+independence of the oracle is its parser. It cannot catch a defect of the fetch step, because
+it reads the same bytes. The sha256 of each landed document is in `raw.fetches` and in the
+ledger row of the call, so a wrong fetch is a lineage question (#1418 B7), not an oracle one.
 """
 
 from __future__ import annotations
@@ -37,6 +43,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from psycopg import Connection
+
+from data_engine.datahub.fetch_key import FetchKey
 
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -115,25 +123,33 @@ class Drift:
         return max(0, self.vendor.period_end.year - self.mart_period_end.year)
 
 
-def _http_json(url: str, user_agent: str) -> dict[str, Any]:
+def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
+    """One SEC document, fetched once per ``key`` (#1411 K5): the oracle reads the bytes the tick landed."""
     from data_engine.sources import gateway
 
-    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
-    # raises as it always did here instead of being parsed as a document.
-    _status, body = gateway.urlopen(
-        "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
-    )
-    return json.loads(body.decode())
+    def fetch() -> bytes:
+        request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+        # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
+        # raises as it always did here instead of being parsed as a document.
+        _status, body = gateway.urlopen(
+            "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
+        )
+        return body
+
+    return json.loads(gateway.fetch_once(key, fetch).decode())
 
 
 def ticker_cik_index(user_agent: str) -> dict[str, int]:
-    payload = _http_json(_TICKERS_URL, user_agent)
+    from data_engine.sources import sec
+
+    payload = _http_json(_TICKERS_URL, user_agent, sec.company_tickers_key())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in payload.values()}
 
 
 def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
-    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent)
+    from data_engine.sources import sec
+
+    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, sec.company_facts_key(cik))
 
 
 def _annual_entries(facts: dict[str, Any], concept: str, unit: str, cutoff: date) -> Iterable[tuple[date, Decimal]]:
