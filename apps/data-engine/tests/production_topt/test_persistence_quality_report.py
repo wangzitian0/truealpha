@@ -1167,7 +1167,7 @@ def test_the_oracle_catches_the_fixtures_own_impossible_numbers(connection) -> N
 _NO_BAR_TICKER = "XOM"
 
 
-def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_report(connection, capsys) -> None:
+def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_report(capsys) -> None:
     """#1346. Both daily series of every TOPT symbol but one are stored, as the market-data lane stores them.
 
     The financial-fact payload of the symbol without series carries a share count. The frozen snapshot
@@ -1175,24 +1175,34 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
     issuer unavailable. The report reads that verdict, so it does not list the listing as complete, and
     the nightly invariant holds on the rows that the deployed writers wrote. Red when the report decides
     from the payload alone: it listed the listing complete (production, listing xnas:wdc).
+
+    The test runs in a database of its own: the symbol must have no committed bar, and a shared database
+    could hold one. The other tick tests call `freeze_snapshot` and `build_report` in the order of
+    `composition.run_topt_pipeline`; `test_live_share_basis.py` pins that order through the deployed op.
     """
-    store = _InMemoryObjectStore()
-    plan = _capture(connection, version="test-1346-share-count", object_store=store)
-    stored = [symbol for symbol in DEFAULT_TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
-    store_flat_daily_series(connection, stored, first=date(2026, 1, 2), last=CUTOFF.date())
-    core = PostgresToptCoreRepository(connection)
-    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    report = quality_report.build_report(connection, plan.run_id, object_store=store)
-    quality_report.persist(connection, report)
+    from truealpha_runtime.testing import isolated_test_database
 
-    assert [result.availability.value for result in results].count("unavailable") == 1, "only the issuer without bars"
-    grade = report["factor_availability"]["gross_profit_per_employee"]
-    assert f"listing:xnys:{_NO_BAR_TICKER.lower()}" not in grade["complete_subject_ids"]
-    assert grade["complete_subjects"] == len(grade["complete_subject_ids"]) == 20
-    # What falls: one financial-fact cell of 84 is no longer usable.
-    assert report["available_count"] == report["requested_count"] - 1 == 83
+    with isolated_test_database("report_share_count") as url, psycopg.connect(url) as connection:
+        store = _InMemoryObjectStore()
+        plan = _capture(connection, version="test-1346-share-count", object_store=store)
+        stored = [symbol for symbol in DEFAULT_TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
+        store_flat_daily_series(connection, stored, first=date(2026, 1, 2), last=CUTOFF.date())
+        core = PostgresToptCoreRepository(connection)
+        snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+        results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+        report = quality_report.build_report(connection, plan.run_id, object_store=store)
+        quality_report.persist(connection, report)
 
-    verdict = _serve_and_judge(connection, plan, snapshot)
-    assert verdict() == 0, capsys.readouterr()
-    assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
+        dropped = sorted(listing for listing, coordinate in plan.coordinates.items() if coordinate[3] == _NO_BAR_TICKER)
+        assert len(dropped) == 1, "the fixture holds one listing of the symbol"
+        assert [result.availability.value for result in results].count("unavailable") == len(dropped)
+        grade = report["factor_availability"]["gross_profit_per_employee"]
+        expected_complete = sorted(set(plan.coordinates) - set(dropped))
+        assert grade["complete_subject_ids"] == expected_complete
+        assert grade["complete_subjects"] == len(expected_complete)
+        # What falls: one financial-fact cell for each dropped listing is no longer usable.
+        assert report["available_count"] == report["requested_count"] - len(dropped)
+
+        verdict = _serve_and_judge(connection, plan, snapshot)
+        assert verdict() == 0, capsys.readouterr()
+        assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out

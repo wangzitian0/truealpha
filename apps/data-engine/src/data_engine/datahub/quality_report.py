@@ -5,7 +5,9 @@ pipeline (#27) can persist it inside the same transaction as the capture it
 grades. Computes, over the exact requested denominator, the terminal/coverage/
 availability/freshness/independent-reconciliation/lineage/mean-confidence
 figures from the capture tables, and persists one append-only
-`mart.datahub_quality_report` row.
+`mart.datahub_quality_report` row. One input is not a capture table: the share count of a financial
+fact. The report reads the verdict of the frozen core snapshot for it (#1346), so the snapshot must
+exist before the report is built. `composition.run_topt_pipeline` freezes, materializes, then grades.
 
 `independent_reconciliation` is computed by the accepted fusion engine
 `reconcile_source_assertions` (#343): every multi-source market-price cell's
@@ -324,15 +326,19 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
     return False
 
 
-# ---- The share count: the report reads the verdict of the frozen snapshot (#1346) ----
-# The single place that decides share readiness is the frozen snapshot. `_snapshot_member` and
-# `share_basis.live_on_close_basis` drop a count that the stored series cannot put on the share
-# basis of the close, and the core then marks the whole issuer unavailable. The report reads that
-# verdict and does not decide it. A payload can carry a share count that the snapshot dropped.
-# Then `_has_usable_value` says yes and the core says no. The nightly invariant
-# `quality-report-matches-core-results` caught that on the QQQ head of 2026-10-20 (listing xnas:wdc).
-# The report reads the snapshot member, not `mart.topt_core_results`: the invariant compares the
-# two, and a report that read the results would make the invariant true by construction.
+# ---- The share count: the report reads one part of the core verdict from the frozen snapshot (#1346) ----
+# The frozen snapshot decides share readiness. `_snapshot_member` and `share_basis.live_on_close_basis`
+# drop a count that the stored series cannot put on the share basis of the close.
+# The core then marks the whole issuer unavailable. The report reads that one fact and does not decide it.
+# A payload can carry a share count that the snapshot dropped.
+# Then `_has_usable_value` says yes and the core says no.
+# The nightly invariant `quality-report-matches-core-results` showed this on 2026-10-20 (listing xnas:wdc).
+# The report reads the snapshot member, not `mart.topt_core_results`.
+# The invariant compares the two. A report that read the results would make it true by construction.
+# Other gaps remain, and they are tracked on #1346. The report does not read these parts of the verdict.
+# The core marks an issuer unavailable for a missing or non-positive market price.
+# It does so for a stale or unknown cell, and for a non-positive input.
+# A listing with one of these faults is still complete in the report.
 _FROZEN_FACTOR_INPUTS_SQL = """
     select member.factor_input
     from staging.topt_core_snapshots snapshot
@@ -497,6 +503,10 @@ def build_report(
 
     `object_store` is where lineage pointers are dereferenced; it defaults to the deployed
     S3 store, so the deployed call site needs no argument and tests can inject.
+
+    Call it after `freeze_snapshot`. A financial-fact observation is usable when its payload
+    carries the values and the frozen snapshot kept the share count of its issuer (#1346).
+    A run with no frozen snapshot gives the payload-only grade.
     """
     status = conn.execute(
         """
