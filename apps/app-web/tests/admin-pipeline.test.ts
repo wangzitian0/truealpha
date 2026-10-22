@@ -196,7 +196,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(jobRunHealth?.ok === false && jobRunHealth.summary.startsWith("red: head_reports_pipeline"), "the verdict is shown");
   assert(runtimeShape?.ok === null, "a pending verdict stays pending, not red");
   assert(release?.gitSha.startsWith("0123456789ab") === true, "the release names the newest build");
-  assert(Math.abs((release?.ageHours ?? 0) - 50) < 0.1, "the release age is the time since the build first ran");
+  assert(Math.abs((release?.ageHours ?? 0) - 50) < 0.1, "the release age is the time since the start of the stretch");
 }
 
 // --- no failed run: the event log is not read ---
@@ -284,6 +284,73 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(outcome.data.unreadable.verdicts?.includes("permission denied") === true, "the verdicts say why they are missing");
   assert(outcome.data.unreadable.release?.includes("statement timeout") === true, "a timeout is told, never reported as no build");
   assert(outcome.data.jobs.length === 1 && outcome.data.release === null, "the counts stand and the release is missing");
+}
+
+// --- the identity view cannot be read: the page says so and does not report "no build" ---
+{
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+      if (sql.includes("from dagster.runs")) {
+        return {
+          rows: [{ job: "a_job", successes: 1, failures: 0, last_success: "2026-10-21T01:00:00Z", last_failure: null, last_failure_run_id: null }],
+        };
+      }
+      if (sql.includes("mart.data_engine_identity")) {
+        throw Object.assign(new Error("permission denied for view data_engine_identity"), { code: "42501" });
+      }
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready" && outcome.data.release === null, "no release");
+  assert(outcome.data.unreadable.release?.includes("permission denied") === true, "the first read failing is told, not hidden");
+}
+
+// --- the view does not exist (a database that predates it) or holds no run: no release, nothing unreadable ---
+{
+  for (const identity of [
+    () => {
+      throw Object.assign(new Error('relation "mart.data_engine_identity" does not exist'), { code: "42P01" });
+    },
+    () => ({ rows: [] }),
+  ]) {
+    __setTestOpsClient({
+      query: async (sql: string) => {
+        if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+        if (sql.includes("from dagster.runs")) {
+          return {
+            rows: [{ job: "a_job", successes: 1, failures: 0, last_success: "2026-10-21T01:00:00Z", last_failure: null, last_failure_run_id: null }],
+          };
+        }
+        if (sql.includes("mart.data_engine_identity")) return identity();
+        return { rows: [] };
+      },
+    } as never);
+    const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+    assert(outcome.kind === "ready" && outcome.data.release === null && outcome.data.unreadable.release === null, "no view, no run");
+  }
+}
+
+// --- the start of the stretch is null although a build exists: no age, nothing unreadable ---
+{
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
+      if (sql.includes("from dagster.runs")) {
+        return {
+          rows: [{ job: "a_job", successes: 1, failures: 0, last_success: "2026-10-21T01:00:00Z", last_failure: null, last_failure_run_id: null }],
+        };
+      }
+      if (sql === RELEASE_START_SQL) return { rows: [{ since: null }] };
+      if (sql.includes("mart.data_engine_identity")) {
+        return { rows: [{ run_id: "r", git_sha: "abc", image_digest: "sha256:1", created_at: "2026-10-21T01:00:00Z" }] };
+      }
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadPipelineOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready" && outcome.data.release === null && outcome.data.unreadable.release === null, "null start");
 }
 
 // --- a build with no recorded sha has no age, and says nothing is unreadable ---

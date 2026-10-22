@@ -97,6 +97,8 @@ const ready: PipelineOutcome = {
     data: {
       ...ready.data,
       unreadable: { eventLog: "permission denied for table event_logs", verdicts: "statement timeout", release: null },
+      jobRunHealth: null,
+      runtimeShape: null,
     },
   };
   const html = render(unreadable);
@@ -106,6 +108,19 @@ const ready: PipelineOutcome = {
   assert(text(html).includes("The verdicts could not be read") && text(html).includes("statement timeout"), "verdict cause");
   assert(!text(html).includes("no error text in the event log"), "a missing line is not blamed on the event log");
   assert((html.match(/<tr[^>]*data-job="/g) ?? []).length === 3, "the rows stay");
+  assert(/data-verdict="job_run_health">not read</.test(html), "an unread verdict card says not read, not no verdict recorded");
+  assert(!text(html).includes("no verdict recorded"), "no card claims that no verdict exists");
+}
+
+// --- the release cannot be read: the card says so beside the notice ---
+{
+  const html = render({
+    kind: "ready",
+    data: { ...ready.data, release: null, unreadable: { eventLog: null, verdicts: null, release: "permission denied for view" } },
+  });
+  assert(html.includes('data-unreadable="release"') && text(html).includes("The run plans could not be read"), "release notice");
+  assert(/data-release-age="true">not read</.test(html), "the release card says not read");
+  assert(!text(html).includes("no run has recorded its build yet"), "the card does not claim that no build exists");
 }
 
 // --- the other states say something ---

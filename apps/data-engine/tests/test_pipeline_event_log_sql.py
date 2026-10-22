@@ -140,13 +140,12 @@ def test_the_jobs_query_counts_the_window_names_the_newest_failure_and_drops_a_j
     assert rows["healthy_job"][2] is not None and rows["healthy_job"][3] is None and rows["healthy_job"][4] is None
 
 
-def test_the_release_start_is_the_first_run_of_the_current_stretch_of_the_build(runs) -> None:
-    """A, B, A, A: the build A returned after B. Its release age counts from the second A, not from the first."""
-    url, _ = runs
+def start_of(url: str, builds: list[tuple[str, int]], sha: str) -> tuple[datetime | None]:
+    """RELEASE_START_SQL for `sha` over run plans of `builds` (git sha, day offset). The rows are rolled back."""
     base = datetime(2026, 10, 1, tzinfo=UTC)
-    with psycopg.connect(url, autocommit=True) as connection:
-        connection.execute("set session_replication_role = replica")  # run plans need a run row and a validator
-        for index, (sha, offset) in enumerate((("A", 0), ("B", 1), ("A", 2), ("A", 3))):
+    with psycopg.connect(url) as connection:
+        connection.execute("set local session_replication_role = replica")  # run plans need a run row and a validator
+        for index, (build, offset) in enumerate(builds):
             connection.execute(
                 "insert into raw.production_topt_run_plans (run_id, release_manifest_id, content_sha256, payload, created_at) "
                 "values (%s, %s, %s, %s::jsonb, %s)",
@@ -154,15 +153,37 @@ def test_the_release_start_is_the_first_run_of_the_current_stretch_of_the_build(
                     f"capture-run:test{index}",
                     "release-manifest:" + "a" * 64,
                     f"{index:064x}",
-                    json.dumps({"data_engine_git_sha": sha}),
+                    json.dumps({"data_engine_git_sha": build}),
                     base + timedelta(days=offset),
                 ),
             )
-        sql = loader_sql(OPS, "RELEASE_START_SQL")
-        newest = connection.execute(sql, {"p1": "A"}).fetchone()
-        older = connection.execute(sql, {"p1": "B"}).fetchone()
-        absent = connection.execute(sql, {"p1": "C"}).fetchone()
+        row = connection.execute(loader_sql(OPS, "RELEASE_START_SQL"), {"p1": sha}).fetchone()
+        connection.rollback()
+    assert row is not None
+    return (row[0],)
 
-    assert newest == (base + timedelta(days=2),), "the stretch began at the second A"
-    assert older == (None,), "B ended before the newest run: it has no run after the newest run of another build"
-    assert absent == (None,)
+
+DAY = datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def test_the_release_start_is_the_first_run_of_the_current_stretch_of_the_build(runs) -> None:
+    """A, B, A, A: the build A returned after B. Its release age counts from the second A, not from the first."""
+    url, _ = runs
+    builds = [("A", 0), ("B", 1), ("A", 2), ("A", 3)]
+
+    assert start_of(url, builds, "A") == (DAY + timedelta(days=2),), "the stretch began at the second A"
+    assert start_of(url, builds, "B") == (None,), "B has no run after the newest run of another build"
+    assert start_of(url, builds, "C") == (None,), "a build with no run has no start"
+
+
+def test_a_run_with_no_recorded_sha_is_not_another_build(runs) -> None:
+    """C, unknown, C: the stamp is missing on one run plan. It must not start a new stretch of C."""
+    url, _ = runs
+
+    assert start_of(url, [("C", 0), ("unknown", 1), ("C", 2)], "C") == (DAY,)
+
+
+def test_a_build_that_ran_once_starts_at_that_run(runs) -> None:
+    url, _ = runs
+
+    assert start_of(url, [("A", 0), ("B", 5)], "B") == (DAY + timedelta(days=5),)

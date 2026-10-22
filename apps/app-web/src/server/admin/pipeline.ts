@@ -206,9 +206,9 @@ interface Release {
 
 /** The release is the build of the newest run and the start of its current stretch. A build with no recorded sha has no age. */
 async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<Release> {
-  const build = await loadDataEngineBuild(client);
-  if (build === null || build.gitSha === "unknown") return { release: null, unreadable: null };
   try {
+    const build = await loadDataEngineBuild(client);
+    if (build === null || build.gitSha === "unknown") return { release: null, unreadable: null };
     const since = await loadReleaseStart(client, build.gitSha);
     if (since === null) return { release: null, unreadable: null };
     return { release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 }, unreadable: null };
