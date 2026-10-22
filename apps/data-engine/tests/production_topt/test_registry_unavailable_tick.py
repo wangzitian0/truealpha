@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import sys
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -98,6 +99,21 @@ class _FakeSecSocket:
         return httpx.Response(200, json={"sic": "6021" if bank else "3674", "filings": {"recent": {}}})
 
 
+#: The fiscal period that the fake facts report. A flagged payload must drop it with the numerators.
+_PERIOD = date(2025, 12, 31)
+
+
+def _bundle_with_periods(branch: Any) -> Any:
+    """The offline bundle with both operating numerators and the period of the operating metric set."""
+    bundle = _bundle(branch)
+    return replace(
+        bundle,
+        pre_provision_profit=bundle.pre_provision_profit or Decimal("5000000"),
+        operating_period_end=_PERIOD,
+        revenue_period_end=_PERIOD,
+    )
+
+
 def _arm_registry(
     monkeypatch: pytest.MonkeyPatch, *, timing_out_tickers: set[str] | None
 ) -> tuple[_FakeSecSocket, list[float]]:
@@ -130,7 +146,7 @@ def _arm_registry(
     monkeypatch.setattr(
         sec_financial_adapter,
         "sec_financial_fetcher",
-        lambda cik, cutoff, branch, **_kwargs: _bundle(branch),
+        lambda cik, cutoff, branch, **_kwargs: _bundle_with_periods(branch),
     )
     monkeypatch.setattr(issuer_registry, "_pause", pauses.append, raising=False)
     return socket, pauses
@@ -184,6 +200,17 @@ def test_one_registry_timeout_excludes_one_issuer_and_the_tick_publishes_the_res
         assert payload["gross_profit"] is None and payload["pre_provision_profit"] is None
         assert payload["registry_unavailable"] is True and payload["operating_period_end"] is None
         assert payload["revenue"] is not None and payload["total_assets"] is not None
+        assert payload["revenue_period_end"] == _PERIOD.isoformat(), "the honest facts keep their period"
+        # the same bundle, for an issuer the registry classified, keeps its numerators and its period
+        (classified,) = [
+            row[0]
+            for row in reader.execute(
+                _PAYLOAD_SQL, (metadata["capture_run_id"], _issuer_of(reader, metadata["capture_run_id"], "AAPL"))
+            ).fetchall()
+        ]
+        assert classified["gross_profit"] is not None and classified["pre_provision_profit"] is not None
+        assert classified["operating_period_end"] == _PERIOD.isoformat()
+        assert "registry_unavailable" not in classified
         # the row states a gap
         (availability,) = reader.execute(
             "select availability from mart.topt_core_results where run_id = %s and issuer_id = %s",

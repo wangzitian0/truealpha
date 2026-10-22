@@ -132,6 +132,13 @@ REGISTRY_BACKOFF_SECONDS = 1.0
 #: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no
 #: more. A long outage costs one client timeout (30 s) per issuer instead of three.
 REGISTRY_OUTAGE_AFTER = 3
+#: Elapsed time that one registry pass may spend before it stops reading (#1323). The count above bounds
+#: the attempts and not the time: a host that never answers costs one client timeout (30 s) for each
+#: issuer, so 500 issuers would hold the tick transaction for hours. Dagster ends a run after
+#: `max_runtime_seconds` (10800) without a named refusal. After this budget each issuer that is left is
+#: named unavailable with the reason "not read", and the tick goes on. The pass stays under the budget plus
+#: the cost of one issuer (93 s at most).
+REGISTRY_BUDGET_SECONDS = 180.0
 #: The payload key of a financial-fact observation whose issuer the registry could not classify.
 UNAVAILABLE_PAYLOAD_KEY = "registry_unavailable"
 
@@ -159,17 +166,25 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
+def _clock() -> float:
+    return time.monotonic()
+
+
+#: Failures of a read that may clear: a timeout or a reset, and a body that arrived cut short.
+_TRANSIENT = (httpx.TransportError, httpx.DecodingError, json.JSONDecodeError, UnicodeDecodeError)
+
+
 def _failure(error: Exception) -> tuple[bool, bool]:
     """(worth another attempt, counts toward an outage) for a failed read.
 
-    A timeout, a reset, a truncated body, a 429 and a 5xx may clear. A 404 means that EDGAR has no such
-    issuer: no outage. Any other failure (a block, a spent budget, a body that is not an object) is not
-    worth another attempt and may repeat for the next issuer.
+    A timeout, a reset, a body cut short, a 429 and a 5xx may clear. A 404 means that EDGAR has no such
+    issuer, and it is no outage. Any other failure is not worth another attempt. It may repeat for the next
+    issuer. Examples: a block (403), a spent budget, a body that is not an object.
     """
     if isinstance(error, httpx.HTTPStatusError):
         status = error.response.status_code
         return (status == 429 or status >= 500), status != 404
-    return isinstance(error, httpx.TransportError | json.JSONDecodeError), True
+    return isinstance(error, _TRANSIENT), True
 
 
 def _read_submissions(cik: int, http: httpx.Client, *, attempts: int) -> _Read:
@@ -191,14 +206,24 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     A read that fails in a way that may clear is tried again, up to `REGISTRY_ATTEMPTS`. An issuer
     whose read still fails is named in `RegistryReading.unavailable`. The caller excludes that
     issuer: a run that cannot say whether an issuer is a bank must not classify it as anything.
-    One issuer never fails the run (#1323). The registry never marks an issuer unavailable that it
-    did not try to read.
+    One issuer never fails the run (#1323). The registry marks an issuer unavailable without a read
+    only after `REGISTRY_BUDGET_SECONDS` of elapsed time, and it says so in the reason.
     """
     classifications: dict[int, IssuerClassification] = {}
     unavailable: dict[int, str] = {}
     failed_in_a_row = 0
+    started = _clock()
     with sec.client() as http:
         for cik in sorted(set(ciks.values())):
+            if _clock() - started >= REGISTRY_BUDGET_SECONDS:
+                if not any(reason.startswith("not read") for reason in unavailable.values()):
+                    logger.error(
+                        "registry pass spent its %.0f s budget after %d issuers; the others are not read",
+                        REGISTRY_BUDGET_SECONDS,
+                        len(classifications) + len(unavailable),
+                    )
+                unavailable[cik] = f"not read: the registry pass spent its {REGISTRY_BUDGET_SECONDS:.0f} s budget"
+                continue
             read = _read_submissions(
                 cik, http, attempts=1 if failed_in_a_row >= REGISTRY_OUTAGE_AFTER else REGISTRY_ATTEMPTS
             )

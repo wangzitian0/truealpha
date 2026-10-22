@@ -303,11 +303,11 @@ def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: Corro
 def _registry_unavailable(
     context: dg.OpExecutionContext, connection: Any, tick: UniverseTick, run_id: str, verdict: Any
 ) -> list[str]:
-    """The issuers of the run whose registry read failed (#1323), named in the log.
+    """The issuers of the run whose registry read failed (#1323). The log names each one.
 
-    A tick that runs the strategy refuses a run with no eligible issuer. A tick without a strategy
-    has no such rule, so it refuses here a run in which the registry classified no issuer at all:
-    every operating numerator of that run is null, and the run would publish it as a success.
+    A tick with a strategy refuses a run that has no eligible issuer. A tick without a strategy has no such
+    rule. It refuses a run in which the registry classified no issuer. Every operating numerator of that run
+    is null, and the run would publish it as a success.
     """
     flagged = registry_unavailable_issuers(connection, run_id=run_id)
     for issuer_id in flagged:

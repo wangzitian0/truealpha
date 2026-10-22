@@ -8,6 +8,7 @@ No database: the call ledger of the gateway keeps its records in memory.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Callable
 
 import httpx
@@ -135,14 +136,91 @@ def test_a_long_outage_costs_one_attempt_per_issuer_after_the_third_failed_issue
     assert all("ReadTimeout" in reason for reason in reading.unavailable.values()), "each issuer was read and failed"
 
 
-def test_a_block_counts_toward_an_outage(monkeypatch, pauses) -> None:
-    """EDGAR answers 403 to a blocked client for every issuer. 403 is not tried again and still trips the breaker."""
+def _burst_then_timeouts(kind: str, monkeypatch) -> tuple[FakeSec, issuer_registry.RegistryReading]:
+    """The three lowest CIKs fail in `kind`; the 17 others time out. A tripped breaker reads each of the 17 once."""
     ciks = list(range(1, 21))
-    socket, reading = read(monkeypatch, lambda cik, attempt: httpx.Response(403), ciks)
+    first = {1, 2, 3}
 
-    assert sorted(reading.unavailable) == ciks
-    assert socket.reads == ciks, "one read per issuer"
-    assert pauses == []
+    def script(cik: int, attempt: int) -> Outcome:
+        if cik not in first:
+            return timeout()
+        return {"403": httpx.Response(403), "not-an-object": httpx.Response(200, json=[1])}[kind]
+
+    if kind != "budget":
+        return read(monkeypatch, script, ciks)
+    socket = FakeSec(lambda cik, attempt: timeout())
+    monkeypatch.setattr(sec, "client", lambda: httpx.Client(transport=httpx.MockTransport(socket.handle)))
+    real = sec.fetch_company_submissions
+
+    def fetch(cik: int, http: httpx.Client | None = None) -> dict:
+        if cik in first:
+            raise BudgetExhausted("sec", environment="staging", budget=5000, spent=5000)
+        return real(cik, http)
+
+    monkeypatch.setattr(sec, "fetch_company_submissions", fetch)
+    return socket, issuer_registry.resolve_issuer_classifications({f"T{cik}": cik for cik in ciks})
+
+
+@pytest.mark.parametrize("kind", ["403", "not-an-object", "budget"])
+def test_a_failure_that_is_not_retried_still_counts_toward_an_outage(monkeypatch, pauses, kind) -> None:
+    """Without the count, 17 timeouts would spend 3 attempts each until three of them trip the breaker."""
+    socket, reading = _burst_then_timeouts(kind, monkeypatch)
+
+    assert sorted(reading.unavailable) == list(range(1, 21))
+    reads = Counter(socket.reads)
+    assert all(reads[cik] == 1 for cik in range(4, 21)), f"{kind}: each of the 17 others gets one attempt"
+    assert pauses == [], f"{kind}: nothing was retried, so nothing waited"
+
+
+def _gzip_that_is_not_gzip() -> httpx.Response:
+    return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=httpx.ByteStream(b"not a gzip body"))
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param(lambda: httpx.Response(200, content=b'{"sic": "36'), id="truncated-json"),
+        pytest.param(_gzip_that_is_not_gzip, id="decoding-error"),
+        pytest.param(lambda: httpx.Response(200, content=b'{"sic": "\xff'), id="cut-utf8"),
+    ],
+)
+def test_a_body_cut_short_is_tried_again(monkeypatch, pauses, broken) -> None:
+    """Each attempt gets a fresh response: a response body is read once."""
+    socket, reading = read(monkeypatch, lambda cik, attempt: broken() if attempt < 3 else ok(), [1])
+
+    assert socket.reads == [1, 1, 1]
+    assert pauses == [1.0, 2.0]
+    assert 1 in reading.classifications
+
+
+def test_a_pass_that_spends_its_time_budget_names_the_issuers_it_did_not_read(monkeypatch, pauses) -> None:
+    """Every read succeeds and takes 50 s. After 180 s the rest are named "not read": the pass is bounded in time."""
+    clock = {"now": 0.0}
+    monkeypatch.setattr(issuer_registry, "_clock", lambda: clock["now"])
+
+    def script(cik: int, attempt: int) -> Outcome:
+        clock["now"] += 50.0
+        return ok()
+
+    socket, reading = read(monkeypatch, script, list(range(1, 11)))
+
+    assert sorted(reading.classifications) == [1, 2, 3, 4], "four reads take 200 s, the budget is 180 s"
+    assert sorted(reading.unavailable) == list(range(5, 11))
+    assert all(reason.startswith("not read:") and "180 s budget" in reason for reason in reading.unavailable.values())
+    assert socket.reads == [1, 2, 3, 4], "no read is made after the budget"
+
+
+def test_a_pass_inside_its_time_budget_reads_every_issuer(monkeypatch, pauses) -> None:
+    clock = {"now": 0.0}
+    monkeypatch.setattr(issuer_registry, "_clock", lambda: clock["now"])
+
+    def script(cik: int, attempt: int) -> Outcome:
+        clock["now"] += 1.0
+        return ok()
+
+    socket, reading = read(monkeypatch, script, list(range(1, 101)))
+
+    assert len(reading.classifications) == 100 and reading.unavailable == {}
 
 
 def test_a_missing_issuer_neither_resets_nor_counts_toward_an_outage(monkeypatch, pauses) -> None:

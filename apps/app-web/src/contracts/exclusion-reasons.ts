@@ -32,9 +32,10 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   // #1323 / #1443: the plausibility gate refused this issuer; the run published the others.
   plausibility_refused_node_sign_policy:
     "Refused by the plausibility gate: the sign of the operating metric breaks its definition",
-  // #1323: the issuer registry (SEC submissions) did not answer after its retries.
+  // #1323: the issuer registry (SEC submissions) gave no classification: no answer after its retries, a block,
+  // a spent budget, an issuer it does not know, or a pass that ran out of time.
   registry_unavailable:
-    "The issuer registry did not answer, so the run could not tell which operating profit applies to this issuer",
+    "The issuer registry gave no classification, so the run could not tell which operating profit applies to this issuer",
 };
 
 export function exclusionLabel(reason: string | null): string | null {

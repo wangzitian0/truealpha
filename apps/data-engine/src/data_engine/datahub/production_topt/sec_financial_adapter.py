@@ -1311,7 +1311,8 @@ class SecFinancialFactAdapter:
         # periods. The marker below records why the metric is absent.
         operating_period_stale = _periods_differ(bundle.operating_period_end, bundle.revenue_period_end)
         pre_provision_value = bundle.pre_provision_profit
-        if _operating_withheld(operating_period_stale, target):
+        withheld = _operating_withheld(operating_period_stale, target)
+        if withheld:
             gross_profit_value = None
             pre_provision_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
@@ -1332,7 +1333,7 @@ class SecFinancialFactAdapter:
             "shares_outstanding": _s(bundle.shares_outstanding),
             "shares_basis": bundle.shares_basis,
             "pre_provision_profit": _s(pre_provision_value),
-            "operating_period_end": None if operating_period_stale else _d(bundle.operating_period_end),
+            "operating_period_end": None if withheld else _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
