@@ -142,8 +142,6 @@ def test_every_tracked_markdown_file_is_read_except_the_named_exclusions() -> No
         "apps/data-engine/samples/README.md",
         "apps/data-engine/samples/moomoo/notes.md",
         "AGENTS.md",
-        "CLAUDE.md",
-        "GEMINI.md",
         ".agents/skills/init/SKILL.md",
         ".claude/skills/init/SKILL.md",
         "docs/data.json",
@@ -159,6 +157,23 @@ def test_an_exclusion_matches_a_whole_path_segment_and_not_a_name_prefix() -> No
 def test_every_exclusion_names_a_reason() -> None:
     assert doc_drift.EXCLUDED
     assert all(reason.strip() for _, reason in doc_drift.EXCLUDED)
+
+
+def test_every_exclusion_matches_a_tracked_file_of_this_repository() -> None:
+    """An entry for a deleted file guards nothing (#1410). The two retired carrier files left
+    the tree, so their entries left `EXCLUDED` too."""
+    repository = Path(__file__).resolve().parents[3]
+    listing = subprocess.run(
+        ["git", "-C", str(repository), "ls-files", "-z"], capture_output=True, text=True, check=True
+    ).stdout
+    tracked = [entry for entry in listing.split("\0") if entry]
+    assert len(tracked) > 100, f"git reports only {len(tracked)} tracked files (GREEN-WHILE-EMPTY)"
+    dead = [
+        entry
+        for entry, _ in doc_drift.EXCLUDED
+        if not any(path == entry or (entry.endswith("/") and path.startswith(entry)) for path in tracked)
+    ]
+    assert not dead, f"exclusions that match no tracked file: {dead}"
 
 
 def test_a_missing_path_on_a_history_line_is_skipped_and_counted() -> None:

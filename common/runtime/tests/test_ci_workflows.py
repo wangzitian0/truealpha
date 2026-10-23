@@ -1568,8 +1568,7 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
     The shared rule source publishes this repository's `AGENTS.md` and skills, so a PR
     that touches only those paths is the normal case, not an edge. A test in this file
     reads every one of them: `skills/` is a scan root, the mirror-only roots and the
-    publish record are excluded on premises asserted here, and `AGENTS.md` (with
-    `CLAUDE.md` linking to it) is a root file.
+    publish record are excluded on premises asserted here, and `AGENTS.md` is a root file.
 
     A PR that adds some other new top-level directory still skips ci-python; no filter
     entry can name a directory that does not exist yet.
@@ -1578,7 +1577,7 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
     # a dot-directory file, or reach it through a broader entry such as `*.md`.
     published = [
         f"{root}/probe/file.md" for root in ("skills", *_MIRROR_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)
-    ] + ["AGENTS.md", "CLAUDE.md"]
+    ] + ["AGENTS.md"]
     missing = [path for path in published if "python" not in selected_lanes(REQUIRED, [path])]
     assert not missing, (
         f"the python filter does not select {missing}: a PR touching only those paths skips ci-python, "
@@ -1852,7 +1851,7 @@ def _unread_documents() -> list[str]:
 def test_a_document_selects_the_lanes_that_read_it_and_no_other() -> None:
     """#1412: a document that a test reads keeps the lane that runs that test, or a PR
     could change it, skip the test and break main (#1018). A document that no test reads
-    selects no lane. Named readers today: init.md, README.md, CLAUDE.md,
+    selects no lane. Named readers today: init.md, README.md, AGENTS.md,
     docs/datahub-quality-report.md and docs/architecture-decisions/A3-source-governance.md.
     """
     named = _markdown_named_by_tests()

@@ -17,7 +17,7 @@ class Settings(CoreRuntimeSettings):
     tools read the real `mart` and nothing else. The checked-in golden fixture lives in
     tests only (`truealpha_contracts.strategy_run_fixture`, injected through
     `build_mcp_server(repository=...)`), never behind a runtime flag a deployed process
-    could flip. CLAUDE.md: fixture data lives in tests only and is never reachable from a
+    could flip. AGENTS.md: fixture data lives in tests only and is never reachable from a
     deployed route.
     """
 

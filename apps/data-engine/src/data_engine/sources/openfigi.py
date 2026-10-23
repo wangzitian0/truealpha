@@ -1,6 +1,6 @@
 """OpenFIGI mapping client: ISIN -> listing records (venue + local ticker).
 
-This is the ISIN/CUSIP resolution step CLAUDE.md's N-PORT gotcha calls for —
+This is the ISIN/CUSIP resolution step AGENTS.md's N-PORT gotcha calls for —
 N-PORT identifies holdings by CUSIP/ISIN (foreign CUSIPs are placeholder zeros),
 and moomoo/SEC need market-local codes.
 

@@ -66,7 +66,7 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     # Facts already reflect one PIT-resolved vintage per metric; a factor never
     # re-selects among candidates (init.md Section 6) — take the sole match.
     # Mirrors gross_profit_per_employee._find: source fusion never silently
-    # picks the most recently supplied row (CLAUDE.md architecture red line).
+    # picks the most recently supplied row (AGENTS.md architecture red line).
     matches = [f for f in facts if f.entity_id == entity_id and f.metric == metric]
     if len(matches) > 1:
         raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")

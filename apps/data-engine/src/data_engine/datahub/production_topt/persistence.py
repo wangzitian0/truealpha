@@ -347,7 +347,7 @@ class PostgresCaptureControlSink:
             body=raw.body,
             content_type=raw.content_type,
             # Honest audit clocks (#530). These are "ingestion audit time only"
-            # (CLAUDE.md) and are identity-safe: the table's uniqueness is
+            # (AGENTS.md) and are identity-safe: the table's uniqueness is
             # (source, source_record_id, payload_sha256), so a retried tick still
             # collapses onto the existing row — the fabricated cutoff-derived
             # stamps bought no determinism and produced a false diagnosis in #531

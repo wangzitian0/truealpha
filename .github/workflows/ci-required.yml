@@ -124,7 +124,7 @@ jobs:
               # What the shared rule source publishes, all of it read by
               # test_ci_workflows.py: skills/ is a scan root, .claude/, .agents/
               # and .ws-publish/ are excluded only on premises asserted there, and
-              # AGENTS.md (CLAUDE.md links to it) is a root file. #1018 touched
+              # AGENTS.md is a root file. #1018 touched
               # only such paths, matched no filter, and merged with that file red
               # on main.
               - 'skills/**'
@@ -135,7 +135,7 @@ jobs:
               # test_a_document_selects_the_lanes_that_read_it_and_no_other derives
               # the readers from the tests. Every top-level markdown file is read:
               # by the reintroduction sweep, or by name (init.md, README.md,
-              # CLAUDE.md). Three files under docs/ are read by name. Other files
+              # AGENTS.md). Three files under docs/ are read by name. Other files
               # under docs/ start no lane.
               - '*.md'
               - 'docs/architecture-decisions/A3-source-governance.md'

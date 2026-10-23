@@ -5,7 +5,7 @@ Composes one issuer's already-materialized `gross_profit_per_employee` (module
 exists only to feed this composite) `FactorResult`s into a valuation gap:
 ``target_multiple_midpoint / current_multiple - 1`` (#21's `ValuationGapRule`
 ranks candidates by descending valuation gap). Confidence is the minimum of
-the two consumed inputs, per the composite-factor rule (CLAUDE.md: "composite
+the two consumed inputs, per the composite-factor rule (AGENTS.md: "composite
 factors... confidence = min() of inputs").
 
 The multiple is the definition's valuation basis: `price_to_sales` for strategy

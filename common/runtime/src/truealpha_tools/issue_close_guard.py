@@ -138,8 +138,6 @@ NON_PRODUCT_PREFIXES = (
 )
 NON_PRODUCT_FILES = {
     "AGENTS.md",
-    "CLAUDE.md",
-    "GEMINI.md",
     "init.md",
     "README.md",
     ".gitignore",

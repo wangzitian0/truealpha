@@ -1,4 +1,4 @@
-"""Raw landing per the runtime contract (CLAUDE.md raw-storage hard constraint,
+"""Raw landing per the runtime contract (AGENTS.md raw-storage hard constraint,
 db/migrations/0004_runtime_contracts.sql): immutable source-response bytes go to
 S3-compatible object storage, and `raw.fetches` keeps the checksum, object
 pointer, timestamps, and lineage. Rows are append-only vintages — a re-fetch
