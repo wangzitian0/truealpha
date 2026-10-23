@@ -282,7 +282,9 @@ def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     assert "TWELVE_DATA_ENVIRONMENT_SHARES" not in init_text
 
     # Section 0 states the production target and points to the contract.
-    goal_section = init_text.split("## 1. Core Design Principles", 1)[0]
+    next_heading = "## 1. Core Design Principles"
+    assert next_heading in init_text, "The slice of section 0 needs the heading of section 1."
+    goal_section = init_text.split(next_heading, 1)[0]
     assert "environment_contract.v1.json" in goal_section
     assert "S&P 500" in goal_section
 
