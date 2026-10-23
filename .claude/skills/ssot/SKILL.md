@@ -36,7 +36,7 @@ An `/ssot` pass fails closed unless every gate below passes with physical comman
 1. **Predecessor Deletion & Net-Diff Gate**:
    - Run `git diff --stat <base>...HEAD` and `wc -l` on touched modules before opening or merging a PR.
    - Every new abstraction, shared helper, or unified entry point MUST delete its predecessor in the same PR.
-   - Purely additive "unification" PRs are forbidden. If lines added exceed lines deleted on an `/ssot` or refactor slice, justify why or delete the remaining duplicate callers first.
+   - Purely additive "unification" PRs are forbidden. If lines added exceed lines deleted on an `/ssot` or refactor slice, delete the remaining duplicate callers first, or name each added group and its removed predecessor lines in a `## Net diff` PR section. `ws-pr-gate` enforces this (`net-diff-positive`).
 2. **Cross-Package & Standalone-Script Convergence Gate**:
    - When extracting a contract or helper into an SDK or `common/` module, migrate all in-repository callers and delete the local copy in the same change. Verify zero remaining local definitions with `git grep`.
    - Never duplicate dataclasses, registries, or parsers inside standalone or piped scripts via `try: from common... except ImportError:` fallbacks. Keep one authoritative definition and inline or pass it mechanically at the boundary.

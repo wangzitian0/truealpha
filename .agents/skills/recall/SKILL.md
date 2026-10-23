@@ -39,7 +39,7 @@ Level 4: Physical runtime verification (worker.log, live probes, exit codes)
 ### Level 4: Physical runtime verification
 - When a tool, worker, or command fails:
   - Check live daemon logs: `tail -n 50 ~/.local/state/subagent-worker/worker.log`.
-  - Check model availability: `subagent-worker --check-models`.
+  - Check the LLM roles and the provider: `subagent-worker --check-models`.
   - Check physical git status and branch locks: `git status -s`, `git worktree list`.
   - Never classify a transient network or rate-limit failure as an architectural conflict.
 

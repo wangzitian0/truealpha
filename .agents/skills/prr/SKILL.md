@@ -7,15 +7,13 @@ description: PR review mechanics. Weigh unresolved review findings by severity, 
 
 `auto` calls this skill. Use it alone when only the review loop is needed.
 
-## Blocking threshold (conjunctive budget)
+## Blocking threshold
 
-| Severity tag | Allowed unresolved count | Notes |
-|---|---|---|
-| `severity: high` | `0` | Any unresolved high finding blocks the merge |
-| `severity: medium` | `<= 2` | Unlabelled findings and `severity: middle` count as `medium` |
-| `severity: low` | `<= 4` | Minor/nit findings |
+Each repository's gate tool (`ws-pr-gate` or `tools.pr_merge_gate`) computes the unresolved review threshold from literal `severity:` tags (`high`, `medium`/`middle`, `low`; unlabelled counts as `middle`):
+- **Weighted repositories (`infra2`, `dev_env`)**: `high = 1.0`, `middle = 0.5`, `low = 0.25`; a total score `>= 1.0` blocks merge (`AGENTS.md`).
+- **Conjunctive-budget repositories (`ws-pr-gate` default)**: `High == 0` AND `Medium <= 2` AND `Low <= 4`.
 
-A PR is review-ready only when all three conditions hold simultaneously: `High == 0` AND `Medium <= 2` AND `Low <= 4`. Read the literal `severity:` tag. Do not infer severity from tone. Reviewer platform errors, timeouts, or unparseable reviews warn and do not block.
+Read the literal `severity:` tag; do not infer severity from tone. Let the repository's gate tool compute the verdict rather than estimating manually. Reviewer platform errors, timeouts, or unparseable reviews warn and do not block.
 
 ## Thread rules
 
