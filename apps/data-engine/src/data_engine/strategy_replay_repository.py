@@ -23,6 +23,11 @@ a bug to raise on, not paper over.
 `CLAIM_CEILING = "preview"` is the default for fixture-sourced replays
 (`core_strategy_replay.py`); callers bound to a governed PIT snapshot pass
 their own `claim_ceiling` so this writer persists the exact ceiling claimed.
+
+A run that evaluated a measured risk-free rate carries its lineage (#1255): the series id, the value,
+the observation date, the source and the `raw.fetches` row. The first four are part of the run
+identity, so two rates make two runs. The fetch id is a row pointer of one database and is not.
+A fixture or preview replay uses the explicit rates of its corpus and passes none.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
     decision_availability_status,
     statuses_without_raw_pointer,
 )
+from data_engine.datahub.risk_free import RiskFreeRate
 
 CLAIM_CEILING = "preview"
 
@@ -50,6 +56,7 @@ def _run_payload(
     executed_at: datetime,
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
+    risk_free_rate: RiskFreeRate | None = None,
 ) -> dict[str, Any]:
     # #955: when bound to a PIT snapshot, corpus_sha256 reflects the actual inputs
     # consumed by that cutoff's replay rather than the static fixture constant.
@@ -66,7 +73,25 @@ def _run_payload(
     # a run bound to a PIT snapshot gets a distinct run id (#395).
     if snapshot_id is not None:
         payload["snapshot_id"] = snapshot_id
+    # The rate of a cutoff is a measurement. It can differ between two runs of one tick, because a
+    # forced tick can see a newer Treasury observation than the scheduled tick did (#1255). Two rates
+    # must be two runs. Otherwise the second run meets the unique key of the first run's decisions.
+    # The member is included only when set, so fixture and preview runs keep their identity.
+    if risk_free_rate is not None:
+        payload["risk_free"] = {
+            "series_id": risk_free_rate.series_id,
+            "value": format(risk_free_rate.value.normalize(), "f"),
+            "observation_date": risk_free_rate.observation_date.isoformat(),
+            "source": risk_free_rate.source,
+        }
     return payload
+
+
+def _risk_free_columns(rate: RiskFreeRate | None) -> tuple[Any, ...]:
+    """The five lineage columns of `mart.strategy_runs`, all null when the run used no measured rate."""
+    if rate is None:
+        return (None, None, None, None, None)
+    return (rate.series_id, rate.value, rate.observation_date, rate.source, rate.fetch_id)
 
 
 def write_strategy_run(
@@ -76,12 +101,14 @@ def write_strategy_run(
     executed_at: datetime,
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
+    risk_free_rate: RiskFreeRate | None = None,
 ) -> str:
     payload = _run_payload(
         definition,
         executed_at=executed_at,
         snapshot_id=snapshot_id,
         claim_ceiling=claim_ceiling,
+        risk_free_rate=risk_free_rate,
     )
     content_sha256 = canonical_sha256(payload)
     run_id = f"strategy-run:{content_sha256}"
@@ -89,8 +116,10 @@ def write_strategy_run(
         """
         insert into mart.strategy_runs (
             strategy_run_id, content_sha256, strategy_key, strategy_version,
-            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at, snapshot_id
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at, snapshot_id,
+            risk_free_series_id, risk_free_value, risk_free_observation_date, risk_free_source,
+            risk_free_fetch_id
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (strategy_run_id) do nothing
         returning strategy_run_id
         """,
@@ -104,6 +133,7 @@ def write_strategy_run(
             payload["claim_ceiling"],
             executed_at,
             snapshot_id,
+            *_risk_free_columns(risk_free_rate),
         ),
     ).fetchone()
     if inserted is not None:
@@ -216,11 +246,13 @@ def write_replay(
     snapshot_id: str | None = None,
     claim_ceiling: str = CLAIM_CEILING,
     source_evidence_status: InputEvidenceStatus | None = None,
+    risk_free_rate: RiskFreeRate | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Persist one full replay: one `strategy_runs` row, one `strategy_decisions`
     row per decision. Idempotent -- replaying identical decisions against the
     same definition and executed_at reproduces the same run/decision IDs.
-    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395)."""
+    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395).
+    ``risk_free_rate`` binds the run to the measured rate that its decisions used (#1255)."""
 
     run_id = write_strategy_run(
         connection,
@@ -228,6 +260,7 @@ def write_replay(
         executed_at=executed_at,
         snapshot_id=snapshot_id,
         claim_ceiling=claim_ceiling,
+        risk_free_rate=risk_free_rate,
     )
     decision_ids = tuple(
         write_strategy_decision(

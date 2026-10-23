@@ -26,7 +26,7 @@ from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability
+from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability, ToptCoreReasonCode
 from psycopg.types.json import Jsonb
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
@@ -50,7 +50,8 @@ from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunReposit
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from split_series_seed import share_count_vintage, store_flat_daily_series  # noqa: E402
+from macro_seed import stored_rate_for_cutoff  # noqa: E402
+from split_series_seed import flat_history, share_count_vintage, store_flat_daily_series  # noqa: E402
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -443,7 +444,7 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
         terminal_observation_id,
         unselected_same_request_observation_ids,
         foreign_observation_id,
-    ) = _seed_complete_production_run(connection)
+    ) = _seed_strategy_capture(connection)
     assert capture_repository.status(run.run_id).complete
 
     repository = PostgresToptCoreRepository(connection)
@@ -1104,7 +1105,7 @@ def test_a_listing_without_the_exact_four_semantic_cells_is_refused_by_the_membe
     by_type = {semantic: _cell_row("listing:probe", semantic, ordinal) for ordinal, semantic in enumerate(cells)}
 
     with pytest.raises(ValueError, match="listing:probe does not have the exact four TOPT semantic cells"):
-        PostgresToptCoreRepository._snapshot_member("listing:probe", by_type)
+        PostgresToptCoreRepository._snapshot_member("listing:probe", by_type, histories=(flat_history(),))
 
 
 def test_a_run_whose_listing_cells_are_unbalanced_but_sum_to_the_obligations_is_refused(
@@ -1584,7 +1585,7 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
         connection,
         cutoff=CUTOFF,
         executed_at=executed_at,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )
@@ -1650,7 +1651,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
         connection,
         cutoff=CUTOFF,
         executed_at=first_executed,
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )
@@ -1689,7 +1690,7 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
         connection,
         cutoff=CUTOFF,
         executed_at=first_executed + timedelta(minutes=5),
-        risk_free_rate=Decimal("0.05"),
+        risk_free_rate=stored_rate_for_cutoff(connection, CUTOFF, "0.05"),
         capture_run_id=run.run_id,
         plausibility_refusals={},
     )
@@ -1888,7 +1889,9 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
         confidence=Decimal("0.92"),
         financial_vintage={"gross_profit": {"is_revenue_proxy": False}},
     )
-    control_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", control_rows)
+    control_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", control_rows, histories=(flat_history(),)
+    )
     assert control_member.gross_profit is not None
     assert control_member.gross_profit.confidence == Decimal("0.92")
     assert {cell.confidence for cell in control_member.cell_inputs} == {Decimal("0.92")}
@@ -1897,7 +1900,9 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
         confidence=Decimal("0.92"),
         financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
     )
-    proxy_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", proxy_rows)
+    proxy_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", proxy_rows, histories=(flat_history(),)
+    )
     assert proxy_member.gross_profit is not None
     assert proxy_member.gross_profit.confidence == Decimal("0.85")
     fin_cell = next(
@@ -1910,7 +1915,7 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
         confidence=Decimal("0.70"),
         financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
     )
-    low_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", low_rows)
+    low_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", low_rows, histories=(flat_history(),))
     assert low_member.gross_profit is not None
     assert low_member.gross_profit.confidence == Decimal("0.70")
 
@@ -1919,7 +1924,9 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
         confidence=Decimal("0.92"),
         financial_vintage={"gross_profit": None},
     )
-    null_vintage_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", null_vintage_rows)
+    null_vintage_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", null_vintage_rows, histories=(flat_history(),)
+    )
     assert null_vintage_member.gross_profit is not None
     assert null_vintage_member.gross_profit.confidence == Decimal("0.92")
 
@@ -1930,7 +1937,9 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
     duplicate_key_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
     duplicate_key_rows["financial-fact"].payload["gross_profit_is_revenue_proxy"] = True
     with pytest.raises(ValidationError):
-        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", duplicate_key_rows)
+        PostgresToptCoreRepository._snapshot_member(
+            "listing:xnas:nvda", duplicate_key_rows, histories=(flat_history(),)
+        )
 
 
 def test_snapshot_member_accepts_listing_reused_price_with_foreign_issuer_id() -> None:
@@ -1942,19 +1951,25 @@ def test_snapshot_member_accepts_listing_reused_price_with_foreign_issuer_id() -
     reused_price_rows = _member_rows_for_probe()
     reused_price_rows["market-price"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
     reused_price_rows["market-price"].payload["instrument_id"] = "instrument:us67066g1040"
-    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", reused_price_rows)
+    member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", reused_price_rows, histories=(flat_history(),)
+    )
     assert member.issuer_id == "issuer:cik:0001045810"
     assert member.listing_id == "listing:xnas:nvda"
 
     wrong_price_listing_rows = _member_rows_for_probe()
     wrong_price_listing_rows["market-price"].payload["listing_id"] = "listing:xnas:aapl"
     with pytest.raises(ValueError, match="normalized payload identities disagree"):
-        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_price_listing_rows)
+        PostgresToptCoreRepository._snapshot_member(
+            "listing:xnas:nvda", wrong_price_listing_rows, histories=(flat_history(),)
+        )
 
     wrong_financial_issuer_rows = _member_rows_for_probe()
     wrong_financial_issuer_rows["financial-fact"].payload["issuer_id"] = "issuer:lei:549300S4KLFTLO7GSQ80"
     with pytest.raises(ValueError, match="normalized payload identities disagree"):
-        PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", wrong_financial_issuer_rows)
+        PostgresToptCoreRepository._snapshot_member(
+            "listing:xnas:nvda", wrong_financial_issuer_rows, histories=(flat_history(),)
+        )
 
 
 def test_snapshot_member_aligns_stock_split_via_live_on_close_basis() -> None:
@@ -1988,6 +2003,83 @@ def test_snapshot_member_aligns_stock_split_via_live_on_close_basis() -> None:
     )
     assert member.shares_outstanding.value == Decimal("100000000")
     assert member.shares_outstanding.knowable_at == datetime(2026, 3, 31, tzinfo=UTC)
+
+
+def test_a_run_whose_listings_have_no_stored_series_never_values_a_filed_count(connection) -> None:
+    """#1277. No symbol of the run has a stored bar in either series, so no split can be proved.
+
+    The core drops each filed count and names the cause. Red on main: `_issuer_split_histories`
+    returned no histories when no symbol had a series, `_snapshot_member` skipped the adjustment,
+    and the core multiplied the filed count by the close for all 20 issuers.
+    """
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection,
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20)),
+        },
+    )
+    repository = PostgresToptCoreRepository(connection)
+
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+
+    assert len(snapshot.members) == 21
+    assert {member.shares_outstanding.value for member in snapshot.members} == {None}
+    assert {member.shares_outstanding.unavailable_reason for member in snapshot.members} == {
+        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
+    }
+    assert len(results) == 20
+    assert {item.availability for item in results} == {ToptCoreAvailability.UNAVAILABLE}
+    assert {item.reason_codes for item in results} == {(ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,)}
+    assert {item.current_pgp for item in results} == {None}
+
+
+def test_the_reasons_of_the_live_share_basis_are_exactly_the_registered_share_basis_codes() -> None:
+    """`_snapshot_member` turns the reason of `live_on_close_basis` into a core reason code.
+
+    An unregistered reason raises at the tick, after the capture is committed. This test raises first.
+    It reads each reason that `share_basis` builds into an `Unavailable(...)`: a named constant or a
+    string literal. The reasons equal the registered share-basis codes, in both directions (#1277).
+    """
+    import ast
+    import inspect
+
+    from data_engine.datahub import share_basis
+    from factors.production_topt import SHARE_BASIS_REASON_CODES
+
+    reasons: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(share_basis))):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Unavailable"):
+            continue
+        reason = node.args[0] if node.args else next(item.value for item in node.keywords if item.arg == "reason")
+        if isinstance(reason, ast.Constant) and isinstance(reason.value, str):
+            reasons.add(reason.value)
+        elif isinstance(reason, ast.Name):
+            reasons.add(getattr(share_basis, reason.id))
+        # Another expression, such as `gaps[0].reason`, passes on a reason that another call built.
+    registered = {code.value for code in SHARE_BASIS_REASON_CODES}
+
+    assert reasons, "the reader found no reason"
+    assert reasons == registered, (
+        f"only in share_basis: {sorted(reasons - registered)}; only registered: {sorted(registered - reasons)}"
+    )
+    assert registered <= {code.value for code in ToptCoreReasonCode}
+
+
+def test_a_member_with_an_empty_history_drops_its_count_by_name() -> None:
+    """`freeze_snapshot` passes `()` for an issuer that has no listing ticker. `live_on_close_basis` names it."""
+    rows = _member_rows_for_probe(
+        shares_outstanding="10000000",
+        shares_period_end="2026-01-20",
+        financial_vintage={
+            "shares_outstanding": share_count_vintage(filed=date(2026, 2, 1), own_date=date(2026, 1, 20))
+        },
+    )
+
+    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", rows, histories=())
+
+    assert member.shares_outstanding.value is None
+    assert member.shares_outstanding.unavailable_reason is ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
 
 
 def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_confidence(
@@ -2041,7 +2133,7 @@ def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_
 def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its_two_series(connection) -> None:
     """#1277: no lane stored a daily series of a QQQ listing outside TOPT, so its issuer was unavailable (#1309).
 
-    The core finds no split history for the issuer and drops its share count. The QQQ price lane's
+    The core finds no split history for the issuer and drops its share count with a named reason. The QQQ price lane's
     weekday run stores both series of that listing through the deployed op body. The same capture
     then values the issuer on its filed share count. The head's TOPT symbol keeps the series of the
     market-data lane, and the lane does not fetch it.
@@ -2080,7 +2172,7 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     before = results_by_listing()
     assert before["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE
     assert before["listing:xnas:t1277q"].availability is ToptCoreAvailability.UNAVAILABLE
-    assert ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING in before["listing:xnas:t1277q"].reason_codes
+    assert before["listing:xnas:t1277q"].reason_codes == (ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,)
 
     requests: list[tuple[str, str, str]] = []
     outcome = qqq_prices._refresh_qqq_prices(
@@ -2099,5 +2191,5 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     assert {symbol for symbol, _interval, _adjust in requests} == {"T1277Q"}
     after = results_by_listing()
     assert after["listing:xnas:t1277q"].availability is ToptCoreAvailability.AVAILABLE
-    assert ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING not in after["listing:xnas:t1277q"].reason_codes
+    assert after["listing:xnas:t1277q"].reason_codes == ()
     assert after["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE

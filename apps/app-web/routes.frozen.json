@@ -104,6 +104,10 @@
     {
       "path": "/admin/universes",
       "live": true
+    },
+    {
+      "path": "/admin/macro",
+      "live": true
     }
   ]
 }

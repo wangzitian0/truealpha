@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import date
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -30,9 +32,12 @@ from data_engine.datahub.production_topt.materialization import FinancialFactPay
 from data_engine.datahub.quality_report import (
     _FINANCIAL_FACT_OPERATING_NUMERATOR,
     _has_usable_value,
+    _observation_usable,
     _PointerDereferencer,
+    observations_without_share_count,
     persist,
 )
+from data_engine.datahub.share_basis import SplitHistory, Unavailable
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.models import RawObjectRef
 
@@ -229,9 +234,22 @@ def test_an_insurance_branch_payload_grades_available() -> None:
     assert _has_usable_value("financial-fact", {**payload, "gross_profit": None}) is False
 
 
-def test_financial_fact_usability_matches_topt_core_availability_across_branches_and_fields() -> None:
-    """SSOT guard (#434): `_has_usable_value('financial-fact', ...)` and `compute_topt_core`
-    must agree on every `OperatingBranch` and every nullable field of `FinancialFactPayload`.
+#: The stored split history of the listing, as `freeze_snapshot` hands it to `_snapshot_member` (#1277):
+#: series that prove no split, no stored bar at all (WDC on the QQQ head of 2026-10-20), and series
+#: that cannot prove the splits.
+_SHARE_HISTORIES = {
+    "series-prove-no-split": (SplitHistory("BRK.B", (), date(2000, 1, 1), date(2100, 1, 1), Decimal("400")),),
+    "no-stored-bar": (None,),
+    "splits-not-provable": (Unavailable("split_derivation_failed", "an ambiguous ratio step"),),
+}
+
+
+@pytest.mark.parametrize("histories", _SHARE_HISTORIES.values(), ids=_SHARE_HISTORIES.keys())
+def test_financial_fact_usability_matches_topt_core_availability_across_branches_and_fields(histories) -> None:
+    """SSOT guard (#434): the report's decision on a `financial-fact` observation and `compute_topt_core`
+    must agree on every `OperatingBranch`, every nullable field of `FinancialFactPayload`, and every
+    verdict on the share count (#1346). The report reads the verdict of the frozen snapshot. It does not
+    decide it.
     """
     from datetime import UTC, datetime
     from decimal import Decimal
@@ -277,6 +295,8 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
         "headcount": "392400",
         "revenue": "100000000",
         "shares_outstanding": "10000000",
+        # The member builder dates the share count to put it on the basis of the close (#1277).
+        "shares_period_end": "2026-08-01",
         "net_income": "50000000",
         "stockholders_equity": "120000000",
         "preferred_stock_value": "0",
@@ -349,7 +369,7 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
                     payload=fin_payload,
                 ),
             }
-            member = PostgresToptCoreRepository._snapshot_member("listing:xnys:brk.b", by_type)
+            member = PostgresToptCoreRepository._snapshot_member("listing:xnys:brk.b", by_type, histories=histories)
             snapshot = ToptCoreSnapshot(
                 run_id="capture-run:" + "1" * 64,
                 release_manifest_id="release-manifest:" + "2" * 64,
@@ -372,8 +392,48 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
                 definition=tier_def,
             )
             core_available = core_res.availability == MetricAvailability.AVAILABLE
-            report_usable = _has_usable_value("financial-fact", fin_payload)
+            report_usable = _observation_usable(
+                "financial-fact",
+                fin_payload,
+                observation_id=by_type["financial-fact"].observation_id,
+                share_dropped=observations_without_share_count([factor_input.model_dump(mode="json")]),
+            )
             assert report_usable is core_available, (branch, missing_field, report_usable, core_available)
+
+
+def _share_metric(input_id: str, availability: str) -> dict:
+    return {"shares_outstanding": {"input_id": input_id, "availability": availability}}
+
+
+def _fact_payload() -> dict:
+    return {
+        "issuer_id": "issuer:test:dual",
+        "instrument_id": "instrument:test:dual",
+        "listing_id": "listing:xnas:dual",
+        "operating_branch": "non_financial",
+        "currency": "USD",
+        "gross_profit": "80000000",
+        "total_assets": "200000000",
+        "headcount": "40000",
+        "revenue": "100000000",
+        "shares_outstanding": "10000000",
+        "pre_provision_profit": None,
+    }
+
+
+def test_a_dropped_share_count_drops_every_listing_of_its_issuer() -> None:
+    """The core makes a whole issuer unavailable when one share class has no count. So the report must
+    not call the other listing of that issuer complete (#1346)."""
+    dual_class = {
+        "market_value_components": [_share_metric("obs:goog", "available"), _share_metric("obs:googl", "unavailable")]
+    }
+    single = {"market_value_components": [_share_metric("obs:aapl", "available")]}
+
+    dropped = observations_without_share_count([dual_class, single])
+
+    assert dropped == {"obs:goog", "obs:googl"}
+    assert _observation_usable("financial-fact", _fact_payload(), observation_id="obs:aapl", share_dropped=dropped)
+    assert not _observation_usable("financial-fact", _fact_payload(), observation_id="obs:goog", share_dropped=dropped)
 
 
 def _fact(**overrides):

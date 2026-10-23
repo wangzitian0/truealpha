@@ -12,15 +12,18 @@ Real schema, no network: the adapters are the deployed ones, wired to fake fetch
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
+from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
@@ -55,6 +58,9 @@ from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from split_series_seed import store_flat_daily_series, store_flat_topt_series  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
@@ -556,6 +562,7 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
         broken=_OneBrokenCell(financial_fact_numerator=True),
     )
 
+    store_flat_topt_series(connection, last=CUTOFF.date())
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
@@ -610,29 +617,13 @@ class _Borrowed:
         return None
 
 
-def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_mismatch(connection, capsys) -> None:
-    """#1346: `quality-report-matches-core-results` runs on rows that the deployed writers
-    wrote: an 84-cell capture with one broken listing, its core snapshot and results, its
-    persisted report and a served pointer. The report and the core agree, so the check holds.
+def _serve_and_judge(connection, plan, snapshot):
+    """Serve the run through a pointer and return a function that runs `quality-report-matches-core-results`.
 
-    Then a real mismatch is seeded: a newer report of the same run names the broken listing
-    complete. That is the staging QQQ shape of 2026-10-20 (a report built under an older
-    completeness rule). The check fails and names the listing and its core reason codes."""
+    mart.served_head serves the pointers of this database's own environment. The invariant module
+    is loaded as the nightly tool loads it."""
     from truealpha_runtime.testing import load_tool
 
-    store = _InMemoryObjectStore()
-    plan = _capture(
-        connection,
-        version="test-1346-parity",
-        object_store=store,
-        broken=_OneBrokenCell(financial_fact_numerator=True),
-    )
-    core = PostgresToptCoreRepository(connection)
-    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    report = quality_report.build_report(connection, plan.run_id, object_store=store)
-    quality_report.persist(connection, report)
-    # mart.served_head serves the pointers of this database's own environment.
     environment = connection.execute("select environment from mart.environment_identity").fetchone()
     assert environment is not None
     pointer_sha = canonical_sha256({"probe": plan.run_id})
@@ -663,6 +654,32 @@ def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_misma
             exemptions={},
             connect=lambda _url: _Borrowed(connection),
         )
+
+    return verdict
+
+
+def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_mismatch(connection, capsys) -> None:
+    """#1346: `quality-report-matches-core-results` runs on rows that the deployed writers
+    wrote: an 84-cell capture with one broken listing, its core snapshot and results, its
+    persisted report and a served pointer. The report and the core agree, so the check holds.
+
+    Then a real mismatch is seeded: a newer report of the same run names the broken listing
+    complete. That is the staging QQQ shape of 2026-10-20 (a report built under an older
+    completeness rule). The check fails and names the listing and its core reason codes."""
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version="test-1346-parity",
+        object_store=store,
+        broken=_OneBrokenCell(financial_fact_numerator=True),
+    )
+    store_flat_topt_series(connection, last=CUTOFF.date())
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+    quality_report.persist(connection, report)
+    verdict = _serve_and_judge(connection, plan, snapshot)
 
     assert verdict() == 0, capsys.readouterr()
     assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
@@ -1146,3 +1163,48 @@ def test_the_oracle_catches_the_fixtures_own_impossible_numbers(connection) -> N
     assert report["implausible_count"] == len(cells) == 21
     reasons = {tuple(cell["violated"]) for cell in cells.values()}
     assert reasons == {("gross_profit_exceeds_revenue",), ("per_employee_outside_domain",)}
+
+
+#: The listing of this ticker has no stored bar in either daily series. WDC on the QQQ head of 2026-10-20.
+_NO_BAR_TICKER = "XOM"
+
+
+def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_report(capsys) -> None:
+    """#1346. Both daily series of every TOPT symbol but one are stored, as the market-data lane stores them.
+
+    The financial-fact payload of the symbol without series carries a share count. The frozen snapshot
+    drops that count, because no stored series puts it on the basis of the close, and the core marks the
+    issuer unavailable. The report reads that verdict, so it does not list the listing as complete, and
+    the nightly invariant holds on the rows that the deployed writers wrote. Red when the report decides
+    from the payload alone: it listed the listing complete (production, listing xnas:wdc).
+
+    The test runs in a database of its own: the symbol must have no committed bar, and a shared database
+    could hold one. The other tick tests call `freeze_snapshot` and `build_report` in the order of
+    `composition.run_topt_pipeline`; `test_live_share_basis.py` pins that order through the deployed op.
+    """
+    from truealpha_runtime.testing import isolated_test_database
+
+    with isolated_test_database("report_share_count") as url, psycopg.connect(url) as connection:
+        store = _InMemoryObjectStore()
+        plan = _capture(connection, version="test-1346-share-count", object_store=store)
+        stored = [symbol for symbol in DEFAULT_TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
+        store_flat_daily_series(connection, stored, first=date(2026, 1, 2), last=CUTOFF.date())
+        core = PostgresToptCoreRepository(connection)
+        snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+        results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+        report = quality_report.build_report(connection, plan.run_id, object_store=store)
+        quality_report.persist(connection, report)
+
+        dropped = sorted(listing for listing, coordinate in plan.coordinates.items() if coordinate[3] == _NO_BAR_TICKER)
+        assert len(dropped) == 1, "the fixture holds one listing of the symbol"
+        assert [result.availability.value for result in results].count("unavailable") == len(dropped)
+        grade = report["factor_availability"]["gross_profit_per_employee"]
+        expected_complete = sorted(set(plan.coordinates) - set(dropped))
+        assert grade["complete_subject_ids"] == expected_complete
+        assert grade["complete_subjects"] == len(expected_complete)
+        # What falls: one financial-fact cell for each dropped listing is no longer usable.
+        assert report["available_count"] == report["requested_count"] - len(dropped)
+
+        verdict = _serve_and_judge(connection, plan, snapshot)
+        assert verdict() == 0, capsys.readouterr()
+        assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out

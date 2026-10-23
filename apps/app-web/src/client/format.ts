@@ -97,6 +97,53 @@ export function formatPercentFromFraction(value: string | number | null | undefi
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
 }
 
+/**
+ * A yield as a percent with two decimals: `0.0426` → `4.26%`, `0.05` → `5.00%`.
+ *
+ * The mart serves an exact decimal fraction. The shift of the decimal point by two places works on
+ * the digits of the string, so the display carries no binary-float error. Digits beyond the second
+ * decimal of the percent are cut, and the exact string stays in the `title` of the cell. A text that
+ * is not a plain decimal returns null (callers render "—").
+ */
+export function formatYieldPercent(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (match === null) return null;
+  const [, sign, whole, fraction = ""] = match;
+  const shifted = fraction.padEnd(2, "0");
+  const integerPart = `${whole}${shifted.slice(0, 2)}`.replace(/^0+(?=\d)/, "");
+  const decimalPart = shifted.slice(2).padEnd(2, "0").slice(0, 2);
+  // A value that cuts to zero has no sign: `-0.00001` reads `0.00%`, never `-0.00%`.
+  const signed = /^0+$/.test(`${integerPart}${decimalPart}`) ? "" : sign;
+  return `${signed}${integerPart}.${decimalPart}%`;
+}
+
+/** The unit that the catalog `mart.macro_series` states for a yield: an annualized decimal fraction. */
+export const ANNUALIZED_FRACTION_UNIT = "annualized_decimal_fraction";
+
+/**
+ * A macro value in the unit of its series.
+ * An annualized decimal fraction reads as a percent.
+ * Any other unit reads as the exact value and the unit.
+ * A fraction that is not a plain decimal reads the same way.
+ */
+export function formatMacroValue(unit: string, value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (unit === ANNUALIZED_FRACTION_UNIT) {
+    const percent = formatYieldPercent(value);
+    if (percent !== null) return percent;
+  }
+  return `${value} ${unit}`;
+}
+
+/** An instant as `2026-10-20 20:31 UTC`, or null when it is not a valid date. */
+export function formatUtcMinute(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return `${parsed.toISOString().slice(0, 10)} ${parsed.toISOString().slice(11, 16)} UTC`;
+}
+
 /** Tailwind text color for a signed quantity (positive = favorable gap). */
 export function signColor(value: string | number | null | undefined): string {
   const n = toFinite(value);

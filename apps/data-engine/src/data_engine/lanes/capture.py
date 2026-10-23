@@ -23,7 +23,6 @@ from typing import Any
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
-from truealpha_contracts.strategy import live_risk_free_rate
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
@@ -341,11 +340,12 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             # #877: the strategy run is bound to THIS capture. A forced tick (#874) shares
             # its cutoff with the scheduled one, so the cutoff cannot say which capture a
             # strategy run belongs to; readers resolve through the binding.
+            # #1255: the rate is the one the core materialization of this tick used.
             strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
                 connection,
                 cutoff=cutoff,
                 executed_at=cutoff,
-                risk_free_rate=live_risk_free_rate(cutoff),
+                risk_free_rate=pipeline.risk_free_rate,
                 capture_run_id=pipeline.run_id,
                 plausibility_refusals=issuers.excluded_issuers(),
             )
@@ -443,6 +443,12 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         "quality_report_id": pipeline.quality_report_id,
         "forced_fetch": pipeline.forced_fetch,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],
+        # #1255: the lineage of the one rate that this tick used, core and strategy alike.
+        "risk_free_series_id": pipeline.risk_free_rate.series_id,
+        "risk_free_rate": str(pipeline.risk_free_rate.value),
+        "risk_free_observation_date": pipeline.risk_free_rate.observation_date.isoformat(),
+        "risk_free_source": pipeline.risk_free_rate.source,
+        "risk_free_fetch_id": pipeline.risk_free_rate.fetch_id,
         **strategy,
         **fund_consolidation,
         "corroborations_refused": corroborations.total,

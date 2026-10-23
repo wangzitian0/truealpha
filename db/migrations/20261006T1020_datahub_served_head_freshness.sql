@@ -114,6 +114,9 @@ with seed (artifact_key, lane, schedule_name, universe_like, family, served_to, 
     -- qqq-prices: both daily series of the QQQ listings outside TOPT, on weekdays (cron `35 21 * * 1-5`, #1277).
     -- Like market-data, decide the family again when it is wired.
     ('qqq-prices', 'qqq_prices', 'qqq_price_refresh_schedule', null, 'daily', 'internal', false),
+    -- macro-series: the U.S. Treasury par yields (#1255), loaded every day at 20:30 UTC (cron `30 20 * * *`).
+    -- The Treasury publishes on business days, so a run on a weekend appends nothing. Internal until wired.
+    ('macro-series', 'macro_data', 'macro_data_refresh_schedule', null, 'daily', 'internal', false),
     -- strategy-history: the lane runs on Sundays (cron `7 10 * * 0`) and reads stored bytes only.
     ('strategy-history', 'strategy_history', 'strategy_history_schedule', null, 'weekly', 'internal', false),
     -- backtest: the lane runs on weekdays (cron `30 21 * * 1-5`) and simulates daily/monthly portfolios.

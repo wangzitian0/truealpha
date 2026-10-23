@@ -55,6 +55,7 @@ from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from macro_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import store_topt_series  # noqa: E402
 
 #: The settled session every listing closes on, and the tick that follows it (22:15 UTC).
@@ -244,6 +245,8 @@ def ticks() -> Iterator[Ticks]:
         monkeypatch.setattr(gateway, "utc_day", lambda: day)
         gateway._pg_reset()
         store_topt_series(url)
+        # The tick reads the risk-free rate of its cutoff from the stored series (#1255).
+        store_risk_free_series(url)
         try:
             _tick(force_fetch=False)
             first = Counter(vendors.requests)

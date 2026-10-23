@@ -468,3 +468,94 @@ def test_nonpositive_gross_profit_is_unavailable_not_divided() -> None:
     assert result.availability is ToptCoreAvailability.UNAVAILABLE
     assert result.reason_codes == (ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT,)
     assert result.current_pgp is None and result.valuation_gap is None
+
+
+# -- #1277: a share count that the snapshot builder dropped names its cause ----------------------
+
+
+def _unavailable_shares(reason: ToptCoreReasonCode | None) -> ToptMetricInput:
+    return ToptMetricInput(
+        input_id=OBSERVATION_IDS[0],
+        metric="shares_outstanding",
+        value=None,
+        unit="shares",
+        confidence="0.9",
+        knowable_at=CUTOFF - timedelta(days=1),
+        freshness=MetricFreshness.FRESH,
+        availability=MetricAvailability.UNAVAILABLE,
+        unavailable_reason=reason,
+    )
+
+
+def _snapshot_with_shares(shares: ToptMetricInput) -> ToptCoreSnapshotInput:
+    component = _component().model_copy(update={"shares_outstanding": shares})
+    return _snapshot(market_value_components=(component,))
+
+
+def test_a_dropped_share_count_reports_its_named_cause_and_not_a_missing_count() -> None:
+    """Red on main: the engine reported `missing_shares_outstanding` for every dropped count."""
+    result = _compute(_snapshot_with_shares(_unavailable_shares(ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES)))
+
+    assert result.availability is ToptCoreAvailability.UNAVAILABLE
+    assert result.reason_codes == (ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,)
+    assert result.current_pgp is None and result.current_ps is None
+
+
+def test_a_share_count_with_no_named_cause_still_reports_a_missing_count() -> None:
+    result = _compute(_snapshot_with_shares(_unavailable_shares(None)))
+
+    assert result.reason_codes == (ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING,)
+
+
+def test_two_listings_with_different_causes_report_both() -> None:
+    first = _component()
+    second = _component(
+        instrument_id="instrument:second",
+        listing_id="listing:second",
+        financial_observation_id=SECOND_LISTING_IDS[0],
+        market_observation_id=SECOND_LISTING_IDS[1],
+    ).model_copy(
+        update={
+            "shares_outstanding": _unavailable_shares(ToptCoreReasonCode.SPLIT_DERIVATION_FAILED).model_copy(
+                update={"input_id": SECOND_LISTING_IDS[0]}
+            )
+        }
+    )
+    first = first.model_copy(update={"shares_outstanding": _unavailable_shares(None)})
+    snapshot = _snapshot(
+        observation_ids=tuple(sorted((*OBSERVATION_IDS, *SECOND_LISTING_IDS))),
+        cell_inputs=_cells(tuple(sorted((*OBSERVATION_IDS, *SECOND_LISTING_IDS)))),
+        market_value_components=(first, second),
+    )
+
+    result = _compute(snapshot)
+
+    assert result.reason_codes == (
+        ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING,
+        ToptCoreReasonCode.SPLIT_DERIVATION_FAILED,
+    )
+
+
+def test_a_metric_without_a_named_cause_keeps_its_serialized_form() -> None:
+    """A snapshot frozen before #1277 must keep its content hash. The key is absent unless a cause is set."""
+    without = _metric("revenue", None).model_dump(mode="json")
+    with_cause = _unavailable_shares(ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS).model_dump(mode="json")
+
+    assert "unavailable_reason" not in without
+    assert with_cause["unavailable_reason"] == "share_basis_ambiguous"
+    assert ToptMetricInput.model_validate(with_cause).unavailable_reason is ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS
+
+
+def test_an_available_metric_cannot_carry_a_cause() -> None:
+    with pytest.raises(ValidationError, match="available metric cannot carry an unavailable reason"):
+        ToptMetricInput(
+            input_id=OBSERVATION_IDS[0],
+            metric="shares_outstanding",
+            value="10",
+            unit="shares",
+            confidence="0.9",
+            knowable_at=CUTOFF - timedelta(days=1),
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE,
+            unavailable_reason=ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
+        )

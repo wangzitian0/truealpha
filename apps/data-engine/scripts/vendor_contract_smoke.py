@@ -11,7 +11,8 @@ session). Every check below is one of those load-bearing assumptions, named.
 
 Cost: 1 Yahoo request + 3 Twelve Data credits (of the 800/day budget) + 2 moomoo
 calls (gated and ledgered like any other; AAPL is already inside the K-line quota
-window once the governed universe has been captured).
+window once the governed universe has been captured) + 1 U.S. Treasury request (a public
+CSV, no key; 1 of the 100 requests per day that its ledger seat allows).
 Exit 0 = contract holds; exit 1 = a named assumption drifted. Intended for a
 cron/scheduled run and after any vendor incident. A missing TWELVE_DATA_API_KEY is
 recorded as a FAILED check (a monitor with no credentials is a monitoring gap, not
@@ -152,6 +153,51 @@ def check_twelve_data() -> None:
     _check("twelvedata: /eod settled date returns a string close", ok_close, detail)
 
 
+def check_us_treasury() -> None:
+    """The shape of the Treasury file that `datahub.treasury_rates` relies on (#1255, A3 admission item 3).
+
+    The risk-free rate of every tick and every backtest comes from this file, with two more yields for
+    the macro panel. The parser reads the "Date" column and one column per registered series by name.
+    It takes dates as MM/DD/YYYY and values as percent. A header that lost a column, a date format
+    change or an error page fails here by name, before a tick does. In the first days of a year the
+    current file can hold no row yet, so the check then reads the year before.
+    """
+    from data_engine.datahub import treasury_rates
+    from data_engine.datahub.risk_free import MAX_RATE_LAG_DAYS
+
+    today = datetime.now(UTC).date()
+    for year in (today.year, today.year - 1):
+        try:
+            body = treasury_rates.fetch_year(year)
+            parsed = treasury_rates.parse_par_yield_csv(body, year=year)
+        except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
+            _check(f"us-treasury: the {year} file is reachable and parses", False, f"{type(error).__name__}: {error}")
+            return
+        rows = sum(len(items) for items in parsed.values())
+        _check(f"us-treasury: the {year} file is reachable and parses", True, f"{len(body)} bytes, {rows} values")
+        if rows:
+            break
+    else:
+        _check("us-treasury: a file with at least one observation", False, "two files without a row")
+        return
+    for series_id, observations in parsed.items():
+        if not observations:
+            _check(f"us-treasury: {series_id} has an observation", False, f"no row in the {year} file")
+            continue
+        newest = max(observations, key=lambda item: item.observation_date)
+        age = (today - newest.observation_date).days
+        _check(
+            f"us-treasury: the newest {series_id} observation is within the lag limit of the resolver",
+            age <= MAX_RATE_LAG_DAYS,
+            f"{newest.observation_date} is {age} days old",
+        )
+        _check(
+            f"us-treasury: {series_id} values decode as Decimal fractions between 0 and 1",
+            all(isinstance(item.value, Decimal) and 0 <= item.value < 1 for item in observations),
+            f"newest {newest.value}",
+        )
+
+
 def check_moomoo() -> None:
     """The two shapes the moomoo origins rely on (`datahub.production_topt.moomoo_origin`):
     a daily K-line bar stamped with a midnight session date and a float close, and an
@@ -218,6 +264,7 @@ def check_moomoo() -> None:
 def main() -> int:
     check_yahoo()
     check_twelve_data()
+    check_us_treasury()
     check_moomoo()
     if _FAILURES:
         print(f"\n{len(_FAILURES)} contract assumption(s) drifted: {', '.join(_FAILURES)}")
