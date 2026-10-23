@@ -8,11 +8,22 @@
  * Penetrating Physical Matrix for question coverage, enforcing "Strong Dashboard, Weak Gates".
  */
 
+import Link from "next/link";
+
 import { formatCell } from "@/client/format";
-import { loadDatahubStats, type QuestionCoverageQuestion } from "@/server/admin/datahub-stats";
+import { loadDatahubStats, loadVerdictHistory, type QuestionCoverageQuestion } from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
+
+/** A pending verdict (`ok = null`) is neither green nor red. */
+function verdictLabel(ok: boolean | null): string {
+  return ok === null ? "pending" : ok ? "ok" : "fail";
+}
+
+function verdictStyle(ok: boolean | null): string {
+  return ok === null ? "text-gray-400" : ok ? "text-emerald-400" : "text-rose-400";
+}
 
 function shortRun(id: string): string {
   return id.length > 24 ? `${id.slice(0, 24)}…` : id;
@@ -85,12 +96,20 @@ function renderTrackingIssue(issue: string) {
   return <span className="font-mono text-gray-400">{issue}</span>;
 }
 
-export default async function AdminDatahubPage() {
+export default async function AdminDatahubPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const principal = await getServerPrincipal();
   if (!principal || principal.principalKind !== "administrator") {
     return <p className="text-amber-400">Access denied.</p>;
   }
   const stats = await loadDatahubStats();
+  // #1466: `?history=<check>` lists every recorded verdict of one check under the table of current verdicts.
+  const requested = (await searchParams).history;
+  const historyCheck = typeof requested === "string" ? requested : null;
+  const history = historyCheck === null ? null : await loadVerdictHistory(historyCheck, principal);
 
   // 1. Governed Heads Metrics
   const totalHeads = stats.heads.length;
@@ -626,6 +645,7 @@ export default async function AdminDatahubPage() {
         <div>
           <h2 className="text-lg font-semibold">Standing check verdicts (mart.nightly_verdicts)</h2>
           <p className="text-sm text-gray-500">
+            One row per check: its current verdict, the newest recorded. Select a check to list its history.{" "}
             In-environment invariants evaluated by Dagster (<span className="font-mono">output_invariants</span> and{" "}
             <span className="font-mono">report_surface_proof</span>) and surfaced through <span className="font-mono">/api/health</span>.
             Re-evaluated automatically within 60s when a governed head advances or a new release boots (#1346).
@@ -649,10 +669,15 @@ export default async function AdminDatahubPage() {
             <tbody>
               {stats.nightlyVerdicts.map((v) => (
                 <tr key={v.check_name} className="border-t border-border">
-                  <td className="pr-4 font-mono">{v.check_name}</td>
-                  <td className={`pr-4 font-medium ${v.ok ? "text-emerald-400" : "text-rose-400"}`}>
-                    {v.ok ? "ok" : "fail"}
+                  <td className="pr-4 font-mono">
+                    <Link
+                      href={`/admin/datahub?history=${encodeURIComponent(v.check_name)}#verdict-history`}
+                      className="underline decoration-dotted hover:text-accent"
+                    >
+                      {v.check_name}
+                    </Link>
                   </td>
+                  <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
                   <td className="pr-4 text-gray-400">
                     {v.ran_at}
                   </td>
@@ -666,6 +691,46 @@ export default async function AdminDatahubPage() {
           </table>
         )}
       </div>
+
+      {historyCheck !== null && (
+        <div id="verdict-history" className="space-y-3">
+          <h2 className="text-lg font-semibold">
+            History of <span className="font-mono">{historyCheck}</span>
+          </h2>
+          {history === null ? (
+            <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+              That is not the name of a check, so there is no history to list.
+            </p>
+          ) : history.length === 0 ? (
+            <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+              No verdict is recorded for this check.
+            </p>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="pr-4 font-normal">verdict</th>
+                  <th className="pr-4 font-normal">ran at (UTC)</th>
+                  <th className="pr-4 font-normal">dagster run</th>
+                  <th className="font-normal">summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((v) => (
+                  <tr key={`${v.ran_at}-${v.dagster_run_id ?? ""}`} className="border-t border-border" data-history-row="true">
+                    <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
+                    <td className="pr-4 text-gray-400">{v.ran_at}</td>
+                    <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
+                      {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}
+                    </td>
+                    <td className="font-mono text-xs text-gray-300">{v.summary}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Validation</h2>

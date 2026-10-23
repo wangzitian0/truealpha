@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.9.0",
+  "contract_version": "1.10.0",
   "description": "Single source of truth for the universes each environment runs (a list, with the status of each: scheduled or stopped), their tick schedules, sentinel set, shared vendor capacity demand (#1416), the maximum runtime of every Dagster job (#1442), the memory capacity of the Dagster code server (#1467), and the retry, pacing and probe slots of the model seat (#1444).",
   "sentinels": [
     {
@@ -241,6 +241,9 @@
             "longest_minutes": 22.5
           }
         }
+      },
+      "job_run_health_check": {
+        "unmeasured": "No run in the window: the job is new (#1466). It reads one table of run records. Measure it after its first runs."
       },
       "macro_data_refresh_pipeline": {
         "unmeasured": "No run in the window: the lane is new in #1255. The first run makes one request per year since 2000 at 1 request per second. Measure it after its first runs."

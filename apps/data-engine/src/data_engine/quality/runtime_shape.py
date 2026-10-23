@@ -44,7 +44,7 @@ The nightly verdict is red on any of these:
   and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
   process at each sample, and each counted process keeps an event (the newest `MAX_OVER_EVENTS`). A
   smaller over-size process beside a larger one is not seen until it is the largest. A process whose
-  event was dropped by eight newer ones, and that is the largest again, counts again;
+  event was dropped by `MAX_OVER_EVENTS` newer ones, and that is the largest again, counts again;
 * the container was replaced without a change of the deployment. The kernel may kill the server
   process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
   does not show the kill. A deploy replaces the container too, but it changes the deployment.
@@ -106,7 +106,12 @@ def _over_events(value: object) -> tuple[OverEvent, ...]:
     if not isinstance(value, list):
         raise ValueError(f"not a list: {value!r}")
     return tuple(
-        OverEvent(process_id=_text(item["process_id"]), job=_text(item["job"]), size=_count(item["size"]))
+        OverEvent(
+            process_id=_text(item["process_id"]),
+            job=_text(item["job"]),
+            size=_count(item["size"]),
+            container=_text(item.get("container", "")),
+        )
         for item in value
     )
 
@@ -166,11 +171,15 @@ MAX_OVER_EVENTS = 8
 
 @dataclass(frozen=True)
 class OverEvent:
-    """A run process that passed the run budget: its id (`pid:start ticks`), the job of its run and its size (bytes)."""
+    """A run process that passed the run budget: its id (`pid:start ticks`), the job of its run and its size (bytes).
+
+    `container` names the container it ran in. A process id repeats only across containers (after a host
+    reboot), so the pair is the key of an event. State from before the container was recorded has ""."""
 
     process_id: str
     job: str
     size: int
+    container: str = ""
 
 
 @dataclass(frozen=True)
@@ -418,8 +427,9 @@ def _fold_sizes(
     over, worst_process = tracker.processes_over_size, tracker.worst_process
     if size > run_limit:
         worst_process = max(worst_process, size)  # a process that grows after it passed the budget raises the record
-        named = not fresh_container and any(
-            event.process_id == reading.largest_process_id for event in tracker.over_events
+        named = any(
+            event.container == reading.container and event.process_id == reading.largest_process_id
+            for event in tracker.over_events
         )
         if not named and (reading.largest_process_id != before_id or before_size <= run_limit):
             over += 1
@@ -441,7 +451,7 @@ def _fold_sizes(
 
 
 def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeServerCapacity) -> Tracker:
-    """Add one reading to the totals. A reading with a missing fact adds nothing."""
+    """Add one reading to the totals. A reading with a missing fact returns `tracker` itself, unchanged."""
     if reading.oom_kill is None or reading.memory_peak is None or reading.container is None or reading.unreadable:
         return tracker
     previous = tracker.container
@@ -508,7 +518,7 @@ def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
     return []
 
 
-#: The most jobs that the finding names. The summary is published with a bound of 300 characters.
+#: The most jobs that the finding names. The row is cut at `nightly_verdicts.SUMMARY_LIMIT`.
 MAX_NAMED_JOBS = 3
 
 
@@ -522,15 +532,12 @@ def _over_size_text(tracker: Tracker, count: int, capacity: CodeServerCapacity) 
     events = tracker.over_events[-count:]
     unnamed = count - len(events)
     if not events:
-        return (
-            f"{count} run process(es) passed the run budget {budget} MiB (size and job not recorded);"
-            " the run limit assumes that budget"
-        )
+        return f"{count} run process(es) passed the run budget {budget} MiB (size and job not recorded)"
     if len(events) == 1 and not unnamed:
         event = events[0]
         return (
             f"a run process held {round(event.size / MIB)} MiB (job {event.job}), above the run budget"
-            f" {budget} MiB (1 time(s)); the run limit assumes that budget"
+            f" {budget} MiB (1 time(s))"
         )
     by_job: dict[str, list[OverEvent]] = {}
     for event in events:
@@ -668,11 +675,21 @@ def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tra
     raises the size of that event as it grows. An event with an unknown job is looked up again while its
     process is the largest, because the run may not have been started yet or the read may have failed once.
     A known job is never looked up again."""
+    if folded is before or folded.container is None:
+        return folded  # the fold took nothing from this reading, so the names must not change either
     events, process_id, size = folded.over_events, reading.largest_process_id, reading.largest_process or 0
+    container = folded.container.id
     if folded.processes_over_size > before.processes_over_size:
         job = job_of_process(instance, process_id)
-        return replace(folded, over_events=(*events, OverEvent(process_id, job, size))[-MAX_OVER_EVENTS:])
-    index = next((i for i in range(len(events) - 1, -1, -1) if events[i].process_id == process_id), None)
+        return replace(folded, over_events=(*events, OverEvent(process_id, job, size, container))[-MAX_OVER_EVENTS:])
+    index = next(
+        (
+            i
+            for i in range(len(events) - 1, -1, -1)
+            if (events[i].container, events[i].process_id) == (container, process_id)
+        ),
+        None,
+    )
     if index is None:
         return folded
     event = events[index]
@@ -680,7 +697,9 @@ def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tra
     grown = max(event.size, size)
     if job == event.job and grown == event.size:
         return folded
-    return replace(folded, over_events=(*events[:index], OverEvent(process_id, job, grown), *events[index + 1 :]))
+    return replace(
+        folded, over_events=(*events[:index], OverEvent(process_id, job, grown, container), *events[index + 1 :])
+    )
 
 
 def sample(

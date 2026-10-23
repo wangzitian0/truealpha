@@ -78,8 +78,9 @@ export interface OpsPointerRow {
 
 /** #712: which data-engine build produced the newest run, from
  * `mart.data_engine_identity`. `null` when the view has no rows (no run recorded
- * yet) or when the database predates the view (the 2026-09-07 migration); a run
- * recorded before the identity was stamped reads "unknown"/"unknown", not null. */
+ * yet), when the database predates the view (the 2026-09-07 migration), or, on `/admin`,
+ * when the read failed (a missing grant, a timeout); a run recorded before the identity
+ * was stamped reads "unknown"/"unknown", not null. */
 export interface OpsDataEngineBuild {
   gitSha: string;
   imageDigest: string;
@@ -102,6 +103,61 @@ export interface OpsOverview {
  * loader can actually produce are `ready`, `denied` and `error`; the union is
  * wider because it is shared, and the renderer covers the rest. */
 export type OpsOverviewOutcome = ReadState<OpsOverview>;
+
+/**
+ * The data-engine build behind the newest run. The one reader of `mart.data_engine_identity` for the Operate
+ * world: `/admin` and `/admin/pipeline` both call it (#1466). `null` when the view has no row or does not exist
+ * (a database that predates the 2026-09-07 migration). Any other failure, a missing grant or a timeout, propagates:
+ * each caller says what it does with it.
+ */
+/** PostgreSQL error code of a relation that does not exist. */
+export const UNDEFINED_TABLE = "42P01";
+
+export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Promise<OpsDataEngineBuild | null> {
+  let identityResult;
+  try {
+    identityResult = await client.query(
+      "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
+        "order by created_at desc limit 1",
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === UNDEFINED_TABLE) return null;
+    throw error;
+  }
+  const row = identityResult.rows[0];
+  return row === undefined
+    ? null
+    : {
+        gitSha: String(row.git_sha),
+        imageDigest: String(row.image_digest),
+        runId: String(row.run_id),
+        createdAt: new Date(row.created_at).toISOString(),
+      };
+}
+
+/**
+ * When the current stretch of a build began: the first run of `$1` after the newest run of any other build.
+ * A revert (A, B, A) starts a new stretch at the second A, and a rebuild of the same sha extends the stretch.
+ * A run with no recorded sha ("unknown") is not another build.
+ * The release age of `/admin/pipeline` is the time since then (#1466). `tests/test_pipeline_event_log_sql.py`
+ * runs this text on the view over real run plans.
+ */
+export const RELEASE_START_SQL = `
+  select min(i.created_at) as since
+  from mart.data_engine_identity i
+  where i.git_sha = $1
+    and i.created_at > coalesce(
+      (select max(j.created_at) from mart.data_engine_identity j where j.git_sha <> $1 and j.git_sha <> 'unknown'),
+      '-infinity'::timestamptz
+    )
+`;
+
+/** The start of the current stretch of `gitSha`, ISO 8601, or null when the view has no run of it. Errors propagate. */
+export async function loadReleaseStart(client: Pick<PoolClient, "query">, gitSha: string): Promise<string | null> {
+  const result = await client.query(RELEASE_START_SQL, [gitSha]);
+  const since = result.rows[0]?.since;
+  return since === null || since === undefined ? null : new Date(since).toISOString();
+}
 
 export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<OpsOverviewOutcome> {
   if (principal === null || principal.principalKind !== "administrator") {
@@ -159,27 +215,8 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
         };
       });
 
-      let dataEngine: OpsDataEngineBuild | null = null;
-      try {
-        const identityResult = await client.query(
-          "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
-            "order by created_at desc limit 1",
-        );
-        const row = identityResult.rows[0];
-        dataEngine =
-          row === undefined
-            ? null
-            : {
-                gitSha: String(row.git_sha),
-                imageDigest: String(row.image_digest),
-                runId: String(row.run_id),
-                createdAt: new Date(row.created_at).toISOString(),
-              };
-      } catch {
-        // The view arrives with the 2026-09-07 migration; a database that predates it
-        // reports the build as unknown rather than failing the whole overview.
-        dataEngine = null;
-      }
+      // The overview reports an unreadable build as unknown rather than failing the whole page (#712).
+      const dataEngine = await loadDataEngineBuild(client).catch(() => null);
 
       const quotaResult = await client.query(
         "select source, count(*)::int as fetches from raw.fetches " +
