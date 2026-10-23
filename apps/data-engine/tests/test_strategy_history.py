@@ -893,6 +893,20 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     assert (
         latest_financial_observations(connection, one_id_each, known_at=TICK, parser_version="no-such-parser:v0") == {}
     )
+    # #1323: the payload of an issuer that the registry could not classify names a placeholder branch.
+    # The lineage read skips it, so the projector never classifies the issuer from the placeholder.
+    flagged = issuer_ids[0]
+    connection.execute("set local session_replication_role = replica")
+    connection.execute(
+        "update staging.capture_observation_payloads set normalized_payload = normalized_payload || "
+        "'{\"registry_unavailable\": true}'::jsonb where normalized_payload ->> 'issuer_id' = %s",
+        (flagged,),
+    )
+    connection.execute("set local session_replication_role = origin")
+    skipped = latest_financial_observations(
+        connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert sorted(skipped) == [issuer_id for issuer_id in issuer_ids if issuer_id != flagged]
     # #1257: two ids of one entity yield ONE observation. #1347: the ticker of its listing selects it.
     paired = latest_financial_observations(
         connection,
@@ -931,6 +945,51 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     assert [(issuer.issuer_id, issuer.ticker) for issuer in found.issuers] == [(control.canonical_issuer_id, "H1257K")]
     assert found.merged == {control.legacy_issuer_id: control.canonical_issuer_id}
     assert found.unresolved == tuple(issuer_ids)
+
+
+def test_the_lineage_query_falls_back_to_the_newest_observation_that_the_registry_classified(connection) -> None:
+    """#1323: the newest observation of an issuer names a placeholder branch when the registry could not classify
+    it. The query skips it, so the older observation, which names a real branch, is the one it returns."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+    import financial_lineage_seed as seed  # noqa: PLC0415
+    from data_engine.datahub.strategy_history import latest_financial_observations  # noqa: PLC0415
+
+    issuer = seed.mint_issuer(
+        connection, lei="H1323FALLBACKXXXX00", mic="XNAS", ticker="H1323K", cik=1_323_601, known_at=_utc(2026, 1, 1)
+    )
+    older, newer = _utc(2026, 3, 1), _utc(2026, 4, 1)
+    for knowable_at, branch in ((older, "financial"), (newer, "non_financial")):
+        seed.seed_financial_lineage(
+            connection,
+            [seed.Observed(issuer.legacy_issuer_id, issuer.legacy_listing_id, issuer.cik, branch, knowable_at)],
+            company_facts={issuer.cik: _doc()},
+            store=seed.MemoryStore(),
+            cutoff=knowable_at,
+            parser_version="production-topt-integration-parser:v1",
+        )
+    ids = {"entity:fallback": [issuer.legacy_issuer_id]}
+    before = latest_financial_observations(
+        connection, ids, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert before["entity:fallback"][0]["operating_branch"] == "non_financial", "unflagged, the newest observation wins"
+
+    connection.execute("set local session_replication_role = replica")
+    connection.execute(
+        "update staging.capture_observation_payloads p "
+        "set normalized_payload = p.normalized_payload || '{\"registry_unavailable\": true}'::jsonb "
+        "from staging.capture_normalized_observations o "
+        "where o.observation_id = p.observation_id and o.knowable_at = %s and p.normalized_payload ->> 'issuer_id' = %s",
+        (newer, issuer.legacy_issuer_id),
+    )
+    connection.execute("set local session_replication_role = origin")
+
+    after = latest_financial_observations(
+        connection, ids, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert after["entity:fallback"][0]["operating_branch"] == "financial", "flagged, the older observation is returned"
 
 
 def test_the_deployed_run_fails_when_no_issuer_resolves(connection, monkeypatch) -> None:

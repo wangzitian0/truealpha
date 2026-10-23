@@ -23,6 +23,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.strategy import ExclusionReason
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
@@ -34,6 +35,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
 from data_engine.datahub.production_topt.fund_consolidation import (
     summary_line as fund_consolidation_summary,
 )
+from data_engine.datahub.production_topt.issuer_registry import registry_unavailable_issuers
 from data_engine.datahub.production_topt.plausibility_gate import judge_issuers, judge_strategy
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
@@ -298,6 +300,27 @@ def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: Corro
         raise
 
 
+def _registry_unavailable(
+    context: dg.OpExecutionContext, connection: Any, tick: UniverseTick, run_id: str, verdict: Any
+) -> list[str]:
+    """The issuers of the run whose registry read failed (#1323). The log names each one.
+
+    A tick with a strategy refuses a run that has no eligible issuer. A tick without a strategy has no such
+    rule. It refuses a run in which the registry classified no issuer. Every operating numerator of that run
+    is null, and the run would publish it as a success.
+    """
+    flagged = registry_unavailable_issuers(connection, run_id=run_id)
+    for issuer_id in flagged:
+        context.log.warning(f"{tick.log_label}: issuer {issuer_id} excluded as registry_unavailable")
+    judged = set(verdict.issuers.values())
+    if not tick.run_strategy and judged and judged <= set(flagged):
+        raise dg.Failure(
+            f"{tick.log_label}: the issuer registry classified none of {len(judged)} issuers; "
+            "the run would publish no operating numerator (#1323)"
+        )
+    return flagged
+
+
 def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
     """The one tick body every universe runs: capture → freeze → materialize → report →
     governed pointer, plus the strategy replay where the declaration asks for it."""
@@ -332,6 +355,13 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         # run. An issuer refusal excludes that issuer's decision with a named reason, and the run
         # publishes the others.
         issuers = judge_issuers(connection, run_id=pipeline.run_id)
+        # #1323: an issuer whose registry read failed after its attempts is excluded by name, like a
+        # refused issuer. The registry reason wins: the row of that issuer rests on no classification.
+        registry_unavailable = _registry_unavailable(context, connection, tick, pipeline.run_id, issuers)
+        excluded = {
+            **issuers.excluded_issuers(),
+            **dict.fromkeys(registry_unavailable, ExclusionReason.REGISTRY_UNAVAILABLE),
+        }
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
@@ -347,7 +377,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 executed_at=cutoff,
                 risk_free_rate=pipeline.risk_free_rate,
                 capture_run_id=pipeline.run_id,
-                plausibility_refusals=issuers.excluded_issuers(),
+                plausibility_refusals=excluded,
             )
             strategy = {
                 "strategy_inputs_seeded": seeded,
@@ -440,6 +470,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,
         "plausibility_excluded": sorted({f"{v.rule} {v.listing_id}" for v in verdict.refusals}),
+        "registry_unavailable_excluded": registry_unavailable,
         "quality_report_id": pipeline.quality_report_id,
         "forced_fetch": pipeline.forced_fetch,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],

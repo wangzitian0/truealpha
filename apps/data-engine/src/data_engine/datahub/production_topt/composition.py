@@ -80,6 +80,7 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations,
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.executor import SourceFetchPort
+from data_engine.datahub.production_topt.issuer_registry import UNAVAILABLE_PAYLOAD_KEY
 from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
@@ -762,6 +763,9 @@ def _satisfy_from_recent_observations(
             join staging.capture_observation_payloads anchor_payload
               on anchor_payload.observation_id = o.observation_id
              and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
+             -- #1323: an observation of an issuer the registry could not classify never satisfies
+             -- another run. The next unforced run asks the registry again.
+             and anchor_payload.normalized_payload->>%(unavailable_key)s is distinct from 'true'
              and (
                  m.semantic_type = 'market-price'
                  or (
@@ -826,6 +830,7 @@ def _satisfy_from_recent_observations(
             "release_semantics": sorted(_RELEASE_SEMANTICS),
             "coordinates": coordinates_param,
             "parser_version": PARSER_VERSION,
+            "unavailable_key": UNAVAILABLE_PAYLOAD_KEY,
         },
     ).fetchall()
 

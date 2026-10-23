@@ -87,6 +87,14 @@ def ticker_to_cik(ticker: str) -> int:
     return cik
 
 
+def _is_json_object(body: bytes) -> bool:
+    """Whether ``body`` is a JSON object. Text that is not JSON is not one."""
+    try:
+        return isinstance(json.loads(body.decode()), dict)
+    except ValueError:
+        return False
+
+
 def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
     """The issuer's EDGAR submissions metadata (name, SIC classification, filing index).
 
@@ -101,7 +109,13 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
                 return _get(c, "submissions", url, "sec.fetch_company_submissions")
         return _get(http, "submissions", url, "sec.fetch_company_submissions")
 
-    return dict(json.loads(gateway.fetch_once(submissions_key(cik), fetch).decode()))
+    # A 200 answer that is not a JSON object is not the submissions of the issuer. It stays out of the index,
+    # so the retry of the registry and the next caller ask SEC again (#1323).
+    body = gateway.fetch_once(submissions_key(cik), fetch, accept=_is_json_object)
+    payload = json.loads(body.decode())
+    if not isinstance(payload, dict):
+        raise ValueError(f"the submissions of CIK {cik} are not a JSON object")
+    return payload
 
 
 def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> tuple[bytes, dict[str, Any]]:

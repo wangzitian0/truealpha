@@ -16,7 +16,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -1409,3 +1409,159 @@ def test_the_guard_flags_a_table_that_stores_the_legacy_form(connection: psycopg
     assert "zz_guard_probe" in run_scoped_issuer_tables(connection)
     assert run_scoped_issuer_tables(connection) != set(WRITERS), "the coverage test fails on it"
     assert issuer_ids_outside_the_wide_row(connection, "zz_guard_probe", "run:probe", wide) == {legacy}
+
+
+# --- #1466: a partner the supply-chain op mints keeps its birth alias at commit
+
+
+class _CommitRunsDeferredConstraints(_LaneConnection):
+    """The lane connection whose `commit` fires the deferred constraint triggers, as a real commit does.
+
+    The base lane never commits, so the deferred `require_birth_alias` trigger would never run.
+    Staging, 2026-10-21: that trigger failed `head_reports_pipeline` three times at the commit.
+    """
+
+    def commit(self) -> None:
+        super().commit()
+        self.connection.execute("set constraints all immediate")
+        self.connection.execute("set constraints all deferred")
+
+
+@pytest.fixture
+def committing_lane(
+    connection: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch, lane_world: None
+) -> _CommitRunsDeferredConstraints:
+    lane = _CommitRunsDeferredConstraints(connection)
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: lane)
+    return lane
+
+
+def _stub_partners(monkeypatch: pytest.MonkeyPatch, partners: tuple[tuple[str, str], ...]) -> list[tuple[int, str]]:
+    """The seated model names `partners` as (name, relation) for every filing. Returns the asks."""
+    from data_engine.sources import llm
+
+    asks: list[tuple[int, str]] = []
+
+    def identify(_connection: Any, *, cik: int, accession: str, **_kwargs: Any) -> Any:
+        asks.append((cik, accession))
+        invocation = llm.ModelInvocation(
+            decision={"partners": []},
+            model="glm-5.3-flash",
+            provider="zhipu-glm-coding-plan",
+            prompt_sha256="a" * 64,
+            request_sha256="b" * 64,
+            response_sha256="c" * 64,
+            prompt_tokens=1200,
+            completion_tokens=80,
+            invocation_id="model-invocation:" + "d" * 64,
+            replayed=False,
+            served_model="glm-5.3-flash",
+        )
+        return llm.SupplyChainExtraction(
+            partners=tuple(
+                llm.ExtractedSupplyChainPartner(
+                    partner_name=name,
+                    ticker=None,
+                    relation_type=relation,
+                    revenue_share_pct=None,
+                    evidence_quote=f"{name} is a {relation} of the issuer, as the filing states in its business section.",
+                )
+                for name, relation in partners
+            ),
+            invocation=invocation,
+        )
+
+    monkeypatch.setattr(llm, "identify_supply_chain_partners", identify)
+    return asks
+
+
+def _capture_filing(connection: psycopg.Connection[Any], head: question_coverage.GovernedHead) -> int:
+    """One 10-K of one member of the head, in `raw.fetches` as the SEC capture writes it."""
+    members = theme_purity.governed_members(connection, run_id=head.run_id)
+    cik = min(members)
+    named = connection.execute(
+        "select 1 from staging.entity_aliases where entity_id = %s and scheme = 'cik'", (members[cik],)
+    ).fetchone()
+    if named is None:  # the entity store names the issuer by CIK, as on staging
+        _alias(
+            connection,
+            uuid.UUID(members[cik]),
+            "cik",
+            f"{cik:010d}",
+            valid_from="-infinity",
+            at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    published = head.cutoff.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+    connection.execute(
+        """
+        insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type,
+                                 byte_length, source_published_at, fetched_at, metadata)
+        values ('sec', %s, %s, 's3://truealpha-raw/raw/sec/test-10k.htm', 'text/html', 400, %s, %s, %s)
+        """,
+        (
+            f"filing-document:CIK{cik:010d}:{cik:010d}-26-000001:10k.htm",
+            "e" * 64,
+            published,
+            published,
+            json.dumps({"cik": cik, "form": "10-K", "accession": f"{cik:010d}-26-000001", "plain_text": "10-K " * 40}),
+        ),
+    )
+    return cik
+
+
+def test_the_commit_of_the_lane_fires_the_birth_alias_trigger(
+    connection: psycopg.Connection[Any], committing_lane: _CommitRunsDeferredConstraints
+) -> None:
+    """A control: the harness must fail on an entity that has no birth alias, or the next test proves nothing."""
+    connection.execute("select staging.entity_mint('issuer', 'legacy-id', 'company:partner:control-co', 'test')")
+
+    with pytest.raises(psycopg.errors.RaiseException, match="was minted without its birth alias"):
+        committing_lane.commit()
+
+
+def test_the_supply_chain_op_commits_every_partner_it_mints_with_its_birth_alias(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    committing_lane: _CommitRunsDeferredConstraints,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Staging, 2026-10-21 07:32-08:04 UTC: `entity 7989d366-... was minted without its birth alias
+    legacy-id:company:partner:apple-inc` ended `head_reports_pipeline` three times.
+
+    The alias insert passed 6 parameters for 8 placeholders. A bare `except` hid the error.
+    The mint stayed in the open transaction and the commit raised. The op runs on a real head.
+    """
+    cik = _capture_filing(connection, head)
+    asks = _stub_partners(monkeypatch, (("Apple Inc", "customer"), ("Contoso Widgets Ltd", "supplier")))
+    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=UNIVERSE)
+
+    summary = json.loads(standards.run_supply_chain_exposure(dg.build_op_context(), config, "{}"))
+
+    assert len(asks) == 1 and asks[0][0] == cik, "the model was asked about the one filing of the head"
+    assert committing_lane.commits >= 1, "the op committed, so the deferred trigger ran"
+    assert "lane_failure" not in summary
+    assert summary["rows"] == ISSUERS
+    minted = dict(
+        connection.execute(
+            """
+            select e.birth_value, a.value
+            from staging.entities e
+            left join staging.entity_aliases a
+              on a.entity_id = e.entity_id and a.scheme = e.birth_scheme and a.value = e.birth_value
+            where e.birth_scheme = 'legacy-id' and e.birth_value like 'company:partner:%%'
+            """
+        ).fetchall()
+    )
+    assert minted == {
+        "company:partner:apple-inc": "company:partner:apple-inc",
+        "company:partner:contoso-widgets-ltd": "company:partner:contoso-widgets-ltd",
+    }
+    partner_edges = connection.execute(
+        """
+        select count(*) from staging.entity_relations r
+        join staging.entities e on e.entity_id in (r.from_entity_id, r.to_entity_id)
+        where r.relation_type = 'supplies_to' and e.birth_scheme = 'legacy-id'
+          and e.birth_value like 'company:partner:%%'
+        """
+    ).fetchone()
+    assert partner_edges == (2,)

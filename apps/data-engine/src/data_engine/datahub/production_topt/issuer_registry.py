@@ -15,8 +15,11 @@ than being scored through a proxy that does not describe them.
 
 from __future__ import annotations
 
+import json
+import logging
+import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -24,6 +27,7 @@ import httpx
 from factors.production_topt import OperatingBranch
 
 from data_engine.sources import sec
+from data_engine.sources.gateway import CapacityExceeded
 
 _DEPOSITORY_INSTITUTION_SIC = range(6000, 6100)
 _INSURANCE_SIC = range(6300, 6400)
@@ -86,10 +90,6 @@ def statement_filings(submissions: Mapping[str, Any]) -> tuple[StatementFiling, 
     return tuple(filings)
 
 
-class IssuerRegistryUnavailableError(RuntimeError):
-    """The registry could not classify an issuer, so no run may assume a branch."""
-
-
 def operating_branch_for_sic(sic: str | None) -> OperatingBranch:
     """Map an EDGAR SIC code to the operating branch its economics belong to."""
     if sic is None or not sic.strip().isdigit():
@@ -124,25 +124,132 @@ class IssuerClassification:
     statement_filings: tuple[StatementFiling, ...] = ()
 
 
-def resolve_issuer_classifications(ciks: Mapping[str, int]) -> dict[int, IssuerClassification]:
+#: Attempts to read one issuer's submissions (#1323). Three attempts wait 1 s, then 2 s.
+REGISTRY_ATTEMPTS = 3
+REGISTRY_BACKOFF_SECONDS = 1.0
+#: Issuers in a row whose read failed in a way that the next issuer may share. Examples: a timeout after
+#: every attempt, a block (403), a spent budget. At this count the registry is down. Each remaining issuer
+#: then gets one attempt and no wait. A short burst of errors costs the issuers that it hit and no more.
+#: A long outage costs one read timeout (`REGISTRY_READ_TIMEOUT_SECONDS`) for each issuer, not three.
+REGISTRY_OUTAGE_AFTER = 3
+#: Seconds that one submissions read may wait for the host (#1323). `sec.client()` waits 30 s. That limit fits a
+#: company-facts read (the longest on staging in 35 days: 73 s), which is a large document. A submissions read
+#: is small. Source: the call ledger of the staging database, 2026-09-16 to 2026-10-21, TOPT and QQQ ticks
+#: (`select duration_ms, ok from staging.api_call_ledger where source = 'sec' and endpoint = 'submissions'`):
+#: 3340 reads, median 226 ms, 99th percentile 623 ms, longest successful read 3602 ms. One read failed: the
+#: 30 s timeout of the tick on 2026-10-20 22:45. 10 s is 2.8 times the longest successful read.
+#: The timeout does not bound the time of a pass. One failing issuer costs 3 x 10 s + 3 s of waits. A sustained
+#: outage costs 269 s for 20 issuers and 84 minutes for 500, and every issuer is still read. A host that
+#: fails two issuers in a row and answers the third never trips the breaker, and the run monitor of Dagster ends the
+#: run after `max_runtime_seconds`. That cost is accepted: a cap would leave issuers unread while the host recovers.
+REGISTRY_READ_TIMEOUT_SECONDS = 10.0
+#: The payload key of a financial-fact observation whose issuer the registry could not classify.
+UNAVAILABLE_PAYLOAD_KEY = "registry_unavailable"
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RegistryReading:
+    """What one registry pass found: the classified issuers, and the ones it could not classify."""
+
+    classifications: dict[int, IssuerClassification]
+    #: CIK -> why the registry gave no classification. An issuer here is excluded, never assumed.
+    unavailable: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _Read:
+    submissions: dict[str, Any] | None
+    reason: str = ""
+    #: The failure may repeat for the next issuer, so it counts toward an outage.
+    outage: bool = False
+
+
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+#: Failures of a read that may clear: a timeout or a reset, and a body that arrived cut short.
+_TRANSIENT = (httpx.TransportError, httpx.DecodingError, json.JSONDecodeError, UnicodeDecodeError)
+
+
+def _failure(error: Exception) -> tuple[bool, bool]:
+    """(worth another attempt, counts toward an outage) for a failed read.
+
+    A timeout, a reset, a body cut short, a 429 and a 5xx may clear. A 404 means that EDGAR has no such
+    issuer, and it is no outage. Any other failure is not worth another attempt. It may repeat for the next
+    issuer. Examples: a block (403), a spent budget, a body that is not an object.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        return (status == 429 or status >= 500), status != 404
+    return isinstance(error, _TRANSIENT), True
+
+
+def _read_submissions(cik: int, http: httpx.Client, *, attempts: int) -> _Read:
+    """The submissions of `cik`, or why not. Only a failure that may clear is tried again, with a doubling wait."""
+    for attempt in range(attempts):
+        try:
+            return _Read(sec.fetch_company_submissions(cik, http))
+        except (httpx.HTTPError, ValueError, CapacityExceeded) as error:
+            retry, outage = _failure(error)
+            if not retry or attempt == attempts - 1:
+                return _Read(None, f"{type(error).__name__}: {error}"[:300], outage)
+            _pause(REGISTRY_BACKOFF_SECONDS * 2**attempt)
+    raise AssertionError("unreachable: the last attempt returns")
+
+
+def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
     """Classify every distinct CIK in the run's universe, once, from one submissions read.
 
-    A registry that cannot be reached raises: a run that cannot say whether an issuer is
-    a bank must not silently classify it as anything.
+    A read that fails in a way that may clear is tried again, up to `REGISTRY_ATTEMPTS`. An issuer
+    whose read still fails is named in `RegistryReading.unavailable`. The caller excludes that
+    issuer: a run that cannot say whether an issuer is a bank must not classify it as anything.
+    One issuer never fails the run (#1323). The registry marks an issuer unavailable only after a read of
+    that issuer failed.
     """
     classifications: dict[int, IssuerClassification] = {}
+    unavailable: dict[int, str] = {}
+    failed_in_a_row = 0
     with sec.client() as http:
+        http.timeout = httpx.Timeout(REGISTRY_READ_TIMEOUT_SECONDS)
         for cik in sorted(set(ciks.values())):
-            try:
-                submissions = sec.fetch_company_submissions(cik, http)
-            except httpx.HTTPError as error:
-                raise IssuerRegistryUnavailableError(
-                    f"could not resolve the operating branch for CIK {cik:010d}: {error}"
-                ) from error
-            sic = submissions.get("sic")
+            read = _read_submissions(
+                cik, http, attempts=1 if failed_in_a_row >= REGISTRY_OUTAGE_AFTER else REGISTRY_ATTEMPTS
+            )
+            if read.submissions is None:
+                logger.warning("registry unavailable for CIK %010d: %s", cik, read.reason)
+                unavailable[cik] = read.reason
+                failed_in_a_row += read.outage
+                if read.outage and failed_in_a_row == REGISTRY_OUTAGE_AFTER:
+                    logger.warning(
+                        "registry down: %d issuers in a row failed; one attempt for each remaining issuer",
+                        failed_in_a_row,
+                    )
+                continue
+            failed_in_a_row = 0
+            sic = read.submissions.get("sic")
             classifications[cik] = IssuerClassification(
                 operating_branch=operating_branch_for_sic(sic),
                 revenue_proxy_allowed=revenue_proxy_allowed_for_sic(sic),
-                statement_filings=statement_filings(submissions),
+                statement_filings=statement_filings(read.submissions),
             )
-    return classifications
+    return RegistryReading(classifications=classifications, unavailable=unavailable)
+
+
+_UNAVAILABLE_ISSUERS_SQL = """
+    select distinct p.normalized_payload->>'issuer_id'
+    from raw.capture_obligations ob
+    join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+    join staging.capture_observation_payloads p on p.observation_id = link.observation_id
+    where ob.run_id = %s
+      and p.normalized_payload->>%s = 'true'
+    order by 1
+"""
+
+
+def registry_unavailable_issuers(connection: Any, *, run_id: str) -> list[str]:
+    """The issuer ids of the run whose financial-fact observation the registry could not classify."""
+    rows = connection.execute(_UNAVAILABLE_ISSUERS_SQL, (run_id, UNAVAILABLE_PAYLOAD_KEY)).fetchall()
+    return [str(issuer_id) for (issuer_id,) in rows if issuer_id is not None]

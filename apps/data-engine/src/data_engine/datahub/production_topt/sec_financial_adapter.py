@@ -59,6 +59,7 @@ from data_engine.datahub.production_topt.issuer_registry import (
     ANNUAL_STATEMENT_FORMS,
     INTERIM_STATEMENT_FORMS,
     STATEMENT_FORMS,
+    UNAVAILABLE_PAYLOAD_KEY,
     StatementFiling,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
@@ -238,6 +239,11 @@ class SecTarget:
     # Defaults False so a target assembled without the registry cannot inherit a
     # substitution that only holds for ~zero-COGS industries.
     revenue_proxy_allowed: bool = False
+    # True when the issuer registry gave no classification after its attempts (#1323). The
+    # operating branch above is then a placeholder. The payload withholds both numerators and
+    # carries `UNAVAILABLE_PAYLOAD_KEY`, so the tick excludes the issuer with the reason
+    # `registry_unavailable` and publishes the others.
+    registry_unavailable: bool = False
     # The listing's canonical ticker, for a corroborating origin that is keyed by symbol
     # rather than by CIK (moomoo). Empty means no such origin can be asked; the primary
     # capture never needs it.
@@ -1305,7 +1311,8 @@ class SecFinancialFactAdapter:
         # periods. The marker below records why the metric is absent.
         operating_period_stale = _periods_differ(bundle.operating_period_end, bundle.revenue_period_end)
         pre_provision_value = bundle.pre_provision_profit
-        if operating_period_stale:
+        withheld = _operating_withheld(operating_period_stale, target)
+        if withheld:
             gross_profit_value = None
             pre_provision_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
@@ -1326,7 +1333,7 @@ class SecFinancialFactAdapter:
             "shares_outstanding": _s(bundle.shares_outstanding),
             "shares_basis": bundle.shares_basis,
             "pre_provision_profit": _s(pre_provision_value),
-            "operating_period_end": None if operating_period_stale else _d(bundle.operating_period_end),
+            "operating_period_end": None if withheld else _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
@@ -1361,6 +1368,7 @@ class SecFinancialFactAdapter:
                     "tangible_equity_period_end": _d(bundle.tangible_equity_period_end),
                 }
             )
+        _mark_unclassified(payload, target)
         if operating_period_stale:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
@@ -1392,6 +1400,24 @@ class SecFinancialFactAdapter:
         if fact is None or fact.knowable_at.date() > target.cutoff:
             return None, None, knowable_at
         return fact.value, headcount_vintage(fact), max(knowable_at, fact.knowable_at)
+
+
+def _operating_withheld(period_stale: bool, target: SecTarget) -> bool:
+    """Whether the payload drops both operating numerators.
+
+    The period of the metric is stale (#1114), or the registry gave no classification (#1323): without
+    it the run cannot say which numerator describes this issuer.
+    """
+    return period_stale or target.registry_unavailable
+
+
+def _mark_unclassified(payload: dict[str, Any], target: SecTarget) -> None:
+    """Flag the payload of an issuer that the registry could not classify.
+
+    The key is present only then, so the payload hash of a classified row does not move.
+    """
+    if target.registry_unavailable:
+        payload[UNAVAILABLE_PAYLOAD_KEY] = True
 
 
 def _confidence(payload: Mapping[str, Any]) -> Decimal:
@@ -1618,7 +1644,8 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     missing = sorted(tickers - set(cik_by_ticker))
     if missing:
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
-    classifications = resolve_issuer_classifications(cik_by_ticker)
+    registry = resolve_issuer_classifications(cik_by_ticker)
+    classifications = registry.classifications
     listing_ids = [coordinate[2] for coordinate in context.coordinates.values()]
     issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in context.coordinates.values()}
     predecessors = (
@@ -1649,6 +1676,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
             # #533: only the industries whose cost of revenue is ~zero may substitute
             # revenue for an untagged gross profit. Absent from the registry means no.
             revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
+            registry_unavailable=cik in registry.unavailable,
             # only meaningful when it differs from the mapped CIK — the fallback would
             # otherwise refetch the same empty document.
             predecessor_cik=int(pred) if pred is not None and has_pred else None,
