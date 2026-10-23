@@ -8,9 +8,9 @@ Extends: `AGENTS.md` Rule 4 ("How work happens"), Rule 6 ("Closed means verified
 
 Over successive iterations, defensive engineering mechanisms degenerated into brittle, multi-tiered "hard gates" (强门禁). Rather than preventing defects, these gates produced development paralysis, workarounds, and false security:
 
-1. **External Platform Deadlocks**: `tools/check_pr_ready.py` (deleted in #1237) introduced fail-closed logic that blocked PR merges whenever an external AI reviewer (such as GitHub Copilot) suffered a network timeout, platform outage, or emitted unparseable prose. PR #1198—which implemented necessary GPPE metric naming, was fully tested, and passed all CI checks—was locked for two days due solely to Copilot emitting an "encountered an error" response.
-2. **Form over Substance Cargo Cult**: `tools/vision_close_guard.py` and its accompanying GitHub Actions workflows (`vision-close-check.yml` and `vision-close-reopen.yml`) introduced regex-based pull request blockers on GitHub closing keywords and automated bots that reopened closed issues lacking literal Markdown headings (`Deployed call site` and `Real-data output`). This incentivized boilerplate copy-pasting to satisfy the regex, while failing to detect whether the underlying service was healthy.
-3. **Metric-to-Gate Inversion and Issue Spam**: `tools/deploy_freshness.py` and `deploy-freshness.yml` inverted an informational age measurement (production deployment older than 14 days, staging older than 3 days) into an exit 1 CI blocker that automatically filed noisy tracker issues (#1202, #1203). This converted normal release soak intervals into pipeline red lights.
+1. **External Platform Deadlocks**: `tools/check_pr_ready.py` (deleted in #1237) introduced fail-closed logic that blocked PR merges whenever an external AI reviewer (such as GitHub Copilot) suffered a network timeout, platform outage, or emitted unparseable prose. PR #1198—which implemented necessary GPPE metric naming, was fully tested, and passed all CI checks—was locked for two days due solely to Copilot emitting an "encountered an error" response. <!-- doc-drift: history -->
+2. **Form over Substance Cargo Cult**: `tools/vision_close_guard.py` and its accompanying GitHub Actions workflows (`vision-close-check.yml` and `vision-close-reopen.yml`) introduced regex-based pull request blockers on GitHub closing keywords and automated bots that reopened closed issues lacking literal Markdown headings (`Deployed call site` and `Real-data output`). This incentivized boilerplate copy-pasting to satisfy the regex, while failing to detect whether the underlying service was healthy. <!-- doc-drift: history -->
+3. **Metric-to-Gate Inversion and Issue Spam**: `tools/deploy_freshness.py` and `deploy-freshness.yml` inverted an informational age measurement (production deployment older than 14 days, staging older than 3 days) into an exit 1 CI blocker that automatically filed noisy tracker issues (#1202, #1203). This converted normal release soak intervals into pipeline red lights. <!-- doc-drift: history -->
 4. **The False Green Paradox**: Despite dozens of mechanical gates, substantive physical defects repeatedly escaped detection:
    - A `0.08` hardcoded constant stood in for measured tangible common equity (#1108, #1176);
    - A demo close-price sorting strategy stood in for fundamental factor backtesting (#758);
@@ -38,7 +38,7 @@ A gate belongs to one of three classes. Everything else is a dashboard.
 
 ### 3. Issue Lifecycle and Verification
 - An agent or engineer independently verifies the change on staging. The verifier reads the relevant dashboard or runs a read-only probe (SQL rows, HTTP responses). Then `/close` walks the acceptance rows (ADR A2) and the issue closes.
-- Production state is not an issue state. The release process that infra2 owns records it (`docs/ssot/ops.pipeline.md` in wangzitian0/infra2).
+- Production state is not an issue state. The release process that infra2 owns records it (the document `ops.pipeline.md` in the docs/ssot folder of wangzitian0/infra2).
 - Reopening is driven by physical regressions identified on the dashboard or by operational failure, not by arbitrary comment text parsers.
 
 ## Consequences
@@ -46,4 +46,4 @@ A gate belongs to one of three classes. Everything else is a dashboard.
 - **Restored Velocity**: Pull requests are no longer held hostage by third-party reviewer hiccups. PR #1198 is unblocked and merged immediately.
 - **Truth Surfaced in Sunlight**: Substantive defects can no longer hide behind green syntactical checks; they are prominently visualized on operational dashboards.
 - **Reduced Noise**: Automated alerts stop creating spurious issue tracker churn for known soak periods, focusing attention on genuine operational breakages.
-- **Release age is a dashboard row** (#1412): `deploy-freshness.yml`, `tools/deploy_freshness.py` and `tools/datahub_freshness.py` are deleted. The daily `delivery-report.yml` shows release age, walk evidence, nightly verdicts and the deploy streak. It opens no issue.
+- **Release age is a dashboard row** (#1412): `deploy-freshness.yml`, `tools/deploy_freshness.py` and `tools/datahub_freshness.py` are deleted. The daily `delivery-report.yml` shows release age, walk evidence, nightly verdicts and the deploy streak. It opens no issue. <!-- doc-drift: history -->

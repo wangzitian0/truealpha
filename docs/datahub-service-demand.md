@@ -6,7 +6,7 @@ does not select a vendor or describe infrastructure.
 
 The public contract is `truealpha_contracts.service_demand.DataHubServiceDemand`.
 The checked-in TOPT round-trip example is
-`libs/contracts/tests/fixtures/datahub_service_demand.v1.json`.
+`common/contracts/tests/fixtures/datahub_service_demand.v1.json`.
 
 ## Request contents
 

@@ -275,15 +275,18 @@ def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions(
 
 def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     init_text = (REPO_ROOT / "init.md").read_text(encoding="utf-8")
-    vision_text = (REPO_ROOT / "vision.md").read_text(encoding="utf-8")
     release_text = (REPO_ROOT / "docs" / "release-protocol.md").read_text(encoding="utf-8")
 
     assert "environment_contract.v1.json" in init_text
     assert "| Local | `local_dev`, `local_test` |" not in init_text
     assert "TWELVE_DATA_ENVIRONMENT_SHARES" not in init_text
 
-    assert "environment_contract.v1.json" in vision_text
-    assert "S&P 500" in vision_text
+    # Section 0 states the production target and points to the contract.
+    next_heading = "## 1. Core Design Principles"
+    assert next_heading in init_text, "The slice of section 0 needs the heading of section 1."
+    goal_section = init_text.split(next_heading, 1)[0]
+    assert "environment_contract.v1.json" in goal_section
+    assert "S&P 500" in goal_section
 
     assert "waits\n20 minutes" not in release_text
     # The daily cap of automatic releases has one value, `DEFAULT_DAILY_CAP`. The docs name it and state no number.

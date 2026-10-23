@@ -1,7 +1,7 @@
 """TrueAlpha Vision Audit tool (Issue #28 and Issue #54).
 
 Evaluates the physical state of the TrueAlpha system against the root acceptance
-criteria in vision.md, init.md, and Gate Epics (#56, #29, #30, #31, #32, #54).
+criteria in init.md section 0 and Gate Epics (#56, #29, #30, #31, #32, #54).
 
 Usage:
     python tools/vision_audit.py [--env production|staging] [--fail-closed] [--json]

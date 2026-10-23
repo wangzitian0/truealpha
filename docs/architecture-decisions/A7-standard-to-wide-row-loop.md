@@ -9,7 +9,7 @@ Date: 2026-09-04 (amended 2026-10-09)
 Fundamental research was starved by missing denominators and unextracted disclosures
 (#735): 89 of 101 QQQ issuers lacked gross profit per employee (GPPE) because headcount was
 unreported in standard XBRL; TOPT 20 relied on unverified manual seeds without accession
-pointers; and `libs/factors/shared/extraction.py` was an empty stub.
+pointers; and `common/factors/src/factors/shared/extraction.py` was an empty stub.
 
 Past attempts suffered from six recurrent defect shapes ("the fakes"):
 1. **The Headcount Special-Case Fake**: The initial loop accepted `standard=` in signatures

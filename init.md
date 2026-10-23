@@ -13,6 +13,71 @@ This project answers a specific set of investment-research questions — it isn'
 
 Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the seven factor modules (Section 7) are the processing; the final output takes three forms: report cards for personal use (in the existing dark, Xiaohongshu-style aesthetic), an App dashboard, and a conversational LLM entry point. **Every step downstream has to be traceable back to the original raw material — that's the reason the point-in-time principle exists, not a technical purity fetish.**
 
+### 0.1 Why this exists
+
+This isn't about building a flashy data platform — it's about engineering an already-developed investment framework into something that can be verified repeatably and kept current, without re-pulling data, rebuilding tables, and re-checking conventions by hand every time. The tech stack will keep changing (it already has, multiple times, over the course of this design process); this document won't — it records the part that doesn't move with the tech stack.
+
+### 0.2 Core investment framework (this is what determines which factors matter — none of this is arbitrary)
+
+- **The "large-model-driven company" three-tier framework**: whether a company needs to add headcount proportionally to handle a new category of decisions. Companies are sorted into three tiers, each mapping to a different P/S range. Traditional 3-4x, tech 8-10x, and large-model-native 20-30x are the framework's current illustrative anchors; the executable v1 bands and boundary semantics must be independently reviewed and versioned before use. The owner reviewed them on 2026-10-12 (#1235): strategy definition 1.0.0 values by P/GP = market value / gross profit, with bands equal to these P/S anchors divided by a reference gross margin. The values live in one definition file; the review record is `governance/reviews/large_model_value_v0-definition-1.0.0.md`. This is a genuine computed output (Section 7, module 7), derived from gross profit per employee — not just a mental model for reading that number
+- **Gross profit per employee as the core operating metric**: top large-model-native companies can reach roughly $5M in annual gross profit per employee, versus roughly $1M for the prior generation's leaders. This metric captures whether "AI leverage" is actually happening better than revenue growth alone does, and gross profit is defined differently for financial vs. non-financial companies — these need separate handling
+- **PEG needs multiple growth-rate conventions**: analyst consensus, historical CAGR, and company guidance can each tell a different story depending on context. The tool needs to support switching between them, not commit to a single convention
+- **Supply chain / industry value chain perspective**: upstream-downstream relationships are themselves a source of alpha, not just a side note to financial comparisons
+- **Analyst backtesting**: the goal is to verify whose historical judgment has actually been worth trusting, rather than passively accepting consensus
+- **ETF-as-virtual-company**: treat a basket of holdings as if it were a single company and look at its fundamentals, to judge whether a given theme or portfolio has real substance behind the packaging
+- **"Pure-blood" company screening**: given a theme, find whose revenue exposure is purest — for expressing a specific view precisely, instead of buying a basket of noise
+
+### 0.3 Use cases
+
+- **Personal investment research**: when analyzing a new company or theme, historical factors should be reusable and traceable, without rebuilding models by hand each time
+- **Content creation**: the AIGC short-form video channel needs material in a "cold verdict" register — the factors, rankings, and reports this tool produces are one source of that raw material, and ultimately feed into Xiaohongshu card decks
+
+### 0.4 What this project is not
+
+- Not a high-frequency / intraday trading system — the inherent disclosure lag in these data sources (e.g., a ~60-day public lag on ETF holdings) is acceptable
+- Not currently a multi-user SaaS product — this is a personal tool; the architecture leaves room to grow but doesn't add complexity for that now
+- Not aiming to cover every stock. Production runs TOPT and QQQ first and the S&P 500 next (owner decisions 2026-10-20 and 2026-10-21, #1410; governed by `common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`, #1416). "Depth over breadth" means that each company in that universe gets all seven modules with traceable history before any name outside it is added
+
+### 0.5 What success looks like
+
+The six success statements below keep their numbers. Other documents cite them by number.
+
+1. Continuously producing results from all seven factor modules for the production universe, the S&P 500, with history that's traceable and conventions that are switchable
+2. Being able to ask, in conversation, "what's this company's PEG trend" or "who's the purest play on this theme," and get an answer backed by data, traceable to a specific filing/vintage — not a number the model made up on the spot
+3. Factor/ranking outputs converting directly into Xiaohongshu card material without a manual processing step in between
+4. Adding a previously unseen company or theme through reviewed, versioned catalog/configuration changes, without changing factor formulas, schemas, or consumer business logic
+5. Adding a source for an existing semantic type through one isolated adapter/normalizer registration, and adding a semantic record type through one typed schema/storage/projector registration, without source/type branches in the generic capture, snapshot, factor-runner, lineage, usage, or consumer path
+6. *Demoted (owner decision 2026-10-20, #1410; rules 23 and 24):* querying how often declared data is captured and actually consumed, and running an immutable strategy-to-source data-quality review that exposes required-but-missing inputs and the decisions they affected. Restore this item when the core path is green in production for two nights in a row, the exit condition of `governance/freezes/core-path-2026-10-12.md`
+
+"Continuously producing" means the versioned production universe has graduated
+beyond canary/shadow operation and meets explicit per-module applicability, usable
+coverage, freshness, and traceability objectives across real source refreshes. An
+`unavailable`, stale, unresolved, or sentinel placeholder does not count as a
+produced result for an applicable subject. A computed value with a low confidence score
+counts, and its score is shown beside it (owner decision 2026-10-15, #1333). Success also requires the deployed MCP/App/
+chat and report/card paths to consume the same materialized outputs; fixture-only tools,
+two immediate scheduled runs, or code existence are not completion evidence.
+
+This success state proves a reproducible research product and an honest evaluation path.
+It does not by itself prove that any factor, tier, screen, or strategy produces positive
+alpha; that requires a separate empirical claim and evidence.
+
+### 0.6 Capabilities and where they live
+
+Delivery state lives on the issues and on the dashboards (`/admin/datahub`), not in this file.
+
+| Capability / Factor Module | Architecture Reference | Target Scope |
+|---|---|---|
+| **Module 1: PEG (Switchable Conventions)** | `factors.base.peg` | Historical CAGR, Consensus, Guidance |
+| **Module 2: Gross Profit per Employee** | `factors.base.gross_profit_per_employee` | Operating AI leverage |
+| **Module 3: Supply Chain / Value Chain** | `factors.base.supply_chain_exposure` | Upstream-downstream alpha |
+| **Module 4: Analyst Backtesting** | `factors.base.analyst_track_record` | Historical analyst accuracy |
+| **Module 5: ETF-as-Virtual-Company** | `factors.base.etf_virtual_company` | Holdings fundamentals aggregation |
+| **Module 6: Pure-Blood Company Screening** | `factors.base.theme_purity` | Segment revenue exposure purity |
+| **Module 7: Three-Tier Valuation Gap** | `factors.composite.three_tier_valuation` | P/GP tier gap against GPPE (definition 1.0.0, #1235) |
+| **Xiaohongshu Card Deck Generation** | `truealpha_contracts.research_cards` | Automated material export |
+| **Conversational Research Q&A** | `apps/llm-service` MCP | Natural language fact retrieval |
+
 ---
 
 ## 1. Core Design Principles (hard constraints, not to be violated)
@@ -131,8 +196,9 @@ answers one question, with the smallest scope that can prove the answer false.
   plus the sentinel listings outside TOPT, and the dashboards and the sentinel known answers
   agree.
 - **Production pursues completeness.** It runs TOPT and QQQ, then the S&P 500 when its
-  unlock holds (`vision.md`; the contract lists the universes and the unlock), the strategy
-  included, and keeps the accuracy checks of staging.
+  unlock holds (Section 0), the strategy included. It keeps the accuracy checks of staging.
+  The `sp500` universe of the environment contract (cited below) holds the unlock and the
+  current state.
 
 Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime
 names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `staging`,
@@ -188,7 +254,7 @@ executable connectivity and negative-network proof.
 |---|---|---|
 | SEC EDGAR | Official structured financial data | `data.sec.gov/api/xbrl/companyfacts/CIK##########.json`; User-Agent must include an email. Financial companies have no gross-profit field, needs an industry branch. Headcount is free text, needs extraction with a fallback. |
 | yfinance | Zero-quota default base for daily prices and split events | Unofficial, no SLA. Its low source prior lowers row confidence. It is a normal critical-path source: it serves every universe, and a corroborating origin raises the score. Capture and reuse key is `(listing, session_date)` (#1333, #1352). |
-| Twelve Data | Corroborating source for daily prices and fundamentals | One key serves every environment. Each environment enforces its own share of the plan limit from its own ledger (`derived_environment_shares("twelvedata")` from `environment_contract.v1.json`, #1416). An environment with no share (local, CI) is refused. One credit buys one `(listing, session_date)` close. A cell Twelve Data cannot serve stays served by the other origins at lower confidence. **QQQ price refresh (#1277):** `qqq_price_refresh_pipeline` stores the daily series of the QQQ listings outside the TOPT symbols. Its cadence and credit budget are in the docstring of `apps/data-engine/src/data_engine/lanes/qqq_prices.py`. |
+| Twelve Data | Corroborating source for daily prices and fundamentals | One key serves every environment. Each environment enforces its own share of the plan limit from its own ledger (`derived_environment_shares("twelvedata")` from `environment_contract.v1.json`, #1416). An environment with no share (local, CI) is refused. The credit cost of one listing is in the docstring of `apps/data-engine/src/data_engine/datahub/production_topt/twelve_data_origin.py`. A cell Twelve Data cannot serve stays served by the other origins at lower confidence. **QQQ price refresh (#1277):** `qqq_price_refresh_pipeline` stores the daily series of the QQQ listings outside the TOPT symbols. Its cadence and credit budget are in the docstring of `apps/data-engine/src/data_engine/lanes/qqq_prices.py`. |
 | U.S. Treasury | Official source of the macro base data and of the risk-free rate of the core strategy (#1255) | "Daily Treasury Par Yield Curve Rates": one public CSV per calendar year, no key (`home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all?type=daily_treasury_yield_curve&field_tdr_date_value={year}&page&_format=csv`). One file carries every series. Three series are stored: `us_treasury_bill_3_month` (column `3 Mo`), `us_treasury_note_2_year` (`2 Yr`) and `us_treasury_note_10_year` (`10 Yr`), in percent in the file and as decimal fractions in the table. The column set differs between years, so the parser reads each column by its name. They are declared once, in `MACRO_REGISTRATIONS` (`source_registrations.py`), with the ledger seat `us-treasury` (100 requests per day as our backstop), the per-key cost 1 and the as-of axis `business_day`. The first run loads one file per year since 2000. The bytes land in `raw.fetches`. `mart.macro_series_daily` is append-only: `observation_date` is the valid time, `knowable_at` is the transaction time (00:00 UTC of the day after the observation, because the Treasury obtains its input quotes at about 3:30 PM New York time; for a revised value the time of the fetch that showed it), and a revised value is a new row. A file that landed on the same UTC day is not fetched again. `datahub.risk_free` takes the newest 3-month observation that was knowable at the cutoff and is at most 10 days old, and raises `MissingRiskFreeRate` (reason `missing_risk_free_rate_parameter`) otherwise. A tick without a rate keeps its capture and fails before it freezes a snapshot, so the served head stays on the last accepted run. A backtest without a rate fails and writes nothing. The lane `macro_data` fetches every day at 20:30 UTC in production and staging, records the verdict `macro_freshness` (red when the newest value of a series is older than 5 days), and can be launched by hand. The rights and budget attestation of this source is `missing`, like every source except the model provider. Under rule 19 that is a dashboard flag, not a gate. |
 | LLM extraction provider | External source for prose-only fields (headcount, segment classification, disclosed relationships) | Module 6's segment-theme classifier calls it per (issuer, filing, theme) and records the served model on each `mart.issuer_theme_purity` row. `common/factors/src/factors/shared/extraction.py` owns the shared selection rules (`select_single_candidate`, `select_exhaustive_partition`) and mints every rule identity (#769, #803). The provider enters like any other source: a `SourceRegistry` entry, a rule-19 prior and budget record, a declared capacity (the `filing-extraction-model` seat in `LEDGER_CAPACITIES`), every call recorded in `api_call_ledger` with its token cost, and an append-only invocation record per Section 9. It is never called from a factor or a consumer surface. Replay reads the stored result: a second run of the same ask returns the recorded decision without a call to the provider. |
 | moomoo | Licensed terminal feed for K-lines, statements, analyst ratings and valuation detail. Rate-limited (bursts/30s), not a monthly quota — see below | OpenD runs on the VPS host. `moomoo-kline:v1` and `moomoo-financials:v1` fetch on schedule. The gated lanes call `get_analyst_consensus`, `get_rating_summary` (per-analyst rating history filtered to `recommendation_date_str <= cutoff`, `success_rate`, `excess_return`), and `get_valuation_detail` (`profit_growth_rate`) through `sources/moomoo.py` (#1333, #1354). Vendor timestamps are accepted evidence. A moomoo rating event is knowable at its vendor date, and the row carries the `vendor_timestamp` reason code and a lower time-quality factor. Fixtures live in `apps/data-engine/samples/moomoo/`. ETF weights and company-level supply-chain edges are not sourced from moomoo. |

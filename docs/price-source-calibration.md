@@ -44,7 +44,7 @@ Data's settled close for the target session, else moomoo's, one confidence grade
 (0.85 -> 0.75, 0.80 -> 0.70) — see `docs/datahub-quality-report.md`, "Primary failover".
 
 The SDK speaks protobuf and returns DataFrames, so the landed bytes are the decoded bars
-in canonical JSON under `raw/moomoo/`, and the parser identity (`moomoo-kline-parser:v1`)
+in canonical JSON under raw/moomoo/ in object storage, and the parser identity (`moomoo-kline-parser:v1`)
 names that rendering. No K-line bytes have been captured yet: the first scheduled
 staging tick with `MOOMOO_KLINE_ORIGIN_ENABLED=true` is the cassette this origin's
 `test_real_vendor_bytes` entry must be sha-anchored to (A3 admission item 2).

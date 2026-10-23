@@ -4,8 +4,8 @@ Personal fundamental & supply-chain investment research tool. Point-in-time
 correctness is the core invariant — every output traceable back to what was
 actually knowable at a given historical moment.
 
-Read first: [`vision.md`](vision.md) (why) → [`init.md`](init.md) (architecture,
-the authoritative doc) → [`CLAUDE.md`](CLAUDE.md) (working rules).
+Read first: [`init.md`](init.md) (section 0 gives the goal; the rest gives the
+architecture; it is the authoritative document) → [`CLAUDE.md`](CLAUDE.md) (working rules).
 
 ## Layout
 

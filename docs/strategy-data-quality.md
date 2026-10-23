@@ -29,7 +29,7 @@ The seven modules add these inputs:
 | Three-tier valuation | Versioned outputs from upstream base factors at one as-of boundary |
 
 Factors remain provenance-blind. Source selection, reconciliation, and lineage are
-resolved before the runner projects typed semantic records into `libs/factors`.
+resolved before the runner projects typed semantic records into `common/factors`.
 Factor code sees opaque input IDs, typed subjects, values/units/currencies, relevant
 valid time, confidence, and the snapshot cutoff, but never source or raw references.
 

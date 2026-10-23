@@ -1819,8 +1819,7 @@ def _lanes_that_read(path: str, named: dict[str, set[str]]) -> set[str]:
 
     - Four roots are read by tree walks in this file: the Qlib text sweep reads `skills/`,
       and the mirror and record tests read `.claude/`, `.agents/` and `.ws-publish/`.
-    - The Qlib sweep reads every top-level file but `init.md` and `vision.md`, and tests
-      name those two.
+    - The Qlib sweep reads every top-level file but `init.md`, and tests name that file.
     - A test that names a document reads it. A test under `apps/data-engine/tests` runs in
       the data_engine job as well.
     """
@@ -1853,7 +1852,7 @@ def _unread_documents() -> list[str]:
 def test_a_document_selects_the_lanes_that_read_it_and_no_other() -> None:
     """#1412: a document that a test reads keeps the lane that runs that test, or a PR
     could change it, skip the test and break main (#1018). A document that no test reads
-    selects no lane. Named readers today: init.md, vision.md, README.md, CLAUDE.md,
+    selects no lane. Named readers today: init.md, README.md, CLAUDE.md,
     docs/datahub-quality-report.md and docs/architecture-decisions/A3-source-governance.md.
     """
     named = _markdown_named_by_tests()
@@ -2654,11 +2653,9 @@ QLIB_SCAN_EXCLUDED_DIRS = (
     "apps/app-web/node_modules",
     "apps/app-web/.next",
 )
-#: Top-level documents that carry the migration's own history. They only became reachable
-#: when the root files were added to the scan, and they are the same two the rest of this
-#: exclusion set already covers in spirit: `init.md` rule 25 points at the ADR, and
-#: `vision.md` is product scope, not a dependency surface.
-QLIB_SCAN_EXCLUDED_FILES = ("init.md", "vision.md")
+#: Top-level documents that carry the migration's own history. `init.md` rule 25 points at
+#: the ADR, so the rest of this exclusion set already covers it in spirit.
+QLIB_SCAN_EXCLUDED_FILES = ("init.md",)
 #: Files a deployed or tested code path is written in whose NAME carries the type rather
 #: than an extension. `Path("Dockerfile").suffix` is `""`, so a suffix allowlist alone
 #: drops every Dockerfile in the tree — including the three that build the production
@@ -2874,8 +2871,7 @@ def test_no_code_path_reintroduces_qlib() -> None:
 
     - `docs/` records the migration itself — `A5-polars-vectorbt-engine.md` is the ADR
       for this change, and `A0-governed-research-access.md` carries an amendment note;
-    - `init.md` rule 25 keeps a one-clause historical pointer to A5, and `vision.md` is
-      product scope rather than a dependency surface (QLIB_SCAN_EXCLUDED_FILES);
+    - `init.md` rule 25 keeps a one-clause historical pointer to A5 (QLIB_SCAN_EXCLUDED_FILES);
     - `governance/` is frozen history and its files' hashes are pinned by accepted tests;
     - `common/contracts/tests/fixtures/` holds versioned accepted-contract artifacts whose
       whole-file hashes are recorded elsewhere (see QLIB_SCAN_EXCLUDED_DIRS).
