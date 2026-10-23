@@ -18,7 +18,7 @@
       ".dockerignore:repo",
       "pyproject.toml:extend-exclude=repo",
       "README.md:execute infra2 from repo/",
-      "CLAUDE.md:bump the repo submodule pointer"
+      "AGENTS.md:bump the repo submodule pointer"
     ],
     "allowed_authority": "Render and validate deterministic request JSON locally; infra2 alone owns remote validation and deployment side effects."
   },

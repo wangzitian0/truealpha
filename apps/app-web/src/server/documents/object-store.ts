@@ -6,7 +6,7 @@
  * caller, mirroring that adapter's shape field-for-field (content-addressed
  * key, head-before-put dedup, checksum-verified read).
  *
- * This is NOT the raw-capture immutable pipeline CLAUDE.md's "apps never
+ * This is NOT the raw-capture immutable pipeline AGENTS.md's "apps never
  * use object storage as a service-to-service data path" red line guards —
  * that line protects `raw.fetches`/the source-capture lineage from being
  * bypassed by a typed consumer reaching into raw bytes directly. Documents

@@ -30,7 +30,7 @@ jobs:
       - name: Forbid moomoo trading APIs (quote/read-only data only)
         run: |
           set -e
-          # CLAUDE.md hard constraint: this repo only ever reads moomoo market/
+          # AGENTS.md hard constraint: this repo only ever reads moomoo market/
           # fundamental data via OpenQuoteContext. Trading contexts and order
           # calls are hard-forbidden, no exceptions — this is a public repo.
           # Word boundaries via POSIX classes, not \b — git grep -E compiles
@@ -41,11 +41,10 @@ jobs:
           # pre-commit config whose local gate carries the same pattern.
           if git grep -InE "$PATTERN" -- . \
               ':(exclude)AGENTS.md' \
-              ':(exclude)CLAUDE.md' \
               ':(exclude)init.md' \
               ':(exclude).github/workflows/security-gate.yml' \
               ':(exclude).pre-commit-config.yaml'; then
-            echo "::error::Forbidden moomoo trading API reference found above — this repo is quote/read-only only (see CLAUDE.md hard constraints)."
+            echo "::error::Forbidden moomoo trading API reference found above — this repo is quote/read-only only (see AGENTS.md hard constraints)."
             exit 1
           fi
           echo "OK: no moomoo trading API references found."

@@ -1,7 +1,7 @@
 """#434 exit criterion 3, as a check that runs again: no deployed consumption code
 instantiates a fixture repository or reads a fixture module.
 
-CLAUDE.md: fixture data lives in tests only and is never reachable from a deployed
+AGENTS.md: fixture data lives in tests only and is never reachable from a deployed
 route. llm-service carried a `strategy_run_backend` flag that could select
 `FixtureStrategyRunRepository` in a deployed process until 2026-09-07; app-web keeps
 its fixture repository class as a tests-only injection point. This scan is what turns
