@@ -5,7 +5,7 @@ description: Step 6 of the flow. End a session. Choose Complete or Suspend, writ
 
 # close: exit gate
 
-Run this when you stop, for any reason. Each rule came from a session that ended wrongly.
+Run this when you stop, for any reason.
 
 ## 1. Choose the mode
 
@@ -22,16 +22,17 @@ ws-delivery-status --assert-complete --reality-probe "<command>"
 | `ws-delivery-status --assert-complete ...` exit 0, service change in batched-staging repo (`auto-release-staging.yml`) or lane of multi-lane issue | **Complete** | Clean up worktree/branch; keep root product issue open with scope note (no `prod-pending`); disposition `batched-staging` |
 | `ws-delivery-status --assert-complete ...` exit 0, release promotion task with Stage 2 staging green + owner gave "deploy" + prod verified | **Complete** | Clean up worktree/branch; close issue; disposition `deployed` |
 | Release promotion task with Stage 2 staging green, awaiting owner reply to `[PROD GATEKEEPER]` | **Suspend** | Keep issue open with `prod-pending`; disposition `pending` |
-| `ws-delivery-status` exit 0 (Stage 1 only, no reality probe or probe failed) | **Suspend** | Report state strictly as `Stage 1 Landed (Unverified)`; issue stays open |
+| `ws-delivery-status` exit 0 (Stage 1 only, no reality probe) | **Suspend** | Report state strictly as `Stage 1 Landed (Unverified)`; issue stays open |
 | `ws-delivery-status` exit 1 (PR in review) | **Suspend** | Report state strictly as `In review` with PR URL |
-| `ws-delivery-status` exit 2 (unmerged branch, draft changes, or probe failed) | **Suspend** | Run `auto` to merge or write handover |
+| `ws-delivery-status` exit 3 (unmerged branch, draft changes, or probe failed) | **Suspend** | Run `auto` to merge or write handover |
+| `ws-delivery-status` exit 4 (could not read git or GitHub) | **Suspend** | Fix the cause in `reasons[]` and re-run; never read it as a pass |
 
 Unmerged work is never Complete. Merge to main without a verified Business Reality Probe is never Complete.
 Do not close the issue and do not delete the worktree in Suspend.
 Never declare complete or done when `ws-delivery-status` exits non-zero.
+Untracked files under `.agents/runs/` and unstaged submodule pointer moves do not block; the tool lists them.
 Complete also needs the predecessor gone: each file, branch, worktree, stash or flag that this issue's change replaces is deleted, or the issue states why it stays. Delete only what this issue created or replaced. Never delete what another session's worktree or stash owns.
-Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
-while the docs described it as existing. Push the branch or write it into the handover.
+Push any local branch or record it in the handover so commits are never stranded locally.
 
 ## 2. Prove the running process is new
 
@@ -81,18 +82,17 @@ Merge, staging deploy, and production deploy are three separate stages. In repos
 - Stage 1 merge: release tag vX.Y.Z = commit <sha>
 - Stage 2 staging: run <url>, soak <duration>, health <result>
 - Stage 3 production: image <digest>, watchdog <state>
-Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
+Authorize production deployment of vX.Y.Z? Reply "deploy vX.Y.Z" or "hold".
 ```
 
 - Claim "deployed" only with an evidence chain: image digest, ledger entry, and a real end-to-end probe (the real browser or TUI).
-  The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
 - Only a production change requires owner approval, with the owner present (Root section `Production reservation`). Ask once, then finish the non-production close.
   Closing in silence is forbidden.
 - Without an answer on an active release promotion, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
   Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
 - A "deploy" covers only the release it names. Immediately before a production dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production (Root section `Production reservation`).
 - Refuse bare "deploy" keywords without release tags or commits. If the owner replies only "deploy", request explicit disambiguation naming the target: "Please confirm release target: deploy vX.Y.Z". Without explicit approval, do not deploy production.
-- After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
+- After "deploy vX.Y.Z", you own the whole loop, including the physical check. Never ask the owner to run a command.
 
 ## 4. Suspend: handover and issue
 
@@ -172,7 +172,6 @@ Red lines:
 - **R3** The distiller is not the executor.
 - **R4** Discard out loud.
 - **R5** One invariant lives in one tier. Copies drift. Skills may restate a criterion but must point back to the owner.
-  (2026-09-22: "the president writes no code" lived in two tiers, and one copy missed the stop condition added that day.)
 - **R6** A pointer must resolve to the same literal string in the target. A pointer to a dropped invariant disguises the loss as convergence.
 
 A finding that is both a criterion and unfinished work becomes two records. One record inside an issue dies when the issue closes.

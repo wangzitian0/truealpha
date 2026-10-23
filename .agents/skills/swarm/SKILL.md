@@ -11,13 +11,9 @@ Swarm does not define multi-round state machines. Caller skills (`audit`, `init`
 
 ## Specifications and constraints
 
-- **Worker role**: Intern (`glm-5.3-flash` exclusively).
-- **Batch size (M)**: Default 10 tasks per swarm batch; global ceiling 50 concurrent. Custom M specified by caller skill (e.g. M=4 in `init`/`ssot`, M=3 in `auto`).
+- **Worker role**: Intern. The infra2 SDK `LlmSettings` role `small` gives its model and reasoning effort. `subagent-worker --check-models` prints them.
+- **Batch size (M)**: Default 10 tasks per swarm batch. `PROVIDER_CONCURRENCY` in `subagent-worker` sets how many requests run at once; the rest run in waves. Custom M specified by caller skill (e.g. M=4 in `init`/`ssot`, M=3 in `auto`).
 - **Tool profile**: Strictly read-only tools or prompt-injected source code via `subagent_batch`.
-- **Reasoning depth tiers**:
-  - **Fast / Swarm Scan (`mode: fast`, `thinking: disabled`)**: Default for Intern batches and parallel sweeps. Zero reasoning overhead.
-  - **Knowledge Extraction (`mode: extract`, `reasoning_effort: medium`)**: For entity extraction, relation mapping, schema parsing, and formalization. Medium chain-of-thought.
-  - **Bench & Evaluation (`mode: bench`, `reasoning_effort: max`)**: For mathematical proofs, invariant falsification, benchmark evaluations, and SHZP recovery. Maximum reasoning depth.
 - **Output contract**:
   - Dense, structured ASD-STE100 technical findings.
   - Length: 500 to 1200 tokens per Intern.
@@ -34,9 +30,7 @@ To execute 1 Swarm, the orchestrator invokes `subagent_batch` with M tasks:
 4. Reduce outputs: Full output persists to `~/.local/state/subagent-worker/runs/<call_id>.md`; inline return folds multi-line `PASS` tasks and expands `FAIL`, `PARTIAL`, or `FAILED` tasks into `SwarmResult`.
 5. Return `SwarmResult` to the calling skill for the next state transition.
 
-## Lean execution discipline
+## Execution discipline
 
-- **Targeted verification only**: Run focused tests on changed targets only (`pytest <file>::<test> -x`).
-- **Never run full test suites** during review or confrontation rounds.
 - **Physical exit codes required**: Cite actual commands and exit codes. A score or claim without a physical command is invalid.
-- **Call deadline**: A call ends within 110 s (145 s when a task uses max reasoning). A batch for a model that runs fewer than 50 requests at once gets that time once per wave, up to 600 s. All SHZP rounds of one task share the deadline. A task cut by the deadline is FAILED (no text) or PARTIAL (text so far). A provider filter or a provider fault inside the answer is PARTIAL too. The first output line gives the counts. Worker log: `~/.local/state/subagent-worker/worker.log`.
+- **Call deadline**: A call ends within 110 s. A batch with more tasks than the concurrency limit gets that time once per wave, up to 600 s. A task cut by the deadline is FAILED (no text) or PARTIAL (text so far). A provider filter or a provider fault inside the answer is PARTIAL too. The first output line gives the counts. Worker log: `~/.local/state/subagent-worker/worker.log`.

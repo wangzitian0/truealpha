@@ -5,11 +5,11 @@ description: Step 1 of the five-step flow. Run before any change. Inventory exis
 
 # init: question the requirement, inventory, isolate
 
-Run this before the first edit. Each rule exists because an agent skipped it and the owner had to correct it.
+Run this before the first edit.
 
 ## 1. Inventory before you build
 
-The owner repeatedly found new scripts that duplicated existing ones. Follow the **Key List Protocol**:
+Follow the **Key List Protocol**:
 
 1. **Check the Key List**: Read the repository's SSOT index (`docs/ssot/MANIFEST.yaml`, `common/meta/data/MANIFEST.yaml`, or the App's contracts index).
    - Scan the capability keys (e.g., `deploy_v2`, `infra2-sdk`, `vault`, `signoz`, `pr_merge_gate`).
@@ -21,8 +21,6 @@ The owner repeatedly found new scripts that duplicated existing ones. Follow the
    - `"Reusing existing component: <key>"` OR `"New capability: will register <key> in MANIFEST.yaml"`.
 
 ## 2. Read the original intent before you change a mechanism
-
-Agents reversed or "fixed" a design without knowing why it existed. Example: skill content is one source, the mapping to hosts is another source.
 
 - Find the issue, PR, or SSOT page that created the mechanism. Read it first.
 - Write one sentence: "This exists because ...". If you cannot, you are not ready to change it.

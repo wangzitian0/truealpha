@@ -10,14 +10,12 @@ Smoke is the first guard after an edit. Use `audit` for depth and `close` for th
 ## Order (left to right, fail fast)
 
 1. **Compile or syntax** on the changed files only (`python -m py_compile`, `ruff check --select E,F`, `go build ./...`, `tsc --noEmit`).
-2. **Focused tests** that touch the change, with `-x`. Never run the full suite per round.
-   The owner stopped agents that waited minutes on slow CI. Cut slow tests and report what you cut.
-   Never invoke whole-repository test runners (`ci_runner.py all`, `check_suite_coverage.py`) during smoke.
+2. **Focused tests** that touch the change, with `-x` (`pytest <file>::<test> -x`). Never run the full suite or whole-repository runners (`ci_runner.py all`, `check_suite_coverage.py`) during smoke.
 3. **Connectivity** of what the code depends on: credentials, services, MCP servers. Commands are in `local.md`.
 
 Stop at the first red. Smoke reports the problem. It does not fix it, and it changes no file.
 
-## Rules that came from failures
+## Verification rules
 
 - **Existence is not validity.** "The variable is set" and "the process is alive" prove nothing.
   Call a read-only endpoint, or do not claim green.
