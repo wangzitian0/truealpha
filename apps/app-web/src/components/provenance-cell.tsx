@@ -10,9 +10,8 @@ import type { RankingRow } from "@/server/mart/research-read";
  * table, which told a reader nothing they could act on while the facts that matter
  * were not on the page at all.
  *
- * init.md, section 0: "Every step downstream has to be traceable back to the
- * original raw material — that's the reason the point-in-time principle exists,
- * not a technical purity fetish."
+ * init.md, section 0: "Every step downstream must trace back to the original
+ * raw material. This is the reason the point-in-time principle exists."
  *
  * The summary shows the operating period end, because that is the value that
  * silently drifts: across the run serving /research today the period ends span
