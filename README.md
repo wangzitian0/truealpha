@@ -5,7 +5,7 @@ correctness is the core invariant — every output traceable back to what was
 actually knowable at a given historical moment.
 
 Read first: [`init.md`](init.md) (section 0 gives the goal; the rest gives the
-architecture; it is the authoritative document) → [`CLAUDE.md`](CLAUDE.md) (working rules).
+architecture; it is the authoritative document) → [`AGENTS.md`](AGENTS.md) (working rules).
 
 ## Layout
 

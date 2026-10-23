@@ -291,4 +291,4 @@ def test_infra2_source_boundary_is_absent(corpus: dict) -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert "extend-exclude" not in pyproject["tool"]["ruff"]
     assert "from `repo/`" not in (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "bump the `repo` submodule pointer" not in (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "bump the `repo` submodule pointer" not in (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")

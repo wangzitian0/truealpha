@@ -3,7 +3,7 @@
 # The default ruleset flags governance evidence identifiers like
 # "rung-evidence:<capability>:<sha256>" as generic api-keys. Those are
 # content-addressed record IDs, not credentials. Allowlist exactly that shape;
-# everything else keeps the default rules (CLAUDE.md red line: scanning is a
+# everything else keeps the default rules (AGENTS.md red line: scanning is a
 # backstop, never permission).
 
 [extend]
@@ -21,7 +21,7 @@ regexes = [
 # governance/ holds append-only, content-hashed delivery records (capability
 # rungs, handoffs, evidence). Their id fields (handoff:, evidence:, rung-*:)
 # are hash identifiers by construction and trip the generic-api-key rule one
-# prefix at a time. The tree never carries credentials (CLAUDE.md red line +
+# prefix at a time. The tree never carries credentials (AGENTS.md red line +
 # review); allowlist the path instead of chasing each id prefix.
 paths = [
   '''governance/.*''',
