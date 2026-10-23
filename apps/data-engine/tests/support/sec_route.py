@@ -40,12 +40,14 @@ def served_financial_record(
     monkeypatch.setattr(
         issuer_registry,
         "resolve_issuer_classifications",
-        lambda ciks: {
-            requested: issuer_registry.IssuerClassification(
-                operating_branch=OperatingBranch.NON_FINANCIAL, revenue_proxy_allowed=False
-            )
-            for requested in ciks.values()
-        },
+        lambda ciks: issuer_registry.RegistryReading(
+            classifications={
+                requested: issuer_registry.IssuerClassification(
+                    operating_branch=OperatingBranch.NON_FINANCIAL, revenue_proxy_allowed=False
+                )
+                for requested in ciks.values()
+            }
+        ),
     )
     monkeypatch.setattr(settings, "moomoo_financials_origin_enabled", False)
     issuer, instrument, listing = f"issuer:cik:{cik}", f"instrument:{ticker.lower()}", f"listing:xnas:{ticker.lower()}"

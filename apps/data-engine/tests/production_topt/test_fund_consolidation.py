@@ -490,6 +490,8 @@ def _run_deployed_tick(monkeypatch, op, *, spy: list) -> None:
     passing = Verdict("v4", (), (), ())
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
     monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
+    # #1323: the tick also reads the issuers whose registry read failed, through the connection.
+    monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
 
     def _spy(connection, *, run_id, cutoff, **kwargs):
         spy.append((run_id, cutoff))

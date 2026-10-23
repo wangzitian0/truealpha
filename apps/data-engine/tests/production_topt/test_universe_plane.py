@@ -267,7 +267,11 @@ def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch
     monkeypatch.setattr(sec_module, "ticker_cik_index", crosswalk_must_not_be_needed)
     # Branch classification fetches SEC submissions per CIK — real network, not
     # this test's subject; the embedded-CIK path is.
-    monkeypatch.setattr(issuer_registry, "resolve_issuer_classifications", lambda cik_by_ticker: {})
+    monkeypatch.setattr(
+        issuer_registry,
+        "resolve_issuer_classifications",
+        lambda cik_by_ticker: issuer_registry.RegistryReading(classifications={}),
+    )
     plan = plan_and_persist(
         connection,
         cutoff=datetime(2026, 8, 17, 12, 30, tzinfo=UTC),

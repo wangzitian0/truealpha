@@ -65,13 +65,15 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     monkeypatch.setattr(
         issuer_registry,
         "resolve_issuer_classifications",
-        lambda ciks: {
-            cik: issuer_registry.IssuerClassification(
-                operating_branch=OperatingBranch.NON_FINANCIAL,
-                revenue_proxy_allowed=False,
-            )
-            for cik in ciks.values()
-        },
+        lambda ciks: issuer_registry.RegistryReading(
+            classifications={
+                cik: issuer_registry.IssuerClassification(
+                    operating_branch=OperatingBranch.NON_FINANCIAL,
+                    revenue_proxy_allowed=False,
+                )
+                for cik in ciks.values()
+            }
+        ),
     )
 
     known_at = datetime(2024, 1, 1, tzinfo=UTC)
