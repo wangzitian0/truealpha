@@ -554,7 +554,9 @@ def test_each_attempt_records_the_request_parameters_without_the_key(world, call
     assert len(call_ledger) == 2
     expected = {
         "model": settings.llm_model,
+        "decoding_version": "v1",
         "thinking": "disabled",
+        "reasoning_effort": None,
         "max_tokens": model_key_health.PROBE_TASK.max_tokens,
         "temperature": 0,
         "response_format": "json_object",
@@ -670,7 +672,29 @@ def test_a_row_with_a_migrated_column_is_written_in_a_savepoint_and_falls_back_t
         **fields,  # type: ignore[arg-type]
     )
     gateway.SourceGateway(Connection(), caller="t")._write(record)
-    assert events == ["savepoint begin", "migrated", "savepoint rolled back", "base"]
+    richer = len(gateway._insert_ladder(record)) - 1
+    assert richer >= 1
+    assert events == ["savepoint begin", "migrated", "savepoint rolled back"] * richer + ["base"]
+
+
+def test_a_row_falls_back_group_by_group_when_only_the_later_migrations_have_not_run(monkeypatch) -> None:
+    """The attempt columns exist, the token columns do not: the row keeps its attempt, provider code
+    and parameters, and loses only the tokens."""
+    import psycopg
+
+    executed: list[str] = []
+
+    def execute(sql: str, params: tuple = ()) -> None:
+        executed.append(sql)
+        if "completion_tokens" in sql:
+            raise psycopg.errors.UndefinedColumn("column completion_tokens does not exist")
+
+    monkeypatch.setattr(gateway, "_pg_execute", execute)
+    record = gateway.CallRecord(
+        source=llm.SOURCE, endpoint="x", caller="t", called_at=datetime.now(UTC), attempt=1, completion_tokens=9
+    )
+    gateway.postgres_writer(record)
+    assert executed[-1] == gateway._INSERT_ATTEMPT_SQL and len(executed) == 2
 
 
 def test_a_model_row_survives_a_schema_that_lacks_the_attempt_columns(monkeypatch) -> None:

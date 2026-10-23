@@ -553,6 +553,22 @@ def test_a_model_seat_that_breaks_a_rule_is_refused(changes: dict[str, object], 
         ModelSeatContract.model_validate_json(json.dumps(_seat(**changes)))
 
 
+def test_an_environment_without_a_named_decoding_version_uses_v1() -> None:
+    seat = load_environment_contract().model_seat
+    assert seat.decoding_version_for("dev") == "v1", "an environment the contract does not list"
+    data = json.loads(seat.environments["staging"].model_dump_json())
+    data.pop("decoding_version")
+    assert seat.environments["staging"].model_validate_json(json.dumps(data)).decoding_version == "v1"
+
+
+@pytest.mark.parametrize("name", ["2", "V2", "v", "v2.1", ""])
+def test_a_decoding_version_name_that_is_not_v_and_a_number_is_refused(name: str) -> None:
+    seat = json.loads(load_environment_contract().model_seat.model_dump_json())
+    seat["environments"]["staging"]["decoding_version"] = name
+    with pytest.raises(ValidationError, match="decoding_version"):
+        ModelSeatContract.model_validate_json(json.dumps(seat))
+
+
 def test_a_live_environment_without_model_seat_limits_is_refused() -> None:
     data = load_environment_contract().model_dump(mode="json")
     data["model_seat"]["environments"].pop("staging")
