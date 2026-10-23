@@ -33,6 +33,10 @@ The sixth is the fetch-key check (`quality.fetch_keys_once`, #1411 K7): whether 
 UTC day that just ended shows any fetch key fetched twice. The source gateway serves a key that landed
 from stored bytes; this check proves it from the ledger.
 
+The seventh is the run health of every job (`quality.job_run_health`, #1466): whether the runs of the last
+7 days in `dagster.runs` succeeded, job by job. It is a dashboard row and not a gate: a red verdict leaves
+the run that records it green. `/admin/pipeline` shows the counts and the error line beside it.
+
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
 daily delivery report shows a red, stale or missing one. The names a run
@@ -57,7 +61,7 @@ from data_engine.environment_universes import any_environment_universe_names, sc
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
-from data_engine.quality import fetch_keys_once, runtime_shape, surface_proof
+from data_engine.quality import fetch_keys_once, job_run_health, runtime_shape, surface_proof
 from data_engine.quality.nightly_verdicts import (
     TICK_TAG,
     check_name,
@@ -121,8 +125,9 @@ RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
 RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 
 RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
-# 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last one,
-# the release fetch proof, runs at 06:15), and before the delivery report (07:00) reads the verdict.
+# 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last ones,
+# the fetch keys check and the job run health, run at 06:20), and before the delivery report (07:00)
+# reads the verdict.
 RUNTIME_SHAPE_CRON = "30 6 * * *"
 
 FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"
@@ -130,6 +135,13 @@ FETCH_KEYS_ONCE_JOB_NAME = "fetch_keys_once_check"
 # runs after every other nightly check (#1484). The check judges the UTC day that ended, and the
 # ledger of that day is complete at 00:00 UTC.
 FETCH_KEYS_ONCE_CRON = "20 6 * * *"
+
+JOB_RUN_HEALTH_JOB_NAME = "job_run_health_check"
+# 06:20 UTC: after every tick of the night and after the release fetch proof (06:15) started, and before the
+# runtime shape check (06:30). No nightly check may fire from the shape check to the delivery report (07:00)
+# (#1484), so this check cannot run after the shape check. It counts the finished runs of the 7 days: the
+# shape check of this night counts from the next night.
+JOB_RUN_HEALTH_CRON = "20 6 * * *"
 
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
@@ -139,12 +151,14 @@ MODEL_KEY_HEALTH_VERDICT = "model_key_health"
 RELEASE_FETCH_PROOF_VERDICT = "release_fetch_proof"
 RUNTIME_SHAPE_VERDICT = "runtime_shape"
 FETCH_KEYS_ONCE_VERDICT = "fetch_keys_once"
+JOB_RUN_HEALTH_VERDICT = "job_run_health"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
     *(check_name(CONFIDENCE_REPORT_VERDICT, universe) for universe in any_environment_universe_names()),
     MODEL_KEY_HEALTH_VERDICT,
     RELEASE_FETCH_PROOF_VERDICT,
+    JOB_RUN_HEALTH_VERDICT,
     RUNTIME_SHAPE_VERDICT,
     FETCH_KEYS_ONCE_VERDICT,
 )
@@ -715,6 +729,54 @@ def runtime_shape_sampler_sensor(context: dg.SensorEvaluationContext):
     )
 
 
+class _RedJobRunHealth(dg.Failure):
+    """The verdict is red. `verdict()` records it and re-raises; the op catches this and ends green."""
+
+
+@dg.op
+def run_job_run_health(context: dg.OpExecutionContext) -> str:
+    """Judge the finished runs of every job in the last 7 days against the rest of the fleet (#1466).
+
+    A red verdict is a dashboard row, not a gate: the op records it and ends green, so this job does not add
+    its own failure to the history that it judges. A history with no finished run is pending, never green."""
+    tick = tick_of(context)
+    now = tick or datetime.now(UTC)
+    judgement = None
+    try:
+        with verdict(JOB_RUN_HEALTH_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+            with psycopg.connect(settings.database_url, autocommit=True) as connection:
+                runs = job_run_health.read_runs(connection, now=now)
+            judgement = job_run_health.judge(runs, now=now)
+            context.log.info(f"job run health: {judgement.summary}")
+            context.add_output_metadata({"jobs": len(judgement.jobs), "red": len(judgement.red)})
+            outcome.summary = judgement.summary
+            if not judgement.jobs:
+                outcome.pending = True
+                outcome.summary = f"no finished run in {job_run_health.WINDOW_DAYS} days; nothing to judge"
+            if judgement.red:
+                raise _RedJobRunHealth(f"job run health: {judgement.summary} (#1466)")
+    except _RedJobRunHealth as red:
+        context.log.warning(str(red))
+    assert judgement is not None
+    return json.dumps({"red": [job.job for job in judgement.red], "summary": judgement.summary})
+
+
+@dg.job(name=JOB_RUN_HEALTH_JOB_NAME)
+def job_run_health_job() -> None:
+    run_job_run_health()
+
+
+@dg.schedule(
+    job=job_run_health_job,
+    cron_schedule=JOB_RUN_HEALTH_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def job_run_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    tick = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
 OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
 OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
 
@@ -767,6 +829,7 @@ defs = dg.Definitions(
         release_fetch_proof_job,
         runtime_shape_job,
         fetch_keys_once_job,
+        job_run_health_job,
     ],
     schedules=[
         output_invariants_schedule,
@@ -775,6 +838,7 @@ defs = dg.Definitions(
         release_fetch_proof_schedule,
         runtime_shape_schedule,
         fetch_keys_once_schedule,
+        job_run_health_schedule,
     ],
     sensors=[output_invariants_on_advance_sensor, runtime_shape_sampler_sensor],
 )

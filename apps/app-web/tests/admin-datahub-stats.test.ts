@@ -213,6 +213,14 @@ const nightlyVerdictRows = [
     summary: "ok (26/26 passed)",
     dagster_run_id: "dagster-run-123",
   },
+  // A pending verdict: the check ran and could not judge yet (#1466). It is neither ok nor a failure.
+  {
+    check_name: "release_fetch_proof",
+    ran_at: "2026-10-20 06:15:00Z",
+    ok: null,
+    summary: "pending",
+    dagster_run_id: null,
+  },
 ];
 
 {
@@ -257,10 +265,11 @@ const nightlyVerdictRows = [
     "traffic rows pass through",
   );
   assert(
-    stats.nightlyVerdicts.length === 1 &&
+    stats.nightlyVerdicts.length === 2 &&
       stats.nightlyVerdicts[0].check_name === "output_invariants" &&
       stats.nightlyVerdicts[0].ok === true &&
-      stats.nightlyVerdicts[0].summary === "ok (26/26 passed)",
+      stats.nightlyVerdicts[0].summary === "ok (26/26 passed)" &&
+      stats.nightlyVerdicts[1].ok === null,
     "nightly verdicts from mart.nightly_verdicts are surfaced on /admin/datahub (#1346)",
   );
   assert(

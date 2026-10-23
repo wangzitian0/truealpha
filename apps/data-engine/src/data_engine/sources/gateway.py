@@ -229,6 +229,9 @@ class CallRecord:
     request_params: dict[str, Any] | None = None
     #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
     fetch_key: str | None = None
+    #: What the response says it cost in output tokens; reasoning tokens only when it reports them.
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -330,7 +333,7 @@ def _pg_execute(sql: str, params=()):
         return _pg().execute(sql, params)
 
 
-#: The columns of every ledger row. Two groups of columns exist only after a migration, and a record
+#: The columns of every ledger row. Three groups of columns exist only after a migration, and a record
 #: that sets none of them is written with `_BASE_COLUMNS` alone. So a code server that starts before the
 #: migration replay never fails an ordinary audit row (rows of the other sources never depend on a migration).
 _BASE_COLUMNS = (
@@ -351,8 +354,12 @@ _BASE_COLUMNS = (
 )
 #: A model attempt (#1444): `20261021T0900_datahub_ledger_model_attempt_columns.sql`.
 _ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
+#: The output tokens of a model attempt (#1444): `20261021T1100_datahub_ledger_model_token_columns.sql`.
+_TOKEN_COLUMNS = ("completion_tokens", "reasoning_tokens")
 #: A keyed fetch (#1411 K7): `20261021T1200_datahub_landed_fetch_keys.sql`.
 _KEY_COLUMNS = ("fetch_key",)
+#: Each group is written by a record that sets one of its columns.
+_OPTIONAL_GROUPS = (_ATTEMPT_COLUMNS, _TOKEN_COLUMNS, _KEY_COLUMNS)
 
 
 @functools.cache
@@ -379,29 +386,39 @@ def _insert_params(record: CallRecord) -> tuple:
     return tuple(_value(record, column) for column in _BASE_COLUMNS)
 
 
+def _insert_ladder(record: CallRecord) -> list[tuple[str, tuple]]:
+    """The INSERTs to try for ``record``, the most complete first, each with its parameters.
+
+    The first holds the base columns and every group that the record sets. The next ones drop the
+    groups from the last: the migrations of the groups apply in the order of `_OPTIONAL_GROUPS`, so a
+    schema that lacks a group lacks the groups after it too. The last one is the base row."""
+    groups = [group for group in _OPTIONAL_GROUPS if any(getattr(record, column) is not None for column in group)]
+    ladder: list[tuple[str, tuple]] = []
+    for kept in range(len(groups), -1, -1):
+        columns: tuple[str, ...] = _BASE_COLUMNS + tuple(column for group in groups[:kept] for column in group)
+        ladder.append((_statement(columns), tuple(_value(record, column) for column in columns)))
+    return ladder
+
+
 def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
-    """The ledger INSERT for ``record`` and its parameters: the base columns, and the columns of
-    each group that the record sets."""
-    columns: tuple[str, ...] = _BASE_COLUMNS
-    if any(getattr(record, column) is not None for column in _ATTEMPT_COLUMNS):
-        columns += _ATTEMPT_COLUMNS
-    if record.fetch_key is not None:
-        columns += _KEY_COLUMNS
-    return _statement(columns), tuple(_value(record, column) for column in columns)
+    """The most complete INSERT for ``record`` and its parameters."""
+    return _insert_ladder(record)[0]
 
 
 def postgres_writer(record: CallRecord) -> None:
     """Write one row. The data-engine and the llm-service deploy together, and only the llm-service
-    applies the migrations at boot. A row that meets the schema before its migration loses the
-    columns of that group for the window and keeps the rest."""
+    applies the migrations at boot. A row that meets the schema before a migration of its groups is
+    written with the groups that exist and loses the others for that window."""
     import psycopg
 
-    sql, params = _insert_statement(record)
-    try:
-        _pg_execute(sql, params)
-    except psycopg.errors.UndefinedColumn:
-        log.warning("staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without")
-        _pg_execute(_INSERT_SQL, _insert_params(record))
+    *richer, (base_sql, base_params) = _insert_ladder(record)
+    for sql, params in richer:
+        try:
+            _pg_execute(sql, params)
+            return
+        except psycopg.errors.UndefinedColumn:
+            log.warning("staging.api_call_ledger lacks a column of this row (a migration has not run); trying fewer")
+    _pg_execute(base_sql, base_params)
 
 
 class MemoryLedger(list[CallRecord]):
@@ -1096,22 +1113,27 @@ class SourceGateway:
             return result
 
     def _write(self, record: CallRecord) -> None:
-        sql, params = _insert_statement(record)
-        if sql == _INSERT_SQL or not hasattr(self.connection, "transaction"):
-            self.connection.execute(sql, params)
+        *richer, (base_sql, base_params) = _insert_ladder(record)
+        if not richer:
+            self.connection.execute(base_sql, base_params)
+            return
+        if not hasattr(self.connection, "transaction"):
+            self.connection.execute(*richer[0])
             return
         # A row with a migrated column needs it. A failed statement would abort the caller's
-        # transaction, so that insert runs in its own savepoint and falls back to the base row.
+        # transaction, so each richer insert runs in its own savepoint; the base row is the last resort.
         import psycopg
 
-        try:
-            with self.connection.transaction():
-                self.connection.execute(sql, params)
-        except psycopg.errors.UndefinedColumn:
-            log.warning(
-                "staging.api_call_ledger lacks a column of this row (a migration has not run); writing it without"
-            )
-            self.connection.execute(_INSERT_SQL, _insert_params(record))
+        for sql, params in richer:
+            try:
+                with self.connection.transaction():
+                    self.connection.execute(sql, params)
+                return
+            except psycopg.errors.UndefinedColumn:
+                log.warning(
+                    "staging.api_call_ledger lacks a column of this row (a migration has not run); trying fewer"
+                )
+        self.connection.execute(base_sql, base_params)
 
     def _recorded_since(self, source: str, since: datetime) -> int:
         row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()

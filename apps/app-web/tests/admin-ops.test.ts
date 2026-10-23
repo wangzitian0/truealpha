@@ -103,7 +103,9 @@ function assert(condition: unknown, message: string): asserts condition {
     query: async (sql: string) => {
       if (sql.includes("dagster.runs")) throw new Error('relation "dagster.runs" does not exist');
       if (sql.includes("served_head")) return { rows: [] };
-      if (sql.includes("data_engine_identity")) throw new Error('relation "mart.data_engine_identity" does not exist');
+      if (sql.includes("data_engine_identity")) {
+        throw Object.assign(new Error('relation "mart.data_engine_identity" does not exist'), { code: "42P01" });
+      }
       if (sql.includes("raw.fetches")) return { rows: [] };
       return { rows: [] };
     },
@@ -113,6 +115,20 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.data.runs === "unavailable", "runs must degrade to unavailable, not an empty lie");
   assert(outcome.data.pointers.length === 0, "no pointer row -> no cards, not a fabricated one");
   assert(outcome.data.dataEngine === null, "a database without the identity view reports the build as unknown");
+}
+
+// --- the identity read fails for another reason: /admin still reports the build as unknown, it does not fail ---
+{
+  __setTestOpsClient({
+    query: async (sql: string) => {
+      if (sql.includes("data_engine_identity")) {
+        throw Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+      }
+      return { rows: [] };
+    },
+  } as never);
+  const outcome = await loadOpsOverview({ principalKind: "administrator" });
+  assert(outcome.kind === "ready" && outcome.data.dataEngine === null, "a timeout of the identity read leaves the overview up");
 }
 
 __setTestOpsClient(null);

@@ -91,7 +91,7 @@
     },
     {
       "path": "/admin/pipeline",
-      "live": false
+      "live": true
     },
     {
       "path": "/admin/releases",
