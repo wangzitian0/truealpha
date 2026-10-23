@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import json
 import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -61,6 +62,8 @@ def _tree(
     memory_max: str | None = str(CEILING),
     peak: int | None = QUIET_PEAK_MIB * MIB,
     oom_kill: int | None = 0,
+    swap_peak: int | None = 0,
+    max_events: int = 870,
     start_ticks: int | None = 12345,
     boot_id: str | None = BOOT_ID,
     command: str = "dagster api grpc",
@@ -81,8 +84,12 @@ def _tree(
         (cgroup / "memory.max").write_text(f"{memory_max}\n")
     if peak is not None:
         (cgroup / "memory.peak").write_text(f"{peak}\n")
+    if swap_peak is not None:
+        (cgroup / "memory.swap.peak").write_text(f"{swap_peak}\n")
     if oom_kill is not None:
-        (cgroup / "memory.events").write_text(f"low 0\nhigh 0\nmax 870\noom 1\noom_kill {oom_kill}\noom_group_kill 0\n")
+        (cgroup / "memory.events").write_text(
+            f"low 0\nhigh 0\nmax {max_events}\noom 1\noom_kill {oom_kill}\noom_group_kill 0\n"
+        )
     if start_ticks is not None:
         after_name = ["S", *["0"] * 18, str(start_ticks), *["0"] * 30]
         (proc / "1" / "stat").write_text(f"1 ({command}) {' '.join(after_name)}\n")
@@ -111,6 +118,8 @@ def _container(
     ticks: int,
     oom_kill: int = 0,
     peak_mib: int = QUIET_PEAK_MIB,
+    swap_mib: int = 0,
+    max_events: int = 870,
     process_bytes: int = 0,
     pid: int = 2,
     server: int = QUIET_SERVER,
@@ -122,6 +131,8 @@ def _container(
         start_ticks=ticks,
         oom_kill=oom_kill,
         peak=peak_mib * MIB,
+        swap_peak=swap_mib * MIB,
+        max_events=max_events,
         processes=processes,
         server=server,
     )
@@ -135,13 +146,23 @@ def _fold(tracker: Tracker, reading: Reading, deployment: str = "A") -> Tracker:
 
 
 def test_the_reading_holds_the_facts_of_the_files(tmp_path: Path) -> None:
-    reading = _reading(tmp_path, memory_max="1610612736", peak=123456789, oom_kill=7, start_ticks=424242)
+    reading = _reading(
+        tmp_path,
+        memory_max="1610612736",
+        peak=123456789,
+        oom_kill=7,
+        swap_peak=1156333568,
+        max_events=11177,
+        start_ticks=424242,
+    )
 
     assert reading == Reading(
         memory_max=1610612736,
         unlimited=False,
         memory_peak=123456789,
+        swap_peak=1156333568,
         oom_kill=7,
+        max_events=11177,
         container=f"{BOOT_ID}:424242",
         largest_process=0,
         largest_process_id="",
@@ -174,6 +195,7 @@ def test_a_memory_max_of_max_is_a_ceiling_that_is_not_there_not_an_unreadable_fi
     [
         ("memory_max", "memory.max"),
         ("peak", "memory.peak"),
+        ("swap_peak", "memory.swap.peak"),
         ("oom_kill", "memory.events"),
         ("start_ticks", "container identity"),
         ("boot_id", "container identity"),
@@ -190,6 +212,22 @@ def test_a_events_file_without_oom_kill_is_unreadable(tmp_path: Path) -> None:
     assert runtime_shape.read(cgroup, proc).unreadable == ("memory.events",)
 
 
+def test_a_events_file_without_max_is_unreadable_and_the_kill_count_is_not_trusted_alone(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path)
+    (cgroup / "memory.events").write_text("low 0\nhigh 0\noom 0\noom_kill 0\n")
+    reading = runtime_shape.read(cgroup, proc)
+
+    assert reading.unreadable == ("memory.events",)
+    assert (reading.oom_kill, reading.max_events) == (None, None)
+
+
+def test_a_swap_peak_file_with_text_that_is_not_a_number_is_unreadable(tmp_path: Path) -> None:
+    cgroup, proc = _tree(tmp_path)
+    (cgroup / "memory.swap.peak").write_text("some\n")
+
+    assert runtime_shape.read(cgroup, proc).unreadable == ("memory.swap.peak",)
+
+
 def test_a_file_with_text_that_is_not_a_number_is_unreadable(tmp_path: Path) -> None:
     cgroup, proc = _tree(tmp_path)
     (cgroup / "memory.peak").write_text("lots\n")
@@ -201,6 +239,7 @@ def test_an_empty_reading_misses_every_fact() -> None:
     assert Reading().unreadable == (
         "memory.max",
         "memory.peak",
+        "memory.swap.peak",
         "memory.events",
         "container identity",
         "process sizes",
@@ -343,10 +382,58 @@ def test_a_new_container_with_a_high_peak_counts_even_when_the_old_peak_was_high
     assert tracker.peaks_over_limit == 2
 
 
+def test_a_new_swap_peak_at_memory_max_counts_once_while_it_stays_the_same(tmp_path: Path) -> None:
+    """`memory.swap.peak` is a high-water mark: the same value is the same peak. The `max` events rise with it."""
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=0, max_events=870))
+    tracker = _fold(tracker, _container(tmp_path, "b", ticks=1, swap_mib=100, max_events=900))
+    assert (tracker.swap_peaks, tracker.worst_swap) == (1, 100 * MIB)
+
+    tracker = _fold(tracker, _container(tmp_path, "c", ticks=1, swap_mib=100, max_events=950))
+    assert tracker.swap_peaks == 1, "the same swap peak is not a new peak, whatever the max events do"
+
+    tracker = _fold(tracker, _container(tmp_path, "d", ticks=1, swap_mib=250, max_events=1200))
+    assert (tracker.swap_peaks, tracker.worst_swap) == (2, 250 * MIB), "a higher peak is a new peak"
+
+
+def test_a_swap_peak_without_a_rise_of_the_max_events_does_not_count(tmp_path: Path) -> None:
+    """The kernel can swap cold pages of an idle server when the host is short of memory. The cgroup did not
+    reach its own ceiling then, and `memory.events` `max` stays where it was."""
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=0, max_events=870))
+
+    tracker = _fold(tracker, _container(tmp_path, "b", ticks=1, swap_mib=50, max_events=870))
+
+    assert (tracker.swap_peaks, tracker.worst_swap) == (0, 0)
+
+
+def test_max_events_without_a_swap_peak_do_not_count(tmp_path: Path) -> None:
+    """A cgroup that fills with page cache reaches `memory.max` and drops file pages. No anonymous memory moves."""
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=0, max_events=870))
+
+    tracker = _fold(tracker, _container(tmp_path, "b", ticks=1, swap_mib=0, max_events=11177))
+
+    assert tracker.swap_peaks == 0
+
+
+def test_a_new_container_counts_the_whole_swap_peak_it_shows(tmp_path: Path) -> None:
+    """A new cgroup starts at zero: all that it shows came after the last sample."""
+    assert _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=1103, max_events=11177)).swap_peaks == 1
+    assert _fold(Tracker(), _container(tmp_path, "b", ticks=1, swap_mib=1103, max_events=0)).swap_peaks == 0
+    assert _fold(Tracker(), _container(tmp_path, "c", ticks=1, swap_mib=0, max_events=11177)).swap_peaks == 0
+
+
+def test_a_new_container_counts_its_swap_peak_even_when_the_old_peak_was_higher(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "c1", ticks=1, swap_mib=900, max_events=5000))
+
+    tracker = _fold(tracker, _container(tmp_path, "c2", ticks=2, swap_mib=100, max_events=40))
+
+    assert (tracker.swap_peaks, tracker.worst_swap) == (2, 900 * MIB)
+
+
 def test_a_reading_with_a_missing_fact_adds_nothing(tmp_path: Path) -> None:
     before = _fold(Tracker(), _container(tmp_path, "a", ticks=1, oom_kill=1))
 
     assert _fold(before, _reading(tmp_path / "b", peak=None)) == before
+    assert _fold(before, _reading(tmp_path / "c", swap_peak=None)) == before
     assert _fold(Tracker(), Reading()) == Tracker()
 
 
@@ -611,8 +698,68 @@ def test_an_unreadable_fact_is_red_even_when_every_other_fact_is_good(tmp_path: 
 
 def test_an_empty_reading_is_red_for_every_fact() -> None:
     assert _judge(Reading()).red == (
-        "unreadable: memory.max, memory.peak, memory.events, container identity, process sizes",
+        "unreadable: memory.max, memory.peak, memory.swap.peak, memory.events, container identity, process sizes",
     )
+
+
+def test_a_swap_peak_at_memory_max_is_red_and_names_the_size(tmp_path: Path) -> None:
+    """The numbers of the production code server on 2026-10-23: swap peak 1,156,333,568 bytes, `max` 11,177."""
+    reading = _reading(tmp_path, swap_peak=1156333568, max_events=11177)
+
+    verdict = _judge(reading)
+
+    assert verdict.red == (
+        "swap peak rose at memory.max 1 time(s); largest swap peak 1103 MiB: the processes needed more than memory.max",
+    )
+    assert verdict.facts["swap_peaks"] == 1
+    assert verdict.facts["worst_swap_mib"] == 1103
+
+
+def test_swap_without_a_rise_of_the_max_events_is_green(tmp_path: Path) -> None:
+    """Swap use of an idle server under host pressure is not the demand of the runs."""
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=0, max_events=870))
+    tracker = _fold(tracker, _container(tmp_path, "b", ticks=1, swap_mib=50, max_events=870))
+
+    verdict = _judge(_container(tmp_path, "c", ticks=1, swap_mib=50, max_events=870), tracker=tracker)
+
+    assert verdict.red == ()
+    assert verdict.facts["swap_peaks"] == 0
+
+
+def test_a_swap_count_lower_than_at_the_last_check_means_the_state_was_reset(tmp_path: Path) -> None:
+    baseline = dataclasses.replace(NOTHING, swap_peaks=2)
+
+    verdict = _judge(_reading(tmp_path), tracker=Tracker(), baseline=baseline)
+
+    assert verdict.red == (
+        "the runtime shape state is lower than at the last check: it was reset, so kills may be unseen",
+    )
+
+
+def test_the_state_saved_before_the_swap_fields_reads_with_zero_swap(tmp_path: Path) -> None:
+    """The stored tracker and baseline of the deployed code have no swap field. They must load, not go red."""
+    tracker = json.loads(_fold(Tracker(), _container(tmp_path, "a", ticks=1)).to_json())
+    for key in ("swap_peaks", "worst_swap"):
+        del tracker[key]
+    for key in ("swap_peak", "max_events"):
+        del tracker["container"][key]
+    baseline = json.loads(NOTHING.to_json())
+    del baseline["swap_peaks"]
+
+    loaded = Tracker.from_json(json.dumps(tracker))
+
+    assert (loaded.swap_peaks, loaded.worst_swap) == (0, 0)
+    assert loaded.container is not None
+    assert (loaded.container.swap_peak, loaded.container.max_events) == (0, 0)
+    assert Baseline.from_json(json.dumps(baseline)).swap_peaks == 0
+
+
+def test_the_swap_fields_survive_a_save_and_a_load(tmp_path: Path) -> None:
+    tracker = _fold(Tracker(), _container(tmp_path, "a", ticks=1, swap_mib=1103, max_events=11177))
+
+    assert Tracker.from_json(tracker.to_json()) == tracker
+    assert tracker.container is not None
+    assert (tracker.container.swap_peak, tracker.container.max_events) == (1103 * MIB, 11177)
 
 
 @pytest.mark.parametrize(
@@ -836,6 +983,28 @@ def test_a_peak_burst_is_red_once_and_the_quiet_nights_after_it_are_green(tmp_pa
 
     assert first.red != ()
     assert (second.red, third.red) == ((), ())
+
+
+def test_a_swap_burst_is_red_once_and_a_higher_burst_is_red_again(tmp_path: Path) -> None:
+    """The production night of 2026-10-22: two runs pushed anonymous memory to swap while the cgroup was at
+    `memory.max`. A peak below the limit of `memory.peak` does not hide it: page cache is no proof of demand."""
+    instance = dg.DagsterInstance.ephemeral()
+    quiet = _container(tmp_path, "quiet", ticks=1)
+    burst = _container(tmp_path, "burst", ticks=1, swap_mib=779, max_events=11177)
+    higher = _container(tmp_path, "higher", ticks=1, swap_mib=1103, max_events=12000)
+
+    assert _night(instance, quiet, TICK_1).red == ()
+    second = _night(instance, burst, TICK_2)
+    third = _night(instance, burst, TICK_3)
+    fourth = _night(instance, higher, "2026-10-24T06:30:00+00:00")
+
+    assert second.red == (
+        "swap peak rose at memory.max 1 time(s); largest swap peak 779 MiB: the processes needed more than memory.max",
+    )
+    assert third.red == (), "the same peak is not new on the next night"
+    assert fourth.red == (
+        "swap peak rose at memory.max 1 time(s); largest swap peak 1103 MiB: the processes needed more than memory.max",
+    )
 
 
 def test_a_restart_without_a_deployment_change_between_two_samples_is_red(tmp_path: Path) -> None:
