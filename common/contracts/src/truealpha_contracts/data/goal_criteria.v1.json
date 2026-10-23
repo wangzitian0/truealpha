@@ -119,9 +119,9 @@
       "threshold": "every scheduled day after the unlock",
       "window": "14 consecutive days after the unlock",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1418"
+      "status": "partial",
+      "verdict_keys": ["job_run_health"],
+      "pending_on": "#1418 (the S&P 500 tick; job_run_health names a tick that fails two nights in a row)"
     },
     {
       "id": "R2.B2",

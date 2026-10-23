@@ -124,6 +124,12 @@ do $$ begin
                where table_schema = 'dagster' and table_name = 'runs') then
         grant select on dagster.runs to app_ops_reader;
     end if;
+    -- #1466: /admin/pipeline shows the first error line of the newest failed run of each job. The event
+    -- log holds that text. The administrator-only page is the one reader, and the text never reaches mart.
+    if exists (select 1 from information_schema.tables
+               where table_schema = 'dagster' and table_name = 'event_logs') then
+        grant select on dagster.event_logs to app_ops_reader;
+    end if;
 end $$;
 grant usage on schema raw to app_ops_reader;
 grant select on raw.fetches to app_ops_reader;
