@@ -7,6 +7,8 @@ inside the container and judges them against the capacity that `code_server_capa
 `environment_contract.v1.json`:
 
 * `memory.events` `oom_kill`: the kernel killed a process of the cgroup;
+* `memory.events` `max` and `memory.swap.peak`: the cgroup was at `memory.max` and moved anonymous memory
+  to swap (the demand of the processes was higher than the RAM ceiling);
 * `memory.peak`: the most memory the cgroup held since the container started;
 * `memory.max`: the ceiling that the container really has;
 * the identity of the container: the boot id of the host and the start ticks of its first process;
@@ -37,6 +39,11 @@ The nightly verdict is red on any of these:
 * the peak of a container rose above `UTILIZATION_CEILING` of `memory.max` since the last check. A
   peak that the last check already judged does not count again: `memory.peak` is a high-water mark
   of the whole container life;
+* `memory.swap.peak` rose above the last peak while `memory.events` `max` rose in the same sample. Page cache
+  fills `memory.max` without a swap peak, and the kernel may swap the cold pages of an idle server under host
+  pressure without a rise of `max`. Both together show the processes needing more than `memory.max`. No limit
+  value is needed: the budget keeps the processes below the usable share, so any such swap means the budget
+  failed (production, 2026-10-22: swap peak 1103 MiB, `max` 11177, no kill);
 * a run process held more than the budget `run_mib`, or the code server more than `server_mib`. A
   process counts once: when it first passes the limit, and again for each new process that does. The
   budget is what is left inside `UTILIZATION_CEILING` of the ceiling when the queue is full, so a larger run
@@ -133,7 +140,11 @@ class Reading:
     memory_max: int | None = None
     unlimited: bool = False
     memory_peak: int | None = None
+    #: `memory.swap.peak` in bytes: the most swap the cgroup held since the container started.
+    swap_peak: int | None = None
     oom_kill: int | None = None
+    #: `memory.events` `max`: how often the cgroup reached `memory.max`. Page cache counts too.
+    max_events: int | None = None
     container: str | None = None
     #: The largest `VmHWM` in bytes of any process except the first (the code server), and that process
     #: (pid and start ticks). 0 and empty when none runs.
@@ -148,7 +159,8 @@ class Reading:
         missing = (
             ("memory.max", self.memory_max is None and not self.unlimited),
             ("memory.peak", self.memory_peak is None),
-            ("memory.events", self.oom_kill is None),
+            ("memory.swap.peak", self.swap_peak is None),
+            ("memory.events", self.oom_kill is None or self.max_events is None),
             ("container identity", self.container is None),
             ("process sizes", self.largest_process is None or self.server_process is None),
         )
@@ -163,6 +175,9 @@ class Container:
     deployment: str
     oom_kill: int
     peak: int
+    #: State from before these two were recorded has 0, so the first sample of its container counts what it shows.
+    swap_peak: int = 0
+    max_events: int = 0
 
 
 #: How many over-budget processes the tracker names. The newest stay.
@@ -191,6 +206,10 @@ class Tracker:
     restarts_same_deployment: int = 0
     restarts_new_deployment: int = 0
     peaks_over_limit: int = 0
+    #: How often a new `memory.swap.peak` came with a rise of `memory.events` `max`, and the largest swap peak
+    #: seen (bytes). The record never restarts with a container, so a red verdict names the size.
+    swap_peaks: int = 0
+    worst_swap: int = 0
     #: The process that was the largest at the last sample and its size (bytes). A process counts when it
     #: first passes the run budget; a new process that passes it counts again.
     process_id: str = ""
@@ -228,11 +247,15 @@ class Tracker:
                     deployment=_text(container["deployment"]),
                     oom_kill=_count(container["oom_kill"]),
                     peak=_count(container["peak"]),
+                    swap_peak=_count(container.get("swap_peak", 0)),
+                    max_events=_count(container.get("max_events", 0)),
                 ),
                 kills=_count(data["kills"]),
                 restarts_same_deployment=_count(data["restarts_same_deployment"]),
                 restarts_new_deployment=_count(data["restarts_new_deployment"]),
                 peaks_over_limit=_count(data["peaks_over_limit"]),
+                swap_peaks=_count(data.get("swap_peaks", 0)),
+                worst_swap=_count(data.get("worst_swap", 0)),
                 process_id=_text(data.get("process_id", "")),
                 process_size=_count(data.get("process_size", 0)),
                 processes_over_size=_count(data.get("processes_over_size", 0)),
@@ -261,6 +284,7 @@ class Baseline:
     summary: str
     processes_over_size: int = 0
     servers_over_size: int = 0
+    swap_peaks: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -279,6 +303,7 @@ class Baseline:
                 summary=_text(data["summary"]),
                 processes_over_size=_count(data.get("processes_over_size", 0)),
                 servers_over_size=_count(data.get("servers_over_size", 0)),
+                swap_peaks=_count(data.get("swap_peaks", 0)),
             )
         except (ValueError, KeyError, TypeError, OverflowError) as exc:
             raise StateUnreadable("the runtime shape baseline is not readable") from exc
@@ -368,7 +393,9 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
     memory_max: int | None = None
     unlimited = False
     memory_peak: int | None = None
+    swap_peak: int | None = None
     oom_kill: int | None = None
+    max_events: int | None = None
     container: str | None = None
     largest_process: int | None = None
     largest_process_id = ""
@@ -385,7 +412,12 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
     except (OSError, ValueError):
         pass
     try:
-        oom_kill = _events(_read_text(cgroup_root / "memory.events"))["oom_kill"]
+        swap_peak = int(_read_text(cgroup_root / "memory.swap.peak"))
+    except (OSError, ValueError):
+        pass
+    try:
+        events = _events(_read_text(cgroup_root / "memory.events"))
+        oom_kill, max_events = events["oom_kill"], events["max"]  # both or neither: one lookup fails the pair
     except (OSError, ValueError, KeyError):
         pass
     try:
@@ -405,7 +437,9 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
         memory_max=memory_max,
         unlimited=unlimited,
         memory_peak=memory_peak,
+        swap_peak=swap_peak,
         oom_kill=oom_kill,
+        max_events=max_events,
         container=container,
         largest_process=largest_process,
         largest_process_id=largest_process_id,
@@ -452,7 +486,14 @@ def _fold_sizes(
 
 def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeServerCapacity) -> Tracker:
     """Add one reading to the totals. A reading with a missing fact returns `tracker` itself, unchanged."""
-    if reading.oom_kill is None or reading.memory_peak is None or reading.container is None or reading.unreadable:
+    if (
+        reading.oom_kill is None
+        or reading.memory_peak is None
+        or reading.swap_peak is None
+        or reading.max_events is None
+        or reading.container is None
+        or reading.unreadable
+    ):
         return tracker
     previous = tracker.container
     fresh_container = previous is None or previous.id != reading.container
@@ -460,10 +501,12 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
     if previous is not None and not fresh_container:
         kills += max(reading.oom_kill - previous.oom_kill, 0)
         peak_is_new = reading.memory_peak > previous.peak
+        swap_before, max_before = previous.swap_peak, previous.max_events
     else:
         # A new container starts new counters, so all of its kills and its whole peak came after the last sample.
         kills += reading.oom_kill
         peak_is_new = True
+        swap_before, max_before = 0, 0
         if previous is not None and previous.deployment == deployment:
             same += 1
         elif previous is not None:
@@ -475,14 +518,24 @@ def fold(tracker: Tracker, reading: Reading, *, deployment: str, capacity: CodeS
         and reading.memory_peak > UTILIZATION_CEILING * reading.memory_max
     ):
         over += 1
+    swaps, worst_swap = tracker.swap_peaks, tracker.worst_swap
+    if reading.swap_peak > swap_before and reading.max_events > max_before:
+        swaps, worst_swap = swaps + 1, max(worst_swap, reading.swap_peak)
     folded = Tracker(
         container=Container(
-            id=reading.container, deployment=deployment, oom_kill=reading.oom_kill, peak=reading.memory_peak
+            id=reading.container,
+            deployment=deployment,
+            oom_kill=reading.oom_kill,
+            peak=reading.memory_peak,
+            swap_peak=reading.swap_peak,
+            max_events=reading.max_events,
         ),
         kills=kills,
         restarts_same_deployment=same,
         restarts_new_deployment=new,
         peaks_over_limit=over,
+        swap_peaks=swaps,
+        worst_swap=worst_swap,
         sampled_at=tracker.sampled_at,
     )
     return _fold_sizes(tracker, folded, reading, fresh_container=fresh_container, capacity=capacity)
@@ -510,6 +563,7 @@ def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
         or tracker.restarts_same_deployment < baseline.restarts_same_deployment
         or tracker.restarts_new_deployment < baseline.restarts_new_deployment
         or tracker.peaks_over_limit < baseline.peaks_over_limit
+        or tracker.swap_peaks < baseline.swap_peaks
         or tracker.processes_over_size < baseline.processes_over_size
         or tracker.servers_over_size < baseline.servers_over_size
     )
@@ -575,12 +629,15 @@ def judge(
     same = max(tracker.restarts_same_deployment - before.restarts_same_deployment, 0)
     new = max(tracker.restarts_new_deployment - before.restarts_new_deployment, 0)
     peaks = max(tracker.peaks_over_limit - before.peaks_over_limit, 0)
+    swaps = max(tracker.swap_peaks - before.swap_peaks, 0)
     too_big = max(tracker.processes_over_size - before.processes_over_size, 0)
     server_big = max(tracker.servers_over_size - before.servers_over_size, 0)
     facts: dict[str, int | float] = {
         "oom_kills": kills,
         "unplanned_restarts": same,
         "peaks_over_limit": peaks,
+        "swap_peaks": swaps,
+        "worst_swap_mib": round(tracker.worst_swap / MIB),
         "processes_over_size": too_big,
         "servers_over_size": server_big,
         "largest_process_mib": round(tracker.largest_process / MIB),
@@ -602,6 +659,11 @@ def judge(
         )
     if peaks:
         red.append(f"the peak rose above {UTILIZATION_CEILING:.0%} of memory.max {peaks} time(s); {peak}")
+    if swaps:
+        red.append(
+            f"swap peak rose at memory.max {swaps} time(s); largest swap peak {_mib(tracker.worst_swap)} MiB:"
+            " the processes needed more than memory.max"
+        )
     if too_big:
         red.append(_over_size_text(tracker, too_big, capacity))
     if server_big:
@@ -787,6 +849,7 @@ def check(
             restarts_same_deployment=totals.restarts_same_deployment,
             restarts_new_deployment=totals.restarts_new_deployment,
             peaks_over_limit=totals.peaks_over_limit,
+            swap_peaks=totals.swap_peaks,
             processes_over_size=totals.processes_over_size,
             servers_over_size=totals.servers_over_size,
             tick=tick,
