@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,12 @@ elif args[:2] == ["run", "list"]:
         print("303")
     elif workflow == "walk-release.yml":
         print("404")
+    elif workflow == "app-deploy-request.yml" and flag("--repo") == "wangzitian0/infra2":
+        # infra2#1363: the receiver run that waits for the owner's production approval,
+        # already filtered to "<url> <created_at>". Empty when no run waits.
+        if os.environ.get("FAKE_INFRA2_READ_FAILS"):
+            sys.exit("fake gh: HTTP 502")
+        print(os.environ.get("FAKE_INFRA2_WAITING", ""))
     else:
         sys.exit(f"fake gh: unexpected workflow {workflow!r}")
 elif args[:2] == ["run", "view"]:
@@ -1120,3 +1127,92 @@ def test_the_poll_budget_is_the_loop_budget_unless_a_lower_cap_is_set() -> None:
     assert polls(120, "3") == "3"
     assert polls(12, "500") == "12"
     assert script.count('$(seq 1 "$(polls ') == 6, "a wait loop does not read its budget through polls()"
+
+
+RECEIVER_WAITING = "https://github.com/wangzitian0/infra2/actions/runs/39943259575 2026-10-23T11:02:13Z"
+
+
+def test_prod_prints_the_approval_link_as_soon_as_the_receiver_waits(ceremony: Ceremony) -> None:
+    """infra2#1363: on 2026-10-23 the receiver waited 20 min before anyone told the owner.
+
+    cut_release.sh ran in the background and printed nothing until its own wait ran out, so
+    the approval came after the receiver's limit and the release had to be dispatched again.
+    """
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env={**staging_evidence(sha), "FAKE_INFRA2_WAITING": RECEIVER_WAITING},
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # stderr: deploy() prints the run id on stdout, and the caller captures it.
+    notices = [line for line in result.stderr.splitlines() if line.startswith("APPROVAL NEEDED: ")]
+    assert notices == [
+        "APPROVAL NEEDED: https://github.com/wangzitian0/infra2/actions/runs/39943259575 waits for the "
+        "owner's 'production' approval (receiver run created 2026-10-23T11:02:13Z)."
+    ], result.stderr
+    reads = [c for c in calls if c[:2] == ["run", "list"] and "app-deploy-request.yml" in c]
+    assert reads and all("wangzitian0/infra2" in c for c in reads), calls
+
+
+def test_a_staging_deploy_never_reads_the_infra2_approval_queue(ceremony: Ceremony) -> None:
+    result, calls = ceremony.run("v0.0.2", extra_env={"FAKE_INFRA2_WAITING": RECEIVER_WAITING})
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "APPROVAL NEEDED" not in result.stdout + result.stderr
+    assert not [c for c in calls if "app-deploy-request.yml" in c]
+
+
+def test_a_failed_approval_read_warns_once_and_does_not_stop_the_release(ceremony: Ceremony) -> None:
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, _ = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env={**staging_evidence(sha), "FAKE_INFRA2_READ_FAILS": "1"},
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.stderr.count("cannot read the infra2 approval queue") == 1, result.stderr
+
+
+def _request_job() -> dict:
+    import yaml
+
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy-release.yml").read_text())
+    return workflow["jobs"]["request"]
+
+
+def test_the_release_waits_nest_inside_each_other() -> None:
+    """infra2#1363: each waiter must outlast what it waits for.
+
+    cut_release.sh waits for the deploy run, the deploy run's job waits for the transport,
+    and the transport waits for the owner's approval in infra2. On 2026-10-23 cut_release.sh
+    gave up after 20 min while the 50 min job still waited.
+    """
+    job = _request_job()
+    timeout = str(job["timeout-minutes"])
+    assert timeout == "${{ inputs.deploy_type == 'prod' && 75 || 50 }}", timeout
+    prod_job_seconds, staging_job_seconds = 75 * 60, 50 * 60
+
+    dispatch = next(step for step in job["steps"] if step.get("name") == "Dispatch the validated request to infra2")
+    assert dispatch["env"]["TRANSPORT_TIMEOUT"] == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}"
+    assert '--timeout "$TRANSPORT_TIMEOUT"' in dispatch["run"]
+    # The prod transport waits 1 h for the owner; the job keeps 15 min for setup and the
+    # 6 min health check. The staging transport is unchanged.
+    assert prod_job_seconds - 3600 >= 15 * 60
+    assert staging_job_seconds - 1800 >= 15 * 60
+
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
+    # Each poll sleeps 10 s and also spends API time, so polls * 10 s is a lower bound.
+    assert int(polls) * 10 >= prod_job_seconds, (polls, prod_job_seconds)
+    assert '$(seq 1 "$(polls "$DEPLOY_RUN_POLLS")")' in script
