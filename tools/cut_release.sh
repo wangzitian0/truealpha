@@ -43,6 +43,10 @@
 #   both run. The value proves the caller named the exact commit; it cannot prove who
 #   typed it. The owner's presence stays a human fact: an agent passes the SHA only
 #   after the owner approved that SHA.
+# --prod then waits for the owner a second time, in GitHub: the infra2 receiver run waits
+#   for the 'production' environment approval. As soon as it waits, the script prints
+#   `APPROVAL NEEDED: <url> ...` on stderr, once (infra2#1363). A caller that runs the script
+#   in the background watches for that line and sends the link to the owner at once.
 #
 # --prod promotes an EXISTING tag that staging already verified, and nothing else (#1412
 #   R1). It reads the staging evidence that GitHub holds for the commit of the tag
@@ -647,6 +651,39 @@ else
   note "tag run $TAG_RUN_ID green"
 fi
 
+# The poll budget of the deploy run wait: 300 polls of at least 10 s, 50 min. It must
+# outlast the request job of deploy-release.yml (timeout-minutes), or this script stops
+# while the deploy still waits for the owner (infra2#1363: on 2026-10-23 it stopped after
+# 20 min of a 50 min job). common/runtime/tests/test_cut_release.py pins the two together.
+DEPLOY_RUN_POLLS=300
+
+# infra2#1363: a prod deploy waits for the owner's 'production' approval in the infra2
+# receiver run. Print its link once, as soon as it waits, so that a caller that runs this
+# script in the background can ask the owner at once. A failed read warns once and does not
+# stop the release: the approval itself happens in GitHub, not here.
+APPROVAL_ANNOUNCED=0
+APPROVAL_READ_WARNED=0
+# The filter of the infra2 receiver runs that wait for this tag. It ignores a run created
+# before this dispatch ($1): a run of a killed earlier attempt may still wait.
+approval_filter() { # $1=dispatched-at (UTC, ISO 8601)
+  printf '%s' "([.[]|select(.status==\"waiting\" and .createdAt>=\"$1\" and (.displayTitle|startswith(\"Deploy truealpha/app prod $TAG \")))][0] // empty) | \"\(.url) \(.createdAt)\""
+}
+announce_approval_wait() { # $1=dispatched-at
+  [ "$APPROVAL_ANNOUNCED" = "0" ] || return 0
+  local WAITING
+  if ! WAITING=$(gh run list --repo wangzitian0/infra2 --workflow app-deploy-request.yml --limit 20 \
+      --json url,displayTitle,status,createdAt -q "$(approval_filter "$1")" 2>/dev/null); then
+    if [ "$APPROVAL_READ_WARNED" = "0" ]; then
+      echo "cut_release: warning: cannot read the infra2 approval queue; watch https://github.com/wangzitian0/infra2/actions/workflows/app-deploy-request.yml" >&2
+      APPROVAL_READ_WARNED=1
+    fi
+    return 0
+  fi
+  [ -n "$WAITING" ] || return 0
+  echo "APPROVAL NEEDED: ${WAITING% *} waits for the owner's 'production' approval (receiver run created ${WAITING#* })."
+  APPROVAL_ANNOUNCED=1
+}
+
 deploy() { # $1=staging|prod, extra -f args after
   local TYPE="$1"; shift
   # A blind `sleep 12` here sometimes read the run list before GitHub's API had
@@ -670,7 +707,8 @@ deploy() { # $1=staging|prod, extra -f args after
     sleep 5
   done
   [ -n "$RUN" ] || fail "$TYPE deploy dispatch for $TAG never appeared in the run list after 60s"
-  for _ in $(seq 1 "$(polls 120)"); do
+  for _ in $(seq 1 "$(polls "$DEPLOY_RUN_POLLS")"); do
+    [ "$TYPE" = "prod" ] && announce_approval_wait "$DISPATCHED_AT" >&2
     local S
     S=$(gh run view "$RUN" --repo "$REPO" --json status,conclusion -q '"\(.status) \(.conclusion)"')
     case "$S" in

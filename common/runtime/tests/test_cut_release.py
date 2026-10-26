@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,12 @@ elif args[:2] == ["run", "list"]:
         print("303")
     elif workflow == "walk-release.yml":
         print("404")
+    elif workflow == "app-deploy-request.yml" and flag("--repo") == "wangzitian0/infra2":
+        # infra2#1363: the receiver run that waits for the owner's production approval,
+        # already filtered to "<url> <created_at>". Empty when no run waits.
+        if os.environ.get("FAKE_INFRA2_READ_FAILS"):
+            sys.exit("fake gh: HTTP 502")
+        print(os.environ.get("FAKE_INFRA2_WAITING", ""))
     else:
         sys.exit(f"fake gh: unexpected workflow {workflow!r}")
 elif args[:2] == ["run", "view"]:
@@ -1120,3 +1127,142 @@ def test_the_poll_budget_is_the_loop_budget_unless_a_lower_cap_is_set() -> None:
     assert polls(120, "3") == "3"
     assert polls(12, "500") == "12"
     assert script.count('$(seq 1 "$(polls ') == 6, "a wait loop does not read its budget through polls()"
+
+
+RECEIVER_WAITING = "https://github.com/wangzitian0/infra2/actions/runs/39943259575 2026-10-23T11:02:13Z"
+
+
+def test_prod_prints_the_approval_link_as_soon_as_the_receiver_waits(ceremony: Ceremony) -> None:
+    """infra2#1363: on 2026-10-23 the receiver waited 20 min before anyone told the owner.
+
+    cut_release.sh ran in the background and printed nothing until its own wait ran out, so
+    the approval came after the receiver's limit and the release had to be dispatched again.
+    """
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env={**staging_evidence(sha), "FAKE_INFRA2_WAITING": RECEIVER_WAITING},
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # stderr: deploy() prints the run id on stdout, and the caller captures it.
+    notices = [line for line in result.stderr.splitlines() if line.startswith("APPROVAL NEEDED: ")]
+    assert notices == [
+        "APPROVAL NEEDED: https://github.com/wangzitian0/infra2/actions/runs/39943259575 waits for the "
+        "owner's 'production' approval (receiver run created 2026-10-23T11:02:13Z)."
+    ], result.stderr
+    reads = [c for c in calls if c[:2] == ["run", "list"] and "app-deploy-request.yml" in c]
+    assert reads and all("wangzitian0/infra2" in c for c in reads), calls
+
+
+def test_a_staging_deploy_never_reads_the_infra2_approval_queue(ceremony: Ceremony) -> None:
+    result, calls = ceremony.run("v0.0.2", extra_env={"FAKE_INFRA2_WAITING": RECEIVER_WAITING})
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "APPROVAL NEEDED" not in result.stdout + result.stderr
+    assert not [c for c in calls if "app-deploy-request.yml" in c]
+
+
+def test_a_failed_approval_read_warns_once_and_does_not_stop_the_release(ceremony: Ceremony) -> None:
+    sha = head_sha(ceremony)
+    ceremony.tag("v0.0.2")
+
+    result, _ = ceremony.run(
+        "v0.0.2",
+        "--prod",
+        "--owner-approved-sha",
+        sha,
+        extra_env={**staging_evidence(sha), "FAKE_INFRA2_READ_FAILS": "1"},
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.stderr.count("cannot read the infra2 approval queue") == 1, result.stderr
+
+
+def _request_job() -> dict:
+    import yaml
+
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "deploy-release.yml").read_text())
+    return workflow["jobs"]["request"]
+
+
+def test_the_deploy_run_wait_outlasts_the_deploy_job() -> None:
+    """infra2#1363: on 2026-10-23 cut_release.sh gave up after 20 min while the 50 min job
+    still waited for the owner, so nobody saw the approval request in time."""
+    job_minutes = int(_request_job()["timeout-minutes"])
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
+    # Each poll sleeps 10 s and also spends API time, so polls * 10 s is a lower bound.
+    assert int(polls) * 10 >= job_minutes * 60, (polls, job_minutes)
+    assert '$(seq 1 "$(polls "$DEPLOY_RUN_POLLS")")' in script
+
+
+def _approval_filter(dispatched_at: str, tag: str) -> str:
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    start = script.index("approval_filter() {")
+    function = script[start : script.index("\n}\n", start) + 3]
+    return subprocess.run(
+        ["bash", "-c", f'TAG={tag}\n{function}\napproval_filter "$1"', "_", dispatched_at],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def test_the_approval_filter_selects_only_this_dispatch_waiting_run() -> None:
+    """The fake gh ignores -q, so run the real filter with jq on a real-shaped run list."""
+    runs = [
+        {
+            "url": "u/done",
+            "status": "completed",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.55 abc [r1]",
+        },
+        {
+            "url": "u/other-tag",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.550 abc [r2]",
+        },
+        {
+            "url": "u/staging",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app staging v0.2.55 abc [r3]",
+        },
+        {
+            "url": "u/old-attempt",
+            "status": "waiting",
+            "createdAt": "2026-10-23T10:00:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.55 abc [r4]",
+        },
+        {
+            "url": "u/finance",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy finance_report/app prod v0.2.55 abc [r5]",
+        },
+    ]
+    target = {
+        "url": "u/mine",
+        "status": "waiting",
+        "createdAt": "2026-10-23T11:02:13Z",
+        "displayTitle": "Deploy truealpha/app prod v0.2.55 71b0849 [r6]",
+    }
+
+    def select(run_list: list) -> str:
+        return subprocess.run(
+            ["jq", "-r", _approval_filter("2026-10-23T11:00:01Z", "v0.2.55")],
+            input=json.dumps(run_list),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    assert select(runs) == ""
+    assert select([*runs, target]) == "u/mine 2026-10-23T11:02:13Z"

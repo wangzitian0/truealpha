@@ -46,7 +46,7 @@ REPO = "wangzitian0/truealpha"
 CI_RUNS = f"/repos/{REPO}/actions/workflows/ci-required.yml/runs"
 DEPLOY_RUNS = f"/repos/{REPO}/actions/workflows/deploy-release.yml/runs"
 WALK_RUNS = f"/repos/{REPO}/actions/workflows/walk-release.yml/runs"
-#: A deploy-release.yml job stops after 50 minutes. A staging deploy of another tag that overlaps
+#: A staging deploy-release.yml job stops after 50 minutes. A staging deploy of another tag that overlaps
 #: the walk window therefore started less than this long before the anchor.
 LOOKBACK = timedelta(hours=1)
 _SHA = re.compile(r"^[0-9a-f]{40}$")
