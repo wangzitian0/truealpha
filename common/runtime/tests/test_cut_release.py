@@ -1274,19 +1274,33 @@ def test_a_prod_request_states_a_one_hour_wait_that_its_job_outlasts() -> None:
 
     infra2-sdk 3.13.0 stops the transport at that time by the clock and states it to the
     receiver as sender_deadline; an older SDK counts polls and states nothing. The job
-    keeps 15 min for setup and the 6 min health check, and cut_release.sh outlasts the job.
+    keeps 20 min: about 4 min of setup, one last poll (35 s) and a health check of up to
+    710 s when every probe times out. cut_release.sh outlasts the job.
     """
     job = _request_job()
-    assert job["timeout-minutes"] == "${{ inputs.deploy_type == 'prod' && 75 || 50 }}"
+    timeout = job["timeout-minutes"]
+    assert timeout == "${{ inputs.deploy_type == 'prod' && 80 || 50 }}", timeout
+    prod_job_seconds = int(re.findall(r"&& ([0-9]+) \|\|", timeout)[0]) * 60
     dispatch = next(step for step in job["steps"] if step.get("name") == "Dispatch the validated request to infra2")
-    assert dispatch["env"]["TRANSPORT_TIMEOUT"] == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}"
+    wait = dispatch["env"]["TRANSPORT_TIMEOUT"]
+    assert wait == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}", wait
     assert '--timeout "$TRANSPORT_TIMEOUT"' in dispatch["run"]
-    assert 75 * 60 - 3600 >= 15 * 60 and 50 * 60 - 1800 >= 15 * 60
+    prod_wait_seconds = int(re.findall(r"&& '([0-9]+)'", wait)[0])
+    assert prod_job_seconds - prod_wait_seconds >= 240 + 35 + 710, (prod_job_seconds, prod_wait_seconds)
 
     script = CUT_RELEASE.read_text(encoding="utf-8")
     [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
-    assert int(polls) * 10 >= 75 * 60, polls
+    assert int(polls) * 10 >= prod_job_seconds, polls
 
-    for pyproject in (REPO_ROOT / "pyproject.toml", REPO_ROOT / "common" / "runtime" / "pyproject.toml"):
-        [version] = re.findall(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-py3", pyproject.read_text(encoding="utf-8"))
-        assert tuple(map(int, version.split("."))) >= (3, 13, 0), (pyproject, version)
+    pins = [
+        (path, re.findall(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-py3", path.read_text(encoding="utf-8")))
+        for path in (
+            REPO_ROOT / "pyproject.toml",
+            REPO_ROOT / "common" / "runtime" / "pyproject.toml",
+            REPO_ROOT / "uv.lock",
+        )
+    ]
+    for path, versions in pins:
+        assert versions, f"{path} names no infra2-sdk wheel"
+        for version in versions:
+            assert tuple(map(int, version.split("."))) >= (3, 13, 0), (path, version)
