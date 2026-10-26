@@ -651,11 +651,11 @@ else
   note "tag run $TAG_RUN_ID green"
 fi
 
-# The poll budget of the deploy run wait: 300 polls of at least 10 s, 50 min. It must
+# The poll budget of the deploy run wait: 480 polls of at least 10 s, 80 min. It must
 # outlast the request job of deploy-release.yml (timeout-minutes), or this script stops
 # while the deploy still waits for the owner (infra2#1363: on 2026-10-23 it stopped after
 # 20 min of a 50 min job). common/runtime/tests/test_cut_release.py pins the two together.
-DEPLOY_RUN_POLLS=300
+DEPLOY_RUN_POLLS=480
 
 # infra2#1363: a prod deploy waits for the owner's 'production' approval in the infra2
 # receiver run. Print its link once, as soon as it waits, so that a caller that runs this

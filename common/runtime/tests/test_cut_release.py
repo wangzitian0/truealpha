@@ -1194,7 +1194,8 @@ def _request_job() -> dict:
 def test_the_deploy_run_wait_outlasts_the_deploy_job() -> None:
     """infra2#1363: on 2026-10-23 cut_release.sh gave up after 20 min while the 50 min job
     still waited for the owner, so nobody saw the approval request in time."""
-    job_minutes = int(_request_job()["timeout-minutes"])
+    raw = str(_request_job()["timeout-minutes"])
+    job_minutes = max(int(n) for n in re.findall(r"[0-9]+", raw))
     script = CUT_RELEASE.read_text(encoding="utf-8")
     [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
     # Each poll sleeps 10 s and also spends API time, so polls * 10 s is a lower bound.
@@ -1266,3 +1267,40 @@ def test_the_approval_filter_selects_only_this_dispatch_waiting_run() -> None:
 
     assert select(runs) == ""
     assert select([*runs, target]) == "u/mine 2026-10-23T11:02:13Z"
+
+
+def test_a_prod_request_states_a_one_hour_wait_that_its_job_outlasts() -> None:
+    """infra2#1363: the prod transport waits 3600 s for the owner's approval in infra2.
+
+    infra2-sdk 3.13.0 stops the transport at that time by the clock and states it to the
+    receiver as sender_deadline; an older SDK counts polls and states nothing. The job
+    keeps 20 min: about 4 min of setup, one last poll (35 s) and a health check of up to
+    710 s when every probe times out. cut_release.sh outlasts the job.
+    """
+    job = _request_job()
+    timeout = job["timeout-minutes"]
+    assert timeout == "${{ inputs.deploy_type == 'prod' && 80 || 50 }}", timeout
+    prod_job_seconds = int(re.findall(r"&& ([0-9]+) \|\|", timeout)[0]) * 60
+    dispatch = next(step for step in job["steps"] if step.get("name") == "Dispatch the validated request to infra2")
+    wait = dispatch["env"]["TRANSPORT_TIMEOUT"]
+    assert wait == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}", wait
+    assert '--timeout "$TRANSPORT_TIMEOUT"' in dispatch["run"]
+    prod_wait_seconds = int(re.findall(r"&& '([0-9]+)'", wait)[0])
+    assert prod_job_seconds - prod_wait_seconds >= 240 + 35 + 710, (prod_job_seconds, prod_wait_seconds)
+
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
+    assert int(polls) * 10 >= prod_job_seconds, polls
+
+    pins = [
+        (path, re.findall(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-py3", path.read_text(encoding="utf-8")))
+        for path in (
+            REPO_ROOT / "pyproject.toml",
+            REPO_ROOT / "common" / "runtime" / "pyproject.toml",
+            REPO_ROOT / "uv.lock",
+        )
+    ]
+    for path, versions in pins:
+        assert versions, f"{path} names no infra2-sdk wheel"
+        for version in versions:
+            assert tuple(map(int, version.split("."))) >= (3, 13, 0), (path, version)
