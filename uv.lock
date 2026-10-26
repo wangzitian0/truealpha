@@ -27,7 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.12.0/infra2_sdk-3.12.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.13.0/infra2_sdk-3.13.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -868,13 +868,13 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "3.12.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.12.0/infra2_sdk-3.12.0-py3-none-any.whl" }
+version = "3.13.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.13.0/infra2_sdk-3.13.0-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.12.0/infra2_sdk-3.12.0-py3-none-any.whl", hash = "sha256:2c3576794fbf2a976963e80271b1e06ef63d1159b2f3615cce12c1f1dee1b2d3" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.13.0/infra2_sdk-3.13.0-py3-none-any.whl", hash = "sha256:9542c2d4c21e880bb59a6324cf7b410e50a5d705b6211c62291f2e75f574d6f1" },
 ]
 
 [package.optional-dependencies]
@@ -2793,7 +2793,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.12.0/infra2_sdk-3.12.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["otel"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.13.0/infra2_sdk-3.13.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "common/contracts" },

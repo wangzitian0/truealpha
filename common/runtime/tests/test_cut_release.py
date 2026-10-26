@@ -1194,7 +1194,8 @@ def _request_job() -> dict:
 def test_the_deploy_run_wait_outlasts_the_deploy_job() -> None:
     """infra2#1363: on 2026-10-23 cut_release.sh gave up after 20 min while the 50 min job
     still waited for the owner, so nobody saw the approval request in time."""
-    job_minutes = int(_request_job()["timeout-minutes"])
+    raw = str(_request_job()["timeout-minutes"])
+    job_minutes = max(int(n) for n in re.findall(r"[0-9]+", raw))
     script = CUT_RELEASE.read_text(encoding="utf-8")
     [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
     # Each poll sleeps 10 s and also spends API time, so polls * 10 s is a lower bound.
@@ -1266,3 +1267,26 @@ def test_the_approval_filter_selects_only_this_dispatch_waiting_run() -> None:
 
     assert select(runs) == ""
     assert select([*runs, target]) == "u/mine 2026-10-23T11:02:13Z"
+
+
+def test_a_prod_request_states_a_one_hour_wait_that_its_job_outlasts() -> None:
+    """infra2#1363: the prod transport waits 3600 s for the owner's approval in infra2.
+
+    infra2-sdk 3.13.0 stops the transport at that time by the clock and states it to the
+    receiver as sender_deadline; an older SDK counts polls and states nothing. The job
+    keeps 15 min for setup and the 6 min health check, and cut_release.sh outlasts the job.
+    """
+    job = _request_job()
+    assert job["timeout-minutes"] == "${{ inputs.deploy_type == 'prod' && 75 || 50 }}"
+    dispatch = next(step for step in job["steps"] if step.get("name") == "Dispatch the validated request to infra2")
+    assert dispatch["env"]["TRANSPORT_TIMEOUT"] == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}"
+    assert '--timeout "$TRANSPORT_TIMEOUT"' in dispatch["run"]
+    assert 75 * 60 - 3600 >= 15 * 60 and 50 * 60 - 1800 >= 15 * 60
+
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
+    assert int(polls) * 10 >= 75 * 60, polls
+
+    for pyproject in (REPO_ROOT / "pyproject.toml", REPO_ROOT / "common" / "runtime" / "pyproject.toml"):
+        [version] = re.findall(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-py3", pyproject.read_text(encoding="utf-8"))
+        assert tuple(map(int, version.split("."))) >= (3, 13, 0), (pyproject, version)
