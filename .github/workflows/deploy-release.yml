@@ -51,10 +51,7 @@ jobs:
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
-    # A prod request waits in infra2 for the owner's 'production' approval, so its transport
-    # waits 1 h (infra2#1363); the job keeps 15 min for setup and the health check. Staging
-    # needs no approval. tools/cut_release.sh waits longer than both (test_cut_release.py).
-    timeout-minutes: ${{ inputs.deploy_type == 'prod' && 75 || 50 }}
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
@@ -208,9 +205,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INFRA2_PAT: ${{ secrets.INFRA2_PAT }}
           REQUEST_JSON: ${{ steps.request.outputs.json }}
-          # The transport states this wait to infra2 as its sender_deadline (infra2-sdk
-          # 3.13.0), and the receiver accepts the owner's approval until 300 s before it.
-          TRANSPORT_TIMEOUT: ${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}
         run: |
           set -euo pipefail
           if [[ -z "${INFRA2_PAT:-}" ]]; then
@@ -272,7 +266,7 @@ jobs:
           # (the properties the previous inline title-match `first(...)` lookup here
           # did not have) now lives in infra2_sdk.dispatch, shared with finance_report.
           result="$(echo "$REQUEST_JSON" | uv run --no-sync python tools/app_deploy_transport.py \
-            --timeout "$TRANSPORT_TIMEOUT" --poll-interval 5)"
+            --timeout 1800 --poll-interval 5)"
           jq . <<<"$result"
           receiver_run_url="$(jq -r '.receiver_run_url' <<<"$result")"
           {

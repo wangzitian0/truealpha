@@ -1191,28 +1191,78 @@ def _request_job() -> dict:
     return workflow["jobs"]["request"]
 
 
-def test_the_release_waits_nest_inside_each_other() -> None:
-    """infra2#1363: each waiter must outlast what it waits for.
-
-    cut_release.sh waits for the deploy run, the deploy run's job waits for the transport,
-    and the transport waits for the owner's approval in infra2. On 2026-10-23 cut_release.sh
-    gave up after 20 min while the 50 min job still waited.
-    """
-    job = _request_job()
-    timeout = str(job["timeout-minutes"])
-    assert timeout == "${{ inputs.deploy_type == 'prod' && 75 || 50 }}", timeout
-    prod_job_seconds, staging_job_seconds = 75 * 60, 50 * 60
-
-    dispatch = next(step for step in job["steps"] if step.get("name") == "Dispatch the validated request to infra2")
-    assert dispatch["env"]["TRANSPORT_TIMEOUT"] == "${{ inputs.deploy_type == 'prod' && '3600' || '1800' }}"
-    assert '--timeout "$TRANSPORT_TIMEOUT"' in dispatch["run"]
-    # The prod transport waits 1 h for the owner; the job keeps 15 min for setup and the
-    # 6 min health check. The staging transport is unchanged.
-    assert prod_job_seconds - 3600 >= 15 * 60
-    assert staging_job_seconds - 1800 >= 15 * 60
-
+def test_the_deploy_run_wait_outlasts_the_deploy_job() -> None:
+    """infra2#1363: on 2026-10-23 cut_release.sh gave up after 20 min while the 50 min job
+    still waited for the owner, so nobody saw the approval request in time."""
+    job_minutes = int(_request_job()["timeout-minutes"])
     script = CUT_RELEASE.read_text(encoding="utf-8")
     [polls] = re.findall(r"^DEPLOY_RUN_POLLS=([0-9]+)", script, flags=re.MULTILINE)
     # Each poll sleeps 10 s and also spends API time, so polls * 10 s is a lower bound.
-    assert int(polls) * 10 >= prod_job_seconds, (polls, prod_job_seconds)
+    assert int(polls) * 10 >= job_minutes * 60, (polls, job_minutes)
     assert '$(seq 1 "$(polls "$DEPLOY_RUN_POLLS")")' in script
+
+
+def _approval_filter(dispatched_at: str, tag: str) -> str:
+    script = CUT_RELEASE.read_text(encoding="utf-8")
+    start = script.index("approval_filter() {")
+    function = script[start : script.index("\n}\n", start) + 3]
+    return subprocess.run(
+        ["bash", "-c", f'TAG={tag}\n{function}\napproval_filter "$1"', "_", dispatched_at],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def test_the_approval_filter_selects_only_this_dispatch_waiting_run() -> None:
+    """The fake gh ignores -q, so run the real filter with jq on a real-shaped run list."""
+    runs = [
+        {
+            "url": "u/done",
+            "status": "completed",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.55 abc [r1]",
+        },
+        {
+            "url": "u/other-tag",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.550 abc [r2]",
+        },
+        {
+            "url": "u/staging",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy truealpha/app staging v0.2.55 abc [r3]",
+        },
+        {
+            "url": "u/old-attempt",
+            "status": "waiting",
+            "createdAt": "2026-10-23T10:00:00Z",
+            "displayTitle": "Deploy truealpha/app prod v0.2.55 abc [r4]",
+        },
+        {
+            "url": "u/finance",
+            "status": "waiting",
+            "createdAt": "2026-10-23T11:03:00Z",
+            "displayTitle": "Deploy finance_report/app prod v0.2.55 abc [r5]",
+        },
+    ]
+    target = {
+        "url": "u/mine",
+        "status": "waiting",
+        "createdAt": "2026-10-23T11:02:13Z",
+        "displayTitle": "Deploy truealpha/app prod v0.2.55 71b0849 [r6]",
+    }
+
+    def select(run_list: list) -> str:
+        return subprocess.run(
+            ["jq", "-r", _approval_filter("2026-10-23T11:00:01Z", "v0.2.55")],
+            input=json.dumps(run_list),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    assert select(runs) == ""
+    assert select([*runs, target]) == "u/mine 2026-10-23T11:02:13Z"
