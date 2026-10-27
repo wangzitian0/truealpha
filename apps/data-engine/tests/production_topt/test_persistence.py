@@ -55,6 +55,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
+from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
@@ -598,7 +599,7 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     assert graded == 21
     # Every registered price origin the harness corroborates with asserts the whole bar
     # (twelve-data v3 and moomoo K-line alongside the primary), so each field sees them all.
-    origins = len(quality_report.RECONCILIATION_POLICY.source_priority)
+    origins = len(reconciliation_policies.RECONCILIATION_POLICY.source_priority)
     for field in quality_report.PRICE_BAR_FIELDS:
         outcomes = {cell["fields"][field]["outcome"] for cell in cells.values()}
         assert outcomes == {"agreed"}, (field, outcomes)
@@ -607,7 +608,7 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
             "agreed": graded,
             "cells": graded,
             "share": "1.0000",
-            "policy_id": quality_report.FIELD_RECONCILIATION_POLICIES[field].policy_id,
+            "policy_id": reconciliation_policies.FIELD_RECONCILIATION_POLICIES[field].policy_id,
         }
     assert report["field_reconciliation"]["volume"]["policy_id"] != report["field_reconciliation"]["close"]["policy_id"]
     # The headline keys are still the close's grade — what the a1 gate reads.
@@ -662,7 +663,7 @@ def test_confidence_report_grades_the_captured_run_from_its_origins(connection) 
         assert family["by_independent_origins"] == {"3": 21}, name
         assert family["reasons"] == {"independent_origins_agree": 21}, name
         assert family["origins"] == close["origins"], name
-        assert family["tolerance"] == quality_report.FIELD_RECONCILIATION_POLICIES[name].policy_id, name
+        assert family["tolerance"] == reconciliation_policies.FIELD_RECONCILIATION_POLICIES[name].policy_id, name
         accuracy = report["accuracy"][name]
         assert accuracy["matches_quality_report"] is True and accuracy["quality_report_mismatches"] == [], name
         assert (accuracy["quality_report_cells"], accuracy["agreed"], accuracy["compared"]) == (21, 21, 21), name
@@ -676,7 +677,7 @@ def test_confidence_report_grades_the_captured_run_from_its_origins(connection) 
         assert family["by_independent_origins"] == {"2": 21}, name
         assert family["reasons"] == {"two_origins_agree": 21}, name
         assert family["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"], name
-        assert family["tolerance"] == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
+        assert family["tolerance"] == reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
         accuracy = report["accuracy"][name]
         assert accuracy["matches_quality_report"] is True and accuracy["quality_report_cells"] == 21, name
         assert (accuracy["agreed"], accuracy["compared"]) == (21, 21), name
@@ -739,7 +740,7 @@ def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> 
     assert all(cell["origin_groups"] == 3 for cell in report["reconciliation_cells"].values())
     assert (
         report["financial_fact_reconciliation_policy_id"]
-        == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id
+        == reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id
     )
     financial = report["financial_fact_reconciliation_cells"]
     assert len(financial) == 21

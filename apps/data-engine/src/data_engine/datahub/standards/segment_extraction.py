@@ -512,8 +512,8 @@ def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Cons
 
 
 #: What the plane records as the origin of these rows. Matches the standard's
-#: `evidence_bearing_sources` and its plane's `source_priority`, which is what makes a later
-#: source able to supersede this one without a code change.
+#: `evidence_bearing_sources` and the source order of its plane's reconciliation policy.
+#: That match lets a later source supersede this one without a code change.
 SEGMENT_SOURCE = "10k-segment-extraction"
 
 

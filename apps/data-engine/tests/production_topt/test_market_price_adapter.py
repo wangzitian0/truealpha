@@ -459,7 +459,7 @@ def test_an_unavailable_primary_is_served_by_twelve_data_graded_one_step_lower(c
 def test_a_null_primary_fails_over_in_the_fusion_policy_order() -> None:
     """#862 acceptance 2: the primary has nothing (the overnight null-close shape, #622).
     The origins are handed over in the WRONG order; the adapter asks them in
-    `RECONCILIATION_POLICY.source_priority` order anyway, so Twelve Data serves and
+    `reconciliation_policies.RECONCILIATION_POLICY.source_priority` order anyway, so Twelve Data serves and
     moomoo — still asked — corroborates the served session at its normal grade."""
     item = _work_item("d" * 64)
     twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))

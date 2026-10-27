@@ -26,7 +26,7 @@ each origin actually asserted; the stored `confidence` column on
 them — the report says so in its metadata, from a measurement rather than a remark.
 
 Every field of the session's bar is its own family (#865): open, high, low and close under
-the deployed market-price policy (`quality_report.RECONCILIATION_POLICY`), volume under its
+the deployed market-price policy (`reconciliation_policies.RECONCILIATION_POLICY`), volume under its
 own (`VOLUME_RECONCILIATION_POLICY`), each read from the payload key the origin wrote it
 under — so a field's `two_origins_agree` is exactly what the quality report's `field_reconciliation`
 calls agreed (#850), and the close's agreement is what the pointer gate calls corroborated. An origin
@@ -79,6 +79,11 @@ from truealpha_contracts.reconciliation import (
     SourceAssertion,
     reconcile_source_assertions,
 )
+from truealpha_contracts.reconciliation_policies import (
+    FIELD_RECONCILIATION_POLICIES,
+    FINANCIAL_FACT_RECONCILIATION_POLICY,
+    INDEX_MEMBERSHIP_POLICY,
+)
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
@@ -91,10 +96,8 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
 from data_engine.datahub.quality_report import (
-    FIELD_RECONCILIATION_POLICIES,
     FIELD_UNITS,
     FINANCIAL_FACT_FUSION_FIELDS,
-    FINANCIAL_FACT_RECONCILIATION_POLICY,
     PRICE_BAR_FIELDS,
     corroborating_financial_value,
     financial_fact_unit,
@@ -154,23 +157,6 @@ HEADCOUNT_LINEAGE: Mapping[str, str] = {"10k-extraction": "sec-10k", "manual-rev
 NASDAQ_INDEX_ORIGIN = "origin:nasdaq-index:v1"
 NPORT_ORIGIN = "origin:nport:v1"
 MEMBERSHIP_LINEAGE: Mapping[str, str] = {NASDAQ_INDEX_ORIGIN: "nasdaq-index", NPORT_ORIGIN: "sec-nport"}
-
-#: Index membership: the operator's constituent list is the pinned primary (it is what the
-#: governed universe is published from); the fund's N-PORT holdings are the independent
-#: second route. Membership is compared exactly (both routes list the listing or not).
-#: The fund WEIGHT is the `etf_weight` family under the same policy: a quarter-end filed
-#: weight and an operator weight taken weeks later differ by price drift, a few percent;
-#: the tolerance exists to catch a mis-joined line (NVDA's 7.6% landing on a 0.3% name),
-#: which is an order of magnitude, not drift. Today the operator route carries no weight
-#: at all (`staging.etf_constituent_facts.weight` is NULL by design until #63 fills it),
-#: so `etf_weight` is single-origin and grades `low` until it does.
-INDEX_MEMBERSHIP_POLICY = ReconciliationPolicy(
-    policy_version="index-membership-fusion:v1",
-    source_priority=("nasdaq-index:v1", "nport:v1"),
-    absolute_tolerance=Decimal("0.05"),
-    relative_tolerance=Decimal("0.10"),
-    minimum_independent_origin_groups=2,
-)
 
 #: Five well-known QQQ names and five TOPT issuers spanning every operating branch (JPM is
 #: the depository institution, BRK.B the insurer, V the multi-class share-count case).
