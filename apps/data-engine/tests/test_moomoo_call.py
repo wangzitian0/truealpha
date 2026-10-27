@@ -1,4 +1,5 @@
 import pytest
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import moomoo as mm
 
 # The rows go through `emit` into the `call_ledger` fixture, never into a real ledger, and the
@@ -7,7 +8,13 @@ pytestmark = pytest.mark.usefixtures("idle_moomoo_gate")
 
 
 def test_call_records_success(call_ledger):
-    mm._call(ctx=object(), endpoint="ep", caller="test", fn=lambda c: (mm.moomoo.RET_OK, "data"))
+    mm._call(
+        ctx=object(),
+        endpoint="ep",
+        caller="test",
+        fn=lambda c: (mm.moomoo.RET_OK, "data"),
+        identity=FetchKey("moomoo", "ep", "symbol:TEST", "2026-10-27"),
+    )
     (row,) = call_ledger
     assert (row.source, row.endpoint, row.caller, row.ok, row.status_code) == (
         "moomoo",
@@ -23,7 +30,13 @@ def test_call_records_on_exception_and_wraps_it(call_ledger):
         raise TimeoutError("network blip")
 
     with pytest.raises(mm.MoomooConnectionError) as exc_info:
-        mm._call(ctx=object(), endpoint="ep", caller="test", fn=raises)
+        mm._call(
+            ctx=object(),
+            endpoint="ep",
+            caller="test",
+            fn=raises,
+            identity=FetchKey("moomoo", "ep", "symbol:TEST", "2026-10-27"),
+        )
     assert isinstance(exc_info.value.__cause__, TimeoutError)
 
     # The request may have reached moomoo's server (spending real quota) even
@@ -35,7 +48,13 @@ def test_call_records_on_exception_and_wraps_it(call_ledger):
 
 def test_call_records_failure_return_code(call_ledger):
     with pytest.raises(mm.MoomooConnectionError):
-        mm._call(ctx=object(), endpoint="ep", caller="test", fn=lambda c: (mm.moomoo.RET_ERROR, "boom"))
+        mm._call(
+            ctx=object(),
+            endpoint="ep",
+            caller="test",
+            fn=lambda c: (mm.moomoo.RET_ERROR, "boom"),
+            identity=FetchKey("moomoo", "ep", "symbol:TEST", "2026-10-27"),
+        )
     (row,) = call_ledger
     assert (row.ok, row.status_code, row.error) == (False, mm.moomoo.RET_ERROR, "boom")
 
@@ -47,7 +66,13 @@ def test_get_history_kline_hashes_bars_without_page_req_key(call_ledger):
         def request_history_kline(self, code, **kwargs):
             return (mm.moomoo.RET_OK, [{"close": 100.5, "time_key": "2026-07-29 00:00:00"}], "page-token-2")
 
-    bars, next_key = mm.get_history_kline(_Ctx(), "US.AAPL", start="2026-07-15", end="2026-07-29")
+    bars, next_key = mm.get_history_kline(
+        _Ctx(),
+        "US.AAPL",
+        start="2026-07-15",
+        end="2026-07-29",
+        identity=FetchKey("moomoo", "history_kline", "symbol:AAPL", "2026-07-29"),
+    )
     assert next_key == "page-token-2"
     golden_raw = b'[{"close":100.5,"time_key":"2026-07-29 00:00:00"}]'
     assert mm.canonical_moomoo_bytes(bars) == golden_raw
@@ -77,7 +102,7 @@ def test_sweep_owner_plate_uses_canonical_moomoo_bytes(monkeypatch):
     monkeypatch.setattr(
         module.mm,
         "get_owner_plate",
-        lambda ctx, chunk, caller: [{"code": "US.NVDA", "plate_code": "US.BK2010"}],
+        lambda ctx, chunk, caller, identity: [{"code": "US.NVDA", "plate_code": "US.BK2010"}],
     )
 
     class _Conn:

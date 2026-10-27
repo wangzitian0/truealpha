@@ -566,18 +566,10 @@ class TwelveDataQuoteFetcher:
         # recorded it (raw.fetches only ever saw the landed successes). Since v3 every
         # tick spends two: the second request is the bar's on a settled day.
         endpoint = url.rsplit("/", 1)[-1]
-        if not final:
-            self._requests += 1
-            status, body = gateway.urlopen(
-                "twelvedata", endpoint, f"{url}?{query}", caller="twelve_data_origin", timeout=20
-            )
-            error = classify_error_body(status, body)
-            if error is not None:
-                raise error
-            return body
         # One key per settled session and symbol (#1411 K3): the second tick, the second universe
         # and the canary read the landed bytes. An answer that carries no data stays unlanded, so a
-        # session that has not settled yet is asked again.
+        # session that has not settled yet is asked again. A window that is not final shares the key
+        # and is never kept.
         key = FetchKey.for_request(
             "twelvedata",
             endpoint,
@@ -587,24 +579,24 @@ class TwelveDataQuoteFetcher:
             default_as_of=gateway.utc_day(),
             exclude=("apikey",),
         )
-        hit = gateway.landed(key)
-        if hit is not None:
-            self._index_hits += 1
-            return hit
 
         def final_answer(answer: bytes) -> bool:
             return carries_data(None, answer) and (must_hold is None or holds_row(answer, must_hold))
 
-        self._requests += 1
-        with gateway.fetching(key, final_answer):
+        def fetch(identity: FetchKey) -> bytes:
+            self._requests += 1
             status, body = gateway.urlopen(
-                "twelvedata", endpoint, f"{url}?{query}", caller="twelve_data_origin", timeout=20
+                "twelvedata", endpoint, f"{url}?{query}", identity=identity, caller="twelve_data_origin", timeout=20
             )
-        error = classify_error_body(status, body)
-        if error is not None:
-            raise error
-        if final_answer(body):
-            gateway.land(key, body)
+            error = classify_error_body(status, body)
+            if error is not None:
+                raise error
+            return body
+
+        requests_before = self._requests
+        body = gateway.fetch_once(key, fetch, keep=final, accept=final_answer)
+        if self._requests == requests_before:
+            self._index_hits += 1
         return body
 
 

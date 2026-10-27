@@ -114,7 +114,7 @@ def test_the_gateway_logs_and_keeps_going_when_a_seat_has_no_raw_source(
     key = FetchKey("no-such-seat", "x", "e", "2026-10-21")
 
     with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
-        assert gateway.fetch_once(key, lambda: b"answer") == b"answer"
+        assert gateway.fetch_once(key, lambda _key: b"answer") == b"answer"
     assert "landing no-such-seat|x|e|2026-10-21 failed" in caplog.text
     with psycopg.connect(database) as reader:
         count = reader.execute("select count(*) from staging.landed_fetch_keys where seat = 'no-such-seat'").fetchone()[

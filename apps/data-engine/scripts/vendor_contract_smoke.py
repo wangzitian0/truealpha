@@ -44,12 +44,23 @@ def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes
     """Status + body, treating an HTTP error status as an answer, exactly as the
     origin's `_get` does post-#557 — the body IS the vendor's reply.
     Through the external call gateway (#729, init.md §1 rule 6)."""
+    from data_engine.datahub.fetch_key import FetchKey
     from data_engine.sources import gateway
 
     query = urllib.parse.urlencode({**params, "apikey": api_key})
     url = f"https://api.twelvedata.com/{path}?{query}"
+    identity = FetchKey.for_request(
+        "twelvedata",
+        path,
+        params,
+        entity_param="symbol",
+        as_of_params=("date", "end_date"),
+        default_as_of=gateway.utc_day(),
+    )
     try:
-        status, body = gateway.urlopen("twelvedata", path, url, caller="vendor_contract_smoke._twelve", timeout=20)
+        status, body = gateway.urlopen(
+            "twelvedata", path, url, identity=identity, caller="vendor_contract_smoke._twelve", timeout=20
+        )
         return status or 0, body
     except OSError as error:
         # DNS, timeout, refused, TLS — transport failure is itself a drifted
@@ -168,7 +179,7 @@ def check_us_treasury() -> None:
     today = datetime.now(UTC).date()
     for year in (today.year, today.year - 1):
         try:
-            body = treasury_rates.fetch_year(year)
+            body = treasury_rates.fetch_year(year, treasury_rates.fetch_key_of(year, on=today))
             parsed = treasury_rates.parse_par_yield_csv(body, year=year)
         except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
             _check(f"us-treasury: the {year} file is reachable and parses", False, f"{type(error).__name__}: {error}")

@@ -39,6 +39,7 @@ from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway, model_decoding, model_policy
 from data_engine.sources.gateway import record_call
 
@@ -296,12 +297,37 @@ _attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
 )
 
 
+def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> FetchKey:
+    """The key of one model request: the standard, the filing and the digest of the request (#1521).
+
+    A call that names no filing (the key health probe) takes the seat as its entity and the UTC day
+    in front of the digest, because its request is the same every day."""
+    if accession:
+        return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", f"filing:{cik:010d}:{accession}", request_sha256)
+    return FetchKey(
+        SOURCE, f"{ENDPOINT}?standard={standard}", f"seat:{SOURCE}", f"{gateway.utc_day()}:{request_sha256}"
+    )
+
+
+#: The key of the request that `_call_provider` is making, for the code that runs inside it. It has no
+#: default: a provider call outside `_call_provider` names no request and raises `LookupError`.
+_attempt_identity: contextvars.ContextVar[FetchKey] = contextvars.ContextVar("llm_attempt_identity")
+
+
 def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
     """The provider call through the external call ledger (rule 6). Nested inside the
-    `record_call` block in `select_headcount`, so it enriches that one row — status,
+    `record_call` block of `_attempt`, so it enriches that one row — status,
     digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(SOURCE, ENDPOINT, request, caller="llm", timeout=_attempt_timeout.get(), cost=0)
+    status, response = gateway.urlopen(
+        SOURCE,
+        ENDPOINT,
+        request,
+        identity=_attempt_identity.get(),
+        caller="llm",
+        timeout=_attempt_timeout.get(),
+        cost=0,
+    )
     return int(status or 0), response
 
 
@@ -607,6 +633,7 @@ def _call_provider(
     timeout_seconds: int,
     answer_required: bool,
     caller: str,
+    identity: FetchKey,
     transport: Transport | None,
 ) -> _ProviderAnswer:
     """Ask the provider until it answers without a transient error (#1444).
@@ -621,6 +648,7 @@ def _call_provider(
     pacer = model_policy.pacer_for(gateway.capacity_environment())
     send = transport or _gateway_transport
     token = _attempt_timeout.set(timeout_seconds)
+    identity_token = _attempt_identity.set(identity)
     try:
         return _retry_loop(
             budget=budget,
@@ -631,9 +659,11 @@ def _call_provider(
             request_bytes=request_bytes,
             request_params=request_params,
             caller=caller,
+            identity=identity,
             answer_required=answer_required,
         )
     finally:
+        _attempt_identity.reset(identity_token)
         _attempt_timeout.reset(token)
 
 
@@ -647,6 +677,7 @@ def _retry_loop(
     request_bytes: bytes,
     request_params: dict[str, Any],
     caller: str,
+    identity: FetchKey,
     answer_required: bool,
 ) -> _ProviderAnswer:
     last: _ProviderAnswer | None = None
@@ -663,6 +694,7 @@ def _retry_loop(
                 request_bytes=request_bytes,
                 request_params=request_params,
                 caller=caller,
+                identity=identity,
                 answer_required=answer_required,
             )
         except gateway.CapacityExceeded as refusal:
@@ -693,6 +725,7 @@ def _attempt(
     request_bytes: bytes,
     request_params: dict[str, Any],
     caller: str,
+    identity: FetchKey,
     answer_required: bool,
 ) -> _ProviderAnswer:
     """One attempt: admitted by the pacer, one ledger row, the answer read."""
@@ -701,7 +734,7 @@ def _attempt(
     provider_code: str | None = None
     with (
         pacer.admitted(remaining_seconds) if pacer is not None else nullcontext(),
-        record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0, admit=False) as call,
+        record_call(SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=url, cost=0, admit=False) as call,
     ):
         call.attempt = attempt
         call.request_params = request_params
@@ -818,6 +851,7 @@ def _ask(
             timeout_seconds=task.timeout_seconds,
             answer_required=task.answer_required,
             caller=caller,
+            identity=_model_key(standard, cik, accession, request_sha256),
             transport=transport,
         )
         status, body, payload, usage, provider_code = (

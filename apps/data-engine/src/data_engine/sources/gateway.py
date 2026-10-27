@@ -223,7 +223,7 @@ class CallRecord:
     provider_code: str | None = None
     #: The request parameters without any secret: model, thinking type, max_tokens (#1444).
     request_params: dict[str, Any] | None = None
-    #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), set by `fetch_once`.
+    #: The canonical fetch key this call fetched (`FetchKey.ledger_key`), named by the `identity` of the call.
     fetch_key: str | None = None
     #: What the response says it cost in output tokens; reasoning tokens only when it reports them.
     completion_tokens: int | None = None
@@ -717,8 +717,6 @@ def _exact_cost(cost: Decimal | int) -> Decimal:
 
 
 _active: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("external_call_active", default=None)
-#: The fetch key of the `fetch_once` that is making its one external request (#1411 K3).
-_fetch_key: contextvars.ContextVar[str | None] = contextvars.ContextVar("external_call_fetch_key", default=None)
 #: The rule that decides whether the answer of that request may be kept (`fetch_once(accept=...)`).
 _fetch_accept: contextvars.ContextVar[Callable[[bytes], bool] | None] = contextvars.ContextVar(
     "external_call_fetch_accept", default=None
@@ -732,6 +730,7 @@ def record_call(
     source: str,
     endpoint: str,
     *,
+    identity: FetchKey,
     caller: str,
     request_uri: str | None = None,
     cost: Decimal | int = 1,
@@ -741,6 +740,10 @@ def record_call(
     ``record.observe(...)``; an exception inside the block is recorded as a failed
     call and re-raised unchanged.
 
+    ``identity`` is the fetch key of the resource that the request asks for (#1521): the row names
+    it. A call that names no resource does not type-check and raises `TypeError` at the call. A probe
+    (`probe_scope`) writes no key, so the nightly verdict lists its rows as unkeyed.
+
     Inside a `capacity_scope`, the bound gate admits the call BEFORE the block runs: a
     refusal raises `CapacityExceeded` here, the request is never made and no row is
     written. ``admit=False`` is for a caller that has already admitted the call through
@@ -749,7 +752,8 @@ def record_call(
     Nested use is one row, not two: when an outer ``record_call`` (a `SourceGateway.call`
     around an adapter that itself goes through `http_get`) is active, the inner block
     receives the OUTER record and enriches it — status, digest, the URI actually asked —
-    instead of emitting a second row for the same request (and is not admitted twice).
+    instead of emitting a second row for the same request (and is not admitted twice). The outer
+    block's ``identity`` names the row, so both pass the same key.
     """
     outer = _active.get()
     if outer is not None:
@@ -771,7 +775,7 @@ def record_call(
         cost=_exact_cost(cost),
         run_key=_run_key.get(),
         capacity_window_id=capacity_window_id(source, called_at),
-        fetch_key=_fetch_key.get(),
+        fetch_key=None if _probe.get() else identity.ledger_key,
     )
     token = _active.set(record)
     try:
@@ -814,11 +818,24 @@ def _observe_http(call: CallRecord, response: Any) -> None:
 
 
 def http_get(
-    client: Any, source: str, endpoint: str, url: str, *, caller: str, cost: Decimal | int = 1, **kwargs: Any
+    client: Any,
+    source: str,
+    endpoint: str,
+    url: str,
+    *,
+    identity: FetchKey,
+    caller: str,
+    cost: Decimal | int = 1,
+    **kwargs: Any,
 ) -> Any:
     """``client.get(url, **kwargs)`` through the ledger (httpx-shaped clients)."""
     with record_call(
-        source, endpoint, caller=caller, request_uri=_requested_uri(url, kwargs.get("params")), cost=cost
+        source,
+        endpoint,
+        identity=identity,
+        caller=caller,
+        request_uri=_requested_uri(url, kwargs.get("params")),
+        cost=cost,
     ) as call:
         response = client.get(url, **kwargs)
         _observe_http(call, response)
@@ -826,11 +843,24 @@ def http_get(
 
 
 def http_post(
-    client: Any, source: str, endpoint: str, url: str, *, caller: str, cost: Decimal | int = 1, **kwargs: Any
+    client: Any,
+    source: str,
+    endpoint: str,
+    url: str,
+    *,
+    identity: FetchKey,
+    caller: str,
+    cost: Decimal | int = 1,
+    **kwargs: Any,
 ) -> Any:
     """``client.post(url, **kwargs)`` through the ledger (httpx-shaped clients)."""
     with record_call(
-        source, endpoint, caller=caller, request_uri=_requested_uri(url, kwargs.get("params")), cost=cost
+        source,
+        endpoint,
+        identity=identity,
+        caller=caller,
+        request_uri=_requested_uri(url, kwargs.get("params")),
+        cost=cost,
     ) as call:
         response = client.post(url, **kwargs)
         _observe_http(call, response)
@@ -873,6 +903,7 @@ def urlopen(
     endpoint: str,
     request: str | urllib.request.Request,
     *,
+    identity: FetchKey,
     caller: str,
     timeout: float,
     cost: Decimal | int = 1,
@@ -885,7 +916,7 @@ def urlopen(
     ``raise_for_status`` is set, in which case ``SourceHTTPError`` carries it.
     """
     uri = request.full_url if isinstance(request, urllib.request.Request) else request
-    with record_call(source, endpoint, caller=caller, request_uri=uri, cost=cost) as call:
+    with record_call(source, endpoint, identity=identity, caller=caller, request_uri=uri, cost=cost) as call:
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed vendor hosts
                 body = bytes(response.read())
@@ -975,52 +1006,50 @@ def land(
 
 
 @contextmanager
-def fetching(key: FetchKey, accept: Callable[[bytes], bool] | None = None) -> Iterator[None]:
-    """Stamp the ledger row of the ONE external request in the block with ``key``.
-
-    ``accept`` is the rule that keeps an answer. A request whose answer it refuses is recorded without
-    the key. In a probe nothing is stamped. For a caller that decides itself whether the answer may be
-    kept (`landed`, then `fetching`, then `land`). `fetch_once` is the short form."""
-    if _probe.get():
-        yield
-        return
-    key_token = _fetch_key.set(key.ledger_key)
-    accept_token = _fetch_accept.set(accept)
+def _answer_rule(accept: Callable[[bytes], bool] | None) -> Iterator[None]:
+    """Judge the answer of the request in the block with ``accept``: a row whose answer it refuses carries no key."""
+    token = _fetch_accept.set(accept)
     try:
         yield
     finally:
-        _fetch_accept.reset(accept_token)
-        _fetch_key.reset(key_token)
+        _fetch_accept.reset(token)
+
+
+def _never_final(_body: bytes) -> bool:
+    return False
 
 
 def fetch_once(
     key: FetchKey,
-    fetch: Callable[[], bytes],
+    fetch: Callable[[FetchKey], bytes],
     *,
     content_type: str = "application/json",
     keep: bool = True,
     accept: Callable[[bytes], bool] | None = None,
 ) -> bytes:
-    """The bytes of ``key``: from the index when it landed, else from ``fetch()`` once.
+    """The bytes of ``key``: from the index when it landed, else from ``fetch(key)`` once.
 
     ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
-    `SourceGateway.call`). The ledger row of that request carries the key, and the nightly
-    verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises lands nothing, so a
-    failed or refused call is tried again by the next caller.
+    `SourceGateway.call`) and names ``key`` as its identity. The ledger row of that request carries
+    the key, and the nightly verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises
+    lands nothing, so a failed or refused call is tried again by the next caller.
 
     ``accept`` judges the answer. An answer it refuses (an error body with status 200, a window whose
     session has not settled) goes to the caller, stays out of the index, and its ledger row carries no
     key, because the next caller asks again on purpose. ``keep=False`` is the same for a request that is
     not final at all: no key, nothing read from or written to the index. Inside a `probe_scope` every
-    request is like that. A caller that needs more control uses `landed`, `fetching` and `land`."""
-    if not keep or _probe.get():
-        return fetch()
+    request is like that."""
+    if _probe.get():
+        return fetch(key)
+    if not keep:
+        with _answer_rule(_never_final):
+            return fetch(key)
     hit = landed(key)
     if hit is not None:
         return hit
     started = _utcnow()
-    with fetching(key, accept):
-        body = fetch()
+    with _answer_rule(accept):
+        body = fetch(key)
     if accept is None or _accepts(accept, body):
         land(key, body, content_type=content_type, fetched_at=started)
     return body
@@ -1083,10 +1112,10 @@ class SourceGateway:
             )
         return capacity
 
-    def call(self, source: str, endpoint: str, fn: Callable[[], T]) -> T:
+    def call(self, source: str, endpoint: str, fn: Callable[[], T], *, identity: FetchKey) -> T:
         self.capacity(source)
         self._gate.admit(source)
-        with record_call(source, endpoint, caller=self.caller, admit=False) as record:
+        with record_call(source, endpoint, identity=identity, caller=self.caller, admit=False) as record:
             result = fn()
             if isinstance(result, bytes | str):
                 # A helper that returns the body itself (`_get_bytes` in the standards

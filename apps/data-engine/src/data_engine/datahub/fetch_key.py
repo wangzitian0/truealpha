@@ -13,8 +13,9 @@ uses two keys, because the ledger counts requests per key.
 
 from __future__ import annotations
 
+import hashlib
 import urllib.parse
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 
 #: Separator of the ledger form. A key part holds none (``__post_init__`` refuses it).
@@ -47,6 +48,15 @@ class FetchKey:
     def ledger_key(self) -> str:
         """The form written to ``staging.api_call_ledger.fetch_key`` and named by the verdict."""
         return KEY_SEPARATOR.join((self.seat, self.endpoint, self.canonical_entity_id, self.as_of))
+
+    @classmethod
+    def for_batch(cls, seat: str, endpoint: str, members: Iterable[str], as_of: str) -> FetchKey:
+        """The key of one request that names a set of members (ISINs, tickers) in its body.
+
+        The entity is ``batch:<sha256 of the sorted members>``: the same set is the same resource,
+        whatever order it was asked in."""
+        digest = hashlib.sha256("\n".join(sorted(members)).encode()).hexdigest()
+        return cls(seat, endpoint, f"batch:{digest}", as_of)
 
     @classmethod
     def for_request(

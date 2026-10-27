@@ -127,12 +127,18 @@ def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
     """One SEC document, fetched once per ``key`` (#1411 K5): the oracle reads the bytes the tick landed."""
     from data_engine.sources import gateway
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         request = urllib.request.Request(url, headers={"User-Agent": user_agent})
         # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
         # raises as it always did here instead of being parsed as a document.
         _status, body = gateway.urlopen(
-            "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
+            "sec",
+            "vendor-oracle",
+            request,
+            identity=identity,
+            caller="quality.vendor_oracle",
+            timeout=90,
+            raise_for_status=True,
         )
         return body
 

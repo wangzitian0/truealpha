@@ -29,6 +29,8 @@ from datetime import UTC, datetime
 
 from data_engine import db, jsonable, raw_store
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
+from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from data_engine.sources.moomoo_ledger import BudgetExceededError, calls_this_month
 from factors.shared import entity_resolution as er
@@ -62,7 +64,8 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
     for start in range(0, len(pending), OWNER_PLATE_CHUNK):
         chunk = pending[start : start + OWNER_PLATE_CHUNK]
         try:
-            df = mm.get_owner_plate(ctx, chunk, caller=CALLER)
+            identity = FetchKey.for_batch("moomoo", "get_owner_plate", chunk, gateway.utc_day())
+            df = mm.get_owner_plate(ctx, chunk, caller=CALLER, identity=identity)
         except mm.MoomooConnectionError as e:
             for code in chunk:
                 stats[(code.split(".")[0], "owner_plate", "fail")] += 1
@@ -120,8 +123,6 @@ def main() -> None:
         conn.close()
         return
 
-    from data_engine.sources import gateway
-
     stats: Counter = Counter()
     made = 0
     aborted = False
@@ -132,7 +133,8 @@ def main() -> None:
                 break
             market = code.split(".")[0]
             try:
-                data = mm.FUNDAMENTAL_ENDPOINTS[endpoint](ctx, code, CALLER)
+                identity = FetchKey("moomoo", endpoint, f"symbol:{code}", gateway.utc_day())
+                data = mm.FUNDAMENTAL_ENDPOINTS[endpoint](ctx, code, CALLER, identity)
             except BudgetExceededError as e:
                 print(f"\nABORT: {e}\nrerun to resume — completed calls are skipped")
                 aborted = True

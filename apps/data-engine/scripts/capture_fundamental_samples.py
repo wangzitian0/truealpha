@@ -23,7 +23,9 @@ Usage:
 import json
 from pathlib import Path
 
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.jsonable import to_jsonable
+from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from data_engine.sources.moomoo_ledger import BudgetExceededError, calls_this_month
 
@@ -37,7 +39,8 @@ def capture_ticker(ctx, ticker: str) -> dict:
     results: dict[str, object] = {}
     for name, call in mm.FUNDAMENTAL_ENDPOINTS.items():
         try:
-            results[name] = {"ok": True, "data": to_jsonable(call(ctx, code, CALLER))}
+            identity = FetchKey("moomoo", name, f"symbol:{code}", gateway.utc_day())
+            results[name] = {"ok": True, "data": to_jsonable(call(ctx, code, CALLER, identity))}
             print(f"  {ticker}.{name}: ok")
         except mm.MoomooConnectionError as e:
             results[name] = {"ok": False, "error": str(e)}
@@ -61,7 +64,8 @@ def main() -> None:
 
         try:
             codes = [f"US.{t}" for t in TICKERS]
-            owner_plate = mm.get_owner_plate(ctx, codes, caller=CALLER)
+            identity = FetchKey.for_batch("moomoo", "get_owner_plate", codes, gateway.utc_day())
+            owner_plate = mm.get_owner_plate(ctx, codes, caller=CALLER, identity=identity)
             out_path = OUT_DIR / "owner_plate.json"
             out_path.write_text(json.dumps(to_jsonable(owner_plate), indent=2, ensure_ascii=False))
             print(f"\nowner_plate (all tickers batched): ok -> {out_path}")

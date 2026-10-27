@@ -29,6 +29,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt import moomoo_origin as origin_module
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
@@ -131,13 +132,13 @@ class _CassetteClient:
         self.error = error
         self.calls: list[tuple[str, ...]] = []
 
-    def history_kline(self, code: str, *, start: date, end: date) -> list[dict[str, Any]]:
+    def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
         self.calls.append(("history_kline", code, start.isoformat(), end.isoformat()))
         if self.error is not None:
             raise self.error
         return self.bars[code]
 
-    def financial_statements(self, code: str, *, statement_type: int) -> dict[str, Any]:
+    def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> dict[str, Any]:
         self.calls.append(("financial_statements", code, str(statement_type)))
         if self.error is not None:
             raise self.error
@@ -590,7 +591,8 @@ def opend(monkeypatch, moomoo_ledger_db):
 
 
 def test_a_kline_request_is_gated_recorded_and_unadjusted(opend) -> None:
-    bars = OpenDClient().history_kline("US.AAPL", start=_PARTITION - timedelta(days=14), end=_PARTITION)
+    key = FetchKey("moomoo", "history_kline", "symbol:AAPL", _PARTITION.isoformat())
+    bars = OpenDClient().history_kline("US.AAPL", start=_PARTITION - timedelta(days=14), end=_PARTITION, identity=key)
     assert [bar["close"] for bar in bars] == [334.55, 337.10, 338.19]
     assert ledger.calls_this_month() == 1, "every OpenD call is a ledger row"
     expected_raw = canonical_bytes(bars)
@@ -767,15 +769,12 @@ def test_the_financials_fetcher_lands_each_statement_under_its_own_key() -> None
 
 
 @pytest.mark.usefixtures("idle_moomoo_gate")
-def test_the_moomoo_ledger_row_carries_the_key_of_the_fetch_that_made_the_call(call_ledger) -> None:
+def test_the_moomoo_ledger_row_names_the_key_of_the_fetch_that_made_the_call(call_ledger) -> None:
     """`sources.moomoo._call` records through `record_call`; the verdict counts the row only if it names the key."""
-    from data_engine.datahub.fetch_key import FetchKey
 
     def kline(ctx):
         return mm.moomoo.RET_OK, []
 
     key = FetchKey("moomoo", "history_kline", "symbol:AAPL", "2026-07-29")
-    with gateway.fetching(key):
-        mm._call(object(), "request_history_kline", "test", kline, request_uri="US.AAPL")
-    mm._call(object(), "request_history_kline", "test", kline, request_uri="US.AAPL")
-    assert [row.fetch_key for row in call_ledger] == [key.ledger_key, None]
+    mm._call(object(), "request_history_kline", "test", kline, request_uri="US.AAPL", identity=key)
+    assert [row.fetch_key for row in call_ledger] == [key.ledger_key]

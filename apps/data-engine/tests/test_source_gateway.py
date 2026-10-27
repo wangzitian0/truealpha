@@ -24,9 +24,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "data_engine"
+
+
+def _key(source: str, endpoint: str) -> FetchKey:
+    """The identity of a call that the test makes: the test names no resource of its own."""
+    return FetchKey(source, endpoint, "symbol:TEST", "2026-10-27")
 
 
 # --- the gateway's own contract --------------------------------------------------------
@@ -35,7 +41,11 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "data_engine"
 def test_a_successful_call_is_one_row_that_names_the_bytes_it_received(call_ledger) -> None:
     body = b'{"chart": {"result": []}}'
     with gateway.record_call(
-        "twelvedata", "eod", caller="test", request_uri="https://x/eod?symbol=A&apikey=s3cret"
+        "twelvedata",
+        "eod",
+        caller="test",
+        request_uri="https://x/eod?symbol=A&apikey=s3cret",
+        identity=_key("twelvedata", "eod"),
     ) as call:
         call.observe(status_code=200, body=body)
 
@@ -51,9 +61,9 @@ def test_a_successful_call_is_one_row_that_names_the_bytes_it_received(call_ledg
 
 
 def test_a_text_or_unhashable_body_never_turns_a_recorded_call_into_a_raised_one(call_ledger) -> None:
-    with gateway.record_call("nport", "archive", caller="test") as call:
+    with gateway.record_call("nport", "archive", caller="test", identity=_key("nport", "archive")) as call:
         call.observe(status_code=200, body="<xml/>")
-    with gateway.record_call("nport", "archive", caller="test") as call:
+    with gateway.record_call("nport", "archive", caller="test", identity=_key("nport", "archive")) as call:
         call.observe(status_code=200, body=object())  # a fake transport's non-bytes payload
 
     text_row, opaque_row = call_ledger
@@ -63,7 +73,7 @@ def test_a_text_or_unhashable_body_never_turns_a_recorded_call_into_a_raised_one
 
 def test_an_exception_inside_the_block_is_a_failed_row_and_still_raises(call_ledger) -> None:
     with pytest.raises(TimeoutError):
-        with gateway.record_call("sec", "companyfacts", caller="test"):
+        with gateway.record_call("sec", "companyfacts", caller="test", identity=_key("sec", "companyfacts")):
             raise TimeoutError("read timed out")
 
     (row,) = call_ledger
@@ -73,7 +83,7 @@ def test_an_exception_inside_the_block_is_a_failed_row_and_still_raises(call_led
 
 
 def test_an_error_status_is_a_failed_row_even_though_nothing_raised(call_ledger) -> None:
-    with gateway.record_call("openfigi", "mapping", caller="test") as call:
+    with gateway.record_call("openfigi", "mapping", caller="test", identity=_key("openfigi", "mapping")) as call:
         call.observe(status_code=429, body=b"")
 
     (row,) = call_ledger
@@ -90,7 +100,9 @@ def test_urlopen_returns_the_error_body_and_records_the_vendor_message(call_ledg
         raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(body))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    status, returned = gateway.urlopen("twelvedata", "eod", "https://x/eod", caller="test", timeout=1)
+    status, returned = gateway.urlopen(
+        "twelvedata", "eod", "https://x/eod", caller="test", timeout=1, identity=_key("twelvedata", "eod")
+    )
 
     assert (status, returned) == (400, body)
     (row,) = call_ledger
@@ -105,7 +117,15 @@ def test_urlopen_can_raise_on_an_error_status_when_the_caller_needs_that(call_le
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(gateway.SourceHTTPError) as info:
-        gateway.urlopen("openfigi", "mapping", "https://x/mapping", caller="test", timeout=1, raise_for_status=True)
+        gateway.urlopen(
+            "openfigi",
+            "mapping",
+            "https://x/mapping",
+            caller="test",
+            timeout=1,
+            raise_for_status=True,
+            identity=_key("openfigi", "mapping"),
+        )
     assert info.value.status_code == 503
     (row,) = call_ledger
     assert row.ok is False and row.status_code == 503 and row.error == "HTTP 503"
@@ -117,7 +137,7 @@ def test_a_ledger_write_failure_never_masks_the_vendor_result(monkeypatch, caplo
 
     monkeypatch.setattr(gateway, "_writer", broken_writer)
     with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
-        with gateway.record_call("yahoo", "chart", caller="test") as call:
+        with gateway.record_call("yahoo", "chart", caller="test", identity=_key("yahoo", "chart")) as call:
             call.observe(status_code=200, body=b"ok")
     assert "external call ledger write failed" in caplog.text
     assert '"source": "yahoo"' in caplog.text, "the unrecorded row is at least in the run log"
@@ -125,9 +145,9 @@ def test_a_ledger_write_failure_never_masks_the_vendor_result(monkeypatch, caplo
 
 def test_run_scope_attributes_rows_to_the_dagster_run(call_ledger) -> None:
     with gateway.run_scope("dagster:run-123"):
-        with gateway.record_call("sec", "submissions", caller="test") as call:
+        with gateway.record_call("sec", "submissions", caller="test", identity=_key("sec", "submissions")) as call:
             call.observe(status_code=200, body=b"{}")
-    with gateway.record_call("sec", "submissions", caller="test") as call:
+    with gateway.record_call("sec", "submissions", caller="test", identity=_key("sec", "submissions")) as call:
         call.observe(status_code=200, body=b"{}")
 
     inside, outside = call_ledger
@@ -137,9 +157,11 @@ def test_run_scope_attributes_rows_to_the_dagster_run(call_ledger) -> None:
 
 def test_a_float_cost_is_refused_rather_than_written_inexactly() -> None:
     with pytest.raises(TypeError):
-        with gateway.record_call("twelvedata", "eod", caller="test", cost=0.1):  # type: ignore[arg-type]
+        with gateway.record_call("twelvedata", "eod", caller="test", cost=0.1, identity=_key("twelvedata", "eod")):  # type: ignore[arg-type]
             pass
-    with gateway.record_call("twelvedata", "eod", caller="test", cost=Decimal("2")) as call:
+    with gateway.record_call(
+        "twelvedata", "eod", caller="test", cost=Decimal("2"), identity=_key("twelvedata", "eod")
+    ) as call:
         call.observe(status_code=200, body=b"")
     assert call.cost == Decimal("2")
 
@@ -288,7 +310,14 @@ def test_openfigi_records_the_rate_limited_attempt_and_the_answer(call_ledger) -
 
 def test_an_httpx_error_status_carries_the_vendor_message(call_ledger) -> None:
     body = json.dumps({"message": "Request rate limit exceeded"}).encode()
-    response = gateway.http_get(_Client(_Response(body, 429)), "sec", "companyfacts", "https://x/f", caller="test")
+    response = gateway.http_get(
+        _Client(_Response(body, 429)),
+        "sec",
+        "companyfacts",
+        "https://x/f",
+        caller="test",
+        identity=_key("sec", "companyfacts"),
+    )
 
     assert response.status_code == 429, "the caller still gets the answer and decides what to do with it"
     (row,) = call_ledger
@@ -300,7 +329,10 @@ def test_index_operator_fetch_is_one_nasdaq_index_row(call_ledger, monkeypatch) 
 
     body = b'{"data": {"data": {"rows": []}}}'
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: io.BytesIO(body))
-    status, returned = universe_plane._get("https://api.nasdaq.com/api/quote/list-type/nasdaq100")
+    status, returned = universe_plane._get(
+        "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+        identity=FetchKey("nasdaq-index", "constituents", "index:nasdaq100", "2026-10-27"),
+    )
 
     assert returned == body and status is None, "a transport that reports no status is not a failure"
     (row,) = call_ledger
@@ -315,8 +347,20 @@ def test_moomoo_failures_reach_the_same_ledger_with_their_error(call_ledger) -> 
         raise TimeoutError("OpenD did not answer")
 
     with pytest.raises(mm.MoomooConnectionError):
-        mm._call(ctx=object(), endpoint="get_market_snapshot", caller="test", fn=raises)
-    mm._call(ctx=object(), endpoint="get_market_snapshot", caller="test", fn=lambda c: (mm.moomoo.RET_OK, "data"))
+        mm._call(
+            ctx=object(),
+            endpoint="get_market_snapshot",
+            caller="test",
+            fn=raises,
+            identity=FetchKey("moomoo", "get_market_snapshot", "symbol:TEST", "2026-10-27"),
+        )
+    mm._call(
+        ctx=object(),
+        endpoint="get_market_snapshot",
+        caller="test",
+        fn=lambda c: (mm.moomoo.RET_OK, "data"),
+        identity=FetchKey("moomoo", "get_market_snapshot", "symbol:TEST", "2026-10-27"),
+    )
 
     failed, succeeded = call_ledger
     assert (failed.source, failed.endpoint, failed.ok) == ("moomoo", "get_market_snapshot", False)
@@ -391,9 +435,9 @@ def _gateway(ledger: _Ledger, capacity: gateway.SourceCapacity, clock: list[floa
 def test_every_gateway_call_lands_in_the_ledger_with_its_caller_and_outcome(call_ledger) -> None:
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
 
-    assert gw.call("sec", "submissions", lambda: "ok") == "ok"
+    assert gw.call("sec", "submissions", lambda: "ok", identity=_key("sec", "submissions")) == "ok"
     with pytest.raises(RuntimeError, match="boom"):
-        gw.call("sec", "archive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        gw.call("sec", "archive", lambda: (_ for _ in ()).throw(RuntimeError("boom")), identity=_key("sec", "archive"))
 
     assert [_four(r) for r in call_ledger] == [("sec", "submissions", "test", True), ("sec", "archive", "test", False)]
     assert call_ledger[1].error == "RuntimeError: boom", "the failed row carries the error (#729)"
@@ -407,20 +451,26 @@ def test_a_gateway_call_around_an_adapter_is_one_row_with_the_adapters_detail(ca
 
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     body = json.dumps({"0": {"ticker": "AAPL", "cik_str": 320193}}).encode()
-    index = gw.call("sec", "company_tickers", lambda: sec.ticker_cik_index(_Client(_Response(body))))
+    index = gw.call(
+        "sec",
+        "company_tickers",
+        lambda: sec.ticker_cik_index(_Client(_Response(body))),
+        identity=sec.company_tickers_key(),
+    )
 
     assert index == {"AAPL": 320193}
     (row,) = call_ledger
     assert _four(row) == ("sec", "company_tickers", "test", True), "the inner http_get did not emit a second row"
     assert row.status_code == 200 and row.payload_sha256 == hashlib.sha256(body).hexdigest()
     assert row.request_uri == sec.TICKERS_URL
+    assert row.fetch_key == sec.company_tickers_key().ledger_key, "the outer and the inner call name one key"
 
 
 def test_a_gateway_call_that_returns_the_body_records_its_digest(call_ledger) -> None:
     """`filing_extraction._get_bytes` returns the bytes, not a response: the row still
     names them (Copilot on #741)."""
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
-    assert gw.call("sec", "archive", lambda: b"<xml/>") == b"<xml/>"
+    assert gw.call("sec", "archive", lambda: b"<xml/>", identity=_key("sec", "archive")) == b"<xml/>"
     (row,) = call_ledger
     assert row.payload_sha256 == hashlib.sha256(b"<xml/>").hexdigest() and row.byte_length == 6
 
@@ -429,9 +479,9 @@ def test_a_call_inside_a_full_window_waits_for_the_window_to_roll() -> None:
     clock, slept = [0.0], []
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 2, 100), clock, slept)
 
-    gw.call("sec", "a", lambda: None)
-    gw.call("sec", "b", lambda: None)
-    gw.call("sec", "c", lambda: None)  # third call in a 2-per-second window
+    gw.call("sec", "a", lambda: None, identity=_key("sec", "a"))
+    gw.call("sec", "b", lambda: None, identity=_key("sec", "b"))
+    gw.call("sec", "c", lambda: None, identity=_key("sec", "c"))  # third call in a 2-per-second window
 
     assert slept and slept[0] == pytest.approx(1.0)
 
@@ -440,7 +490,7 @@ def test_the_daily_budget_refuses_rather_than_fires(call_ledger) -> None:
     gw = _gateway(_Ledger(spent_today=5), gateway.SourceCapacity("search", 60.0, 20, 5), [0.0], [])
 
     with pytest.raises(gateway.CapacityExceeded, match="daily budget 5 spent"):
-        gw.call("search", "query", lambda: "must not run")
+        gw.call("search", "query", lambda: "must not run", identity=_key("search", "query"))
     assert call_ledger == []  # a refused call spends nothing and records nothing
 
 
@@ -449,9 +499,11 @@ def test_capacity_one_defers_the_second_call_of_the_day(call_ledger) -> None:
     call is refused, not fired."""
     gw = _gateway(_Ledger(spent_today=0), gateway.SourceCapacity("filing-extraction-model", 60.0, 10, 1), [0.0], [])
 
-    gw.call("filing-extraction-model", "select", lambda: "first")
+    gw.call("filing-extraction-model", "select", lambda: "first", identity=_key("filing-extraction-model", "select"))
     with pytest.raises(gateway.CapacityExceeded):
-        gw.call("filing-extraction-model", "select", lambda: "second")
+        gw.call(
+            "filing-extraction-model", "select", lambda: "second", identity=_key("filing-extraction-model", "select")
+        )
     assert len(call_ledger) == 1
 
 
@@ -467,22 +519,24 @@ def test_the_daily_count_resets_when_the_utc_day_rolls_over(call_ledger) -> None
         sleep=lambda s: slept.append(s),
         now=lambda: day[0],
     )
-    gw.call("sec", "a", lambda: None)
-    gw.call("sec", "b", lambda: None)
+    gw.call("sec", "a", lambda: None, identity=_key("sec", "a"))
+    gw.call("sec", "b", lambda: None, identity=_key("sec", "b"))
     with pytest.raises(gateway.CapacityExceeded):
-        gw.call("sec", "c", lambda: None)
+        gw.call("sec", "c", lambda: None, identity=_key("sec", "c"))
     day[0] = datetime(2026, 9, 5, 0, 1, tzinfo=UTC)  # midnight passed; the ledger says 0 today
-    gw.call("sec", "d", lambda: None)  # allowed again
+    gw.call("sec", "d", lambda: None, identity=_key("sec", "d"))  # allowed again
     assert [r.endpoint for r in call_ledger] == ["a", "b", "d"]
 
 
 def test_an_undeclared_or_unbudgeted_source_cannot_be_called_through_the_gateway() -> None:
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
-        gw.call("yahoo", "quote", lambda: None)
+        gw.call("yahoo", "quote", lambda: None, identity=_key("yahoo", "quote"))
     gw_default = gateway.SourceGateway(_Ledger(), caller="test")
     with pytest.raises(gateway.CapacityExceeded, match="needs a rate window and a daily budget"):
-        gw_default.call("openfigi", "mapping", lambda: None)  # declared, but paced only: no daily budget
+        gw_default.call(
+            "openfigi", "mapping", lambda: None, identity=_key("openfigi", "mapping")
+        )  # declared, but paced only: no daily budget
 
 
 def test_capacity_must_be_positive_and_paired() -> None:
@@ -666,7 +720,7 @@ def test_the_explicit_gateway_waits_for_other_processes_in_the_shared_window(cal
         sleep=sleep,
         now=lambda: now[0],
     )
-    assert gw.call("sec", "submissions", lambda: "ok") == "ok"
+    assert gw.call("sec", "submissions", lambda: "ok", identity=_key("sec", "submissions")) == "ok"
     assert slept == [pytest.approx(0.51)]
 
 
@@ -701,9 +755,14 @@ def test_a_call_is_admitted_once_however_it_is_wrapped(call_ledger) -> None:
     body = json.dumps({"0": {"ticker": "AAPL", "cik_str": 320193}}).encode()
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     with gateway.capacity_scope(Counting()):
-        gw.call("sec", "company_tickers", lambda: sec.ticker_cik_index(_Client(_Response(body))))
-        with gateway.record_call("yahoo", "chart", caller="outer") as call:
-            with gateway.record_call("yahoo", "chart", caller="inner"):
+        gw.call(
+            "sec",
+            "company_tickers",
+            lambda: sec.ticker_cik_index(_Client(_Response(body))),
+            identity=sec.company_tickers_key(),
+        )
+        with gateway.record_call("yahoo", "chart", caller="outer", identity=_key("yahoo", "chart")) as call:
+            with gateway.record_call("yahoo", "chart", caller="inner", identity=_key("yahoo", "chart")):
                 call.observe(status_code=200, body=b"{}")
     assert admitted == ["yahoo"]
 
@@ -759,10 +818,10 @@ def test_the_gate_enforces_the_warehouse_ledger_every_process_shares(warehouse_s
     capacity = gateway.SourceCapacity(seat, 60.0, 100, 2)
     with gateway.capacity_scope(gateway.CapacityGate(capacities={seat: capacity}, environment="production")):
         for _ in range(2):
-            with gateway.record_call(seat, "probe", caller="test") as call:
+            with gateway.record_call(seat, "probe", caller="test", identity=_key(seat, "probe")) as call:
                 call.observe(status_code=200, body=b"{}")
         with pytest.raises(gateway.BudgetExhausted, match="daily budget 2 spent"):
-            with gateway.record_call(seat, "probe", caller="test"):
+            with gateway.record_call(seat, "probe", caller="test", identity=_key(seat, "probe")):
                 raise AssertionError("a refused call never runs")
 
     assert gateway.ledger_calls_since(seat, started - timedelta(seconds=1)) == 2, "the refusal wrote nothing"
@@ -778,11 +837,11 @@ def test_the_warehouse_ledger_stores_the_attempt_columns_with_their_types(wareho
     that sets none of them leaves the columns null."""
     seat = warehouse_seat
     params = {"model": "m", "thinking": "disabled", "max_tokens": 300}
-    with gateway.record_call(seat, "chat.completions", caller="test") as call:
+    with gateway.record_call(seat, "chat.completions", caller="test", identity=_key(seat, "chat.completions")) as call:
         call.observe(status_code=429, body=b"{}")
         call.attempt, call.provider_code, call.request_params = 2, "1302", params
         call.fail("HTTP 429")
-    with gateway.record_call(seat, "plain", caller="test") as call:
+    with gateway.record_call(seat, "plain", caller="test", identity=_key(seat, "plain")) as call:
         call.observe(status_code=200, body=b"{}")
     rows = gateway._pg_execute(
         "select endpoint, attempt, provider_code, request_params, pg_typeof(attempt)::text, "
@@ -865,6 +924,7 @@ def test_a_moomoo_call_writes_one_row_through_emit(moomoo_caller, monkeypatch) -
             moomoo_caller,
             lambda ctx: (mm.moomoo.RET_OK, {"rating": "buy"}),
             request_uri="US.AAPL",
+            identity=FetchKey("moomoo", "get_research_analyst_consensus", "symbol:TEST", "2026-10-27"),
         )
 
     assert payload == {"rating": "buy"}
@@ -889,7 +949,11 @@ def test_a_row_the_ledger_rejects_leaves_the_moomoo_payload_with_the_caller(ware
     moomoo_ledger._recent_calls.clear()
     with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
         payload = mm._call(
-            object(), "get_company_profile", f"{warehouse_seat}\x00", lambda ctx: (mm.moomoo.RET_OK, "kept")
+            object(),
+            "get_company_profile",
+            f"{warehouse_seat}\x00",
+            lambda ctx: (mm.moomoo.RET_OK, "kept"),
+            identity=FetchKey("moomoo", "get_company_profile", "symbol:TEST", "2026-10-27"),
         )
 
     assert payload == "kept"
@@ -906,7 +970,7 @@ def test_a_gateway_call_row_survives_the_rollback_of_the_callers_transaction(war
         gw = gateway.SourceGateway(
             caller, caller="rollback-test", capacities={seat: capacity}, environment="production"
         )
-        assert gw.call(seat, "probe", lambda: "answer") == "answer"
+        assert gw.call(seat, "probe", lambda: "answer", identity=_key(seat, "probe")) == "answer"
         caller.rollback()
 
     row = gateway._pg_execute("select count(*) from staging.api_call_ledger where source = %s", (seat,)).fetchone()

@@ -135,9 +135,9 @@ class MoomooClient(Protocol):
     the same bytes a replay would read back from `raw.fetches`.
     """
 
-    def history_kline(self, code: str, *, start: date, end: date) -> list[dict[str, Any]]: ...
+    def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]: ...
 
-    def financial_statements(self, code: str, *, statement_type: int) -> Mapping[str, Any]: ...
+    def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> Mapping[str, Any]: ...
 
 
 class OpenDClient:
@@ -149,23 +149,31 @@ class OpenDClient:
     dependency until an environment enables it.
     """
 
-    def history_kline(self, code: str, *, start: date, end: date) -> list[dict[str, Any]]:
+    def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
         from data_engine.jsonable import to_jsonable
         from data_engine.sources import moomoo
 
         with moomoo.connect() as ctx:
             bars, _page_req_key = moomoo.get_history_kline(
-                ctx, code, start=start.isoformat(), end=end.isoformat(), max_count=_KLINE_MAX_COUNT, caller=CALLER
+                ctx,
+                code,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                max_count=_KLINE_MAX_COUNT,
+                caller=CALLER,
+                identity=identity,
             )
         records = to_jsonable(bars)
         return records if isinstance(records, list) else []
 
-    def financial_statements(self, code: str, *, statement_type: int) -> Mapping[str, Any]:
+    def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> Mapping[str, Any]:
         from data_engine.jsonable import to_jsonable
         from data_engine.sources import moomoo
 
         with moomoo.connect() as ctx:
-            statements = moomoo.get_financials_statements(ctx, code, statement_type=statement_type, caller=CALLER)
+            statements = moomoo.get_financials_statements(
+                ctx, code, statement_type=statement_type, caller=CALLER, identity=identity
+            )
         normalized = to_jsonable(statements)
         return normalized if isinstance(normalized, Mapping) else {}
 
@@ -297,9 +305,12 @@ class MoomooKlineFetcher:
             "moomoo", f"history_kline?lookback={_KLINE_LOOKBACK_DAYS}", f"symbol:{symbol}", cutoff.isoformat()
         )
 
-        def fetch() -> bytes:
+        def fetch(identity: FetchKey) -> bytes:
             bars = self._client.history_kline(
-                moomoo_code(symbol), start=cutoff - timedelta(days=_KLINE_LOOKBACK_DAYS), end=cutoff
+                moomoo_code(symbol),
+                start=cutoff - timedelta(days=_KLINE_LOOKBACK_DAYS),
+                end=cutoff,
+                identity=identity,
             )
             return canonical_bytes(bars)
 
@@ -492,8 +503,10 @@ class MoomooFinancialsFetcher:
     def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
         key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())
 
-        def fetch() -> bytes:
-            return canonical_bytes(self._client.financial_statements(code, statement_type=statement_type))
+        def fetch(identity: FetchKey) -> bytes:
+            return canonical_bytes(
+                self._client.financial_statements(code, statement_type=statement_type, identity=identity)
+            )
 
         return json.loads(gateway.fetch_once(key, fetch).decode())
 
