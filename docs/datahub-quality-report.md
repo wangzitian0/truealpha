@@ -25,9 +25,9 @@ For each requested semantic cell, DataHub performs these steps in order:
 6. Retain agreement, insufficient independent origins, conflict/abstention,
    not-yet-knowable, and unavailable as distinct outcomes.
 
-The selected assertion carries its existing normalized continuous confidence in
-`[0, 1]`. Presentation layers may multiply it by 100 for display, but this module
-does not recalculate or override the confidence policy owned by #207.
+Neither an assertion nor a result carries a confidence (#1517 A3): fusion takes none and
+writes none. The confidence of a cell is the one value computed from stored evidence
+(#1517 stage B), and the report's mean confidence is the mean of the stamps the run holds.
 Factor projection remains provenance-neutral; source and origin metadata stay in the
 runner/report boundary.
 
@@ -37,7 +37,7 @@ A market-price observation asserts the session's whole bar — `open`, `high`, `
 `close`, `volume` — from both origins (parser `production-topt-live-parser:v10`,
 `twelve-data-parser:v3`). The report reconciles each field as its own
 `ReconciliationCell` (its own `field_semantics_id`, unit and policy), so "several
-metrics at HIGH confidence" is a count of fields whose two origins agreed, not a count
+metrics agree" is a count of fields whose two origins agreed, not a count
 of cells whose close did:
 
 | field | policy | unit |
@@ -62,8 +62,9 @@ that listing; a field no origin asserted (observations written before v10) grade
 `unavailable`. Two nulls never agree.
 
 In the persisted payload each `reconciliation_cells[listing]` keeps the close's grade
-under the headline keys (`outcome`, `origin_groups`, `selected_source`,
-`selected_value`, `conflicting` — what the pointer gate and the admin page read) and
+under the headline keys (`outcome`, `origin_groups`, `agreeing_origin_groups`,
+`selected_source`, `selected_value`, `conflicting`, `outliers` — what the pointer gate and
+the admin page read; no `band` and no `confidence`) and
 carries every field's grade under `fields[<field>]` with its `policy_id`;
 `field_reconciliation[<field>]` summarises `agreed` / `cells` / `share` per field over
 the graded market-price cells. The headline `independent_reconciliation` ratio stays
@@ -137,7 +138,6 @@ All summary ratios use this requested-cell count as their denominator:
 - `freshness = fresh_selected_count / requested_count`
 - `independent_reconciliation = agreed_cell_count / requested_count`
 - `lineage_completeness = complete_lineage_cell_count / requested_count`
-- `denominator_mean_confidence_score = sum(selected confidence; otherwise 0) / requested_count`
 
 This prevents a failing collector from improving its own metrics by omitting failed or
 missing cells. Reconciliation results also retain the policy threshold and explicit
@@ -170,7 +170,6 @@ lineage coordinates, retry counts, unchanged-response counts, and reason codes.
   "freshness": "0.25",
   "independent_reconciliation": "0.25",
   "lineage_completeness": "0.5",
-  "denominator_mean_confidence_score": "0.1875",
   "origin_composition": [
     {"origin_group_id": "origin:sec:v1", "cell_count": 2},
     {"origin_group_id": "origin:vendor-a:v1", "cell_count": 2}
@@ -178,10 +177,9 @@ lineage coordinates, retry counts, unchanged-response counts, and reason codes.
 }
 ```
 
-The low aggregate score is intentional: one independently reconciled value at `0.75`,
-one conflict, one failed acquisition, and one unplanned cell produce
-`0.75 / 4 = 0.1875`. A presentation layer may display that as 18.75/100. The report
-exposes the service gap rather than averaging only successful rows.
+The summary holds no confidence figure. One independently reconciled value, one conflict,
+one failed acquisition and one unplanned cell give `independent_reconciliation = 1 / 4`:
+the report exposes the service gap rather than averaging only successful rows.
 
 ## Manual re-run with a forced fetch
 

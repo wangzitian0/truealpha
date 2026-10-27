@@ -15,11 +15,12 @@ assertions are reconciled under a declared tolerance/priority policy, the
 per-cell outcome is persisted in the report payload, and only AGREED cells
 count as independently reconciled — a raw origin count never does.
 
-Since 2026-09-17 every policy grades by the owner's rule (`grade_consensus`, 0.1%): each
-reconciled field carries its `band` — HIGH when three independent origins agree (median
-served, confidence 1.00), MEDIUM when two do (their mean served), LOW otherwise (the
-priority origin's value served, the disagreement recorded). AGREED means HIGH or MEDIUM:
-at least two independent origins agree, which is what the pointer gate counts.
+Since 2026-09-17 every policy grades by the owner's rule (`grade_consensus`, 0.1%): three
+independent origins that agree serve their median, two serve their mean, and otherwise the
+priority origin's value is served and the disagreement recorded. AGREED means at least two
+independent origins agree, which is what the pointer gate counts. Fusion writes no band word
+and no confidence: a reconciled field carries `origin_groups` and `agreeing_origin_groups`,
+and the report's mean confidence is the mean of the stamps the run holds (#1517).
 
 Every field of the price bar is its own reconciliation cell (`reconcile_price_bar`):
 open, high, low and close under the price policy, volume under its own. A cell's
@@ -60,8 +61,6 @@ from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
 from truealpha_contracts.reconciliation import (
-    HIGH_CONSENSUS_CONFIDENCE,
-    ConsensusBand,
     ReconciliationCell,
     ReconciliationOutcome,
     ReconciliationResult,
@@ -516,12 +515,6 @@ def build_report(
     lineage_complete = sum(1 for cell in cells.values() if cell.lineage_complete)
     fresh = sum(1 for cell in cells.values() if cell.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
-    # The served close's numeric confidence is the reconciled one: 1.00 when HIGH (the
-    # owner's "置信度 100%"); a MEDIUM or LOW close keeps the graded observation confidence.
-    for obligation_id, listing_id in market_price_cells.items():
-        close = reconciliation.get(listing_id, {})
-        if close.get("band") == ConsensusBand.HIGH.value and cells[obligation_id].confidence is not None:
-            cells[obligation_id].confidence = HIGH_CONSENSUS_CONFIDENCE
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
     served_by_failover = sum(1 for cell in reconciliation.values() if SERVED_BY_FAILOVER in cell)
     field_reconciliation = _field_reconciliation(reconciliation)
@@ -610,8 +603,8 @@ _PRIMARY_PRICE_SOURCE = RECONCILIATION_POLICY.source_priority[0]
 
 
 def _served_day_assertions(
-    entries: list[tuple[str, Any, Decimal, str, str, str, str, dict]],
-) -> list[tuple[str, Any, Decimal, str, str, str, str, dict]]:
+    entries: list[tuple[str, Any, str, str, str, str, dict]],
+) -> list[tuple[str, Any, str, str, str, str, dict]]:
     """Only assertions from the served bar's trading day are comparable.
 
     The mart serves the primary origin's newest bar, so that bar's day anchors the
@@ -638,7 +631,7 @@ def _served_day_assertions(
 
 def _field_reconciliation(cells: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Per bar field: how many graded market-price cells reached AGREED, over every
-    graded cell — the figure that answers "how many metrics are HIGH". The headline
+    graded cell — the figure that answers "how many metrics agree". The headline
     `independent_reconciliation` stays the close's, over the full requested denominator."""
     graded = len(cells)
     out: dict[str, dict[str, Any]] = {}
@@ -658,7 +651,7 @@ def _field_reconciliation(cells: dict[str, dict[str, Any]]) -> dict[str, dict[st
 
 def reconcile_price_bar(
     listing_id: str,
-    entries: list[tuple[str, Any, Decimal, str, str, str, str, dict]],
+    entries: list[tuple[str, Any, str, str, str, str, dict]],
     *,
     partition: date,
     cutoff: datetime,
@@ -694,11 +687,10 @@ def reconcile_price_bar(
                 normalized_value_sha256=payload_sha,
                 numeric_value=Decimal(str(extra["values"][field])),
                 confidence_assessment_id=f"confidence-assessment:{payload_sha}",
-                confidence_score=confidence,
                 lineage_node_ids=(vintage_id, raw_object),
                 lineage_complete=True,
             )
-            for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+            for source_id, knowable_at, payload_sha, obs_id, vintage_id, raw_object, extra in entries
             if extra["values"].get(field) is not None
         )
         result = reconcile_source_assertions(cell=cell, assertions=assertions, policy=policy, cutoff=cutoff)
@@ -711,22 +703,20 @@ def graded_cell(result: ReconciliationResult, assertions: Sequence[SourceAsserti
     """One reconciled field as the report persists it.
 
     `outcome` keeps the vocabulary the pointer gate reads (`agreed` = at least two
-    independent origins agree, the owner's HIGH or MEDIUM); `band` is the owner's band;
-    `selected_value` is the served value (the agreeing set's median for HIGH and MEDIUM,
-    the priority origin's own value for LOW) and `selected_source` the origin it is
-    attributed to (the highest-priority member of the served set); `confidence` is 1.00 for
-    HIGH, else that origin's graded confidence. `outliers` names the origins outside the
-    served set: the ignored extra source of a HIGH cell, the disagreeing ones otherwise.
+    independent origins agree); `agreeing_origin_groups` counts the served set (three or more
+    serve their median, two their mean, one the priority origin's own value);
+    `selected_value` is the served value and `selected_source` the origin it is attributed
+    to (the highest-priority member of the served set). `outliers` names the origins outside
+    the served set: the ignored extra source of a three-origin cell, the disagreeing ones
+    otherwise. No band word and no confidence travel with the cell (#1517).
     """
     source_by_id = {item.assertion_id: item.source_id for item in assertions}
     return {
         "outcome": result.outcome.value,
-        "band": None if result.band is None else result.band.value,
         "origin_groups": len(result.origin_group_ids),
         "agreeing_origin_groups": len(result.agreeing_assertion_ids),
         "selected_source": source_by_id.get(result.selected_assertion_id or ""),
         "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
-        "confidence": None if result.selected_confidence_score is None else str(result.selected_confidence_score),
         "conflicting": len(result.conflicting_assertion_ids),
         "outliers": sorted(source_by_id[item] for item in result.conflicting_assertion_ids),
     }
@@ -749,7 +739,7 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
     cutoff = status[0]
     rows = conn.execute(
         """
-        select o.subject_id, o.parser_version, o.knowable_at, o.confidence,
+        select o.subject_id, o.parser_version, o.knowable_at,
                o.normalized_payload_sha256, o.observation_id,
                v.source_vintage_id, v.raw_object_id, p.normalized_payload,
                (ob.partition_key)::date as partition_date
@@ -764,10 +754,10 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
         (run_id,),
     ).fetchall()
 
-    by_listing: dict[str, list[tuple[str, Any, Decimal, str, str, str, str, dict]]] = {}
+    by_listing: dict[str, list[tuple[str, Any, str, str, str, str, dict]]] = {}
     served_by_failover: dict[str, str] = {}
     partition: date | None = None
-    for subject_id, parser, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, payload, part in rows:
+    for subject_id, parser, knowable_at, payload_sha, obs_id, vintage_id, raw_object, payload, part in rows:
         if parser not in _SOURCE_BY_PARSER:
             continue
         partition = partition or part
@@ -787,7 +777,6 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
             (
                 source_id,
                 knowable_at,
-                Decimal(str(confidence)),
                 payload_sha,
                 obs_id,
                 vintage_id,
@@ -890,7 +879,6 @@ class FinancialFactEntry:
     source_id: str
     origin_group: str
     knowable_at: datetime
-    confidence: Decimal
     payload_sha: str
     observation_id: str
     vintage_id: str
@@ -905,7 +893,6 @@ class FinancialFactEntry:
 def classify_financial_fact_entry(
     parser_version: str,
     knowable_at: datetime,
-    confidence: Decimal,
     payload_sha: str,
     observation_id: str,
     vintage_id: str,
@@ -921,7 +908,7 @@ def classify_financial_fact_entry(
     else:
         return None
     return FinancialFactEntry(
-        source_id, origin_group, knowable_at, confidence, payload_sha, observation_id, vintage_id, raw_object, payload
+        source_id, origin_group, knowable_at, payload_sha, observation_id, vintage_id, raw_object, payload
     )
 
 
@@ -994,7 +981,6 @@ def _financial_assertion(cell: ReconciliationCell, entry: FinancialFactEntry, va
         normalized_value_sha256=entry.payload_sha,
         numeric_value=value,
         confidence_assessment_id=f"confidence-assessment:{entry.payload_sha}",
-        confidence_score=entry.confidence,
         lineage_node_ids=(entry.vintage_id, entry.raw_object),
         lineage_complete=True,
     )
@@ -1008,7 +994,7 @@ def _reconcile_financial_fact_cells(conn: psycopg.Connection[Any], run_id: str) 
     cutoff = status[0]
     rows = conn.execute(
         """
-        select o.subject_id, o.parser_version, o.knowable_at, o.confidence,
+        select o.subject_id, o.parser_version, o.knowable_at,
                o.normalized_payload_sha256, o.observation_id,
                v.source_vintage_id, v.raw_object_id, p.normalized_payload
         from raw.capture_obligations ob
@@ -1022,10 +1008,8 @@ def _reconcile_financial_fact_cells(conn: psycopg.Connection[Any], run_id: str) 
         (run_id,),
     ).fetchall()
     by_listing: dict[str, list[FinancialFactEntry]] = {}
-    for subject_id, parser, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, payload in rows:
-        entry = classify_financial_fact_entry(
-            parser, knowable_at, Decimal(str(confidence)), payload_sha, obs_id, vintage_id, raw_object, payload
-        )
+    for subject_id, parser, knowable_at, payload_sha, obs_id, vintage_id, raw_object, payload in rows:
+        entry = classify_financial_fact_entry(parser, knowable_at, payload_sha, obs_id, vintage_id, raw_object, payload)
         if entry is not None:
             by_listing.setdefault(subject_id, []).append(entry)
     return {

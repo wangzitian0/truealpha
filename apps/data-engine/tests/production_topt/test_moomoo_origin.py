@@ -409,7 +409,6 @@ def _entries(result: FetchSuccess, *, corroboration_payload: dict[str, Any] | No
     primary = classify_financial_fact_entry(
         PARSER_VERSION,
         result.transaction_time,
-        result.confidence,
         result.normalized_sha256,
         "normalized-observation:" + "a" * 64,
         "source-vintage:" + "b" * 64,
@@ -423,7 +422,6 @@ def _entries(result: FetchSuccess, *, corroboration_payload: dict[str, Any] | No
         second = classify_financial_fact_entry(
             corroboration.record.parser_version,
             corroboration.transaction_time,
-            corroboration.confidence,
             hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(),
             f"normalized-observation:{index:064x}",
             "source-vintage:" + "e" * 64,

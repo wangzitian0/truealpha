@@ -56,9 +56,9 @@ class ServiceObjectives:
     # On the 0 to 1 scale of the stored confidence, like every report ratio.
     minimum_confidence_score: Decimal
     minimum_independent_origin_groups: int
-    # Share of graded reconciliation cells that must reach the `high` band (agreed
+    # Share of graded reconciliation cells that must be corroborated (agreed
     # with at least `minimum_independent_origin_groups` origin groups) for the
-    # pointer to advance. The per-cell band requirement stays absolute; what this
+    # pointer to advance. The per-cell agreement requirement stays absolute; what this
     # replaces is weakest-cell gating, where one symbol's abstain froze every other
     # symbol's fresher, fully corroborated data behind the previous head (#623).
     minimum_corroborated_share: Decimal
@@ -167,9 +167,9 @@ def _plain(value: Decimal) -> str:
 
 
 def _corroborated_share(cells: Any, *, minimum_origin_groups: int) -> Decimal:
-    """Share of graded cells whose served value reaches the `high` band.
+    """Share of graded cells whose served value is corroborated.
 
-    A cell reaches the band only when independent origins agree — exactly
+    A cell is corroborated only when independent origins agree — exactly
     `ReconciliationOutcome.AGREED` with at least the policy's minimum origin groups;
     an abstained cell has origins but no corroborated value, so it contributes
     nothing to the numerator (counting its disagreeing origins would be the raw

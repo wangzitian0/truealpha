@@ -71,7 +71,8 @@ from truealpha_contracts.confidence import (
     SourceConfidenceEvidence,
 )
 from truealpha_contracts.reconciliation import (
-    ConsensusBand,
+    MEDIAN_QUORUM_GROUPS,
+    ConflictBehavior,
     ReconciliationCell,
     ReconciliationOutcome,
     ReconciliationPolicy,
@@ -614,26 +615,16 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             comparison=comparison,
         )
     result = _reconcile(policy, subject_id, valued, numeric, cutoff)
-    if result.band is not None:
-        if result.band is ConsensusBand.HIGH:
-            reason = "independent_origins_agree"
-        elif result.band is ConsensusBand.MEDIUM:
-            reason = "two_origins_agree"
-        elif result.band is ConsensusBand.LOW:
-            reason = (
-                "cross_origin_conflict"
-                if result.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED
-                else "single_eligible_origin"
-            )
-        else:
-            reason = (
-                "not_knowable_at_cutoff"
-                if result.outcome == ReconciliationOutcome.NOT_YET_KNOWABLE
-                else "no_eligible_origin"
-            )
+    if result.outcome is ReconciliationOutcome.AGREED:
+        # The median rule serves a pair's mean beside a quorum's median; any other policy
+        # (index membership) names every agreement the same way.
+        pair = (
+            policy.reconciliation.conflict_behavior is ConflictBehavior.MEDIAN_CONSENSUS
+            and len(result.agreeing_assertion_ids) < MEDIAN_QUORUM_GROUPS
+        )
+        reason = "two_origins_agree" if pair else "independent_origins_agree"
     else:
         reason = {
-            ReconciliationOutcome.AGREED: "independent_origins_agree",
             ReconciliationOutcome.CONFLICT_ABSTAINED: "not_agreed_within_tolerance",
             ReconciliationOutcome.CONFLICT_PRIORITY_SERVED: "cross_origin_conflict",
             ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS: "single_eligible_origin",
@@ -684,9 +675,6 @@ def _reconcile(
                 normalized_value_sha256=value_sha,
                 numeric_value=numeric[origin.origin_id],
                 confidence_assessment_id=f"confidence-assessment:{value_sha}",
-                # The engine never arbitrates on confidence (rule 12) and the report never
-                # reads it; a full score here is a placeholder the result does not carry.
-                confidence_score=Decimal("1"),
                 lineage_node_ids=(observation_id,),
                 lineage_complete=True,
             )
