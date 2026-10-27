@@ -36,12 +36,25 @@ def render() -> str:
         ticks_by_env[env_name] = {
             tick_key: {
                 "scheduled": contract.is_universe_scheduled(tick_key, env_name),
-                "cron": tick.cron,
-                "tick_type": tick.tick_type,
+                "cron": contract.record(tick_key).cron[env_name],
                 "estimated_listings": tick.estimated_listings,
             }
             for tick_key, tick in spec.ticks.items()
         }
+    universes = [
+        {
+            "key": key,
+            "region": universe.region,
+            "id_prefix": universe.id_prefix,
+            "lane_name": universe.lane_name,
+            "label": universe.label,
+            "roles": list(universe.roles),
+            "scheduled_somewhere": any(
+                contract.is_universe_scheduled(key, env_name) for env_name in ("staging", "production")
+            ),
+        }
+        for key, universe in contract.universes.items()
+    ]
     sentinels = [
         {
             "ticker": member.ticker,
@@ -52,7 +65,7 @@ def render() -> str:
         for member in contract.sentinels
     ]
     ticks_json = json.dumps(ticks_by_env, indent=2)
-    known_keys_json = json.dumps(sorted(contract.known_tick_keys))
+    universes_json = json.dumps(universes, indent=2)
     sentinels_json = json.dumps(sentinels, indent=2)
     return f"""\
 /**
@@ -66,8 +79,18 @@ def render() -> str:
 export interface EnvironmentTickRule {{
   readonly scheduled: boolean;
   readonly cron: string;
-  readonly tick_type: "strategy" | "fund" | "index" | "sentinel";
   readonly estimated_listings: number;
+}}
+
+export interface UniverseRecordContract {{
+  readonly key: string;
+  readonly region: string;
+  readonly id_prefix: string;
+  readonly lane_name: string;
+  readonly label: string;
+  readonly roles: readonly ("strategy" | "fund_consolidation" | "sentinel")[];
+  /** Whether some environment schedules the universe, or runs it as a sentinel. */
+  readonly scheduled_somewhere: boolean;
 }}
 
 export interface SentinelMemberContract {{
@@ -84,12 +107,45 @@ export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = {sentinels_js
 
 export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, EnvironmentTickRule>>>> = {ticks_json} as const;
 
-export const KNOWN_TICK_KEYS: readonly string[] = {known_keys_json} as const;
+export const UNIVERSES: readonly UniverseRecordContract[] = {universes_json} as const;
+
+/** The record of the universe `key`. A key outside the record throws (#1522). */
+export function universeRecord(key: string): UniverseRecordContract {{
+  const found = UNIVERSES.find((universe) => universe.key === key);
+  if (!found) {{
+    throw new Error(`"${{key}}" is no universe of the environment contract`);
+  }}
+  return found;
+}}
+
+/** The key of the universe that governs `universeId`: the longest id prefix wins; the id is not split. Null when none matches. */
+export function findUniverseOfId(universeId: string): string | null {{
+  const matches = UNIVERSES.filter((universe) => universeId.startsWith(universe.id_prefix));
+  if (matches.length === 0) {{
+    return null;
+  }}
+  return matches.reduce((best, universe) => (universe.id_prefix.length > best.id_prefix.length ? universe : best)).key;
+}}
+
+/** The key of the universe that governs `universeId`. An id that starts with no id prefix throws. */
+export function universeOfId(universeId: string): string {{
+  const key = findUniverseOfId(universeId);
+  if (key === null) {{
+    throw new Error(`"${{universeId}}" starts with no universe id prefix of the environment contract`);
+  }}
+  return key;
+}}
+
+/** The SQL `like` pattern of every universe id of the universe `key`. */
+export function idPrefixLike(key: string): string {{
+  return `${{universeRecord(key).id_prefix}}%`;
+}}
 
 /**
- * Generated from environment_contract.v1.json (#1416 E1/E2).
- * Fails closed (returns true) when environment is unrecognised or universeId maps to no tick key of the contract.
- * A tick key that another environment declares and this one does not is not scheduled here.
+ * Generated from environment_contract.v1.json (#1416 E1/E2, #1522).
+ * Fails closed (returns true) when environment is unrecognised or universeId starts with no id prefix of the
+ * records (the Python twin and the SQL function answer the same way until step 2 of #1522 retires the function).
+ * A universe that another environment ticks and this one does not is not scheduled here.
  */
 export function isHeadScheduledFromContract(
   universeId: string,
@@ -104,13 +160,12 @@ export function isHeadScheduledFromContract(
   if (!envTicks) {{
     return true;
   }}
-  const stripped = universeId.startsWith("universe:") ? universeId.slice("universe:".length) : universeId;
-  const key = stripped.split("-", 1)[0] || "";
-  const rule = envTicks[key];
-  if (!rule) {{
-    return !KNOWN_TICK_KEYS.includes(key);
+  const key = findUniverseOfId(universeId);
+  if (key === null) {{
+    return true;
   }}
-  return rule.scheduled;
+  const rule = envTicks[key];
+  return rule ? rule.scheduled : false;
 }}
 """
 

@@ -18,6 +18,8 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.environment_contract import UniverseRole
+from truealpha_contracts.universes import record, universe_of
 
 
 class QuestionScope(StrEnum):
@@ -62,16 +64,16 @@ QUESTION_TEXT: MappingProxyType[Question, str] = MappingProxyType(
 @dataclass(frozen=True)
 class FactorColumn:
     """One wide-row column that answers a question: where it lives, which registered factor
-    writes it, and which universes it exists for (empty = every governed universe)."""
+    writes it, and the role of the universes it exists for (None = every governed universe, #1522)."""
 
     table: str
     column: str
     factor: str
     module: int
-    universe_prefixes: tuple[str, ...] = ()
+    universe_role: UniverseRole | None = None
 
     def applies_to(self, universe_id: str) -> bool:
-        return not self.universe_prefixes or any(universe_id.startswith(p) for p in self.universe_prefixes)
+        return self.universe_role is None or self.universe_role in record(universe_of(universe_id)).roles
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,7 @@ QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
     QuestionRequirement(
         question=Question.Q2_VALUATION_VS_GROWTH,
         # PEG is materialized by the strategy run, which exists for the curated TOPT universe only.
-        columns=(FactorColumn("mart.strategy_decisions", "peg", "peg", 1, ("universe:topt-",)),),
+        columns=(FactorColumn("mart.strategy_decisions", "peg", "peg", 1, "strategy"),),
         standards=(),
         tracking_issue="#284",
     ),
@@ -126,7 +128,7 @@ QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
                 "weighted_valuation_gap",
                 "etf_virtual_company",
                 5,
-                ("universe:qqq-",),
+                "fund_consolidation",
             ),
         ),
         standards=(),

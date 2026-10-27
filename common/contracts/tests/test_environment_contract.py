@@ -19,6 +19,7 @@ from truealpha_contracts.environment_contract import (
     EnvironmentUniverse,
     JobRunTimeBasis,
     ModelSeatContract,
+    UnknownUniverse,
     load_environment_contract,
     load_sentinel_known_answers,
 )
@@ -68,6 +69,11 @@ def test_environment_contract_loads_ten_sentinel_listings_across_nine_issuers() 
 def test_contract_is_head_scheduled_matches_declared_ticks(universe_id: str, environment: str, expected: bool) -> None:
     contract = load_environment_contract()
     assert contract.is_head_scheduled(universe_id, environment) is expected
+
+
+def test_the_universe_of_an_id_outside_the_records_raises() -> None:
+    with pytest.raises(UnknownUniverse, match="starts with no universe id prefix"):
+        load_environment_contract().universe_of_id("universe:unknown-us-2026-09-30")
 
 
 def _raw_contract() -> dict:
@@ -214,7 +220,6 @@ def test_a_universe_list_that_breaks_a_rule_is_refused(mutate, message: str) -> 
         ("theme_purity@topt", "production", True),
         ("theme_purity@universe-list:sp500", "production", False),
         ("runtime_shape", "staging", True),
-        ("theme_purity@universe:adhoc", "staging", True),
         ("theme_purity@universe-list:qqq", "dev", True),
         ("theme_purity@universe-list:qqq", None, True),
     ],
@@ -224,6 +229,56 @@ def test_an_environment_records_the_per_universe_verdicts_of_the_universes_it_sc
 ) -> None:
     """Staging runs TOPT only (owner decision of 2026-10-21). An unnamed environment shows every name."""
     assert load_environment_contract().expects_verdict(check, environment) is expected
+
+
+def test_a_lane_name_outside_the_universe_records_raises() -> None:
+    with pytest.raises(UnknownUniverse, match="the lane name of no universe"):
+        load_environment_contract().expects_verdict("theme_purity@universe:adhoc", "staging")
+
+
+def test_the_universe_records_hold_the_names_the_lanes_and_the_pointer_use() -> None:
+    contract = load_environment_contract()
+
+    assert {key: (record.id_prefix, record.lane_name) for key, record in contract.universes.items()} == {
+        "topt": ("universe:topt-us-", "topt"),
+        "qqq": ("universe:qqq-us-", "universe-list:qqq"),
+        "sp500": ("universe:sp500-us-", "universe-list:sp500"),
+        "canary": ("universe:canary-us-", "universe-list:canary"),
+    }
+    assert contract.universe_of_id("universe:topt-us-2026-03-31") == "topt"
+    assert contract.universe_of_lane("universe-list:qqq") == "qqq"
+    assert [key for key, record in contract.universes.items() if record.is_sentinel] == ["canary"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda raw: raw["universes"]["qqq"].update(id_prefix="universe:topt-us-"), "share a id_prefix"),
+        (lambda raw: raw["universes"]["qqq"].update(lane_name="topt"), "share a lane_name"),
+        (lambda raw: raw["universes"]["qqq"]["membership"].pop("url"), "needs url"),
+        (lambda raw: raw["universes"]["topt"]["membership"].update(url="https://example.invalid"), "holds \\['url'\\]"),
+        (lambda raw: raw["universes"]["topt"]["cron"].pop("staging"), "differ"),
+        (lambda raw: raw["universes"]["qqq"]["cron"].update(staging="20 23 * * *"), "differ"),
+        (
+            lambda raw: (raw["universes"].pop("sp500"), raw["environments"]["production"]["ticks"].pop("sp500")),
+            "no record",
+        ),
+        (lambda raw: raw["universes"]["qqq"].update(roles=["unknown"]), "roles"),
+    ],
+    ids=[
+        "two-records-share-an-id-prefix",
+        "two-records-share-a-lane-name",
+        "index-api-without-a-url",
+        "frozen-corpus-with-a-url",
+        "an-environment-lists-a-tick-the-record-does-not-time",
+        "the-record-times-a-tick-the-environment-does-not-list",
+        "an-environment-lists-a-universe-without-a-record",
+        "an-unknown-role",
+    ],
+)
+def test_a_universe_record_that_breaks_a_rule_is_refused(mutate, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        _contract_with(mutate)
 
 
 def test_a_stopped_universe_needs_the_unlock_to_be_built_from_the_model() -> None:

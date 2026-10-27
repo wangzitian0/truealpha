@@ -5,6 +5,9 @@ Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` fr
 (``apps/app-web/src/contracts/environmentContract.generated.ts``) derive their rules
 from this contract so no environment schedule or vendor share is hand-mirrored.
 
+Every universe has one record in ``universes`` (#1522): its key, id prefix, lane name, membership, roles,
+price series flag, report sample and tick cron per environment. No other file keeps its own copy or list of
+a universe key, an id prefix, a lane name, a member list or a tick time.
 Each environment holds a list of universes it runs. A universe is ``scheduled`` or ``stopped``.
 A stopped universe names the precondition that unlocks it. No other file says that a universe is
 stopped (owner decision of 2026-10-21).
@@ -31,11 +34,16 @@ from truealpha_contracts.common import canonical_sha256
 ENVIRONMENT_CONTRACT_RESOURCE = "environment_contract.v1.json"
 SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
 
-TickKey = Literal["topt", "qqq", "sp500", "canary"]
-TickType = Literal["strategy", "fund", "index", "sentinel"]
 EnvironmentKey = Literal["preview", "staging", "production"]
-UniverseKey = Literal["topt", "qqq", "sp500"]
 UniverseStatus = Literal["scheduled", "stopped"]
+#: ``strategy``: the tick seeds the strategy inputs and runs the frozen strategy. ``fund_consolidation``: the
+#: tick values the fund whose holdings are the members. ``sentinel``: a deploy check, no served universe.
+UniverseRole = Literal["strategy", "fund_consolidation", "sentinel"]
+MembershipKind = Literal["frozen_corpus", "index_api", "nport", "static"]
+
+
+class UnknownUniverse(LookupError):
+    """A key, id or lane name that no record of the environment contract holds."""
 
 
 class _StrictFrozenModel(BaseModel):
@@ -50,14 +58,78 @@ class SentinelMember(_StrictFrozenModel):
     defect_refs: tuple[str, ...] = Field(min_length=1)
 
 
-class EnvironmentTickContract(_StrictFrozenModel):
-    """The cron and size of one tick. A universe tick runs when its universe is ``scheduled``.
+class UniverseMembership(_StrictFrozenModel):
+    """Where the members of a universe come from. A field that the kind does not use must stay empty."""
 
-    A sentinel tick (the canary) is no universe and runs whenever it holds a cron.
+    kind: MembershipKind
+    #: ``index_api``: the endpoint of the index operator.
+    url: str | None = Field(default=None, min_length=1)
+    #: The one exchange that lists every member, or None for a multi-exchange universe (#1411 K6).
+    mic: str | None = Field(default=None, min_length=1)
+    #: The fund whose N-PORT holdings give or check the members.
+    nport_ticker: str | None = Field(default=None, min_length=1)
+    #: ``static``: the tickers of a hand-picked list.
+    members: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _the_kind_fixes_the_fields(self) -> Self:
+        used = {
+            "frozen_corpus": set(),
+            "index_api": {"url", "mic", "nport_ticker"},
+            "nport": {"nport_ticker", "mic"},
+            "static": {"members", "mic"},
+        }[self.kind]
+        required = {"index_api": "url", "nport": "nport_ticker", "static": "members"}.get(self.kind)
+        stray = sorted(
+            name for name in ("url", "mic", "nport_ticker", "members") if getattr(self, name) and name not in used
+        )
+        if stray or (required is not None and not getattr(self, required)):
+            raise ValueError(
+                f"a {self.kind} membership needs {required or 'no field'} and holds {stray or 'nothing else'}"
+            )
+        return self
+
+
+class UniverseRecord(_StrictFrozenModel):
+    """The one record of a universe (#1522). Every reader of the universe reads this record.
+
+    The key of the record is its key in ``EnvironmentContract.universes``. ``lane_name`` is the name that
+    the lanes, the run tags and the stored verdicts give the universe: it stays as stored. ``id_prefix``
+    starts every governed universe id of the universe. ``cron`` holds the tick time of each environment
+    that ticks the universe.
     """
 
-    cron: str = Field(min_length=1)
-    tick_type: TickType
+    region: str = Field(pattern=r"^[a-z]{2}$")
+    id_prefix: str = Field(pattern=r"^universe:[a-z0-9]+-[a-z]{2}-$")
+    lane_name: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    membership: UniverseMembership
+    roles: tuple[UniverseRole, ...]
+    price_series: bool
+    report_sample: tuple[str, ...]
+    cron: Mapping[EnvironmentKey, str] = Field(min_length=1)
+
+    @property
+    def is_sentinel(self) -> bool:
+        """A sentinel is a deploy check. It has no served head and no status in an environment list."""
+        return "sentinel" in self.roles
+
+    @property
+    def runs_strategy(self) -> bool:
+        return "strategy" in self.roles
+
+    @property
+    def consolidates_funds(self) -> bool:
+        return "fund_consolidation" in self.roles
+
+
+class EnvironmentTickContract(_StrictFrozenModel):
+    """The size of one tick. The tick time is in the universe record.
+
+    A universe tick runs when its universe is ``scheduled``. A sentinel tick (the canary) is no
+    universe and runs whenever the record holds a cron for the environment.
+    """
+
     estimated_listings: int = Field(ge=0)
 
 
@@ -65,7 +137,7 @@ class UnlockEndToEnd(_StrictFrozenModel):
     """The universe that must run end to end in ``environment`` before a stopped universe starts."""
 
     environment: EnvironmentKey
-    universe: UniverseKey
+    universe: str = Field(min_length=1)
 
 
 class UnlockVerdict(_StrictFrozenModel):
@@ -86,7 +158,7 @@ class UniverseUnlock(_StrictFrozenModel):
 class EnvironmentUniverse(_StrictFrozenModel):
     """One universe of an environment and its status. A stopped universe names its unlock."""
 
-    key: UniverseKey
+    key: str = Field(min_length=1)
     status: UniverseStatus
     unlock: UniverseUnlock | None = None
 
@@ -108,15 +180,10 @@ class EnvironmentSpec(_StrictFrozenModel):
     planned_daily_demand: Mapping[str, int]
 
     @model_validator(mode="after")
-    def _universes_and_ticks_agree(self) -> Self:
+    def _a_universe_is_listed_once(self) -> Self:
         keys = [universe.key for universe in self.universes]
         if len(set(keys)) != len(keys):
             raise ValueError(f"{self.environment}: a universe is listed twice: {keys}")
-        universe_ticks = {key for key, tick in self.ticks.items() if tick.tick_type != "sentinel"}
-        if universe_ticks != set(keys):
-            raise ValueError(
-                f"{self.environment}: the universes {sorted(keys)} and the universe ticks {sorted(universe_ticks)} differ"
-            )
         return self
 
 
@@ -149,7 +216,7 @@ class JobRunTimeBasis(_StrictFrozenModel):
     """
 
     measured: Mapping[EnvironmentKey, MeasuredRunTimes] | None = Field(default=None, min_length=1)
-    estimate_tick: TickKey | None = None
+    estimate_tick: str | None = Field(default=None, min_length=1)
     unmeasured: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -391,11 +458,36 @@ class EnvironmentContract(_StrictFrozenModel):
     contract_version: str = Field(min_length=1)
     description: str = Field(min_length=1)
     sentinels: tuple[SentinelMember, ...]
+    universes: Mapping[str, UniverseRecord] = Field(min_length=1)
     environments: Mapping[str, EnvironmentSpec]
     shared_physical_seats: Mapping[str, SharedSeatSpec]
     run_time_bounds: RunTimeBounds
     code_server_capacity: CodeServerCapacity
     model_seat: ModelSeatContract
+
+    @model_validator(mode="after")
+    def _the_records_agree_with_the_environments(self) -> Self:
+        for field in ("id_prefix", "lane_name"):
+            values = [getattr(record, field) for record in self.universes.values()]
+            if len(set(values)) != len(values):
+                raise ValueError(f"two universe records share a {field}: {sorted(values)}")
+        for env_name, spec in self.environments.items():
+            ticking = {key for key, record in self.universes.items() if env_name in record.cron}
+            if set(spec.ticks) != ticking:
+                raise ValueError(
+                    f"{env_name}: the ticks {sorted(spec.ticks)} and the universe records with a cron {sorted(ticking)} differ"
+                )
+            listed = {entry.key for entry in spec.universes}
+            named = listed | {entry.unlock.end_to_end.universe for entry in spec.universes if entry.unlock is not None}
+            unknown = sorted(named - set(self.universes))
+            if unknown:
+                raise ValueError(f"{env_name}: the environment names universes with no record: {unknown}")
+            served_ticks = {key for key in spec.ticks if not self.universes[key].is_sentinel}
+            if listed != served_ticks:
+                raise ValueError(
+                    f"{env_name}: the universes {sorted(listed)} and the universe ticks {sorted(served_ticks)} differ"
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_sentinels_and_environments(self) -> Self:
@@ -462,20 +554,42 @@ class EnvironmentContract(_StrictFrozenModel):
             return "production"
         return env
 
-    @property
-    def known_tick_keys(self) -> frozenset[str]:
-        """Every tick key that some environment declares."""
-        return frozenset(key for spec in self.environments.values() for key in spec.ticks)
+    def record(self, key: str) -> UniverseRecord:
+        """The record of the universe ``key``. A key outside the record raises (#1522)."""
+        try:
+            return self.universes[key]
+        except KeyError:
+            raise UnknownUniverse(
+                f"{key!r} is no universe of the environment contract: {sorted(self.universes)}"
+            ) from None
+
+    def universe_of_id(self, universe_id: str) -> str:
+        """The key of the universe whose ``id_prefix`` is the longest prefix of ``universe_id``. The id is not split."""
+        matches = [key for key, record in self.universes.items() if universe_id.startswith(record.id_prefix)]
+        if not matches:
+            raise UnknownUniverse(
+                f"{universe_id!r} starts with no universe id prefix: {sorted(r.id_prefix for r in self.universes.values())}"
+            )
+        return max(matches, key=lambda key: len(self.universes[key].id_prefix))
+
+    def universe_of_lane(self, lane_name: str) -> str:
+        """The key of the universe that the lanes call ``lane_name``. A name outside the records raises."""
+        for key, record in self.universes.items():
+            if record.lane_name == lane_name:
+                return key
+        raise UnknownUniverse(
+            f"{lane_name!r} is the lane name of no universe: {sorted(r.lane_name for r in self.universes.values())}"
+        )
 
     def universe_status(self, universe: str, environment: str | None) -> UniverseStatus | None:
-        """The status of ``universe`` in ``environment``, or None when that environment does not list it."""
+        """The status of the universe ``universe`` (a key) in ``environment``, or None when it is not listed there."""
+        self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
         if spec is None:
             return None
-        key = universe.removeprefix("universe-list:")
-        return next((entry.status for entry in spec.universes if entry.key == key), None)
+        return next((entry.status for entry in spec.universes if entry.key == universe), None)
 
-    def scheduled_universes(self, environment: str | None) -> tuple[UniverseKey, ...]:
+    def scheduled_universes(self, environment: str | None) -> tuple[str, ...]:
         """The keys of the universes that ``environment`` runs on a schedule, in contract order."""
         spec = self.environments.get(self.normalize_environment(environment))
         if spec is None:
@@ -494,53 +608,50 @@ class EnvironmentContract(_StrictFrozenModel):
         spec = self.environments.get(self.normalize_environment(environment))
         if spec is None:
             return None
-        key = universe.removeprefix("universe-list:")
-        return next((entry.unlock for entry in spec.universes if entry.key == key), None)
+        self.record(universe)
+        return next((entry.unlock for entry in spec.universes if entry.key == universe), None)
 
     def expects_verdict(self, check: str, environment: str | None) -> bool:
         """Whether ``environment`` records the nightly verdict ``check``.
 
-        A per-universe name (``check@universe``) of a universe that some environment lists is recorded
-        only where the environment schedules that universe: staging runs TOPT only, so it records no
-        QQQ verdict. Any other name, and any environment that the contract does not name, records it.
+        A per-universe name (``check@lane_name``) is recorded only where the environment schedules that
+        universe: staging runs TOPT only, so it records no QQQ verdict. A lane name outside the record
+        raises. Any other name, and any environment that the contract does not name, records it.
         """
-        _, at, universe = check.partition("@")
+        _, at, lane_name = check.partition("@")
         if not at:
             return True
-        key = universe.removeprefix("universe-list:")
-        if key not in {entry.key for spec in self.environments.values() for entry in spec.universes}:
-            return True
+        key = self.universe_of_lane(lane_name)
         if self.normalize_environment(environment) not in self.environments:
             return True
         return self.universe_status(key, environment) == "scheduled"
 
     def is_universe_scheduled(self, universe: str, environment: str) -> bool:
-        """Whether ``universe`` has an active schedule in ``environment`` (#1416 E1).
+        """Whether the universe ``universe`` (a key) has an active schedule in ``environment`` (#1416 E1).
 
         A universe tick is active when the environment lists the universe as ``scheduled``. A sentinel
-        tick (the canary) is active when the environment declares its cron.
+        tick (the canary) is active when the record holds its cron for the environment.
         """
+        record = self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
-        if spec is None:
+        if spec is None or universe not in spec.ticks:
             return False
-        key = universe.removeprefix("universe-list:")
-        tick = spec.ticks.get(key)
-        if tick is None:
-            return False
-        return tick.tick_type == "sentinel" or self.universe_status(key, environment) == "scheduled"
+        return record.is_sentinel or self.universe_status(universe, environment) == "scheduled"
 
     def is_head_scheduled(self, universe_id: str, environment: str | None) -> bool:
         """Whether ``universe_id`` has a running schedule in ``environment`` (#1416 E1).
 
-        Fails closed (returns True) when ``environment`` is omitted or unrecognised, or when
-        ``universe_id`` does not map to a tick key that some environment declares. A tick key that
-        another environment declares and this one does not is not scheduled here.
+        Fails closed (returns True) when ``environment`` is omitted or unrecognised, or when ``universe_id``
+        starts with no id prefix of the records: the SQL function ``mart.is_head_scheduled`` answers the same
+        way, and ``test_output_invariants`` holds the two equal until step 2 of #1522 retires the function.
+        A universe that another environment ticks and this one does not is not scheduled here.
         """
         env = self.normalize_environment(environment)
         if env not in self.environments or env == "preview":
             return True
-        key = universe_id.removeprefix("universe:").split("-", 1)[0]
-        if key not in self.known_tick_keys:
+        try:
+            key = self.universe_of_id(universe_id)
+        except UnknownUniverse:
             return True
         return self.is_universe_scheduled(key, env)
 

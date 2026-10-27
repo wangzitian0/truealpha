@@ -13,7 +13,7 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 # Any of these mean the query returned rows that no longer match the shape this
 # repository expects (a renamed/unaliased column, a dropped field) -- a caller-facing
@@ -81,7 +81,7 @@ class PostgresToptGppeRepository:
                       and universe_id like %s
                     order by advanced_at desc limit 1
                     """,
-                    (f"{SERVED_UNIVERSE_PREFIX}%",),
+                    (id_prefix_like(universe_with_role("strategy")),),
                 ).fetchone()
                 if head is not None and (head["availability"] == "unavailable" or head["run_id"] is None):
                     reason = head["staleness_reason"] or "older_than_30d"
@@ -96,7 +96,7 @@ class PostgresToptGppeRepository:
                         and s.universe_id like %s
                         order by q.created_at desc, q.report_id desc limit 1
                         """,
-                        (f"{SERVED_UNIVERSE_PREFIX}%",),
+                        (id_prefix_like(universe_with_role("strategy")),),
                     ).fetchone()
                 if head is None or head["run_id"] is None:
                     return ToptGppeUnavailable(reason="no accepted (quality-reported) production TOPT run")

@@ -19,7 +19,7 @@ TS_TWIN = REPO / "apps" / "app-web" / "src" / "server" / "mart" / "strategy-run-
 
 
 def _normalize(sql: str) -> str:
-    return re.sub(r"\s+", " ", sql.replace("$1", "%s").replace("%%", "%")).strip()
+    return re.sub(r"\s+", " ", re.sub(r"\$\d", "%s", sql).replace("%%", "%")).strip()
 
 
 def _ts_latest_run_sql() -> str:
