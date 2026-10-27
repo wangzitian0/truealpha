@@ -13,9 +13,9 @@ call does), and writes `tools/pytest_shard_weights.json`.
 The harvest records the run it came from — which dates it, since a run id is
 resolvable to its timestamp. That is not decoration:
 weights go stale silently — the lanes stay green and merely drift back out of
-balance — so `common/runtime/tests/test_pytest_shard.py` asserts the harvest
-still covers most of the tree, which is the observable symptom of a harvest
-nobody refreshed.
+balance. `common/runtime/tests/test_pytest_shard.py` reports the coverage, and
+the scheduled workflow `shard-weight-refresh.yml` runs this tool and opens one
+refresh pull request through `shard_weight_refresh.py` (#1503).
 
 Separate from `pytest_shard.py` on purpose, not by oversight: that tool runs in
 every shard lane and is stdlib-only by design, while this one shells out to
@@ -66,6 +66,24 @@ def fetch_log(run_id: str) -> str:
     return result.stdout
 
 
+def write_weights(output: Path, run_id: str, root_desc: list[str] | str, seconds: dict[str, float]) -> None:
+    """Write the one weights file format. `shard_weight_refresh` writes through this function too."""
+    output.write_text(
+        json.dumps(
+            {
+                "harvested_from_run": run_id,
+                "root": root_desc,
+                "files": len(seconds),
+                "total_seconds": round(sum(seconds.values()), 2),
+                "seconds_by_file": {key: round(value, 3) for key, value in sorted(seconds.items())},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id")
@@ -95,21 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     output = Path(arguments.out)
-    root_desc = list(roots) if roots else "all"
-    output.write_text(
-        json.dumps(
-            {
-                "harvested_from_run": str(arguments.run_id),
-                "root": root_desc,
-                "files": len(seconds),
-                "total_seconds": round(sum(seconds.values()), 2),
-                "seconds_by_file": {key: round(value, 3) for key, value in sorted(seconds.items())},
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    write_weights(output, str(arguments.run_id), list(roots) if roots else "all", seconds)
     print(f"harvest: {len(seconds)} files, {sum(seconds.values()):.1f}s total -> {output}")
     return 0
 

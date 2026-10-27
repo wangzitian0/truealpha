@@ -650,6 +650,54 @@
       "cwd": "."
     },
     {
+      "id": "shard-weight-refresh/an-open-pr-blocks-another",
+      "guard": "common/runtime/tests/test_shard_weight_refresh.py",
+      "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",
+      "find": "    if open_prs > 0:\n",
+      "replace": "    if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_shard_weight_refresh.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "shard-weight-refresh/a-refresh-must-add-a-weight",
+      "guard": "common/runtime/tests/test_shard_weight_refresh.py",
+      "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",
+      "find": "    if not gained:\n",
+      "replace": "    if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_shard_weight_refresh.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "shard-weight-refresh/a-partial-harvest-keeps-old-weights",
+      "guard": "common/runtime/tests/test_shard_weight_refresh.py",
+      "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",
+      "find": "merged = {**old, **harvested}",
+      "replace": "merged = dict(harvested)",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_shard_weight_refresh.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "forest/gppe-tree-reproduces-v020",
       "guard": "common/factors/tests/forest/test_gppe_tree.py",
       "file": "common/factors/src/factors/forest/registry.py",

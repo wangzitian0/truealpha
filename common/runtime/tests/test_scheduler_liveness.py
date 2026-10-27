@@ -64,6 +64,7 @@ ESTATE = [
     pytest.param(("0 7 * * *",), DAY, id="truealpha-delivery-report"),
     pytest.param(("0 6 * * 1",), 7 * DAY, id="truealpha-mutation-reproof"),
     pytest.param(("0 5 * * *",), DAY, id="truealpha-nightly-dagster-liveness"),
+    pytest.param(("23 4 * * 0",), 7 * DAY, id="truealpha-shard-weight-refresh"),
     pytest.param(INFRA2_OPS_CHECKS, HOUR, id="infra2-ops-checks-union"),
     pytest.param(("17 2 * * *",), DAY, id="infra2-ops-checks-daily-alone"),
     pytest.param(("0 1 * * 1",), 7 * DAY, id="infra2-ops-checks-weekly-alone"),

@@ -1,0 +1,138 @@
+name: shard-weight-refresh
+
+# #1503: the shard weights drift every time a pull request adds test files. A coverage test used
+# to block the merge and a person refreshed `tools/pytest_shard_weights.json` by hand (#1083,
+# #1490, #1540). Now the test only reports the coverage. This job does the refresh.
+#
+# Two triggers: a weekly schedule, and `workflow_dispatch` for a manual replay.
+#
+# The job harvests the newest green `main` run that carries pytest durations. It asks
+# `tools/shard_weight_refresh.py` whether to open a pull request. That tool skips when a refresh
+# pull request is already open, and when the harvest adds a weight to no existing test file. The
+# job opens one pull request at most, on one fixed branch.
+#
+# The pull request is opened with INFRA2_PAT. GitHub gives the default token two limits here.
+# A push made with it starts no workflow run, so the pull request would never run its checks.
+# This repository also forbids that token to create pull requests
+# (`can_approve_pull_request_reviews` is false). auto-release-staging.yml (#940) uses the same PAT
+# for the same first reason.
+
+on:
+  schedule:
+    # Sunday 04:23 UTC: before the Monday mutation-reproof run, at an off-minute.
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  # `contents: read` is the default token. The push runs under INFRA2_PAT, which checkout stores.
+  contents: read
+  # `gh run list` and `gh run view --log` read the main runs.
+  actions: read
+  # `gh pr list` counts the open refresh pull requests.
+  pull-requests: read
+
+concurrency:
+  group: shard-weight-refresh
+  cancel-in-progress: false
+
+env:
+  # One definition for the decision count and for the push.
+  REFRESH_BRANCH: ci/refresh-shard-weights
+
+jobs:
+  refresh:
+    # A dispatch on another branch must not open a pull request from that branch's tool.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require a credential that can push a branch and open a pull request
+        # The secret goes through `env:`, not into the script text (the same pattern as
+        # auto-release-staging.yml). A missing secret fails here, before checkout can fall back to
+        # the default token.
+        env:
+          INFRA2_PAT: ${{ secrets.INFRA2_PAT }}
+        run: |
+          if [ -z "${INFRA2_PAT:-}" ]; then
+            echo "::error::INFRA2_PAT is required to push the refresh branch and open its pull request (#1503)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.INFRA2_PAT }}
+
+      # The tools are stdlib-only. They need no `uv sync` (the same as delivery-report.yml).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Harvest the newest green main run that carries durations
+        id: harvest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A green run can skip the Python lanes (a path filter), and then its log holds no
+        # durations. The harvest tool fails closed on that run. The loop tries the next one.
+        run: |
+          set -euo pipefail
+          run_ids=$(gh run list --workflow ci-required.yml --branch main --event push --status success \
+            --limit 10 --json databaseId --jq '.[].databaseId')
+          if [ -z "$run_ids" ]; then
+            echo "::error::no green ci-required run on main"
+            exit 1
+          fi
+          for run_id in $run_ids; do
+            if python3 tools/harvest_shard_weights.py "$run_id" --out "$RUNNER_TEMP/harvest.json"; then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::none of the newest 10 green main runs carries pytest durations"
+          exit 1
+
+      - name: Decide whether one refresh pull request is worth opening
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The tool writes the merged weights file only when it decides to open the pull request.
+        run: |
+          set -euo pipefail
+          open_prs=$(gh pr list --head "$REFRESH_BRANCH" --state open --json number --jq length)
+          python3 tools/shard_weight_refresh.py --harvest "$RUNNER_TEMP/harvest.json" --open-prs "$open_prs" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Open one refresh pull request
+        if: steps.decide.outputs.open_pr == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.INFRA2_PAT }}
+          HARVEST_RUN_ID: ${{ steps.harvest.outputs.run_id }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          JOB_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # `--force` is safe on this branch. The decision step skips when a pull request is open
+        # on it, so nothing live is overwritten. A branch left by a merged pull request is stale.
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$REFRESH_BRANCH"
+          git add tools/pytest_shard_weights.json
+          git commit -m "[truealpha-ci] Refresh the shard weights from run $HARVEST_RUN_ID (#1503)"
+          git push --force origin "$REFRESH_BRANCH"
+          {
+            echo "The scheduled job harvested main run $HARVEST_RUN_ID."
+            echo
+            echo "Decision: $REASON."
+            echo
+            echo "This pull request changes tools/pytest_shard_weights.json only."
+            echo "A file that the run does not hold keeps its old weight."
+            echo "A file that no longer exists loses its weight."
+            echo "The change affects CI speed only. No merge depends on it."
+            echo
+            echo "Job run: $JOB_URL"
+            echo
+            echo "Refs #1503"
+          } > "$RUNNER_TEMP/pr_body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$REFRESH_BRANCH" \
+            --title "[truealpha-ci] Refresh the shard weights from run $HARVEST_RUN_ID (#1503)" \
+            --body-file "$RUNNER_TEMP/pr_body.md"
