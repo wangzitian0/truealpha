@@ -6,8 +6,8 @@ It holds two named GPPE metrics (#1176, owner decision 2026-10-09):
   labor efficiency that `factors.production_topt.compute_topt_gppe` used to spell out by hand.
   Every class uses total assets as the capital base. The node key was `gppe` before #1176; the
   arithmetic and the published values did not change (`tests/forest/test_gppe_tree.py` golden ids).
-- `gppe_banking_tce_v1`, in tree `gppe_banking_tce` `v1`. FINANCIAL only. The capital base is
-  measured tangible common equity, built from three captured inputs.
+- `gppe_banking_tce_v1`, in tree `gppe_banking_tce` `v2`. FINANCIAL only. The capital base is
+  measured tangible common equity, built from four captured inputs.
 
 Node and tree UUIDs were minted once as uuid5 values under the namespace
 `uuid5(NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/metric-forest")` and are
@@ -81,6 +81,7 @@ PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
         ),
         "preferred_stock_value": "a carrying amount of preferred stock; a negative balance is a sign or unit defect in the filing parse",
         "tangible_deductions": "the sum of three non-negative balances (preferred stock, goodwill and intangibles)",
+        "charged_tangible_common_equity": "tangible common equity when it is not negative; undefined otherwise (#1518)",
     }
 )
 
@@ -281,7 +282,10 @@ STOCKHOLDERS_EQUITY = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="stockholders_equity"),
     confidence=_captured("stockholders_equity"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="stockholders_equity"),
+    ),
 )
 
 PREFERRED_STOCK_VALUE = MetricNode(
@@ -298,7 +302,10 @@ PREFERRED_STOCK_VALUE = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="preferred_stock_value"),
     confidence=_captured("preferred_stock_value"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="preferred_stock_value"),
+    ),
 )
 
 GOODWILL = MetricNode(
@@ -312,7 +319,10 @@ GOODWILL = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="goodwill"),
     confidence=_captured("goodwill"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="goodwill"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="goodwill"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="goodwill"),
+    ),
 )
 
 INTANGIBLE_ASSETS = MetricNode(
@@ -326,7 +336,10 @@ INTANGIBLE_ASSETS = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="intangible_assets_net_excluding_goodwill"),
     confidence=_captured("intangible_assets_net_excluding_goodwill"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="intangible_assets_net_excluding_goodwill"),
+    ),
 )
 
 TANGIBLE_DEDUCTIONS = MetricNode(
@@ -356,11 +369,29 @@ TANGIBLE_COMMON_EQUITY = MetricNode(
     confidence=_DERIVED_CONFIDENCE,
 )
 
+CHARGED_TANGIBLE_COMMON_EQUITY = MetricNode(
+    node_id=UUID("2cc2205b-4649-51a4-9f21-9e64b238d162"),
+    key="charged_tangible_common_equity",
+    kind=NodeKind.DERIVED,
+    definition=(
+        "The tangible common equity that the capital charge applies to (#1518 review): the measured value when it "
+        "is not negative, undefined when it is. A negative equity would turn the charge into a credit, and the "
+        "real profit would grow with the loss of equity. Zero gives a zero charge. Working choice of the delivery "
+        "session, not an owner approval."
+    ),
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
+    confidence=_DERIVED_CONFIDENCE,
+)
+
 CAPITAL_CHARGE_TCE = MetricNode(
     node_id=UUID("588a8f4d-b301-5a2e-b0f3-de6743d60af4"),
     key="capital_charge_tce",
     kind=NodeKind.DERIVED,
-    definition="The risk-free return on measured tangible common equity: TCE x rate (#1176).",
+    definition="The risk-free return on measured tangible common equity: TCE x rate (#1176). TCE is not negative here (#1518).",
     unit=UnitFamily.CURRENCY,
     period=PeriodSemantics.FISCAL_YEAR_FLOW,
     applicability=_FINANCIAL,
@@ -399,10 +430,13 @@ GPPE_BANKING_TCE_V1 = MetricNode(
     confidence=_DERIVED_CONFIDENCE,
 )
 
+#: v2 (#1518): the four captured leaves name the snapshot field that carries each one, so the TOPT
+#: core snapshot can carry the tree. The arithmetic is the one of v1. The aliases are part of the
+#: tree identity, so the edit is a new version (`test_gppe_tree.FROZEN_TREES`).
 GPPE_BANKING_TCE_TREE = MetricTree(
     tree_id=UUID("96fd6d4a-8983-5caf-b647-360122569d00"),
     key="gppe_banking_tce",
-    version="v1",
+    version="v2",
     realizes=LABOR_EFFICIENCY.key,
     root=GPPE_BANKING_TCE_V1.key,
     applicability=_FINANCIAL,
@@ -425,7 +459,14 @@ GPPE_BANKING_TCE_TREE = MetricTree(
             output=CAPITAL_CHARGE_TCE.key,
             formula_id="product",
             formula_version=1,
-            operands={IssuerClass.FINANCIAL: (TANGIBLE_COMMON_EQUITY.key, RISK_FREE_RATE.key)},
+            operands={IssuerClass.FINANCIAL: (CHARGED_TANGIBLE_COMMON_EQUITY.key, RISK_FREE_RATE.key)},
+        ),
+        # A negative tangible common equity gives no charge and no value: never a credit (#1518).
+        Decomposition(
+            output=CHARGED_TANGIBLE_COMMON_EQUITY.key,
+            formula_id="non_negative",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (TANGIBLE_COMMON_EQUITY.key,)},
         ),
         Decomposition(
             output=TANGIBLE_COMMON_EQUITY.key,
@@ -505,6 +546,7 @@ FOREST = Forest(
         INTANGIBLE_ASSETS,
         TANGIBLE_DEDUCTIONS,
         TANGIBLE_COMMON_EQUITY,
+        CHARGED_TANGIBLE_COMMON_EQUITY,
         CAPITAL_CHARGE_TCE,
         CAPITAL_ADJUSTED_TCE,
         GPPE_BANKING_TCE_V1,
@@ -512,7 +554,12 @@ FOREST = Forest(
     trees=(GPPE_V0_TREE, GPPE_BANKING_TCE_TREE),
 )
 
-#: Published mart columns -> the node each one carries, per table. The wide-row generator
+#: Published mart columns -> the node whose SIGN POLICY judges each one, per table. This is not a statement of what
+#: the column holds. Since #1518 the column `gppe` holds the root of the tree that the strategy definition pins for
+#: the row's class: `gppe_uniform_charge_v0` for the non-financial classes and `gppe_banking_tce_v1` for FINANCIAL.
+#: `capital_adjusted_gross_profit` holds the numerator of that root ratio (`capital_adjusted_tce` for a bank). The
+#: node named here judges the sign of the column for every class because every pinned root declares the same sign
+#: policy as it does: `test_bound_tree.py` holds that for every class. The wide-row generator
 #: (docs/metric-forest.md §6) will derive these; until then this is the one place a published
 #: column is tied to a node, and both the invariant suite and the tick's gate read it.
 PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType(

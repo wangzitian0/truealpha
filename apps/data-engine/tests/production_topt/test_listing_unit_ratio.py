@@ -28,7 +28,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -210,6 +210,16 @@ _CORE_VALUE_COLUMNS = (
 )
 
 
+def _bundle_without_preferred_stock(branch: Any) -> Any:
+    """The offline bundle of `test_degraded_capture_forced`, with no preferred-stock figure for the bank.
+
+    The shared bundle carries all four banking leaves (#1518). This module needs a bank that the strategy
+    excludes with its own reason, `missing_preferred_stock_value`: no zero stand-in for a missing preferred
+    stock (owner decision D2). So the bank of this module has equity, goodwill and intangibles and no
+    preferred stock, which is the capture of a bank whose balance sheet names no preferred line."""
+    return replace(_bundle(branch), preferred_stock_value=None)
+
+
 def _arm_deployed_route(monkeypatch: pytest.MonkeyPatch, host: FakeSecHost, *, reader_on: bool) -> None:
     """The deployed route builder over the fake SEC host. Prices, company facts and the other semantics are offline.
 
@@ -230,7 +240,9 @@ def _arm_deployed_route(monkeypatch: pytest.MonkeyPatch, host: FakeSecHost, *, r
     monkeypatch.setattr(composition, "build_routes", build)
     monkeypatch.setattr(sec, "client", lambda: httpx.Client(transport=httpx.MockTransport(host.handle)))
     monkeypatch.setattr(
-        sec_financial_adapter, "sec_financial_fetcher", lambda cik, cutoff, branch, **_kwargs: _bundle(branch)
+        sec_financial_adapter,
+        "sec_financial_fetcher",
+        lambda cik, cutoff, branch, **_kwargs: _bundle_without_preferred_stock(branch),
     )
     monkeypatch.setattr(listing_unit_ratio, "latest_annual_filing_over_http", _DEPLOYED_FINDER)
     if not reader_on:
@@ -406,8 +418,8 @@ def test_every_listing_carries_all_seven_keys_and_the_tick_captures_every_cell(t
     for ticker, payload in measured.payloads.items():
         assert all(key in payload for key in PAYLOAD_KEYS), ticker
     assert measured.status == (84, 0, True), "no obligation failed because a cover did not parse"
-    # The offline bundle of the bank has no preferred-stock figure, so the strategy excludes it. That is the
-    # same with and without the reader. No decision is excluded because of a cover.
+    # The offline bundle of the bank has no preferred-stock figure (`_bundle_without_preferred_stock`), so the
+    # strategy excludes it. That is the same with and without the reader. No decision is excluded because of a cover.
     expected = Counter({None: 19, "missing_preferred_stock_value": 1})
     assert Counter(measured.decisions.values()) == expected
     assert Counter(ticks.before.decisions.values()) == expected

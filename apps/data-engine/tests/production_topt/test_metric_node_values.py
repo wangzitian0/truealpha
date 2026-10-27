@@ -242,28 +242,24 @@ def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit
 
 
 def test_f3_strategy_definition_evaluates_trees_by_key_and_allows_omitting_universe() -> None:
-    """F3 standing check: LargeModelValueV0Definition omits unused universe requirement when None
-    and evaluates labor_efficiency_tree_keys through factors.forest.evaluate."""
+    """F3 standing check: LargeModelValueV0Definition omits an unused universe requirement when None
+    and evaluates labor_efficiency_tree_keys through factors.forest.evaluate (#1518: pinned by hash)."""
     corpus = load_live_strategy_corpus()
     payload = json.loads(json.dumps(corpus["strategy_definition"]))
     payload.pop("universe", None)
-    payload["definition_version"] = "1.0.1"
-    payload["labor_efficiency_tree_keys"] = {
-        "financial": "gppe_banking_tce",
-        "non_financial": "gppe",
-        "insurance": "gppe",
-    }
+    payload["definition_version"] = "1.1.1"
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
     assert definition.universe is None
-    assert definition.labor_efficiency_tree_keys == {
-        "financial": "gppe_banking_tce",
-        "non_financial": "gppe",
-        "insurance": "gppe",
+    assert definition.labor_efficiency_tree_keys is not None
+    assert {name: (pin.tree_key, pin.tree_version) for name, pin in definition.labor_efficiency_tree_keys.items()} == {
+        "financial": ("gppe_banking_tce", "v2"),
+        "non_financial": ("gppe", "production-topt-v0.2.0"),
+        "insurance": ("gppe", "production-topt-v0.2.0"),
     }
 
-    # Live definition 1.0.0 hash stays untouched
+    # The live definition 1.1.0 hash stays untouched
     live = load_live_strategy_definition()
-    assert live.content_sha256 == "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803"
+    assert live.content_sha256 == "8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0"
 
     issuer = IssuerInput(
         issuer_id="issuer:nvda",

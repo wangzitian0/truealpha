@@ -2,6 +2,7 @@
 
 from factors.production_topt.core import (
     SHARE_BASIS_REASON_CODES,
+    TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -17,10 +18,12 @@ from factors.production_topt.core import (
     ToptMetricInput,
     compute_topt_core,
     compute_topt_gppe,
+    drop_absent_banking_leaves,
 )
 
 __all__ = [
     "SHARE_BASIS_REASON_CODES",
+    "TCE_SNAPSHOT_FIELDS",
     "GppeV0Definition",
     "MetricAvailability",
     "MetricFreshness",
@@ -36,4 +39,5 @@ __all__ = [
     "ToptMetricInput",
     "compute_topt_core",
     "compute_topt_gppe",
+    "drop_absent_banking_leaves",
 ]

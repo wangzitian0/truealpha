@@ -143,7 +143,10 @@ def materialize_metric_node_values(
     evidence_by_listing: Mapping[str, InputEvidenceStatus],
     forest: Forest = FOREST,
 ) -> int:
-    """Evaluate every applicable tree in `forest` for each issuer and persist derived node rows."""
+    """Evaluate every applicable tree in `forest` for each issuer and persist derived node rows.
+
+    A bank gets the nodes of both trees under their own node keys: the pinned banking tree, which the published
+    column `gppe` holds, and the uniform tree, which is a separate diversity metric (#1518)."""
     if not factor_inputs:
         return 0
     all_obs_ids = sorted({oid for item in factor_inputs for oid in item.observation_ids})

@@ -114,7 +114,8 @@ def test_the_tick_definition_selects_wmt_then_meta_on_the_2026_10_08_head() -> N
         ("WMT", 1, Decimal("0.7056")),
         ("META", 2, Decimal("0.1661")),
     ]
-    assert definition.definition_version == "1.0.0"
+    # The head was produced by 1.0.0 (#1235). 1.1.0 holds the same bands and the bank rule that the decision already used.
+    assert definition.definition_version == "1.1.0"
     assert [item.target_weight for item in selected] == [Decimal("0.500000")] * 2
     assert Counter(item.tier for item in decisions) == {"traditional": 11, "tech": 5, "large_model_native": 1}
     by_ticker = {item.issuer_id: item for item in decisions}

@@ -102,7 +102,7 @@ def test_read_returns_mart_results_without_a_hash_tuple(connection) -> None:
         if r["availability"] == "available":
             assert r["gppe"] is not None
     assert {r["availability"] for r in results} == {"available"}
-    assert {Decimal(r["gppe"]) for r in results} == {Decimal("2000000"), Decimal("700000")}
+    assert {Decimal(r["gppe"]) for r in results} == {Decimal("2000000"), Decimal("780000")}
 
 
 def test_quality_report_read(connection) -> None:

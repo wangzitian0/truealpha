@@ -1,4 +1,7 @@
-"""Strategy definition 1.0.0 of large_model_value_v0 (#1235): the confirmed P/GP bands.
+"""Strategy definitions 1.0.0 and 1.1.0 of large_model_value_v0 (#1235, #1518): the confirmed P/GP bands.
+
+Definition 1.0.0 is the frozen file with the golden decisions. It is read by name. Definition
+1.1.0 is the live file: the same bands, with labor efficiency pinned as a tree per issuer class.
 
 The golden expectations in the packaged file are checked here against an INDEPENDENT
 oracle: a plain Decimal calculation written in this file. It does not import the
@@ -36,8 +39,12 @@ from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
     ValuationBasis,
     load_live_strategy_definition,
+    load_strategy_definition,
     load_strategy_definition_corpus,
 )
+
+#: The frozen #21 file: definition 1.0.0 and the golden decisions. Named here on purpose.
+_FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 
 #: Owner decision 2026-10-12 on #1235: (tier, labor-efficiency lower, upper, target P/GP lower, upper).
 _OWNER_BANDS: tuple[tuple[str, Decimal | None, Decimal | None, Decimal, Decimal], ...] = (
@@ -62,7 +69,7 @@ def _q(value: Decimal, places: int) -> Decimal:
 
 
 def _corpus() -> dict[str, Any]:
-    return load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
+    return load_strategy_definition_corpus(_FROZEN_RESOURCE)
 
 
 def _definition_payload() -> dict[str, Any]:
@@ -121,8 +128,8 @@ def _oracle(decisions: list[dict[str, Any]], rate: Decimal) -> dict[str, dict[st
     return expected
 
 
-def test_the_live_definition_is_version_1_0_0_and_is_not_provisional() -> None:
-    definition = load_live_strategy_definition()
+def test_the_frozen_definition_is_version_1_0_0_and_is_not_provisional() -> None:
+    definition = load_strategy_definition(_FROZEN_RESOURCE)
     assert definition.strategy_id == "large_model_value_v0"
     assert definition.definition_version == "1.0.0"
     assert definition.provisional_semantics is False
@@ -134,7 +141,7 @@ def test_the_live_definition_is_version_1_0_0_and_is_not_provisional() -> None:
 
 
 def test_the_bands_are_the_owner_confirmed_values() -> None:
-    bands = load_live_strategy_definition().tier_valuation.bands
+    bands = load_strategy_definition(_FROZEN_RESOURCE).tier_valuation.bands
     assert [
         (
             band.tier.value,
@@ -157,7 +164,7 @@ def test_the_bands_follow_the_recorded_derivation() -> None:
 
 def test_definition_1_0_0_tier_cuts_and_valuation_contracts() -> None:
     """The labor-efficiency cuts are 1,000,000 / 3,000,000 and the valuation basis is P/GP."""
-    v1 = load_live_strategy_definition()
+    v1 = load_strategy_definition(_FROZEN_RESOURCE)
     v1_cuts = [band.labor_efficiency_upper_bound for band in v1.tier_valuation.bands[:2]]
     assert v1_cuts == [Decimal("1000000"), Decimal("3000000")]
     assert v1.content_sha256 == _V1_SHA256
@@ -305,3 +312,106 @@ def test_a_golden_expectation_names_exactly_one_target_basis() -> None:
     }
     with pytest.raises(ValidationError, match="exactly one valuation basis"):
         GoldenExpectation.model_validate_json(json.dumps(both))
+
+
+# --- definition 1.1.0 (#1518, owner decision D2 of 2026-10-26) ---------------------------------
+
+_LIVE_PINS = {
+    "financial": ("gppe_banking_tce", "v2"),
+    "non_financial": ("gppe", "production-topt-v0.2.0"),
+    "insurance": ("gppe", "production-topt-v0.2.0"),
+}
+#: The fields that definition 1.0.0 holds and definition 1.1.0 leaves out: the formula and the reason code of each input.
+_FORMULA_FIELDS = {
+    "numerator": "gross_profit",
+    "capital_charge_base": "total_assets",
+    "denominator": "headcount",
+    "formula": "(numerator-capital_charge_base*risk_free_rate)/denominator",
+    "missing_numerator_reason": "missing_gross_profit_fact",
+    "missing_capital_base_reason": "missing_total_assets_fact",
+    "missing_denominator_reason": "missing_headcount_disclosure",
+    "nonpositive_denominator_reason": "nonpositive_headcount",
+}
+
+
+def _live_payload() -> dict[str, Any]:
+    return copy.deepcopy(load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)["strategy_definition"])
+
+
+def test_the_live_definition_is_1_1_0_and_changes_only_the_owner_of_labor_efficiency() -> None:
+    live = load_live_strategy_definition()
+    frozen = load_strategy_definition(_FROZEN_RESOURCE)
+    # The exact difference in `labor_efficiency` besides the formula fields: the factor version.
+    assert (frozen.labor_efficiency.factor_version, live.labor_efficiency.factor_version) == ("0.1.0", "0.2.0")
+    for name in ("factor_key", "risk_free", "unit", "quantization"):
+        assert getattr(live.labor_efficiency, name) == getattr(frozen.labor_efficiency, name), name
+    assert live.definition_version == "1.1.0"
+    assert live.provisional_semantics is False
+    assert live.content_sha256 != frozen.content_sha256
+    for name in (
+        "schedule",
+        "price_to_sales",
+        "price_to_gross_profit",
+        "tier_valuation",
+        "valuation_gap",
+        "eligibility",
+        "selection",
+        "sizing",
+        "execution",
+        "transaction_cost",
+        "total_return",
+    ):
+        assert getattr(live, name) == getattr(frozen, name), f"definition 1.1.0 changed {name}"
+
+
+def test_the_live_definition_states_no_formula_and_pins_one_tree_per_class() -> None:
+    live = load_live_strategy_definition()
+    labor = live.labor_efficiency
+    assert [getattr(labor, name) for name in _FORMULA_FIELDS] == [None] * len(_FORMULA_FIELDS)
+    assert not set(_FORMULA_FIELDS) & set(json.loads(labor.model_dump_json())), "an absent formula is not dumped"
+    # The frozen 1.0.0 holds all eight, so its content hash is the one that its stored runs carry.
+    frozen_labor = load_strategy_definition(_FROZEN_RESOURCE).labor_efficiency
+    assert set(_FORMULA_FIELDS) <= set(json.loads(frozen_labor.model_dump_json()))
+    pins = live.labor_efficiency_tree_keys
+    assert pins is not None
+    assert {name: (pin.tree_key, pin.tree_version) for name, pin in pins.items()} == _LIVE_PINS
+
+
+def test_the_formula_fields_are_all_present_or_all_absent() -> None:
+    payload = _live_payload()
+    payload["labor_efficiency"]["numerator"] = "gross_profit"
+    with pytest.raises(ValidationError, match="all present or all absent"):
+        _validate(payload)
+
+
+def test_a_definition_names_exactly_one_owner_of_labor_efficiency() -> None:
+    both = _live_payload()
+    both["labor_efficiency"].update(_FORMULA_FIELDS)
+    with pytest.raises(ValidationError, match="one owner"):
+        _validate(both)
+    neither = _live_payload()
+    del neither["labor_efficiency_tree_keys"]
+    with pytest.raises(ValidationError, match="one owner"):
+        _validate(neither)
+
+
+def test_a_tree_pin_is_part_of_the_content_hash() -> None:
+    changed = _live_payload()
+    changed["labor_efficiency_tree_keys"]["financial"]["tree_sha256"] = "0" * 64
+    assert _validate(changed).content_sha256 != load_live_strategy_definition().content_sha256
+
+
+def test_the_authoring_record_of_1_1_0_names_the_hash_and_the_pins_of_the_live_file() -> None:
+    """The record states the identity of the file. A change of the file without the record turns this red."""
+    from pathlib import Path
+
+    record = (
+        Path(__file__).resolve().parents[3] / "governance" / "reviews" / "large_model_value_v0-definition-1.1.0.md"
+    ).read_text(encoding="utf-8")
+    live = load_live_strategy_definition()
+    assert live.content_sha256 in record
+    assert live.strategy_definition_id in record
+    assert live.labor_efficiency_tree_keys is not None
+    for pin in live.labor_efficiency_tree_keys.values():
+        assert pin.tree_sha256 in record and pin.tree_version in record
+    assert "not a review" in record, "the record must not claim an owner review that did not happen"

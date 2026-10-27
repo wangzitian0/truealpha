@@ -21,6 +21,9 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
     "Banks: measured tangible common equity not captured yet (stockholders' equity, goodwill, intangibles)",
   missing_preferred_stock_value:
     "Banks: preferred stock value not captured yet (no zero stand-in is used)",
+  // #1518: a negative tangible common equity would turn the capital charge into a credit, so the bank has no value.
+  negative_tangible_common_equity:
+    "Banks: measured tangible common equity is negative, so no capital charge applies and no labor-efficiency value is given",
   missing_issuer_class: "Issuer has no operating class, so no labor-efficiency metric applies",
   below_confidence_floor: "Input confidence below the strategy's floor",
   stale_required_input: "A required input is older than the strategy allows",

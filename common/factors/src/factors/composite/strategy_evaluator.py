@@ -11,8 +11,9 @@ the replay rejected at the band *midpoint* while the spec rejects at the band
 from the definition. This module is the one implementation both consume, so the
 algorithm can no longer be re-derived per consumer.
 
-The factor arithmetic itself stays in the base factors (`gross_profit_per_employee`,
-`price_to_sales`, `price_to_gross_profit`, `three_tier_valuation`); this evaluator
+The factor arithmetic itself stays in the base factors (`price_to_sales`,
+`price_to_gross_profit`, `three_tier_valuation`) and, for labor efficiency, in the tree of the
+metric forest that the definition pins for the issuer class (#1518). This evaluator
 orchestrates them and owns only the portfolio-decision rules, reading every parameter
 (quantization, thresholds, bands, selection count, valuation basis) from the versioned
 `LargeModelValueV0Definition` — no implicit defaults.
@@ -20,12 +21,14 @@ orchestrates them and owns only the portfolio-decision rules, reading every para
 The valuation basis comes from the definition (#1235). Definition 0.1.0 compares P/S
 with P/S bands. Definition 1.0.0 compares P/GP with P/GP bands and still records P/S.
 No other rule changes between them: the tier, the above-band rejection, the ranking,
-the selection count and the weights read the same definition fields.
+the selection count and the weights read the same definition fields. Definition 1.1.0
+(#1518) pins one labor-efficiency tree for each issuer class: banks charge the risk-free rate on
+tangible common equity, every other class on total assets.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -36,14 +39,16 @@ from truealpha_contracts.strategy import (
     DecimalQuantization,
     ExclusionReason,
     GoldenDecisionOutcome,
+    LaborEfficiencyTreePin,
     LargeModelValueV0Definition,
     ValuationBasis,
 )
 
 from factors.base.gross_profit_per_employee import (
-    BANKING_TCE_INPUTS,
+    MISSING_PREFERRED_FLAG,
+    MISSING_TCE_FLAG,
+    NEGATIVE_TCE_FLAG,
     gross_profit_per_employee,
-    gross_profit_per_employee_banking_tce,
 )
 from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
@@ -55,15 +60,13 @@ from factors.forest import (
     Forest,
     IssuerClass,
     MetricTree,
-)
-from factors.forest import (
-    evaluate as evaluate_forest_tree,
-)
-from factors.forest import (
-    required_inputs as forest_required_inputs,
+    bound_tree,
+    definition_pins,
+    input_key_of,
+    required_inputs,
 )
 from factors.registry import FACTOR_REGISTRY
-from factors.types import Fact, FactorResult, GrowthConvention, UnitFamily
+from factors.types import Fact, FactorResult, GrowthConvention
 
 
 def _input_keys(factor_name: str) -> tuple[str, ...]:
@@ -119,53 +122,11 @@ def _required_inputs(basis: ValuationBasis) -> tuple[tuple[str, ExclusionReason]
     return tuple((key, reason) for key, reason in _REQUIRED_INPUT_REASONS if key not in recorded_only)
 
 
-@dataclass(frozen=True)
-class LaborEfficiencyMetric:
-    """One named GPPE metric the strategy can rank an issuer on (#1176)."""
-
-    metric: str
-    compute: Callable[..., FactorResult]
-    input_keys: tuple[str, ...]
-
-
-_UNIFORM_CHARGE_V0 = LaborEfficiencyMetric(
-    metric="gppe_uniform_charge_v0",
-    compute=gross_profit_per_employee,
-    input_keys=_input_keys("gross_profit_per_employee"),
-)
-_BANKING_TCE_V1 = LaborEfficiencyMetric(
-    metric="gppe_banking_tce_v1",
-    compute=gross_profit_per_employee_banking_tce,
-    input_keys=tuple(input_key_for_metric(metric) for metric in BANKING_TCE_INPUTS),
-)
-
-#: The one binding table for the live path (owner decision 2026-10-09, #1176): FINANCIAL issuers
-#: rank on measured tangible common equity; every other class ranks on the uniform total-assets
-#: charge. An issuer with no class has no entry: it gets `missing_issuer_class`, never a fallback.
-_LIVE_LABOR_EFFICIENCY: dict[IssuerClass | None, LaborEfficiencyMetric] = {
-    IssuerClass.FINANCIAL: _BANKING_TCE_V1,
-    IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
-    IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
-}
-LABOR_EFFICIENCY_BY_CLASS: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(_LIVE_LABOR_EFFICIENCY)
-
-#: The frozen #21 replay binding, passed by name by the replay callers. Every class, and a
-#: classless input, ranks on the uniform charge the #21 golden was frozen with.
-UNIFORM_LABOR_EFFICIENCY_BINDING: Mapping[IssuerClass | None, LaborEfficiencyMetric] = MappingProxyType(
-    {
-        None: _UNIFORM_CHARGE_V0,
-        IssuerClass.FINANCIAL: _UNIFORM_CHARGE_V0,
-        IssuerClass.NON_FINANCIAL: _UNIFORM_CHARGE_V0,
-        IssuerClass.INSURANCE: _UNIFORM_CHARGE_V0,
-    }
-)
-
 #: Factor flags that name a missing banking input, and the exclusion reason each one carries.
-_MISSING_TCE_FLAG = "missing_tangible_common_equity"
-_MISSING_PREFERRED_FLAG = "missing_preferred_stock_value"
 _BANKING_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
-    (_MISSING_PREFERRED_FLAG, ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
-    (_MISSING_TCE_FLAG, ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+    (MISSING_PREFERRED_FLAG, ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
+    (MISSING_TCE_FLAG, ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+    (NEGATIVE_TCE_FLAG, ExclusionReason.NEGATIVE_TANGIBLE_COMMON_EQUITY),
 )
 #: Refusal flags of the valuation multiples that have an exact exclusion reason (#1235).
 _MULTIPLE_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
@@ -178,123 +139,38 @@ _MULTIPLE_FACTOR = {
 }
 
 
-def _resolve_tree_by_key(forest: Forest, tree_key: str) -> MetricTree:
-    matches = [tree for tree in forest.trees if tree.key == tree_key]
-    if not matches:
-        raise KeyError(f"no tree with key {tree_key!r} in forest")
-    return matches[-1]
+def _labor_efficiency_keys(forest: Forest, tree: MetricTree, issuer_class: IssuerClass) -> list[str]:
+    """The strategy input keys of the captured leaves of ``tree`` for ``issuer_class`` (the rate is no leaf)."""
+    return [
+        input_key_of(node)
+        for node in required_inputs(forest, tree, issuer_class)
+        if node.alias(AliasKind.DEFINITION_PARAMETER) is None
+    ]
 
 
-def _tree_compute_for_class(
-    forest: Forest,
-    tree: MetricTree,
-    issuer_class: IssuerClass,
-) -> tuple[Callable[..., FactorResult], tuple[str, ...]]:
-    req_nodes = forest_required_inputs(forest, tree, issuer_class)
-    input_keys_list: list[str] = []
-    for node in req_nodes:
-        if node.alias(AliasKind.DEFINITION_PARAMETER) is not None:
-            continue
-        metric_name = node.alias(AliasKind.METRIC) or (
-            "gross_profit" if node.key == "pre_provision_profit" else node.key
-        )
-        key_name = node.alias(AliasKind.INPUT_KEY) or input_key_for_metric(metric_name)
-        if key_name not in input_keys_list:
-            input_keys_list.append(key_name)
-    root_node = forest.node(tree.root)
-    unit_family = root_node.unit or UnitFamily.PER_EMPLOYEE
-
-    def _compute(
-        facts: Sequence[Fact],
-        *,
-        entity_id: str,
-        as_of: datetime,
-        risk_free_rate: Decimal,
-    ) -> FactorResult:
-        fact_by_metric = {f.metric: f for f in facts if f.entity_id == entity_id}
-        tree_inputs: dict[str, Decimal | None] = {}
-        flags: list[str] = []
-        confidences: list[Decimal] = []
-        for node in req_nodes:
-            param = node.alias(AliasKind.DEFINITION_PARAMETER)
-            if param == "risk_free_rate":
-                tree_inputs[node.key] = risk_free_rate
-                continue
-            metric_name = node.alias(AliasKind.METRIC) or (
-                "gross_profit" if node.key == "pre_provision_profit" else node.key
-            )
-            fact = fact_by_metric.get(metric_name)
-            if fact is None or fact.value is None:
-                if metric_name in {"stockholders_equity", "goodwill", "intangible_assets_net_excluding_goodwill"}:
-                    if _MISSING_TCE_FLAG not in flags:
-                        flags.append(_MISSING_TCE_FLAG)
-                elif metric_name == "preferred_stock_value":
-                    flags.append(_MISSING_PREFERRED_FLAG)
-                else:
-                    flags.append(f"missing_{metric_name}")
-                tree_inputs[node.key] = None
-                continue
-            if metric_name == "employees_total" and fact.value <= 0:
-                flags.append("non_positive_employees_total")
-                tree_inputs[node.key] = None
-                continue
-            tree_inputs[node.key] = fact.value
-            confidences.append(fact.confidence)
-        if flags:
-            return FactorResult(
-                factor=tree.root,
-                entity_id=entity_id,
-                value=None,
-                unit_family=unit_family,
-                confidence=Decimal("0"),
-                as_of=as_of,
-                data_availability="unverified",
-                flags=flags,
-            )
-        evaluation = evaluate_forest_tree(forest, tree, issuer_class=issuer_class, inputs=tree_inputs)
-        val = evaluation.values.get(tree.root)
-        if val is None:
-            return FactorResult(
-                factor=tree.root,
-                entity_id=entity_id,
-                value=None,
-                unit_family=unit_family,
-                confidence=Decimal("0"),
-                as_of=as_of,
-                data_availability="unverified",
-                flags=[evaluation.undefined.get(tree.root, "undefined_operand")],
-            )
-        return FactorResult(
-            factor=tree.root,
-            entity_id=entity_id,
-            value=val,
-            unit_family=unit_family,
-            confidence=min(confidences) if confidences else Decimal("1"),
-            as_of=as_of,
-            data_availability="unverified",
-            flags=[],
-        )
-
-    return _compute, tuple(input_keys_list)
-
-
-def labor_efficiency_binding_from_tree_keys(
-    tree_keys: Mapping[str, str],
+def required_input_keys(
+    definition: LargeModelValueV0Definition,
+    issuer_class: IssuerClass | None = None,
     *,
     forest: Forest = FOREST,
-) -> Mapping[IssuerClass | None, LaborEfficiencyMetric]:
-    """Build a per-class `LaborEfficiencyMetric` binding from `{issuer_class: tree_key}` (#1413 F3)."""
-    binding: dict[IssuerClass | None, LaborEfficiencyMetric] = {}
-    for class_str, tree_key in tree_keys.items():
-        issuer_class = IssuerClass(class_str)
-        tree = _resolve_tree_by_key(forest, tree_key)
-        compute_fn, input_keys = _tree_compute_for_class(forest, tree, issuer_class)
-        binding[issuer_class] = LaborEfficiencyMetric(
-            metric=tree.root,
-            compute=compute_fn,
-            input_keys=input_keys,
-        )
-    return MappingProxyType(binding)
+    pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
+) -> frozenset[str]:
+    """The per-issuer input keys that ``definition`` consumes (#496, #1518).
+
+    The keys come from the pinned trees: every captured input of the tree of the class, plus the
+    inputs of price-to-sales (market value is shares times the last close; P/GP divides the same
+    market value by the gross profit that the tree already consumes). Without a class the set is
+    the union over every pinned class. The L2 coverage metric measures staging presence against
+    the set of the issuer's class, and the output invariant `every-consumed-input-is-populated`
+    reads the union.
+    """
+    pinned = definition_pins(definition) if pins is None else pins
+    classes = [IssuerClass(name) for name in pinned] if issuer_class is None else [issuer_class]
+    keys = set(_input_keys("price_to_sales"))
+    for each in classes:
+        tree = bound_tree(definition, each, forest=forest, pins=pins)
+        keys.update(_labor_efficiency_keys(forest, tree, each))
+    return frozenset(keys)
 
 
 @dataclass(frozen=True)
@@ -453,7 +329,8 @@ def _evaluate_issuer(
     definition: LargeModelValueV0Definition,
     risk_free_rate: Decimal,
     as_of: datetime,
-    binding: Mapping[IssuerClass | None, LaborEfficiencyMetric],
+    trees: Mapping[IssuerClass, MetricTree],
+    forest: Forest,
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     """Return this issuer's pre-ranking decision plus its valuation gap (or None
     when it is not a ranking candidate)."""
@@ -489,14 +366,17 @@ def _evaluate_issuer(
             None,
         )
 
-    labor = binding.get(issuer.issuer_class)
-    if labor is None:
+    tree = None if issuer.issuer_class is None else trees.get(issuer.issuer_class)
+    if issuer.issuer_class is None or tree is None:
         return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=consumed_confidence), None
-    gppe_result = labor.compute(
-        _facts_for(issuer, labor.input_keys, as_of=as_of),
+    gppe_result = gross_profit_per_employee(
+        _facts_for(issuer, _labor_efficiency_keys(forest, tree, issuer.issuer_class), as_of=as_of),
         entity_id=issuer.issuer_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
+        forest=forest,
+        tree=tree,
+        issuer_class=issuer.issuer_class,
     )
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
@@ -520,7 +400,7 @@ def _evaluate_issuer(
             ExclusionReason.STALE_REQUIRED_INPUT,
         )
         return (
-            _excluded(issuer.issuer_id, reason, confidence=consumed_confidence, labor_efficiency_metric=labor.metric),
+            _excluded(issuer.issuer_id, reason, confidence=consumed_confidence, labor_efficiency_metric=tree.root),
             None,
         )
 
@@ -557,7 +437,7 @@ def _evaluate_issuer(
                 issuer.issuer_id,
                 ExclusionReason.MISSING_MARKET_VALUE_INPUT,
                 confidence=tier_result.confidence,
-                labor_efficiency_metric=labor.metric,
+                labor_efficiency_metric=tree.root,
             ),
             None,
         )
@@ -579,7 +459,7 @@ def _evaluate_issuer(
         outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
         exclusion_reason=None,
         confidence=tier_result.confidence,
-        labor_efficiency_metric=labor.metric,
+        labor_efficiency_metric=tree.root,
     )
     # "Above tier band" == the current multiple above the band's upper bound (#21 spec / #393 L0),
     # in the definition's valuation basis.
@@ -658,17 +538,19 @@ def evaluate_cutoff(
     definition: LargeModelValueV0Definition,
     cutoff_at: datetime,
     risk_free_rate: Decimal,
-    labor_efficiency_by_class: Mapping[IssuerClass | None, LaborEfficiencyMetric] | None = None,
+    tree_pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
     forest: Forest = FOREST,
     plausibility_refusals: Mapping[str, ExclusionReason] = MappingProxyType({}),
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id.
 
-    `labor_efficiency_by_class` is the binding that selects each issuer's labor metric. An issuer
-    whose class has no entry is excluded with `missing_issuer_class`. Replays of the frozen #21
-    corpus pass `UNIFORM_LABOR_EFFICIENCY_BINDING` by name. When omitted, `definition.labor_efficiency_tree_keys`
-    is resolved through `forest` if present, otherwise `LABOR_EFFICIENCY_BY_CLASS` is used.
+    The labor-efficiency tree of each issuer class is the tree that ``definition`` pins
+    (`factors.forest.bound_tree`). A pin that differs from the registered tree raises before any
+    issuer is evaluated. An issuer whose class has no pin, or no class, is excluded with
+    `missing_issuer_class`. A definition that states a formula and pins no tree (1.0.0) raises,
+    unless the caller passes ``tree_pins``. Only the replay of the frozen #21 golden does that,
+    with `factors.forest.uniform_tree_pins()`.
 
     An issuer is excluded with `stale_required_input` when any required input became knowable more
     than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255).
@@ -676,13 +558,10 @@ def evaluate_cutoff(
     `plausibility_refusals` maps an issuer id to the reason the plausibility gate refused its
     published row (#1323). That issuer is excluded with the reason before ranking, so the other
     issuers are ranked and weighted without it."""
-    resolved_binding: Mapping[IssuerClass | None, LaborEfficiencyMetric]
-    if labor_efficiency_by_class is not None:
-        resolved_binding = labor_efficiency_by_class
-    elif definition.labor_efficiency_tree_keys is not None:
-        resolved_binding = labor_efficiency_binding_from_tree_keys(definition.labor_efficiency_tree_keys, forest=forest)
-    else:
-        resolved_binding = LABOR_EFFICIENCY_BY_CLASS
+    pins = definition_pins(definition) if tree_pins is None else tree_pins
+    trees = {
+        IssuerClass(name): bound_tree(definition, IssuerClass(name), forest=forest, pins=tree_pins) for name in pins
+    }
 
     decisions = [
         _excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id], confidence=None)
@@ -692,7 +571,8 @@ def evaluate_cutoff(
             definition=definition,
             risk_free_rate=risk_free_rate,
             as_of=cutoff_at,
-            binding=resolved_binding,
+            trees=trees,
+            forest=forest,
         )[0]
         for issuer in issuers
     ]

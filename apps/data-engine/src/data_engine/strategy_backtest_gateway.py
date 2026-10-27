@@ -14,16 +14,17 @@ exact snapshot it was computed from.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
 from factors.composite.strategy_evaluator import (
-    UNIFORM_LABOR_EFFICIENCY_BINDING,
     IssuerInput,
     LookAheadError,
     evaluate_cutoff,
 )
+from factors.forest import IssuerClass, uniform_tree_pins
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual
@@ -264,17 +265,22 @@ def run_backtest_from_staging(
     gateway = StrategyBacktestGateway(connection)
     rates = corpus["golden_decision_set"]["risk_free_rates"]
     cutoff_ats = sorted({decision["cutoff_at"] for decision in corpus["golden_decision_set"]["decisions"]})
+    # The staging rows carry no class. The golden decision of each issuer names its branch.
+    classes = {
+        decision["issuer"]["id"]: IssuerClass(decision["issuer_branch"])
+        for decision in corpus["golden_decision_set"]["decisions"]
+    }
 
     decisions: list[Decision] = []
     for cutoff_at in cutoff_ats:
         as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
         risk_free_rate = _risk_free_rate(rates, cutoff_at)
         evaluated = evaluate_cutoff(
-            gateway.issuer_inputs(cutoff_at),
+            [replace(item, issuer_class=classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff_at)],
             definition=definition,
             cutoff_at=as_of,
             risk_free_rate=risk_free_rate,
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+            tree_pins=uniform_tree_pins(),
         )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
 

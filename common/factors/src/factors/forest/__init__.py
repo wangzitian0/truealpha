@@ -3,6 +3,16 @@
 Design: docs/metric-forest.md.
 """
 
+from factors.forest.binding import (
+    UnpinnedClassError,
+    bound_tree,
+    capital_adjusted_node,
+    definition_pins,
+    input_key_of,
+    metric_of,
+    operating_numerator_node,
+    uniform_tree_pins,
+)
 from factors.forest.model import (
     ALL_ISSUER_CLASSES,
     AliasKind,
@@ -49,8 +59,16 @@ __all__ = [
     "SignFinding",
     "SignPolicy",
     "TreeEvaluation",
+    "UnpinnedClassError",
+    "bound_tree",
+    "capital_adjusted_node",
+    "definition_pins",
     "evaluate",
+    "input_key_of",
     "judge_sign",
+    "metric_of",
+    "operating_numerator_node",
     "published_node",
     "required_inputs",
+    "uniform_tree_pins",
 ]

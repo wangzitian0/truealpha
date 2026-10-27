@@ -4,8 +4,11 @@ Reuses the materialization suite's real seeding spine (same pattern as
 test_entity_display_resolution_view.py): seed a complete production run,
 freeze + materialize, seed strategy inputs, then persist coverage and assert:
 
-  * one row per issuer of the run, required_count == 6 (derived from the
-    frozen definition's required_input_keys(), not hardcoded in the writer);
+  * one row per issuer of the run, required_count derived from the trees that the
+    frozen definition pins for the issuer's class (`required_input_keys`, not hardcoded in
+    the writer): 6 for a non-financial issuer or an insurer (gross_profit, total_assets, headcount,
+    revenue, shares_outstanding, last_close), 9 for a bank (no total_assets; the four
+    tangible-common-equity inputs instead of it, plus the five others) (#1518);
   * present/missing arithmetic holds (check constraint mirrors it in the DB);
   * the writer's (complete, total) return matches the persisted rows;
   * rows are append-only (UPDATE/DELETE trigger-rejected) and re-running the
@@ -65,7 +68,13 @@ def test_coverage_rows_land_per_issuer_and_arithmetic_holds(connection) -> None:
     ).fetchall()
     issuers = {member.issuer_id for member in snapshot.members}
     assert total == len(rows) == len(issuers), "one coverage row per issuer of the run"
-    assert all(required == 6 for _, required, *_ in rows), "6 required keys derived from the frozen definition"
+    branches = {member.issuer_id: member.operating_branch.value for member in snapshot.members}
+    # Hand count of the keys of each class, written out here and not read from the code under test.
+    hand_count = {"financial": 9, "non_financial": 6, "insurance": 6}
+    assert any(branch == "financial" for branch in branches.values()), "the seed holds a bank, so the 9 is exercised"
+    assert {issuer: required for issuer, required, *_ in rows} == {
+        issuer: hand_count[branch] for issuer, branch in branches.items()
+    }, "required keys derived from the tree that the definition pins for each class"
     assert complete == sum(1 for _, req, present, _ in rows if present == req)
     for _issuer, required, present, missing in rows:
         assert len(missing) == required - present

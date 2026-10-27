@@ -259,11 +259,11 @@ def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
 
 def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyPatch) -> None:
     """`output_invariants` also runs where `data_engine` is not installed (a bare fixture DB job).
-    Assert its `ImportError` fallback tuples equal the live registry outputs so they never drift.
-    The parser ranks have no fallback: without the registry no parser family has a rank."""
+    Assert its `ImportError` fallback of the primary parser equals the live registry output so it never drifts.
+    The parser ranks have no fallback: without the registry no parser family has a rank. The expected input keys
+    have none: they come from `factors` and `truealpha_contracts`, which the tool always imports (#1518)."""
     import builtins
 
-    live_keys = _module._expected_input_keys()
     live_primary = _module._primary_market_price_parser()
     assert _module._market_price_parser_ranks(), "the live registry ranks at least one market-price parser family"
 
@@ -275,7 +275,6 @@ def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyP
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _block_data_engine)
-    assert _module._expected_input_keys() == live_keys
     assert _module._primary_market_price_parser() == live_primary
     assert _module._market_price_parser_ranks() == ()
     assert _module._rank_values(()) == "(null::text, null::integer)"
@@ -1193,3 +1192,16 @@ def test_a_head_whose_results_are_all_unavailable_is_not_judged_by_this_invarian
 
     assert code == 0, output
     assert f"ok       {REVENUE_INVARIANT}: 1 row(s) examined" in output
+
+
+def test_the_expected_inputs_follow_the_class_of_the_issuer() -> None:
+    """#1518: a key is expected for the classes whose pinned tree consumes it. A bank needs its four banking leaves
+    and no total assets. Every other class needs total assets and no banking leaf."""
+    pairs = set(_module.EXPECTED_INPUTS)
+    leaves = {"stockholders_equity", "preferred_stock_value", "goodwill", "intangible_assets_net_excluding_goodwill"}
+    for leaf in leaves:
+        assert (leaf, "financial") in pairs
+        assert (leaf, "non_financial") not in pairs and (leaf, "insurance") not in pairs
+    assert ("total_assets", "financial") not in pairs
+    assert ("total_assets", "non_financial") in pairs and ("total_assets", "insurance") in pairs
+    assert ("net_income", "financial") in pairs and ("net_income", "non_financial") in pairs, "PEG reads every class"

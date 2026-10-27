@@ -1,0 +1,481 @@
+{
+  "content_sha256": "df985dae4eee7f982a7b80270016c0fda5b6475d9b49b8ca4b7d624bcce122e5",
+  "members": [
+    {
+      "factor_input": {
+        "cell_inputs": [
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:7777777777777777777777777777777777777777777777777777777777777777",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:8888888888888888888888888888888888888888888888888888888888888888",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          }
+        ],
+        "cutoff": "2026-04-02T00:00:00Z",
+        "gross_profit": {
+          "availability": "unavailable",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "gross_profit",
+          "unit": "USD",
+          "value": null
+        },
+        "headcount": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "headcount",
+          "unit": "employees",
+          "value": "1E+2"
+        },
+        "instrument_id": "instrument:jpm",
+        "issuer_id": "issuer:jpm",
+        "listing_id": "listing:jpm",
+        "market_value_components": [
+          {
+            "instrument_id": "instrument:jpm",
+            "listing_id": "listing:jpm",
+            "market_price": {
+              "availability": "available",
+              "confidence": "0.9",
+              "freshness": "fresh",
+              "input_id": "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+              "knowable_at": "2026-04-01T00:00:00Z",
+              "metric": "market_price",
+              "unit": "USD_per_share",
+              "value": "4E+1"
+            },
+            "shares_outstanding": {
+              "availability": "available",
+              "confidence": "0.9",
+              "freshness": "fresh",
+              "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+              "knowable_at": "2026-04-01T00:00:00Z",
+              "metric": "shares_outstanding",
+              "unit": "shares",
+              "value": "1E+7"
+            }
+          }
+        ],
+        "observation_ids": [
+          "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+          "normalized-observation:7777777777777777777777777777777777777777777777777777777777777777",
+          "normalized-observation:8888888888888888888888888888888888888888888888888888888888888888"
+        ],
+        "operating_branch": "financial",
+        "pre_provision_profit": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "pre_provision_profit",
+          "unit": "USD",
+          "value": "8E+7"
+        },
+        "release_manifest_id": "release-manifest:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "revenue": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "revenue",
+          "unit": "USD",
+          "value": "1E+8"
+        },
+        "run_id": "capture-run:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "snapshot_id": "topt-core-snapshot:df985dae4eee7f982a7b80270016c0fda5b6475d9b49b8ca4b7d624bcce122e5",
+        "total_assets": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "total_assets",
+          "unit": "USD",
+          "value": "2E+8"
+        },
+        "universe_id": "universe:topt-candidate-v1",
+        "universe_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "universe_version": "2026-03-31-v1"
+      },
+      "member_sha256": "baf690fd554cf4281033916a80858244316f198d469d40de143706f60f568b6f"
+    },
+    {
+      "factor_input": {
+        "cell_inputs": [
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:3333333333333333333333333333333333333333333333333333333333333333",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:4444444444444444444444444444444444444444444444444444444444444444",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          }
+        ],
+        "cutoff": "2026-04-02T00:00:00Z",
+        "gross_profit": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "gross_profit",
+          "unit": "USD",
+          "value": "2.1E+8"
+        },
+        "headcount": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "headcount",
+          "unit": "employees",
+          "value": "1E+2"
+        },
+        "instrument_id": "instrument:nvda",
+        "issuer_id": "issuer:nvda",
+        "listing_id": "listing:nvda",
+        "market_value_components": [
+          {
+            "instrument_id": "instrument:nvda",
+            "listing_id": "listing:nvda",
+            "market_price": {
+              "availability": "available",
+              "confidence": "0.9",
+              "freshness": "fresh",
+              "input_id": "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+              "knowable_at": "2026-04-01T00:00:00Z",
+              "metric": "market_price",
+              "unit": "USD_per_share",
+              "value": "4E+1"
+            },
+            "shares_outstanding": {
+              "availability": "available",
+              "confidence": "0.9",
+              "freshness": "fresh",
+              "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+              "knowable_at": "2026-04-01T00:00:00Z",
+              "metric": "shares_outstanding",
+              "unit": "shares",
+              "value": "1E+7"
+            }
+          }
+        ],
+        "observation_ids": [
+          "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+          "normalized-observation:3333333333333333333333333333333333333333333333333333333333333333",
+          "normalized-observation:4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "operating_branch": "non_financial",
+        "pre_provision_profit": {
+          "availability": "unavailable",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "pre_provision_profit",
+          "unit": "USD",
+          "value": null
+        },
+        "release_manifest_id": "release-manifest:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "revenue": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "revenue",
+          "unit": "USD",
+          "value": "1E+8"
+        },
+        "run_id": "capture-run:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "snapshot_id": "topt-core-snapshot:df985dae4eee7f982a7b80270016c0fda5b6475d9b49b8ca4b7d624bcce122e5",
+        "total_assets": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "total_assets",
+          "unit": "USD",
+          "value": "2E+8"
+        },
+        "universe_id": "universe:topt-candidate-v1",
+        "universe_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "universe_version": "2026-03-31-v1"
+      },
+      "member_sha256": "1d69caecf92fd1e487c0f3e0dcb5dcfef89c04e699e8df850fcebf75c2aee0af"
+    }
+  ],
+  "note": "A TOPT core snapshot as main wrote it before #1518 (no banking leaves). Captured with the code of main.",
+  "payload": {
+    "cutoff": "2026-04-02T00:00:00Z",
+    "members": [
+      {
+        "cell_inputs": [
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:7777777777777777777777777777777777777777777777777777777777777777",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:8888888888888888888888888888888888888888888888888888888888888888",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          }
+        ],
+        "gross_profit": {
+          "availability": "unavailable",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "gross_profit",
+          "unit": "USD",
+          "value": null
+        },
+        "headcount": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "headcount",
+          "unit": "employees",
+          "value": "1E+2"
+        },
+        "instrument_id": "instrument:jpm",
+        "issuer_id": "issuer:jpm",
+        "listing_id": "listing:jpm",
+        "market_price": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "market_price",
+          "unit": "USD_per_share",
+          "value": "4E+1"
+        },
+        "observation_ids": [
+          "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "normalized-observation:6666666666666666666666666666666666666666666666666666666666666666",
+          "normalized-observation:7777777777777777777777777777777777777777777777777777777777777777",
+          "normalized-observation:8888888888888888888888888888888888888888888888888888888888888888"
+        ],
+        "operating_branch": "financial",
+        "pre_provision_profit": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "pre_provision_profit",
+          "unit": "USD",
+          "value": "8E+7"
+        },
+        "revenue": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "revenue",
+          "unit": "USD",
+          "value": "1E+8"
+        },
+        "shares_outstanding": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "shares_outstanding",
+          "unit": "shares",
+          "value": "1E+7"
+        },
+        "total_assets": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:5555555555555555555555555555555555555555555555555555555555555555",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "total_assets",
+          "unit": "USD",
+          "value": "2E+8"
+        }
+      },
+      {
+        "cell_inputs": [
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:3333333333333333333333333333333333333333333333333333333333333333",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          },
+          {
+            "confidence": "0.9",
+            "freshness": "fresh",
+            "input_id": "normalized-observation:4444444444444444444444444444444444444444444444444444444444444444",
+            "knowable_at": "2026-04-01T00:00:00Z"
+          }
+        ],
+        "gross_profit": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "gross_profit",
+          "unit": "USD",
+          "value": "2.1E+8"
+        },
+        "headcount": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "headcount",
+          "unit": "employees",
+          "value": "1E+2"
+        },
+        "instrument_id": "instrument:nvda",
+        "issuer_id": "issuer:nvda",
+        "listing_id": "listing:nvda",
+        "market_price": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "market_price",
+          "unit": "USD_per_share",
+          "value": "4E+1"
+        },
+        "observation_ids": [
+          "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "normalized-observation:2222222222222222222222222222222222222222222222222222222222222222",
+          "normalized-observation:3333333333333333333333333333333333333333333333333333333333333333",
+          "normalized-observation:4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "operating_branch": "non_financial",
+        "pre_provision_profit": {
+          "availability": "unavailable",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "pre_provision_profit",
+          "unit": "USD",
+          "value": null
+        },
+        "revenue": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "revenue",
+          "unit": "USD",
+          "value": "1E+8"
+        },
+        "shares_outstanding": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "shares_outstanding",
+          "unit": "shares",
+          "value": "1E+7"
+        },
+        "total_assets": {
+          "availability": "available",
+          "confidence": "0.9",
+          "freshness": "fresh",
+          "input_id": "normalized-observation:1111111111111111111111111111111111111111111111111111111111111111",
+          "knowable_at": "2026-04-01T00:00:00Z",
+          "metric": "total_assets",
+          "unit": "USD",
+          "value": "2E+8"
+        }
+      }
+    ],
+    "release_manifest_id": "release-manifest:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "run_id": "capture-run:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "universe_id": "universe:topt-candidate-v1",
+    "universe_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "universe_version": "2026-03-31-v1"
+  },
+  "snapshot_id": "topt-core-snapshot:df985dae4eee7f982a7b80270016c0fda5b6475d9b49b8ca4b7d624bcce122e5"
+}

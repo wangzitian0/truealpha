@@ -57,11 +57,15 @@
       "kind": "base",
       "module": 2,
       "module_path": "common/factors/src/factors/base/gross_profit_per_employee.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal, forest: Forest, tree: MetricTree, issuer_class: IssuerClass) -> FactorResult",
       "inputs": [
         "gross_profit",
         "total_assets",
-        "employees_total"
+        "employees_total",
+        "stockholders_equity",
+        "preferred_stock_value",
+        "goodwill",
+        "intangible_assets_net_excluding_goodwill"
       ]
     },
     "supply_chain_exposure": {
