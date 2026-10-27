@@ -32,7 +32,6 @@ from data_engine.datahub.analyst_ratings import (
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, CanonicalUniverse
 from data_engine.datahub.question_coverage import stored_report_run as _STORED_REPORT_RUN
 from data_engine.sources import moomoo as mm
-from data_engine.sources import moomoo_ledger as ledger
 from factors.base.analyst_track_record import (
     AnalystRatingItem,
     analyst_track_record,
@@ -59,11 +58,8 @@ def _identity_universe(
 
 
 @pytest.fixture(autouse=True)
-def _isolated_moomoo_ledger(tmp_path, monkeypatch):
-    """Run the real `_call` wrapper against a throwaway JSON ledger, never the staging table."""
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    ledger._recent_calls.clear()
+def _isolated_moomoo_ledger(idle_moomoo_gate, monkeypatch):
+    """Run the real `_call` wrapper over the in-memory ledger (`call_ledger`), never the staging table."""
     # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
     # over 25 tickers would run for a minute; the pacing is not what these tests assert.
     monkeypatch.setattr(mm, "throttle", lambda: None)
@@ -187,7 +183,7 @@ def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
     assert conn.executed == [], "nothing reached the table"
 
 
-def test_the_wrapper_hands_back_the_payload_without_the_return_code() -> None:
+def test_the_wrapper_hands_back_the_payload_without_the_return_code(call_ledger) -> None:
     """The root cause of #771: `_call` returns the payload alone, not `(ret, data)`.
 
     The capture code unpacked `ret, df = get_analyst_consensus(...)`. The real payload is a
@@ -197,7 +193,7 @@ def test_the_wrapper_hands_back_the_payload_without_the_return_code() -> None:
     payload = mm.get_analyst_consensus(_FakeQuoteContext({"US.DDOG": _sample("DDOG")}), "US.DDOG", caller="test")
     assert isinstance(payload, dict)
     assert payload["total"] == 35
-    assert ledger.calls_this_month() == 1
+    assert len(call_ledger) == 1
 
 
 @pytest.mark.parametrize(
@@ -209,7 +205,9 @@ def test_the_wrapper_hands_back_the_payload_without_the_return_code() -> None:
         ("DUOL", 3, 7, 2, 4, 1),
     ],
 )
-def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, total, buy, hold, sell) -> None:
+def test_a_real_consensus_response_becomes_an_available_row(
+    ticker, rating, total, buy, hold, sell, call_ledger
+) -> None:
     conn = _MockConnection()
     ctx = _FakeQuoteContext({f"US.{ticker}": _sample(ticker)})
     res = capture_ticker_analyst_ratings(
@@ -222,7 +220,7 @@ def test_a_real_consensus_response_becomes_an_available_row(ticker, rating, tota
     assert res.rows == 1
     assert res.failure is None
     assert ctx.codes == [f"US.{ticker}"]
-    assert ledger.calls_this_month() == 1
+    assert len(call_ledger) == 1
     assert len(conn.executed) == 1
     _, params = conn.executed[0]
     assert params[0] == "run:test"

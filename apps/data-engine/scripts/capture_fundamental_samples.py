@@ -13,7 +13,8 @@ endpoints are rate-limited, not monthly-quota-capped â€” see init.md Section 5 â
 so a deeper pull is a matter of choice, not a hard ceiling).
 
 REQUIRES the moomoo OpenD gateway already running and logged in (see
-data_engine/sources/moomoo.py).
+data_engine/sources/moomoo.py) and DATABASE_URL (every call is one row in
+staging.api_call_ledger).
 
 Usage:
     uv run --package truealpha-data-engine python apps/data-engine/scripts/capture_fundamental_samples.py

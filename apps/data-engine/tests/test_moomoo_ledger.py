@@ -1,31 +1,25 @@
 import pytest
+from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
 
 
-@pytest.fixture(autouse=True)
-def _json_backend(monkeypatch):
-    # Pin the json backend: a developer .env with MOOMOO_LEDGER_BACKEND=postgres
-    # must not make these tests write fake rows into the real append-only
-    # staging.api_call_ledger (see test_kg_integration for the postgres path).
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
+def _kline(code: str) -> None:
+    """One K-line call on ``code`` through the real wrapper: gate, throttle, call, record."""
+    mm._call(object(), "request_history_kline", "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri=code)
 
 
-def test_gate_allows_calls_under_quota(tmp_path, monkeypatch):
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
+def test_gate_allows_calls_under_quota(moomoo_ledger_db, monkeypatch):
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 2)
 
-    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
-    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
+    _kline("US.AAPL")
     assert ledger.calls_this_month() == 1
     assert ledger.kline_distinct_stocks_30d() == {"moomoo://US.AAPL"}
 
 
-def test_gate_blocks_once_30d_kline_stock_quota_exhausted(tmp_path, monkeypatch):
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
+def test_gate_blocks_once_30d_kline_stock_quota_exhausted(moomoo_ledger_db, monkeypatch):
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 1)
 
-    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
-    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
+    _kline("US.AAPL")
 
     # Requesting the SAME stock again within the 30-day window does not consume a new stock slot
     ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
@@ -33,30 +27,6 @@ def test_gate_blocks_once_30d_kline_stock_quota_exhausted(tmp_path, monkeypatch)
     # Requesting a SECOND distinct stock exceeds the 30-day stock quota
     with pytest.raises(ledger.BudgetExceededError):
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.MSFT")
-
-
-def test_record_counts_failed_calls_too(tmp_path, monkeypatch):
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-
-    ledger.record("get_rating_change", "test", ok=False)
-    assert ledger.calls_this_month() == 1
-
-
-def test_record_preserves_payload_sha_and_byte_length(tmp_path, monkeypatch):
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
-    ledger.record(
-        "get_history_kline",
-        "test",
-        ok=True,
-        request_uri="moomoo://US.AAPL",
-        payload_sha256="abc123sha",
-        byte_length=42,
-    )
-    calls = ledger._load()["calls"]
-    assert len(calls) == 1
-    assert calls[0]["request_uri"] == "moomoo://US.AAPL"
-    assert calls[0]["payload_sha256"] == "abc123sha"
-    assert calls[0]["byte_length"] == 42
 
 
 def test_throttle_paces_a_full_window(monkeypatch):

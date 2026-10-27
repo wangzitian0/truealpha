@@ -1,9 +1,8 @@
 """Full-universe moomoo fundamental sweep into raw.fetches.
 
 Every call goes through the ledger gate + burst throttle (init.md Section 1 rule
-6). Runs on the OpenD host and REQUIRES MOOMOO_LEDGER_BACKEND=postgres — at
-sweep volume the JSON file ledger would rewrite itself thousands of times, and
-its state isn't what anyone audits.
+6) and is one row in staging.api_call_ledger. Runs on the OpenD host and REQUIRES
+DATABASE_URL.
 
 Endpoint set: CORE_ENDPOINTS (what the current factor modules read, ~9
 calls/line) by default; --all-endpoints adds the rest of FUNDAMENTAL_ENDPOINTS.
@@ -100,12 +99,6 @@ def main() -> None:
     parser.add_argument("--refetch", action="store_true", help="pull new vintages even where rows exist")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and budget state, make no calls")
     args = parser.parse_args()
-
-    if settings.moomoo_ledger_backend != "postgres":
-        raise SystemExit(
-            "sweep requires MOOMOO_LEDGER_BACKEND=postgres (staging.api_call_ledger) — "
-            "the JSON file ledger is for small probe sessions only"
-        )
 
     conn = db.connect()
     if args.codes:

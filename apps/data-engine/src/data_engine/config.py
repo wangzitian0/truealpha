@@ -107,9 +107,6 @@ class Settings(RuntimeSettings):
         default="", json_schema_extra={"source": "code", "empty_ok": True, "group": "moomoo"}
     )
     moomoo_opend_port: int = Field(default=0, json_schema_extra={"source": "code", "group": "moomoo"})
-    # Which ledger the gate reads/writes: 'json' (local file, Phase -1 probe
-    # scripts) or 'postgres' (staging.api_call_ledger — required for sweeps).
-    moomoo_ledger_backend: str = Field(default="json", json_schema_extra={"source": "code", "group": "moomoo"})
     # Process-local burst throttle matching moomoo's real limit shape
     # (bursts per 30s). Global across endpoints, deliberately conservative.
     # ge=1: 0 would make throttle() index an empty deque instead of meaning
