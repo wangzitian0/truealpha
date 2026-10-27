@@ -147,8 +147,8 @@ def tick_cron(key: str, app_env: str) -> str:
     Environments that share a vendor key keep their ticks apart in the records: two simultaneous ticks
     put ~15 requests a minute on a Twelve Data key whose free tier caps at 8 (#574).
     """
-    crons = record(key).cron
-    return crons.get(rule_environment(app_env)) or next(iter(crons.values()))
+    universe = record(key)
+    return universe.cron_for(rule_environment(app_env)) or next(iter(universe.cron.values()))
 
 
 def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:

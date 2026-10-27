@@ -109,6 +109,10 @@ class UniverseRecord(_StrictFrozenModel):
     report_sample: tuple[str, ...]
     cron: Mapping[EnvironmentKey, str] = Field(min_length=1)
 
+    def cron_for(self, environment: str) -> str | None:
+        """The tick cron of ``environment``, or None when the record does not time it there."""
+        return next((cron for name, cron in self.cron.items() if name == environment), None)
+
     @property
     def is_sentinel(self) -> bool:
         """A sentinel is a deploy check. It has no served head and no status in an environment list."""

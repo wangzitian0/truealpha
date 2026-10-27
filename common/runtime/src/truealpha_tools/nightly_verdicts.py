@@ -156,10 +156,9 @@ def _universe_entries(spec: object) -> list[dict[str, str]]:
 def _lane_names(contract: dict) -> dict[str, str]:
     """key -> lane name, for every universe record of the contract."""
     records = contract.get("universes")
-    ok = isinstance(records, dict) and all(
+    if not isinstance(records, dict) or not all(
         isinstance(record, dict) and isinstance(record.get("lane_name"), str) for record in records.values()
-    )
-    if not ok:
+    ):
         raise VerdictCheckFailure("the environment contract holds no universe records this tool can read")
     return {key: record["lane_name"] for key, record in records.items()}
 
