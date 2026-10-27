@@ -27,6 +27,7 @@ from factors.production_topt import (
     ToptMetricInput,
     compute_topt_core,
     compute_topt_gppe,
+    drop_absent_banking_leaves,
 )
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -269,10 +270,7 @@ class SnapshotMember(_FrozenModel):
         data: dict[str, Any] = handler(self)
         if not self.is_primary:
             data.pop("is_primary", None)
-        for name in TCE_SNAPSHOT_FIELDS:
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_absent_banking_leaves(data)
 
     @field_validator("observation_ids")
     @classmethod

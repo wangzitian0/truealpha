@@ -18,6 +18,7 @@ from factors.production_topt.core import (
     ToptMetricInput,
     compute_topt_core,
     compute_topt_gppe,
+    drop_absent_banking_leaves,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "ToptMetricInput",
     "compute_topt_core",
     "compute_topt_gppe",
+    "drop_absent_banking_leaves",
 ]

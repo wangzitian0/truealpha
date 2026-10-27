@@ -179,6 +179,15 @@ TCE_SNAPSHOT_FIELDS = (
 )
 
 
+def drop_absent_banking_leaves(data: dict[str, Any]) -> dict[str, Any]:
+    """The dump ``data`` of a snapshot type without each banking leaf that is None (#1518).
+
+    The core snapshot input and the snapshot member share this one rule, so a snapshot stored before
+    the leaves existed, and the snapshot of any issuer that is not a bank, keep their content hash.
+    """
+    return {key: value for key, value in data.items() if key not in TCE_SNAPSHOT_FIELDS or value is not None}
+
+
 class ToptMetricInput(_FrozenModel):
     """One provenance-neutral value selected into an exact snapshot."""
 
@@ -339,10 +348,7 @@ class ToptCoreSnapshotInput(_FrozenModel):
         data: dict[str, Any] = handler(self)
         if not self.primary_listing_undeclared:
             data.pop("primary_listing_undeclared", None)
-        for name in TCE_SNAPSHOT_FIELDS:
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_absent_banking_leaves(data)
 
     @field_validator("cutoff")
     @classmethod
