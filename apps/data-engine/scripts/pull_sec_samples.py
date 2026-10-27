@@ -11,6 +11,7 @@ import json
 import sys
 from pathlib import Path
 
+from data_engine.sources import gateway
 from data_engine.sources.sec import save_sample
 
 DEFAULT_TICKERS = ["DDOG", "NICE", "SHOP", "DUOL"]  # reconnaissance test universe
@@ -51,4 +52,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("pull_sec_samples"):
+        main()

@@ -76,4 +76,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("capture_fundamental_samples"):
+        main()

@@ -14,8 +14,8 @@ backfilled monthly history until this covers every date already ingested, not on
 newest one).
 
 Every vendor call this op makes is attributed to this Dagster run in the external call
-ledger (#729) and admitted by the rule-6 gate first (`gateway.run_scope` +
-`gateway.capacity_scope`, #938 contract item 3): before this fix, `market_prices.py`
+ledger (#729, `external_op`) and admitted by the rule-6 gate first (`gateway.capacity_scope`,
+#938 contract item 3): before this fix, `market_prices.py`
 routed its Twelve Data calls through `gateway.urlopen` for the ledger row alone -- no
 `capacity_scope` was ever bound around this op, so `record_call`'s `gate = _bound_gate.get()`
 was always `None` and nothing throttled or budgeted the calls this lane made. That is the
@@ -62,6 +62,7 @@ from data_engine.datahub.market_prices import (
     UNADJUSTED,
     oldest_session_within_lag,
 )
+from data_engine.external_op import external_op
 from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
@@ -276,7 +277,7 @@ def judge_bar_freshness(connection: psycopg.Connection, symbols: Sequence[str], 
     )
 
 
-@dg.op
+@external_op
 def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
     """Ingest OHLCV bars for the TOPT universe, then recompute the PIT universe mask over
     every cutoff each resolution's table holds, then judge the freshness of the daily bars.
@@ -290,7 +291,6 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
     ) as outcome:
         now = datetime.now(UTC)
         with (
-            gateway.run_scope(f"dagster:{context.run_id}"),
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):

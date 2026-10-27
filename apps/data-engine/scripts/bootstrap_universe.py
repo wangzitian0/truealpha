@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from data_engine import db, raw_store, universe
 from data_engine.config import settings
 from data_engine.datahub.production_topt.holdings_enrichment import figi_from_raw
-from data_engine.sources import nport, openfigi
+from data_engine.sources import gateway, nport, openfigi
 from data_engine.sources.sec import TICKERS_URL
 from data_engine.sources.sec import client as sec_client
 from factors.shared import entity_resolution as er
@@ -382,4 +382,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("bootstrap_universe"):
+        main()

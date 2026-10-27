@@ -436,9 +436,9 @@ class TwelveDataClient:
         """Through the external call ledger (#729): every Twelve Data request this
         client makes is one row in `staging.api_call_ledger`, status-honest (a 4xx/5xx
         body is the vendor's answer, not an exception) like `twelve_data_origin`'s. The
-        row is admitted and attributed to a run only when the caller has bound
-        `gateway.capacity_scope()`/`gateway.run_scope()` around it -- `lanes.market_data`
-        does (#938 contract item 3); a caller that does not is only ledgered, not gated."""
+        row is attributed to the run of the op that made it (`external_op`) and admitted only when the caller
+        has bound `gateway.capacity_scope()` around it -- `lanes.market_data` does (#938 contract item 3); a
+        caller that does not is only ledgered, not gated."""
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
         # The request names its own resource: the query holds the symbol, the interval and the window.
         params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))

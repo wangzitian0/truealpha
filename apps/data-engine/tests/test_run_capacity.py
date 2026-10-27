@@ -17,6 +17,7 @@ default executor, a waiting job without the tag, a server size below a fresh cod
 
 from __future__ import annotations
 
+import inspect
 import subprocess
 import sys
 import tempfile
@@ -198,7 +199,9 @@ def _jobs_that_wait() -> set[str]:
         job.name
         for job in defs.resolve_all_job_defs()
         for node in job.graph.nodes
-        if _reaches(node.definition.compute_fn.decorated_fn, "_await_settled")
+        if _reaches(
+            inspect.unwrap(node.definition.compute_fn.decorated_fn), "_await_settled"
+        )  # the body, not `external_op`
     }
 
 

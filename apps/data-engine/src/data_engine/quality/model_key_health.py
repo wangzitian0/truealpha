@@ -84,8 +84,8 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
 
 
 def probe(*, transport: llm.Transport | None = None) -> KeyHealth:
-    """Ask the seated model provider, classify, never raise. Call inside `gateway.run_scope(...)`
-    so every ledger row is attributed to the run that asked. A rate limit is waited out by the
+    """Ask the seated model provider, classify, never raise. Call inside an `external_op`
+    (or `gateway.run_scope(...)`) so every ledger row is attributed to the run that asked. A rate limit is waited out by the
     retry policy of `sources.llm`, one ledger row per attempt."""
     try:
         invocation = llm.invoke(

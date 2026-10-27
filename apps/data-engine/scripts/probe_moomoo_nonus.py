@@ -56,4 +56,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("probe_moomoo_nonus"):
+        main()

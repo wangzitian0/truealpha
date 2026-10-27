@@ -44,6 +44,7 @@ from data_engine.datahub.strategy_bridge import (
     seed_strategy_inputs_from_capture,
 )
 from data_engine.environment_universes import rule_environment
+from data_engine.external_op import external_op
 from data_engine.sources import gateway
 
 
@@ -244,14 +245,13 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
     # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
     # against the same content-addressed identities. Every vendor call inside is
-    # attributed to this Dagster run in the external call ledger (#729) and admitted by
+    # attributed to this Dagster run in the external call ledger (#729, `external_op`) and admitted by
     # the rule-6 gate first: paced to its seat's declared window, refused once this
     # environment's share of the seat's daily budget is spent. Every corroboration the
     # capture loses — refused by its origin, by the gate, or not persisted — and every
     # call the gate refused is counted for the summary below (#885), which a failed tick
     # still logs.
     with (
-        gateway.run_scope(f"dagster:{context.run_id}"),
         gateway.probe_scope(config.force_fetch),
         corroboration_tally() as corroborations,
         _summary_on_failure(context, f"{tick.log_label} {config.executed_at}", corroborations),
@@ -447,7 +447,7 @@ def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, d
     """Op, job and schedule for one declaration. Op and job names are the declaration's:
     operators launch by them and the trigger sensor dispatches by them."""
 
-    @dg.op(name=tick.op_name)
+    @external_op(name=tick.op_name)
     def tick_op(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
         return _run_tick(context, config, tick)
 
