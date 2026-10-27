@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 from data_engine.sources import moomoo_ledger as ledger
 from factors.shared import entity_resolution as er
@@ -187,10 +188,23 @@ def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch)
 
     # Assertions are delta-based: the database may carry real prior calls on a dev machine.
     before = ledger.calls_this_month()
-    mm._call(object(), "request_history_kline", "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri="US.AAPL")
+    mm._call(
+        object(),
+        "request_history_kline",
+        "test",
+        lambda ctx: (mm.moomoo.RET_OK, []),
+        request_uri="US.AAPL",
+        identity=FetchKey("moomoo", "request_history_kline", "symbol:TEST", "2026-10-27"),
+    )
     # Failures count too — they may have spent server-side quota.
     with pytest.raises(mm.MoomooConnectionError):
-        mm._call(object(), "ep", "test", lambda ctx: (mm.moomoo.RET_ERROR, "boom"))
+        mm._call(
+            object(),
+            "ep",
+            "test",
+            lambda ctx: (mm.moomoo.RET_ERROR, "boom"),
+            identity=FetchKey("moomoo", "ep", "symbol:TEST", "2026-10-27"),
+        )
     assert ledger.calls_this_month() == before + 2
 
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", len(ledger.kline_distinct_stocks_30d()))

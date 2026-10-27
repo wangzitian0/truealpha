@@ -42,6 +42,7 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.universes import lane_name, record
 
 from data_engine import raw_store
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, corpus_list_version, load_corpus
 from data_engine.sources import gateway
 
@@ -112,6 +113,7 @@ def _get(
     url: str,
     headers: dict[str, str] | None = None,
     *,
+    identity: FetchKey,
     source: str = DataSource.NASDAQ_INDEX.value,
     endpoint: str = "constituents",
     caller: str = "universe_plane._get",
@@ -122,7 +124,7 @@ def _get(
     recorded request before it is a landed row.
     """
     request = urllib.request.Request(url, headers=headers or _BROWSER_HEADERS)
-    return gateway.urlopen(source, endpoint, request, caller=caller, timeout=30)
+    return gateway.urlopen(source, endpoint, request, identity=identity, caller=caller, timeout=30)
 
 
 class ConstituentRow(TypedDict):
@@ -173,6 +175,7 @@ def _resolve_cik_via_edgar(ticker: str, *, user_agent: str) -> int | None:
     status, body = _get(
         f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=10-K&output=atom&count=1",
         headers={"User-Agent": user_agent, "Accept": "application/atom+xml"},
+        identity=FetchKey(DataSource.SEC.value, "browse-edgar", f"symbol:{ticker}", gateway.utc_day()),
         source=DataSource.SEC.value,
         endpoint="browse-edgar",
         caller="universe_plane._resolve_cik_via_edgar",
@@ -213,6 +216,9 @@ def _resolve_figis(
             DataSource.OPENFIGI.value,
             "mapping",
             request,
+            identity=FetchKey.for_batch(
+                DataSource.OPENFIGI.value, "mapping", tickers[start : start + batch_size], gateway.utc_day()
+            ),
             caller="universe_plane._resolve_figis",
             timeout=30,
             raise_for_status=True,
@@ -266,7 +272,14 @@ def refresh_etf_constituents(
         body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
         fetch_source = DataSource.RELEASE
     else:
-        status, body = _get(source.index_api, caller="universe_plane.refresh_etf_constituents")
+        # The entity is the operator's list type, the last segment of the endpoint ("nasdaq100").
+        index_key = FetchKey(
+            DataSource.NASDAQ_INDEX.value,
+            "constituents",
+            f"index:{source.index_api.rsplit('/', 1)[-1]}",
+            gateway.utc_day(),
+        )
+        status, body = _get(source.index_api, identity=index_key, caller="universe_plane.refresh_etf_constituents")
         if status != 200:
             raise RuntimeError(f"{source.etf} constituents endpoint answered {status}: {body[:120]!r}")
         rows = parse_nasdaq_index_rows(body)

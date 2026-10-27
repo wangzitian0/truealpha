@@ -31,6 +31,7 @@ from data_engine.datahub.analyst_ratings import (
     materialize_universe_analyst_ratings,
 )
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, CanonicalUniverse
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.question_coverage import stored_report_run as _STORED_REPORT_RUN
 from data_engine.sources import moomoo as mm
 from factors.base.analyst_track_record import (
@@ -202,7 +203,12 @@ def test_the_wrapper_hands_back_the_payload_without_the_return_code(call_ledger)
     dict of ten entries, so the unpack raised `ValueError` after the ledger had recorded the
     call as ok.
     """
-    payload = mm.get_analyst_consensus(_FakeQuoteContext({"US.DDOG": _sample("DDOG")}), "US.DDOG", caller="test")
+    payload = mm.get_analyst_consensus(
+        _FakeQuoteContext({"US.DDOG": _sample("DDOG")}),
+        "US.DDOG",
+        caller="test",
+        identity=FetchKey("moomoo", "get_research_analyst_consensus", "symbol:DDOG", "2026-10-27"),
+    )
     assert isinstance(payload, dict)
     assert payload["total"] == 35
     assert len(call_ledger) == 1
@@ -348,7 +354,10 @@ def test_a_non_empty_payload_that_lacks_the_rating_or_the_total_is_a_contract_er
     ("payload", "message"),
     [
         ({"rating": 4.9, "total": 10}, "moomoo rating 4.9 is not a whole number"),
-        ({"rating": float("nan"), "total": 10}, "moomoo rating nan is not a whole number"),
+        (
+            {"rating": float("nan"), "total": 10},
+            "get_research_analyst_consensus payload lacks rating; keys: ['rating', 'total']",
+        ),
         ({"rating": "4", "total": 10}, "moomoo rating '4' is not a whole number"),
         ({"rating": True, "total": 10}, "moomoo rating True is not a whole number"),
         ({"rating": 4, "total": 10.5}, "moomoo total 10.5 is not a whole number"),
@@ -434,7 +443,16 @@ def test_a_share_that_is_no_number_is_a_contract_error(share) -> None:
     assert params[9] == ["fetch_error:ValueError"]
 
 
-@pytest.mark.parametrize("share", [-0.01, -1.0, 100.01, 101.0, float("nan")])
+def test_a_nan_share_lands_as_null_and_reads_as_no_share() -> None:
+    """The parser reads the landed bytes. Their canonical JSON renders NaN as null, the form of a field
+    that moomoo leaves unset, so a NaN share is no share and no contract error."""
+    res, params = _capture({"rating": 4, "total": 10, "buy": float("nan")})
+
+    assert res.failure is None
+    assert params[5] == 0
+
+
+@pytest.mark.parametrize("share", [-0.01, -1.0, 100.01, 101.0])
 def test_a_share_outside_0_to_100_percent_is_a_contract_error(share) -> None:
     res, params = _capture({"rating": 4, "total": 10, "sell": share})
 
@@ -1485,10 +1503,12 @@ def test_a_total_failure_turns_the_coverage_verdict_of_its_own_universe_red(monk
 
 @pytest.mark.parametrize("job_name", JOB_NAMES)
 def test_a_rerun_with_a_failing_fetch_keeps_the_available_rows_and_still_ends_red(
-    monkeypatch, shared_connection, job_name
+    monkeypatch, shared_connection, landed_keys, job_name
 ) -> None:
     """A failed fetch must not replace the good row an earlier run of the same head wrote."""
     assert _execute_job(monkeypatch, shared_connection, job_name, VALID).success
+    # A later UTC day: the key of the first answer is another key, so the rerun asks moomoo again.
+    landed_keys.bodies.clear()
 
     rerun = _execute_job(monkeypatch, shared_connection, job_name, FAILED)
 

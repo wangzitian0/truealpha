@@ -679,6 +679,7 @@ def test_a_model_row_survives_a_schema_that_lacks_the_attempt_columns(monkeypatc
 
 class _Answer:
     def __init__(self, body: bytes) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body = body
         self.status = 200
 

@@ -72,6 +72,7 @@ def _today(connection: psycopg.Connection) -> date:
 
 class _Response:
     def __init__(self, body: bytes) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body, self.status = body, 200
 
     def __enter__(self) -> _Response:

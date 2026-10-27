@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.standards import backfill as backfill_module
 from data_engine.datahub.standards.backfill import run_standard_backfill
 from data_engine.datahub.standards.filing_extraction import (
@@ -27,6 +28,11 @@ from truealpha_contracts.standards import STANDARDS
 
 CUTOFF = datetime(2026, 9, 4, 22, 15, tzinfo=UTC)
 STANDARD = STANDARDS["employees_total"]
+
+
+def _key(source: str, endpoint: str) -> FetchKey:
+    """The identity of a call that the test makes: the test names no resource of its own."""
+    return FetchKey(source, endpoint, "symbol:TEST", "2026-10-27")
 
 
 # --- fakes -----------------------------------------------------------------------------
@@ -122,6 +128,8 @@ class FakeStore:
 
 class _Response:
     def __init__(self, *, json_body=None, content: bytes = b"") -> None:
+        assert isinstance(content, bytes), "an httpx response holds bytes"
+        self.status_code = 200
         self._json = json_body
         # An httpx response carries the same document as bytes and as parsed JSON.
         self.content = content if json_body is None else json.dumps(json_body).encode()
@@ -458,7 +466,7 @@ def test_capacity_exhaustion_defers_the_cell_instead_of_failing_the_run() -> Non
         sleep=lambda _s: None,
         now=lambda: CUTOFF,
     )
-    gateway.call("sec", "warm", lambda: None)  # spends the whole daily budget
+    gateway.call("sec", "warm", lambda: None, identity=_key("sec", "warm"))  # spends the whole daily budget
     outcome = extract_headcount(
         1045810,
         connection=connection,

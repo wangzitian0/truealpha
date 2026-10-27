@@ -54,23 +54,23 @@ def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGat
     capture run reads it once and indexes.
     """
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         def request() -> bytes:
             if http is None:
                 with client() as c:
-                    return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
-            return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index")
+                    return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index", identity)
+            return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index", identity)
 
         # A standards-lane gateway admits and records the request itself. It runs only on a miss.
-        return request() if via is None else via.call("sec", "company_tickers", request)
+        return request() if via is None else via.call("sec", "company_tickers", request, identity=identity)
 
     rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
 
 
-def _get(http: httpx.Client, endpoint: str, url: str, caller: str) -> bytes:
+def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
     """One SEC request through the gateway and ledger; the verbatim body of a successful answer."""
-    resp = gateway.http_get(http, "sec", endpoint, url, caller=caller)
+    resp = gateway.http_get(http, "sec", endpoint, url, identity=identity, caller=caller)
     resp.raise_for_status()
     return bytes(resp.content)
 
@@ -102,12 +102,12 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     an issuer is a depository institution rather than a manufacturer.
     """
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         url = SUBMISSIONS_URL.format(cik=cik)
         if http is None:
             with client() as c:
-                return _get(c, "submissions", url, "sec.fetch_company_submissions")
-        return _get(http, "submissions", url, "sec.fetch_company_submissions")
+                return _get(c, "submissions", url, "sec.fetch_company_submissions", identity)
+        return _get(http, "submissions", url, "sec.fetch_company_submissions", identity)
 
     # A 200 answer that is not a JSON object is not the submissions of the issuer. It stays out of the index,
     # so the retry of the registry and the next caller ask SEC again (#1323).
@@ -127,12 +127,12 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
     corrected mapping would be replaying our own output.
     """
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         url = COMPANY_FACTS_URL.format(cik=cik)
         if http is None:
             with client() as c:
-                return _get(c, "companyfacts", url, "sec.fetch_company_facts_response")
-        return _get(http, "companyfacts", url, "sec.fetch_company_facts_response")
+                return _get(c, "companyfacts", url, "sec.fetch_company_facts_response", identity)
+        return _get(http, "companyfacts", url, "sec.fetch_company_facts_response", identity)
 
     body = gateway.fetch_once(company_facts_key(cik), fetch)
     return body, json.loads(body.decode())

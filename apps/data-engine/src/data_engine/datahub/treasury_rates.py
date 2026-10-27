@@ -130,11 +130,18 @@ def has_landed(connection: psycopg.Connection[Any], key: FetchKey) -> bool:
     return bool(row and row[0])
 
 
-def fetch_year(year: int) -> bytes:
-    """The CSV bytes of one year, through the external call gateway. Raise on any status but 200."""
+def fetch_year(year: int, identity: FetchKey) -> bytes:
+    """The CSV bytes of one year, through the external call gateway. Raise on any status but 200.
+
+    ``identity`` is the key of the request (`fetch_key_of`): the ledger row of the request names it."""
     request = urllib.request.Request(year_url(year), headers={"User-Agent": USER_AGENT})
     status, body = gateway.urlopen(
-        SOURCE.value, ENDPOINT, request, caller="treasury_rates.fetch_year", timeout=REQUEST_TIMEOUT_SECONDS
+        SOURCE.value,
+        ENDPOINT,
+        request,
+        identity=identity,
+        caller="treasury_rates.fetch_year",
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
     if status != 200:
         raise TreasuryFetchError(f"the Treasury answered HTTP {status} for the {year} file ({len(body)} bytes)")
@@ -348,7 +355,7 @@ def _refresh_year(
     connection: psycopg.Connection[Any],
     year: int,
     *,
-    fetch: Callable[[int], bytes],
+    fetch: Callable[[int, FetchKey], bytes],
     clock: Callable[[], datetime],
     store: RawObjectStore | None,
     registration: MacroSourceRegistration,
@@ -356,7 +363,7 @@ def _refresh_year(
     key = fetch_key_of(year, on=clock().astimezone(UTC).date())
     if has_landed(connection, key):
         return YearResult(year=year, inserted=0, fetch_id=None, observations=0, reused=True)
-    body = fetch(year)
+    body = fetch(year, key)
     # The time of the answer, read after the request. A revised value is knowable from this instant.
     fetched_at = clock()
     observations = parse_par_yield_csv(body, year=year, series=registration.series)
@@ -387,7 +394,7 @@ def refresh_macro_series(
     connection: psycopg.Connection[Any],
     *,
     today: date,
-    fetch: Callable[[int], bytes] = fetch_year,
+    fetch: Callable[[int, FetchKey], bytes] = fetch_year,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     store: RawObjectStore | None = None,
     registration: MacroSourceRegistration = REGISTRATION,

@@ -250,10 +250,12 @@ def _fetch_bytes_via_gateway(
     A second caller for the same key, in this run or a later one, reads the landed bytes."""
     from data_engine.sources import gateway as gw_mod
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         if gateway_instance is not None:
-            return gateway_instance.call("sec", endpoint, lambda: _get_bytes(http, url))
-        response = gw_mod.http_get(http, "sec", endpoint, url, caller="filing_extraction.latest_periodic_filing")
+            return gateway_instance.call("sec", endpoint, lambda: _get_bytes(http, url), identity=identity)
+        response = gw_mod.http_get(
+            http, "sec", endpoint, url, identity=identity, caller="filing_extraction.latest_periodic_filing"
+        )
         response.raise_for_status()
         return bytes(response.content)
 

@@ -105,7 +105,7 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
         default_as_of=gateway.utc_day(),
     )
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
             # Through the external call ledger (#729): the request, its status and the digest
             # of the body it answered with are recorded before the bytes are parsed or landed.
@@ -114,6 +114,7 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
                 "yahoo",
                 "chart",
                 CHART_URL.format(symbol=symbol),
+                identity=identity,
                 caller="yahoo.fetch_daily_chart",
                 params=params,
             )
