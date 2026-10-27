@@ -56,7 +56,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
-from factors.forest import FOREST, AliasKind, IssuerClass, bound_tree, required_inputs
+from factors.forest import FOREST, AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
 from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
@@ -130,19 +130,26 @@ _SOURCE_BY_PARSER = SOURCE_BY_PARSER
 # `shares_outstanding`. The report and the page read the same fields so they agree on one run —
 # the report used to answer 84/84 for a tick the mart scored 19 available / 1 unavailable.
 _IDENTITY_SEMANTICS = RELEASE_SEMANTICS
-# Mirrors `compute_topt_gppe`'s dispatch exactly: FINANCIAL scores through
-# pre-provision profit, every other branch through gross profit (the insurance
-# parse lands revenue-minus-claims INTO gross_profit). This map must stay total
-# over `OperatingBranch` — the first deployed tick after INSURANCE was added
-# (#534) crashed on BRK.B's cell with a KeyError here, aborting the whole run,
-# because CI's fixture emitted only the two branches this map then covered.
-# `test_the_numerator_map_is_total_over_operating_branches` turns red on the
-# next branch added without a row here.
-_FINANCIAL_FACT_OPERATING_NUMERATOR = {
-    OperatingBranch.FINANCIAL: "pre_provision_profit",
-    OperatingBranch.NON_FINANCIAL: "gross_profit",
-    OperatingBranch.INSURANCE: "gross_profit",
-}
+
+
+def _operating_numerator_field(branch: OperatingBranch) -> str:
+    """The financial-fact field that the numerator of the labor efficiency reads for ``branch``.
+
+    The tree that the live definition pins for the class says which (`operating_numerator_node`, #1518):
+    FINANCIAL reads pre-provision profit, every other branch reads gross profit (the insurance parse lands
+    revenue-minus-claims INTO gross_profit). The core reads the same node (`compute_topt_core`). So the map
+    below has no second copy of the rule. It is total over `OperatingBranch` by construction: a class that the
+    definition does not pin fails at import. The first deployed tick after INSURANCE was added (#534) crashed
+    on a KeyError of a hand-written map; `test_the_numerator_map_is_total_over_operating_branches` stays.
+    """
+    issuer_class = IssuerClass(branch.value)
+    node = operating_numerator_node(bound_tree(load_live_strategy_definition(), issuer_class), issuer_class)
+    field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+    assert field is not None, f"the numerator {node.key} names no snapshot field"
+    return field
+
+
+_FINANCIAL_FACT_OPERATING_NUMERATOR = {branch: _operating_numerator_field(branch) for branch in OperatingBranch}
 
 
 # Which semantics each SERVED factor needs usable, per subject, before the factor

@@ -23,7 +23,15 @@ export interface LaborEfficiencyInput {
 	publishedGppe: string | null;
 	strategyValue: string | null;
 	strategyMetric: string | null;
+	/** The `operating_branch` of the published row. Null when the row is absent or names none. */
+	operatingBranch?: string | null;
 }
+
+/**
+ * The class whose metric changed with definition 1.1.0: a FINANCIAL issuer was published on total assets by the
+ * core and ranked on tangible common equity by the strategy. Every other class had one metric throughout.
+ */
+const CLASS_WITH_TWO_METRICS = "financial";
 
 function sameMetricValue(a: string, b: string): boolean {
 	if (a === b) return true;
@@ -35,19 +43,26 @@ function sameMetricValue(a: string, b: string): boolean {
 
 /**
  * Every present number with its metric name. The decision row names the metric of its class. A published value
- * takes that name when the decision row names one and the two numbers do not disagree: the core and the
- * composite evaluate one pinned tree. They do not disagree when the strategy value is absent (an issuer
- * excluded after its tree was chosen) or when both numbers agree. A published value that disagrees with the
- * strategy value, or that no row names a metric for, is shown as `UNRECORDED_METRIC`. The page never asserts a
- * name that no row states.
+ * takes that name when the row names one and the page can show that the published number is of that metric:
+ *
+ * - the two numbers agree (the core and the composite evaluate one pinned tree), or
+ * - there is no strategy value, and the class had one metric throughout (not FINANCIAL). A FINANCIAL value that
+ *   was published before definition 1.1.0 is the total-assets value, so with no strategy value to compare with,
+ *   the page cannot name it. A class that the row does not name is treated like FINANCIAL.
+ *
+ * Any other published value is shown as `UNRECORDED_METRIC`. The page never asserts a name that no row states.
  */
 export function laborEfficiencyLabels(input: LaborEfficiencyInput): LaborEfficiencyLabel[] {
 	const labels: LaborEfficiencyLabel[] = [];
 	const { publishedGppe, strategyValue, strategyMetric } = input;
+	const oneMetricClass =
+		input.operatingBranch !== undefined &&
+		input.operatingBranch !== null &&
+		input.operatingBranch !== CLASS_WITH_TWO_METRICS;
 	const publishedMetric =
 		publishedGppe !== null &&
 		strategyMetric !== null &&
-		(strategyValue === null || sameMetricValue(publishedGppe, strategyValue))
+		(strategyValue === null ? oneMetricClass : sameMetricValue(publishedGppe, strategyValue))
 			? strategyMetric
 			: null;
 	if (publishedGppe !== null) {

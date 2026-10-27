@@ -17,6 +17,7 @@ hardcoded formula.
 | 2026-09-17 | Keep diversity. The metrics form a forest: gross profit, Market Value Added, stock-based compensation, labor cost, marketing cost, and so on, possibly with several ways to decompose each. **The engineering structure must not hardcode GPPE.** |
 | 2026-09-17 | #877: entities are identified by UUIDs with typed aliases. |
 | 2026-10-09 | #1176: split GPPE into two named metrics. `gppe_uniform_charge_v0` (total-assets charge, every class). `gppe_banking_tce_v1` (FINANCIAL only, measured tangible common equity). No constant stands in for a measurement. A missing input gives `unavailable`, never a fallback. |
+| 2026-10-26 | D2 (#1518): the bank capital base is measured tangible common equity. The strategy definition (1.1.0) pins one tree per issuer class by key, version and content hash. The core and the composite evaluate that pin. A negative tangible common equity gives no value (working choice of the delivery session, not an owner approval). |
 
 ## 1. What exists, measured in code (`main@f5807a7`)
 
@@ -435,9 +436,12 @@ The existing fixed columns stay as a compatibility projection:
 - `strategy_bridge._STRATEGY_FINANCIAL_KEYS` becomes the forest's input nodes, which removes
   the rule-22 violation that init.md names.
 - `mart.strategy_input_coverage` measures, per issuer, `required_inputs(tree, class)` of the
-  trees the strategy consumes. A bank is then required to carry `pre_provision_profit`, not
-  `gross_profit`. Since #1518, `factors.composite.strategy_evaluator.required_input_keys`
-  derives the keys from the trees that the definition pins for the issuer class.
+  trees the strategy consumes. Since #1518, `factors.composite.strategy_evaluator.required_input_keys`
+  derives the keys from the trees that the definition pins for the issuer class. A bank carries the
+  strategy input key `gross_profit` (the node `pre_provision_profit` is the financial-issuer split of the
+  metric `gross_profit`, so its input key is `gross_profit`), `headcount` and the four tangible-common-equity
+  leaves, and no `total_assets`. Every other class carries `gross_profit`, `headcount` and `total_assets`.
+  P/S adds `shares_outstanding`, `last_close` and `revenue` for every class.
 
 ## 8. Confidence
 

@@ -554,10 +554,12 @@ FOREST = Forest(
     trees=(GPPE_V0_TREE, GPPE_BANKING_TCE_TREE),
 )
 
-#: Since #1518 the column `gppe` holds the root of the tree that the strategy definition pins for the row's class, so
-#: the node named here is the one that judges the SIGN of the column: every pinned root declares the same sign policy
-#: (`test_bound_tree.py` holds it for every class).
-#: Published mart columns -> the node each one carries, per table. The wide-row generator
+#: Published mart columns -> the node whose SIGN POLICY judges each one, per table. This is not a statement of what
+#: the column holds. Since #1518 the column `gppe` holds the root of the tree that the strategy definition pins for
+#: the row's class: `gppe_uniform_charge_v0` for the non-financial classes and `gppe_banking_tce_v1` for FINANCIAL.
+#: `capital_adjusted_gross_profit` holds the numerator of that root ratio (`capital_adjusted_tce` for a bank). The
+#: node named here judges the sign of the column for every class because every pinned root declares the same sign
+#: policy as it does: `test_bound_tree.py` holds that for every class. The wide-row generator
 #: (docs/metric-forest.md §6) will derive these; until then this is the one place a published
 #: column is tied to a node, and both the invariant suite and the tick's gate read it.
 PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType(

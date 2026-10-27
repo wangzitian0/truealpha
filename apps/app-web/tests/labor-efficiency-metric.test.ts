@@ -132,17 +132,58 @@ assertSameJson(
 );
 
 // 9. #1518 review: a non-bank excluded after its tree was chosen has a published value and no strategy value. The
-// decision row still names the metric, so the published value carries that name. Only a row with no name is unrecorded.
+// class has one metric, and the decision row names it, so the published value carries that name.
 assertSameJson(
-  laborEfficiencyLabels({ publishedGppe: "2563276.38", strategyValue: null, strategyMetric: "gppe_uniform_charge_v0" }),
+  laborEfficiencyLabels({
+    publishedGppe: "2563276.38",
+    strategyValue: null,
+    strategyMetric: "gppe_uniform_charge_v0",
+    operatingBranch: "non_financial",
+  }),
   [{ metric: "gppe_uniform_charge_v0", value: "2563276.38" }],
-  "a published value with no strategy value takes the metric name of the decision row",
+  "a non-financial published value with no strategy value takes the metric name of the decision row",
 );
 assertSameJson(
-  laborEfficiencyLabels({ publishedGppe: "2563276.38", strategyValue: null, strategyMetric: null }),
+  laborEfficiencyLabels({ publishedGppe: "2563276.38", strategyValue: null, strategyMetric: null, operatingBranch: "non_financial" }),
   [{ metric: UNRECORDED_METRIC, value: "2563276.38" }],
   "no row names a metric, so the page says so",
 );
 
-console.log("labor-efficiency-metric: 11 checks passed");
+// 10. #1518 review (second round): a bank published BEFORE definition 1.1.0 holds the old total-assets value
+// (JPM -422081.43), while its decision row names the banking metric. With no strategy value to compare with,
+// the page cannot show that the published number is the banking one. It must not show it under the banking name.
+assertSameJson(
+  laborEfficiencyLabels({
+    publishedGppe: "-422081.43",
+    strategyValue: null,
+    strategyMetric: "gppe_banking_tce_v1",
+    operatingBranch: "financial",
+  }),
+  [{ metric: UNRECORDED_METRIC, value: "-422081.43" }],
+  "a bank's published value with no strategy value is not named for the banking metric",
+);
+// The class is unknown: the page cannot say that the class has one metric either.
+assertSameJson(
+  laborEfficiencyLabels({
+    publishedGppe: "-422081.43",
+    strategyValue: null,
+    strategyMetric: "gppe_banking_tce_v1",
+    operatingBranch: null,
+  }),
+  [{ metric: UNRECORDED_METRIC, value: "-422081.43" }],
+  "a published value of an unknown class with no strategy value is not named",
+);
+// A bank whose published and strategy values agree (definition 1.1.0) takes the banking name.
+assertSameJson(
+  laborEfficiencyLabels({
+    publishedGppe: "227476.20",
+    strategyValue: "227476.20",
+    strategyMetric: "gppe_banking_tce_v1",
+    operatingBranch: "financial",
+  }),
+  [{ metric: "gppe_banking_tce_v1", value: "227476.20" }],
+  "a bank whose two values agree shows one value under the banking name",
+);
+
+console.log("labor-efficiency-metric: 14 checks passed");
 

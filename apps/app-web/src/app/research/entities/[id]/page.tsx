@@ -60,6 +60,7 @@ export default async function EntityDetailPage({
     publishedGppe: gppeDetail?.gppe ?? null,
     strategyValue: latestRow?.capitalAdjustedLaborEfficiency ?? null,
     strategyMetric: latestRow?.laborEfficiencyMetric ?? null,
+    operatingBranch: gppeDetail?.operatingBranch ?? null,
   });
   // #1235: the gap divides the multiple of the row's definition — P/GP under 1.0.0.
   const basisLabel = valuationBasisLabel(latestRow?.valuationBasis ?? null);
