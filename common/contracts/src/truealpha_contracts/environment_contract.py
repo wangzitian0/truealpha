@@ -35,6 +35,8 @@ ENVIRONMENT_CONTRACT_RESOURCE = "environment_contract.v1.json"
 SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
 
 EnvironmentKey = Literal["preview", "staging", "production"]
+#: The other names that a process or a stored row gives an environment: alias -> environment.
+ENVIRONMENT_ALIASES: Mapping[str, str] = {"prod": "production"}
 UniverseStatus = Literal["scheduled", "stopped"]
 #: ``strategy``: the tick seeds the strategy inputs and runs the frozen strategy. ``fund_consolidation``: the
 #: tick values the fund whose holdings are the members. ``sentinel``: a deploy check, no served universe.
@@ -554,9 +556,11 @@ class EnvironmentContract(_StrictFrozenModel):
 
     def normalize_environment(self, environment: str | None) -> str:
         env = (environment or "").strip().lower()
-        if env == "prod":
-            return "production"
-        return env
+        return ENVIRONMENT_ALIASES.get(env, env)
+
+    def environment_names(self, environment: str) -> tuple[str, ...]:
+        """Every name that ``environment`` goes by: its own and its aliases."""
+        return (environment, *(alias for alias, target in ENVIRONMENT_ALIASES.items() if target == environment))
 
     def record(self, key: str) -> UniverseRecord:
         """The record of the universe ``key``. A key outside the record raises (#1522)."""
@@ -646,22 +650,30 @@ class EnvironmentContract(_StrictFrozenModel):
             return False
         return record.is_sentinel or self.universe_status(universe, environment) == "scheduled"
 
+    def unscheduled_id_prefixes(self) -> Mapping[str, tuple[str, ...]]:
+        """For each environment that gates its heads: the id prefixes of the universes it does not tick (#1522).
+
+        ``preview`` gates nothing and is absent. The Python rule ``is_head_scheduled`` and the SQL predicate of
+        the output invariants (`truealpha_tools.output_invariants.head_is_scheduled_sql`) both read this one
+        mapping, so a status that changes in the records changes both.
+        """
+        return {
+            env: tuple(
+                record.id_prefix for key, record in self.universes.items() if not self.is_universe_scheduled(key, env)
+            )
+            for env in self.environments
+            if env != "preview"
+        }
+
     def is_head_scheduled(self, universe_id: str, environment: str | None) -> bool:
         """Whether ``universe_id`` has a running schedule in ``environment`` (#1416 E1).
 
-        Fails closed (returns True) when ``environment`` is omitted or unrecognised, or when ``universe_id``
-        starts with no id prefix of the records: the SQL function ``mart.is_head_scheduled`` answers the same
-        way, and ``test_output_invariants`` holds the two equal until step 2 of #1522 retires the function.
-        A universe that another environment ticks and this one does not is not scheduled here.
+        Fails closed (returns True) when ``environment`` is omitted or unrecognised, and for an id that starts
+        with no id prefix of the records. A head is not scheduled where its universe's prefix is in
+        ``unscheduled_id_prefixes()`` for the environment.
         """
-        env = self.normalize_environment(environment)
-        if env not in self.environments or env == "preview":
-            return True
-        try:
-            key = self.universe_of_id(universe_id)
-        except UnknownUniverse:
-            return True
-        return self.is_universe_scheduled(key, env)
+        prefixes = self.unscheduled_id_prefixes().get(self.normalize_environment(environment))
+        return prefixes is None or not universe_id.startswith(prefixes)
 
     def derived_environment_shares(self, seat: str) -> tuple[tuple[str, int], ...]:
         """Derive percentage shares ``(environment, percent)`` for a shared physical seat (#1416 E3).

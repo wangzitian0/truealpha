@@ -16,8 +16,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from data_engine.environment_universes import scheduled_universe_names
-from data_engine.lanes.capture import is_head_scheduled
 from infra2_sdk.deploy import default_http_get
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from truealpha_tools.nightly_verdicts import HealthReport, read_report
 
@@ -64,7 +64,7 @@ def _assess_served_head_freshness(
             stale.append(str(entry))
             continue
         universe = str(entry.get("universe_id", "?"))
-        if not is_head_scheduled(universe, environment):
+        if not load_environment_contract().is_head_scheduled(universe, environment):
             continue
         scheduled_seen += 1
         freshness = str(entry.get("freshness", "fresh"))

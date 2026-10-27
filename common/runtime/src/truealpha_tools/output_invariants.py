@@ -57,6 +57,7 @@ from typing import Any
 import psycopg
 from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
 from truealpha_contracts import reconciliation_policies
+from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
@@ -295,7 +296,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
 _SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
 
 
-INVARIANTS: tuple[Invariant, ...] = (
+_TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="node-sign-policy",
         claim=(
@@ -605,7 +606,7 @@ INVARIANTS: tuple[Invariant, ...] = (
                 select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
                 from mart.served_head h
                 where h.factor_id = 'gross_profit_per_employee'
-                  and mart.is_head_scheduled(h.universe_id, h.environment)
+                  and __HEAD_IS_SCHEDULED__
             ),
             reports as (
                 select
@@ -706,7 +707,7 @@ INVARIANTS: tuple[Invariant, ...] = (
             select count(*)
             from mart.served_head h
             where h.factor_id = 'gross_profit_per_employee'
-              and mart.is_head_scheduled(h.universe_id, h.environment)
+              and __HEAD_IS_SCHEDULED__
         """,
     ),
     Invariant(
@@ -735,7 +736,7 @@ INVARIANTS: tuple[Invariant, ...] = (
                 select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
                 from mart.served_head h
                 where h.factor_id = 'gross_profit_per_employee'
-                  and mart.is_head_scheduled(h.universe_id, h.environment)
+                  and __HEAD_IS_SCHEDULED__
             ),
             served as (
                 select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end,
@@ -761,7 +762,7 @@ INVARIANTS: tuple[Invariant, ...] = (
             from mart.served_head h
             join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
             where h.factor_id = 'gross_profit_per_employee'
-              and mart.is_head_scheduled(h.universe_id, h.environment)
+              and __HEAD_IS_SCHEDULED__
               and r.availability = 'available'
               and r.revenue_period_end is not null
         """,
@@ -775,22 +776,56 @@ def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
     return ", ".join(f"('{family}', {rank})" for family, rank in ranks) or "(null::text, null::integer)"
 
 
-def _render(invariant: Invariant) -> Invariant:
+def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
+    """The SQL boolean over `h.universe_id` and `h.environment` that says whether a served head has a schedule (#1346).
+
+    Written from the contract: `contract.unscheduled_id_prefixes()` gives, for each environment, the id prefixes of the
+    universes that it does not tick. An environment that the contract does not name, and an id that starts with
+    no listed prefix, are scheduled. This predicate replaces the SQL function `mart.is_head_scheduled`, which the
+    old query called: that function was a copy of the schedule that a migration had to follow (#1522).
+    """
+    unscheduled = []
+    for environment, prefixes in contract.unscheduled_id_prefixes().items():
+        if not prefixes:
+            continue
+        names = ", ".join(f"'{name}'" for name in contract.environment_names(environment))
+        likes = ", ".join(f"'{prefix}%'" for prefix in prefixes)
+        unscheduled.append(
+            f"(lower(trim(coalesce(h.environment, ''))) in ({names})"
+            f" and coalesce(h.universe_id, '') like any (array[{likes}]))"
+        )
+    return f"not ({' or '.join(unscheduled)})" if unscheduled else "true"
+
+
+def _render(invariant: Invariant, scheduled: str) -> Invariant:
     """The derived facts enter the SQL as literals, once, here — never at query time."""
     values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
     ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
+
+    def fill(sql: str) -> str:
+        return (
+            sql.replace("__EXPECTED_VALUES__", values)
+            .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
+            .replace("__MARKET_PRICE_PARSER_RANKS__", ranks)
+            .replace("__HEAD_IS_SCHEDULED__", scheduled)
+        )
+
     return Invariant(
         id=invariant.id,
         claim=invariant.claim,
-        violations=invariant.violations.replace("__EXPECTED_VALUES__", values)
-        .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
-        .replace("__MARKET_PRICE_PARSER_RANKS__", ranks),
-        population=invariant.population,
-        signals=invariant.signals,
+        violations=fill(invariant.violations),
+        population=fill(invariant.population),
+        signals=None if invariant.signals is None else fill(invariant.signals),
     )
 
 
-INVARIANTS = tuple(_render(invariant) for invariant in INVARIANTS)
+def render_invariants(contract: EnvironmentContract) -> tuple[Invariant, ...]:
+    """The shipped invariants, with the schedule predicate written from ``contract``."""
+    scheduled = head_is_scheduled_sql(contract)
+    return tuple(_render(template, scheduled) for template in _TEMPLATES)
+
+
+INVARIANTS: tuple[Invariant, ...] = render_invariants(load_environment_contract())
 
 
 @dataclass(frozen=True)
