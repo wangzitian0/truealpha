@@ -6,7 +6,7 @@
 -- staging.etf_constituent_facts (company_name), display_name resolved to NULL and the Web UI
 -- rendered bare tickers without company names.
 --
--- Superseded: 20261027T1000_datahub_primary_listing_relation.sql redefines the view later in the
+-- Superseded: 20261027T1100_datahub_primary_listing_relation.sql redefines the view later in the
 -- chain (#1518) and owns its definition. Replacing it here would take ACCESS EXCLUSIVE on the view on
 -- every replay, only for that file to replace it again. So this file creates the view only on a
 -- database that has none.

@@ -318,7 +318,7 @@ UUIDs without touching them.
     with a pinned `search_path` (#953). Before that they were not, and every
     `mart_readonly` select on this view failed with `permission denied for schema
     staging` — which is why #954's App-side twin never ran.
-  - Since #1337 the view calls neither helper. One set-based pass (`20261015T0900`, redefined by `20261027T1000`) gives
+  - Since #1337 the view calls neither helper. One set-based pass (`20261015T0900`, redefined by `20261027T1100`) gives
     the survivor and the alias end of every row, as the helpers give them at `'infinity'`.
     `common/runtime/tests/test_entity_identity_view.py` compares the view with the definition
     that calls the helpers.

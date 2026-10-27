@@ -21,7 +21,7 @@
 -- A change to either helper needs the same change here.
 -- libs/runtime/tests/test_entity_identity_view.py compares this view with the old definition.
 --
--- Superseded: 20261027T1000_datahub_primary_listing_relation.sql redefines the view later in the
+-- Superseded: 20261027T1100_datahub_primary_listing_relation.sql redefines the view later in the
 -- chain (#1518) and owns its shape. Replacing the view here would take ACCESS EXCLUSIVE on it on
 -- every replay, only for that file to replace it again. So this file creates the view only on a
 -- database that has none. 20260923T1800 creates it first, so this file keeps the comment.

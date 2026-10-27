@@ -2,7 +2,7 @@
 
 The view of 20260923T1800 called `staging.entity_survivor()` and `staging.entity_alias_valid_to()`
 for each row. On production, one evaluation took 1.4 s to 3 s. 20261015T0900 gives the same values
-for all rows at once, through common table expressions. 20261027T1000 (#1518) ranks the listings of one
+for all rows at once, through common table expressions. 20261027T1100 (#1518) ranks the listings of one
 issuer by the relation `primary_listing`, not by ticker literals.
 
 The checks:
@@ -44,7 +44,7 @@ LEGACY_ID_MIGRATION = MIGRATIONS / "20260923T1800_datahub_mart_entity_identity_l
 #: The definition of #1337. It creates the view only on a database that has none.
 SET_BASED_MIGRATION = MIGRATIONS / "20261015T0900_datahub_mart_entity_identity_set_based.sql"
 #: The definition of #1518. It reads the relation `primary_listing`. It is the last file that defines the view.
-PRIMARY_LISTING_MIGRATION = MIGRATIONS / "20261027T1000_datahub_primary_listing_relation.sql"
+PRIMARY_LISTING_MIGRATION = MIGRATIONS / "20261027T1100_datahub_primary_listing_relation.sql"
 #: Every file that defines the view. Each boot replays all of them.
 VIEW_MIGRATIONS = (
     MIGRATIONS / "20260921T2100_datahub_mart_entity_identity.sql",
