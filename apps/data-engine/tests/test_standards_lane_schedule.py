@@ -18,6 +18,7 @@ from data_engine.lanes.standards import (
     standard_backfill_pipeline_job,
     standard_backfill_schedule,
 )
+from truealpha_contracts.universes import lane_name, record, served_keys
 
 #: What each environment runs (the contract lists them): production runs TOPT and QQQ, staging TOPT only.
 UNIVERSES_BY_ENVIRONMENT = [
@@ -319,7 +320,7 @@ def _pointer(monkeypatch, *, heads: dict[str, str | None], stored: dict[str, str
     def governed_head(_connection, *, universe_prefix):
         # #756 replaced #826's literal: the head is resolved under the environment the
         # database declares, so there is no argument left to pin. The signature does it.
-        universe = next(key for key, prefix in question_coverage.UNIVERSE_PREFIXES.items() if prefix == universe_prefix)
+        universe = next(lane_name(key) for key in served_keys() if record(key).id_prefix == universe_prefix)
         run = heads.get(universe)
         return None if run is None else question_coverage.GovernedHead(ids[universe], run, HEAD_CUTOFF)
 

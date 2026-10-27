@@ -10,6 +10,8 @@ checked-in corpus file this plane exists to eliminate.
 from __future__ import annotations
 
 import hashlib
+import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -31,6 +33,10 @@ from data_engine.datahub.production_topt.universe_plane import (
 )
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.universes import lane_name
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from variant_contract import serve_variant  # noqa: E402
 
 _CASSETTE = Path(__file__).parent / "cassettes" / "nasdaq100_index.bcc3fb15.json"
 _CASSETTE_SHA = "bcc3fb150a3988b699eba12e798e950e0ec0e7d55f4d99765c69dd528f087518"
@@ -125,7 +131,7 @@ def test_land_publish_resolve_round_trip(connection) -> None:
     assert contract_id.startswith("universe-list:")
     assert current_head_mapping_sha(connection, source) == denominator["instrument_mapping_sha256"]
 
-    corpus = resolve_universe_corpus(connection, source.head_kind)
+    corpus = resolve_universe_corpus(connection, lane_name(source.etf))
     version = corpus_list_version(corpus)
     assert len(version.members) == 102
     assert version.universe.universe_id == "universe:qqq-us-2026-06-30"
@@ -276,7 +282,7 @@ def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch
         connection,
         cutoff=datetime(2026, 8, 17, 12, 30, tzinfo=UTC),
         version="test-routes",
-        universe_head_kind=source.head_kind,
+        universe_head_kind=lane_name(source.etf),
         label_prefix="test-qqq",
     )
     routes = build_routes(plan, connection)
@@ -961,9 +967,12 @@ _REFRESH_ROWS = [("ZQR1", 9990041, "bbg0zqr10001")] + [
 
 
 def _exchange_source():
-    from data_engine.datahub.production_topt.universe_plane import UniverseSource
+    """A multi-exchange source: the S&P 500 declares no exchange, so each constituent resolves through the identity store."""
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 
-    return UniverseSource(etf="exctest", index_api="", universe_prefix="exctest-us", label="exchange test", mic=None)
+    source = UNIVERSE_SOURCES["sp500"]
+    assert source.mic is None
+    return replace(source, nport_ticker=None)
 
 
 def _landing(rows: list[tuple[str, int, str]]):
@@ -1019,10 +1028,12 @@ def test_the_refresh_op_reports_the_exclusion_in_its_output_metadata(
     from truealpha_runtime.testing import isolated_test_database
 
     corpus_rows(("ZQR1", "xnas"))
-    monkeypatch.setattr(universe_plane, "UNIVERSE_SOURCES", {"exctest": _exchange_source()})
+    monkeypatch.setattr(universe_plane, "UNIVERSE_SOURCES", {"sp500": _exchange_source()})
     monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS))
     monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda *_args, **_kwargs: "skipped")
-    with isolated_test_database("universe_refresh") as url:
+    # The refresh skips a universe that the environment does not schedule: the variant schedules the S&P 500.
+    monkeypatch.setattr(settings, "app_env", "production")
+    with serve_variant(), isolated_test_database("universe_refresh") as url:
         monkeypatch.setattr(settings, "database_url", url)
         context = dg.build_op_context()
 
@@ -1031,4 +1042,4 @@ def test_the_refresh_op_reports_the_exclusion_in_its_output_metadata(
     metadata = context.get_output_metadata("result")
     assert metadata is not None and "constituents_excluded" in metadata, "the op reported no exclusion"
     reported = metadata["constituents_excluded"].value
-    assert reported == {"exctest": {"count": 7, "tickers": _UNKNOWN_TICKERS, "reason": "unresolved_listing_exchange"}}
+    assert reported == {"sp500": {"count": 7, "tickers": _UNKNOWN_TICKERS, "reason": "unresolved_listing_exchange"}}

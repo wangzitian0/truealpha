@@ -24,6 +24,7 @@ import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
+from truealpha_contracts.universes import keys, lane_name, record
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
@@ -44,41 +45,6 @@ from data_engine.datahub.strategy_bridge import (
 )
 from data_engine.environment_universes import rule_environment
 from data_engine.sources import gateway
-
-TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
-
-
-def live_topt_cron(app_env: str) -> str:
-    """Daily, after the US close (2h+ in EDT, 5h+ in EST), so same-day closes and
-    facts are settled — and 30 minutes APART per environment.
-
-    Both environments used to fire at the same instant against ONE shared Twelve
-    Data key whose free tier caps requests per MINUTE at 8. Two simultaneous ticks
-    put ~15 req/min on that ceiling and each environment lost ~6 of its 21
-    second-origin cells to rate limiting (2026-08-15/16 scheduled ticks: prod and
-    staging both 15/21 agreed, 15+15 of 42 twelvedata objects landing in the shared
-    window) — which froze the governed head for three days straight, because the
-    #536 gate correctly refuses a run whose weakest cell lost corroboration. #491
-    sized the DAILY budget; the per-minute collision of two same-instant consumers
-    is what this offset removes. 22:45 is still comfortably after the close, so the
-    staleness argument above holds for both environments.
-
-    #27's two-consecutive-cycles proof was gathered on a temporary hourly cadence
-    and is complete in both environments; hourly ALSO over-spent the shared daily
-    tier once production joined staging (21 fetches/tick x 24 x 2 envs = 1008/day
-    against an 800/day budget, #491). Daily spends 42/day across both. Testing or
-    retry never needs a faster cron: launch the same job manually with an explicit
-    `executed_at`.
-    """
-    # Alias-safe: a deploy configured APP_ENV=prod must never silently take the
-    # staging slot and re-create the collision (Copilot review on #574). Only two
-    # environments run this schedule; anything unrecognized shares staging's slot,
-    # where a surprise collision costs a staging tick, not the production head.
-    normalized = app_env.strip().lower()
-    return "15 22 * * *" if normalized in ("production", "prod") else "45 22 * * *"
-
-
-TOPT_LIVE_CRON = live_topt_cron(settings.app_env)
 
 
 class ToptLiveTickConfig(dg.Config):
@@ -104,17 +70,16 @@ class ToptLiveTickConfig(dg.Config):
 
 @dataclass(frozen=True)
 class UniverseTick:
-    """One universe's scheduled tick, declared (#72 scope 4). The factory below turns a
+    """One universe's scheduled tick, built from its record (#72 scope 4, #1522). The factory below turns a
     declaration into the op, the job and (when `cron` is set) the schedule; a new
-    universe is one entry in `TICKS`, not sixty copied lines."""
+    universe is one record in `environment_contract.v1.json`, not sixty copied lines."""
 
+    #: The key of the universe record.
     key: str
     job_name: str
     op_name: str
     schedule_name: str
     log_label: str
-    #: None means the hand-curated TOPT corpus; otherwise a governed universe head.
-    universe_head_kind: str | None
     label_prefix: str
     objectives: ServiceObjectives | None
     #: TOPT additionally seeds the strategy inputs and runs the frozen strategy;
@@ -123,29 +88,31 @@ class UniverseTick:
     #: Whether this tick materializes the module-5 fund consolidation (#727/#36). Only
     #: the universe whose members ARE the fund's holdings can value them: QQQ's filed
     #: lines consolidated against TOPT's 20 core rows would resolve a fraction of the
-    #: fund and refuse on coverage — a true answer to a question nobody asked. One flag
+    #: fund and refuse on coverage — a true answer to a question nobody asked. One role
     #: while one fund has a universe; a fund->universe registry is the multi-fund
     #: tranche's problem (stated the same way in the App's fund-valuation reader).
     consolidate_funds: bool
     cron: str | None
 
+    @property
+    def lane_name(self) -> str:
+        return lane_name(self.key)
 
-QQQ_LIVE_JOB_NAME = "qqq_live_pipeline"
-# 23:20 UTC: after prod TOPT (22:15, ~7 min) and staging TOPT (22:45, ~7 min), so the
-# three consumers of the shared 8-requests-per-minute Twelve Data key never overlap
-# (#574's collision class, third consumer edition). A 102-listing tick at the 8s
-# throttle runs ~15-30 minutes and finishes before midnight UTC.
-QQQ_LIVE_CRON = "20 23 * * *"
-QQQ_UNIVERSE_HEAD = "universe-list:qqq"
-# Phase-1 service objectives for the QQQ universe, declared where the gate reads them
-# rather than silently reusing TOPT's demand: ~90 of 101 issuers have no headcount
+    @property
+    def universe_head_kind(self) -> str | None:
+        """None means the hand-curated TOPT corpus; otherwise the name of a governed universe head."""
+        return None if record(self.key).membership.kind == "frozen_corpus" else self.lane_name
+
+
+# Phase-1 service objectives for a data-only universe (QQQ, S&P 500), declared where the gate reads them
+# rather than silently reusing TOPT's demand: ~90 of 101 QQQ issuers have no headcount
 # fact yet (#564 fills them; the plane accepts inserts, never deploys) and a handful
 # of foreign filers report under IFRS the ruleset does not map yet — those cells
 # grade honestly unavailable, and a 0.95 availability floor would freeze the QQQ
 # pointer on day one for gaps we have chosen to serve honestly. The corroboration
 # band and coverage stay at full strength; availability rises back to 0.95 when the
 # headcount plane covers the universe (tracked on #578/#564).
-QQQ_PHASE1_OBJECTIVES = ServiceObjectives(
+DATA_UNIVERSE_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
     minimum_availability=Decimal("0.70"),
     minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
@@ -157,15 +124,13 @@ QQQ_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_corroborated_share=Decimal("0.90"),
 )
 
-CANARY_JOB_NAME = "canary_live_pipeline"
-CANARY_UNIVERSE_HEAD = "universe-list:canary"
 # The canary judges itself by NAMED ORACLES (scripts/canary_assert.py), not by the
 # pointer: its five issuers span every operating branch, ASML's honest headcount
 # hole caps availability by design, and a post-deploy run may execute at any hour
 # (mid-session captures grade insufficient under #625). The floors here only stop
 # a catastrophic run from advancing the canary's own head; they are deliberately
 # NOT the verification bar.
-CANARY_OBJECTIVES = ServiceObjectives(
+SENTINEL_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
     minimum_availability=Decimal("0.70"),
     minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
@@ -173,85 +138,50 @@ CANARY_OBJECTIVES = ServiceObjectives(
     minimum_corroborated_share=Decimal("0"),
 )
 
-# 23:47 UTC: 27 minutes after the QQQ tick, so the canary's overlap names (AAPL,
-# GOOGL, GOOG, ASML) reuse the night's committed observations under #635 and the
-# daily proof costs ~2 vendor calls (HBAN/CINF only). Seven deploy-free days in a
-# row meant seven days with ZERO full freeze→publish executions — a
-# deploy-triggered verifier only verifies when you deploy; this makes the full
-# chain prove itself nightly in BOTH environments (#648/#671).
-CANARY_DAILY_CRON = "47 23 * * *"
 
-SP500_LIVE_JOB_NAME = "sp500_live_pipeline"
-# 01:15 UTC: after the nightly invariants (00:15 UTC) and confidence report (00:45 UTC),
-# well clear of the 22:15/22:45 TOPT, 23:20 QQQ, and 23:47 canary capture windows (#67 / #1281).
-SP500_LIVE_CRON = "15 1 * * *"
-# The contract holds the status of the SP500 universe: `environment_contract.v1.json` lists it as
-# stopped, with the precondition that unlocks it. This lane declares no status of its own.
-SP500_UNIVERSE_HEAD = "universe-list:sp500"
-SP500_PHASE1_OBJECTIVES = ServiceObjectives(
-    minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
-    minimum_availability=Decimal("0.70"),
-    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
-    minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
-    minimum_corroborated_share=Decimal("0.90"),
-)
+def tick_cron(key: str, app_env: str) -> str:
+    """The cron of the universe `key` in `app_env`, from its record (#1522).
+
+    An environment that the contract does not name follows staging (`rule_environment`). A universe that
+    the environment does not tick takes the one cron of its record: its schedule exists and stays STOPPED.
+    Environments that share a vendor key keep their ticks apart in the records: two simultaneous ticks
+    put ~15 requests a minute on a Twelve Data key whose free tier caps at 8 (#574).
+    """
+    crons = record(key).cron
+    return crons.get(rule_environment(app_env)) or next(iter(crons.values()))
 
 
-TICKS: tuple[UniverseTick, ...] = (
-    UniverseTick(
-        key="topt",
-        job_name=TOPT_LIVE_JOB_NAME,
-        op_name="run_topt_live_tick",
-        schedule_name="topt_live_schedule",
-        log_label="topt live tick",
-        universe_head_kind=None,
-        label_prefix="production-topt",
-        objectives=None,
-        run_strategy=True,
-        consolidate_funds=False,
-        cron=TOPT_LIVE_CRON,
-    ),
-    UniverseTick(
-        key="qqq",
-        job_name=QQQ_LIVE_JOB_NAME,
-        op_name="run_qqq_live_tick",
-        schedule_name="qqq_live_schedule",
-        log_label="qqq live tick",
-        universe_head_kind=QQQ_UNIVERSE_HEAD,
-        label_prefix="production-qqq",
-        objectives=QQQ_PHASE1_OBJECTIVES,
-        run_strategy=False,
-        # QQQ's core rows are the fund's own holdings: the only tick that can value them.
-        consolidate_funds=True,
-        cron=QQQ_LIVE_CRON,
-    ),
-    UniverseTick(
-        key="sp500",
-        job_name=SP500_LIVE_JOB_NAME,
-        op_name="run_sp500_live_tick",
-        schedule_name="sp500_live_schedule",
-        log_label="sp500 live tick",
-        universe_head_kind=SP500_UNIVERSE_HEAD,
-        label_prefix="production-sp500",
-        objectives=SP500_PHASE1_OBJECTIVES,
-        run_strategy=False,
-        consolidate_funds=False,
-        cron=SP500_LIVE_CRON,
-    ),
-    UniverseTick(
-        key="canary",
-        job_name=CANARY_JOB_NAME,
-        op_name="run_canary_live_tick",
-        schedule_name="canary_daily_schedule",
-        log_label="canary tick",
-        universe_head_kind=CANARY_UNIVERSE_HEAD,
-        label_prefix="production-canary",
-        objectives=CANARY_OBJECTIVES,
-        run_strategy=False,
-        consolidate_funds=False,
-        cron=CANARY_DAILY_CRON,
-    ),
-)
+def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:
+    """The tick declaration of the universe `key`: names and roles from its record, the cron of `app_env`.
+
+    The sentinel (the canary) is no served universe: its objectives are floors, not the verification bar.
+    A universe that holds no role serves prices, facts and valuation context.
+    """
+    universe = record(key)
+    if universe.is_sentinel:
+        objectives: ServiceObjectives | None = SENTINEL_OBJECTIVES
+    else:
+        objectives = None if universe.runs_strategy else DATA_UNIVERSE_OBJECTIVES
+    return UniverseTick(
+        key=key,
+        job_name=f"{key}_live_pipeline",
+        op_name=f"run_{key}_live_tick",
+        schedule_name=f"{key}_daily_schedule" if universe.is_sentinel else f"{key}_live_schedule",
+        log_label=f"{key} tick" if universe.is_sentinel else f"{key} live tick",
+        label_prefix=f"production-{key}",
+        objectives=objectives,
+        run_strategy=universe.runs_strategy,
+        consolidate_funds=universe.consolidates_funds,
+        cron=tick_cron(key, app_env),
+    )
+
+
+TICKS: tuple[UniverseTick, ...] = tuple(universe_tick(key) for key in keys())
+
+TOPT_LIVE_JOB_NAME = universe_tick("topt").job_name
+QQQ_LIVE_JOB_NAME = universe_tick("qqq").job_name
+SP500_LIVE_JOB_NAME = universe_tick("sp500").job_name
+CANARY_JOB_NAME = universe_tick("canary").job_name
 
 
 def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
@@ -269,21 +199,15 @@ def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultSchedule
 
 
 def is_universe_scheduled(universe: str, environment: str) -> bool:
-    """Whether `universe` has an active schedule in `environment` (#1118, #1416)."""
-    key = universe.removeprefix("universe-list:")
-    for tick in TICKS:
-        if tick.key == key:
-            if tick.cron is None:
-                return False
-            return tick_schedule_status(tick, environment) == dg.DefaultScheduleStatus.RUNNING
-    return load_environment_contract().is_universe_scheduled(universe, environment)
+    """Whether the universe `universe` (a key of the record) has an active schedule in `environment` (#1118, #1416)."""
+    return load_environment_contract().is_universe_scheduled(universe, rule_environment(environment))
 
 
 def is_head_scheduled(universe_id: str, environment: str) -> bool:
     """Whether `universe_id` has a running schedule in `environment` (#1256, #1416).
 
     Delegates to `environment_contract.v1.json` and fails closed (returns True) when
-    `environment` is omitted or unrecognised, or when `universe_id` maps to no tick key.
+    `environment` is omitted or unrecognised, or when `universe_id` starts with no id prefix of the records.
     """
     return load_environment_contract().is_head_scheduled(universe_id, environment)
 
@@ -563,7 +487,7 @@ def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
             build_schedule(
                 tick,
                 _BUILT[tick.key][1],
-                cron=live_topt_cron(app_env) if tick.key == "topt" else tick.cron,
+                cron=tick_cron(tick.key, app_env),
                 default_status=tick_schedule_status(tick, app_env),
             )
             for tick in TICKS

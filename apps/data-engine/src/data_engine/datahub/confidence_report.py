@@ -77,6 +77,7 @@ from truealpha_contracts.reconciliation import (
     reconcile_source_assertions,
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
+from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
@@ -99,10 +100,10 @@ from data_engine.datahub.quality_report import (
     utc_day,
 )
 from data_engine.datahub.question_coverage import (
-    UNIVERSE_PREFIXES,
     GovernedHead,
+    NoHead,
     declared_environment,
-    governed_head,
+    governed_head_of,
 )
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 from data_engine.quality import vendor_oracle
@@ -169,18 +170,6 @@ INDEX_MEMBERSHIP_POLICY = ReconciliationPolicy(
     minimum_independent_origin_groups=2,
 )
 
-#: Five well-known QQQ names and five TOPT issuers spanning every operating branch (JPM is
-#: the depository institution, BRK.B the insurer, V the multi-class share-count case).
-DEFAULT_SAMPLE_SUBJECTS: Mapping[str, tuple[str, ...]] = {
-    "universe-list:qqq": (
-        "listing:xnas:aapl",
-        "listing:xnas:msft",
-        "listing:xnas:nvda",
-        "listing:xnas:amzn",
-        "listing:xnas:googl",
-    ),
-    "topt": ("listing:xnys:jpm", "listing:xnys:brk.b", "listing:xnys:xom", "listing:xnys:v", "listing:xnas:cost"),
-}
 DEFAULT_ORACLE_ISSUERS = 5
 
 BAND_DEFINITIONS: Mapping[str, str] = {
@@ -1256,7 +1245,7 @@ def _add_headcount_producers(connection: Connection[Any], subjects: Mapping[str,
 
 
 def _universe_source(universe: str) -> UniverseSource | None:
-    return next((source for source in UNIVERSE_SOURCES.values() if source.head_kind == universe), None)
+    return UNIVERSE_SOURCES.get(key_of_lane(universe))
 
 
 def load_index_membership(
@@ -1521,7 +1510,7 @@ def build_report(
         for family in PLANE_FAMILIES:
             families[family]["routes"] = membership_notes
 
-    samples = list(sample_subjects) if sample_subjects else list(DEFAULT_SAMPLE_SUBJECTS.get(universe, ()))
+    samples = list(sample_subjects) if sample_subjects else list(record(key_of_lane(universe)).report_sample)
     sample: dict[str, Any] = {}
     for subject_id in samples:
         entry: dict[str, Any] = {"ticker": subjects[subject_id].ticker if subject_id in subjects else None}
@@ -1618,9 +1607,8 @@ def compile_report(
     oracle: SecOracle | None = None,
 ) -> dict[str, Any] | None:
     """The report for one lane universe's governed head, or None when it has no head yet."""
-    prefix = UNIVERSE_PREFIXES.get(universe, universe)
-    head = governed_head(connection, universe_prefix=prefix)
-    if head is None:
+    head = governed_head_of(connection, key_of_lane(universe))
+    if isinstance(head, NoHead):
         return None
     return build_report(
         connection,

@@ -9,7 +9,6 @@ import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
-from data_engine.lanes import production_only_schedule_status
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
@@ -31,11 +30,8 @@ def _is_source_refresh_enabled(source) -> bool:
     """Refresh the constituents and the N-PORT holdings of a universe that the process environment runs.
 
     The contract is the only source of "scheduled" and "stopped" (#67, #1310): a stopped universe, and
-    a universe that the environment does not list, are not refreshed. A source that the contract does not
-    name at all (a universe added before the contract lists it) is refreshed: the contract has no rule for it.
+    a universe that the environment does not list, are not refreshed.
     """
-    if source.etf not in load_environment_contract().known_tick_keys:
-        return True
     return is_universe_scheduled(source.etf, settings.app_env)
 
 
@@ -151,9 +147,17 @@ def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.Sched
         job=universe_refresh_pipeline_job,
         cron_schedule=UNIVERSE_REFRESH_CRON,
         execution_timezone="UTC",
-        # Production-only, like the QQQ capture itself; staging exercises the plane
-        # via the operator script when needed.
-        default_status=production_only_schedule_status(app_env),
+        # The refresh runs where the environment schedules a universe whose members an index API gives
+        # (staging runs TOPT only and exercises the plane through the operator script when needed).
+        default_status=(
+            dg.DefaultScheduleStatus.RUNNING
+            if any(
+                is_universe_scheduled(key, app_env)
+                for key, universe in load_environment_contract().universes.items()
+                if universe.membership.kind == "index_api"
+            )
+            else dg.DefaultScheduleStatus.STOPPED
+        ),
     )
     def _universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
         return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())

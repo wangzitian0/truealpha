@@ -2143,15 +2143,15 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     import dagster as dg
     from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
     from data_engine.lanes import qqq_prices
-    from data_engine.lanes.capture import QQQ_UNIVERSE_HEAD
     from factors.production_topt import ToptCoreReasonCode
     from qqq_head_seed import daily_series_client, publish_qqq_head
     from split_series_seed import sessions
+    from truealpha_contracts.universes import lane_name
 
     publish_qqq_head(connection, [("AAPL", 320193), ("T1277Q", 1277)])
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
         connection,
-        corpus=resolve_universe_corpus(connection, QQQ_UNIVERSE_HEAD),
+        corpus=resolve_universe_corpus(connection, lane_name("qqq")),
         financial_vintage={
             "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20)),
         },

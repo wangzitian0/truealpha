@@ -33,11 +33,10 @@ from truealpha_contracts.environment_contract import (
     SentinelKnownAnswersCatalog,
     load_sentinel_known_answers,
 )
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 from data_engine import release_identity
 from data_engine.config import settings
-
-_CANARY_UNIVERSE_LIKE = "universe:canary-us-%"
 
 
 def _aapl_gppe_band() -> tuple[Decimal, Decimal]:
@@ -422,7 +421,7 @@ def main() -> int:
             or (
                 connection.execute(
                     "select run_id from mart.topt_capture_status where universe_id like %s order by cutoff desc limit 1",
-                    (_CANARY_UNIVERSE_LIKE,),
+                    (id_prefix_like(universe_with_role("sentinel")),),
                 ).fetchone()
                 or [None]
             )[0]

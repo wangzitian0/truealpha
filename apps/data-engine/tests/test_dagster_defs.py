@@ -26,9 +26,9 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine import dagster_defs
+from data_engine.config import settings
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
-    TOPT_LIVE_CRON,
     ToptLiveTickConfig,
     defs,
     fixture_canary_definitions,
@@ -38,6 +38,9 @@ from data_engine.dagster_defs import (
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
 from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
+from data_engine.lanes.capture import tick_cron
+from truealpha_contracts.environment_contract import UnknownUniverse
+from truealpha_contracts.universes import lane_name
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import stub_rate  # noqa: E402
@@ -114,7 +117,7 @@ def test_deployed_module_contains_no_fixture_seeding() -> None:
 def test_schedule_is_enabled_hourly_with_tick_driven_identity() -> None:
     # ENABLED is deliberate (#27 appended acceptance: schedule running in Staging).
     assert topt_live_schedule.default_status == dg.DefaultScheduleStatus.RUNNING
-    assert topt_live_schedule.cron_schedule == TOPT_LIVE_CRON
+    assert topt_live_schedule.cron_schedule == tick_cron("topt", settings.app_env)
 
     # Same tick -> same run_key + executed_at (idempotent retry); distinct ticks ->
     # distinct run_key (two-cycle proof). No wall clock.
@@ -628,10 +631,8 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     head frozen three days). No single-environment test could see this — the collision
     is a cross-environment property, so the guard asserts the SCHEDULING, not a fetch.
     """
-    from data_engine.dagster_defs import live_topt_cron
-
-    production = live_topt_cron("production")
-    staging = live_topt_cron("staging")
+    production = tick_cron("topt", "production")
+    staging = tick_cron("topt", "staging")
     assert production != staging, "same-instant crons re-create the per-minute collision"
     # Both stay in the settled after-close window the schedule's rationale requires.
     for cron in (production, staging):
@@ -642,9 +643,9 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     # throttling drift must never reach the other's window.
     assert abs(int(production.split()[0]) - int(staging.split()[0])) >= 30
     # Alias safety: APP_ENV=prod is production, not an accidental staging slot.
-    assert live_topt_cron("prod") == production
-    assert live_topt_cron("PRODUCTION") == production
-    assert live_topt_cron("dev") == staging, "unrecognized envs share the lower-stakes slot"
+    assert tick_cron("topt", "prod") == production
+    assert tick_cron("topt", "PRODUCTION") == production
+    assert tick_cron("topt", "dev") == staging, "unrecognized envs share the lower-stakes slot"
 
 
 # -- #72 scope 4: ticks are declarations; the factory builds what they say -------------------
@@ -787,7 +788,7 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
     assert not hasattr(standards, "extended_defs")
 
     assert {"qqq", "sp500", "canary"} == set(UNIVERSE_SOURCES)
-    assert UNIVERSE_SOURCES["sp500"].head_kind == "universe-list:sp500"
+    assert lane_name(UNIVERSE_SOURCES["sp500"].etf) == "universe-list:sp500"
     assert _universe_source("universe-list:sp500") == UNIVERSE_SOURCES["sp500"]
 
     for env in ("production", "prod", " PRODUCTION "):
@@ -798,7 +799,7 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
         expected_schedules = {
             "topt_live_schedule": "15 22 * * *",
             "qqq_live_schedule": "20 23 * * *",
-            "sp500_live_schedule": capture.SP500_LIVE_CRON,
+            "sp500_live_schedule": "15 1 * * *",
             "sp500_universe_refresh_schedule": universe_refresh.SP500_UNIVERSE_REFRESH_CRON,
             "canary_daily_schedule": "47 23 * * *",
             "nport_monthly_schedule": standards.NPORT_MONTHLY_CRON,
@@ -996,7 +997,8 @@ def test_the_sp500_universe_has_no_schedule_in_any_environment_and_the_qqq_rule_
     QQQ keeps its rule: scheduled in production, not run in staging."""
     for environment in ("production", "prod", "staging"):
         assert capture.is_universe_scheduled("sp500", environment) is False, (environment, SP500_STOPPED_BECAUSE)
-        assert capture.is_universe_scheduled("universe-list:sp500", environment) is False, environment
+        with pytest.raises(UnknownUniverse):
+            capture.is_universe_scheduled("universe-list:sp500", environment)  # a lane name is no key
         assert capture.is_head_scheduled("universe:sp500-us-2026-09-30", environment) is False, (
             environment,
             SP500_STOPPED_BECAUSE,
@@ -1130,7 +1132,7 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
 ) -> None:
     """`_is_source_refresh_enabled` refreshes a universe where the contract schedules it, and the canary
     where the contract declares its tick. The SP500 waits in production and is absent in staging.
-    Staging runs the TOPT universe only, so it refreshes no QQQ."""
+    Staging runs the TOPT universe only, so it refreshes no QQQ. A source outside the records raises."""
     from data_engine.config import settings
     from data_engine.lanes import universe_refresh
     from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
@@ -1143,26 +1145,21 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
         def __init__(self, etf: str) -> None:
             self.etf = etf
 
-    UNLISTED = "universe-the-contract-does-not-list"
-
     def enabled() -> dict[str, bool]:
-        return {
-            etf: universe_refresh._is_source_refresh_enabled(_Source(etf))
-            for etf in ("qqq", "sp500", "canary", UNLISTED)
-        }
+        return {etf: universe_refresh._is_source_refresh_enabled(_Source(etf)) for etf in ("qqq", "sp500", "canary")}
 
     monkeypatch.setattr(settings, "app_env", "production")
-    assert enabled() == {"qqq": True, "sp500": False, "canary": True, UNLISTED: True}, SP500_STOPPED_BECAUSE
+    assert enabled() == {"qqq": True, "sp500": False, "canary": True}, SP500_STOPPED_BECAUSE
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True}
+    with pytest.raises(UnknownUniverse):
+        universe_refresh._is_source_refresh_enabled(_Source("universe-the-contract-does-not-list"))
 
     monkeypatch.setattr(capture, "load_environment_contract", lambda: unlocked)
     monkeypatch.setattr(settings, "app_env", "production")
-    assert enabled() == {"qqq": True, "sp500": True, "canary": True, UNLISTED: True}, "the contract unlocks the SP500"
+    assert enabled() == {"qqq": True, "sp500": True, "canary": True}, "the contract unlocks the SP500"
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True, UNLISTED: True}, (
-        "staging does not list the SP500"
-    )
+    assert enabled() == {"qqq": False, "sp500": False, "canary": True}, "staging does not list the SP500"
 
 
 @pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])

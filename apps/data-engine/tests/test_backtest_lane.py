@@ -55,11 +55,11 @@ def test_the_schedule_runs_in_staging_and_production(app_env: str, status: dg.De
 
 
 def test_the_schedule_stays_outside_the_staging_capture_tick() -> None:
-    from data_engine.lanes.capture import live_topt_cron
+    from data_engine.lanes.capture import tick_cron
 
     backtest_minute_field, backtest_hour_field = lane.BACKTEST_CRON.split()[:2]
     backtest_minute = int(backtest_hour_field) * 60 + int(backtest_minute_field)
-    minute, hour = live_topt_cron("staging").split()[:2]
+    minute, hour = tick_cron("topt", "staging").split()[:2]
     assert int(hour) * 60 + int(minute) - backtest_minute >= 60, "the staging tick starts an hour or more later"
 
 

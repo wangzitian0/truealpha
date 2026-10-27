@@ -40,6 +40,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from truealpha_contracts.standards import STANDARDS
+from truealpha_contracts.universes import key_of_lane, lane_name, universe_with_role
 
 from data_engine.config import settings
 from data_engine.datahub import analyst_ratings, question_coverage
@@ -49,7 +50,6 @@ from data_engine.datahub.canonical_issuer import (
     canonicalize_universe,
     is_canonical_issuer_id,
 )
-from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
@@ -57,7 +57,6 @@ from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 from data_engine.datahub.standards.history import run_standard_history as _run_standard_history
 from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
-from data_engine.lanes import production_only_schedule_status
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -73,8 +72,7 @@ STANDARD_HISTORY_JOB_NAME = "standard_history_backfill_pipeline"
 # Monday 09:07 UTC: the day after the weekly backfill. The SEC daily budget counts per UTC
 # day, so the two runs never share one budget.
 STANDARD_HISTORY_CRON = "7 9 * * 1"
-# The backtest reads the frozen TOPT universe (A6, decision 6). Another universe joins here.
-STANDARD_HISTORY_UNIVERSES = ("topt",)
+# The backtest reads the universe that holds the strategy role (A6, decision 6).
 STANDARD_HISTORY_MONTHS = 36
 # The standards whose history the backtest reads. A standard joins after its own review.
 STANDARDS_WITH_HISTORY: tuple[str, ...] = ("employees_total",)
@@ -128,7 +126,6 @@ __all__ = (
     "STANDARD_HISTORY_CRON",
     "STANDARD_HISTORY_JOB_NAME",
     "STANDARD_HISTORY_MONTHS",
-    "STANDARD_HISTORY_UNIVERSES",
     "STANDARDS_PLANE_CRONS",
     "STANDARDS_PLANE_SCHEDULE_STATUS",
     "STANDARDS_WITH_HISTORY",
@@ -160,7 +157,7 @@ class StandardBackfillConfig(dg.Config):
     instrument). `max_issuers` bounds a manual run; 0 means every open cell."""
 
     executed_at: str
-    universe: str = "universe-list:qqq"
+    universe: str = lane_name(universe_with_role("fund_consolidation"))
     #: Empty runs EVERY registered standard, which is what the schedule does. A name here
     #: bounds a manual run to one metric.
     #:
@@ -182,7 +179,7 @@ class StandardHistoryConfig(dg.Config):
     ask the provider again."""
 
     executed_at: str
-    universe: str = STANDARD_HISTORY_UNIVERSES[0]
+    universe: str = lane_name(universe_with_role("strategy"))
     standard: str = ""
     months: int = STANDARD_HISTORY_MONTHS
 
@@ -434,7 +431,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         materialize_theme_purity,
         summary_line,
     )
-    from data_engine.datahub.question_coverage import governed_head
+    from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
     context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
     current = reports_current(backfill_summary)
@@ -444,7 +441,6 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     # run the App serves, so the partitions they consume must be the ones knowable at that
     # run's cutoff. Selecting at the schedule time instead would let a filing that landed
     # after the head was published change a row attributed to it.
-    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with (
         verdict(
             check_name(THEME_PURITY_VERDICT, config.universe),
@@ -460,11 +456,11 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         # converted every view, leaving this literal reading a lineage that stopped advancing
         # the day that migration landed. `governed_head` now resolves the identity itself, so
         # there is no environment to name and no second reading to drift back to.
-        head = governed_head(connection, universe_prefix=prefix)
-        if head is None:
+        head = governed_head_of(connection, key_of_lane(config.universe))
+        if isinstance(head, NoHead):
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
             outcome.pending = True
-            outcome.summary = "no governed head; no rows"
+            outcome.summary = head.summary
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
         # The classifier is told which issuer it is judging (#849): the ticker, from the same
         # universe corpus the backfill labels its own asks with.
@@ -494,7 +490,7 @@ def run_supply_chain_exposure(
 
     Sequenced after theme purity and before analyst ratings and question coverage.
     """
-    from data_engine.datahub.question_coverage import governed_head
+    from data_engine.datahub.question_coverage import NoHead, governed_head_of
     from data_engine.datahub.standards.planner import universe_issuers
     from data_engine.datahub.standards.supply_chain_extraction import (
         materialize_universe_supply_chain_exposure,
@@ -505,10 +501,9 @@ def run_supply_chain_exposure(
     if current is not None:
         return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
-    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with psycopg.connect(settings.database_url) as connection:
-        head = governed_head(connection, universe_prefix=prefix)
-        if head is None:
+        head = governed_head_of(connection, key_of_lane(config.universe))
+        if isinstance(head, NoHead):
             context.log.warning("no governed head for %s; no supply chain exposure rows", config.universe)
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
@@ -589,7 +584,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     A moomoo context that does not open fails every ticker, like a fetch error.
     """
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
-    from data_engine.datahub.question_coverage import governed_head
+    from data_engine.datahub.question_coverage import NoHead, governed_head_of
     from data_engine.datahub.standards.planner import universe_issuers
 
     context.log.info("analyst ratings follows supply chain exposure: %s", sc_summary[:200])
@@ -597,10 +592,9 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     if current is not None:
         return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
-    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with psycopg.connect(settings.database_url) as connection:
-        head = governed_head(connection, universe_prefix=prefix)
-        if head is None:
+        head = governed_head_of(connection, key_of_lane(config.universe))
+        if isinstance(head, NoHead):
             context.log.warning("no governed head for %s; no analyst ratings rows", config.universe)
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
 
@@ -694,7 +688,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     """#748: after the week's backfill of EVERY standard, theme purity, supply chain exposure,
     and analyst ratings, count the six questions on the governed head — answered / unavailable-by-reason / missing — and
     append the report."""
-    from data_engine.datahub.question_coverage import compile_report, persist, summary_line
+    from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, compile_report, persist, summary_line
 
     # The analyst ratings' summary is this op's only upstream: consuming it is what sequences the
     # report after all upstream factors have landed, and logging it keeps the chain legible.
@@ -716,7 +710,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
         if report is None:
             context.log.warning("no governed head for %s; no coverage report", config.universe)
             outcome.pending = True
-            outcome.summary = "no governed head; no report"
+            outcome.summary = NO_HEAD_SUMMARY
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
         connection.commit()
@@ -878,11 +872,11 @@ def history_run_config(executed_at: str, universe: str) -> dg.RunConfig:
 )
 def standard_history_schedule(context: dg.ScheduleEvaluationContext):
     executed_at = context.scheduled_execution_time.isoformat()
-    for universe in STANDARD_HISTORY_UNIVERSES:
-        yield dg.RunRequest(
-            run_key=f"history:{executed_at}:{universe}",
-            run_config=history_run_config(executed_at, universe),
-        )
+    universe = lane_name(universe_with_role("strategy"))
+    yield dg.RunRequest(
+        run_key=f"history:{executed_at}:{universe}",
+        run_config=history_run_config(executed_at, universe),
+    )
 
 
 STANDARD_BACKFILL_CATCHUP_SENSOR_NAME = "standard_backfill_catchup"
@@ -984,11 +978,13 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
     """
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
-        prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
         red: list[str] = []
         with psycopg.connect(settings.database_url) as connection:
-            head = question_coverage.governed_head(connection, universe_prefix=prefix)
-            if head is not None and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id:
+            head = question_coverage.governed_head_of(connection, key_of_lane(config.universe))
+            if (
+                not isinstance(head, question_coverage.NoHead)
+                and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id
+            ):
                 red = _red_report_checks(config.universe)
                 if not red:
                     summary[REPORTS_CURRENT] = head.run_id
@@ -1089,8 +1085,8 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     requests: list[dg.RunRequest] = []
     with psycopg.connect(settings.database_url) as connection:
         for universe in scheduled_universe_names():
-            head = question_coverage.governed_head(connection, universe_prefix=UNIVERSE_PREFIXES[universe])
-            if head is None or followed.get(universe) == head.run_id:
+            head = question_coverage.governed_head_of(connection, key_of_lane(universe))
+            if isinstance(head, question_coverage.NoHead) or followed.get(universe) == head.run_id:
                 continue
             first_sight = universe not in followed
             followed[universe] = head.run_id
@@ -1119,20 +1115,13 @@ def _build_standards_plane_schedule(
     cron_schedule: str,
     *,
     job: dg.JobDefinition,
-    app_env: str,
 ) -> dg.ScheduleDefinition:
-    status = (
-        STANDARDS_PLANE_SCHEDULE_STATUS
-        if STANDARDS_PLANE_SCHEDULE_STATUS == dg.DefaultScheduleStatus.STOPPED
-        else production_only_schedule_status(app_env)
-    )
-
     @dg.schedule(
         name=schedule_name,
         job=job,
         cron_schedule=cron_schedule,
         execution_timezone="UTC",
-        default_status=status,
+        default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
     )
     def _plane_schedule(context: dg.ScheduleEvaluationContext):
         executed_at = context.scheduled_execution_time.isoformat()
@@ -1149,7 +1138,7 @@ def _build_standards_plane_schedule(
     return _plane_schedule
 
 
-def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg.ScheduleDefinition, ...]:
+def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
     """Build the 4 staggered Standards Plane Cron schedules (#67)."""
     from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
 
@@ -1162,7 +1151,6 @@ def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg
                 if schedule_name == NPORT_MONTHLY_SCHEDULE_NAME
                 else standard_backfill_pipeline_job
             ),
-            app_env=app_env,
         )
         for schedule_name, cron_schedule in STANDARDS_PLANE_CRONS.items()
     )
@@ -1173,20 +1161,16 @@ def build_standards_plane_schedules(app_env: str = settings.app_env) -> tuple[dg
     thirteenf_quarterly_schedule,
     form4_daily_schedule,
     tenk_annual_schedule,
-) = build_standards_plane_schedules(settings.app_env)
+) = build_standards_plane_schedules()
 
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
     """Build all standards lane jobs, schedules, and sensors for `app_env` (#67)."""
     plane_schedules = (
-        (
-            nport_monthly_schedule,
-            thirteenf_quarterly_schedule,
-            form4_daily_schedule,
-            tenk_annual_schedule,
-        )
-        if app_env == settings.app_env
-        else build_standards_plane_schedules(app_env)
+        nport_monthly_schedule,
+        thirteenf_quarterly_schedule,
+        form4_daily_schedule,
+        tenk_annual_schedule,
     )
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],

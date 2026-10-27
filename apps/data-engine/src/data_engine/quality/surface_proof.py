@@ -37,10 +37,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg import Connection
+from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
 
 from data_engine.datahub.question_coverage import (
     GOVERNING_FACTOR,
-    UNIVERSE_PREFIXES,
     GovernedHead,
     compile_report,
     declared_environment,
@@ -50,8 +50,6 @@ from data_engine.datahub.question_coverage import (
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import llm
 
-TOPT = "topt"
-QQQ = "universe-list:qqq"
 _NOT_SCHEDULED = "not_scheduled"
 
 #: `apps/app-web/src/server/mart/strategy-run-repository.ts` resolves the governed strategy
@@ -95,7 +93,7 @@ _HOLDINGS_HEAD_SQL = """
 select run_id, freshness, availability, staleness_reason
 from mart.served_head
 where factor_id = 'gross_profit_per_employee'
-  and universe_id like 'universe:qqq-us-%%'
+  and universe_id like %s
 order by advanced_at desc limit 1
 """
 _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_id = %s"
@@ -172,9 +170,7 @@ def _heads(connection: Connection[Any]) -> dict[str, GovernedHead | None]:
     this comparison -- has filtered on since that migration. While this function pinned the
     literal `production` instead, the proof was comparing two different definitions of the
     head and reporting the difference as a surface mismatch."""
-    return {
-        universe: governed_head(connection, universe_prefix=prefix) for universe, prefix in UNIVERSE_PREFIXES.items()
-    }
+    return {lane_name(key): governed_head(connection, universe_prefix=record(key).id_prefix) for key in served_keys()}
 
 
 def fresh_heads_without_reports(connection: Connection[Any], *, now: datetime, grace: timedelta) -> dict[str, str]:
@@ -210,7 +206,10 @@ def prove(
     that does not match is IN-PROGRESS rather than MISMATCH."""
     environment = declared_environment(connection)
     heads = _heads(connection)
-    topt, qqq = heads.get(TOPT), heads.get(QQQ)
+    # The strategy pages serve the universe that holds the strategy role, the holdings page the universe that
+    # consolidates the fund (#1522): the proof names a role, never a universe key.
+    strategy_key, fund_key = universe_with_role("strategy"), universe_with_role("fund_consolidation")
+    topt, qqq = lane_name(strategy_key), lane_name(fund_key)
     verdicts: list[SurfaceVerdict] = []
 
     row = connection.execute(_STRATEGY_HEAD_SQL).fetchone()
@@ -218,10 +217,10 @@ def prove(
         SurfaceVerdict(
             surface="/research/rankings, /strategy, /compare, /trace, /coverage",
             reader="mart.governed_strategy_run",
-            expected_run=_run(topt),
+            expected_run=_run(heads.get(topt)),
             served_run=str(row[0]) if row else None,
             detail=f"strategy run {row[1]}" if row else "the view is empty: no strategy run at the head's cutoff",
-            universe=TOPT,
+            universe=topt,
         )
     )
 
@@ -237,17 +236,17 @@ def prove(
                 expected_run=_NOT_RUN_HERE,
                 served_run=_NOT_RUN_HERE,
                 detail="no model provider seated in this environment; the theme lane is off",
-                universe=TOPT,
+                universe=topt,
             )
         )
     else:
         verdicts.append(themes_verdict(connection, heads, str(row[0]) if row else None))
 
-    row = connection.execute(_HOLDINGS_HEAD_SQL).fetchone()
+    row = connection.execute(_HOLDINGS_HEAD_SQL, (f"{record(fund_key).id_prefix}%",)).fetchone()
     served = str(row[0]) if row else None
     counted = connection.execute(_HOLDINGS_ROWS_SQL, (served,)).fetchone() if served else None
     funds = int(counted[0]) if counted else 0
-    if qqq is None and served is None:
+    if heads.get(qqq) is None and served is None:
         # An environment that never captures QQQ (staging today) has no holdings head to
         # serve and none to serve wrongly; the page renders its filed weights unvalued. Not
         # a mismatch — a surface with no run behind it in a place that runs no such tick.
@@ -257,8 +256,8 @@ def prove(
                 reader="fund-valuation.ts QQQ_POINTER_HEAD_SQL",
                 expected_run=_NOT_RUN_HERE,
                 served_run=_NOT_RUN_HERE,
-                detail="no QQQ head in this environment; the page renders filed weights unvalued",
-                universe=QQQ,
+                detail=f"no {fund_key} head in this environment; the page renders filed weights unvalued",
+                universe=qqq,
             )
         )
     else:
@@ -266,11 +265,11 @@ def prove(
             SurfaceVerdict(
                 surface="/research/holdings",
                 reader="fund-valuation.ts QQQ_POINTER_HEAD_SQL",
-                expected_run=_run(qqq),
+                expected_run=_run(heads.get(qqq)),
                 served_run=served,
                 detail=f"{funds} consolidated fund row(s)",
                 stale=served is not None and funds == 0,
-                universe=QQQ,
+                universe=qqq,
             )
         )
 
@@ -278,8 +277,9 @@ def prove(
         str(universe_id): (str(run_id), payload)
         for universe_id, run_id, payload in connection.execute(_COVERAGE_HEAD_SQL).fetchall()
     }
-    for universe, prefix in UNIVERSE_PREFIXES.items():
-        if not is_universe_scheduled(universe, environment) and universe not in (settling or {}):
+    for universe in heads:
+        prefix = record(key_of_lane(universe)).id_prefix
+        if not is_universe_scheduled(key_of_lane(universe), environment) and universe not in (settling or {}):
             verdicts.append(
                 SurfaceVerdict(
                     surface=f"/admin/datahub coverage [{universe}]",
@@ -369,7 +369,11 @@ def themes_verdict(
     covered = {
         universe: head
         for universe, head in present.items()
-        if _exists(connection, _THEME_UNIVERSE_SQL, (environment, GOVERNING_FACTOR, UNIVERSE_PREFIXES[universe] + "%"))
+        if _exists(
+            connection,
+            _THEME_UNIVERSE_SQL,
+            (environment, GOVERNING_FACTOR, record(key_of_lane(universe)).id_prefix + "%"),
+        )
     }
     candidates = covered or present
     if not candidates:
@@ -379,7 +383,7 @@ def themes_verdict(
             expected_run=None,
             served_run=served,
             detail="" if served else _no_theme_rows(connection, None),
-            universe=TOPT,
+            universe=lane_name(universe_with_role("strategy")),
         )
     newest = max(head.cutoff for head in candidates.values())
     tied = sorted(universe for universe, head in candidates.items() if head.cutoff == newest)

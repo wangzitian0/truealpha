@@ -54,9 +54,10 @@ from pathlib import Path
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
 
 from data_engine.config import settings
-from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, declared_environment
+from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.lanes.capture import TICKS, is_head_scheduled
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
@@ -230,11 +231,6 @@ UNFINISHED_RUN_STATUSES = (
 IN_FLIGHT_MAX_AGE = timedelta(hours=12)
 
 
-def _tick_universe(key: str | None) -> str:
-    # A tick with no universe head is the hand-curated TOPT corpus (`UniverseTick`).
-    return key or "topt"
-
-
 def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None) -> dict[str, str]:
     """universe -> the unfinished run that will move its head or rewrite its reports.
 
@@ -243,11 +239,8 @@ def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None)
     operator launched untagged counts too). Runs created more than `IN_FLIGHT_MAX_AGE` before
     `now` are not counted."""
     created_after = (now or datetime.now(UTC)) - IN_FLIGHT_MAX_AGE
-    ticks = {
-        tick.job_name: _tick_universe(tick.universe_head_kind)
-        for tick in TICKS
-        if _tick_universe(tick.universe_head_kind) in UNIVERSE_PREFIXES
-    }
+    served = {lane_name(key) for key in served_keys()}
+    ticks = {tick.job_name: tick.lane_name for tick in TICKS if tick.lane_name in served}
     found: dict[str, str] = {}
     for job_name in (*ticks, HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME):
         runs = instance.get_runs(
@@ -257,7 +250,7 @@ def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None)
         )
         for run in runs:
             universe = ticks.get(job_name) or run_universe(run.run_config or {})
-            if universe in UNIVERSE_PREFIXES:
+            if universe in served:
                 found.setdefault(
                     universe, f"{job_name} run {run.run_id[:8]} is {run.status.value.lower().replace('_', ' ')}"
                 )
@@ -433,7 +426,7 @@ class ConfidenceReportConfig(dg.Config):
     `oracle_issuers` bounds the live SEC re-derivation."""
 
     executed_at: str
-    universe: str = "universe-list:qqq"
+    universe: str = lane_name(universe_with_role("fund_consolidation"))
     sample_subjects: list[str] = []
     oracle_issuers: int = 5
 
@@ -463,7 +456,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):
-            stale_heads = stale_served_heads(connection, universe_prefix=UNIVERSE_PREFIXES.get(config.universe, ""))
+            stale_heads = stale_served_heads(connection, universe_prefix=record(key_of_lane(config.universe)).id_prefix)
             if stale_heads:
                 outcome.summary = f"stale served_head: {', '.join(stale_heads)}"
                 raise dg.Failure(
@@ -479,7 +472,8 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             )
             if report is None:
                 context.log.warning("no governed head for %s; no confidence report", config.universe)
-                outcome.summary = "no governed head; no report"
+                outcome.pending = True
+                outcome.summary = NO_HEAD_SUMMARY
             else:
                 report_id = persist(connection, report)
                 connection.commit()

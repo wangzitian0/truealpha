@@ -6,7 +6,7 @@ The core engine values an issuer through the stored daily series of its listings
 them is unavailable. This lane stores both series (`adjust = 'splits'` and `adjust = 'none'`) for
 the other QQQ listings.
 
-Symbols. The listings of the governed QQQ head (`capture.QQQ_UNIVERSE_HEAD`), which the QQQ tick
+Symbols. The listings of the governed QQQ head (the lane name of its record), which the QQQ tick
 captures. The lane keeps one listing per issuer: the primary class (`canonical_issuer.ticker_sort_key`).
 It skips an issuer whose primary listing is a TOPT symbol, because the market-data lane stores it.
 So Alphabet adds no symbol (GOOGL is a TOPT symbol), and the lane never stores GOOG.
@@ -48,6 +48,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from pydantic import Field
+from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
 from data_engine.datahub.canonical_issuer import ticker_sort_key
@@ -66,8 +67,7 @@ from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, split_history
-from data_engine.lanes.backtest import schedule_status
-from data_engine.lanes.capture import QQQ_UNIVERSE_HEAD
+from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
 QQQ_PRICE_REFRESH_JOB_NAME = "qqq_price_refresh_pipeline"
@@ -288,7 +288,7 @@ def _refresh_qqq_prices(
     max_symbols: int | None = None,
 ) -> RefreshOutcome:
     """The op body, apart from the Dagster plumbing, so a test can drive it with a fake vendor and its own connection."""
-    corpus = resolve_universe_corpus(connection, QQQ_UNIVERSE_HEAD)
+    corpus = resolve_universe_corpus(connection, lane_name("qqq"))
     symbols = target_symbols(corpus["topt_denominator"], covered=DEFAULT_TOPT_SYMBOLS)
     spend = ledger_spend(now.astimezone(UTC).date())
     budget = credit_budget(
@@ -363,9 +363,12 @@ def qqq_price_refresh_pipeline_job() -> None:
     job=qqq_price_refresh_pipeline_job,
     cron_schedule=QQQ_PRICE_REFRESH_CRON,
     execution_timezone="UTC",
-    # Production and staging, like the market-data refresh. The budget gives staging 0 credits
-    # while its measured spend fills its share; the schedule needs no environment case.
-    default_status=schedule_status(settings.app_env),
+    # The contract holds the status of the QQQ universe (staging runs TOPT only).
+    default_status=(
+        dg.DefaultScheduleStatus.RUNNING
+        if is_universe_scheduled("qqq", settings.app_env)
+        else dg.DefaultScheduleStatus.STOPPED
+    ),
 )
 def qqq_price_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     # The run key dedupes a re-evaluated tick. A schedule never plans a dry run.

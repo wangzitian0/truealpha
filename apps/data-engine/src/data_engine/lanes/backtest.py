@@ -11,7 +11,7 @@ no bars yet, red on any failure.
 The schedule runs in production and in staging, so staging evidence exists before production.
 21:45 UTC on weekdays is after the strategy history projection (20:07 UTC, ``lanes.strategy_history``),
 after the market data refresh of both environments (21:15 UTC; 15 minutes in production, 20 minutes in
-staging, #1281) and before the staging TOPT tick (22:45 UTC, ``lanes.capture.live_topt_cron``).
+staging, #1281) and before the staging TOPT tick (22:45 UTC, the staging cron of the TOPT universe record).
 
 Manual replay: launch the job from the Dagster UI launchpad, or through GraphQL, with the run
 config below. A rerun of one release on the same data writes nothing. A new release on the same
