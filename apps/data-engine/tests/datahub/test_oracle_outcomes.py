@@ -74,9 +74,9 @@ AS_OF = date(2026, 3, 30)
 # -- the pure comparison ---------------------------------------------------------------
 
 
-def _metric(metric: str, value: Decimal | None) -> ToptMetricInput:
+def _metric(metric: str, value: Decimal | None, input_id: str) -> ToptMetricInput:
     return ToptMetricInput(
-        input_id="normalized-observation:" + "a" * 64,
+        input_id=input_id,
         metric=metric,
         value=value,
         unit="shares" if metric == "shares_outstanding" else "USD_per_share",
@@ -117,10 +117,10 @@ def _factor_input(*listings: tuple[str, Decimal | None]) -> ToptCoreSnapshotInpu
             ToptMarketValueComponent(
                 instrument_id=f"instrument:{listing}",
                 listing_id=listing,
-                market_price=_metric("market_price", Decimal("40")),
-                shares_outstanding=_metric("shares_outstanding", shares),
+                market_price=_metric("market_price", Decimal("40"), observation_ids[4 * index]),
+                shares_outstanding=_metric("shares_outstanding", shares, observation_ids[4 * index]),
             )
-            for listing, shares in listings
+            for index, (listing, shares) in enumerate(listings)
         ),
     )
 
