@@ -1011,9 +1011,9 @@ def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_he
 def test_no_invariant_needs_the_sql_schedule_function(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Release N+1 of #1522 drops `mart.is_head_scheduled`. A process of release N must already run
-    without it. The function is dropped inside this test's transaction, then every shipped invariant runs."""
-    conn.execute("drop function mart.is_head_scheduled(text, text)")
+    """The chain no longer holds `mart.is_head_scheduled` (#1522 release N+1), and a process of release N already
+    ran without it. Every shipped invariant runs on a database without the function."""
+    assert conn.execute("select to_regprocedure('mart.is_head_scheduled(text,text)') is null").fetchone() == (True,)
     code = check(
         "postgresql://borrowed",
         today=TODAY,
