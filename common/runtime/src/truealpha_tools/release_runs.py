@@ -5,10 +5,6 @@ the `deploy-release` run and the `walk-release` run. The facts below have one de
 the run titles, the workflow files, the tag name, the summary job, the failed conclusions and the
 timestamp parser. `delivery_report.py` and the train import them.
 
-Other tools still hold their own copies of some of these facts: `walk_evidence.py`,
-`staging_evidence.py`, `nightly_verdicts.py` and the workflow paths of `delivery_report.py`. Move a
-fact here when you change it there.
-
 Stdlib only: `auto-release-staging.yml` runs the train with no `uv sync`.
 """
 

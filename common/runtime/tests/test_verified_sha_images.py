@@ -107,7 +107,7 @@ def test_the_short_sha_is_metadata_actions_spelling() -> None:
     main never pushed and every image would "need building" -- the optimisation silently off."""
     tool = load_tool("verified_sha_images")
     assert tool.short_sha(SHA) == "7de7813"
-    assert tool.SHORT_SHA_LENGTH == 7
+    assert len(tool.short_sha(SHA)) == 7
     for junk in ("7de7813", SHA.upper(), "v0.0.63", ""):
         with pytest.raises(ValueError, match="full 40-hex commit sha"):
             tool.short_sha(junk)

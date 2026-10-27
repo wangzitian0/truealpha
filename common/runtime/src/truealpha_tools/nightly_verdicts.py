@@ -53,6 +53,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from truealpha_tools.release_runs import DEPLOY_WORKFLOW
+
 # The SDK is imported where the default HTTP client is built, not here (#1412). The delivery
 # report reuses this module on a bare `python3` without the SDK.
 if TYPE_CHECKING:
@@ -64,7 +66,7 @@ GitRun = Callable[..., subprocess.CompletedProcess[str]]
 #: when that cannot be shown.
 FirstDeclared = Callable[[str, str], datetime | None]
 #: Successful deploy-release.yml runs, newest first: "Deploy <deploy_type> <tag>".
-DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?status=success&per_page=100"
+DEPLOY_RUNS_PATH = f"/repos/wangzitian0/truealpha/actions/workflows/{DEPLOY_WORKFLOW}/runs?status=success&per_page=100"
 
 EXPECTATIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "nightly_verdicts.json"
 CONTRACT_PATH = (
