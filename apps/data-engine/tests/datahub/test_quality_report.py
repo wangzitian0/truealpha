@@ -384,6 +384,7 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
                 factor_input,
                 invocation_id="topt-gppe-invocation:" + "4" * 64,
                 gppe_definition=gppe_def,
+                definition=tier_def,
             )
             core_res = compute_topt_core(
                 factor_input,

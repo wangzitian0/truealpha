@@ -116,6 +116,7 @@ def _compute(snapshot: ToptCoreSnapshotInput):
         snapshot,
         invocation_id=f"topt-gppe-invocation:{'f' * 64}",
         gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=load_live_strategy_definition(),
     )
     return compute_topt_core(
         snapshot,
@@ -272,38 +273,59 @@ def test_current_ps_sums_distinct_per_class_share_counts() -> None:
     assert result.current_ps == Decimal("4.4")
 
 
-def test_financial_issuer_takes_the_uniform_capital_adjusted_path() -> None:
-    # #394 convergence: a financial issuer uses the same
-    # (numerator - total_assets*rf)/headcount capital charge (numerator =
-    # pre-provision profit for financials) and flows through the tier / P-S path --
-    # no pre_provision/headcount short-circuit, no FINANCIAL_VALUATION_NOT_COMPARABLE.
-    result = _compute(
-        _snapshot(
-            operating_branch=OperatingBranch.FINANCIAL,
-            gross_profit=None,
-            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
-        )
-    )
+#: A bank whose measured tangible common equity is a fifth of its total assets (200,000,000).
+#: TCE = 50,000,000 - 5,000,000 - (3,000,000 + 2,000,000) = 40,000,000. The bank's own numbers, written out
+#: here and not read from the code under test.
+_BANK_LEAVES = {
+    "stockholders_equity": "50000000",
+    "preferred_stock_value": "5000000",
+    "goodwill": "3000000",
+    "intangible_assets_net_excluding_goodwill": "2000000",
+}
+
+
+def _bank_snapshot(**overrides: object) -> ToptCoreSnapshotInput:
+    leaves = {name: _metric(name, value) for name, value in _BANK_LEAVES.items()}
+    values: dict[str, object] = {
+        "operating_branch": OperatingBranch.FINANCIAL,
+        "gross_profit": None,
+        "pre_provision_profit": _metric("pre_provision_profit", "80000000"),
+        **leaves,
+    }
+    values.update(overrides)
+    return _snapshot(**values)
+
+
+def test_financial_issuer_takes_the_banking_tce_path() -> None:
+    # #1518, owner decision D2: the definition pins the banking tree for FINANCIAL issuers. The capital
+    # charge is measured TCE x rate, not total assets x rate, and the bank flows through the tier / P-S path.
+    result = _compute(_bank_snapshot())
 
     assert result.availability is ToptCoreAvailability.AVAILABLE
     assert result.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
-    # (80_000_000 - 200_000_000 * 0.05) / 100 = 700_000, not 80_000_000/100 = 800_000
-    assert result.gppe == Decimal("700000")
-    assert result.operating_efficiency == Decimal("700000")
-    assert result.tier is not None
+    # Hand value: (80_000_000 - 40_000_000 * 0.05) / 100 = 78_000_000 / 100 = 780_000.
+    # The total-assets value of the same bank is (80_000_000 - 200_000_000 * 0.05) / 100 = 700_000.
+    assert result.gppe == Decimal("780000")
+    assert result.operating_efficiency == Decimal("780000")
+    assert result.capital_adjusted_gross_profit == Decimal("78000000")
+    assert result.tier is ValuationTier.TRADITIONAL
     assert result.current_ps is not None
 
 
-def test_financial_issuer_without_total_assets_is_unavailable() -> None:
-    # total_assets is required uniformly now -- the capital charge applies to banks too.
-    result = _compute(
-        _snapshot(
-            operating_branch=OperatingBranch.FINANCIAL,
-            gross_profit=None,
-            total_assets=None,
-            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
-        )
-    )
+def test_a_bank_needs_its_banking_leaves_and_not_total_assets() -> None:
+    # Total assets is not an input of the banking tree: a bank without it is still evaluated.
+    without_assets = _compute(_bank_snapshot(total_assets=None))
+    assert without_assets.availability is ToptCoreAvailability.AVAILABLE
+    assert without_assets.gppe == Decimal("780000")
+
+    # A missing leaf is named by its snapshot field. No other leaf and no total assets replaces it.
+    without_goodwill = _compute(_bank_snapshot(goodwill=None))
+    assert without_goodwill.availability is ToptCoreAvailability.UNAVAILABLE
+    assert without_goodwill.reason_codes == (ToptCoreReasonCode.MISSING_GOODWILL,)
+
+
+def test_a_non_financial_issuer_still_needs_total_assets() -> None:
+    result = _compute(_snapshot(total_assets=None))
 
     assert result.availability is ToptCoreAvailability.UNAVAILABLE
     assert ToptCoreReasonCode.MISSING_TOTAL_ASSETS in result.reason_codes
@@ -316,6 +338,7 @@ def test_tier_composite_rejects_gppe_from_another_snapshot_member() -> None:
         other_member,
         invocation_id=f"topt-gppe-invocation:{'f' * 64}",
         gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=load_live_strategy_definition(),
     )
 
     with pytest.raises(ValueError, match="does not match its exact snapshot member"):
@@ -360,58 +383,44 @@ def test_snapshot_rejects_malformed_observation_identity() -> None:
         _snapshot(observation_ids=malformed)
 
 
-def test_topt_gppe_equals_the_base_factor_for_identical_inputs() -> None:
-    # #394 cross-path equivalence: production_topt computes the same labor
-    # efficiency as the base factors.base.gross_profit_per_employee for identical
-    # inputs -- non-financial (gross_profit numerator) and financial (pre-provision
-    # numerator, the bank's industry-branch gross-profit proxy).
-    from factors.base.gross_profit_per_employee import gross_profit_per_employee
-    from factors.types import Fact, UnitFamily
+def test_the_core_equals_the_composite_for_identical_inputs() -> None:
+    # #394 cross-path equivalence, kept by #1518: the core and the strategy composite evaluate the one
+    # tree that the definition pins for the class. Same inputs, same value, for a non-financial issuer
+    # (gross-profit numerator, total-assets charge) and for a bank (pre-provision numerator, TCE charge).
+    from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+    from factors.forest import IssuerClass
 
-    rf = Decimal("0.05")
-
-    def base_gppe(numerator: str, total_assets: str, headcount: str) -> Decimal:
-        facts = [
-            Fact(
-                entity_id="issuer:x",
-                metric="gross_profit",
-                value=Decimal(numerator),
-                unit_family=UnitFamily.CURRENCY,
-                confidence=Decimal("0.9"),
-                as_of=CUTOFF,
-            ),
-            Fact(
-                entity_id="issuer:x",
-                metric="total_assets",
-                value=Decimal(total_assets),
-                unit_family=UnitFamily.CURRENCY,
-                confidence=Decimal("0.9"),
-                as_of=CUTOFF,
-            ),
-            Fact(
-                entity_id="issuer:x",
-                metric="employees_total",
-                value=Decimal(headcount),
-                unit_family=UnitFamily.COUNT,
-                confidence=Decimal("0.9"),
-                as_of=CUTOFF,
-            ),
-        ]
-        value = gross_profit_per_employee(facts, entity_id="issuer:x", as_of=CUTOFF, risk_free_rate=rf).value
-        assert value is not None
-        return value
-
-    non_financial = _compute(_snapshot()).gppe
-    assert non_financial == base_gppe("210000000", "200000000", "100") == Decimal("2000000")
-
-    financial = _compute(
-        _snapshot(
-            operating_branch=OperatingBranch.FINANCIAL,
-            gross_profit=None,
-            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
+    def decision_value(records: dict[str, str], issuer_class: IssuerClass) -> Decimal:
+        full = {
+            **records,
+            "revenue": "100000000",
+            "shares_outstanding": "10000000",
+            "last_close": "40",
+        }
+        issuer = IssuerInput(
+            issuer_id="issuer:x",
+            records={key: (Decimal(value), Decimal("0.9")) for key, value in full.items()},
+            knowable_at=dict.fromkeys(full, CUTOFF - timedelta(days=1)),
+            issuer_class=issuer_class,
         )
-    ).gppe
-    assert financial == base_gppe("80000000", "200000000", "100") == Decimal("700000")
+        [decision] = evaluate_cutoff(
+            [issuer], definition=load_live_strategy_definition(), cutoff_at=CUTOFF, risk_free_rate=Decimal("0.05")
+        )
+        assert decision.capital_adjusted_labor_efficiency is not None
+        return decision.capital_adjusted_labor_efficiency
+
+    core_non_financial = _compute(_snapshot()).gppe
+    assert core_non_financial == Decimal("2000000")  # (210M - 200M x 0.05) / 100
+    assert decision_value(
+        {"gross_profit": "210000000", "total_assets": "200000000", "headcount": "100"}, IssuerClass.NON_FINANCIAL
+    ) == Decimal("2000000.00")
+
+    core_bank = _compute(_bank_snapshot()).gppe
+    assert core_bank == Decimal("780000")  # (80M - 40M x 0.05) / 100
+    assert decision_value(
+        {"gross_profit": "80000000", "total_assets": "200000000", "headcount": "100", **_BANK_LEAVES},
+        IssuerClass.FINANCIAL,
+    ) == Decimal("780000.00")
 
 
 def test_rows_stamp_the_strategy_definition_that_supplied_the_bands() -> None:
@@ -432,6 +441,7 @@ def test_the_core_engine_refuses_a_ps_basis_definition() -> None:
         snapshot,
         invocation_id=f"topt-gppe-invocation:{'f' * 64}",
         gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=load_live_strategy_definition(),
     )
     ps_definition = MagicMock(
         valuation_basis=ValuationBasis.PRICE_TO_SALES,
@@ -448,14 +458,8 @@ def test_the_core_engine_refuses_a_ps_basis_definition() -> None:
 
 def test_pgp_divides_by_the_numerator_gppe_reads_for_the_class() -> None:
     """A bank's P/GP divides by its pre-provision profit, the GPPE tree's financial numerator."""
-    result = _compute(
-        _snapshot(
-            operating_branch=OperatingBranch.FINANCIAL,
-            gross_profit=None,
-            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
-        )
-    )
-    # (80M - 200M x 0.05) / 100 = 700,000 -> traditional, P/GP 7.50-10.00; 400M / 80M = 5.
+    result = _compute(_bank_snapshot())
+    # (80M - 40M x 0.05) / 100 = 780,000 -> traditional, P/GP 7.50-10.00; 400M / 80M = 5.
     assert result.tier is ValuationTier.TRADITIONAL
     assert result.current_pgp == Decimal("5")
     assert result.target_pgp_midpoint == Decimal("8.75")
@@ -576,3 +580,56 @@ def test_a_snapshot_input_keeps_its_serialized_form_unless_the_listing_is_undecl
     """A stored factor input must keep its content hash. The key is absent unless the flag is set."""
     assert "primary_listing_undeclared" not in _snapshot().model_dump(mode="json")
     assert _snapshot(primary_listing_undeclared=True).model_dump(mode="json")["primary_listing_undeclared"] is True
+
+
+def test_a_negative_tangible_common_equity_is_unavailable_in_the_core_and_in_the_composite() -> None:
+    # #1518 review. TCE = 20M - 5M - (15M + 5M) = -5M. The capital charge is never a credit: the core gives
+    # no value and names the reason, and the composite excludes the bank with the same reason.
+    from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+    from factors.forest import IssuerClass
+
+    leaves = {
+        "stockholders_equity": "20000000",
+        "preferred_stock_value": "5000000",
+        "goodwill": "15000000",
+        "intangible_assets_net_excluding_goodwill": "5000000",
+    }
+    core = _compute(_bank_snapshot(**{name: _metric(name, value) for name, value in leaves.items()}))
+    assert core.availability is ToptCoreAvailability.UNAVAILABLE
+    assert core.gppe is None
+    assert core.reason_codes == (ToptCoreReasonCode.NEGATIVE_TANGIBLE_COMMON_EQUITY,)
+
+    full = {
+        **leaves,
+        "gross_profit": "80000000",
+        "total_assets": "200000000",
+        "headcount": "100",
+        "revenue": "100000000",
+        "shares_outstanding": "10000000",
+        "last_close": "40",
+    }
+    issuer = IssuerInput(
+        issuer_id="issuer:x",
+        records={key: (Decimal(value), Decimal("0.9")) for key, value in full.items()},
+        knowable_at=dict.fromkeys(full, CUTOFF - timedelta(days=1)),
+        issuer_class=IssuerClass.FINANCIAL,
+    )
+    [decision] = evaluate_cutoff(
+        [issuer], definition=load_live_strategy_definition(), cutoff_at=CUTOFF, risk_free_rate=Decimal("0.05")
+    )
+    assert decision.eligible is False
+    assert decision.exclusion_reason is not None and decision.exclusion_reason.value == core.reason_codes[0].value
+
+
+def test_a_zero_tangible_common_equity_is_a_zero_charge_in_the_core() -> None:
+    # TCE = 25M - 5M - (15M + 5M) = 0. Real profit = 80M - 0 x 0.05 = 80M. Value = 80M / 100 = 800,000.
+    leaves = {
+        "stockholders_equity": "25000000",
+        "preferred_stock_value": "5000000",
+        "goodwill": "15000000",
+        "intangible_assets_net_excluding_goodwill": "5000000",
+    }
+    result = _compute(_bank_snapshot(**{name: _metric(name, value) for name, value in leaves.items()}))
+    assert result.availability is ToptCoreAvailability.AVAILABLE
+    assert result.gppe == Decimal("800000")
+    assert result.capital_adjusted_gross_profit == Decimal("80000000")

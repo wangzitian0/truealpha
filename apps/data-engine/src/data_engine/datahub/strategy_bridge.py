@@ -31,7 +31,7 @@ from functools import cache, partial
 from typing import Any
 
 import psycopg
-from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff, required_input_keys
 from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
@@ -504,8 +504,8 @@ def run_strategy_replay_for_cutoff(
 def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) -> dict[str, IssuerClass]:
     """The operating class of each issuer in one capture run (#1176). Read from the captured
     financial-fact observations, the same rows the strategy inputs are seeded from. The class
-    selects the labor-efficiency metric (`LABOR_EFFICIENCY_BY_CLASS`). An issuer with no class
-    here gets `missing_issuer_class` in the evaluator."""
+    selects the labor-efficiency tree that the definition pins (`factors.forest.bound_tree`). An issuer
+    with no class here gets `missing_issuer_class` in the evaluator."""
     rows = connection.execute(
         """
         select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'operating_branch'
@@ -536,12 +536,16 @@ def persist_strategy_input_coverage(
 ) -> tuple[int, int]:
     """#496: the L2 funnel metric — one `mart.strategy_input_coverage` row per
     issuer of this run, measuring seeded staging inputs against the FROZEN
-    definition's `required_input_keys()` (derived semantics, not a hardcoded
-    list). Runs right after `seed_strategy_inputs_from_capture` in the same
+    definition's `required_input_keys` (derived semantics, not a hardcoded
+    list). The set is the one of the issuer's class: a bank needs the four
+    tangible-common-equity inputs, every other class needs total assets (#1518). An
+    issuer with no class is measured against the union. Runs right after
+    `seed_strategy_inputs_from_capture` in the same
     tick transaction; the same latest-vintage-per-(issuer, key) read the
     gateway uses, so the metric can never disagree with the replay's view.
     Returns (complete_issuers, total_issuers)."""
-    required = sorted(load_strategy_definition().required_input_keys())
+    definition = load_strategy_definition()
+    classes = _issuer_classes_for_run(connection, run_id)
     issuers = [
         row[0]
         for row in connection.execute(
@@ -564,6 +568,7 @@ def persist_strategy_input_coverage(
 
     complete = 0
     for issuer_id in issuers:
+        required = sorted(required_input_keys(definition, classes.get(issuer_id)))
         missing = [key for key in required if key not in present.get(issuer_id, set())]
         if not missing:
             complete += 1

@@ -208,7 +208,7 @@ class MetricNode(_Frozen):
         return values[0] if values else None
 
 
-FormulaId = Literal["identity", "sum", "difference", "product", "ratio"]
+FormulaId = Literal["identity", "sum", "difference", "product", "ratio", "non_negative"]
 
 
 def _identity(operands: Sequence[Decimal]) -> Decimal | None:
@@ -234,6 +234,15 @@ def _ratio(operands: Sequence[Decimal]) -> Decimal | None:
     return None if denominator == 0 else numerator / denominator
 
 
+def _non_negative(operands: Sequence[Decimal]) -> Decimal | None:
+    """The operand when it is not negative; undefined (None) when it is. Zero passes."""
+    (value,) = operands
+    return None if value < 0 else value
+
+
+#: Why a formula that returns None leaves its output undefined. `evaluate` reports the reason by node.
+UNDEFINED_REASONS: Mapping[str, str] = {"ratio": "zero_denominator", "non_negative": "negative_operand"}
+
 #: (formula id, version) -> (operand arity or None for "two or more", function). A formula
 #: version is immutable: a different arithmetic is a new version, never an edit.
 FORMULAS: Mapping[tuple[str, int], tuple[int | None, Callable[[Sequence[Decimal]], Decimal | None]]] = {
@@ -242,6 +251,7 @@ FORMULAS: Mapping[tuple[str, int], tuple[int | None, Callable[[Sequence[Decimal]
     ("difference", 1): (2, _difference),
     ("product", 1): (None, _product),
     ("ratio", 1): (2, _ratio),
+    ("non_negative", 1): (1, _non_negative),
 }
 
 
@@ -437,7 +447,7 @@ class TreeEvaluation(_Frozen):
     issuer_class: IssuerClass
     #: Every node the evaluation touched; None where the node is undefined.
     values: Mapping[str, Decimal | None]
-    #: node key -> why it is undefined (`missing_input`, `zero_denominator`, `undefined_operand`).
+    #: node key -> why it is undefined (`missing_input`, `zero_denominator`, `negative_operand`, `undefined_operand`).
     undefined: Mapping[str, str] = {}
 
 
@@ -477,7 +487,7 @@ def evaluate(
             value = function(present)
         values[key] = value
         if value is None:
-            undefined[key] = "zero_denominator"
+            undefined[key] = UNDEFINED_REASONS[decomposition.formula_id]
         return value
 
     if issuer_class not in tree.applicability:

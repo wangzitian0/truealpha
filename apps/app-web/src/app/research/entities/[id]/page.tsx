@@ -54,8 +54,8 @@ export default async function EntityDetailPage({
   const analystRatings = state.kind === "ready" ? state.data.analystRatings ?? null : null;
   const supplyChainExposure = state.kind === "ready" ? state.data.supplyChainExposure ?? null : null;
 
-  // #1176: the published `gppe` column is the uniform metric; the strategy value carries the name the
-  // strategy used. Both are shown, each with its name, and neither is shown bare.
+  // #1176, #1518: the strategy value carries the name of the tree that the definition pins. The published
+  // `gppe` column takes that name when the two agree. Both are shown with a name, and neither is shown bare.
   const laborLabels = laborEfficiencyLabels({
     publishedGppe: gppeDetail?.gppe ?? null,
     strategyValue: latestRow?.capitalAdjustedLaborEfficiency ?? null,

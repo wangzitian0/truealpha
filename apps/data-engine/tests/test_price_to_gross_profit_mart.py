@@ -94,7 +94,7 @@ def test_a_v1_decision_persists_pgp_and_no_target_ps(connection) -> None:
     ).fetchone()
     assert row == (
         definition.content_sha256,
-        "1.0.0",
+        "1.1.0",
         Decimal("1.2420"),
         None,
         Decimal("5.1302"),

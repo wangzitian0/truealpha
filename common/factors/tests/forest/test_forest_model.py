@@ -60,6 +60,8 @@ MINTED = {
     "intangible_assets_net_excluding_goodwill": "14313d73-f5f7-5a47-a087-ed9ce71ebd88",
     "tangible_deductions": "805d8f77-10aa-5dc4-b2bd-f47647e00593",
     "tangible_common_equity": "8c346339-0ca5-588a-90d4-e67c96db8ecb",
+    # #1518: the base of the capital charge. It refuses a negative tangible common equity.
+    "charged_tangible_common_equity": "2cc2205b-4649-51a4-9f21-9e64b238d162",
     "capital_charge_tce": "588a8f4d-b301-5a2e-b0f3-de6743d60af4",
     "capital_adjusted_tce": "57204502-7b9c-5671-b392-424b4368d9f1",
     "gppe_banking_tce_v1": "582c62d6-4873-5ff4-ad91-eba1d571fc4c",

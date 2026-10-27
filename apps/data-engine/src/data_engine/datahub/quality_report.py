@@ -46,6 +46,7 @@ broken cell per failure mode must drive the corresponding metric below 1.0.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -55,6 +56,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
+from factors.forest import FOREST, AliasKind, IssuerClass, bound_tree, required_inputs
 from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
@@ -72,6 +74,7 @@ from truealpha_contracts.reconciliation_policies import (
     FINANCIAL_FACT_RECONCILIATION_POLICY,
     RECONCILIATION_POLICY,
 )
+from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_runtime import S3RawObjectStore
 
@@ -122,9 +125,9 @@ _SOURCE_BY_PARSER = SOURCE_BY_PARSER
 
 # What "a usable value" means for each requested semantic. The payload contracts are the
 # ones the mart itself parses (`materialization._snapshot_member`), and the financial-fact
-# requirement covers the five core inputs (`total_assets`, `headcount`, the branch's
-# operating numerator, `revenue`, and `shares_outstanding`) that `mart.topt_core_results`
-# requires. The report and the page read the same five fields so they agree on one run —
+# requirement covers the core inputs that `mart.topt_core_results` requires: the captured leaves of
+# the tree that the live definition pins for the branch (`_core_payload_fields`), `revenue` and
+# `shares_outstanding`. The report and the page read the same fields so they agree on one run —
 # the report used to answer 84/84 for a tick the mart scored 19 available / 1 unavailable.
 _IDENTITY_SEMANTICS = RELEASE_SEMANTICS
 # Mirrors `compute_topt_gppe`'s dispatch exactly: FINANCIAL scores through
@@ -183,6 +186,19 @@ def _factor_availability(usable_by_subject: dict[str, dict[str, bool]]) -> dict[
     return out
 
 
+@functools.cache
+def _core_payload_fields(branch: OperatingBranch) -> tuple[str, ...]:
+    """The financial-fact fields that the core reads for ``branch``: the captured leaves of the tree that
+    the live definition pins for the class (#1518). A bank reads its pre-provision profit, its four banking
+    leaves and its headcount. Every other class reads its gross profit, its total assets and its headcount.
+    The names are the `topt_snapshot_field` aliases of the leaves, and they equal the payload fields.
+    """
+    issuer_class = IssuerClass(branch.value)
+    tree = bound_tree(load_live_strategy_definition(), issuer_class)
+    fields = (node.alias(AliasKind.TOPT_SNAPSHOT_FIELD) for node in required_inputs(FOREST, tree, issuer_class))
+    return tuple(field for field in fields if field is not None)
+
+
 def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> bool:
     """Does this observation's normalized payload carry the value its cell was requested for?
 
@@ -202,16 +218,9 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
             return MarketPricePayload.model_validate(payload).close is not None
         if semantic_type == "financial-fact":
             fact = FinancialFactPayload.model_validate(payload)
-            numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
             return all(
-                value is not None
-                for value in (
-                    fact.total_assets,
-                    fact.headcount,
-                    numerator,
-                    fact.revenue,
-                    fact.shares_outstanding,
-                )
+                getattr(fact, name) is not None
+                for name in (*_core_payload_fields(fact.operating_branch), "revenue", "shares_outstanding")
             )
     except ValidationError:
         return False

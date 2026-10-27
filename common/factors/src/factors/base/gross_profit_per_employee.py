@@ -1,61 +1,40 @@
 """Module 2: gross profit per employee (v0 capital-adjusted labor efficiency).
 
-Two named metrics (#1176, owner decision 2026-10-09). Each has its own forest node:
+The factor evaluates one tree of the metric forest. It holds no formula of its own (#1518).
 
-- `gross_profit_per_employee` is `gppe_uniform_charge_v0`. Its capital base is total assets for
-  every issuer. It has no ratio test and no class branch.
-- `gross_profit_per_employee_banking_tce` is `gppe_banking_tce_v1`. Its capital base is measured
-  tangible common equity. The strategy applies it to FINANCIAL issuers only. Missing equity,
-  goodwill or intangibles gives an unavailable result. It never falls back to total assets.
+The strategy definition pins one tree for each issuer class (`labor_efficiency_tree_keys`,
+`factors.forest.bound_tree`): the uniform total-assets tree `gppe` (`gppe_uniform_charge_v0`) and the
+banking tree `gppe_banking_tce` (`gppe_banking_tce_v1`, measured tangible common equity, FINANCIAL
+issuers only). The caller passes the pinned tree and the issuer class. The factor reads each captured
+leaf of the tree from `facts` and evaluates the tree with `factors.forest.evaluate`. So the TOPT core and
+the strategy composite evaluate the same tree, and one issuer has one value.
 
-The uniform formula is frozen by issue #59 (2026-07-18 owner decision): one definition
-applies to every issuer, financial or not. The retired 8% leverage branch is gone.
+The uniform formula is frozen by issue #59 (2026-07-18 owner decision):
 
     real_profit_v0 = gross_profit - total_assets * risk_free_rate
     labor_efficiency_v0 = real_profit_v0 / employees_total
 
-The capital charge (`total_assets * risk_free_rate`) is subtracted for every
-issuer, banks included. A financial issuer whose real profit falls below the
-risk-free return on its balance sheet produces a *negative* labor efficiency:
-that is a valid low signal ("destroys value per employee at the risk-free
-hurdle"), ranked accordingly by the strategy, not a special-case exclusion.
-This supersedes the earlier financial branch (which computed
-`gross_profit / employees_total` with no capital charge and then marked banks
-`financial_valuation_not_comparable`); the owner decision is a single uniform
-definition with no blanket sector special-casing.
+A negative value is a valid low signal ("destroys value per employee at the risk-free hurdle"), ranked
+accordingly by the strategy, and not an exclusion. The banking tree charges the risk-free rate on
+measured tangible common equity (owner decision D2, 2026-10-26). A missing leaf gives an unavailable
+result with a flag that names it. No leaf is zero-filled and no capital base replaces another.
 
 `gross_profit` is still the parser's industry-branch definition per issuer
-(`truealpha_contracts.metrics.METRICS["gross_profit"]` is `financial_issuer_split=True`
-so a bank's value is its pre-provision-profit proxy, not a cost-of-revenue
-subtotal it never reports). That is a *metric-definition* concern owned by the
-parser; the factor consumes whatever grounded `gross_profit` fact it is given
-and applies the one uniform formula. `issuer_branch` is therefore no longer an
-input to this factor — a bank and a software issuer take the identical path.
+(`truealpha_contracts.metrics.METRICS["gross_profit"]` is `financial_issuer_split=True`, so a bank's
+value is its pre-provision-profit proxy). The factor consumes whatever grounded `gross_profit` fact it is
+given, for the tree node `pre_provision_profit` too.
 
-This still does not implement #59's fuller "operating-vs-investment profit
-decomposition" (investment returns minus a risk-free return on investable
-assets) — that remains a later calibration step, a new versioned definition of
-this same schema, not a per-issuer branch here.
+`risk_free_rate` is a versioned parameter (#59: "3-month US T-bill yield (v0 default; versioned
+parameter)"), not a live per-period market fact this factor looks up itself. The caller supplies it,
+exactly like `growth_convention` is an explicit parameter to the PEG factor.
 
-`risk_free_rate` is a versioned parameter (#59: "3-month US T-bill yield (v0
-default; versioned parameter)"), not a live per-period market fact this factor
-looks up itself — the caller supplies the frozen v0 value, exactly like
-`growth_convention` is an explicit parameter to the PEG factor.
+The uniform arithmetic is also expressed as a matrix-compatible AST expression
+(`GPPE_EXPRESSION_DEFINITION`), built only from shared `truealpha_contracts.ast` node types, so a compiled
+Polars execution reproduces the Decimal output of the uniform tree. The compiler is a test-time oracle
+(`common/factors/tests/support/expression_oracle`, #758). No deployed path runs it.
 
-The arithmetic is also expressed as a matrix-compatible AST expression
-(`GPPE_EXPRESSION_DEFINITION`), built only from shared
-`truealpha_contracts.ast` node types — no factor-specific node — so a
-compiled Polars execution reproduces this function's Decimal output. The
-compiler is a test-time oracle (`common/factors/tests/support/expression_oracle`, #758): the cross-check test
-runs it, and no deployed path does. The Decimal path above is the computation
-and the source of truth; the vectorised execution is the reproducibility proof.
-Because the formula is now uniform, this single expression covers every issuer.
-
-Input metric names match the canonical registry
-(`truealpha_contracts.metrics.METRICS`) so staging fusion and factor
-consumption never drift apart; `Fact` itself rejects a metric/unit_family
-combination that doesn't match that registry (see `factors.types.Fact`), so
-this function does not re-check unit compatibility.
+Input metric names match the canonical registry (`truealpha_contracts.metrics.METRICS`), and `Fact`
+rejects a metric and unit family that do not match it, so this function does not re-check units.
 """
 
 from collections.abc import Sequence
@@ -64,12 +43,26 @@ from decimal import Decimal
 
 from truealpha_contracts.ast import Div, Feature, Mul, Sub
 
+from factors.forest import AliasKind, Forest, IssuerClass, MetricTree, evaluate, metric_of, required_inputs
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
 _GROSS_PROFIT = "gross_profit"
 _TOTAL_ASSETS = "total_assets"
 _EMPLOYEES_TOTAL = "employees_total"
+
+#: The flags that a missing leaf of the banking tree raises (#1176). Equity, goodwill and intangibles
+#: share one flag. Preferred stock has its own. The strategy maps each flag to its exclusion reason.
+MISSING_TCE_FLAG = "missing_tangible_common_equity"
+MISSING_PREFERRED_FLAG = "missing_preferred_stock_value"
+#: The flag of a negative tangible common equity: the tree refuses it, so the charge is never a credit (#1518).
+NEGATIVE_TCE_FLAG = "negative_tangible_common_equity"
+_MISSING_LEAF_FLAGS = {
+    "stockholders_equity": MISSING_TCE_FLAG,
+    "goodwill": MISSING_TCE_FLAG,
+    "intangible_assets_net_excluding_goodwill": MISSING_TCE_FLAG,
+    "preferred_stock_value": MISSING_PREFERRED_FLAG,
+}
 
 #: `(gross_profit - total_assets * risk_free_rate) / employees_total` as a
 #: `truealpha_contracts.ast` expression. Feature names are the panel column
@@ -93,146 +86,88 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     return matches[0] if matches else None
 
 
-@factor("gross_profit_per_employee", kind="base", module=2, inputs=("gross_profit", "total_assets", "employees_total"))
+@factor(
+    "gross_profit_per_employee",
+    kind="base",
+    module=2,
+    inputs=(
+        "gross_profit",
+        "total_assets",
+        "employees_total",
+        "stockholders_equity",
+        "preferred_stock_value",
+        "goodwill",
+        "intangible_assets_net_excluding_goodwill",
+    ),
+)
 def gross_profit_per_employee(
     facts: Sequence[Fact],
     *,
     entity_id: str,
     as_of: datetime,
     risk_free_rate: Decimal,
+    forest: Forest,
+    tree: MetricTree,
+    issuer_class: IssuerClass,
 ) -> FactorResult:
-    """`gppe_uniform_charge_v0`: the uniform total-assets charge for every issuer class."""
-    gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
-    total_assets = _find(facts, entity_id, _TOTAL_ASSETS)
-    headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
+    """The labor efficiency of one issuer on the pinned ``tree`` (`gppe_uniform_charge_v0`, `gppe_banking_tce_v1`).
 
-    flags: list[str] = []
-    if gross_profit is None or gross_profit.value is None:
-        flags.append("missing_gross_profit")
-    if total_assets is None or total_assets.value is None:
-        flags.append("missing_total_assets")
-    if headcount is None or headcount.value is None:
-        flags.append("missing_employees_total")
-    elif headcount.value <= 0:
-        flags.append("non_positive_employees_total")
-    if not flags and gross_profit is not None and headcount is not None and total_assets is not None:
-        fiscal_periods = {gross_profit.fiscal_period, headcount.fiscal_period, total_assets.fiscal_period}
-        if len(fiscal_periods) > 1:
-            flags.append("fiscal_period_mismatch")
-
-    if flags:
-        return FactorResult(
-            factor="gross_profit_per_employee",
-            entity_id=entity_id,
-            value=None,
-            unit_family=UnitFamily.PER_EMPLOYEE,
-            confidence=Decimal("0"),
-            as_of=as_of,
-            data_availability="unverified",
-            flags=flags,
-        )
-
-    assert gross_profit is not None and headcount is not None and total_assets is not None
-    assert gross_profit.value is not None and headcount.value is not None and total_assets.value is not None
-
-    real_profit = gross_profit.value - total_assets.value * risk_free_rate
-    value = real_profit / headcount.value
-    confidence = min(gross_profit.confidence, total_assets.confidence, headcount.confidence)
-
-    return FactorResult(
-        factor="gross_profit_per_employee",
-        entity_id=entity_id,
-        value=value,
-        unit_family=UnitFamily.PER_EMPLOYEE,
-        confidence=confidence,
-        as_of=as_of,
-        data_availability="unverified",
-        flags=[],
-    )
-
-
-_STOCKHOLDERS_EQUITY = "stockholders_equity"
-_PREFERRED_STOCK = "preferred_stock_value"
-_GOODWILL = "goodwill"
-_INTANGIBLE_ASSETS = "intangible_assets_net_excluding_goodwill"
-
-#: The metrics `gppe_banking_tce_v1` reads. Total assets is not one of them.
-BANKING_TCE_INPUTS = (
-    _GROSS_PROFIT,
-    _STOCKHOLDERS_EQUITY,
-    _PREFERRED_STOCK,
-    _GOODWILL,
-    _INTANGIBLE_ASSETS,
-    _EMPLOYEES_TOTAL,
-)
-
-
-def gross_profit_per_employee_banking_tce(
-    facts: Sequence[Fact],
-    *,
-    entity_id: str,
-    as_of: datetime,
-    risk_free_rate: Decimal,
-) -> FactorResult:
-    """`gppe_banking_tce_v1` (#1176): `(gross_profit - TCE * risk_free_rate) / headcount`.
-
-    TCE is `stockholders_equity - preferred_stock_value - (goodwill + intangible_assets_net_excluding_goodwill)`.
-    It is measured, never estimated. A missing equity, goodwill or intangible input gives the flag
-    `missing_tangible_common_equity`. A missing preferred value gives `missing_preferred_stock_value`.
-    Neither input is zero-filled. The factor never substitutes total assets or a ratio.
+    A missing captured input gives no value and a flag that names it (`missing_<metric>`; the banking
+    leaves have their own flags). A headcount that is not positive gives no value. Facts that carry two
+    fiscal periods give no value (`fiscal_period_mismatch`): one period answers for the whole tree.
+    The confidence is the minimum over the consumed inputs.
     """
-    gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
-    equity = _find(facts, entity_id, _STOCKHOLDERS_EQUITY)
-    preferred = _find(facts, entity_id, _PREFERRED_STOCK)
-    goodwill = _find(facts, entity_id, _GOODWILL)
-    intangibles = _find(facts, entity_id, _INTANGIBLE_ASSETS)
-    headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
-    tce_inputs = (equity, goodwill, intangibles)
-
+    root = forest.node(tree.root)
+    unit_family = root.unit or UnitFamily.PER_EMPLOYEE
+    nodes = required_inputs(forest, tree, issuer_class)
+    tree_inputs: dict[str, Decimal | None] = {}
     flags: list[str] = []
-    if gross_profit is None or gross_profit.value is None:
-        flags.append("missing_gross_profit")
-    if any(item is None or item.value is None for item in tce_inputs):
-        flags.append("missing_tangible_common_equity")
-    if preferred is None or preferred.value is None:
-        flags.append("missing_preferred_stock_value")
-    if headcount is None or headcount.value is None:
-        flags.append("missing_employees_total")
-    elif headcount.value <= 0:
-        flags.append("non_positive_employees_total")
-    present = [item for item in (gross_profit, headcount, preferred, *tce_inputs) if item is not None]
-    if not flags and len({item.fiscal_period for item in present}) > 1:
+    consumed: list[Fact] = []
+    for node in nodes:
+        if node.alias(AliasKind.DEFINITION_PARAMETER) == "risk_free_rate":
+            tree_inputs[node.key] = risk_free_rate
+            continue
+        metric = metric_of(node)
+        fact = _find(facts, entity_id, metric)
+        tree_inputs[node.key] = None
+        if fact is None or fact.value is None:
+            flag = _MISSING_LEAF_FLAGS.get(metric, f"missing_{metric}")
+            if flag not in flags:
+                flags.append(flag)
+        elif metric == _EMPLOYEES_TOTAL and fact.value <= 0:
+            flags.append("non_positive_employees_total")
+        else:
+            tree_inputs[node.key] = fact.value
+            consumed.append(fact)
+    if not flags and len({fact.fiscal_period for fact in consumed}) > 1:
         flags.append("fiscal_period_mismatch")
 
-    if flags:
+    def unavailable(flag_list: list[str]) -> FactorResult:
         return FactorResult(
-            factor="gppe_banking_tce_v1",
+            factor=tree.root,
             entity_id=entity_id,
             value=None,
-            unit_family=UnitFamily.PER_EMPLOYEE,
+            unit_family=unit_family,
             confidence=Decimal("0"),
             as_of=as_of,
             data_availability="unverified",
-            flags=flags,
+            flags=flag_list,
         )
 
-    assert gross_profit is not None and headcount is not None
-    assert equity is not None and goodwill is not None and intangibles is not None
-    assert gross_profit.value is not None and headcount.value is not None
-    assert equity.value is not None and goodwill.value is not None and intangibles.value is not None
-    assert preferred is not None and preferred.value is not None
-
-    tangible_common_equity = equity.value - preferred.value - (goodwill.value + intangibles.value)
-    real_profit = gross_profit.value - tangible_common_equity * risk_free_rate
-    value = real_profit / headcount.value
-    confidence = min(item.confidence for item in (gross_profit, headcount, preferred, *tce_inputs) if item is not None)
-
+    if flags:
+        return unavailable(flags)
+    evaluation = evaluate(forest, tree, issuer_class=issuer_class, inputs=tree_inputs)
+    value = evaluation.values.get(tree.root)
+    if value is None:
+        if "negative_operand" in evaluation.undefined.values():
+            return unavailable([NEGATIVE_TCE_FLAG])
+        return unavailable([evaluation.undefined.get(tree.root, "undefined_operand")])
     return FactorResult(
-        factor="gppe_banking_tce_v1",
+        factor=tree.root,
         entity_id=entity_id,
         value=value,
-        unit_family=UnitFamily.PER_EMPLOYEE,
-        confidence=confidence,
+        unit_family=unit_family,
+        confidence=min(fact.confidence for fact in consumed) if consumed else Decimal("1"),
         as_of=as_of,
         data_availability="unverified",
         flags=[],

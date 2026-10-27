@@ -7,11 +7,13 @@ the instant out of the content identity, so every stored snapshot id keeps its b
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from data_engine.strategy_backtest_gateway import InputRow, issuer_inputs_from_rows, snapshot_id_from_rows
-from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING, evaluate_cutoff
+from factors.composite.strategy_evaluator import evaluate_cutoff
+from factors.forest import IssuerClass
 from truealpha_contracts.strategy import ExclusionReason, load_live_strategy_definition
 
 CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
@@ -165,11 +167,10 @@ def test_rows_with_a_stale_required_input_exclude_the_issuer_and_old_periods_do_
     decisions = {
         item.issuer_id: item
         for item in evaluate_cutoff(
-            issuer_inputs_from_rows(rows),
+            [replace(item, issuer_class=IssuerClass.NON_FINANCIAL) for item in issuer_inputs_from_rows(rows)],
             definition=load_live_strategy_definition(),
             cutoff_at=CUTOFF,
             risk_free_rate=Decimal("0"),
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         )
     }
 

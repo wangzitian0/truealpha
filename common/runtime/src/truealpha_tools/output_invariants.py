@@ -112,31 +112,27 @@ LATEST_STRATEGY_RUN = f"""
 """
 
 
-def _expected_input_keys() -> tuple[str, ...]:
-    """The keys the strategy consumes: the definition's required inputs plus PEG's
-    ranking inputs, read from the code that consumes them. Before 2026-09-07 this was a
-    literal list that still named `earnings_cagr_3y`, which parser v8 replaced with the
-    per-period net-income series — the invariant failed on production for a key nothing
-    consumed, i.e. the check drifted, not the data (#725 item H)."""
-    try:
-        from data_engine.datahub.strategy_bridge import load_strategy_definition
-        from factors.composite import strategy_evaluator
+def _expected_inputs() -> tuple[tuple[str, str], ...]:
+    """(input key, issuer class) for every key the strategy consumes for a class: the keys of the tree that the
+    live definition pins for the class (`required_input_keys`, #1518), plus PEG's ranking inputs. Read from the
+    code that consumes them. Before 2026-09-07 this was a literal list that still named `earnings_cagr_3y`, which
+    parser v8 replaced with the per-period net-income series: the invariant failed on production for a key nothing
+    consumed, i.e. the check drifted, not the data (#725 item H). The class says which issuers need the key: a
+    bank needs its four banking leaves, and an environment that holds no bank needs none (a preview of a few
+    tickers). The tool needs `factors` and `truealpha_contracts` only, so it runs where `data_engine` is absent."""
+    from factors.composite import strategy_evaluator
+    from factors.forest import definition_pins
+    from truealpha_contracts.strategy import load_live_strategy_definition
 
-        peg_keys: tuple[str, ...] = strategy_evaluator._input_keys("peg")
-        return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(peg_keys)))
-    except (
-        ImportError,
-        AttributeError,
-    ):  # the tool also runs where data_engine is not installed (a bare fixture DB job)
-        return (
-            "gross_profit",
-            "headcount",
-            "last_close",
-            "net_income",
-            "revenue",
-            "shares_outstanding",
-            "total_assets",
+    definition = load_live_strategy_definition()
+    peg_keys = set(strategy_evaluator._input_keys("peg"))
+    return tuple(
+        sorted(
+            (key, issuer_class.value)
+            for issuer_class in (IssuerClass(name) for name in definition_pins(definition))
+            for key in strategy_evaluator.required_input_keys(definition, issuer_class) | peg_keys
         )
+    )
 
 
 def _primary_market_price_parser() -> str:
@@ -170,7 +166,7 @@ def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
     return tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
 
 
-EXPECTED_INPUT_KEYS = _expected_input_keys()
+EXPECTED_INPUTS = _expected_inputs()
 PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
 MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
 
@@ -371,13 +367,21 @@ _TEMPLATES: tuple[Invariant, ...] = (
         # would only prove the list agrees with itself; the value here is a second,
         # independent statement of what the deployed run is supposed to produce.
         violations="""
-            with expected(input_key) as (values __EXPECTED_VALUES__
+            with expected(input_key, issuer_class) as (values __EXPECTED_VALUES__
             ), latest as (
                 select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
+            ), present as (
+                -- The classes of the issuers that the latest cutoff scored. A key is expected when one of them
+                -- needs it. No class found (no core row at that cutoff) expects every key: the check never goes
+                -- quiet because it could not tell which classes ran.
+                select distinct r.operating_branch as issuer_class from mart.topt_core_results r
+                where r.cutoff = (select cutoff_at from latest)
             )
-            select expected.input_key, (select cutoff_at from latest)::text as cutoff_at
+            select distinct expected.input_key, (select cutoff_at from latest)::text as cutoff_at
             from expected
             where exists (select 1 from latest where cutoff_at is not null)
+              and (expected.issuer_class in (select issuer_class from present)
+                   or not exists (select 1 from present))
               and not exists (
                 select 1 from staging.strategy_backtest_inputs i
                 where i.input_key = expected.input_key
@@ -799,7 +803,7 @@ def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
 
 def _render(invariant: Invariant, scheduled: str) -> Invariant:
     """The derived facts enter the SQL as literals, once, here — never at query time."""
-    values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
+    values = ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS)
     ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
 
     def fill(sql: str) -> str:
