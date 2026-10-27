@@ -18,7 +18,9 @@ error status, or raised before an answer arrived:
 - ``cost`` — 1 call today; tokens for a model provider when #70 gives it a seat;
 - ``capacity_window_id`` — the vendor window the call was charged to (``twelvedata:day:
   2026-09-04``), so "used vs declared" is one GROUP BY;
-- ``run_key`` — the Dagster run that made the call, bound by the op (`run_scope`).
+- ``run_key`` — the run that made the call: ``dagster:<run_id>``, bound for the whole op by `external_op`, or
+  ``script:<name>:<epoch seconds>``, bound by `script_run`. A call outside every run is recorded with a NULL
+  ``run_key`` and never refused (owner decision D5); the dashboard counts it (#1521).
 - ``fetch_key`` — the key of the resource that the call fetched: the ``identity`` of the call (#1521);
 - ``repeat_reason`` — why a second row of that key is no duplicate fetch: ``probe``, ``window_not_final``,
   ``answer_refused`` or ``model_call``. The gateway derives it from the call itself; no caller passes one.
@@ -209,6 +211,17 @@ def run_scope(run_key: str) -> Iterator[None]:
         yield
     finally:
         _run_key.reset(token)
+
+
+@contextmanager
+def script_run(name: str) -> Iterator[str]:
+    """Attribute every call that a script makes to one run, `script:<name>:<UTC epoch seconds>` (#1521 step 4).
+
+    A script has no Dagster run. Its `main` runs inside this block, so its rows carry a run key like an op's
+    rows do. Yields the key."""
+    run_key = f"script:{name}:{int(_utcnow().timestamp())}"
+    with run_scope(run_key):
+        yield run_key
 
 
 # --- the record -----------------------------------------------------------------------

@@ -143,7 +143,10 @@ def test_a_ledger_write_failure_never_masks_the_vendor_result(monkeypatch, caplo
     assert '"source": "yahoo"' in caplog.text, "the unrecorded row is at least in the run log"
 
 
-def test_run_scope_attributes_rows_to_the_dagster_run(call_ledger) -> None:
+def test_run_scope_attributes_rows_to_the_dagster_run_and_a_call_outside_a_run_is_recorded_without_one(
+    call_ledger,
+) -> None:
+    """Owner decision D5 (#1521): a call outside every run is recorded with a NULL run key, never refused."""
     with gateway.run_scope("dagster:run-123"):
         with gateway.record_call("sec", "submissions", caller="test", identity=_key("sec", "submissions")) as call:
             call.observe(status_code=200, body=b"{}")

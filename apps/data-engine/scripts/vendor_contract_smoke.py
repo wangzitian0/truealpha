@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from data_engine.config import settings
+from data_engine.sources import gateway
 
 _FAILURES: list[str] = []
 
@@ -299,4 +300,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with gateway.script_run("vendor_contract_smoke"):
+        exit_code = main()
+    raise SystemExit(exit_code)

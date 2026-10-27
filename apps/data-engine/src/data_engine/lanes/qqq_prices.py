@@ -67,6 +67,7 @@ from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, split_history
+from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
@@ -321,14 +322,13 @@ class QqqPriceRefreshConfig(dg.Config):
     max_symbols: int | None = Field(default=None, ge=1)
 
 
-@dg.op
+@external_op
 def refresh_qqq_prices_op(context: dg.OpExecutionContext, config: QqqPriceRefreshConfig) -> None:
     """Store both daily series of the stalest QQQ symbols within this environment's Twelve Data budget.
 
     Every request is attributed to this run in the ledger and admitted by the rule-6 gate first.
     """
     with (
-        gateway.run_scope(f"dagster:{context.run_id}"),
         gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):

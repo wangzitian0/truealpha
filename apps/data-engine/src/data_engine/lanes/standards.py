@@ -57,6 +57,7 @@ from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 from data_engine.datahub.standards.history import run_standard_history as _run_standard_history
 from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
+from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -225,7 +226,7 @@ def history_standards(selected: str) -> tuple[str, ...]:
     return STANDARDS_WITH_HISTORY
 
 
-@dg.op
+@external_op
 def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfillConfig) -> str:
     cutoff = datetime.fromisoformat(config.executed_at)
     if config.mode not in ("backfill", "probe"):
@@ -413,7 +414,7 @@ def _already_current(context: dg.OpExecutionContext, check: str, config: Standar
     return json.dumps({"universe": config.universe, "run_id": run_id, REPORTS_CURRENT: run_id})
 
 
-@dg.op
+@external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
     """#772 (init.md §7 module 6): the theme-purity rows for this week's governed head.
 
@@ -482,7 +483,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     return json.dumps(summary)
 
 
-@dg.op
+@external_op
 def run_supply_chain_exposure(
     context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
 ) -> str:
@@ -576,7 +577,7 @@ def run_supply_chain_exposure(
     return json.dumps(summary)
 
 
-@dg.op
+@external_op
 def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
     """#771 (init.md §7 module 4): analyst consensus ratings rows for this week's governed head.
 
@@ -683,7 +684,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     return json.dumps(summary)
 
 
-@dg.op
+@external_op
 def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, analyst_summary: str) -> str:
     """#748: after the week's backfill of EVERY standard, theme purity, supply chain exposure,
     and analyst ratings, count the six questions on the governed head — answered / unavailable-by-reason / missing — and
@@ -736,7 +737,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     return json.dumps({"report_id": report_id, "summary": summary_line(report)})
 
 
-@dg.op
+@external_op
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
     """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
 
@@ -817,7 +818,7 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
-@dg.op
+@external_op
 def run_standard_history(context: dg.OpExecutionContext, config: StandardHistoryConfig) -> str:
     """#1137: the month-end history of each standard in `STANDARDS_WITH_HISTORY` over one universe.
 
@@ -966,7 +967,7 @@ def _red_report_checks(universe: str) -> list[str]:
     return [name for name in names if newest_is_red(name)]
 
 
-@dg.op
+@external_op
 def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartConfig) -> str:
     """The daily job's stand-in for the backfill summary the purity op sequences after: no
     cells are extracted here, only the head's own reports are refreshed — or, in the

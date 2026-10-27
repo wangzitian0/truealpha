@@ -19,6 +19,7 @@ from io import StringIO
 from pathlib import Path
 
 import httpx
+from data_engine.sources import gateway
 from data_engine.sources.sec import COMPANY_FACTS_URL
 from data_engine.sources.sec import client as sec_client
 from data_engine.sources.yahoo import CHART_URL, USER_AGENT, fetch_daily_bars
@@ -285,4 +286,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("capture_strategy_evidence"):
+        main()

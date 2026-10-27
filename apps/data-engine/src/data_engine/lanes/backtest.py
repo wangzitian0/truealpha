@@ -32,6 +32,7 @@ from truealpha_contracts.strategy import load_strategy_definition as load_packag
 
 from data_engine.config import settings
 from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
+from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
@@ -83,7 +84,7 @@ def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
     )
 
 
-@dg.op
+@external_op
 def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBacktestConfig) -> None:
     """Backtest large_model_value_v0 over the quarter-end history and persist the run."""
     tick = tick_from_config(config.executed_at)
