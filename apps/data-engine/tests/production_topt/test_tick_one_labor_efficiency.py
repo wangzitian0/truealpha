@@ -26,7 +26,10 @@ from truealpha_contracts.strategy import load_live_strategy_definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_live_input_age import AGE_DAYS, Tick  # noqa: E402
-from test_live_input_age import tick as _tick_fixture  # noqa: E402, F401  (registers the fixture named `tick`)
+from test_live_input_age import tick as _tick_fixture  # noqa: E402
+
+#: The module-scoped fixture of the deployed tick, registered in this module under its own name.
+tick = _tick_fixture
 
 _BANK = "JPM"
 _HEADCOUNT = Decimal("164000")
