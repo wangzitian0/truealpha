@@ -666,3 +666,13 @@ def test_the_view_ranks_by_the_relation_and_not_by_a_ticker(conn: psycopg.Connec
 
     store.retract_relation(named_googl, at=T0 + 2 * HOUR)
     assert identity_of(conn, issuer) == ("GOOG", "listing:xnas:goog")
+
+
+@pytest.mark.parametrize("view", ["mart.entity_identity", "mart.entity_display_resolution"])
+def test_a_live_view_names_no_ticker_literal(conn: psycopg.Connection, view: str) -> None:
+    """#1518: both views rank the listings of an issuer by the relation `primary_listing`. No ticker stays in them."""
+    row = conn.execute("select pg_get_viewdef(%s::regclass)", (view,)).fetchone()
+    assert row is not None
+
+    assert "goog" not in str(row[0]).lower()
+    assert "primary_listing" in str(row[0])
