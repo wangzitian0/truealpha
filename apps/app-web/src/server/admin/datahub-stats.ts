@@ -31,6 +31,33 @@ export interface FactorAvailabilityRow {
   ratio: string;
 }
 
+/**
+ * #1519 step 1a: how the cover of each issuer's latest annual filing read for its listing. `parsed` is a depositary
+ * ratio, `ordinary` is a plain share (ratio 1), `unparsed` keeps the title text and a reason, and `not_measured` is
+ * a payload that has no ratio key. The data engine writes the block into the quality report; the App only formats it.
+ */
+export type ListingRatioOutcome = "parsed" | "ordinary" | "unparsed" | "not_measured";
+
+export interface ListingRatioCell {
+  listing_id: string;
+  issuer_id: string | null;
+  outcome: ListingRatioOutcome;
+  /** Ordinary shares that one listed unit stands for. */
+  listing_units_per_share: string | null;
+  pattern: string | null;
+  title: string | null;
+  reason: string | null;
+  accession: string | null;
+  form: string | null;
+  filed: string | null;
+}
+
+export interface ListingRatioReport {
+  counts: Record<ListingRatioOutcome, number>;
+  /** The listings that need a look come first: `unparsed`, `not_measured`, `parsed`, `ordinary`. */
+  cells: ListingRatioCell[];
+}
+
 export interface HeadStatusRow {
   universe_id: string;
   sequence: number;
@@ -48,6 +75,8 @@ export interface HeadStatusRow {
   is_corroboration_degraded: boolean;
   degraded_reasons: string[];
   factors: FactorAvailabilityRow[];
+  /** null: the quality report of the target run was written before the ratio block existed. */
+  listing_ratio: ListingRatioReport | null;
 }
 
 export interface SourceStatRow {
@@ -483,7 +512,8 @@ const HEADS_SQL = `
          h.age_hours::float as age_hours,
          h.limit_hours::float as limit_hours,
          h.staleness_reason,
-         coalesce(q.payload->'factor_availability', '{}'::jsonb) as factor_availability
+         coalesce(q.payload->'factor_availability', '{}'::jsonb) as factor_availability,
+         q.payload->'listing_ratio' as listing_ratio
   from mart.served_head h
   left join mart.datahub_quality_report q on q.run_id = coalesce(h.run_id, h.head_run_id)
   order by h.universe_id
@@ -650,10 +680,55 @@ interface FactorGrade {
   ratio: string;
 }
 
-interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
+interface HeadDbRow extends Omit<HeadStatusRow, "factors" | "listing_ratio"> {
   environment?: string | null;
   head_availability?: string | null;
   factor_availability: Record<string, FactorGrade>;
+  listing_ratio?: unknown;
+}
+
+const RATIO_OUTCOMES: ListingRatioOutcome[] = ["unparsed", "not_measured", "parsed", "ordinary"];
+
+function text(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** The ratio block of a quality report, ordered for reading. null when the report has none. */
+export function listingRatioReport(block: unknown): ListingRatioReport | null {
+  if (block === null || typeof block !== "object") return null;
+  const { counts, cells } = block as { counts?: Record<string, unknown>; cells?: Record<string, unknown> };
+  if (counts === undefined || counts === null || cells === undefined || cells === null) return null;
+  const rows: ListingRatioCell[] = [];
+  for (const [key, raw] of Object.entries(cells)) {
+    const cell = raw as Record<string, unknown>;
+    const outcome = RATIO_OUTCOMES.find((candidate) => candidate === cell.outcome);
+    if (outcome === undefined) continue;
+    rows.push({
+      listing_id: text(cell.listing_id) ?? key,
+      issuer_id: text(cell.issuer_id),
+      outcome,
+      listing_units_per_share: text(cell.listing_units_per_share),
+      pattern: text(cell.pattern),
+      title: text(cell.title),
+      reason: text(cell.reason),
+      accession: text(cell.accession),
+      form: text(cell.form),
+      filed: text(cell.filed),
+    });
+  }
+  rows.sort(
+    (a, b) =>
+      RATIO_OUTCOMES.indexOf(a.outcome) - RATIO_OUTCOMES.indexOf(b.outcome) || a.listing_id.localeCompare(b.listing_id),
+  );
+  return {
+    counts: {
+      parsed: Number(counts.parsed ?? 0),
+      ordinary: Number(counts.ordinary ?? 0),
+      unparsed: Number(counts.unparsed ?? 0),
+      not_measured: Number(counts.not_measured ?? 0),
+    },
+    cells: rows,
+  };
 }
 
 export async function loadDatahubStats(): Promise<DatahubStats> {
@@ -792,6 +867,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
               ratio: grade.ratio,
             }),
           ),
+          listing_ratio: listingRatioReport(row.listing_ratio),
         };
       }),
       sources: sources.rows,

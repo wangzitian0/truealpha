@@ -67,6 +67,7 @@ from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
+    from data_engine.datahub.standards.listing_unit_ratio import ListingUnitRatio
 
 
 # Concept lists are NOT here any more: they are a published, content-addressed ruleset
@@ -354,6 +355,11 @@ def headcount_vintage(fact: HeadcountFact) -> dict[str, Any]:
 
 # (cik, cutoff) -> the extracted headcount fact, or None when no filing yields one.
 HeadcountExtractor = Callable[[int, date], HeadcountFact | None]
+
+# (cik, cutoff, ticker) -> what the cover of the issuer's latest annual filing says about the ratio
+# of the listed unit to the ordinary share (#1519, step 1a). The reader never raises: a read that
+# fails is an `unparsed` outcome with a reason, so the capture of the issuer's numbers goes on.
+ListingRatioReader = Callable[[int, date, str], "ListingUnitRatio"]
 
 
 class SourceUnavailableError(Exception):
@@ -1185,10 +1191,14 @@ class SecFinancialFactAdapter:
         mapping_version: str = MAPPING_VERSION,
         corroborating_origins: Sequence[FinancialFactCorroboratingOrigin] = (),
         ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
+        listing_ratio_reader: ListingRatioReader | None = None,
     ) -> None:
         self._targets = targets
         self._fetcher = fetcher
         self._headcount_extractor = headcount_extractor
+        # None means no reader ran: the payload then carries no ratio key, so a dashboard reads
+        # "not measured" and the payload hash of a row without a reader does not move.
+        self._listing_ratio_reader = listing_ratio_reader
         # Carries the resolved ruleset's hash, so an observation names the exact concept
         # rules behind it. Without that, advancing the pointer silently changes what
         # numbers mean while every row still claims the same mapping identity.
@@ -1369,6 +1379,10 @@ class SecFinancialFactAdapter:
                 }
             )
         _mark_unclassified(payload, target)
+        if self._listing_ratio_reader is not None and not target.registry_unavailable:
+            # Measured and stored only. No factor reads these keys yet (#1519, step 1a). An issuer
+            # that the registry could not read is excluded from the tick: its cover is not read.
+            payload.update(self._listing_ratio_reader(target.cik, target.cutoff, target.ticker).payload_fields())
         if operating_period_stale:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
@@ -1616,6 +1630,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
     from data_engine.datahub.production_topt.moomoo_origin import moomoo_financials_origin
     from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
+    from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
     from data_engine.sources import sec
 
     connection = context.connection
@@ -1699,4 +1714,6 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
         mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
         corroborating_origins=() if second_origin is None else (second_origin,),
         ruleset=ruleset,
+        # One reader per run: two listings of one issuer read one filing.
+        listing_ratio_reader=CoverRatioReader(),
     )

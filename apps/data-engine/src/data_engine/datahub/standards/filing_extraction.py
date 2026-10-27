@@ -342,7 +342,9 @@ def _latest_filing_for_forms(
     return None
 
 
-def latest_annual_filing(cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime) -> FilingDocument | None:
+def latest_annual_filing(
+    cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
+) -> FilingDocument | None:
     """The newest 10-K/20-F filed at or before the cutoff, with its primary document (#1264).
 
     High-volume filers (such as JPM, which files thousands of 424B2 notes per year) push
@@ -365,7 +367,7 @@ def latest_periodic_filing(
     return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=STATEMENT_FORMS)
 
 
-def _format_accession(accession: str) -> str:
+def format_accession(accession: str) -> str:
     digits = accession.replace("-", "")
     if len(digits) == 18 and digits.isdigit():
         return f"{digits[:10]}-{digits[10:12]}-{digits[12:]}"
@@ -410,7 +412,7 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
     by_member = by_end[latest_end]
     if len(by_member) < 2 or not _uniform_class_par_values(ix, tuple(by_member)):
         return []
-    formatted_accn = _format_accession(document.accession)
+    formatted_accn = format_accession(document.accession)
     filed_iso = document.filing_date.isoformat()
     end_iso = latest_end.isoformat()
     return [

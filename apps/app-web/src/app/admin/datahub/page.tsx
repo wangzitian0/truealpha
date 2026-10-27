@@ -11,7 +11,13 @@
 import Link from "next/link";
 
 import { formatCell } from "@/client/format";
-import { loadDatahubStats, loadVerdictHistory, type QuestionCoverageQuestion } from "@/server/admin/datahub-stats";
+import {
+  loadDatahubStats,
+  loadVerdictHistory,
+  type ListingRatioCell,
+  type ListingRatioReport,
+  type QuestionCoverageQuestion,
+} from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +80,60 @@ function getPhysicalStatus(q: QuestionCoverageQuestion): {
     label: "Disconnected (0%)",
     badgeClass: "bg-rose-950/80 text-rose-400 border border-rose-800",
   };
+}
+
+/** What one listing's cover read says, in words. The reason and the title text stay visible for `unparsed`. */
+function listingRatioText(cell: ListingRatioCell): string {
+  if (cell.outcome === "parsed") return `1 unit = ${cell.listing_units_per_share} ordinary shares`;
+  if (cell.outcome === "ordinary") return "ordinary share (1)";
+  if (cell.outcome === "not_measured") return "not measured";
+  return `unparsed: ${cell.reason ?? "no reason"}`;
+}
+
+/**
+ * #1519 step 1a: the depositary ratio that the cover of each issuer's latest annual filing gave. A measurement for the
+ * owner to read before the ratio is enforced: no grade, no gate. The counts come from the data engine.
+ */
+function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
+  if (report === null) return null;
+  const { counts } = report;
+  return (
+    <div className="mt-3 text-sm">
+      <h3 className="font-semibold">Depositary ratio of the listing (#1519)</h3>
+      <p className="text-gray-400">
+        {counts.parsed} parsed ratio · {counts.ordinary} ordinary (1) ·{" "}
+        <span className={counts.unparsed > 0 ? "text-amber-400 font-medium" : ""}>{counts.unparsed} unparsed</span> ·{" "}
+        {counts.not_measured} not measured
+      </p>
+      {report.cells.length > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-gray-500">{report.cells.length} listings, unparsed first</summary>
+          <table className="mt-2 w-full text-left">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="pr-4 font-normal">listing</th>
+                <th className="pr-4 font-normal">outcome</th>
+                <th className="pr-4 font-normal">cover title</th>
+                <th className="font-normal">filing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.cells.map((cell) => (
+                <tr key={cell.listing_id} className={cell.outcome === "unparsed" ? "text-amber-400" : ""}>
+                  <td className="pr-4 font-mono">{cell.listing_id}</td>
+                  <td className="pr-4">{listingRatioText(cell)}</td>
+                  <td className="pr-4">{cell.title ?? "—"}</td>
+                  <td className="font-mono">
+                    {cell.accession === null ? "—" : `${cell.form ?? ""} ${cell.accession} ${cell.filed ?? ""}`.trim()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function renderTrackingIssue(issue: string) {
@@ -639,6 +699,7 @@ export default async function AdminDatahubPage({
                   </tbody>
                 </table>
               )}
+              <ListingRatioBlock report={head.listing_ratio} />
           </div>
         ))}
       </div>

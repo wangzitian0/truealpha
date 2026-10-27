@@ -87,6 +87,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     SOURCE_BY_PARSER,
     registration_for,
 )
+from data_engine.datahub.standards.listing_unit_ratio import OUTCOME_NOT_MEASURED, OUTCOMES, outcome_of_payload
 
 # The fusion policies and their source orders live in
 # `truealpha_contracts.reconciliation_policies` (init.md rule 12).
@@ -364,6 +365,33 @@ class _PointerDereferencer:
         return result
 
 
+def listing_ratio_cell(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The dashboard row of one financial-fact payload: how the cover read for this listing (#1519, step 1a).
+
+    The row is a measurement. No grade, no gate and no served value reads it.
+    """
+    return {
+        "issuer_id": payload.get("issuer_id"),
+        "listing_id": payload.get("listing_id"),
+        "outcome": outcome_of_payload(payload),
+        "listing_units_per_share": payload.get("listing_units_per_share"),
+        "pattern": payload.get("ratio_pattern"),
+        "title": payload.get("ratio_title"),
+        "reason": payload.get("ratio_reason"),
+        "accession": payload.get("ratio_accession"),
+        "form": payload.get("ratio_form"),
+        "filed": payload.get("ratio_filed"),
+    }
+
+
+def listing_ratio_report(cells: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
+    """The rows of one run and their count per outcome. The App only formats this block."""
+    counts = dict.fromkeys(OUTCOMES, 0)
+    for cell in cells.values():
+        counts[cell["outcome"]] += 1
+    return {"counts": counts, "cells": dict(sorted(cells.items()))}
+
+
 @dataclass
 class _Cell:
     """One requested cell's graded facts, folded over the observations bound to it.
@@ -458,6 +486,7 @@ def build_report(
     cells: dict[str, _Cell] = {}
     market_price_cells: dict[str, str] = {}
     plausibility: dict[str, dict[str, Any]] = {}
+    listing_ratio: dict[str, dict[str, Any]] = {}
     usable_by_subject: dict[str, dict[str, bool]] = {}
     for (
         obligation_id,
@@ -490,6 +519,10 @@ def build_report(
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
+            # A measured row is never replaced by a `not_measured` one from another observation of the subject.
+            ratio_cell = listing_ratio_cell(payload)
+            if ratio_cell["outcome"] != OUTCOME_NOT_MEASURED or str(subject_id) not in listing_ratio:
+                listing_ratio[str(subject_id)] = ratio_cell
             try:
                 violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
             except ValidationError:
@@ -561,6 +594,8 @@ def build_report(
             else "0"
         ),
         "plausibility_cells": plausibility,
+        # #1519 step 1a: the depositary ratio that the cover of each issuer's latest annual filing gave.
+        "listing_ratio": listing_ratio_report(listing_ratio),
         "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
         "run_id": run_id,
         "requested_count": requested,
