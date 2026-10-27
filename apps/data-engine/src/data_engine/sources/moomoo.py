@@ -11,20 +11,20 @@ Every call goes through moomoo_ledger.gate() first (init.md Section 1 rule 6:
 no module decides for itself whether to call). The gate is a defensive
 throttle/audit trail, not enforcement of a real moomoo-side monthly quota —
 moomoo's own docs only rate-limit these endpoints (bursts per 30s); see
-init.md Section 5's 2026-07-10 correction.
+init.md Section 5's 2026-07-10 correction. The call is recorded by the one
+ledger writer, `gateway.record_call` (#1521).
 """
 
-import hashlib
 import json
 import socket
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 import moomoo
 
 from data_engine.config import settings
-from data_engine.sources.moomoo_ledger import gate, record, throttle
+from data_engine.sources.gateway import record_call
+from data_engine.sources.moomoo_ledger import gate, normalize_stock_uri, throttle
 
 
 class MoomooConnectionError(Exception):
@@ -80,67 +80,37 @@ def _call(ctx, endpoint: str, caller: str, fn, *, request_uri: str | None = None
     always first; everything after it is returned to the caller as-is (a
     single value for a 2-tuple, a tuple of the rest otherwise).
 
-    record() must run even if fn(ctx) raises: a request can reach moomoo's
-    server (spending real quota) and still raise locally (timeout, a
-    malformed/unexpected response) — if we skip recording on exception, the
-    local ledger undercounts and the gate stops protecting the real budget.
-    Re-raised as MoomooConnectionError (chained, original still inspectable
-    via __cause__) so every caller-facing failure mode is one exception type.
+    The row is written when the `record_call` block ends, even if fn(ctx) raises: a
+    request can reach moomoo's server (spending real quota) and still raise locally
+    (timeout, a malformed/unexpected response) — if we skip recording on exception, the
+    ledger undercounts and the gate stops protecting the real budget. The exception is
+    re-raised as MoomooConnectionError (chained, original still inspectable via
+    __cause__) so every caller-facing failure mode is one exception type.
+
+    A row the ledger rejects never reaches this function: `emit` logs it and the answer
+    stays with the caller (#1521, the same rule as every other source).
     """
     gate(endpoint, caller, request_uri=request_uri)
     throttle()
-    started = time.monotonic()
-    try:
-        result = fn(ctx)
-    except Exception as e:
+    with record_call(
+        "moomoo", endpoint, caller=caller, request_uri=normalize_stock_uri(request_uri), admit=False
+    ) as call:
         try:
-            record(
-                endpoint,
-                caller,
-                ok=False,
-                error=f"{type(e).__name__}: {e}",
-                duration_ms=int((time.monotonic() - started) * 1000),
-                request_uri=request_uri,
-            )
-        except Exception as ledger_err:
-            # The ledger write failing must neither mask the original SDK error
-            # nor escape as a raw psycopg error no sweep handler knows.
-            raise MoomooConnectionError(
-                f"{endpoint} raised: {e} — and recording it failed too ({ledger_err}); this spent call is unaudited"
-            ) from e
-        raise MoomooConnectionError(f"{endpoint} raised: {e}") from e
-    ret, rest = result[0], result[1:]
-    ok = ret == moomoo.RET_OK
-    payload_sha: str | None = None
-    byte_length: int | None = None
-    if ok:
-        try:
-            raw = canonical_moomoo_bytes(rest[0] if len(rest) == 1 else rest)
-            payload_sha = hashlib.sha256(raw).hexdigest()
-            byte_length = len(raw)
-        except Exception:
-            payload_sha = None
-            byte_length = None
-    try:
-        record(
-            endpoint,
-            caller,
-            ok,
-            status_code=int(ret) if isinstance(ret, int) else None,
-            error=None if ok else str(rest[0] if rest else "unknown error"),
-            duration_ms=int((time.monotonic() - started) * 1000),
-            request_uri=request_uri,
-            payload_sha256=payload_sha,
-            byte_length=byte_length,
-        )
-    except Exception as ledger_err:
-        # Deliberately drop the payload: an unaudited-but-kept result would let
-        # raw fill up while the gate undercounts. Surfacing this as the one
-        # caller-facing exception type means sweeps log it, skip, and re-fetch
-        # (and re-record) the same call on a later run.
-        raise MoomooConnectionError(
-            f"{endpoint} succeeded but the ledger write failed ({ledger_err}); payload dropped — rerun re-fetches it"
-        ) from ledger_err
+            result = fn(ctx)
+        except Exception as e:
+            call.fail(f"{type(e).__name__}: {e}")
+            raise MoomooConnectionError(f"{endpoint} raised: {e}") from e
+        ret, rest = result[0], result[1:]
+        ok = ret == moomoo.RET_OK
+        raw: bytes | None = None
+        if ok:
+            try:
+                raw = canonical_moomoo_bytes(rest[0] if len(rest) == 1 else rest)
+            except Exception:
+                raw = None
+        call.observe(status_code=int(ret) if isinstance(ret, int) else None, body=raw)
+        if not ok:
+            call.fail(str(rest[0] if rest else "unknown error"))
     if not ok:
         raise MoomooConnectionError(f"{endpoint} failed: {rest[0] if rest else 'unknown error'}")
     return rest[0] if len(rest) == 1 else rest

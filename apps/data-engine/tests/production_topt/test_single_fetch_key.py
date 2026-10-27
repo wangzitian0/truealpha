@@ -127,16 +127,17 @@ def test_k1_no_module_outside_the_source_registry_holds_a_per_key_cost_literal()
 # --- K2: moomoo monthly call budget deleted; 30d 2,000-stock quota & daily anomaly ---
 
 
-def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(tmp_path, monkeypatch) -> None:
+def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(moomoo_ledger_db, monkeypatch) -> None:
+    from data_engine.sources import moomoo as mm
+
+    def spend(endpoint: str, code: str) -> None:
+        mm._call(object(), endpoint, "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri=code)
+
     assert not hasattr(ledger.settings, "moomoo_monthly_call_budget")
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 2)
 
-    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
-    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
-    ledger.gate("request_history_kline", "test", request_uri="moomoo://US.MSFT")
-    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.MSFT")
+    spend("request_history_kline", "US.AAPL")
+    spend("request_history_kline", "US.MSFT")
 
     # Re-requesting an already-used stock in the 30d window succeeds
     ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
@@ -147,7 +148,7 @@ def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(tmp_
 
     # Daily call anomaly triggers only above 2x planned_p99
     assert ledger.is_daily_call_anomaly(planned_p99=1) is False
-    ledger.record("get_company_profile", "test", ok=True, request_uri="moomoo://US.NVDA")
+    spend("get_company_profile", "US.NVDA")
     assert ledger.is_daily_call_anomaly(planned_p99=1) is True
 
 
@@ -266,21 +267,25 @@ def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_al
 
 
 def test_k3_a_probe_stamps_no_key_on_the_paths_that_call_fetching_directly(call_ledger, landed_keys) -> None:
-    """Twelve Data calls `landed`, `fetching` and `land`; moomoo reads `current_fetch_key()` for its own row.
+    """Twelve Data calls `landed`, `fetching` and `land`; every row, moomoo's included, reads the stamp.
 
     Red when `fetching` stamps inside a probe: the rows of a forced tick would then count as fetches."""
     key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
     socket: list[str] = []
     client = _socket(socket)
+
+    def call() -> None:
+        gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test")
+
     with gateway.probe_scope(True):
         with gateway.fetching(key):
-            assert gateway.current_fetch_key() is None
-            gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test")
+            call()
         gateway.land(key, b"ignored")
     assert [row.fetch_key for row in call_ledger] == [None] and landed_keys.bodies == {}
     with gateway.fetching(key):
-        assert gateway.current_fetch_key() == key.ledger_key
-    assert gateway.current_fetch_key() is None, "the stamp ends with the block"
+        call()
+    call()
+    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key, None], "the stamp ends with the block"
 
 
 def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledger, landed_keys, caplog) -> None:

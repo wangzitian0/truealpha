@@ -198,10 +198,6 @@ def run_scope(run_key: str) -> Iterator[None]:
         _run_key.reset(token)
 
 
-def current_run_key() -> str | None:
-    return _run_key.get()
-
-
 # --- the record -----------------------------------------------------------------------
 
 
@@ -458,13 +454,13 @@ def set_writer(writer: Callable[[CallRecord], None]) -> Callable[[CallRecord], N
     return previous
 
 
-def emit(record: CallRecord, writer: Callable[[CallRecord], None] | None = None) -> None:
+def emit(record: CallRecord) -> None:
     """Write one finished record. Never raises: a ledger outage is logged with the full
     row, not turned into a vendor failure (see the module docstring)."""
     if settings.external_call_ledger == "off":
         return
     try:
-        (writer or _writer)(record)
+        _writer(record)
     except Exception:  # noqa: BLE001 - the vendor result must not depend on the ledger
         log.exception("external call ledger write failed; unrecorded call: %s", json.dumps(record.as_row()))
 
@@ -739,7 +735,6 @@ def record_call(
     caller: str,
     request_uri: str | None = None,
     cost: Decimal | int = 1,
-    writer: Callable[[CallRecord], None] | None = None,
     admit: bool = True,
 ) -> Iterator[CallRecord]:
     """Wrap exactly one outbound request. The block reports the answer through
@@ -793,7 +788,7 @@ def record_call(
             record.ok = record.status_code is None or record.status_code < 400
             if not record.ok and record.error is None:
                 record.error = f"HTTP {record.status_code}"
-        emit(record, writer)
+        emit(record)
 
 
 def _requested_uri(url: str, params: Any) -> str:
@@ -979,13 +974,6 @@ def land(
         log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
 
 
-def current_fetch_key() -> str | None:
-    """The ledger form of the key of the `fetch_once` that is making a request now, or None.
-
-    A caller that writes its own ledger row (the moomoo SDK wrapper) reads it here."""
-    return _fetch_key.get()
-
-
 @contextmanager
 def fetching(key: FetchKey, accept: Callable[[bytes], bool] | None = None) -> Iterator[None]:
     """Stamp the ledger row of the ONE external request in the block with ``key``.
@@ -1038,7 +1026,7 @@ def fetch_once(
     return body
 
 
-# --- the explicit gateway (#740): one gate, rows on the caller's connection ------------
+# --- the explicit gateway (#740): one gate, rows from the one writer ----------------------
 
 
 @dataclass
@@ -1050,9 +1038,9 @@ class SourceGateway:
     against the ledger, the rate window paced — runs the callable, and records the
     attempt. Recording goes through `record_call`, so the row has the same shape as every
     adapter's — and when the callable itself goes through `http_get`/`urlopen`, the two
-    collapse into ONE row carrying the status, the digest and the URI. Rows are written on
-    the caller's connection (the standards tests count them on their fake connection); a
-    refused call is `CapacityExceeded` and writes nothing. A seat must declare both a
+    collapse into ONE row carrying the status, the digest and the URI. The row goes through
+    `emit` like every other row (autocommit, so a rollback of the caller's transaction keeps
+    it); a refused call is `CapacityExceeded` and writes nothing. A seat must declare both a
     window and a daily budget to be called here.
     """
 
@@ -1063,15 +1051,14 @@ class SourceGateway:
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], datetime] = _utcnow
     environment: str | None = None
-    #: The shared rate-window read. Other processes' calls are committed rows the
-    #: autocommit ledger connection sees; this gateway's own sit uncommitted in the caller's
-    #: transaction and are paced by the gate's local window instead.
+    #: The shared rate-window read: every row, this gateway's own included, is committed by the
+    #: autocommit ledger connection, and the same connection reads it back.
     recent_calls: Callable[[str, datetime], tuple[int, datetime | None]] | None = ledger_window
     _gate: CapacityGate = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # The budget is read on the caller's connection, where this gateway's own
-        # uncommitted rows are visible alongside every committed one.
+        # The budget is read on the caller's connection; every row is committed on the ledger
+        # connection, so it is visible there.
         self._gate = CapacityGate(
             capacities=self.capacities,
             environment=self.environment,
@@ -1099,7 +1086,7 @@ class SourceGateway:
     def call(self, source: str, endpoint: str, fn: Callable[[], T]) -> T:
         self.capacity(source)
         self._gate.admit(source)
-        with record_call(source, endpoint, caller=self.caller, writer=self._write, admit=False) as record:
+        with record_call(source, endpoint, caller=self.caller, admit=False) as record:
             result = fn()
             if isinstance(result, bytes | str):
                 # A helper that returns the body itself (`_get_bytes` in the standards
@@ -1111,29 +1098,6 @@ class SourceGateway:
                 if status is not None or isinstance(body, bytes):
                     record.observe(status_code=status, body=body)
             return result
-
-    def _write(self, record: CallRecord) -> None:
-        *richer, (base_sql, base_params) = _insert_ladder(record)
-        if not richer:
-            self.connection.execute(base_sql, base_params)
-            return
-        if not hasattr(self.connection, "transaction"):
-            self.connection.execute(*richer[0])
-            return
-        # A row with a migrated column needs it. A failed statement would abort the caller's
-        # transaction, so each richer insert runs in its own savepoint; the base row is the last resort.
-        import psycopg
-
-        for sql, params in richer:
-            try:
-                with self.connection.transaction():
-                    self.connection.execute(sql, params)
-                return
-            except psycopg.errors.UndefinedColumn:
-                log.warning(
-                    "staging.api_call_ledger lacks a column of this row (a migration has not run); trying fewer"
-                )
-        self.connection.execute(base_sql, base_params)
 
     def _recorded_since(self, source: str, since: datetime) -> int:
         row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()

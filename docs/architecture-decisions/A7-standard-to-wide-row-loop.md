@@ -57,7 +57,8 @@ observations:
 All external vendor and model requests pass through `data_engine.sources.gateway.SourceGateway`:
 - Windowed rate limits and daily budgets are enforced per seat (SEC, Twelve Data, Yahoo,
   OpenFIGI, N-PORT, and `filing-extraction-model`). Over-capacity requests are deferred.
-- Every external call produces one row in `staging.api_call_ledger`.
+- Every external call produces one row in `staging.api_call_ledger`. One writer (`gateway.record_call`,
+  through `emit`) writes it for every source, moomoo included.
 - Model invocations are appended to `staging.model_invocations`. Replay matches both
   requested model digest and `served_model`; `order by id asc limit 1` guarantees that the
   first answer is immutable.

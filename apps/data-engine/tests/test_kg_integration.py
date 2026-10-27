@@ -175,18 +175,22 @@ def test_fund_holding_dual_lines_coexist_and_rerun_conflicts_away(conn):
     assert line("CNE1000003X6", 1.10, 500.0) is None
 
 
-def test_ledger_postgres_backend(conn, monkeypatch):
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "postgres")
+def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch):
+    from data_engine.sources import moomoo as mm
+
     # The ledger connection lives in `sources.gateway` since #729 (moomoo was the ledger's
     # first tenant); patching it there rides the test transaction, rolled back after.
     monkeypatch.setattr(gateway, "_pg_conn", conn)
+    monkeypatch.setattr(gateway, "_writer", gateway.postgres_writer)
+    monkeypatch.setattr(gateway.settings, "external_call_ledger", "postgres")
+    monkeypatch.setattr(mm, "throttle", lambda: None)
 
-    # Assertions are delta-based: in postgres mode calls_this_month() also sums
-    # the local json ledger (probe sessions must stay visible to a sweep's
-    # gate), and both stores may carry real prior calls on a dev machine.
+    # Assertions are delta-based: the database may carry real prior calls on a dev machine.
     before = ledger.calls_this_month()
-    ledger.record("request_history_kline", "test", ok=True, request_uri="moomoo://US.AAPL")
-    ledger.record("ep", "test", ok=False)  # failures count too — they may have spent server-side quota
+    mm._call(object(), "request_history_kline", "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri="US.AAPL")
+    # Failures count too — they may have spent server-side quota.
+    with pytest.raises(mm.MoomooConnectionError):
+        mm._call(object(), "ep", "test", lambda ctx: (mm.moomoo.RET_ERROR, "boom"))
     assert ledger.calls_this_month() == before + 2
 
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", len(ledger.kline_distinct_stocks_30d()))

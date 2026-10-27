@@ -153,8 +153,7 @@ def test_a_ledger_without_the_fetch_key_column_still_records_a_keyed_call(
 ) -> None:
     """A code server that starts before the migration replay keeps its audit rows (deploy skew).
 
-    The writer on the gateway's connection falls back to the unkeyed row. The writer on a caller's
-    connection does it in a savepoint, so the caller's transaction is not aborted."""
+    The one writer falls back to the unkeyed row."""
     from data_engine.config import settings
 
     monkeypatch.setattr(settings, "database_url", database)
@@ -166,12 +165,8 @@ def test_a_ledger_without_the_fetch_key_column_still_records_a_keyed_call(
         admin.execute("alter table staging.api_call_ledger drop column fetch_key")
         try:
             gateway.postgres_writer(record)
-            with psycopg.connect(database) as caller:
-                gateway.SourceGateway(caller, caller="skew-test")._write(record)
-                assert caller.execute("select 1").fetchone() == (1,), "the caller's transaction was aborted"
-                caller.commit()
             rows = admin.execute("select count(*) from staging.api_call_ledger where caller = 'skew-test'").fetchone()
         finally:
             gateway._pg_reset()
             admin.execute("alter table staging.api_call_ledger add column fetch_key text")
-    assert rows == (2,)
+    assert rows == (1,)

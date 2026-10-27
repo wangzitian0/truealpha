@@ -7,7 +7,8 @@ Runs the same endpoint registry as the sweep and writes full JSON per code to
 samples/moomoo/ for eyeballing, exactly like the Phase -1 US captures. Default
 codes: Tencent (HK) + Kweichow Moutai (SH A-share) ≈ 28 calls.
 
-REQUIRES OpenD running and logged in (see data_engine/sources/moomoo.py).
+REQUIRES OpenD running and logged in (see data_engine/sources/moomoo.py) and DATABASE_URL
+(every call is one row in staging.api_call_ledger).
 
 Usage:
     uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_nonus.py [CODE ...]

@@ -51,7 +51,6 @@ class FakeConnection:
         self.predecessors: dict[str, int] = {}
         self.model_invocations: list[tuple] = []
         self.headcount_rows: list[tuple] = []
-        self.ledger_rows: list[tuple] = []
         self.raw_rows: list[tuple] = []
         self.health_rows: list[tuple] = []
         self.commits = 0
@@ -81,9 +80,6 @@ class FakeConnection:
             return _Result([(i, c) for i, c in self.predecessors.items() if i in issuer_ids])
         if text.startswith("select count(*) from staging.api_call_ledger"):
             return _Result([(0,)])
-        if text.startswith("insert into staging.api_call_ledger"):
-            self.ledger_rows.append(params)
-            return _Result([])
         if text.startswith("insert into raw.fetches"):
             self.raw_rows.append(params)
             return _Result([(len(self.raw_rows),)])
@@ -364,7 +360,7 @@ def _fixture_edgar() -> FakeHttp:
     )
 
 
-def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at() -> None:
+def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at(call_ledger) -> None:
     connection, store = FakeConnection(), FakeStore()
     outcome = extract_headcount(
         1730168,
@@ -390,7 +386,7 @@ def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at() -> 
     assert "accession=000173016825000121" in evidence_ref and RULE_SINGLE_CANDIDATE in evidence_ref
     assert "raw=raw.fetches:1" in evidence_ref and "33,000 employees" in evidence_ref
     assert len(store.stored) == 1 and store.stored[0].source_published_at == datetime(2025, 12, 18, tzinfo=UTC)
-    assert [r[0] for r in connection.ledger_rows] == ["sec", "sec"]  # submissions + archive, both recorded
+    assert [r.source for r in call_ledger] == ["sec", "sec"]  # submissions + archive, both recorded
 
 
 def test_a_second_backfill_of_the_same_filing_records_nothing_twice() -> None:
@@ -419,7 +415,7 @@ def test_a_second_backfill_of_the_same_filing_records_nothing_twice() -> None:
     assert len(connection.headcount_rows) == 1
 
 
-def test_probe_mode_enumerates_and_selects_but_writes_no_fact_and_no_raw_object() -> None:
+def test_probe_mode_enumerates_and_selects_but_writes_no_fact_and_no_raw_object(call_ledger) -> None:
     connection, store = FakeConnection(), FakeStore()
     outcome = extract_headcount(
         1045810,
@@ -433,7 +429,7 @@ def test_probe_mode_enumerates_and_selects_but_writes_no_fact_and_no_raw_object(
     )
     assert outcome.status == "resolved" and outcome.value == 42000
     assert connection.headcount_rows == [] and connection.raw_rows == [] and store.stored == []
-    assert len(connection.ledger_rows) == 2  # the vendor calls are still capacity spent
+    assert len(call_ledger) == 2  # the vendor calls are still capacity spent
 
 
 def test_a_filing_after_the_cutoff_is_not_knowable() -> None:
@@ -811,7 +807,7 @@ def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch
     assert outcome.status == "needs_model_selection" and connection.headcount_rows == []
 
 
-def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch) -> None:
+def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch, call_ledger) -> None:
     connection = FakeConnection()
     monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: [_issuer(1045810, "NVDA")])
     report = run_standard_backfill(
@@ -827,7 +823,7 @@ def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch) -> None:
     )
     assert dict(report.outcomes) == {"resolved": 1}
     assert connection.headcount_rows == [] and connection.raw_rows == []
-    assert connection.ledger_rows and connection.health_rows
+    assert call_ledger and connection.health_rows
 
 
 def test_candidate_records_are_frozen_values() -> None:
