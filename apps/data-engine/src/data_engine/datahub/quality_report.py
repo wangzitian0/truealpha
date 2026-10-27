@@ -384,6 +384,16 @@ def listing_ratio_cell(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def record_listing_ratio(cells: dict[str, dict[str, Any]], subject_id: str, payload: Mapping[str, Any]) -> None:
+    """Put the cell of one financial-fact payload into `cells`.
+
+    A measured cell is never replaced by a `not_measured` one from another observation of the same subject.
+    """
+    cell = listing_ratio_cell(payload)
+    if cell["outcome"] != OUTCOME_NOT_MEASURED or subject_id not in cells:
+        cells[subject_id] = cell
+
+
 def listing_ratio_report(cells: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
     """The rows of one run and their count per outcome. The App only formats this block."""
     counts = dict.fromkeys(OUTCOMES, 0)
@@ -519,10 +529,7 @@ def build_report(
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
-            # A measured row is never replaced by a `not_measured` one from another observation of the subject.
-            ratio_cell = listing_ratio_cell(payload)
-            if ratio_cell["outcome"] != OUTCOME_NOT_MEASURED or str(subject_id) not in listing_ratio:
-                listing_ratio[str(subject_id)] = ratio_cell
+            record_listing_ratio(listing_ratio, str(subject_id), payload)
             try:
                 violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
             except ValidationError:

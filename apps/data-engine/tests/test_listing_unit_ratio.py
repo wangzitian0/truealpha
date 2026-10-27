@@ -529,3 +529,22 @@ def test_a_payload_without_ratio_keys_is_a_not_measured_cell_with_no_evidence() 
 
     assert cell["outcome"] == OUTCOME_NOT_MEASURED
     assert {cell[key] for key in ("listing_units_per_share", "pattern", "title", "reason", "accession")} == {None}
+
+
+def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_subject() -> None:
+    """The capture plane can bind several observations to one subject. A later payload without ratio keys must not
+    erase the measurement of an earlier one. A later measurement does replace it."""
+    from data_engine.datahub.quality_report import record_listing_ratio
+
+    measured = _ratio(cover_html(("ACME", "Common stock")), "ACME").payload_fields()
+    unparsed = _ratio(cover_html(("ACME", "Rights")), "ACME").payload_fields()
+    cells: dict[str, dict] = {}
+
+    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_NOT_MEASURED
+    record_listing_ratio(cells, "listing:xnas:acme", measured)
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY
+    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY, "not measured does not erase a measurement"
+    record_listing_ratio(cells, "listing:xnas:acme", unparsed)
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_UNPARSED, "a later measurement replaces an earlier one"

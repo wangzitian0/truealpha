@@ -1379,10 +1379,7 @@ class SecFinancialFactAdapter:
                 }
             )
         _mark_unclassified(payload, target)
-        if self._listing_ratio_reader is not None and not target.registry_unavailable:
-            # Measured and stored only. No factor reads these keys yet (#1519, step 1a). An issuer
-            # that the registry could not read is excluded from the tick: its cover is not read.
-            payload.update(self._listing_ratio_reader(target.cik, target.cutoff, target.ticker).payload_fields())
+        payload.update(self._listing_ratio_fields(target))
         if operating_period_stale:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
@@ -1402,6 +1399,16 @@ class SecFinancialFactAdapter:
             ),
             corroborations=self._corroborate(target),
         )
+
+    def _listing_ratio_fields(self, target: SecTarget) -> dict[str, Any]:
+        """The payload keys of the cover read, or none when no reader ran (#1519, step 1a).
+
+        Measured and stored only: no factor reads these keys yet. An issuer that the registry could not
+        read is excluded from the tick, so its cover is not read and its payload says "not measured".
+        """
+        if self._listing_ratio_reader is None or target.registry_unavailable:
+            return {}
+        return self._listing_ratio_reader(target.cik, target.cutoff, target.ticker).payload_fields()
 
     def _resolve_headcount_fact(
         self, target: SecTarget, knowable_at: datetime

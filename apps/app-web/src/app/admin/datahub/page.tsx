@@ -87,7 +87,13 @@ function listingRatioText(cell: ListingRatioCell): string {
   if (cell.outcome === "parsed") return `1 unit = ${cell.listing_units_per_share} ordinary shares`;
   if (cell.outcome === "ordinary") return "ordinary share (1)";
   if (cell.outcome === "not_measured") return "not measured";
-  return `unparsed: ${cell.reason ?? "no reason"}`;
+  return `unparsed: ${formatCell(cell.reason)}`;
+}
+
+/** The filing that a cover read came from: form, accession and filing date, or null when no filing was read. */
+function listingRatioFiling(cell: ListingRatioCell): string | null {
+  if (cell.accession === null) return null;
+  return [cell.form, cell.accession, cell.filed].filter((part) => part !== null).join(" ");
 }
 
 /**
@@ -122,10 +128,8 @@ function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
                 <tr key={cell.listing_id} className={cell.outcome === "unparsed" ? "text-amber-400" : ""}>
                   <td className="pr-4 font-mono">{cell.listing_id}</td>
                   <td className="pr-4">{listingRatioText(cell)}</td>
-                  <td className="pr-4">{cell.title ?? "—"}</td>
-                  <td className="font-mono">
-                    {cell.accession === null ? "—" : `${cell.form ?? ""} ${cell.accession} ${cell.filed ?? ""}`.trim()}
-                  </td>
+                  <td className="pr-4">{formatCell(cell.title)}</td>
+                  <td className="font-mono">{formatCell(listingRatioFiling(cell))}</td>
                 </tr>
               ))}
             </tbody>
