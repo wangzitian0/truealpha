@@ -163,15 +163,14 @@ const confidenceRows = [
         close: {
           semantic_type: "market-price",
           cells: 102,
-          high: 101,
-          medium: 0,
-          low: 1,
-          missing: 0,
+          by_independent_origins: { "1": 1, "2": 98, "3": 3 },
+          mean_confidence: "0.8512",
           compared: 101,
           agreement_rate: "1.0000",
           tolerance: "reconciliation-policy:" + "b".repeat(64),
           origins: ["origin:twelve-data:v1", "origin:yahoo:v1"],
         },
+        // A report written before #1517 holds band words: the App shows a dash for it.
         revenue: {
           semantic_type: "financial-fact",
           cells: 102,
@@ -284,10 +283,21 @@ const nightlyVerdictRows = [
   const close = stats.confidence[0].families.find((f) => f.family === "close");
   assert(
     close !== undefined &&
-      close.high === 101 &&
+      close.origin_counts?.none === 0 &&
+      close.origin_counts?.one === 1 &&
+      close.origin_counts?.two === 98 &&
+      close.origin_counts?.three_or_more === 3 &&
+      close.mean_confidence === "0.8512" &&
       close.agreement_rate === "1.0000" &&
       close.origins.length === 2,
-    "close is banded from two origins with its agreement rate",
+    "close is counted by independent origins with its mean confidence and agreement rate",
+  );
+  const legacyRevenue = stats.confidence[0].families.find((f) => f.family === "revenue");
+  assert(
+    legacyRevenue !== undefined &&
+      legacyRevenue.origin_counts === null &&
+      legacyRevenue.mean_confidence === null,
+    "a report written before #1517 shows no origin counts instead of zeros",
   );
   assert(
     stats.confidence[0].oracle_fields[0].field === "revenue" &&

@@ -962,15 +962,12 @@ def test_a_failover_cell_is_graded_on_what_actually_corroborated_it(connection, 
     )
     close = confidence["families"]["close"]
     graded = confidence["cells"]["close"][victim_listing]
+    assert "band" not in graded
     if corroborated:
-        assert (graded["band"], graded["reason"]) == ("medium", "two_origins_agree")
+        assert graded["reason"] == "two_origins_agree"
         assert close["reasons"] == {"independent_origins_agree": 20, "two_origins_agree": 1}
     else:
-        assert (graded["band"], graded["reason"], graded["origins"]) == (
-            "low",
-            "served_by_failover",
-            ["origin:twelve-data:v1"],
-        )
+        assert (graded["reason"], graded["origins"]) == ("served_by_failover", ["origin:twelve-data:v1"])
         assert close["reasons"] == {"independent_origins_agree": 20, "served_by_failover": 1}
     assert confidence["accuracy"]["close"]["matches_quality_report"] is True
 

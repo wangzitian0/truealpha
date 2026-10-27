@@ -488,11 +488,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             "universe_id": report["universe_id"],
             "run_id": report["run_id"],
             "sources_connected": ", ".join(report["sources_connected"]),
-            **{
-                f"{name}_{band}": family[band]
-                for name, family in report["families"].items()
-                for band in ("high", "medium", "low", "missing")
-            },
+            **{f"{name}_mean_confidence": family["mean_confidence"] for name, family in report["families"].items()},
             "close_agreement_rate": str(report["accuracy"]["close"]["agreement_rate"]),
             "sec_oracle_issuers_compared": report["accuracy"]["sec_oracle"]["issuers_compared"],
         }

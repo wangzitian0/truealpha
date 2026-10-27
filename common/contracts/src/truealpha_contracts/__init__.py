@@ -304,7 +304,6 @@ from truealpha_contracts.research_report import (
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.service_demand import (
-    ConfidenceTargetBand,
     DataHubDemandIntakeReport,
     DataHubServiceDemand,
     DataQualityObjective,
@@ -431,7 +430,6 @@ __all__ = [
     "CatalogRequirementLevel",
     "CatalogTargetKind",
     "ComponentKey",
-    "ConfidenceTargetBand",
     "ConflictBehavior",
     "DataDomain",
     "DataHubDemandIntakeReport",

@@ -27,15 +27,6 @@ def _reject_binary_float(value: Any) -> Any:
     return value
 
 
-def _shift_decimal_exponent_exact(value: Decimal, places: int) -> Decimal:
-    """Scale a finite Decimal by a power of ten without using caller arithmetic context."""
-
-    sign, digits, exponent = value.as_tuple()
-    if not isinstance(exponent, int):
-        raise ValueError("only finite Decimal values can be scaled")
-    return Decimal((sign, digits, exponent + places))
-
-
 def _sorted_unique(values: tuple[str, ...], field_name: str, *, allow_empty: bool = False) -> tuple[str, ...]:
     if not allow_empty and not values:
         raise ValueError(f"{field_name} must not be empty")
@@ -238,7 +229,6 @@ class ContinuousConfidenceEvaluation(BaseModel):
     lineage_completeness: Decimal = Field(ge=0, le=1)
     required_component_completeness: Decimal = Field(ge=0, le=1)
     confidence: Decimal = Field(ge=0, le=1)
-    score_100: Decimal = Field(ge=0, le=100)
     reason_codes: tuple[str, ...] = Field(min_length=1)
 
     @field_validator(
@@ -249,7 +239,6 @@ class ContinuousConfidenceEvaluation(BaseModel):
         "lineage_completeness",
         "required_component_completeness",
         "confidence",
-        "score_100",
         mode="before",
     )
     @classmethod
@@ -282,8 +271,6 @@ class ContinuousConfidenceEvaluation(BaseModel):
             raise ValueError("policy identity and hash must agree")
         if self.input_id != f"confidence-input:{self.input_sha256}":
             raise ValueError("input identity and hash must agree")
-        if self.score_100 != _shift_decimal_exponent_exact(self.confidence, 2):
-            raise ValueError("score_100 must be the exact normalized confidence projection")
         object.__setattr__(self, "source_scores", source_scores)
         object.__setattr__(self, "origin_groups", origin_groups)
         _freeze_content_addressed(
