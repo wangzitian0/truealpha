@@ -142,5 +142,4 @@ class RuntimeSettings(CoreRuntimeSettings):
             addressing_style="path",
             connect_timeout_seconds=float(self.s3_connect_timeout_seconds),
             read_timeout_seconds=float(self.s3_connect_timeout_seconds),
-            raw_prefix=self.s3_raw_prefix,
         )

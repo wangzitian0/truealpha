@@ -16,10 +16,10 @@ from infra2_sdk import deploy as deployed_release
 from infra2_sdk import deploy as sdk_deploy
 from infra2_sdk.deploy import (
     ReleaseIdentityError,
-    identifier_kind,
     identity_from_body,
     read_deployed_release,
 )
+from infra2_sdk.refs import identifier_kind
 
 URL = "https://truealpha.club/api/health"
 
