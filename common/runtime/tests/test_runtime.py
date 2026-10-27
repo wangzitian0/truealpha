@@ -113,7 +113,7 @@ def test_runtime_settings_converts_to_s3_settings():
     )
     s3 = settings.to_s3_settings()
     assert s3.bucket == "my-bucket"
-    assert s3.raw_prefix == "raw"
+    assert settings.s3_raw_prefix == "raw"
     assert s3.addressing_style == "path"
     assert isinstance(s3, S3Settings)
 
