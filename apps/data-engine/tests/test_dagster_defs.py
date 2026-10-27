@@ -209,6 +209,8 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     """Fake every collaborator the op calls, so only the op's own reporting is under
     test. `register_run_evidence` returns the given verdict verbatim."""
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
+    # The registry write has its own test (production_topt/test_head_registry_tick.py); this one asserts the op's reporting.
+    monkeypatch.setattr(capture, "ensure_served_head_artifacts", lambda *_a, **_k: 0)
     monkeypatch.setattr(
         capture,
         "run_topt_pipeline",
