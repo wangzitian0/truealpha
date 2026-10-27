@@ -138,7 +138,7 @@ def run_standard_history(
 ) -> HistoryReport:
     """Run the backfill of one standard over one universe at each month-end cutoff.
 
-    One gateway serves every cutoff, so the SEC rate window and the daily budget carry over.
+    One gateway serves every cutoff, so the SEC rate window carries over.
     The issuers resolve once. Each cell commits on its own, as in the weekly run: a run that
     dies keeps what it landed, and the next run finds only the cells that remain open.
     """

@@ -158,10 +158,6 @@ class SourceCapacity:
         return self.window_seconds is not None
 
     @property
-    def shared(self) -> bool:
-        return self.account is not None
-
-    @property
     def seats(self) -> tuple[str, ...]:
         """The seats that spend this capacity together: the seats of the account, or this seat alone."""
         return self.pool or (self.source,)
@@ -545,7 +541,8 @@ class ShareBelowOneCall(CapacityExceeded):
     The contract gives the environment percent 0, or a floor of 0 (amount x percent // 100). The contract
     loads and the image boots: only the call is refused, nothing is sent and nothing is recorded. An
     environment that the percent table does not name (local, CI) meets this refusal at an account that it
-    may not call.
+    may not call: Twelve Data, OpenFIGI and moomoo. A local run of `universe_refresh` with a bound gate is refused
+    at the OpenFIGI step. This is intended (working choice U1 of #1520): a local run never spends a shared key.
     """
 
     def __init__(self, source: str, *, environment: str, account: str) -> None:
@@ -1121,8 +1118,8 @@ class SourceGateway:
     """One path to a vendor or model for callers that must be throttled and budgeted
     explicitly (#740: the standards lane's SEC filings, the model and search seats).
 
-    `call` admits through the gateway's own `CapacityGate` — the declared daily budget
-    against the ledger, the rate window paced — runs the callable, and records the
+    `call` admits through the gateway's own `CapacityGate` — the daily budget against the ledger
+    where the account has one, the rate window paced — runs the callable, and records the
     attempt. Recording goes through `record_call`, so the row has the same shape as every
     adapter's — and when the callable itself goes through `http_get`/`urlopen`, the two
     collapse into ONE row carrying the status, the digest and the URI. The row goes through

@@ -186,7 +186,7 @@
     }
   },
   "vendor_accounts": {
-    "description": "Every vendor account that more than one environment calls has one row here (#1520). A row holds the limits of the vendor, each with its evidence, and the percent of each environment. Each environment spends its percent of each limit and enforces it from its own ledger. The share of a limit is amount x percent // 100 (integer floor), in the window of the limit, so the shares of the environments never sum past the amount. A share of 0 is not an error: the environment makes no call to that account. A limit with the evidence kind self_imposed is our own pace: it is never divided. A limit with no amount (none_published, not_known) is shown and never invented. An environment that this table does not name (local, CI) gets the whole figure of a host_ip account and no call to any other account. The percent values are owner policy (D4 of 2026-10-26).",
+    "description": "Every vendor account that more than one environment calls has one row here (#1520). A row holds the limits of the vendor, each with its evidence, and the percent of each environment. The share of a limit is amount x percent // 100 (integer floor), in the window of the limit. The shares of the environments never sum past the amount. A share of 0 is not an error: the contract loads and the gate refuses the call. A limit with the evidence kind self_imposed is our own pace. The gate enforces it and never divides it. A limit with no amount (none_published, not_known) is shown and never invented. An environment that this table does not name (local, CI) gets the whole figure of a host_ip account and no call to any other account. The gate enforces the shares of twelvedata, sec_edgar and openfigi now, and the self_imposed paces of yahoo, nasdaq_index and us_treasury. It does not enforce moomoo_opend yet: moomoo calls skip the gate until step 2 of #1520, and the K-line stock quota is still a constant of moomoo_ledger.py. It does not enforce model_plan: the pace of the model seat stays in model_seat.environments until step 5 of #1520. The default percent 20/20/60 is owner decision D4 of 2026-10-26. The Twelve Data override 0/40/60 and the moomoo shares 6/6/18 are working choices of 2026-10-27, not owner approval.",
     "default_percent": {"preview": 20, "staging": 20, "production": 60},
     "accounts": {
       "twelvedata": {
@@ -255,6 +255,7 @@
         "holder": "account",
         "seats": ["moomoo"],
         "outside_consumers": false,
+        "note": "The shares 6/6/18 come from the default percent and are a working choice of 2026-10-27 (OD5 A of #1520), not owner approval. The gate does not admit moomoo calls until step 2 of #1520. Until then throttle() in moomoo_ledger.py paces them, capped by MOOMOO_CALLS_PER_30S.",
         "limits": [
           {
             "id": "burst",

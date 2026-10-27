@@ -353,3 +353,65 @@ def test_the_alias_of_an_environment_reads_the_same_share() -> None:
 
     assert contract.account_share("sec_edgar", "prod") == contract.account_share("sec_edgar", "production")
     assert contract.account_share("sec_edgar", " Staging ").environment == "staging"
+
+
+# -- a loaded table must leave staging and production able to call -------------------------------------------
+
+
+def _windows_without_a_call(raw: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Every (account, limit, environment) of staging or production whose share floors below one call.
+
+    The oracle is exact fraction arithmetic on the raw table. It does not call `account_share`. The model plan
+    is out: the provider states no figure. A `self_imposed` pace is whole, so it never floors to zero.
+    """
+    model_seat = raw["model_seat"]["seat"]
+    found = []
+    for name, row in raw["vendor_accounts"]["accounts"].items():
+        if model_seat in row["seats"]:
+            continue
+        for limit in row["limits"]:
+            if limit.get("amount") is None or limit["evidence"]["kind"] == "self_imposed":
+                continue
+            for environment in ("staging", "production"):
+                if math.floor(Fraction(limit["amount"] * _percent(raw, name, environment), 100)) < 1:
+                    found.append((name, limit["id"], environment))
+    return found
+
+
+def test_staging_and_production_get_at_least_one_call_in_every_window_of_every_account() -> None:
+    """A zero share loads by design (#1520). This test keeps the shipped table from loading one for the
+    two environments that must call: a percent of 0, or a new limit that floors to 0, refuses every call there."""
+    assert _windows_without_a_call(_raw()) == []
+
+
+def test_the_check_of_the_shipped_table_names_a_percent_of_zero_and_a_floor_of_zero() -> None:
+    zero_percent = _raw()
+    zero_percent["vendor_accounts"]["default_percent"].update(preview=40, staging=60, production=0)
+    found = _windows_without_a_call(zero_percent)
+    assert ("sec_edgar", "per_second", "production") in found
+    assert ("openfigi", "per_minute", "production") in found
+
+    floor_of_zero = _raw()
+    floor_of_zero["vendor_accounts"]["accounts"]["sec_edgar"]["limits"].append(
+        {
+            "id": "per_ten_seconds_probe",
+            "unit": "request",
+            "amount": 1,
+            "window_seconds": 10,
+            "counts_per": "not_stated",
+            "evidence": {"kind": "published", "source": ["https://example.com/limits"], "checked_at": "2026-10-27"},
+        }
+    )
+    assert _windows_without_a_call(floor_of_zero) == [
+        ("sec_edgar", "per_ten_seconds_probe", "staging"),
+        ("sec_edgar", "per_ten_seconds_probe", "production"),
+    ]
+
+
+def test_the_model_plan_has_nothing_to_refuse_in_any_environment() -> None:
+    """The model plan holds no figure with an amount, so `account_share` has no window to floor to zero.
+    The pace of the model seat is `model_seat.environments`, and it gives an unlisted environment no limit."""
+    contract = load_environment_contract()
+
+    for environment in (*ENVIRONMENTS, "local_dev", "github_ci"):
+        assert contract.account_share("model_plan", environment).admits_a_call is True, environment

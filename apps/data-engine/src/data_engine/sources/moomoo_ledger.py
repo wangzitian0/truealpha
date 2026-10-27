@@ -30,6 +30,8 @@ from data_engine.sources.gateway import _pg_execute  # one autocommit ledger con
 logger = logging.getLogger(__name__)
 
 #: moomoo OpenAPI historical-candlestick quota: 2,000 distinct stocks per rolling 30-day window.
+#: Step 2 of #1520 deletes this constant. The vendor counts distinct stocks over 7 days by account tier, and the
+#: contract row `kline_stocks` (not_known) holds no figure. This typed number stays until a stored reading exists.
 MOOMOO_KLINE_30D_STOCK_QUOTA = 2000
 #: Endpoints that consume the 30-day distinct-stock candlestick quota.
 KLINE_ENDPOINTS = frozenset({"request_history_kline", "get_history_kline"})

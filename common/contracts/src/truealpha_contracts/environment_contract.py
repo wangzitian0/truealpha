@@ -392,7 +392,9 @@ class AccountShare(_StrictFrozenModel):
 
     @property
     def admits_a_call(self) -> bool:
-        """False when the share of any request limit is below one call: the environment may not call the account."""
+        """False when the share of any request limit is below one call: the environment may not call the account.
+
+        True when no request limit has an amount: there is no share to refuse."""
         return all(limit.share >= 1 for limit in self.limits if limit.unit == "request" and limit.share is not None)
 
 
@@ -892,7 +894,10 @@ class EnvironmentContract(_StrictFrozenModel):
         stretches a window. A share of 0 (percent 0, or a floor of 0) is no error: ``admits_a_call`` is False.
         A limit with the evidence kind ``self_imposed`` is whole for every environment. A limit with no amount
         has no share. An environment that the percent table does not name (local, CI) gets 100 percent of a
-        ``host_ip`` account and 0 percent of any other account.
+        ``host_ip`` account and 0 percent of any other account (Twelve Data, OpenFIGI and moomoo today: a local run
+        draws no call from a key or an account that the environments share). An account with no limit that has an amount
+        has nothing to refuse, so ``admits_a_call`` stays True for it in every environment: the model plan.
+        The pace of the model seat is in ``model_seat.environments``, and it gives an unlisted environment no limit.
         """
         row = self.vendor_accounts.accounts.get(account)
         if row is None:

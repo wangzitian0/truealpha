@@ -551,8 +551,8 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         # files of 2023 to 2026 is four days (a Friday and the Tuesday after a Monday holiday). One day
         # more admits the run that comes before the Treasury publishes.
         max_age_days=5,
-        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat allows 100
-        # requests per day, and this load needs one request per year.
+        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat has a pace of one
+        # request per second and no daily budget, and this load needs one request per year.
         first_year=2000,
         notes=(
             "The Treasury obtains its input quotes at about 3:30 PM New York time on each business day. "

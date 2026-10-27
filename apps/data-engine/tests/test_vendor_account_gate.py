@@ -273,3 +273,70 @@ def test_the_gateway_of_the_standards_lane_admits_with_the_same_share(call_ledge
     explicit.call("sec", "probe", lambda: b"{}", identity=FetchKey("sec", "probe", "symbol:2", "2026-10-27"))
 
     assert clock.slept == [pytest.approx(1.0)]
+
+
+# -- the pooled daily budget --------------------------------------------------------------------------------
+
+
+def _pooled_probe_contract() -> Any:
+    """The shipped contract plus a test account: two seats that share a minute limit of 100 and a day limit of 10."""
+    from truealpha_contracts.environment_contract import EnvironmentContract
+
+    evidence = {"kind": "published", "source": ["https://example.com/limits"], "checked_at": "2026-10-27"}
+    raw = json.loads(load_environment_contract().model_dump_json())
+    raw["vendor_accounts"]["accounts"]["pooled_probe"] = {
+        "holder": "host_ip",
+        "seats": ["pool-a", "pool-b"],
+        "outside_consumers": False,
+        "limits": [
+            {
+                "id": "per_minute",
+                "unit": "request",
+                "amount": 100,
+                "window_seconds": 60,
+                "counts_per": "not_stated",
+                "evidence": evidence,
+            },
+            {
+                "id": "per_day",
+                "unit": "request",
+                "amount": 10,
+                "window_seconds": DAY_SECONDS,
+                "counts_per": "not_stated",
+                "evidence": evidence,
+            },
+        ],
+    }
+    return EnvironmentContract.model_validate_json(json.dumps(raw))
+
+
+def _pooled_gate(monkeypatch: pytest.MonkeyPatch, ledger: gateway.MemoryLedger) -> gateway.CapacityGate:
+    monkeypatch.setattr(gateway, "load_environment_contract", _pooled_probe_contract)
+    pool = ("pool-a", "pool-b")
+    capacities = {seat: gateway.SourceCapacity(seat, 60.0, 100, 10, account="pooled_probe", pool=pool) for seat in pool}
+    return gateway.CapacityGate(
+        capacities=capacities,
+        environment="production",
+        spent_since=ledger.calls_since,
+        recent_calls=None,
+        now=lambda: NOW,
+    )
+
+
+def test_the_seats_of_one_account_count_together_in_the_daily_budget(
+    monkeypatch: pytest.MonkeyPatch, call_ledger: gateway.MemoryLedger
+) -> None:
+    """Production spends 6 of the 10 a day. Three calls recorded by `pool-a` and three by `pool-b` spend all 6."""
+    earlier = NOW - timedelta(hours=1)
+    rows = [
+        gateway.CallRecord(source=seat, endpoint="x", caller="earlier", called_at=earlier, ok=True)
+        for seat in ("pool-a", "pool-b", "pool-a", "pool-b", "pool-a")
+    ]
+    call_ledger.extend(rows)  # five of the six: the sixth call fits
+    _pooled_gate(monkeypatch, call_ledger).admit("pool-b")
+
+    call_ledger.append(gateway.CallRecord(source="pool-b", endpoint="x", caller="earlier", called_at=earlier, ok=True))
+    gate = _pooled_gate(monkeypatch, call_ledger)
+    for seat in ("pool-a", "pool-b"):
+        with pytest.raises(gateway.BudgetExhausted, match=r"daily budget 6 spent \(6 calls today\) in production"):
+            gate.admit(seat)
