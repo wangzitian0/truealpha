@@ -503,7 +503,6 @@ def build_report(
     )
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
-    market_price_cells: dict[str, str] = {}
     plausibility: dict[str, dict[str, Any]] = {}
     listing_ratio: dict[str, dict[str, Any]] = {}
     usable_by_subject: dict[str, dict[str, bool]] = {}
@@ -522,8 +521,6 @@ def build_report(
         content_type,
     ) in rows:
         cell = cells.setdefault(obligation_id, _Cell())
-        if semantic_type == "market-price":
-            market_price_cells[obligation_id] = str(obligation_subject)
         subject_semantics = usable_by_subject.setdefault(str(obligation_subject), {})
         subject_semantics.setdefault(semantic_type, False)
         if observation_id is None:
@@ -975,7 +972,7 @@ def reconcile_financial_fact_entries(
     currency is absent the same way — a figure in another unit is not the same number.
     The subject's outcome is AGREED only when every compared field agreed and at least
     one was compared; a subject with any field whose origins no pair of which agree is
-    `conflict_priority_served` (that field serves the primary's figure at LOW).
+    `conflict_priority_served` (that field serves the primary's figure).
     """
     primaries = [entry for entry in entries if entry.is_primary]
     if not primaries:

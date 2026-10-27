@@ -24,11 +24,16 @@ import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
-from truealpha_contracts.universes import keys, lane_name, record
+from truealpha_contracts.universes import job_name, keys, lane_name, op_name, record, schedule_name
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
-from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
+from data_engine.datahub.production_topt.composition import (
+    ensure_served_head_artifacts,
+    live_version_for,
+    run_topt_pipeline,
+)
 from data_engine.datahub.production_topt.corroboration_audit import CorroborationTally, corroboration_tally
 from data_engine.datahub.production_topt.fund_consolidation import (
     materialize_fund_consolidation,
@@ -166,9 +171,9 @@ def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:
         objectives = None if universe.runs_strategy else DATA_UNIVERSE_OBJECTIVES
     return UniverseTick(
         key=key,
-        job_name=f"{key}_live_pipeline",
-        op_name=f"run_{key}_live_tick",
-        schedule_name=f"{key}_daily_schedule" if universe.is_sentinel else f"{key}_live_schedule",
+        job_name=job_name(key),
+        op_name=op_name(key),
+        schedule_name=schedule_name(key),
         log_label=f"{key} tick" if universe.is_sentinel else f"{key} live tick",
         label_prefix=f"production-{key}",
         objectives=objectives,
@@ -259,6 +264,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):
+        # #1522: the record names the universes; the registry that grades their heads follows it.
+        ensure_served_head_artifacts(connection)
         pipeline = run_topt_pipeline(
             connection,
             cutoff=cutoff,
@@ -349,6 +356,9 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             **({"objectives": tick.objectives} if tick.objectives is not None else {}),
         )
         connection.commit()
+        # #1523: the outside comparisons of this run, after the commit and in a transaction of their
+        # own. They are evidence, not a gate: a failure is logged and the tick still ends committed.
+        oracle_rows = record_oracle_outcomes_safely(connection, pipeline.run_id, compared_at=cutoff, log=context.log)
 
     summary = (
         f"{tick.log_label} {config.executed_at}{' (forced fetch)' if pipeline.forced_fetch else ''}: "
@@ -405,6 +415,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         "capacity_refused": corroborations.capacity_refused,
         "budget_exhausted": corroborations.budget_exhausted,
         "served_by_failover": served_by_failover,
+        "oracle_outcomes_written": oracle_rows is not None,
+        "oracle_outcomes_rows": oracle_rows or 0,
         "pointer_advanced": registration.advanced,
         "pointer_sequence": registration.sequence,
         "unmet_service_objectives": registration.summary,

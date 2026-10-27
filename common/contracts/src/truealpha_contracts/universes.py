@@ -12,6 +12,9 @@ A universe has three spellings, and each has one lookup:
 * the id (``universe:qqq-us-2026-03-31``) starts with the id prefix of the record, and the longest
   prefix wins: `universe_of(universe_id)`. The id is never split.
 
+The Dagster names of the tick of a universe follow from its key and its roles: `job_name`, `op_name` and
+`schedule_name`. The tick declaration and the registry row of its head both read them.
+
 A key, id or lane name outside the record raises `UnknownUniverse`. There is no default universe.
 
 `mart.current_pointer` is keyed `(environment, universe_id, universe_version, factor_id)`. A consumer
@@ -33,10 +36,13 @@ __all__ = [
     "UniverseRecord",
     "UnknownUniverse",
     "id_prefix_like",
+    "job_name",
     "key_of_lane",
     "keys",
     "lane_name",
+    "op_name",
     "record",
+    "schedule_name",
     "served_keys",
     "universe_of",
     "universe_with_role",
@@ -80,6 +86,23 @@ def universe_with_role(role: UniverseRole) -> str:
     if len(holders) != 1:
         raise UnknownUniverse(f"the role {role!r} needs exactly one universe, the record holds {holders}")
     return holders[0]
+
+
+def job_name(key: str) -> str:
+    """The Dagster job that ticks the universe ``key``."""
+    record(key)  # a key outside the record raises
+    return f"{key}_live_pipeline"
+
+
+def op_name(key: str) -> str:
+    """The Dagster op of the tick of the universe ``key``."""
+    record(key)  # a key outside the record raises
+    return f"run_{key}_live_tick"
+
+
+def schedule_name(key: str) -> str:
+    """The Dagster schedule of the tick of the universe ``key``: daily for a sentinel, live for a served universe."""
+    return f"{key}_daily_schedule" if record(key).is_sentinel else f"{key}_live_schedule"
 
 
 def id_prefix_like(key: str) -> str:

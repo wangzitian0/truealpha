@@ -16,7 +16,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
@@ -28,15 +27,9 @@ from data_engine.datahub.resolve_coordinates import resolve_entity
 from data_engine.lanes import capture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from macro_seed import stub_rate  # noqa: E402
+from deployed_tick import CUTOFF, RUN, run_deployed_tick  # noqa: E402
 
-#: A HISTORICAL replay cutoff. The look-ahead this guards against is not a filing dated
-#: in the future — `staging.kg_identifiers` already refuses to record one (recorded_at >=
-#: transaction_time) — it is a filing that has landed since, being applied to a replay of
-#: an earlier date. That is the shape a backtest actually meets (#758/M3).
-CUTOFF = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 FUND = "etf:series:TEST-CONSOLIDATION"
-RUN = "capture-run:" + "f" * 64
 OLDEST_FILING = datetime(2026, 3, 20, tzinfo=UTC)
 #: The newest vintage knowable AT the cutoff — the one the producer must choose.
 KNOWABLE_FILING = datetime(2026, 5, 15, tzinfo=UTC)
@@ -450,59 +443,15 @@ def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate
 # --- the deployed call site -------------------------------------------------------
 
 
-class _FakeConnection:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc: object) -> bool:
-        return False
-
-    def commit(self) -> None:
-        return None
-
-
 def _run_deployed_tick(monkeypatch, op, *, spy: list) -> None:
     """Drive one deployed tick op with every collaborator faked but the consolidation
     call itself recorded — so this asserts the WIRING, not the arithmetic."""
-    from data_engine.datahub.a1_evidence import PointerRegistration
-    from data_engine.datahub.production_topt.composition import ToptPipelineResult
-    from data_engine.datahub.production_topt.plausibility_gate import Verdict
-
-    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _FakeConnection())
-    monkeypatch.setattr(
-        capture,
-        "run_topt_pipeline",
-        lambda *a, **k: ToptPipelineResult(
-            run_id=RUN,
-            release_manifest_id="release-manifest:" + "b" * 64,
-            core_result_count=20,
-            quality_report_id="datahub-quality-report:" + "c" * 64,
-            quality={"available_count": 20, "requested_count": 20, "independent_reconciliation": "20/20"},
-            risk_free_rate=stub_rate(),
-        ),
-    )
-    monkeypatch.setattr(capture, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
-    monkeypatch.setattr(capture, "persist_strategy_input_coverage", lambda *a, **k: (20, 20))
-    monkeypatch.setattr(
-        capture, "run_strategy_replay_for_cutoff", lambda *a, **k: ("strategy-run:" + "d" * 64, 20, "snap:" + "e" * 64)
-    )
-    monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: PointerRegistration(RUN, 1, ()))
-    passing = Verdict("v4", (), (), ())
-    monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
-    monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
-    # #1323: the tick also reads the issuers whose registry read failed, through the connection.
-    monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
-    # #1518: the tick also reads the issuers with several listings and no declared primary listing, through the
-    # connection. These tests fake the connection, so none exists here. The real op is driven in
-    # production_topt/test_primary_listing_one_producer.py, against a database.
-    monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *a, **k: ())
 
     def _spy(connection, *, run_id, cutoff, **kwargs):
         spy.append((run_id, cutoff))
         return ()
 
-    monkeypatch.setattr(capture, "materialize_fund_consolidation", _spy)
-    op(dg.build_op_context(), capture.ToptLiveTickConfig(executed_at=CUTOFF.isoformat()))
+    run_deployed_tick(monkeypatch, op, materialize=_spy)
 
 
 def test_the_qqq_tick_consolidates_funds(monkeypatch) -> None:

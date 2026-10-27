@@ -55,7 +55,7 @@
     },
     {
       "identity": "strategy-history-projector",
-      "replay": "strategy_history_projection_pipeline re-projects the past cutoffs with the projector code of this release. The projector now takes the listing of each issuer from the primary_listing relation (#1535). Launch it by hand on staging after the deploy of this release. Use the run config ops.project_strategy_history_op.config.executed_at set to an ISO 8601 time with a time zone. The scheduled run (20:07 UTC on weekdays) also covers it. The nightly backtest then evaluates the past cutoffs under strategy definition 1.1.0 and appends rows under its content hash (#1518). History rows are append-only. The old rows stay."
+      "replay": "The change of #1518 makes the projector read the primary listing of an issuer through choose_primary_listings (relation primary_listing). An issuer with several listings and no declared primary listing is excluded with reason primary_listing_undeclared. Alphabet reads listing:xnas:googl. strategy_history_projection_pipeline re-projects the past cutoffs with the projector code of this release. Launch it by hand on staging after the deploy of this release. Use the run config ops.project_strategy_history_op.config.executed_at set to an ISO 8601 time with a time zone. The scheduled run (20:07 UTC on weekdays) also covers it. History rows are append-only. The old rows stay. The replay adds new rows. A same-run replay of a cutoff that straddles the deploy reloads a stored snapshot that has no is_primary flag. Alphabet then reads as undeclared on that replay only."
     }
   ]
 }
