@@ -22,13 +22,14 @@ from truealpha_contracts.goal_criteria import (
     backing_findings,
     load_goal_criteria,
 )
+from truealpha_runtime.testing import load_tool  # noqa: I001
 
 REPO = Path(__file__).resolve().parents[3]
-VERDICTS = REPO / "tools" / "nightly_verdicts.json"
 
 
 def _verdict_keys() -> set[str]:
-    return set(json.loads(VERDICTS.read_text())["checks"])
+    """The checks the tool expects: the per-universe checks expanded over the contract of this checkout."""
+    return set(load_tool("nightly_verdicts").load_expectations())
 
 
 def _test_paths() -> list[Path]:

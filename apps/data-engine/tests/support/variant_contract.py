@@ -1,7 +1,7 @@
 """A variant of the environment contract for tests of the universe record (#1522).
 
 `variant_text()` is the packaged contract with the S&P 500 scheduled in production and one more universe
-(`dow`). `serve_variant()` makes every `load_environment_contract()` call in the process read it, because
+(`dow` by default). `serve_variant()` makes every `load_environment_contract()` call in the process read it, because
 all readers share that one cached loader.
 """
 
@@ -21,16 +21,17 @@ NEW_ID_PREFIX = "universe:dow-us-"
 NEW_LANE = "universe-list:dow"
 
 
-def variant_text() -> str:
+def variant_text(*, key: str = NEW_KEY, lane: str = NEW_LANE, id_prefix: str = NEW_ID_PREFIX) -> str:
+    """The packaged contract with the S&P 500 scheduled in production and the universe ``key`` added."""
     raw: dict[str, Any] = json.loads(
         resources.files("truealpha_contracts.data")
         .joinpath(environment_contract.ENVIRONMENT_CONTRACT_RESOURCE)
         .read_text()
     )
-    raw["universes"][NEW_KEY] = {
+    raw["universes"][key] = {
         "region": "us",
-        "id_prefix": NEW_ID_PREFIX,
-        "lane_name": NEW_LANE,
+        "id_prefix": id_prefix,
+        "lane_name": lane,
         "label": "Dow Jones Industrial Average constituents",
         "membership": {"kind": "index_api", "url": "https://example.invalid/dow", "mic": "xnys"},
         "roles": [],
@@ -43,9 +44,9 @@ def variant_text() -> str:
         {"key": "topt", "status": "scheduled"},
         {"key": "qqq", "status": "scheduled"},
         {"key": "sp500", "status": "scheduled"},
-        {"key": NEW_KEY, "status": "scheduled"},
+        {"key": key, "status": "scheduled"},
     ]
-    production["ticks"][NEW_KEY] = {"estimated_listings": 30}
+    production["ticks"][key] = {"estimated_listings": 30}
     return json.dumps(raw)
 
 

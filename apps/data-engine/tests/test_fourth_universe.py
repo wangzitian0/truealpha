@@ -93,7 +93,8 @@ def _child_build() -> None:
         instance.add_run(
             dg.DagsterRun(job_name=f"{key}_live_pipeline", run_id=str(uuid.uuid4()), status=dg.DagsterRunStatus.STARTED)
         )
-    assert sorted(quality.runs_in_flight(instance)) == sorted(VARIANT_LANES)
+    in_flight = sorted(quality.runs_in_flight(instance))
+    assert in_flight == sorted(VARIANT_LANES), f"the in-flight list holds {in_flight}"
 
     # the surface proof: a head recorded a minute ago, with no reports yet, settles in every universe.
     now = datetime(2026, 10, 27, 0, 45, tzinfo=UTC)

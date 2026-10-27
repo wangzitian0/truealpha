@@ -615,13 +615,17 @@ class EnvironmentContract(_StrictFrozenModel):
         """Whether ``environment`` records the nightly verdict ``check``.
 
         A per-universe name (``check@lane_name``) is recorded only where the environment schedules that
-        universe: staging runs TOPT only, so it records no QQQ verdict. A lane name outside the record
-        raises. Any other name, and any environment that the contract does not name, records it.
+        universe: staging runs TOPT only, so it records no QQQ verdict. No environment records a name whose
+        lane is in no record: the stored row of a retired universe stays in the append-only table and is
+        no check. Any other name, and any environment that the contract does not name, records it.
         """
         _, at, lane_name = check.partition("@")
         if not at:
             return True
-        key = self.universe_of_lane(lane_name)
+        try:
+            key = self.universe_of_lane(lane_name)
+        except UnknownUniverse:
+            return False
         if self.normalize_environment(environment) not in self.environments:
             return True
         return self.universe_status(key, environment) == "scheduled"

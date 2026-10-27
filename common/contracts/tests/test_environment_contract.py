@@ -231,9 +231,13 @@ def test_an_environment_records_the_per_universe_verdicts_of_the_universes_it_sc
     assert load_environment_contract().expects_verdict(check, environment) is expected
 
 
-def test_a_lane_name_outside_the_universe_records_raises() -> None:
+def test_a_lane_name_outside_the_universe_records_raises_and_no_environment_records_its_verdict() -> None:
+    contract = load_environment_contract()
     with pytest.raises(UnknownUniverse, match="the lane name of no universe"):
-        load_environment_contract().expects_verdict("theme_purity@universe:adhoc", "staging")
+        contract.universe_of_lane("universe:adhoc")
+    # The stored row of a retired universe is no check: /health must not report it as a stopped one.
+    assert not contract.expects_verdict("theme_purity@universe:adhoc", "staging")
+    assert not contract.expects_verdict("theme_purity@universe:adhoc", "production")
 
 
 def test_the_universe_records_hold_the_names_the_lanes_and_the_pointer_use() -> None:
