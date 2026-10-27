@@ -27,6 +27,7 @@ import ast
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 # pytest's default `python_files`. Both patterns are collected so that a future
 # `foo_test.py` is sharded rather than silently skipped; pyproject does not
@@ -122,6 +123,63 @@ def weight_of(path: Path, weights: dict[str, float], repo_root: Path, rate: floa
     if key in weights:
         return weights[key]
     return float(test_functions(path)) * rate
+
+
+# The smallest share of test files that must carry a harvested weight.
+# Below this share, the packing estimates most files from test counts. The harvest is then broken.
+# At or above this share, the packing still works: `weight_of` converts the test count of each
+# unweighted file at the measured rate. A share between this floor and 100% is a speed statistic.
+# It goes to the CI step summary and never blocks a merge (#1503; it blocked #1083, #1490, #1540).
+WEIGHT_COVERAGE_FLOOR = 0.5
+
+
+class WeightCoverage(NamedTuple):
+    """How many test files of one root have a harvested weight."""
+
+    label: str
+    known: int
+    total: int
+
+    @property
+    def share(self) -> float:
+        """Known files divided by all files. An empty root has share 0.0, so it fails the floor."""
+        return self.known / self.total if self.total else 0.0
+
+    def line(self) -> str:
+        """One markdown list item for the CI step summary."""
+        return (
+            f"- {self.label}: {self.share:.1%} of test files have a harvested weight "
+            f"({self.known}/{self.total}); floor {WEIGHT_COVERAGE_FLOOR:.0%}"
+        )
+
+
+def weight_coverage(label: str, files: Sequence[Path], weights: dict[str, float], repo_root: Path) -> WeightCoverage:
+    """Count the files of one root whose repo-relative path has a harvested weight."""
+    known = sum(1 for path in files if str(path.relative_to(repo_root)) in weights)
+    return WeightCoverage(label=label, known=known, total=len(files))
+
+
+def require_coverage_floor(coverages: Sequence[WeightCoverage]) -> None:
+    """Raise ValueError that names every root whose coverage is below the floor.
+
+    The floor means the harvest is broken. It does not mean the harvest is old.
+    """
+    broken = [coverage for coverage in coverages if coverage.share < WEIGHT_COVERAGE_FLOOR]
+    if broken:
+        details = "; ".join(f"{c.label} {c.share:.1%} ({c.known}/{c.total})" for c in broken)
+        raise ValueError(
+            f"the harvest covers less than {WEIGHT_COVERAGE_FLOOR:.0%} of the test files: {details}. "
+            f"Run tools/harvest_shard_weights.py <run-id> with a green run."
+        )
+
+
+def write_step_summary(coverages: Sequence[WeightCoverage], summary_path: str | None) -> None:
+    """Append one line per root to the file that GITHUB_STEP_SUMMARY names. No path: write nothing."""
+    if not summary_path:
+        return
+    with Path(summary_path).open("a", encoding="utf-8") as handle:
+        handle.write("### Shard-weight coverage\n\n")
+        handle.write("\n".join(coverage.line() for coverage in coverages) + "\n")
 
 
 def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:

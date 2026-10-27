@@ -618,6 +618,38 @@
       "cwd": "."
     },
     {
+      "id": "pytest-shard/the-floor-is-not-zero",
+      "guard": "common/runtime/tests/test_pytest_shard.py",
+      "file": "common/runtime/src/truealpha_tools/pytest_shard.py",
+      "find": "WEIGHT_COVERAGE_FLOOR = 0.5\n",
+      "replace": "WEIGHT_COVERAGE_FLOOR = 0.0\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_pytest_shard.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "pytest-shard/a-broken-harvest-blocks",
+      "guard": "common/runtime/tests/test_pytest_shard.py",
+      "file": "common/runtime/src/truealpha_tools/pytest_shard.py",
+      "find": "    if broken:\n        details",
+      "replace": "    if False:\n        details",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_pytest_shard.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "forest/gppe-tree-reproduces-v020",
       "guard": "common/factors/tests/forest/test_gppe_tree.py",
       "file": "common/factors/src/factors/forest/registry.py",
