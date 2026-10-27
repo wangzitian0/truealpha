@@ -59,6 +59,7 @@ from truealpha_contracts.universes import key_of_lane, lane_name, record, served
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
+from data_engine.external_op import external_op
 from data_engine.lanes.capture import TICKS
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
@@ -178,7 +179,7 @@ def _suite_path() -> Path:
     raise FileNotFoundError(f"output_invariants.py is neither at {_IMAGE_COPY} nor {_REPO_COPY}")
 
 
-@dg.op
+@external_op
 def run_output_invariants(context: dg.OpExecutionContext) -> str:
     """Run the suite against this environment's database; fail the run on any verdict
     the suite fails on (a violation, an expired exemption, a stale exemption, missing
@@ -339,7 +340,7 @@ def stale_served_heads(
     return out
 
 
-@dg.op
+@external_op
 def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
     """Every report surface serves the governed head (#855 C1): replay each App reader's own
     run selection and the coverage report's recomputation against this environment's
@@ -431,7 +432,7 @@ class ConfidenceReportConfig(dg.Config):
     oracle_issuers: int = 5
 
 
-@dg.op
+@external_op
 def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceReportConfig) -> str:
     from data_engine.datahub.confidence_report import SecOracle, compile_report, persist, summary_line
 
@@ -452,7 +453,6 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         # Every SEC read is attributed to this Dagster run in the external call ledger (#729)
         # and admitted by the rule-6 gate first.
         with (
-            gateway.run_scope(f"dagster:{context.run_id}"),
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):
@@ -518,7 +518,7 @@ def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
-@dg.op
+@external_op
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
     """One minimal ask of the seated model provider (#876 W2). A rejected key, an erroring or
     unreachable provider, or no seated key at all is a red run and a red verdict."""
@@ -527,9 +527,8 @@ def run_model_key_health(context: dg.OpExecutionContext) -> str:
     with verdict(
         MODEL_KEY_HEALTH_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
-        # The ask lands in the external call ledger attributed to this run (#729).
-        with gateway.run_scope(f"dagster:{context.run_id}"):
-            health = probe()
+        # The ask lands in the external call ledger attributed to this run (#729): `external_op` binds it.
+        health = probe()
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
         context.add_output_metadata({"outcome": health.outcome, "status_code": health.status_code or 0})
@@ -563,7 +562,7 @@ def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
 model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
 
 
-@dg.op
+@external_op
 def run_release_fetch_proof(context: dg.OpExecutionContext) -> str:
     """Whether the current deployment's first scheduled or forced tick fetched from every
     registered origin itself (`quality.release_fetch_proof`). Pending records `ok = null`
@@ -602,7 +601,7 @@ def release_fetch_proof_schedule(context: dg.ScheduleEvaluationContext) -> dg.Ru
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
-@dg.op
+@external_op
 def run_runtime_shape(context: dg.OpExecutionContext) -> str:
     """Judge the memory cgroup of this container against the declared capacity (#1467).
 
@@ -647,7 +646,7 @@ class FetchKeysOnceConfig(dg.Config):
     day: str | None = None
 
 
-@dg.op
+@external_op
 def run_fetch_keys_once(context: dg.OpExecutionContext, config: FetchKeysOnceConfig) -> str:
     """Judge the call ledger of the UTC day that ended: no fetch key fetched twice (#1411 K7, #1418 B2).
 
@@ -723,7 +722,7 @@ class _RedJobRunHealth(dg.Failure):
     """The verdict is red. `verdict()` records it and re-raises; the op catches this and ends green."""
 
 
-@dg.op
+@external_op
 def run_job_run_health(context: dg.OpExecutionContext) -> str:
     """Judge the finished runs of every job in the last 7 days against the rest of the fleet (#1466).
 

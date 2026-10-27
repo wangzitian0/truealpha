@@ -3,7 +3,7 @@
   "apps/data-engine/scripts/bootstrap_universe.py:main": 46,
   "apps/data-engine/scripts/capture_factor_matrix_samples.py:load_plan": 25,
   "apps/data-engine/scripts/capture_factor_matrix_samples.py:validate_capture": 28,
-  "apps/data-engine/scripts/sweep_moomoo_fundamentals.py:main": 22,
+  "apps/data-engine/scripts/sweep_moomoo_fundamentals.py:main": 21,
   "apps/data-engine/src/data_engine/datahub/canary_oracles.py:failures_for_run": 22,
   "apps/data-engine/src/data_engine/datahub/confidence_report.py:build_report": 21,
   "apps/data-engine/src/data_engine/datahub/production_topt/holdings_enrichment.py:enrich_holding_identities": 22,

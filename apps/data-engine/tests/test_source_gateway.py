@@ -11,11 +11,11 @@ red against the pre-#729 `universe_plane.py`, which called `urlopen` directly).
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
 import logging
-import re
 import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime, timedelta
@@ -143,7 +143,10 @@ def test_a_ledger_write_failure_never_masks_the_vendor_result(monkeypatch, caplo
     assert '"source": "yahoo"' in caplog.text, "the unrecorded row is at least in the run log"
 
 
-def test_run_scope_attributes_rows_to_the_dagster_run(call_ledger) -> None:
+def test_run_scope_attributes_rows_to_the_dagster_run_and_a_call_outside_a_run_is_recorded_without_one(
+    call_ledger,
+) -> None:
+    """Owner decision D5 (#1521): a call outside every run is recorded with a NULL run key, never refused."""
     with gateway.run_scope("dagster:run-123"):
         with gateway.record_call("sec", "submissions", caller="test", identity=_key("sec", "submissions")) as call:
             call.observe(status_code=200, body=b"{}")
@@ -370,24 +373,253 @@ def test_moomoo_failures_reach_the_same_ledger_with_their_error(call_ledger) -> 
     assert succeeded.ok is True and succeeded.status_code == mm.moomoo.RET_OK
 
 
-# --- the standing check: no vendor call site outside the gateway -----------------------
+# --- the standing check: no vendor call outside the gateway, and every gateway call names its key ----
 
-_NETWORK_ENTRY = re.compile(r"urlopen\(|httpx\.Client\(|requests\.(get|post|Session)\(")
+#: The source tree and the scripts: the two places that make vendor calls (`mypy` skips `scripts/`).
+_SCANNED = (SRC, Path(__file__).resolve().parents[1] / "scripts")
+_HTTP_VERBS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "request", "stream", "send"})
+#: What builds an HTTP client. A name bound to one of these (or annotated as one) is a client name.
+_CLIENT_TYPES = frozenset({"httpx.Client", "httpx.AsyncClient"})
+_CLIENT_FACTORIES = _CLIENT_TYPES | {"data_engine.sources.sec.client"}
+#: Calls that take the key of the resource as the keyword `identity` (#1521 step 2).
+_IDENTITY_FUNCTIONS = frozenset(
+    {"data_engine.sources.gateway." + name for name in ("record_call", "http_get", "http_post", "urlopen")}
+    | {
+        "data_engine.sources.moomoo." + name
+        for name in (
+            "_call",
+            "get_analyst_consensus",
+            "get_rating_summary",
+            "get_market_rating_changes",
+            "get_company_profile",
+            "get_financials_statements",
+            "get_financials_revenue_breakdown",
+            "get_valuation_detail",
+            "get_research_morningstar_report",
+            "get_shareholders_overview",
+            "get_insider_trade_list",
+            "get_corporate_actions_dividends",
+            "get_short_interest",
+            "get_owner_plate",
+            "get_history_kline",
+            "get_history_kl_quota",
+        )
+    }
+    | {"data_engine.datahub.production_topt.universe_plane._get"}
+)
+#: Methods of the moomoo client protocol; any owner (`client.history_kline`, `self._client.history_kline`).
+_IDENTITY_METHODS = frozenset({"history_kline", "financial_statements"})
 
 
-def test_every_network_call_site_imports_the_gateway() -> None:
-    """A module that opens a vendor connection must route the call through
-    `sources.gateway`; importing it is the cheapest observable proof, and the per-adapter
-    tests above prove the rows. Red against the pre-#729 universe_plane/twelve_data_origin/
-    vendor_oracle, which called `urlopen` with no ledger at all."""
-    offenders = []
-    for path in sorted(SRC.rglob("*.py")):
-        if path.name == "gateway.py":
+def _module_of(path: Path, root: Path) -> str:
+    """The dotted module of ``path`` under ``root`` (`src/data_engine/sources/gateway.py` is `data_engine.sources.gateway`)."""
+    return ".".join((root.name, *path.relative_to(root).with_suffix("").parts))
+
+
+def _aliases(tree: ast.Module) -> dict[str, str]:
+    """The dotted name that each imported name stands for."""
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names[alias.asname or alias.name.split(".")[0]] = (
+                    alias.name if alias.asname else alias.name.split(".")[0]
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return names
+
+
+def _dotted(node: ast.expr, aliases: dict[str, str], module: str) -> str | None:
+    """The dotted name of a name or attribute chain, through the imports of the file and its own module."""
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, f"{module}.{node.id}")
+    if isinstance(node, ast.Attribute):
+        owner = _dotted(node.value, aliases, module)
+        return None if owner is None else f"{owner}.{node.attr}"
+    return None
+
+
+def _client_names(tree: ast.Module, aliases: dict[str, str], module: str) -> set[str]:
+    """Names bound to an HTTP client: built by a client factory, or annotated as a client."""
+
+    def builds_client(value: ast.expr | None) -> bool:
+        return isinstance(value, ast.Call) and _dotted(value.func, aliases, module) in _CLIENT_FACTORIES
+
+    def annotated_client(annotation: ast.expr | None) -> bool:
+        return annotation is not None and any(
+            _dotted(part, aliases, module) in _CLIENT_TYPES
+            for part in ast.walk(annotation)
+            if isinstance(part, ast.Name | ast.Attribute)
+        )
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and builds_client(node.value):
+            names |= {target.id for target in node.targets if isinstance(target, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if builds_client(node.value) or annotated_client(node.annotation):
+                names.add(node.target.id)
+        elif isinstance(node, ast.withitem) and builds_client(node.context_expr):
+            if isinstance(node.optional_vars, ast.Name):
+                names.add(node.optional_vars.id)
+        elif isinstance(node, ast.arg) and annotated_client(node.annotation):
+            names.add(node.arg)
+    return names
+
+
+def scan_vendor_calls(path: Path, root: Path, *, text: str | None = None) -> tuple[list[str], int]:
+    """The findings of one file, and how many gateway calls it makes.
+
+    A finding is a call that leaves the gateway (outside `sources/`): `httpx.get` and its verbs, any
+    `requests.*`, `urllib.request.urlopen`, the `get` or `post` of an HTTP client name, `OpenQuoteContext`.
+    Or it is a call to a gateway entry point that passes no `identity`."""
+    tree = ast.parse(path.read_text() if text is None else text)
+    module = _module_of(path, root)
+    aliases = _aliases(tree)
+    clients = _client_names(tree, aliases, module)
+    in_sources = module.startswith("data_engine.sources.")
+    findings: list[str] = []
+    gateway_calls = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
             continue
-        text = path.read_text()
-        if _NETWORK_ENTRY.search(text) and "from data_engine.sources import gateway" not in text:
-            offenders.append(str(path.relative_to(SRC)))
-    assert offenders == [], f"vendor call sites without the external call ledger: {offenders}"
+        func = node.func
+        name = _dotted(func, aliases, module) or ""
+        where = f"{path.relative_to(root)}:{node.lineno}"
+        if not in_sources:
+            if (
+                name in {f"httpx.{verb}" for verb in _HTTP_VERBS}
+                or name.startswith("requests.")
+                or name == "urllib.request.urlopen"
+                or name in {"moomoo.OpenQuoteContext", "moomoo.OpenTradeContext"}
+                or (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in _HTTP_VERBS
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in clients
+                )
+            ):
+                findings.append(f"{where}: {ast.unparse(func)}(...) leaves the gateway")
+        names_identity = any(keyword.arg == "identity" for keyword in node.keywords)
+        takes_identity = (
+            name in _IDENTITY_FUNCTIONS
+            or (isinstance(func, ast.Attribute) and func.attr in _IDENTITY_METHODS)
+            or (
+                isinstance(func, ast.Attribute)
+                and func.attr == "call"
+                and len(node.args) >= 3
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            )
+        )
+        if takes_identity:
+            gateway_calls += 1
+            if not names_identity:
+                findings.append(f"{where}: {ast.unparse(func)}(...) names no `identity`")
+        elif name == "data_engine.datahub.treasury_rates.fetch_year":
+            gateway_calls += 1
+            if len(node.args) < 2 and not names_identity:
+                findings.append(f"{where}: fetch_year(...) names no key")
+    return findings, gateway_calls
+
+
+def _scan_all() -> tuple[list[str], int, int]:
+    """The findings of `src/` and `scripts/`, the number of files scanned and the number of gateway calls seen."""
+    findings: list[str] = []
+    files = calls = 0
+    for root in _SCANNED:
+        for path in sorted(root.rglob("*.py")):
+            found, made = scan_vendor_calls(path, root)
+            findings += [f"{root.name}/{item}" for item in found]
+            files += 1
+            calls += made
+    return findings, files, calls
+
+
+def test_no_vendor_call_leaves_the_gateway_and_every_gateway_call_names_its_key() -> None:
+    """One scan of `src/` and `scripts/`, no file exempt. A vendor call that leaves the gateway writes no ledger
+    row and spends quota nobody counts; a gateway call without `identity` raises at the call. `scripts/` is
+    outside `mypy`, so this scan is the only check that sees a script."""
+    findings, files, gateway_calls = _scan_all()
+    assert files > 0 and gateway_calls > 0, "the scan found nothing to scan: it would pass on an empty tree"
+    assert findings == [], "vendor calls outside the gateway, or gateway calls without a key:\n" + "\n".join(findings)
+
+
+_MUTATIONS = [
+    ("datahub/x.py", "import httpx\nhttpx.get('https://v.example/x')\n", "httpx.get(...) leaves the gateway"),
+    ("datahub/x.py", "import httpx\nhttpx.request('GET', 'https://v.example/x')\n", "httpx.request(...) leaves"),
+    ("lanes/x.py", "import requests\nrequests.Session().get('https://v.example')\n", "requests"),
+    ("lanes/x.py", "import urllib.request\nurllib.request.urlopen('https://v.example')\n", "urlopen(...) leaves"),
+    ("lanes/x.py", "from urllib.request import urlopen\nurlopen('https://v.example')\n", "urlopen(...) leaves"),
+    ("lanes/x.py", "from urllib import request\nrequest.urlopen('https://v.example')\n", "urlopen(...) leaves"),
+    (
+        "datahub/x.py",
+        "import httpx\nwith httpx.Client() as http:\n    http.get('https://v.example')\n",
+        "http.get(...) leaves",
+    ),
+    (
+        "datahub/x.py",
+        "import httpx\nclient = httpx.Client()\nclient.post('https://v.example')\n",
+        "client.post(...) leaves",
+    ),
+    (
+        "datahub/x.py",
+        "import httpx\ndef f(client: httpx.Client | None):\n    client.get('https://v.example')\n",
+        "client.get(...) leaves",
+    ),
+    (
+        "datahub/x.py",
+        "from data_engine.sources.sec import client as sec_client\nwith sec_client() as http:\n    http.get('u')\n",
+        "http.get(...) leaves",
+    ),
+    ("datahub/x.py", "import moomoo\nmoomoo.OpenQuoteContext(host='h', port=1)\n", "OpenQuoteContext(...) leaves"),
+    (
+        "datahub/x.py",
+        "from data_engine.sources import gateway\ngateway.http_get(c, 'sec', 'e', 'u', caller='x')\n",
+        "names no `identity`",
+    ),
+    (
+        "datahub/x.py",
+        "from data_engine.sources import gateway\ngateway.urlopen('sec', 'e', 'u', caller='x', timeout=1)\n",
+        "names no `identity`",
+    ),
+    (
+        "datahub/x.py",
+        "from data_engine.sources import moomoo as mm\nmm.get_owner_plate(ctx, ['US.A'], caller='x')\n",
+        "names no `identity`",
+    ),
+    ("datahub/x.py", "client.history_kline('US.A', start=s, end=e)\n", "names no `identity`"),
+    ("datahub/x.py", "gw.call('sec', 'submissions', lambda: None)\n", "names no `identity`"),
+]
+
+
+@pytest.mark.parametrize(
+    ("relative", "source", "expected"), _MUTATIONS, ids=[m[1].splitlines()[-1][:48] for m in _MUTATIONS]
+)
+def test_the_scan_finds_each_call_it_names(tmp_path: Path, relative: str, source: str, expected: str) -> None:
+    """The mutation proof: the same text in a file under `src/` is a finding, so a bare `httpx.get` cannot pass."""
+    root = tmp_path / "data_engine"
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source)
+    findings, _calls = scan_vendor_calls(path, root)
+    assert any(expected in finding for finding in findings), findings
+
+
+def test_the_scan_lets_the_gateway_and_a_keyed_call_through(tmp_path: Path) -> None:
+    root = tmp_path / "data_engine"
+    gateway_file = root / "sources" / "x.py"
+    gateway_file.parent.mkdir(parents=True)
+    gateway_file.write_text("import httpx\nhttpx.get('https://v.example')\n")  # `sources/` is the gateway's own
+    keyed = root / "datahub" / "y.py"
+    keyed.parent.mkdir()
+    keyed.write_text(
+        "from data_engine.sources import gateway\ngateway.http_get(c, 'sec', 'e', 'u', identity=key, caller='x')\n"
+    )
+    assert scan_vendor_calls(gateway_file, root) == ([], 0)
+    assert scan_vendor_calls(keyed, root) == ([], 1)
 
 
 # --- #740's enforcing gateway: declared capacity, throttle, budget, refusal --------------

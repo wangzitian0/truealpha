@@ -8,7 +8,9 @@ The assertions fail on a call that carries no identity, whichever site makes it.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -299,3 +301,116 @@ def test_a_model_attempt_writes_the_reason_model_call(moomoo_ledger_db: str, mon
 
     assert [key is not None for _endpoint, key in _rows(llm.SOURCE)] == [True]
     assert _reasons(llm.SOURCE) == ["model_call"]
+
+
+# --- #1521 step 4: the run is attributed ------------------------------------------------------
+
+
+def _is_op_decorator(decorator: ast.expr) -> bool:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return ast.unparse(target) in {"dg.op", "dagster.op", "op"}
+
+
+def test_every_op_under_lanes_is_an_external_op() -> None:
+    """`external_op` binds the ledger run for the whole op. A plain `@dg.op` under `lanes/` binds none, so
+    its vendor calls write a NULL `run_key` (17 of 24 ops bound none before step 4)."""
+    lanes = Path(__file__).resolve().parents[1] / "src" / "data_engine" / "lanes"
+    plain: list[str] = []
+    external = 0
+    for path in sorted(lanes.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                target = decorator.func if isinstance(decorator, ast.Call) else decorator
+                if _is_op_decorator(decorator):
+                    plain.append(f"{path.name}:{node.name}")
+                elif ast.unparse(target) == "external_op":
+                    external += 1
+    assert plain == [], f"ops that bind no ledger run: {plain}"
+    assert external > 0, "the scan found no op: it would pass on an empty tree"
+
+
+def test_every_op_of_every_deployed_job_binds_the_ledger_run() -> None:
+    """The same property on the deployed registry: the ops that the jobs run, factories included."""
+    from data_engine.dagster_defs import defs
+    from data_engine.external_op import EXTERNAL_OP_MARK
+
+    ops = [op for job in defs.resolve_all_job_defs() for op in job.graph.iterate_op_defs()]
+    assert ops, "no op in the deployed jobs"
+    unbound = sorted({op.name for op in ops if not getattr(op.compute_fn.decorated_fn, EXTERNAL_OP_MARK, False)})
+    assert unbound == [], f"ops of deployed jobs that bind no ledger run: {unbound}"
+
+
+def test_a_standards_op_writes_the_run_key_of_its_dagster_run(analyst_world: _OpenD) -> None:
+    import test_canonical_issuer_resolution as world
+
+    context = dg.build_op_context()
+    config = standards.StandardBackfillConfig(executed_at=world.EXECUTED_AT, universe=world.UNIVERSE)
+    standards.run_analyst_ratings(context, config, "{}")
+
+    run_keys = {
+        key for (key,) in gateway._pg_execute("select run_key from staging.api_call_ledger where source = 'moomoo'")
+    }
+    assert analyst_world.calls > 0, "the op reached the vendor"
+    assert run_keys == {f"dagster:{context.run_id}"}, "every row of the op names its run"
+
+
+def test_a_call_outside_every_run_is_recorded_with_a_null_run_key(moomoo_ledger_db: str) -> None:
+    """Owner decision D5: no gate. The gateway records a call without a run and never refuses it."""
+    from data_engine.sources import sec
+
+    with gateway.record_call("sec", "submissions", identity=sec.submissions_key(320193), caller="repl") as call:
+        call.observe(status_code=200, body=b"{}")
+
+    assert [
+        key for (key,) in gateway._pg_execute("select run_key from staging.api_call_ledger where source = 'sec'")
+    ] == [None]
+
+
+def test_a_script_run_attributes_the_calls_of_a_script_to_one_run_key(moomoo_ledger_db: str) -> None:
+    from data_engine.sources import sec
+
+    with gateway.script_run("identity-test") as run_key:
+        for cik in (1, 2):
+            with gateway.record_call("sec", "submissions", identity=sec.submissions_key(cik), caller="script") as call:
+                call.observe(status_code=200, body=b"{}")
+
+    assert re.fullmatch(r"script:identity-test:\d+", run_key), run_key
+    assert [
+        key for (key,) in gateway._pg_execute("select run_key from staging.api_call_ledger where source = 'sec'")
+    ] == [
+        run_key,
+        run_key,
+    ]
+
+
+def _reaches_a_vendor(tree: ast.Module) -> bool:
+    """Whether a script imports a module that makes vendor calls through the gateway."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module == "data_engine.sources":
+                if any(alias.name != "moomoo_ledger" for alias in node.names):
+                    return True
+            elif node.module.startswith("data_engine.sources.") and node.module != "data_engine.sources.moomoo_ledger":
+                return True
+            elif node.module == "data_engine.datahub" and any(alias.name == "treasury_rates" for alias in node.names):
+                return True
+    return False
+
+
+def test_every_script_that_reaches_a_vendor_runs_inside_script_run() -> None:
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    reaching: list[str] = []
+    unbound: list[str] = []
+    for path in sorted(scripts.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        if not _reaches_a_vendor(tree):
+            continue
+        reaching.append(path.name)
+        if not any(
+            isinstance(node, ast.Call) and ast.unparse(node.func).endswith("script_run") for node in ast.walk(tree)
+        ):
+            unbound.append(path.name)
+    assert reaching, "the scan found no script that reaches a vendor: it would pass on an empty directory"
+    assert unbound == [], f"scripts that make vendor calls outside a script run: {unbound}"

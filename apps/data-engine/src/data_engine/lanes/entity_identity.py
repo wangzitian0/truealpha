@@ -38,6 +38,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
+from data_engine.external_op import external_op
 
 ENTITY_BACKFILL_JOB_NAME = "entity_identity_backfill"
 
@@ -56,7 +57,7 @@ def _count(section: Mapping[str, Any]) -> int:
     return sum(int(value) for value in section.values())
 
 
-@dg.op
+@external_op
 def entity_identity_backfill_op(context: dg.OpExecutionContext) -> dg.Output[dict[str, Any]]:
     """Run staging.entity_backfill() once and record what it wrote, held back and failed."""
     with psycopg.connect(settings.database_url) as connection:

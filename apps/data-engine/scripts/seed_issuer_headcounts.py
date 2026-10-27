@@ -22,7 +22,7 @@ from data_engine.datahub.production_topt.headcount import (
     record_headcount,
     validate_cited_headcount_fact,
 )
-from data_engine.sources import sec
+from data_engine.sources import gateway, sec
 
 _SOURCE = "manual-review"
 _CONFIDENCE = Decimal("0.70")
@@ -266,4 +266,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with gateway.script_run("seed_issuer_headcounts"):
+        exit_code = main()
+    raise SystemExit(exit_code)

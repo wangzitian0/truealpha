@@ -9,6 +9,7 @@ import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
+from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
@@ -35,7 +36,7 @@ def _is_source_refresh_enabled(source) -> bool:
     return is_universe_scheduled(source.etf, settings.app_env)
 
 
-@dg.op
+@external_op
 def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     """Refresh every configured universe's constituent plane; publish on change."""
     from data_engine.datahub.production_topt.universe_plane import (
@@ -52,7 +53,7 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     # universe at once. That log line survives a failure.
     excluded: dict[str, dict[str, object]] = {}
     try:
-        with gateway.run_scope(f"dagster:{context.run_id}"), gateway.capacity_scope():
+        with gateway.capacity_scope():
             _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish, excluded)
     finally:
         context.add_output_metadata({"constituents_excluded": dg.MetadataValue.json(excluded)})

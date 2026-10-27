@@ -126,8 +126,7 @@ def main() -> None:
     stats: Counter = Counter()
     made = 0
     aborted = False
-    run_key = f"script:{CALLER}:{int(datetime.now(UTC).timestamp())}"
-    with gateway.run_scope(run_key), mm.connect() as ctx:
+    with mm.connect() as ctx:
         for code, endpoint in plan:
             if args.limit is not None and made >= args.limit:
                 break
@@ -176,4 +175,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("sweep_moomoo_fundamentals"):
+        main()

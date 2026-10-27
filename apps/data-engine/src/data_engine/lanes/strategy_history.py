@@ -30,6 +30,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.strategy_history import DEFAULT_MONTHS, project_deployed_history
+from data_engine.external_op import external_op
 from data_engine.lanes.backtest import schedule_status
 
 STRATEGY_HISTORY_JOB_NAME = "strategy_history_projection_pipeline"
@@ -49,7 +50,7 @@ class StrategyHistoryConfig(dg.Config):
     months: int = DEFAULT_MONTHS
 
 
-@dg.op
+@external_op
 def project_strategy_history_op(context: dg.OpExecutionContext, config: StrategyHistoryConfig) -> None:
     """Project the point-in-time strategy inputs of every consumed issuer over the history cutoffs."""
     tick = datetime.fromisoformat(config.executed_at)

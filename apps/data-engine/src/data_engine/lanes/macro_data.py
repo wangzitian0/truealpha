@@ -47,6 +47,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.treasury_rates import REGISTRATION, refresh_macro_series
+from data_engine.external_op import external_op
 from data_engine.lanes.backtest import schedule_status
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_of, verdict
 from data_engine.sources import gateway
@@ -103,7 +104,7 @@ def judge_freshness(connection: psycopg.Connection) -> MacroFreshness:
     return MacroFreshness(ok=True, summary=f"newest observations: {', '.join(newest)}")
 
 
-@dg.op
+@external_op
 def refresh_macro_data_op(context: dg.OpExecutionContext) -> None:
     """Load the Treasury files, then judge the freshness of every series.
 
@@ -114,7 +115,6 @@ def refresh_macro_data_op(context: dg.OpExecutionContext) -> None:
     ) as outcome:
         now = datetime.now(UTC)
         with (
-            gateway.run_scope(f"dagster:{context.run_id}"),
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):
