@@ -15,7 +15,7 @@ may already be a later merge's image.
 
 `sha-<short>` is docker/metadata-action's `type=sha,format=short` spelling (seven hex chars);
 test_ci_workflows.py pins that the publish step still tags that way. The registry read is the
-anonymous Registry v2 flow infra2's `_image_manifest_exists` and `infra2_sdk.release.
+anonymous Registry v2 flow infra2's `_image_manifest_exists` and `infra2_sdk.refs.
 resolve_image_digest` use -- an anonymous pull token, then HEAD on the manifest with the OCI
 accept set -- in the stdlib, because the `plan` job that runs this installs nothing. 404 is the
 one answer that means "build". Every other failure raises: a refused or unavailable registry must
@@ -35,12 +35,11 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from infra2_sdk.refs import MANIFEST_ACCEPT, SHORT_SHA_LENGTH, short_sha  # noqa: F401
+from infra2_sdk.refs import MANIFEST_ACCEPT, short_sha
 
 #: A transient registry answer is retried this many times in total before it is a failure.
 ATTEMPTS = 3
 _RETRIED_STATUSES = frozenset({429, 500, 502, 503, 504})
-_SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DIGEST_RE = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
 
 
@@ -137,7 +136,7 @@ def published_digest(
 ) -> str | None:
     """The digest `registry/repository:reference` names, or None when no such tag exists.
 
-    The same HEAD-with-Bearer read `infra2_sdk.release.resolve_image_digest` performs, so the
+    The same HEAD-with-Bearer read `infra2_sdk.refs.resolve_image_digest` performs, so the
     digest a tag is re-pointed at is the one infra2's deployer will resolve from that tag.
     """
     url = f"https://{registry}/v2/{repository}/manifests/{reference}"

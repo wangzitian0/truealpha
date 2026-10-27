@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
-from truealpha_tools import nightly_verdicts, surface_contract, walk_evidence
+from truealpha_tools import nightly_verdicts, release_runs, surface_contract, walk_evidence
 from truealpha_tools.release_runs import DEPLOY_TITLE, FAILED_CONCLUSIONS, SUMMARY_JOB, parse_time, tag_key
 
 GhApi = Callable[[str], str]
@@ -70,8 +70,8 @@ HTTP_TIMEOUT_SECONDS = 30
 CALL_BUDGET = 600
 PAGE_SIZE = 100
 
-DEPLOY_RUNS = f"/repos/{REPOSITORY}/actions/workflows/deploy-release.yml/runs"
-CI_RUNS = f"/repos/{REPOSITORY}/actions/workflows/ci-required.yml/runs"
+DEPLOY_RUNS = f"/repos/{REPOSITORY}/actions/workflows/{release_runs.DEPLOY_WORKFLOW}/runs"
+CI_RUNS = f"/repos/{REPOSITORY}/actions/workflows/{release_runs.CI_WORKFLOW}/runs"
 TAGS = f"/repos/{REPOSITORY}/tags"
 PULLS = f"/repos/{REPOSITORY}/pulls?state=closed&base=main&sort=updated&direction=desc"
 MAIN_COMMITS = f"/repos/{REPOSITORY}/commits?sha=main"

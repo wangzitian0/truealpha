@@ -45,6 +45,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from truealpha_tools.release_runs import DEPLOY_WORKFLOW, WALK_WORKFLOW, parse_time
+
 # The SDK is imported where the deployed release is read, not here (#1412). `staging_evidence`
 # reuses `find_walk` from `cut_release.sh --prod`, which runs on a bare `python3` without the SDK.
 if TYPE_CHECKING:
@@ -55,9 +57,9 @@ WALK_STEP_NAME = "Walk the deployed surface"
 # busy repo a given release's run falls off a 100-item all-workflows page
 # within days, and "no such run exists" would then be false rather than merely
 # unhelpful.
-RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/walk-release.yml/runs?per_page=100"
+RUNS_PATH = f"/repos/wangzitian0/truealpha/actions/workflows/{WALK_WORKFLOW}/runs?per_page=100"
 WINDOW = "the last 100 walk-release runs"
-DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?per_page=100"
+DEPLOY_RUNS_PATH = f"/repos/wangzitian0/truealpha/actions/workflows/{DEPLOY_WORKFLOW}/runs?per_page=100"
 #: A staging release measured 12-13 min from tag to walked on 2026-09-16, of which the
 #: deploy run is ~9 min and the walk ~2 min; the check can land anywhere in that span.
 IN_FLIGHT_WAIT = timedelta(minutes=15)
@@ -123,13 +125,6 @@ def find_walk(deploy_type: str, release: str, *, environment: str = "", gh_api: 
     )
 
 
-def _utc(stamp: object) -> datetime | None:
-    try:
-        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def in_flight(deploy_type: str, release: str, *, gh_api: GhApi, now: datetime) -> str | None:
     """What of this release is still running, or None once there is an outcome to judge.
 
@@ -154,7 +149,7 @@ def in_flight(deploy_type: str, release: str, *, gh_api: GhApi, now: datetime) -
             return f"{run.get('display_title')!r} (run {run.get('id')}) is {run.get('status')}"
     if deploys:
         newest = max(deploys, key=lambda run: str(run.get("updated_at", "")))
-        finished = _utc(newest.get("updated_at"))
+        finished = parse_time(newest.get("updated_at"))
         walked_after = any(str(walk.get("created_at", "")) >= str(newest.get("updated_at", "")) for walk in walks)
         if (
             newest.get("conclusion") == "success"

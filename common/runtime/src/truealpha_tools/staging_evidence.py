@@ -40,17 +40,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from truealpha_tools.release_runs import CI_WORKFLOW, DEPLOY_WORKFLOW, TAG_RE, WALK_WORKFLOW
 from truealpha_tools.walk_evidence import RUNS_PATH, MissingWalkEvidence, find_walk
 
 REPO = "wangzitian0/truealpha"
-CI_RUNS = f"/repos/{REPO}/actions/workflows/ci-required.yml/runs"
-DEPLOY_RUNS = f"/repos/{REPO}/actions/workflows/deploy-release.yml/runs"
-WALK_RUNS = f"/repos/{REPO}/actions/workflows/walk-release.yml/runs"
+CI_RUNS = f"/repos/{REPO}/actions/workflows/{CI_WORKFLOW}/runs"
+DEPLOY_RUNS = f"/repos/{REPO}/actions/workflows/{DEPLOY_WORKFLOW}/runs"
+WALK_RUNS = f"/repos/{REPO}/actions/workflows/{WALK_WORKFLOW}/runs"
 #: A staging deploy-release.yml job stops after 50 minutes. A staging deploy of another tag that overlaps
 #: the walk window therefore started less than this long before the anchor.
 LOOKBACK = timedelta(hours=1)
 _SHA = re.compile(r"^[0-9a-f]{40}$")
-_RELEASE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 
 Run = dict[str, object]
 RunLister = Callable[[str], list[Run]]
@@ -216,7 +216,7 @@ def find_staging_evidence(
     api: GhApi = gh_api,
 ) -> StagingEvidence:
     """The three facts of the module docstring, or `NotPromotable` for the first missing one."""
-    if not _RELEASE.match(release) or not _SHA.match(release_sha):
+    if not TAG_RE.match(release) or not _SHA.match(release_sha):
         raise NotPromotable(f"needs a vX.Y.Z release and a 40-character SHA, not {release!r} and {release_sha!r}")
     anchor = _anchor(release, release_sha, runs)
     since = _query_time(_time(anchor["created_at"]) - LOOKBACK)
