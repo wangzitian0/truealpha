@@ -36,6 +36,9 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   // a spent budget, or an issuer it does not know.
   registry_unavailable:
     "The issuer registry gave no classification, so the run could not tell which operating profit applies to this issuer",
+  // #1518: an issuer with several listings and no declared primary listing is excluded, never ranked by ticker.
+  primary_listing_undeclared:
+    "The issuer has several listings and none is declared as its primary listing, so no listing values it",
 };
 
 export function exclusionLabel(reason: string | null): string | null {

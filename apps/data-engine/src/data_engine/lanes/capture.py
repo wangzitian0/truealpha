@@ -46,6 +46,7 @@ from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
+    undeclared_primary_listing_issuers,
 )
 from data_engine.environment_universes import rule_environment
 from data_engine.external_op import external_op
@@ -279,8 +280,11 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         # #1323: an issuer whose registry read failed after its attempts is excluded by name, like a
         # refused issuer. The registry reason wins: the row of that issuer rests on no classification.
         registry_unavailable = _registry_unavailable(context, connection, tick, pipeline.run_id, issuers)
+        # #1518: an issuer with several listings and no declared primary listing is excluded by name.
+        undeclared = undeclared_primary_listing_issuers(connection, pipeline.run_id, cutoff=cutoff)
         excluded = {
             **issuers.excluded_issuers(),
+            **dict.fromkeys(undeclared, ExclusionReason.PRIMARY_LISTING_UNDECLARED),
             **dict.fromkeys(registry_unavailable, ExclusionReason.REGISTRY_UNAVAILABLE),
         }
         strategy: dict[str, Any] = {}

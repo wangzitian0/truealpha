@@ -66,11 +66,9 @@ from data_engine import raw_store
 from data_engine.datahub.canonical_issuer import (
     ConflictingPredecessorError as ConflictingPredecessorError,
 )
-from data_engine.datahub.canonical_issuer import (
-    stored_entity_of,
-    ticker_sort_key,
-)
+from data_engine.datahub.canonical_issuer import stored_entity_of
 from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
@@ -399,13 +397,13 @@ def latest_financial_observations(
     known_at: datetime,
     parser_version: str = PARSER_VERSION,
 ) -> dict[str, tuple[dict[str, Any], str]]:
-    """Per entity, the payload and source record id of the financial-fact observation of its preferred listing.
+    """Per entity, the payload and source record id of the financial-fact observation of its primary listing.
 
     The candidates are the observations recorded under any of the entity's ids (#1257: a legacy id and
-    the entity UUID name one issuer). The ticker of each listing selects the listing (``ticker_sort_key``,
-    #1347). ``_ticker_of`` reads that ticker at ``known_at``. The primary share class comes first, then
-    the ticker text. Inside one ticker the newest observation wins, then the lower listing id.
-    An observation id never selects between two listings. One tick writes every listing of an issuer
+    the entity UUID name one issuer). `choose_primary_listings` selects the listing at ``known_at`` (#1518).
+    An entity with several listings and no declared primary listing is not in the answer: no listing
+    values it, so the caller reports it as unresolved. Inside the chosen listing the newest observation
+    wins. An observation id never selects between two listings. One tick writes every listing of an issuer
     with one ``recorded_at`` and one ``knowable_at``, so that order changed from tick to tick.
     """
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
@@ -421,12 +419,16 @@ def latest_financial_observations(
     candidates: dict[str, list[tuple[dict[str, Any], str]]] = {}
     for entity_id, payload, record_id in rows:
         candidates.setdefault(str(entity_id), []).append((dict(payload), str(record_id)))
-    # `min` keeps the first of equal keys, and the rows of one entity come newest first.
+    chosen = choose_primary_listings(
+        connection,
+        {entity_id: [str(item[0]["listing_id"]) for item in found] for entity_id, found in candidates.items()},
+        known_at=known_at,
+    )
+    # The rows of one entity come newest first, so `next` takes the newest observation of the chosen listing.
     return {
-        entity_id: min(
-            found, key=lambda item: ticker_sort_key(_ticker_of(str(item[0]["listing_id"]), connection, known_at))
-        )
+        entity_id: next(item for item in found if str(item[0]["listing_id"]) == chosen[entity_id])
         for entity_id, found in candidates.items()
+        if chosen[entity_id] is not None
     }
 
 

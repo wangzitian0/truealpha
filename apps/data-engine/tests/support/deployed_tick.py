@@ -76,5 +76,9 @@ def run_deployed_tick(monkeypatch: Any, op: Any, *, connection: Any = None, mate
     monkeypatch.setattr(capture, "judge_issuers", lambda *_a, **_k: passing)
     monkeypatch.setattr(capture, "judge_strategy", lambda *_a, **_k: passing)
     monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *_a, **_k: [])
+    # #1518: the tick also reads the issuers with several listings and no declared primary listing. These tests
+    # drive the op without a run to read, so none exists here. The real op is driven in
+    # production_topt/test_primary_listing_one_producer.py, against a database.
+    monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *_a, **_k: ())
     monkeypatch.setattr(capture, "materialize_fund_consolidation", materialize or (lambda *_a, **_k: ()))
     op(dg.build_op_context(), capture.ToptLiveTickConfig(executed_at=CUTOFF.isoformat()))
