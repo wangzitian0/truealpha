@@ -59,7 +59,7 @@ def _budget_gate(spent: int):
     now = datetime(2026, 9, 16, 22, 20, tzinfo=UTC)
     return gateway.CapacityGate(
         capacities={
-            "twelvedata": gateway.SourceCapacity("twelvedata", 60.0, 8, 800, environment_shares=(("production", 60),)),
+            "twelvedata": gateway.CAPACITIES["twelvedata"],
             "yahoo": gateway.SourceCapacity("yahoo", 1.0, 2, 10),
         },
         environment="production",

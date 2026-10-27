@@ -1,9 +1,15 @@
-"""Single source of truth for environment scope, sentinels, known answers, and derived vendor shares (#1416).
+"""Single source of truth for environment scope, sentinels, known answers, and vendor accounts (#1416, #1520).
 
 Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` from
 ``truealpha_contracts.data``. Both Python lanes and the generated TypeScript module
 (``apps/app-web/src/contracts/environmentContract.generated.ts``) derive their rules
 from this contract so no environment schedule or vendor share is hand-mirrored.
+
+Every vendor account that more than one environment calls has one row in ``vendor_accounts`` (#1520).
+The row holds each limit of the vendor with its evidence, and one percent per environment.
+``account_share`` is the one function that turns a limit and a percent into a number of calls.
+The share is ``amount * percent // 100``, an integer floor, in the window of the limit.
+No other file keeps a vendor figure, a percent or a demand estimate.
 
 Every universe has one record in ``universes`` (#1522): its key, id prefix, lane name, membership, roles,
 price series flag, report sample and tick cron per environment. No other file keeps its own copy or list of
@@ -25,9 +31,9 @@ import math
 from collections.abc import Mapping
 from decimal import Decimal
 from importlib import resources
-from typing import Literal, Self
+from typing import Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts.common import canonical_sha256
 
@@ -183,7 +189,6 @@ class EnvironmentSpec(_StrictFrozenModel):
     live_vendor_calls: bool
     universes: tuple[EnvironmentUniverse, ...]
     ticks: Mapping[str, EnvironmentTickContract]
-    planned_daily_demand: Mapping[str, int]
 
     @model_validator(mode="after")
     def _a_universe_is_listed_once(self) -> Self:
@@ -193,9 +198,202 @@ class EnvironmentSpec(_StrictFrozenModel):
         return self
 
 
-class SharedSeatSpec(_StrictFrozenModel):
-    shared_credential: str = Field(min_length=1)
-    allocation_basis: Literal["planned_daily_demand"]
+#: The window of a request limit that the gate reads as a daily budget. The gate counts from 00:00 UTC.
+DAY_SECONDS = 86_400
+_ENVIRONMENT_KEYS: tuple[str, ...] = get_args(EnvironmentKey)
+#: Who holds the credential of the account. An environment that the percent table does not name (local, CI)
+#: gets the whole figure of a ``host_ip`` account (another host has another address) and no call to any other.
+AccountHolder = Literal["api_key", "host_ip", "account"]
+#: What the vendor counts a limit per. ``not_stated``: the vendor page does not say. The contract then reads
+#: one counter for all endpoints, processes and environments, at the smallest published figure.
+CountsPer = Literal["api_key", "host_ip", "account", "endpoint", "connection", "not_stated"]
+LimitUnit = Literal["request", "distinct_stock"]
+#: ``published``: a vendor page states the figure. ``measured``: we measured it. ``none_published``: the vendor
+#: states no figure. ``not_known``: no figure is known. ``self_imposed``: our own pace, never divided.
+EvidenceKind = Literal["published", "measured", "none_published", "not_known", "self_imposed"]
+_ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
+
+
+class UnknownVendorAccount(LookupError):
+    """An account or seat name that no row of ``vendor_accounts`` holds."""
+
+
+def _check_percents(owner: str, percent: Mapping[EnvironmentKey, int]) -> None:
+    if set(percent) != set(_ENVIRONMENT_KEYS):
+        raise ValueError(f"{owner}: the percent table names {sorted(percent)}, not {sorted(_ENVIRONMENT_KEYS)}")
+    if any(not 0 <= value <= 100 for value in percent.values()):
+        raise ValueError(f"{owner}: a percent is an integer from 0 to 100: {dict(percent)}")
+    if sum(percent.values()) > 100:
+        raise ValueError(f"{owner}: the percents sum past 100: {dict(percent)}")
+
+
+class LimitEvidence(_StrictFrozenModel):
+    """Where the figure of a limit comes from. The kind fixes which fields hold a value and which stay empty."""
+
+    kind: EvidenceKind
+    source: tuple[str, ...] = ()
+    checked_at: str | None = Field(default=None, pattern=_ISO_DATE)
+    method: str | None = Field(default=None, min_length=1)
+    reason: str | None = Field(default=None, min_length=1)
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _one_source_may_be_a_bare_string(cls, value: object) -> object:
+        """A JSON list is a tuple here (strict mode takes no list). A bare string is one source."""
+        if isinstance(value, str):
+            return (value,)
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _the_kind_fixes_the_fields(self) -> Self:
+        needs = {
+            "published": {"source", "checked_at"},
+            "measured": {"method", "checked_at"},
+            "none_published": {"reason"},
+            "not_known": {"reason"},
+            "self_imposed": {"reason", "checked_at"},
+        }[self.kind]
+        optional = {"measured": {"source"}, "none_published": {"source", "checked_at"}}.get(self.kind, set())
+        held = {name for name in ("source", "checked_at", "method", "reason") if getattr(self, name)}
+        if needs - held or held - needs - optional:
+            raise ValueError(
+                f"{self.kind} evidence needs {sorted(needs)}: missing {sorted(needs - held)}, "
+                f"stray {sorted(held - needs - optional)}"
+            )
+        if any(not url.startswith("https://") for url in self.source):
+            raise ValueError(f"{self.kind} evidence names a source that is no https URL: {self.source}")
+        return self
+
+
+class VendorLimit(_StrictFrozenModel):
+    """One limit of a vendor account. A limit with no amount is shown and never invented."""
+
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
+    unit: LimitUnit
+    amount: int | None = Field(default=None, gt=0)
+    window_seconds: int | None = Field(default=None, gt=0)
+    counts_per: CountsPer
+    applies_to: str | None = Field(default=None, min_length=1)
+    evidence: LimitEvidence
+
+    @model_validator(mode="after")
+    def _the_evidence_fixes_the_amount(self) -> Self:
+        has_figure = self.evidence.kind in ("published", "measured", "self_imposed")
+        if has_figure != (self.amount is not None):
+            raise ValueError(
+                f"{self.id}: {self.evidence.kind} evidence "
+                f"{'needs an amount' if has_figure else 'carries no amount'}, got {self.amount}"
+            )
+        if self.amount is not None and self.window_seconds is None:
+            raise ValueError(f"{self.id}: a limit with an amount needs a window")
+        return self
+
+    @property
+    def divided(self) -> bool:
+        """Whether the environments split the amount. Our own pace (``self_imposed``) is whole for each."""
+        return self.amount is not None and self.evidence.kind != "self_imposed"
+
+
+class VendorAccount(_StrictFrozenModel):
+    """The one row of a vendor account that several environments call (#1520).
+
+    ``seats`` are the ledger seats that draw from the account: the gate counts the calls of all of them
+    against each limit. ``percent`` replaces the default percent of the table, and ``percent_reason`` says why.
+    ``outside_consumers``: other users spend the same account, so no percent describes it.
+    """
+
+    holder: AccountHolder
+    seats: tuple[str, ...] = Field(min_length=1)
+    outside_consumers: bool
+    percent: Mapping[EnvironmentKey, int] | None = None
+    percent_reason: str | None = Field(default=None, min_length=1)
+    note: str | None = Field(default=None, min_length=1)
+    limits: tuple[VendorLimit, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _the_row_is_consistent(self) -> Self:
+        if len(set(self.seats)) != len(self.seats):
+            raise ValueError(f"a seat is listed twice: {self.seats}")
+        ids = [limit.id for limit in self.limits]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"a limit id is listed twice: {ids}")
+        windows = [
+            limit.window_seconds for limit in self.limits if limit.unit == "request" and limit.amount is not None
+        ]
+        if len(set(windows)) != len(windows):
+            raise ValueError(f"two request limits share one window: {windows}")
+        if (self.percent is None) != (self.percent_reason is None):
+            raise ValueError("a percent override and its percent_reason go together")
+        if self.percent is not None:
+            if self.outside_consumers:
+                raise ValueError("an account with outside consumers has no percent")
+            _check_percents("percent override", self.percent)
+        return self
+
+
+class VendorAccounts(_StrictFrozenModel):
+    """Every vendor account, and the default percent of each environment (owner decision D4, 2026-10-26)."""
+
+    description: str = Field(min_length=1)
+    default_percent: Mapping[EnvironmentKey, int]
+    accounts: Mapping[str, VendorAccount] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _the_table_is_consistent(self) -> Self:
+        _check_percents("default_percent", self.default_percent)
+        seats = [seat for row in self.accounts.values() for seat in row.seats]
+        if len(set(seats)) != len(seats):
+            raise ValueError(f"a seat belongs to two accounts: {sorted(seats)}")
+        return self
+
+    def account_of_seat(self, seat: str) -> str:
+        """The name of the one account that the ledger seat ``seat`` draws from."""
+        for name, row in self.accounts.items():
+            if seat in row.seats:
+                return name
+        raise UnknownVendorAccount(f"{seat!r} is the seat of no vendor account: {sorted(self.accounts)}")
+
+    def percent_of(self, account: str, environment: str) -> int | None:
+        """The percent of ``environment`` in ``account``, or None when the table does not name the environment."""
+        row = self.accounts[account]
+        table = row.percent if row.percent is not None else self.default_percent
+        return next((value for key, value in table.items() if key == environment), None)
+
+
+class LimitShare(_StrictFrozenModel):
+    """What one environment may spend of one limit. ``share`` is None when the limit has no amount."""
+
+    limit_id: str
+    unit: LimitUnit
+    window_seconds: int | None
+    amount: int | None
+    share: int | None
+    divided: bool
+
+
+class AccountShare(_StrictFrozenModel):
+    """What one environment may spend of one vendor account, limit by limit (`account_share`)."""
+
+    account: str
+    environment: str
+    percent: int
+    limits: tuple[LimitShare, ...]
+
+    def share_in_window(self, window_seconds: int) -> int | None:
+        """The calls that the environment may make in a window of ``window_seconds``, or None when no limit has one."""
+        return next(
+            (
+                limit.share
+                for limit in self.limits
+                if limit.unit == "request" and limit.window_seconds == window_seconds and limit.share is not None
+            ),
+            None,
+        )
+
+    @property
+    def admits_a_call(self) -> bool:
+        """False when the share of any request limit is below one call: the environment may not call the account."""
+        return all(limit.share >= 1 for limit in self.limits if limit.unit == "request" and limit.share is not None)
 
 
 class MeasuredRunTimes(_StrictFrozenModel):
@@ -466,7 +664,7 @@ class EnvironmentContract(_StrictFrozenModel):
     sentinels: tuple[SentinelMember, ...]
     universes: Mapping[str, UniverseRecord] = Field(min_length=1)
     environments: Mapping[str, EnvironmentSpec]
-    shared_physical_seats: Mapping[str, SharedSeatSpec]
+    vendor_accounts: VendorAccounts
     run_time_bounds: RunTimeBounds
     code_server_capacity: CodeServerCapacity
     model_seat: ModelSeatContract
@@ -514,6 +712,8 @@ class EnvironmentContract(_StrictFrozenModel):
         unknown = sorted(set(self.model_seat.environments) - set(self.environments))
         if unknown:
             raise ValueError(f"model seat limits name unknown environments: {unknown}")
+        if self.model_seat.seat not in self.vendor_seats:
+            raise ValueError(f"the model seat {self.model_seat.seat!r} belongs to no vendor account")
         for spec in self.environments.values():
             for universe in spec.universes:
                 if universe.unlock is None:
@@ -675,33 +875,48 @@ class EnvironmentContract(_StrictFrozenModel):
         prefixes = self.unscheduled_id_prefixes().get(self.normalize_environment(environment))
         return prefixes is None or not universe_id.startswith(prefixes)
 
-    def derived_environment_shares(self, seat: str) -> tuple[tuple[str, int], ...]:
-        """Derive percentage shares ``(environment, percent)`` for a shared physical seat (#1416 E3).
+    @property
+    def vendor_seats(self) -> tuple[str, ...]:
+        """Every ledger seat that draws from a vendor account, in contract order."""
+        return tuple(seat for row in self.vendor_accounts.accounts.values() for seat in row.seats)
 
-        Each active live environment's planned daily demand for ``seat`` is divided by the total
-        planned demand across live environments and floored to integer percentages summing to <= 100.
+    def account_of_seat(self, seat: str) -> str:
+        """The name of the one vendor account that the ledger seat ``seat`` draws from (#1520)."""
+        return self.vendor_accounts.account_of_seat(seat)
+
+    def account_share(self, account: str, environment: str | None) -> AccountShare:
+        """What ``environment`` may spend of each limit of ``account`` (#1520).
+
+        The share of a limit is ``amount * percent // 100``, an integer floor, in the window of the limit.
+        The shares of the environments sum to at most the amount. The function never rounds up and never
+        stretches a window. A share of 0 (percent 0, or a floor of 0) is no error: ``admits_a_call`` is False.
+        A limit with the evidence kind ``self_imposed`` is whole for every environment. A limit with no amount
+        has no share. An environment that the percent table does not name (local, CI) gets 100 percent of a
+        ``host_ip`` account and 0 percent of any other account.
         """
-        if seat not in self.shared_physical_seats:
-            return ()
-        demands: list[tuple[str, int]] = []
-        for env_name in ("production", "staging"):
-            spec = self.environments[env_name]
-            demand = int(spec.planned_daily_demand.get(seat, 0))
-            if demand > 0:
-                demands.append((env_name, demand))
-        total = sum(demand for _, demand in demands)
-        if total <= 0:
-            return ()
-        shares: list[tuple[str, int]] = []
-        allocated = 0
-        for index, (env_name, demand) in enumerate(demands):
-            if index == len(demands) - 1:
-                percent = max(1, 100 - allocated)
-            else:
-                percent = max(1, round(demand * 100 / total))
-                allocated += percent
-            shares.append((env_name, percent))
-        return tuple(shares)
+        row = self.vendor_accounts.accounts.get(account)
+        if row is None:
+            raise UnknownVendorAccount(f"{account!r} is no vendor account: {sorted(self.vendor_accounts.accounts)}")
+        named = self.normalize_environment(environment)
+        percent = self.vendor_accounts.percent_of(account, named)
+        if percent is None:
+            percent = 100 if row.holder == "host_ip" else 0
+        return AccountShare(
+            account=account,
+            environment=named,
+            percent=percent,
+            limits=tuple(
+                LimitShare(
+                    limit_id=limit.id,
+                    unit=limit.unit,
+                    window_seconds=limit.window_seconds,
+                    amount=limit.amount,
+                    share=limit.amount * percent // 100 if limit.amount is not None and limit.divided else limit.amount,
+                    divided=limit.divided,
+                )
+                for limit in row.limits
+            ),
+        )
 
 
 class SentinelKnownAnswer(_StrictFrozenModel):

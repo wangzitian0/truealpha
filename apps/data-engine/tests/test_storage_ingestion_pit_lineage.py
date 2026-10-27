@@ -39,7 +39,6 @@ from data_engine.datahub.production_topt.source_registrations import (
     REGISTRATIONS,
     CapacityDeclaration,
     OriginRegistration,
-    environment_share,
 )
 from data_engine.datahub.production_topt.status_dimensions import (
     availability_status_for,
@@ -80,32 +79,6 @@ def test_quota_ssot_all_registrations_and_origins_bind_declared_seat() -> None:
     }
     assert {"yahoo", "twelvedata", "moomoo"} <= set(all_seats)
     assert registry.registration_for("financial-fact").ledger_seat == "sec"
-
-
-def test_quota_ssot_capacity_constraints_and_environment_shares() -> None:
-    """Capacity declarations must enforce positive rate bounds and safe environment shares."""
-    for seat_name, declaration in LEDGER_CAPACITIES.items():
-        assert declaration.calls_per_window > 0, f"seat {seat_name} calls per window must be positive"
-        assert declaration.window_seconds > 0, f"seat {seat_name} window seconds must be positive"
-        if declaration.daily_budget is not None:
-            assert declaration.daily_budget > 0, f"seat {seat_name} daily budget must be positive"
-
-        # Validate that declared environment shares fit within total capacity
-        if declaration.environment_shares:
-            shares_dict = dict(declaration.environment_shares)
-            assert set(shares_dict.keys()) <= {"production", "staging"}
-            assert sum(shares_dict.values()) <= 100
-
-            if declaration.calls_per_window is not None:
-                prod_calls = environment_share(
-                    declaration.calls_per_window, declaration.environment_shares, "production"
-                )
-                staging_calls = environment_share(
-                    declaration.calls_per_window, declaration.environment_shares, "staging"
-                )
-                assert prod_calls is not None and prod_calls > 0
-                assert staging_calls is not None and staging_calls > 0
-                assert prod_calls + staging_calls <= declaration.calls_per_window
 
 
 def test_quota_ssot_origin_registration_refuses_undeclared_or_conflicting_seat() -> None:

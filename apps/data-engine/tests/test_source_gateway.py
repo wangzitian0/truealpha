@@ -192,9 +192,9 @@ def test_credential_query_keys_are_blanked_whatever_their_casing() -> None:
 def test_capacity_windows_follow_what_the_registry_declares() -> None:
     at = datetime(2026, 9, 4, 22, 15, 30, tzinfo=UTC)
     assert gateway.capacity_window_id("twelvedata", at) == "twelvedata:day:2026-09-04", "daily budget wins"
-    assert gateway.capacity_window_id("openfigi", at) == f"openfigi:6s:{int(at.timestamp() // 6)}"
-    # Yahoo publishes no limit; the ceiling is ours and is budgeted like any other (#729).
-    assert gateway.capacity_window_id("yahoo", at) == "yahoo:day:2026-09-04"
+    assert gateway.capacity_window_id("openfigi", at) == f"openfigi:60s:{int(at.timestamp() // 60)}"
+    # Yahoo publishes no limit; the pace is ours and has no daily budget (OD2 A of #1520): a rate window only.
+    assert gateway.capacity_window_id("yahoo", at) == f"yahoo:1s:{int(at.timestamp())}"
     assert gateway.capacity_window_id("never-heard-of", at) is None
 
 
@@ -765,11 +765,11 @@ def test_an_undeclared_or_unbudgeted_source_cannot_be_called_through_the_gateway
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
         gw.call("yahoo", "quote", lambda: None, identity=_key("yahoo", "quote"))
-    gw_default = gateway.SourceGateway(_Ledger(), caller="test")
-    with pytest.raises(gateway.CapacityExceeded, match="needs a rate window and a daily budget"):
-        gw_default.call(
-            "openfigi", "mapping", lambda: None, identity=_key("openfigi", "mapping")
-        )  # declared, but paced only: no daily budget
+    unwindowed = gateway.SourceGateway(
+        _Ledger(), caller="test", capacities={"budget-only": gateway.SourceCapacity("budget-only", None, None, 5)}
+    )
+    with pytest.raises(gateway.CapacityExceeded, match="needs a rate window"):
+        unwindowed.call("budget-only", "mapping", lambda: None, identity=_key("budget-only", "mapping"))
 
 
 def test_capacity_must_be_positive_and_paired() -> None:
@@ -778,6 +778,7 @@ def test_capacity_must_be_positive_and_paired() -> None:
     with pytest.raises(ValueError):
         gateway.SourceCapacity("sec", 1.0, None, 100)
     assert gateway.SourceCapacity("yahoo", None, None, None).enforceable is False
+    assert gateway.SourceCapacity("sec", 1.0, 8, None).enforceable is True, "a rate window is enough (#1520)"
 
 
 # --- rule 6 enforced (#729 criterion 4): one declaration, queue on the rate, refuse on budget
@@ -813,17 +814,18 @@ def test_the_gateways_capacities_are_the_registrys_and_nothing_else() -> None:
     assert set(gateway.CAPACITIES) == set(LEDGER_CAPACITIES)
     for seat, declared in LEDGER_CAPACITIES.items():
         view = gateway.CAPACITIES[seat]
-        assert (view.window_seconds, view.calls_per_window, view.daily_budget, view.environment_shares) == (
+        assert (view.window_seconds, view.calls_per_window, view.daily_budget, view.account) == (
             declared.window_seconds,
             declared.calls_per_window,
             declared.daily_budget,
-            declared.environment_shares,
+            declared.account,
         ), seat
     assert 'SourceCapacity("' not in (SRC / "sources" / "gateway.py").read_text(), "the gateway writes no number"
-    # The reconciled figures, against each vendor's published limit.
-    sec, moomoo, twelve = (gateway.CAPACITIES[seat] for seat in ("sec", "moomoo", "twelvedata"))
-    assert (sec.calls_per_window, sec.window_seconds) == (8, 1.0), "8 of SEC's 10 requests/second"
-    assert (moomoo.calls_per_window, moomoo.window_seconds) == (8, 30.0), "what moomoo_ledger paces"
+    # The whole-account figures are the published limits of the vendors (the contract row holds them).
+    sec, nport, moomoo, twelve = (gateway.CAPACITIES[seat] for seat in ("sec", "nport", "moomoo", "twelvedata"))
+    assert (sec.calls_per_window, sec.window_seconds, sec.daily_budget) == (10, 1.0, None), "SEC: 10 a second"
+    assert (nport.calls_per_window, nport.pool) == (10, ("sec", "nport")), "N-PORT shares the SEC counter"
+    assert (moomoo.calls_per_window, moomoo.window_seconds) == (30, 30.0), "moomoo: 30 requests in 30 s"
     assert (twelve.calls_per_window, twelve.window_seconds, twelve.daily_budget) == (8, 60.0, 800)
 
 
@@ -832,7 +834,8 @@ def test_every_deployed_ledger_source_has_a_declared_seat() -> None:
     from truealpha_contracts.models import DataSource
 
     vendors = {source.value for source in DataSource} - {"release"}  # release-frozen config calls nobody
-    assert vendors | {llm.SOURCE, "search"} <= set(gateway.CAPACITIES)
+    assert vendors | {llm.SOURCE} <= set(gateway.CAPACITIES)
+    assert "search" not in gateway.CAPACITIES, "the placeholder seat had no caller (#1520)"
 
 
 def test_a_shared_seat_spends_only_this_environments_share() -> None:
@@ -844,7 +847,8 @@ def test_a_shared_seat_spends_only_this_environments_share() -> None:
     assert production is not None and staging is not None
     assert (production.daily_budget, production.calls_per_window) == (480, 4)
     assert (staging.daily_budget, staging.calls_per_window) == (320, 3)
-    assert seat.in_environment("local_dev") is None, "an environment the split does not name has no share"
+    assert seat.in_environment("preview") is None, "a share of 0 is a share below one call"
+    assert seat.in_environment("local_dev") is None, "an environment the table does not name has no share"
 
     production_ledger, staging_ledger = gateway.MemoryLedger(), gateway.MemoryLedger()
     production_ledger.extend(_seat_rows("twelvedata", 480))
@@ -852,7 +856,7 @@ def test_a_shared_seat_spends_only_this_environments_share() -> None:
     with pytest.raises(gateway.BudgetExhausted, match=r"daily budget 480 spent \(480 calls today\) in production"):
         _gate(production_ledger, seat).admit("twelvedata")
     _gate(staging_ledger, seat, environment="staging").admit("twelvedata")  # staging's 320th
-    with pytest.raises(gateway.BudgetExhausted, match="no share of the seat's shared daily budget .* local_dev"):
+    with pytest.raises(gateway.ShareBelowOneCall, match="share_below_one_call: the twelvedata account .* local_dev"):
         _gate(gateway.MemoryLedger(), seat, environment="local_dev").admit("twelvedata")
 
 

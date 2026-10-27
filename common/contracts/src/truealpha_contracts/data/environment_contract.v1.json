@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "1.11.0",
-  "description": "Single source of truth for every universe (one record each: key, id prefix, lane name, membership, roles, report sample, tick cron), the universes each environment runs (a list, with the status of each: scheduled or stopped), sentinel set, shared vendor capacity demand (#1416), the maximum runtime of every Dagster job (#1442), the memory capacity of the Dagster code server (#1467), and the retry, pacing and probe slots of the model seat (#1444).",
+  "contract_version": "2.0.0",
+  "description": "Single source of truth for every universe (one record each: key, id prefix, lane name, membership, roles, report sample, tick cron), the universes each environment runs (a list, with the status of each: scheduled or stopped), sentinel set, the vendor accounts that several environments call with their limits, evidence and the percent of each environment (#1520), the maximum runtime of every Dagster job (#1442), the memory capacity of the Dagster code server (#1467), and the retry, pacing and probe slots of the model seat (#1444).",
   "sentinels": [
     {
       "ticker": "AAPL",
@@ -135,13 +135,7 @@
       "trigger": "platform_paths_or_weekly",
       "live_vendor_calls": false,
       "universes": [],
-      "ticks": {},
-      "planned_daily_demand": {
-        "twelvedata": 0,
-        "sec": 0,
-        "yahoo": 0,
-        "moomoo": 0
-      }
+      "ticks": {}
     },
     "staging": {
       "environment": "staging",
@@ -157,12 +151,6 @@
         "canary": {
           "estimated_listings": 6
         }
-      },
-      "planned_daily_demand": {
-        "twelvedata": 240,
-        "sec": 1200,
-        "yahoo": 300,
-        "moomoo": 200
       }
     },
     "production": {
@@ -194,31 +182,210 @@
         "canary": {
           "estimated_listings": 6
         }
-      },
-      "planned_daily_demand": {
-        "twelvedata": 360,
-        "sec": 2400,
-        "yahoo": 900,
-        "moomoo": 400
       }
     }
   },
-  "shared_physical_seats": {
-    "twelvedata": {
-      "shared_credential": "single_api_key",
-      "allocation_basis": "planned_daily_demand"
-    },
-    "sec": {
-      "shared_credential": "single_host_ip",
-      "allocation_basis": "planned_daily_demand"
-    },
-    "yahoo": {
-      "shared_credential": "single_host_ip",
-      "allocation_basis": "planned_daily_demand"
-    },
-    "moomoo": {
-      "shared_credential": "single_opend_account",
-      "allocation_basis": "planned_daily_demand"
+  "vendor_accounts": {
+    "description": "Every vendor account that more than one environment calls has one row here (#1520). A row holds the limits of the vendor, each with its evidence, and the percent of each environment. Each environment spends its percent of each limit and enforces it from its own ledger. The share of a limit is amount x percent // 100 (integer floor), in the window of the limit, so the shares of the environments never sum past the amount. A share of 0 is not an error: the environment makes no call to that account. A limit with the evidence kind self_imposed is our own pace: it is never divided. A limit with no amount (none_published, not_known) is shown and never invented. An environment that this table does not name (local, CI) gets the whole figure of a host_ip account and no call to any other account. The percent values are owner policy (D4 of 2026-10-26).",
+    "default_percent": {"preview": 20, "staging": 20, "production": 60},
+    "accounts": {
+      "twelvedata": {
+        "holder": "api_key",
+        "seats": ["twelvedata"],
+        "outside_consumers": false,
+        "percent": {"preview": 0, "staging": 40, "production": 60},
+        "percent_reason": "Working choice OD3 A of #1520, recorded 2026-10-27 and not yet an owner approval. It keeps the split that staging and production ran before this row: 3 and 4 calls a minute, 320 and 480 a day. Preview calls no Twelve Data endpoint.",
+        "limits": [
+          {
+            "id": "per_minute",
+            "unit": "request",
+            "amount": 8,
+            "window_seconds": 60,
+            "counts_per": "api_key",
+            "evidence": {"kind": "published", "source": ["https://twelvedata.com/pricing"], "checked_at": "2026-10-27"}
+          },
+          {
+            "id": "per_day",
+            "unit": "request",
+            "amount": 800,
+            "window_seconds": 86400,
+            "counts_per": "api_key",
+            "evidence": {"kind": "published", "source": ["https://twelvedata.com/pricing"], "checked_at": "2026-10-27"}
+          }
+        ]
+      },
+      "sec_edgar": {
+        "holder": "host_ip",
+        "seats": ["sec", "nport"],
+        "outside_consumers": false,
+        "limits": [
+          {
+            "id": "per_second",
+            "unit": "request",
+            "amount": 10,
+            "window_seconds": 1,
+            "counts_per": "not_stated",
+            "applies_to": "All SEC hosts that the sec and nport seats call share one counter. The vendor publishes no daily limit.",
+            "evidence": {
+              "kind": "published",
+              "source": ["https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data"],
+              "checked_at": "2026-10-27"
+            }
+          }
+        ]
+      },
+      "openfigi": {
+        "holder": "api_key",
+        "seats": ["openfigi"],
+        "outside_consumers": false,
+        "note": "Whether staging and production use one key is not verified here. The key is held in infra2.",
+        "limits": [
+          {
+            "id": "per_minute",
+            "unit": "request",
+            "amount": 250,
+            "window_seconds": 60,
+            "counts_per": "api_key",
+            "applies_to": "Mapping requests with an API key. Each window starts with the first request.",
+            "evidence": {"kind": "published", "source": ["https://www.openfigi.com/api/documentation"], "checked_at": "2026-10-27"}
+          }
+        ]
+      },
+      "moomoo_opend": {
+        "holder": "account",
+        "seats": ["moomoo"],
+        "outside_consumers": false,
+        "limits": [
+          {
+            "id": "burst",
+            "unit": "request",
+            "amount": 30,
+            "window_seconds": 30,
+            "counts_per": "not_stated",
+            "applies_to": "All endpoints, all processes and all environments, at the smallest published figure.",
+            "evidence": {
+              "kind": "published",
+              "source": [
+                "https://openapi.futunn.com/futu-api-doc/en/quote/get-research-analyst-consensus.html",
+                "https://openapi.futunn.com/futu-api-doc/en/quote/get-research-rating-summary.html",
+                "https://openapi.futunn.com/futu-api-doc/en/quote/get-valuation-detail.html",
+                "https://openapi.futunn.com/futu-api-doc/en/quote/request-history-kline.html"
+              ],
+              "checked_at": "2026-10-27"
+            }
+          },
+          {
+            "id": "kline_stocks",
+            "unit": "distinct_stock",
+            "amount": null,
+            "window_seconds": 604800,
+            "counts_per": "account",
+            "applies_to": "Distinct stocks of history K-line requests.",
+            "evidence": {
+              "kind": "not_known",
+              "reason": "The vendor sets this quota by the tier of the account and states no figure for ours. No stored reading exists yet. Step 2 of #1520 stores get_history_kl_quota readings."
+            }
+          }
+        ]
+      },
+      "yahoo": {
+        "holder": "host_ip",
+        "seats": ["yahoo"],
+        "outside_consumers": false,
+        "limits": [
+          {
+            "id": "vendor_figure",
+            "unit": "request",
+            "amount": null,
+            "counts_per": "not_stated",
+            "evidence": {"kind": "none_published", "reason": "The chart endpoint is unofficial. It has no published limit and no SLA (init.md section 9)."}
+          },
+          {
+            "id": "pace",
+            "unit": "request",
+            "amount": 2,
+            "window_seconds": 1,
+            "counts_per": "not_stated",
+            "evidence": {
+              "kind": "self_imposed",
+              "reason": "Our own pace, carried over from source_registrations.py. It stops a runaway loop. OD2 A of #1520 deletes the daily number.",
+              "checked_at": "2026-10-27"
+            }
+          }
+        ]
+      },
+      "nasdaq_index": {
+        "holder": "host_ip",
+        "seats": ["nasdaq-index"],
+        "outside_consumers": false,
+        "limits": [
+          {
+            "id": "vendor_figure",
+            "unit": "request",
+            "amount": null,
+            "counts_per": "not_stated",
+            "evidence": {"kind": "none_published", "reason": "The index-constituent endpoint publishes no limit."}
+          },
+          {
+            "id": "pace",
+            "unit": "request",
+            "amount": 1,
+            "window_seconds": 1,
+            "counts_per": "not_stated",
+            "evidence": {
+              "kind": "self_imposed",
+              "reason": "Our own pace, carried over from source_registrations.py. The weekly refresh makes one call. OD2 A of #1520 deletes the daily number.",
+              "checked_at": "2026-10-27"
+            }
+          }
+        ]
+      },
+      "us_treasury": {
+        "holder": "host_ip",
+        "seats": ["us-treasury"],
+        "outside_consumers": false,
+        "limits": [
+          {
+            "id": "vendor_figure",
+            "unit": "request",
+            "amount": null,
+            "counts_per": "not_stated",
+            "evidence": {"kind": "none_published", "reason": "The public CSV on home.treasury.gov needs no key and states no limit."}
+          },
+          {
+            "id": "pace",
+            "unit": "request",
+            "amount": 1,
+            "window_seconds": 1,
+            "counts_per": "not_stated",
+            "evidence": {
+              "kind": "self_imposed",
+              "reason": "Our own pace, carried over from source_registrations.py. The nightly run makes one request. OD2 A of #1520 deletes the daily number.",
+              "checked_at": "2026-10-27"
+            }
+          }
+        ]
+      },
+      "model_plan": {
+        "holder": "account",
+        "seats": ["filing-extraction-model"],
+        "outside_consumers": true,
+        "note": "Other users of the coding plan spend the same rate limit. The pace of each environment stays in model_seat.environments until step 5 of #1520.",
+        "limits": [
+          {
+            "id": "rate",
+            "unit": "request",
+            "amount": null,
+            "counts_per": "not_stated",
+            "evidence": {
+              "kind": "none_published",
+              "source": ["https://docs.z.ai/api-reference/api-code"],
+              "checked_at": "2026-10-27",
+              "reason": "Code 1302 means that the rate limit is reached. The page states no figure and no scope."
+            }
+          }
+        ]
+      }
     }
   },
   "run_time_bounds": {

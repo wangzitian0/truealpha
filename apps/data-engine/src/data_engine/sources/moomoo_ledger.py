@@ -9,7 +9,8 @@ Per owner directive on #1411 (K2):
      `request_history_kline` / `get_history_kline` tracks distinct stocks (`request_uri`
      codes) over the past 30 days and raises `BudgetExceededError` if a new stock would
      exceed the 2,000-stock quota.
-  2. Burst throttle (`throttle()`): 8 calls per 30 s (`LEDGER_CAPACITIES["moomoo"]`).
+  2. Burst throttle (`throttle()`): at most `MOOMOO_CALLS_PER_30S` calls per 30 s, and never past the burst
+     limit of the moomoo account in the environment contract (`LEDGER_CAPACITIES["moomoo"]`).
   3. Daily call anomaly alert (`is_daily_call_anomaly()`): warns when daily calls exceed
      `2 * MOOMOO_PLANNED_DAILY_P99`.
 
@@ -118,9 +119,9 @@ _recent_calls: deque[float] = deque()
 def throttle(*, now=time.monotonic, sleep=time.sleep) -> None:
     """Block until one more call fits the moomoo seat's window.
 
-    The window and its ceiling are the source registry's (`LEDGER_CAPACITIES["moomoo"]`,
-    rule 6: declared once); MOOMOO_CALLS_PER_30S may only LOWER the ceiling, never raise
-    it past the declaration.
+    The window and its ceiling are the source registry's (`LEDGER_CAPACITIES["moomoo"]`: the burst limit of
+    the moomoo account, rule 6); MOOMOO_CALLS_PER_30S may only LOWER the ceiling, never raise
+    it past the declaration. Step 2 of #1520 replaces this pace with admission by the share of the environment.
 
     Process-local on purpose: sweeps are single-process, and moomoo's burst
     limits are per OpenD connection anyway — a cross-process ledger-based

@@ -159,11 +159,26 @@ def test_entry_id_covers_capacity_and_ledger_seat() -> None:
     base = REGISTRATIONS[-1]
     assert replace(base, ledger_seat=None, capacity=CapacityDeclaration(1, 1)).entry_id != base.entry_id
     assert replace(base, ledger_seat="nport", capacity=None).entry_id != base.entry_id
-    split = CapacityDeclaration(8, 60, 800, environment_shares=(("production", 50),))
-    assert (
-        replace(base, ledger_seat=None, capacity=split).entry_id
-        != replace(base, ledger_seat=None, capacity=CapacityDeclaration(8, 60, 800)).entry_id
-    ), "the per-environment split is part of what the source declared"
+    whole = replace(base, ledger_seat=None, capacity=CapacityDeclaration(8, 60, 800, account="twelvedata"))
+    assert whole.entry_id != replace(base, ledger_seat=None, capacity=CapacityDeclaration(8, 60, 800)).entry_id
+
+
+def test_entry_id_covers_the_share_of_every_environment(monkeypatch) -> None:
+    """A percent that moves in the contract makes a new registration id: the shares sign the registration (#1520)."""
+    import json
+
+    from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+
+    prices = registration_for("market-price")  # origins: yahoo, twelvedata, moomoo
+    filings = registration_for("financial-fact")  # seat sec, origin moomoo: no Twelve Data
+    before = (prices.entry_id, filings.entry_id)
+    raw = json.loads(load_environment_contract().model_dump_json())
+    raw["vendor_accounts"]["accounts"]["twelvedata"]["percent"]["staging"] = 30
+    changed = EnvironmentContract.model_validate_json(json.dumps(raw))
+    monkeypatch.setattr(registry, "load_environment_contract", lambda: changed)
+
+    assert prices.entry_id != before[0]
+    assert filings.entry_id == before[1], "the percent of one account moves no registration that does not call it"
 
 
 # -- rule 6: capacity is declared once, per ledger seat, and every vendor names its seat -------
@@ -196,31 +211,3 @@ def test_a_seat_and_a_capacity_that_disagree_are_refused() -> None:
         OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="never-declared")
     origin = OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="sec")
     assert origin.capacity is registry.LEDGER_CAPACITIES["sec"]
-
-
-def test_an_environment_split_must_fit_inside_the_vendors_allowance() -> None:
-    import pytest
-    from data_engine.datahub.production_topt.source_registrations import CapacityDeclaration
-
-    with pytest.raises(ValueError, match="sum past"):
-        CapacityDeclaration(8, 60, 800, environment_shares=(("production", 60), ("staging", 50)))
-    with pytest.raises(ValueError, match="not a capture environment"):
-        CapacityDeclaration(8, 60, 800, environment_shares=(("prod", 60),))
-    with pytest.raises(ValueError, match="floors to zero"):
-        CapacityDeclaration(8, 60, 800, environment_shares=(("production", 90), ("staging", 10)))
-    with pytest.raises(ValueError, match="appears twice"):
-        CapacityDeclaration(8, 60, 800, environment_shares=(("staging", 10), ("staging", 20)))
-    with pytest.raises(ValueError, match="positive"):
-        CapacityDeclaration(8, 60, 0)
-
-    twelve = registry.LEDGER_CAPACITIES["twelvedata"]
-    assert dict(twelve.environment_shares) == {"production": 60, "staging": 40}
-    for field_value in (twelve.calls_per_window, twelve.daily_budget):
-        assert field_value is not None
-        shares = [
-            registry.environment_share(field_value, twelve.environment_shares, env) for env in ("production", "staging")
-        ]
-        assert all(share is not None and share > 0 for share in shares)
-        assert sum(share for share in shares if share is not None) <= field_value
-    assert registry.environment_share(800, twelve.environment_shares, "local_dev") is None
-    assert registry.environment_share(800, (), "local_dev") == 800, "an unsplit seat is whole everywhere"
