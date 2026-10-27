@@ -203,15 +203,6 @@ def is_universe_scheduled(universe: str, environment: str) -> bool:
     return load_environment_contract().is_universe_scheduled(universe, rule_environment(environment))
 
 
-def is_head_scheduled(universe_id: str, environment: str) -> bool:
-    """Whether `universe_id` has a running schedule in `environment` (#1256, #1416).
-
-    Delegates to `environment_contract.v1.json` and fails closed (returns True) when
-    `environment` is omitted or unrecognised, or when `universe_id` starts with no id prefix of the records.
-    """
-    return load_environment_contract().is_head_scheduled(universe_id, environment)
-
-
 @contextmanager
 def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: CorroborationTally) -> Iterator[None]:
     """A tick that fails — a capture refused for its shortfall (#538) included — still
