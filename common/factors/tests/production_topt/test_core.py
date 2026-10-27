@@ -559,3 +559,20 @@ def test_an_available_metric_cannot_carry_a_cause() -> None:
             availability=MetricAvailability.AVAILABLE,
             unavailable_reason=ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
         )
+
+
+def test_an_issuer_with_no_declared_primary_listing_is_unavailable_with_its_reason() -> None:
+    """#1518: complete inputs give no value when the snapshot builder cannot name the primary listing."""
+    complete = _compute(_snapshot())
+    undeclared = _compute(_snapshot(primary_listing_undeclared=True))
+
+    assert complete.availability.value == "available"
+    assert undeclared.availability.value == "unavailable"
+    assert undeclared.reason_codes == (ToptCoreReasonCode.PRIMARY_LISTING_UNDECLARED,)
+    assert undeclared.operating_efficiency is None and undeclared.current_ps is None
+
+
+def test_a_snapshot_input_keeps_its_serialized_form_unless_the_listing_is_undeclared() -> None:
+    """A stored factor input must keep its content hash. The key is absent unless the flag is set."""
+    assert "primary_listing_undeclared" not in _snapshot().model_dump(mode="json")
+    assert _snapshot(primary_listing_undeclared=True).model_dump(mode="json")["primary_listing_undeclared"] is True

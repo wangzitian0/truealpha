@@ -394,3 +394,39 @@ def test_an_undeclared_issuer_leaves_the_other_issuers_alone(undeclared_tick: Ti
         ).fetchone()
 
     assert row == ("available", [])
+
+
+def _stored_snapshot_payload(tick: Tick) -> dict:
+    with psycopg.connect(tick.url) as reader:
+        row = reader.execute(
+            "select payload from staging.topt_core_snapshots where run_id = %s", (tick.metadata["capture_run_id"],)
+        ).fetchone()
+    assert row is not None
+    return dict(row[0])
+
+
+def test_the_frozen_snapshot_records_the_primary_listing_on_that_member_only(declared_tick: Tick) -> None:
+    """`freeze_snapshot` records `is_primary` on the declared listing. The key is absent on every other member."""
+    members = _stored_snapshot_payload(declared_tick)["members"]
+
+    flagged = [member for member in members if "is_primary" in member]
+
+    assert [(member["listing_id"], member["is_primary"]) for member in flagged] == [
+        (declared_tick.alphabet.listings["GOOGL"], True)
+    ]
+    assert len(members) == 21, "the TOPT corpus holds 21 listings"
+
+
+def test_a_snapshot_stored_before_the_flag_reloads_and_leaves_only_alphabet_undeclared(declared_tick: Tick) -> None:
+    """A stored snapshot without `is_primary` reloads. Its sole-listing issuers keep their values. Alphabet has two
+    listings and no flag, so its factor input is unavailable (a replay of such a run reads no relation)."""
+    from data_engine.datahub.production_topt.materialization import ToptCoreSnapshot
+
+    payload = _stored_snapshot_payload(declared_tick)
+    for member in payload["members"]:
+        member.pop("is_primary", None)
+
+    snapshot = ToptCoreSnapshot.model_validate(payload)
+
+    undeclared = [item.issuer_id for item in snapshot.factor_inputs() if item.primary_listing_undeclared]
+    assert undeclared == [declared_tick.alphabet.issuer]

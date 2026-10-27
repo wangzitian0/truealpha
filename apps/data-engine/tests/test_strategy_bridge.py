@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 import pytest
@@ -161,42 +162,66 @@ def test_seed_strategy_inputs_zeroes_confidence_on_period_mismatch() -> None:
 
 
 class _RunConnection(_FakeConnection):
-    """`_FakeConnection`, and the run's listing-identity tickers for the ticker query of the seed."""
+    """`_FakeConnection` for the run's cells. Every other query goes to the real connection, as the seed asks it."""
 
-    def __init__(self, select_rows: list[tuple], tickers: list[tuple[str, str]]) -> None:
+    def __init__(self, real: Any, select_rows: list[tuple]) -> None:
         super().__init__(select_rows)
-        self._tickers = tickers
-        self.ticker_reads = 0
+        self._real = real
 
-    def execute(self, sql: str, params: tuple = ()) -> _FakeCursor:
-        if "->> 'ticker'" in sql:
-            self.ticker_reads += 1
-            return _FakeCursor(self._tickers)
-        return super().execute(sql, params)
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        if "capture_observation_payloads" in sql or sql.strip().lower().startswith("insert"):
+            return super().execute(sql, params)
+        return self._real.execute(sql, params)
 
 
-def test_the_seed_takes_the_close_of_the_primary_class_whatever_the_listing_ids() -> None:
-    """#1347: the live seed takes `last_close` from one listing of each issuer. Production listing ids
-    are entity UUIDs that no literal names, so the old rule took the lowest listing id. Red on that
-    rule: the GOOG listing holds the lower id here, and the seed wrote the GOOG close."""
+def test_the_seed_takes_the_close_of_the_declared_listing_whatever_the_listing_ids(connection) -> None:
+    """#1518: the live seed takes `last_close` from one listing of each issuer: the one that a `primary_listing`
+    row names. Production listing ids are entity UUIDs that no literal names. The old rule took the lowest
+    listing id, and the GOOG listing holds the lower id here. An issuer with no declared listing gets no input."""
     import data_engine.datahub.strategy_bridge as strategy_bridge
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
     cutoff = datetime(2026, 1, 1, tzinfo=UTC)
-    issuer = "00000000-1347-5000-8000-000000000000"
-    goog, googl = "10000000-0000-5000-8000-000000000000", "90000000-0000-5000-8000-000000000000"
+
+    def entities(issuer: str, trios: list[tuple[str, str, str]]) -> list[str]:
+        coordinates = resolve_coordinates(
+            connection,
+            [[issuer, instrument, listing, ticker] for instrument, listing, ticker in trios],
+            as_of=cutoff.date(),
+            known_at=cutoff,
+        )
+        issuer_id = coordinates[trios[0][1]][0]
+        return [issuer_id, *(coordinates[listing][2] for _instrument, listing, _ticker in trios)]
+
+    alphabet, goog, googl = entities(
+        "issuer:lei:5493006MHB84DD0ZWV18",
+        [
+            ("security:cusip:02079K107", "listing:xnas:goog", "GOOG"),
+            ("security:cusip:02079K305", "listing:xnas:googl", "GOOGL"),
+        ],
+    )
+    fox, foxa, fox_b = entities(
+        "issuer:cik:0001754301",
+        [
+            ("security:cusip:35137L105", "listing:xnas:foxa", "FOXA"),
+            ("security:cusip:35137L204", "listing:xnas:fox", "FOX"),
+        ],
+    )
+    assert goog < googl, "the GOOG listing holds the lower id"
     rows = [
-        ("market-price", "0.9", {"issuer_id": issuer, "listing_id": goog, "close": "100.00"}, cutoff),
-        ("market-price", "0.9", {"issuer_id": issuer, "listing_id": googl, "close": "101.00"}, cutoff),
+        ("market-price", "0.9", {"issuer_id": alphabet, "listing_id": goog, "close": "100.00"}, cutoff),
+        ("market-price", "0.9", {"issuer_id": alphabet, "listing_id": googl, "close": "101.00"}, cutoff),
+        ("market-price", "0.9", {"issuer_id": fox, "listing_id": foxa, "close": "50.00"}, cutoff),
+        ("market-price", "0.9", {"issuer_id": fox, "listing_id": fox_b, "close": "49.00"}, cutoff),
     ]
     for ordered in (rows, list(reversed(rows))):
-        fake = _RunConnection(ordered, [(goog, "GOOG"), (googl, "GOOGL")])
+        fake = _RunConnection(connection, ordered)
 
         written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test", cutoff=cutoff)
 
-        assert written == 1
+        assert written == 1, "Alphabet is seeded, and Fox has no declared listing"
         ((issuer_id, _cutoff, input_key, value, *_rest),) = fake.inserts
-        assert (issuer_id, input_key, value) == (issuer, "last_close", "101.00"), "the GOOGL close, never GOOG's"
-        assert fake.ticker_reads == 1, "the seed reads the run's tickers once"
+        assert (issuer_id, input_key, value) == (alphabet, "last_close", "101.00"), "the GOOGL close, never GOOG's"
 
 
 def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> None:

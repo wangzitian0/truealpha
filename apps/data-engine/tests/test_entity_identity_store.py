@@ -790,20 +790,31 @@ def test_the_sensor_launches_once_for_new_evidence_and_is_otherwise_quiet(fresh_
 
 def test_entity_identity_views_follow_the_primary_listing_relation(connection) -> None:
     """#1518: the resolver writes `primary_listing` from `primary_listings.v1.json`. `mart.entity_identity`
-    and `mart.entity_display_resolution` read it, even when the secondary class is recorded after the
-    primary class."""
+    reads it, even when the secondary class is recorded after the primary class. Before the resolver ran,
+    no row names a listing, and the view has no ticker literal to fall back on."""
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
+
     # Seed GOOGL first and GOOG second (newer transaction_time) so recency alone would pick GOOG.
     _seed_both_universes(connection)
     _seed_nport_crosswalk(connection, GOOGL, GOOG)
     assert _backfill(connection)["failed"] == []
-
     issuer_entity = _resolve(connection, "cik", GOOGL["cik"])
+    declared = "select count(*) from staging.entity_relations where relation_type = 'primary_listing'"
+    assert connection.execute(declared).fetchone() == (0,)
+
+    trios = [
+        [
+            f"issuer:lei:{ids['lei']}",
+            f"security:cusip:{ids['cusip']}",
+            ids["listing"],
+            ids["listing"].split(":")[2].upper(),
+        ]
+        for ids in (GOOG, GOOGL)
+    ]
+    resolve_coordinates(connection, trios, as_of=TODAY, known_at=NOW)
+
+    assert connection.execute(declared).fetchone() == (1,)
     identity_row = connection.execute(
-        """
-        select current_ticker, listing_id
-        from mart.entity_identity
-        where entity_id = %s
-        """,
-        (issuer_entity,),
+        "select current_ticker, listing_id from mart.entity_identity where entity_id = %s", (issuer_entity,)
     ).fetchone()
     assert identity_row == ("GOOGL", "listing:xnas:googl")

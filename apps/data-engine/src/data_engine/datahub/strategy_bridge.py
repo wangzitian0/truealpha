@@ -188,7 +188,14 @@ def seed_strategy_inputs_from_capture(
     # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
     # Resolve the target run's issuer_id for each listing from listing-identity or
     # financial-fact before bucketing price observations.
-    listing_to_issuer = _run_listings(connection, run_id)
+    listing_to_issuer: dict[str, str] = {
+        str(payload["listing_id"]): str(payload["issuer_id"])
+        for semantic_type, _conf, payload, _obs_at in rows
+        if semantic_type in ("listing-identity", "financial-fact")
+    }
+    for semantic_type, _conf, payload, _obs_at in rows:
+        if semantic_type == "market-price":
+            listing_to_issuer.setdefault(str(payload["listing_id"]), str(payload["issuer_id"]))
     primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
 
     # issuer -> (primary listing, payload, confidence, the observation's own knowable_at)
@@ -252,7 +259,7 @@ def seed_strategy_inputs_from_capture(
     return written
 
 
-# The issuer and the listing of each listing-identity and financial-fact cell of the run.
+# The listing and the issuer of each listing-identity and financial-fact cell of the run.
 _RUN_LISTINGS_SQL = """
 select distinct p.normalized_payload ->> 'listing_id', p.normalized_payload ->> 'issuer_id'
 from raw.capture_obligations ob
@@ -263,14 +270,6 @@ where ob.run_id = %s
   and o.semantic_type in ('listing-identity', 'financial-fact')
 order by 1, 2
 """
-
-
-def _run_listings(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
-    """The issuer of each listing of the run. A listing that two cells give to two issuers keeps the last."""
-    return {
-        str(listing_id): str(issuer_id)
-        for listing_id, issuer_id in connection.execute(_RUN_LISTINGS_SQL, (run_id,)).fetchall()
-    }
 
 
 def _listings_by_issuer(listing_to_issuer: Mapping[str, str]) -> dict[str, list[str]]:
@@ -288,9 +287,11 @@ def undeclared_primary_listing_issuers(
     The seed writes no input for them. The tick excludes each one with
     `ExclusionReason.PRIMARY_LISTING_UNDECLARED`.
     """
-    chosen = choose_primary_listings(
-        connection, _listings_by_issuer(_run_listings(connection, run_id)), known_at=cutoff
-    )
+    listing_to_issuer = {
+        str(listing_id): str(issuer_id)
+        for listing_id, issuer_id in connection.execute(_RUN_LISTINGS_SQL, (run_id,)).fetchall()
+    }
+    chosen = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
     return tuple(sorted(issuer_id for issuer_id, listing_id in chosen.items() if listing_id is None))
 
 

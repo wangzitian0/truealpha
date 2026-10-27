@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import psycopg
 
-from data_engine.datahub.resolve_coordinates import alias_of, lookup_entity
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
 
 __all__ = ("PRIMARY_LISTING_UNDECLARED", "choose_primary_listings")
 
@@ -72,12 +72,34 @@ def choose_primary_listings(
     declared: dict[str, str] = {}
     for issuer_entity, listing_entity in connection.execute(_DECLARED_SQL, {"known_at": known_at}).fetchall():
         declared.setdefault(issuer_entity, listing_entity)
+    as_of = known_at.astimezone(UTC).date()
     for issuer, listings in contested.items():
-        entity = lookup_entity(connection, issuer, "issuer", as_of=known_at.astimezone(UTC).date(), known_at=known_at)
-        listing_entity = None if entity is None else declared.get(str(entity))
-        names = set() if listing_entity is None else _listing_names(connection, listing_entity, known_at)
-        chosen[issuer] = next((listing for listing in listings if listing.strip().lower() in names), None)
+        entities = {listing: _listing_entity(connection, listing, as_of, known_at) for listing in listings}
+        # Two spellings of one listing (a legacy id and its entity UUID) are one listing, not a choice.
+        if len({entity or listing.strip().lower() for listing, entity in entities.items()}) == 1:
+            chosen[issuer] = listings[0]
+            continue
+        issuer_entity = lookup_entity(connection, issuer, "issuer", as_of=as_of, known_at=known_at)
+        declared_entity = None if issuer_entity is None else declared.get(str(issuer_entity))
+        names = set() if declared_entity is None else _listing_names(connection, declared_entity, known_at)
+        chosen[issuer] = next(
+            (
+                listing
+                for listing in listings
+                if (declared_entity is not None and entities[listing] == declared_entity)
+                or listing.strip().lower() in names
+            ),
+            None,
+        )
     return chosen
+
+
+def _listing_entity(connection: psycopg.Connection[Any], listing: str, as_of: date, known_at: datetime) -> str | None:
+    """The entity that a listing id or entity UUID names, or None for a ticker or an unknown id."""
+    if not (is_uuid(listing) or listing.startswith("listing:")):
+        return None
+    entity = lookup_entity(connection, listing, "listing", as_of=as_of, known_at=known_at)
+    return None if entity is None else str(entity)
 
 
 def _listing_names(connection: psycopg.Connection[Any], listing_entity: str, known_at: datetime) -> set[str]:
