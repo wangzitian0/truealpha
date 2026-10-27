@@ -41,9 +41,9 @@ Its service objective is:
 - daily refresh and a two-day freshness maximum age, exactly matching the embedded
   `DataRequirement`;
 - 100% denominator coverage and at least 95% availability;
-- continuous confidence of at least 70 on the 0-100 presentation scale;
-- the `high` target band, which requires at least two canonical original-source
-  groups; mirrors or resellers of the same origin do not increase this count;
+- continuous confidence of at least 0.70 on the 0 to 1 scale;
+- at least two canonical original-source groups; mirrors or resellers of the same
+  origin do not increase this count;
 - a corroborated share of at least 95% of graded reconciliation cells reaching the
   `high` band for the governed pointer to advance: a cell that abstained or lacks a
   second origin is served with its honest grade, and only the share of corroborated

@@ -24,13 +24,12 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
+from truealpha_contracts import reconciliation_policies
 
 from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountFact
 
-#: Fusion order for the headcount plane (rule 12). Sources absent from the list rank
-#: last, so an unknown producer can never outrank a cited one by being newer.
-HEADCOUNT_SOURCE_PRIORITY: tuple[str, ...] = ("10k-extraction", "manual-review")
-_ACTIVE_HEADCOUNT_SOURCES: tuple[str, ...] = HEADCOUNT_SOURCE_PRIORITY
+# The source order of the headcount plane is `reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY`
+# (rule 12). Each function reads the policy through the module, so one edit there reaches this reader.
 
 _ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6}|\d{4}-\d{2}-\d{6})(?:\s|$)")
 _STRICT_18_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6})(?:\s|$)")
@@ -92,7 +91,7 @@ def _is_eligible_headcount_row(
     """
     if source == "curated-10k-2025":
         return False
-    if source in _ACTIVE_HEADCOUNT_SOURCES:
+    if source in reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority:
         accession_re = _ACCESSION_RE if source == "10k-extraction" else _STRICT_18_ACCESSION_RE
         if accession_re.search(evidence_ref) is None or _FILED_RE.search(evidence_ref) is None:
             return False
@@ -121,12 +120,12 @@ order by array_position(%s::text[], source) nulls last, knowable_at desc, id des
 def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> HeadcountFact | None:
     """Resolve the point-in-time headcount fact for `cik` at `cutoff` (#70, #1264).
 
-    Orders by declared `HEADCOUNT_SOURCE_PRIORITY` first and `knowable_at desc` second,
+    Orders by the `source_priority` of `HEADCOUNT_RECONCILIATION_POLICY` first and `knowable_at desc` second,
     filtering out retired `curated-10k-2025` rows and uncited legacy `manual-review` rows
     that lack an 18-digit SEC accession.
     """
     boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
-    params = (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY))
+    params = (cik, boundary, list(reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority))
     row = connection.execute(f"{_SELECT_HEADCOUNT_SQL} limit 1", params).fetchone()
     if row is None:
         return None
@@ -200,7 +199,7 @@ def record_headcount(
     """
     if source == "curated-10k-2025":
         raise ValueError("headcount source 'curated-10k-2025' is retired; cite an 18-digit SEC accession (#1264)")
-    if source in _ACTIVE_HEADCOUNT_SOURCES:
+    if source in reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority:
         validate_cited_headcount_fact(
             knowable_at=knowable_at,
             period_end=period_end,

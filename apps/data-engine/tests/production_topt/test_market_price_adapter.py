@@ -443,7 +443,7 @@ def test_an_unavailable_primary_is_served_by_twelve_data_graded_one_step_lower(c
     from data_engine.datahub.production_topt.materialization import MarketPricePayload
 
     assert MarketPricePayload.model_validate(dict(served.record.payload)).close == Decimal("150.30")
-    # Graded from what the observation asserts: one origin, LOW, named as a failover.
+    # Graded from what the observation asserts: one origin, named as a failover.
     origins = confidence_report.bar_origins(
         SOURCE_BY_PARSER[served.record.parser_version],
         dict(served.record.payload),
@@ -453,17 +453,13 @@ def test_an_unavailable_primary_is_served_by_twelve_data_graded_one_step_lower(c
     grade = confidence_report.classify_cell(
         confidence_report.family_policy("close"), "listing:xnas:goog", [origins["close"]], _RUN_CUTOFF
     )
-    assert (grade.band, grade.reason, grade.independent_origins) == (
-        confidence_report.Band.LOW,
-        "served_by_failover",
-        1,
-    )
+    assert (grade.reason, grade.independent_origins) == ("served_by_failover", 1)
 
 
 def test_a_null_primary_fails_over_in_the_fusion_policy_order() -> None:
     """#862 acceptance 2: the primary has nothing (the overnight null-close shape, #622).
     The origins are handed over in the WRONG order; the adapter asks them in
-    `RECONCILIATION_POLICY.source_priority` order anyway, so Twelve Data serves and
+    `reconciliation_policies.RECONCILIATION_POLICY.source_priority` order anyway, so Twelve Data serves and
     moomoo — still asked — corroborates the served session at its normal grade."""
     item = _work_item("d" * 64)
     twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))

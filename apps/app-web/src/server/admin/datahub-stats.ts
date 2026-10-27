@@ -233,15 +233,22 @@ interface SecOracleDb {
   >;
 }
 
+/** Cells of one family by the number of independent origins that asserted a value. */
+export interface ConfidenceOriginCounts {
+  none: number;
+  one: number;
+  two: number;
+  three_or_more: number;
+}
+
 /** The nightly confidence & accuracy report: one family row per metric family. */
 export interface ConfidenceFamilyRow {
   family: string;
   semantic_type: string;
   cells: number;
-  high: number;
-  medium: number;
-  low: number;
-  missing: number;
+  /** null for a report written before #1517: it holds band words, which the App does not show. */
+  origin_counts: ConfidenceOriginCounts | null;
+  mean_confidence: string | null;
   compared: number;
   agreement_rate: string | null;
   tolerance: string | null;
@@ -285,10 +292,8 @@ interface ConfidenceReportDbRow {
       {
         semantic_type?: string;
         cells?: number;
-        high?: number;
-        medium?: number;
-        low?: number;
-        missing?: number;
+        by_independent_origins?: Record<string, number>;
+        mean_confidence?: string;
         compared?: number;
         agreement_rate?: string | null;
         tolerance?: string | null;
@@ -310,6 +315,26 @@ const CONFIDENCE_REPORT_SQL = `
   where universe_id in (select universe_id from mart.served_head)
   order by universe_id, created_at desc
 `;
+
+function originCounts(
+  byOrigins: Record<string, number> | undefined,
+): ConfidenceOriginCounts | null {
+  if (byOrigins === undefined) return null;
+  const counts: ConfidenceOriginCounts = {
+    none: 0,
+    one: 0,
+    two: 0,
+    three_or_more: 0,
+  };
+  for (const [origins, cells] of Object.entries(byOrigins)) {
+    const n = Number(origins);
+    if (n === 0) counts.none += cells;
+    else if (n === 1) counts.one += cells;
+    else if (n === 2) counts.two += cells;
+    else counts.three_or_more += cells;
+  }
+  return counts;
+}
 
 function confidenceReportRows(
   rows: ConfidenceReportDbRow[],
@@ -345,10 +370,8 @@ function confidenceReportRows(
           family,
           semantic_type: entry.semantic_type ?? "",
           cells: entry.cells ?? 0,
-          high: entry.high ?? 0,
-          medium: entry.medium ?? 0,
-          low: entry.low ?? 0,
-          missing: entry.missing ?? 0,
+          origin_counts: originCounts(entry.by_independent_origins),
+          mean_confidence: entry.mean_confidence ?? null,
           compared: entry.compared ?? 0,
           agreement_rate: entry.agreement_rate ?? null,
           tolerance: entry.tolerance ?? null,

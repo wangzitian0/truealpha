@@ -98,7 +98,6 @@ def evaluate_continuous_confidence(
             * _power(evidence.required_component_completeness, policy.completeness_exponent)
         )
         confidence = _quantize(confidence, policy.output_decimal_places)
-        score_100 = _quantize(confidence * Decimal(100), policy.output_decimal_places)
 
     reason_codes = {"confidence.evaluated"}
     if len(grouped) == 1:
@@ -132,7 +131,6 @@ def evaluate_continuous_confidence(
         lineage_completeness=evidence.lineage_completeness,
         required_component_completeness=evidence.required_component_completeness,
         confidence=confidence,
-        score_100=score_100,
         reason_codes=tuple(reason_codes),
     )
 

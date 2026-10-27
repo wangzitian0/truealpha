@@ -44,7 +44,7 @@ Three promises hold for every answer.
 - **Traceability.** Every number traces to the stored source bytes through lineage (rule 1, Section 2.1).
 - **Honesty.** A stale value shows its age. A low-confidence value shows its score. A missing value shows as missing (rules 18 and 20). `mart.freshness_limit` holds the age limit of each cadence.
 
-Three operating conditions hold in every environment. Daily data uses T-1 (rule 27). Each fetch key is fetched once (rule 28). Each core fact has one editable source (rule 29).
+Three operating conditions hold in every environment. Daily data uses T-1 (rule 27). Each fetch key is fetched once (rule 28). Every copy of a core fact is deleted (rule 29).
 
 ### 0.5 Investment framework
 
@@ -115,7 +115,7 @@ Delivery state lives on the issues and on the dashboards (`/admin/datahub`), not
 9. **Observability is centered on the Dagster UI.** This holds only when Dagster persists its own runtime metadata (Section 6) and does not keep it on its default local storage.
 10. **Supply-chain propagation is scenario analysis unless causality is independently established.** Every propagation run declares a versioned shock, direction, materiality/sensitivity rule, horizon, and minimum edge confidence. Low-confidence paths are killed, but high confidence in a disclosed relationship does not by itself prove a causal effect.
 11. **No moon.** GitHub Actions with path filtering is sufficient.
-12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side. The mart winner comes from the metric registry's per-field `source_priority` (Section 6, "Source fusion"). The ruleset version is part of mart lineage. Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property. It is never defaulted to the insert clock. Every staging row also carries `recorded_at` (ingestion clock, audit only). A parsed fact also carries a `mapping_version`. So "the data changed" and "the cleaning logic changed" stay distinguishable forever.
+12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side. The mart winner comes from the `ReconciliationPolicy` of the fact family. Its `source_priority` orders the sources. Its `policy_id` enters the lineage (Section 6, "Source fusion"). Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property. It is never defaulted to the insert clock. Every staging row also carries `recorded_at` (ingestion clock, audit only). A parsed fact also carries a `mapping_version`. So "the data changed" and "the cleaning logic changed" stay distinguishable forever.
 13. **Scope is immutable and explicit.** `UniverseRef` contains the universe ID, version, and membership or resolver hash. Every capture, snapshot, factor invocation, screen, strategy, report, SLO evaluation, and audit binds that exact reference plus `as_of` and `valid_on` where applicable. Research Catalog, applicability, capture, and SLO identities remain separate immutable contracts and are bound together by the release manifest. A mutable "current universe" or an unversioned ticker list is never a valid execution scope.
 14. **Applicability is frozen before execution and scope cannot shrink to obtain green status.** Required/optional/not-applicable cells are approved before a run. Removing a subject, invocation, theme, scenario, or required cell creates a new catalog/SLO version. It records product-owner approval and narrows the claim. It cannot retroactively make a failed gate pass. The supported workflow must also onboard an issuer and theme that were absent from development evidence without changing factor or consumer code.
 15. **Capture completeness is row-level, not job-level.** Each capture run records every required `(scope, subject or instrument, domain, partition or vintage)` cell as a capture obligation. `staging.capture_observation_obligations` binds each obligation to the observation that satisfies it. That observation carries the raw capture, normalized record, confidence, times, mapping/policy versions, and lineage. `mart.topt_capture_status` gives the obligation, success, unchanged, unavailable, skipped and failed counts and a `complete` flag for each run. Missing required cells fail even when Dagster is green or raw payload counts look plausible.
@@ -132,7 +132,7 @@ Delivery state lives on the issues and on the dashboards (`/admin/datahub`), not
 26. **Consumer identity and research access are governed outside computation.** The additive `app` schema stores principals, memberships, and append-only entitlement grants and revocations. It also stores immutable release-bound publication policy sets, owner-only private object locators, authorization decisions, and content-free audit events. Browser, App, chat, Claude Code, Codex, and service-agent access uses the same server-derived `AccessContext` and stable authorization contract. Private conversation and document content is owner-only by default. Administrators may see policy-permitted materialized strategy and backtest results and tenant-filtered non-content audit metadata. They may not see private content. Product roles are staged. First come a viewing user (a `member`) and an administrator. A regular user, a VIP and an administrator follow later. A VIP is an entitlement tier on a member, held as an `ActiveEntitlementGrant`. It is not a new principal kind. The publication policy names, by role and entitlement, which principal may record a request to run an already registered immutable replay definition. The request carries a registered definition id, a release manifest id and an idempotency key. It cannot carry code, parameters, dates, source selectors, or execution inputs. Dagster remains the sole execution authority. `AccessContext`, tenant, principal, role, entitlement, and publication identities never enter factors, engine expressions, `BacktestDataGateway`, `DecisionSnapshot`, or `ReplayEventStream`. Consumer reads resolve through a governed, access-controlled current-pointer to an immutable exact run per ADR A1 (`docs/architecture-decisions/A1-evidence-chain-in-database.md`). Exact run identities stay queryable for reproducible reads. A bare mutable `latest` is never a read path.
 27. **Daily data uses T-1.** The price cutoff is the close of the latest settled session. `truealpha_contracts.calendar.settled_session_for_cutoff` computes that session. Before 16:00 America/New_York, it returns the prior session. An in-progress bar is not a close. Prices use unadjusted bars plus explicit corporate actions (rule 16).
 28. **Each fetch key is fetched once per environment per day.** A fetch key is the tuple of seat, endpoint, canonical entity id and `as_of`. Identity resolves before the fetch. Each fact type has one store. Readers read that store and never refetch. Every external call names its fetch key.
-29. **Each core fact has one editable source.** This document states rules and points to the source of each fact. A copied value is allowed only when a test holds the copy equal to its source. Delivery state lives on the issues and the dashboards.
+29. **Delete every copy of a core fact.** A generated output names its generator. Nobody edits a generated output by hand.
 
 ---
 
@@ -322,20 +322,21 @@ legacy strings remain the payload ids, and each one resolves through its `legacy
 snapshot is the selected fact set, and mart is its materialized projection. Multiple
 sources may assert the same `(subject_kind, subject_id, metric, fiscal_period)` and
 coexist as separate rows. The winner is chosen by **declared rules, never by ingestion
-recency**. The metric registry declares `source_priority`; the snapshot additionally
+recency**. The `ReconciliationPolicy` of the fact family declares `source_priority`
+(`common/contracts/src/truealpha_contracts/reconciliation_policies.py`); the snapshot additionally
 binds fusion, metric, identity, membership, extraction, price/FX, action, and every other
 requested domain-selection policy version. The financial selection shape is:
 
-1. Rows with `transaction_time <= :as_of` and a source registered for the metric compete; unregistered sources stay in staging as evidence and never reach mart.
+1. Rows with `transaction_time <= :as_of` and a source that the policy of the family names compete; other sources stay in staging as evidence and never reach mart.
 2. The highest-priority source present wins.
 3. Within the winning source, the latest `transaction_time` (restatement) wins; `id` breaks same-instant ties.
 4. `confidence` rides along as data for the factor — it never arbitrates between sources (static per-source confidence must not silently decide truth).
 
-**Confidence and multi-source value selection (owner decisions 2026-09-17 and 2026-10-15, #1333; supersedes the source-count tiers of 2026-09-17).** Confidence is one continuous score on 0 to 100. It is derived per cell. A constant per semantic never stands in for it. The formula is `docs/confidence-calibration.md` (#207): source prior reliability, origin-group independence, agreement, freshness, semantic mapping quality, lineage completeness and component completeness.
+**Confidence and multi-source value selection (owner decisions 2026-09-17 and 2026-10-15, #1333; supersedes the source-count tiers of 2026-09-17).** Confidence is one continuous score from 0 to 1. It is derived per cell. A constant per semantic never stands in for it. The formula is `docs/confidence-calibration.md` (#207): source prior reliability, origin-group independence, agreement, freshness, semantic mapping quality, lineage completeness and component completeness.
 - **Source prior.** The registry holds one prior per source. The order is SEC filings, then moomoo, then Twelve Data, then yfinance, then single-source prose extraction. A prior is data in the registry, not a branch in factor code (rule 3).
 - **Value selection.** At least 3 independent origin groups within the tolerance: the served value is their median. Two groups within the tolerance: the served value is the priority source's value. One group, or no agreement: the served value is the highest-priority source's value. A disagreeing extra source is recorded and lowers agreement.
-- **Tolerance.** 0.1% relative for each family unless a versioned policy sets another (market prices use `market-price-fusion:v3`, financial facts use `financial-fact-fusion:v1`).
-- **Bands for display.** High is a score of 80 or more. Medium is 60 to 79. Low is below 60. SEC plus moomoo agreeing can reach High. One SEC source can reach Medium. One yfinance source is Low and is still served and counted as available.
+- **Tolerance.** 0.1% relative for each family unless a versioned policy sets another. `reconciliation_policies.py` holds every policy and its version.
+- **Bands for display.** One function, `confidence_band`, applies the two thresholds of `common/contracts/src/truealpha_contracts/data/confidence_bands.v1.json`. High is a confidence of 0.80 or more. Medium is 0.60 to below 0.80. Low is below 0.60. A reader derives the band when it serves a cell; no table stores it. SEC plus moomoo agreeing can reach High. One SEC source can reach Medium. One yfinance source is Low and is still served and counted as available.
 - **No score blocks a row.** A low score is shown on the dashboard and carried to the consumer. It never turns a computable value into `unavailable`.
 
 **Where fusion is exercised.** The rule above applies on the planes that carry data:
@@ -348,8 +349,8 @@ requested domain-selection policy version. The financial selection shape is:
 - **Selection is exercised at snapshot freeze.** `staging.topt_core_snapshots` is the
   durable "selected fact set", and every selected observation ID plus policy version is
   persisted in its manifest before any factor runs.
-- **Target selection ranks by the registry.** Every candidate is kept. The registry order
-  of `source_priority` selects the value, and a second candidate raises or lowers the score
+- **Target selection ranks by the policy.** Every candidate is kept. The `source_priority`
+  of the family's `ReconciliationPolicy` selects the value, and a second candidate raises or lowers the score
   through agreement. A second candidate never refuses the run. #1333 records the gap between
   this target and the snapshot freeze in code.
 - **Prices fail over in policy order.** A cell the primary origin cannot serve is served by

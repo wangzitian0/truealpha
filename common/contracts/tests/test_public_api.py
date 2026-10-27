@@ -52,8 +52,10 @@ def test_every_public_pydantic_contract_has_a_closed_json_schema() -> None:
 #: #42 removed `FixtureResearchReadRepository` (deleted with its module) and
 #: `FixtureStrategyRunRepository` (a test double; tests import it from `strategy_run_fixture`),
 #: so importing the package loads no fixture module in a deployed process (AGENTS.md rule 6).
-FROZEN_EXPORT_COUNT = 356
-FROZEN_EXPORT_SHA256 = "d18b4319eb8e81e5d2077d872f0190f91daecf8eb4658117f8eec1cce702da1e"
+#: #1518 removed `fusion_rank`, `source_priority` and `FUSION_RULESET_VERSION` (deleted with the
+#: dead metric-registry source order; the source order of a family is its `ReconciliationPolicy`).
+FROZEN_EXPORT_COUNT = 352
+FROZEN_EXPORT_SHA256 = "9024d771ef7a7641ed4c7d093404ee10f14223df23a6f729bc48a7b84e571f41"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = REPO_ROOT / "common/contracts/src/truealpha_contracts"

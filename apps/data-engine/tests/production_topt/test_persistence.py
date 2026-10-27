@@ -55,6 +55,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
+from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
@@ -598,7 +599,7 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     assert graded == 21
     # Every registered price origin the harness corroborates with asserts the whole bar
     # (twelve-data v3 and moomoo K-line alongside the primary), so each field sees them all.
-    origins = len(quality_report.RECONCILIATION_POLICY.source_priority)
+    origins = len(reconciliation_policies.RECONCILIATION_POLICY.source_priority)
     for field in quality_report.PRICE_BAR_FIELDS:
         outcomes = {cell["fields"][field]["outcome"] for cell in cells.values()}
         assert outcomes == {"agreed"}, (field, outcomes)
@@ -607,22 +608,25 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
             "agreed": graded,
             "cells": graded,
             "share": "1.0000",
-            "policy_id": quality_report.FIELD_RECONCILIATION_POLICIES[field].policy_id,
+            "policy_id": reconciliation_policies.FIELD_RECONCILIATION_POLICIES[field].policy_id,
         }
     assert report["field_reconciliation"]["volume"]["policy_id"] != report["field_reconciliation"]["close"]["policy_id"]
     # The headline keys are still the close's grade — what the a1 gate reads.
     assert all(cell["outcome"] == cell["fields"]["close"]["outcome"] for cell in cells.values())
 
 
-def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -> None:
+def test_confidence_report_grades_the_captured_run_from_its_origins(connection) -> None:
     """The confidence report's loaders read the same persisted observations the quality
-    report grades: with the second price origin wired, every bar field's cell is HIGH from
-    the same origins and matches the quality report's grade of that field (#865); every
-    dated fundamental the second statements origin also asserts at the primary's period is
-    HIGH under the financial policy and matches the quality report's per-field grade
-    (#866), while an undated one stays single-origin; headcount, written by one fixture
-    producer, is LOW; and the stored confidence column is reported as measured and marked
-    unused. Same real schema, same fake vendors — the SQL is what this proves."""
+    report grades: with the second price origin wired, every bar field's cell has three
+    agreeing origins and matches the quality report's grade of that field (#865); every
+    dated fundamental the second statements origin also asserts at the primary's period has
+    two agreeing origins under the financial policy and matches the quality report's
+    per-field grade (#866), while an undated one stays single-origin; headcount, written by
+    one fixture producer, has one origin; and the stored confidence column is reported as
+    measured and marked unused. The report holds no band word and no 0-100 score (#1517): a
+    cell shows `reason`, `independent_origins` and `confidence`, a family shows
+    `by_independent_origins` and `mean_confidence`. Same real schema, same fake vendors — the
+    SQL is what this proves."""
     from data_engine.datahub import confidence_report
     from data_engine.datahub.question_coverage import GovernedHead
 
@@ -634,50 +638,68 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     )
 
     assert report["subjects"] == 21
+    assert "bands" not in report
+    for family_name, family in report["families"].items():
+        assert {"high", "medium", "low", "missing", "share", "mean_score_100"}.isdisjoint(family), family_name
+        assert 0 <= Decimal(family["mean_confidence"]) <= 1, family_name
+        assert sum(family["by_independent_origins"].values()) == family["cells"], family_name
+    for family_name, cells in report["cells"].items():
+        for listing, cell in cells.items():
+            assert {"band", "score_100"}.isdisjoint(cell), (family_name, listing)
+            assert 0 <= Decimal(cell["confidence"]) <= 1, (family_name, listing)
     close = report["families"]["close"]
-    assert (close["high"], close["cells"], close["agreement_rate"]) == (21, 21, "1.0000")
+    assert (close["cells"], close["agreement_rate"]) == (21, "1.0000")
+    assert close["by_independent_origins"] == {"3": 21}
+    assert close["reasons"] == {"independent_origins_agree": 21}
+    assert 0 < Decimal(close["mean_confidence"]) < 1
     assert close["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert report["accuracy"]["close"]["matches_quality_report"] is True
     # Every field of the bar is its own family (#865): the harness's origins assert the whole
-    # bar, so each field grades HIGH from the same three origins and matches the quality
-    # report's per-field grade — five metrics at HIGH, not one; volume under its own policy.
+    # bar, so each field has the same three agreeing origins and matches the quality
+    # report's per-field grade — five metrics, not one; volume under its own policy.
     for name in quality_report.PRICE_BAR_FIELDS:
         family = report["families"][name]
-        assert (family["high"], family["cells"], family["agreement_rate"]) == (21, 21, "1.0000"), name
+        assert (family["cells"], family["agreement_rate"]) == (21, "1.0000"), name
+        assert family["by_independent_origins"] == {"3": 21}, name
+        assert family["reasons"] == {"independent_origins_agree": 21}, name
         assert family["origins"] == close["origins"], name
-        assert family["tolerance"] == quality_report.FIELD_RECONCILIATION_POLICIES[name].policy_id, name
+        assert family["tolerance"] == reconciliation_policies.FIELD_RECONCILIATION_POLICIES[name].policy_id, name
         accuracy = report["accuracy"][name]
         assert accuracy["matches_quality_report"] is True and accuracy["quality_report_mismatches"] == [], name
         assert (accuracy["quality_report_cells"], accuracy["agreed"], accuracy["compared"]) == (21, 21, 21), name
     assert report["families"]["volume"]["tolerance"] != close["tolerance"]
     # The fixture bundle dates revenue and the operating numerator, and the statements origin
-    # publishes both at that period: HIGH under financial-fact-fusion:v1, matching the quality
-    # report field for field. total_assets is undated in the bundle, so nothing can be aligned
+    # publishes both at that period: two agreeing origins under financial-fact-fusion:v1, matching
+    # the quality report field for field. total_assets is undated in the bundle, so nothing can be aligned
     # to it and it is honestly single-origin; net_income is asserted by neither origin.
     for name in ("revenue", "gross_profit"):
         family = report["families"][name]
-        assert (family["low"], family["high"], family["medium"]) == (0, 0, 21), name
+        assert family["by_independent_origins"] == {"2": 21}, name
+        assert family["reasons"] == {"two_origins_agree": 21}, name
         assert family["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"], name
-        assert family["tolerance"] == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
+        assert family["tolerance"] == reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
         accuracy = report["accuracy"][name]
         assert accuracy["matches_quality_report"] is True and accuracy["quality_report_cells"] == 21, name
         assert (accuracy["agreed"], accuracy["compared"]) == (21, 21), name
     total_assets = report["families"]["total_assets"]
-    assert (total_assets["low"], total_assets["reasons"]) == (21, {"single_origin": 21})
+    assert (total_assets["by_independent_origins"], total_assets["reasons"]) == ({"1": 21}, {"single_origin": 21})
     assert total_assets["origins"] == ["origin:sec-company-facts:v1"]
     assert report["accuracy"]["total_assets"]["matches_quality_report"] is None
-    assert report["families"]["net_income"]["missing"] == 21
+    net_income = report["families"]["net_income"]
+    assert (net_income["by_independent_origins"], net_income["reasons"]) == ({"0": 21}, {"no_origin_value": 21})
+    assert Decimal(net_income["mean_confidence"]) == 0
     headcount = report["families"]["headcount"]
-    assert headcount["low"] == 21 and headcount["origins"] == ["origin:headcount:test-fixture"]
+    assert headcount["reasons"] == {"single_origin": 21} and headcount["origins"] == ["origin:headcount:test-fixture"]
     # The financial branch's numerator is the only one filled for a bank; the others are
     # honest gaps, not zeros.
-    assert report["families"]["pre_provision_profit"]["low"] == 1
-    assert report["families"]["pre_provision_profit"]["missing"] == 20
+    pre_provision_profit = report["families"]["pre_provision_profit"]
+    assert pre_provision_profit["by_independent_origins"] == {"0": 20, "1": 1}
+    assert pre_provision_profit["reasons"] == {"no_origin_value": 20, "single_origin": 1}
     # TOPT is not a filing fund: neither plane family is graded, rather than graded empty.
     assert {"index_membership", "etf_weight"}.isdisjoint(report["families"])
     assert set(report["sources_connected"]) == {"moomoo", "sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
     # Measured from the run's own rows (whether a semantic's stamp is constant is a fact
-    # about the data, asserted on production, not here) and never read by the bands.
+    # about the data, asserted on production, not here) and never read by the cells.
     stored = report["metadata"]["stored_confidence"]
     assert stored["used_for_bands"] is False
     assert set(stored["values_by_semantic"]) == {
@@ -688,7 +710,8 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     }
     # The sample names TOPT issuers the harness captured, with a value from each origin.
     sample = report["sample"]["listing:xnys:jpm"]
-    assert sample["in_universe"] and sample["close"]["verdict"] == "high" and sample["volume"]["verdict"] == "high"
+    assert sample["in_universe"] and "verdict" not in sample["close"]
+    assert sample["close"]["reason"] == sample["volume"]["reason"] == "independent_origins_agree"
     assert set(sample["close"]["values"]) == {"origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"}
     assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
     report_id = confidence_report.persist(connection, report)
@@ -717,7 +740,7 @@ def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> 
     assert all(cell["origin_groups"] == 3 for cell in report["reconciliation_cells"].values())
     assert (
         report["financial_fact_reconciliation_policy_id"]
-        == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id
+        == reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id
     )
     financial = report["financial_fact_reconciliation_cells"]
     assert len(financial) == 21

@@ -69,8 +69,6 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
 )
 from data_engine.datahub.quality_report import (
     _SOURCE_BY_PARSER,
-    FINANCIAL_FACT_RECONCILIATION_POLICY,
-    RECONCILIATION_POLICY,
     classify_financial_fact_entry,
     reconcile_financial_fact_entries,
 )
@@ -81,6 +79,10 @@ from factors.production_topt import OperatingBranch
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.reconciliation import ReconciliationOutcome
+from truealpha_contracts.reconciliation_policies import (
+    FINANCIAL_FACT_RECONCILIATION_POLICY,
+    RECONCILIATION_POLICY,
+)
 
 _SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 # The 2026-07-10 reconnaissance capture, byte-pinned: a hand-edited fixture turns this red.

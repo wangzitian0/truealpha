@@ -30,7 +30,6 @@ from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
 from data_engine.datahub.production_topt.status_dimensions import (
-    LOW_CONFIDENCE_FLOOR,
     availability_status_for,
     factor_validation_status_for,
 )
@@ -42,18 +41,6 @@ def _snapshot_freshness(factor_input: ToptCoreSnapshotInput) -> MetricFreshness:
     if any(cell.freshness is MetricFreshness.UNKNOWN for cell in factor_input.cell_inputs):
         return MetricFreshness.UNKNOWN
     return MetricFreshness.FRESH
-
-
-def _confidence_band_for(confidence: Decimal | None) -> str | None:
-    if confidence is None:
-        return None
-    if confidence >= Decimal("0.85"):
-        return "high"
-    if confidence >= LOW_CONFIDENCE_FLOOR:
-        return "medium"
-    if confidence > Decimal("0"):
-        return "low"
-    return "missing"
 
 
 def _parse_decimal(raw: Any) -> Decimal | None:
@@ -263,20 +250,19 @@ def _materialize_issuer_tree(
             financial_payload=financial_payload,
         )
         unit_str = node.unit.value if node.unit is not None else None
-        band_str = _confidence_band_for(node_confidence if persisted_value is not None else Decimal("0"))
         row = connection.execute(
             """
             insert into mart.metric_node_values (
                 run_id, issuer_id, node_id, node_key, period, period_tag,
                 value, unit, availability_status, reason_codes,
                 source_evidence_status, factor_validation_status,
-                confidence, confidence_band, tree_id, tree_version, tree_sha256,
+                confidence, tree_id, tree_version, tree_sha256,
                 input_observation_ids
             ) values (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s,
-                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
                 %s
             )
             on conflict (run_id, issuer_id, node_id, period) do nothing
@@ -296,7 +282,6 @@ def _materialize_issuer_tree(
                 source_evidence.value,
                 validation_status.value,
                 node_confidence,
-                band_str,
                 tree.tree_id,
                 tree.version,
                 tree_sha256,

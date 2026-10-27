@@ -475,10 +475,10 @@ export default async function AdminDatahubPage({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Confidence &amp; accuracy (nightly)</h2>
         <p className="text-sm text-gray-500">
-          Every (metric family, subject) cell of the governed head banded from what its origins asserted:
-          high = two independent origins reconciled agreed, medium = two origins present but no policy /
-          disagreement / one lineage, low = one origin, missing = none. The stored observation confidence
-          column is a constant and is not read. Agreement is judged only over compared cells.
+          Every (metric family, subject) cell of the governed head, counted by the independent origins
+          that asserted a value, with the mean confidence from 0 to 1 evaluated from what they asserted.
+          The stored observation confidence column is a constant and is not read. Agreement is judged only
+          over compared cells. A report written before #1517 shows a dash in the origin columns.
         </p>
         {stats.confidence.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No confidence report yet.</p>
@@ -497,10 +497,11 @@ export default async function AdminDatahubPage({
               <thead>
                 <tr className="text-gray-500">
                   <th className="pr-4 font-normal">family</th>
-                  <th className="pr-4 font-normal">high</th>
-                  <th className="pr-4 font-normal">medium</th>
-                  <th className="pr-4 font-normal">low</th>
-                  <th className="pr-4 font-normal">missing</th>
+                  <th className="pr-4 font-normal">0 origins</th>
+                  <th className="pr-4 font-normal">1 origin</th>
+                  <th className="pr-4 font-normal">2 origins</th>
+                  <th className="pr-4 font-normal">3+ origins</th>
+                  <th className="pr-4 font-normal">mean confidence</th>
                   <th className="pr-4 font-normal">agreement (compared)</th>
                   <th className="font-normal">origins</th>
                 </tr>
@@ -509,10 +510,11 @@ export default async function AdminDatahubPage({
                 {report.families.map((family) => (
                   <tr key={family.family} className="border-t border-border">
                     <td className="pr-4 font-mono">{family.family}</td>
-                    <td className="pr-4">{family.high}</td>
-                    <td className="pr-4">{family.medium}</td>
-                    <td className="pr-4">{family.low}</td>
-                    <td className="pr-4">{family.missing}</td>
+                    <td className="pr-4">{formatCell(family.origin_counts?.none ?? null)}</td>
+                    <td className="pr-4">{formatCell(family.origin_counts?.one ?? null)}</td>
+                    <td className="pr-4">{formatCell(family.origin_counts?.two ?? null)}</td>
+                    <td className="pr-4">{formatCell(family.origin_counts?.three_or_more ?? null)}</td>
+                    <td className="pr-4">{formatCell(family.mean_confidence)}</td>
                     <td className="pr-4">
                       {formatCell(family.agreement_rate)} ({family.compared}/{family.cells})
                     </td>

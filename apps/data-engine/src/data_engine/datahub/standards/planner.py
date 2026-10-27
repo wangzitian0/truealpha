@@ -122,13 +122,13 @@ def open_cells(
         # outranks a later-stamped seed, so the cell is closed, not refetched (review on
         # #740).
         #
-        # The plane and its priority come from the STANDARD (#799). They were
-        # `staging.issuer_headcount_facts` and `HEADCOUNT_SOURCE_PRIORITY` in this file,
-        # which meant a second standard planned against headcount facts under its own name
-        # — this function took a `MetricStandard` and used it for two fields while reading
-        # one hardcoded table. The identifiers are interpolated because they are code (a
-        # `FactPlane` is declared in `STANDARDS`, not supplied by a caller); the values
-        # stay parameterised.
+        # The plane and its source order come from the STANDARD (#799). The plane names the
+        # reconciliation policy that owns the order. They were `staging.issuer_headcount_facts`
+        # and a headcount order in this file, which meant a second standard planned against
+        # headcount facts under its own name — this function took a `MetricStandard` and used
+        # it for two fields while reading one hardcoded table. The identifiers are interpolated
+        # because they are code (a `FactPlane` is declared in `STANDARDS`, not supplied by a
+        # caller); the values stay parameterised.
         #
         # A withdrawn extractor's row is not a fact (#822). Were it one here, the cell would
         # stay closed and the issuer would never be re-extracted under the rule that replaced
@@ -143,7 +143,12 @@ def open_cells(
             order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
             """,  # noqa: S608 - identifiers come from the standard's declared plane, not input
-            (issuer.cik, cutoff, *([withdrawn] if withdrawn else []), list(plane.source_priority)),
+            (
+                issuer.cik,
+                cutoff,
+                *([withdrawn] if withdrawn else []),
+                list(plane.reconciliation_policy.source_priority),
+            ),
         ).fetchone()
         if row is None:
             cells.append(OpenCell(issuer, "no_fact", None, None))
