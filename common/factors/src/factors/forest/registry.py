@@ -6,8 +6,8 @@ It holds two named GPPE metrics (#1176, owner decision 2026-10-09):
   labor efficiency that `factors.production_topt.compute_topt_gppe` used to spell out by hand.
   Every class uses total assets as the capital base. The node key was `gppe` before #1176; the
   arithmetic and the published values did not change (`tests/forest/test_gppe_tree.py` golden ids).
-- `gppe_banking_tce_v1`, in tree `gppe_banking_tce` `v1`. FINANCIAL only. The capital base is
-  measured tangible common equity, built from three captured inputs.
+- `gppe_banking_tce_v1`, in tree `gppe_banking_tce` `v2`. FINANCIAL only. The capital base is
+  measured tangible common equity, built from four captured inputs.
 
 Node and tree UUIDs were minted once as uuid5 values under the namespace
 `uuid5(NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/metric-forest")` and are
@@ -281,7 +281,10 @@ STOCKHOLDERS_EQUITY = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="stockholders_equity"),
     confidence=_captured("stockholders_equity"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="stockholders_equity"),
+    ),
 )
 
 PREFERRED_STOCK_VALUE = MetricNode(
@@ -298,7 +301,10 @@ PREFERRED_STOCK_VALUE = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="preferred_stock_value"),
     confidence=_captured("preferred_stock_value"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="preferred_stock_value"),
+    ),
 )
 
 GOODWILL = MetricNode(
@@ -312,7 +318,10 @@ GOODWILL = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="goodwill"),
     confidence=_captured("goodwill"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="goodwill"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="goodwill"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="goodwill"),
+    ),
 )
 
 INTANGIBLE_ASSETS = MetricNode(
@@ -326,7 +335,10 @@ INTANGIBLE_ASSETS = MetricNode(
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="intangible_assets_net_excluding_goodwill"),
     confidence=_captured("intangible_assets_net_excluding_goodwill"),
-    aliases=(NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="intangible_assets_net_excluding_goodwill"),
+    ),
 )
 
 TANGIBLE_DEDUCTIONS = MetricNode(
@@ -399,10 +411,13 @@ GPPE_BANKING_TCE_V1 = MetricNode(
     confidence=_DERIVED_CONFIDENCE,
 )
 
+#: v2 (#1518): the four captured leaves name the snapshot field that carries each one, so the TOPT
+#: core snapshot can carry the tree. The arithmetic is the one of v1. The aliases are part of the
+#: tree identity, so the edit is a new version (`test_gppe_tree.FROZEN_TREES`).
 GPPE_BANKING_TCE_TREE = MetricTree(
     tree_id=UUID("96fd6d4a-8983-5caf-b647-360122569d00"),
     key="gppe_banking_tce",
-    version="v1",
+    version="v2",
     realizes=LABOR_EFFICIENCY.key,
     root=GPPE_BANKING_TCE_V1.key,
     applicability=_FINANCIAL,

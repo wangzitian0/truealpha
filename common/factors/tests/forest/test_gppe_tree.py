@@ -20,8 +20,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 
 import pytest
-from factors.forest import FOREST, GPPE_V0_TREE, IssuerClass, evaluate, required_inputs
+from factors.forest import (
+    FOREST,
+    GPPE_BANKING_TCE_TREE,
+    GPPE_V0_TREE,
+    AliasKind,
+    IssuerClass,
+    NodeKind,
+    evaluate,
+    required_inputs,
+)
 from factors.production_topt import (
+    TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -32,6 +42,7 @@ from factors.production_topt import (
     ToptMetricInput,
     compute_topt_gppe,
 )
+from truealpha_contracts.strategy import load_live_strategy_definition
 
 CUTOFF = datetime(2026, 9, 16, tzinfo=UTC)
 IDS = tuple(f"normalized-observation:{character * 64}" for character in "1234")
@@ -146,7 +157,23 @@ def _metric(name: str, value: str | None, input_id: str = IDS[0]) -> ToptMetricI
     )
 
 
-def _snapshot(branch: str, gross_profit: str | None, ppnr: str | None, assets: str | None, headcount: str | None):
+#: JPM FY2025 10-K (accession 0001628280-26-008131): the four captured leaves of the banking tree.
+JPM_TCE_LEAVES = {
+    "stockholders_equity": "362438000000",
+    "preferred_stock_value": "20045000000",
+    "goodwill": "52731000000",
+    "intangible_assets_net_excluding_goodwill": "2600000000",
+}
+
+
+def _snapshot(
+    branch: str,
+    gross_profit: str | None,
+    ppnr: str | None,
+    assets: str | None,
+    headcount: str | None,
+    tce_leaves: dict[str, str | None] | None = None,
+):
     return ToptCoreSnapshotInput.model_validate(
         {
             "snapshot_id": f"topt-core-snapshot:{'a' * 64}",
@@ -175,6 +202,7 @@ def _snapshot(branch: str, gross_profit: str | None, ppnr: str | None, assets: s
             "headcount": _metric("headcount", headcount),
             "revenue": _metric("revenue", "100000000"),
             "pre_provision_profit": _metric("pre_provision_profit", ppnr),
+            **{name: _metric(name, value) for name, value in (tce_leaves or {}).items()},
             "market_value_components": (
                 ToptMarketValueComponent(
                     instrument_id="instrument:example",
@@ -188,20 +216,11 @@ def _snapshot(branch: str, gross_profit: str | None, ppnr: str | None, assets: s
 
 
 # (branch, gross_profit, pre_provision_profit, total_assets, headcount, rate) -> result id and
-# gppe as main@f5807a7 published them. JPM's inputs are the strategy corpus's
-# (`large_model_value_v0_definition_1_0_0.json`, jpm-2026-06-30); the rest cover every class, a
-# negative non-financial value, a non-terminating division and each unavailable path.
+# gppe as main@f5807a7 published them. The cases cover the non-financial classes, a negative
+# non-financial value, a non-terminating division and each unavailable path. A bank at the
+# uniform total-assets value is not here: since #1518 a bank is evaluated on the banking tree
+# (`test_a_bank_is_evaluated_on_measured_tangible_common_equity` and the tests after it).
 GOLDEN = {
-    "jpm_production_rate": (
-        ("financial", None, "86807000000", "4424900000000", "318512", "0.05"),
-        "topt-gppe-result:45a5ec8438ea001361777cb66b28d21a8b457af75c9ff53c1f6892c7459e5293",
-        "-422081.4286431908373938815492037977",
-    ),
-    "jpm_corpus_rate": (
-        ("financial", None, "86807000000", "4424900000000", "318512", "0.038"),
-        "topt-gppe-result:fc0a466e1cb021fb03d6992fb42a6b781e3c1b9bb4db41e3e2f8b99e59de4468",
-        "-255372.4820414929421811423117496358",
-    ),
     "insurer": (
         ("insurance", "31700000000", None, "300000000000", "48000", "0.05"),
         "topt-gppe-result:774f50a7825428bb7e9b307ca6a9428e89a7fbe58b60830fddd5d81954a1b9e7",
@@ -223,7 +242,7 @@ GOLDEN = {
         "28751428.56518571428571428571428571",
     ),
     "bank_without_ppnr": (
-        ("financial", "5", None, "4424900000000", "318512", "0.05"),
+        ("financial", "5", None, "4424900000000", "318512", "0.05"),  # + JPM_TCE_LEAVES, see below
         "topt-gppe-result:b06da6b18be6cc251b20b6f938d0e2923f948600293e2dae2dc5bfe9adcfcff4",
         None,
     ),
@@ -243,10 +262,13 @@ GOLDEN = {
 @pytest.mark.parametrize("case", sorted(GOLDEN))
 def test_compute_topt_gppe_reproduces_the_pre_forest_result_identity(case: str) -> None:
     (branch, gross_profit, ppnr, assets, headcount, rate), result_id, gppe = GOLDEN[case]
+    # A bank carries its four banking leaves, so the one gap of `bank_without_ppnr` is its numerator.
+    leaves = JPM_TCE_LEAVES if branch == "financial" else None
     result = compute_topt_gppe(
-        _snapshot(branch, gross_profit, ppnr, assets, headcount),
+        _snapshot(branch, gross_profit, ppnr, assets, headcount, leaves),
         invocation_id=f"topt-gppe-invocation:{'f' * 64}",
         gppe_definition=GppeV0Definition(risk_free_rate=rate),
+        definition=load_live_strategy_definition(),
     )
     assert (None if result.gppe is None else str(result.gppe)) == gppe
     assert result.result_id == result_id
@@ -267,7 +289,9 @@ def test_the_tree_is_the_definition_version_it_claims() -> None:
 FROZEN_TREES = {
     ("gppe", "production-topt-v0.2.0"): "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d",
     # #1176 follow-up: the banking tree deducts preferred stock, so its pin moved with the edit.
-    ("gppe_banking_tce", "v1"): "6b2d2ccec56a240af5a71c0db367fd9569d7a699f838e7c70079497816b32ad0",
+    # #1518: v1 (pin 6b2d2cce...) had no snapshot-field alias on its four captured leaves. v2 names
+    # one for each leaf, so the TOPT core snapshot carries the tree. The arithmetic did not change.
+    ("gppe_banking_tce", "v2"): "f123bc093e4dcc5e4a2e889276957783bdd0a18f5b92fafd7430cb36d7171f1a",
 }
 
 
@@ -323,3 +347,97 @@ def test_banking_tree_leaves_a_missing_tangible_common_equity_undefined() -> Non
     evaluation = evaluate(FOREST, BANKING_TCE_TREE, issuer_class=IssuerClass.FINANCIAL, inputs=inputs)
     assert evaluation.values["gppe_banking_tce_v1"] is None
     assert evaluation.undefined["goodwill"] == "missing_input"
+
+
+# --- #1518: a bank is evaluated on the banking tree that the definition pins --------------------
+
+
+def _tce_kernel(rate: str) -> tuple[Decimal, Decimal]:
+    """JPM FY2025, written out by hand and not read from the code under test.
+
+    TCE         = 362,438M - 20,045M - (52,731M + 2,600M)  = 287,062M
+    real profit = 86,807M - TCE x rate
+    value       = real profit / 318,512
+    """
+    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        tce = Decimal("362438000000") - Decimal("20045000000") - (Decimal("52731000000") + Decimal("2600000000"))
+        real_profit = Decimal("86807000000") - tce * Decimal(rate)
+        return real_profit, real_profit / Decimal("318512")
+
+
+def _bank_result(rate: str, leaves: dict[str, str | None] | None):
+    return compute_topt_gppe(
+        _snapshot("financial", None, "86807000000", "4424900000000", "318512", leaves),
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate=rate),
+        definition=load_live_strategy_definition(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rate", "real_profit", "value"),
+    [
+        # 86,807,000,000 - 287,062,000,000 x 0.05 = 72,453,900,000; / 318,512 = 227,476.2018...
+        ("0.05", Decimal("72453900000"), Decimal("227476.20")),
+        # 86,807,000,000 - 287,062,000,000 x 0.038 = 75,898,644,000; / 318,512 = 238,291.3171...
+        ("0.038", Decimal("75898644000"), Decimal("238291.32")),
+    ],
+)
+def test_a_bank_is_evaluated_on_measured_tangible_common_equity(
+    rate: str, real_profit: Decimal, value: Decimal
+) -> None:
+    result = _bank_result(rate, JPM_TCE_LEAVES)
+    assert result.gppe is not None and result.capital_adjusted_gross_profit is not None
+    assert result.capital_adjusted_gross_profit == real_profit
+    assert result.gppe.quantize(Decimal("0.01"), ROUND_HALF_EVEN) == value
+    assert (result.capital_adjusted_gross_profit, result.gppe) == _tce_kernel(rate)
+    assert result.operating_efficiency == result.gppe
+    # The uniform total-assets value of the same bank is -422,081.43 (rate 0.05). It is not the result.
+    assert result.gppe > 0
+
+
+def test_a_bank_without_its_banking_leaves_is_unavailable_with_each_missing_field_named() -> None:
+    result = _bank_result("0.05", None)
+    assert result.availability.value == "unavailable"
+    assert result.gppe is None
+    assert {reason.value for reason in result.reason_codes} == {f"missing_{name}" for name in JPM_TCE_LEAVES}
+
+
+@pytest.mark.parametrize("leaf", sorted(JPM_TCE_LEAVES))
+def test_one_missing_banking_leaf_is_named_and_never_replaced(leaf: str) -> None:
+    result = _bank_result("0.05", {**JPM_TCE_LEAVES, leaf: None})
+    assert result.gppe is None
+    assert [reason.value for reason in result.reason_codes] == [f"missing_{leaf}"]
+
+
+def test_a_reported_zero_preferred_stock_is_a_value_not_a_gap() -> None:
+    # TCE = 362,438M - 0 - 55,331M = 307,107M. Real profit = 86,807M - 307,107M x 0.05 = 71,451,650,000.
+    result = _bank_result("0.05", {**JPM_TCE_LEAVES, "preferred_stock_value": "0"})
+    assert result.capital_adjusted_gross_profit == Decimal("71451650000")
+
+
+def test_a_class_that_the_definition_pins_to_the_uniform_tree_ignores_the_banking_leaves() -> None:
+    snapshot = _snapshot("non_financial", "97858000000", None, "111601000000", "36000", JPM_TCE_LEAVES)
+    result = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=load_live_strategy_definition(),
+    )
+    assert str(result.gppe) == GOLDEN["nvda_shaped"][2], "the uniform value of the nvda-shaped case"
+
+
+def test_the_banking_leaves_are_absent_from_the_dump_when_none() -> None:
+    non_bank = _snapshot("non_financial", "97858000000", None, "111601000000", "36000")
+    bank = _snapshot("financial", None, "86807000000", "4424900000000", "318512", JPM_TCE_LEAVES)
+    assert not set(TCE_SNAPSHOT_FIELDS) & set(non_bank.model_dump(mode="json")), "a stored snapshot keeps its hash"
+    assert set(TCE_SNAPSHOT_FIELDS) <= set(bank.model_dump(mode="json"))
+
+
+def test_the_snapshot_fields_of_the_banking_leaves_are_the_aliases_of_the_registered_tree() -> None:
+    aliased = {
+        node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+        for node in required_inputs(FOREST, GPPE_BANKING_TCE_TREE, IssuerClass.FINANCIAL)
+        if node.kind is NodeKind.INPUT
+    }
+    assert aliased == set(TCE_SNAPSHOT_FIELDS) | {"pre_provision_profit", "headcount"}

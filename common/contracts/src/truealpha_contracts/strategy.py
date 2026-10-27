@@ -216,25 +216,31 @@ class CapitalChargeBase(StrEnum):
     TOTAL_ASSETS = "total_assets"
 
 
+#: The four fields of one stated formula. They are all present (1.0.0) or all absent (1.1.0, #1518).
+_FORMULA_FIELDS = ("numerator", "capital_charge_base", "denominator", "formula")
+
+
 class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
     """v0 core metric: (numerator - capital_charge_base * risk_free_rate) / denominator.
 
-    One uniform definition applies to every issuer (2026-07-18 owner decision);
-    there is no per-issuer branch. Variants (e.g. a labor-cost denominator) are
-    new versioned definitions of this same schema; the reason codes and unit
-    dimension are forced to match the configured inputs so a variant cannot
-    smuggle stale semantics.
+    Definition 1.0.0 states this one formula for every issuer (2026-07-18 owner decision). It
+    holds ``numerator``, ``capital_charge_base``, ``denominator`` and ``formula``. Definition
+    1.1.0 (#1518, owner decision D2 of 2026-10-26) leaves the four out. The metric forest owns
+    the formula: ``LargeModelValueV0Definition.labor_efficiency_tree_keys`` pins one tree for
+    each issuer class. The four fields are all present or all absent. Variants are new versioned
+    definitions of this same schema; the reason codes and unit dimension are forced to match
+    the configured inputs so a variant cannot smuggle stale semantics.
     """
 
     factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     factor_key: Literal["capital_adjusted_labor_efficiency"]
     factor_version: str = Field(pattern=_VERSION_PATTERN)
-    numerator: LaborEfficiencyNumerator
-    capital_charge_base: CapitalChargeBase
-    denominator: LaborEfficiencyDenominator
+    numerator: LaborEfficiencyNumerator | None = None
+    capital_charge_base: CapitalChargeBase | None = None
+    denominator: LaborEfficiencyDenominator | None = None
     risk_free: RiskFreeRatePolicy
-    formula: Literal["(numerator-capital_charge_base*risk_free_rate)/denominator"]
+    formula: Literal["(numerator-capital_charge_base*risk_free_rate)/denominator"] | None = None
     unit: FactorUnitSpec
     quantization: DecimalQuantization
     missing_numerator_reason: ExclusionReason
@@ -247,8 +253,30 @@ class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
     def reject_mutable_version(cls, value: str) -> str:
         return _reject_mutable_coordinate(value, "factor_version")
 
+    @model_serializer(mode="wrap")
+    def omit_absent_formula(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A definition whose trees own the formula states none, so its content hash covers none."""
+        data: dict[str, Any] = handler(self)
+        for name in _FORMULA_FIELDS:
+            if getattr(self, name) is None:
+                data.pop(name, None)
+        return data
+
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
+        stated = {name: getattr(self, name) is not None for name in _FORMULA_FIELDS}
+        if len(set(stated.values())) != 1:
+            raise ValueError(
+                f"the formula fields {sorted(_FORMULA_FIELDS)} must be all present or all absent, got {stated}"
+            )
+        if self.formula is not None:
+            self._validate_formula_semantics()
+        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        return self
+
+    def _validate_formula_semantics(self) -> None:
+        # The four fields are all present when a formula is stated (checked by the caller).
+        assert self.capital_charge_base is not None
         if self.numerator is LaborEfficiencyNumerator.GROSS_PROFIT:
             if self.missing_numerator_reason is not ExclusionReason.MISSING_GROSS_PROFIT_FACT:
                 raise ValueError("gross-profit numerator requires the missing_gross_profit_fact reason")
@@ -271,8 +299,23 @@ class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
             raise ValueError("denominator and its missing-input reason code are inconsistent")
         if self.nonpositive_denominator_reason is not expected_nonpositive:
             raise ValueError("denominator and its nonpositive reason code are inconsistent")
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
-        return self
+
+
+class LaborEfficiencyTreePin(_StrictFrozenModel):
+    """The tree of the metric forest that evaluates labor efficiency for one issuer class (#1518).
+
+    The pin names the tree and its content hash. ``factors.forest.bound_tree`` raises when the
+    registered tree has another hash, so a definition cannot run on a tree that it did not pin.
+    """
+
+    tree_key: str = Field(pattern=r"^[a-z][a-z0-9_.]*$")
+    tree_version: str = Field(min_length=1)
+    tree_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("tree_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "tree_version")
 
 
 class PriceToSalesDefinition(_StrictFrozenModel):
@@ -658,7 +701,10 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     universe: UniverseRef | None = None
     schedule: QuarterlyCutoffSchedule
     labor_efficiency: CapitalAdjustedLaborEfficiencyDefinition
-    labor_efficiency_tree_keys: dict[str, str] | None = None
+    #: The tree of the metric forest that evaluates labor efficiency, one pin per issuer class (#1518).
+    #: Present when ``labor_efficiency`` states no formula (definition 1.1.0). The core and the
+    #: composite both evaluate the pinned tree (``factors.forest.bound_tree``).
+    labor_efficiency_tree_keys: dict[str, LaborEfficiencyTreePin] | None = None
     price_to_sales: PriceToSalesDefinition
     price_to_gross_profit: PriceToGrossProfitDefinition | None = None
     tier_valuation: ThreeTierValuationDefinition | ThreeTierPgpValuationDefinition
@@ -695,6 +741,13 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
             raise ValueError("the valuation-gap rule must use the multiple of the tier bands")
         if self.provisional_semantics != self.tier_valuation.provisional_thresholds:
             raise ValueError("provisional_semantics must equal the tier valuation's provisional_thresholds")
+        if (self.labor_efficiency.formula is None) != (self.labor_efficiency_tree_keys is not None):
+            raise ValueError(
+                "labor efficiency has one owner: the formula of labor_efficiency, or the trees of "
+                "labor_efficiency_tree_keys. Exactly one must be present"
+            )
+        if self.labor_efficiency_tree_keys is not None and not self.labor_efficiency_tree_keys:
+            raise ValueError("labor_efficiency_tree_keys must pin at least one issuer class")
         factor_keys = [self.labor_efficiency.factor_key, self.price_to_sales.factor_key, self.tier_valuation.factor_key]
         if self.price_to_gross_profit is not None:
             factor_keys.append(self.price_to_gross_profit.factor_key)
@@ -715,29 +768,12 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
             return self.price_to_gross_profit.quantization
         return self.price_to_sales.quantization
 
-    def required_input_keys(self) -> frozenset[str]:
-        """#496: the per-issuer input keys this definition's factors consume,
-        DERIVED from the frozen semantics (no hashed field is added, so
-        content identity is untouched). The L2 coverage metric measures
-        staging presence against exactly this set."""
-        return frozenset(
-            {
-                self.labor_efficiency.numerator.value,
-                self.labor_efficiency.denominator.value,
-                self.labor_efficiency.capital_charge_base.value,
-                # price_to_sales rules: market value = shares x last close;
-                # sales = latest complete fiscal-year revenue. P/GP divides the same
-                # market value by the gross profit the numerator already consumes.
-                "shares_outstanding",
-                "last_close",
-                "revenue",
-            }
-        )
-
 
 #: The packaged definition file the deployed tick and the TOPT core engine both read (#1235).
-#: One file holds the band values; ``load_live_strategy_definition`` is the only reader.
-LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
+#: One file holds the band values; ``load_live_strategy_definition`` is the only reader. Definition
+#: 1.1.0 (#1518) pins the labor-efficiency tree of each issuer class. The 1.0.0 file stays for the
+#: frozen #21 golden replay and for the runs that carry its hash.
+LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_1_0.json"
 
 
 @functools.lru_cache(maxsize=16)
@@ -1298,6 +1334,7 @@ __all__ = [
     "LIVE_STRATEGY_DEFINITION_RESOURCE",
     "LaborEfficiencyDenominator",
     "LaborEfficiencyNumerator",
+    "LaborEfficiencyTreePin",
     "LargeModelValueV0Definition",
     "PriceToGrossProfitDefinition",
     "PriceToGrossProfitTierBand",

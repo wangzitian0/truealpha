@@ -96,7 +96,17 @@ def test_a_factor_declares_its_inputs_as_registered_metrics_or_fails_at_import()
     has to be true at import — a metric the registry does not know is a traceback here, not
     an issuer silently `missing` its input on every run."""
     assert FACTOR_REGISTRY["peg"].inputs == ("price", "shares_outstanding", "net_income")
-    assert FACTOR_REGISTRY["gross_profit_per_employee"].inputs == ("gross_profit", "total_assets", "employees_total")
+    # #1518: the factor evaluates the pinned tree, so it declares the captured inputs of every registered tree.
+    from factors.forest import FOREST, NodeKind, metric_of, required_inputs
+
+    leaves_of_the_forest = {
+        metric_of(node)
+        for tree in FOREST.trees
+        for issuer_class in tree.applicability
+        for node in required_inputs(FOREST, tree, issuer_class)
+        if node.kind is NodeKind.INPUT
+    }
+    assert set(FACTOR_REGISTRY["gross_profit_per_employee"].inputs) == leaves_of_the_forest
     assert FACTOR_REGISTRY["three_tier_valuation"].inputs == (), "a composite consumes results, not metrics"
     with pytest.raises(ValueError, match="not registered metrics: \\['no_such_metric'\\]"):
         factor("probe_with_a_typo", kind="base", module=1, inputs=("no_such_metric",))

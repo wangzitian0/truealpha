@@ -2,6 +2,7 @@
 
 from factors.production_topt.core import (
     SHARE_BASIS_REASON_CODES,
+    TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -21,6 +22,7 @@ from factors.production_topt.core import (
 
 __all__ = [
     "SHARE_BASIS_REASON_CODES",
+    "TCE_SNAPSHOT_FIELDS",
     "GppeV0Definition",
     "MetricAvailability",
     "MetricFreshness",

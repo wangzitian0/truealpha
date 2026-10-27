@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.strategy import (
-    LIVE_STRATEGY_DEFINITION_RESOURCE,
     LargeModelValueV0Definition,
     StrategyDefinitionIdentity,
     definition_review_state,
@@ -42,6 +41,11 @@ from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 #: (governance/reviews/large_model_value_v0-definition-1.0.0.md). Written out here as an
 #: oracle; the registry under test does not supply it.
 _V1 = StrategyDefinitionIdentity("1.0.0", "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803", False)
+#: Definition 1.1.0 (#1518, owner decision D2): the live definition. It pins a labor-efficiency tree per
+#: class. Written out as an oracle, like `_V1`.
+_V11 = StrategyDefinitionIdentity("1.1.0", "de4d30e6e9cef8e0820281a63388a2699ba1992d6c7da75ab6af73c32b784ff4", False)
+#: The frozen #21 file, named on purpose: the live resource is definition 1.1.0.
+_FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 #: Definition 0.1.0, whose file the owner deleted. Production and staging still hold its runs.
 _DELETED_V0 = ("0.1.0", "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d")
 #: A content hash that no definition has.
@@ -60,6 +64,8 @@ def _identity(definition: LargeModelValueV0Definition) -> StrategyDefinitionIden
 def test_the_registry_holds_the_reviewed_live_definition() -> None:
     registry = strategy_definition_registry()
     assert _V1 in registry, f"definition 1.0.0 is missing from the registry: {registry}"
+    assert _V11 in registry, f"definition 1.1.0 is missing from the registry: {registry}"
+    assert _identity(load_live_strategy_definition()) == _V11, "the live definition is 1.1.0"
     assert _identity(load_live_strategy_definition()) in registry, (
         "the definition that the deployed tick evaluates is not in the registry"
     )
@@ -69,6 +75,7 @@ def test_the_registry_holds_the_reviewed_live_definition() -> None:
     ("version", "content_sha256", "expected"),
     [
         pytest.param(_V1.version, _V1.content_sha256, "reviewed", id="reviewed-1.0.0"),
+        pytest.param(_V11.version, _V11.content_sha256, "reviewed", id="reviewed-1.1.0"),
         pytest.param(*_DELETED_V0, "unknown", id="deleted-0.1.0"),
         pytest.param(_V1.version, _OUTSIDE_SHA256, "unknown", id="hash-outside-registry"),
         pytest.param(_DELETED_V0[0], _V1.content_sha256, "unknown", id="version-disagrees-with-hash"),
@@ -112,7 +119,7 @@ def test_a_registered_definition_holds_only_inside_its_context() -> None:
 
 
 def test_registering_a_definition_that_the_registry_holds_is_refused() -> None:
-    with pytest.raises(ValueError, match="the registry already holds version 1.0.0"):
+    with pytest.raises(ValueError, match="the registry already holds version 1.1.0"):
         with registered_strategy_definition(load_live_strategy_definition()):
             pass
 
@@ -131,7 +138,7 @@ def _write_corpus(path: Path, definition: LargeModelValueV0Definition) -> None:
 
 def test_a_definition_file_joins_the_scan_by_its_content_not_its_name(tmp_path: Path) -> None:
     packaged = resources.files("truealpha_contracts.data")
-    (tmp_path / "first.json").write_bytes(packaged.joinpath(LIVE_STRATEGY_DEFINITION_RESOURCE).read_bytes())
+    (tmp_path / "first.json").write_bytes(packaged.joinpath(_FROZEN_RESOURCE).read_bytes())
     (tmp_path / "a_run_report.json").write_bytes(packaged.joinpath(_PREVIEW_FIXTURE_RESOURCE).read_bytes())
     synthetic = synthetic_provisional_strategy_definition()
     _write_corpus(tmp_path / "second.json", synthetic)
@@ -143,7 +150,7 @@ def test_two_definition_files_with_one_version_are_refused(tmp_path: Path) -> No
     live = load_live_strategy_definition()
     _write_corpus(tmp_path / "first.json", live)
     _write_corpus(tmp_path / "second.json", live)
-    with pytest.raises(ValueError, match="a second definition file has version 1.0.0"):
+    with pytest.raises(ValueError, match="a second definition file has version 1.1.0"):
         strategy_definitions_in(tmp_path)
 
 

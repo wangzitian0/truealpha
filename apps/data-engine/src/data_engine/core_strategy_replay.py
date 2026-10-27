@@ -38,11 +38,11 @@ from pathlib import Path
 from typing import Any
 
 from factors.composite.strategy_evaluator import (
-    UNIFORM_LABOR_EFFICIENCY_BINDING,
     EvaluatedDecision,
     IssuerInput,
     evaluate_cutoff,
 )
+from factors.forest import IssuerClass, uniform_tree_pins
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 # CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
@@ -198,6 +198,7 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
                     for record in item["inputs"]
                 },
                 knowable_at={record["input_key"]: _instant(record["knowable_at"]) for record in item["inputs"]},
+                issuer_class=IssuerClass(item["issuer_branch"]),
             )
             for item in group
         ]
@@ -206,7 +207,7 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
             definition=definition,
             cutoff_at=as_of,
             risk_free_rate=risk_free_rate,
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+            tree_pins=uniform_tree_pins(),
         )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
 

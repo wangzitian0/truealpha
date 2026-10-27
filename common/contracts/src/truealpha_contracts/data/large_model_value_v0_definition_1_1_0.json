@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "notes": "Definition 1.1.0 of the large_model_value_v0 strategy (#1518). Owner decision D2 of 2026-10-26: the bank capital base, measured tangible common equity, goes into the next strategy definition. Labor efficiency is not a formula of this file. It is a tree of the metric forest, pinned for each issuer class by key, version and content hash. FINANCIAL issuers use the tree gppe_banking_tce, which charges the risk-free rate on tangible common equity. Every other class uses the tree gppe, which charges it on total assets. The core and the composite evaluate the same pinned tree (factors.forest.bound_tree). Every other field equals definition 1.0.0: the tier cuts, the P/GP bands, the eligibility rule, the selection, the sizing and the costs. The golden decisions of the frozen #21 replay stay in the file of definition 1.0.0.",
+  "strategy_definition": {
+    "strategy_id": "large_model_value_v0",
+    "definition_version": "1.1.0",
+    "provisional_semantics": false,
+    "universe": {
+      "universe_id": "universe:sample-evidence-us",
+      "universe_version": "2026.07.12",
+      "content_sha256": "d4281c12d9c00c1508895ed77b1270e6b48e3788e5b579868beec32c1fb91205"
+    },
+    "schedule": {
+      "rule_id": "calendar_quarter_end_utc",
+      "first_cutoff_at": "2026-03-31T23:59:59Z",
+      "cutoff_inclusive": true
+    },
+    "labor_efficiency": {
+      "factor_key": "capital_adjusted_labor_efficiency",
+      "factor_version": "0.2.0",
+      "risk_free": {
+        "rule_id": "per_cutoff_versioned_parameter",
+        "instrument": "us_treasury_bill_3_month",
+        "rate_unit": "annualized_decimal_fraction",
+        "missing_rate_reason": "missing_risk_free_rate_parameter"
+      },
+      "unit": {
+        "dimension": "reporting_currency_per_employee",
+        "unit_code": "reporting_currency_per_employee"
+      },
+      "quantization": {
+        "decimal_places": 2,
+        "rounding": "half_even"
+      },
+      "missing_numerator_reason": "missing_gross_profit_fact",
+      "missing_capital_base_reason": "missing_total_assets_fact",
+      "missing_denominator_reason": "missing_headcount_disclosure",
+      "nonpositive_denominator_reason": "nonpositive_headcount"
+    },
+    "labor_efficiency_tree_keys": {
+      "financial": {
+        "tree_key": "gppe_banking_tce",
+        "tree_version": "v2",
+        "tree_sha256": "f123bc093e4dcc5e4a2e889276957783bdd0a18f5b92fafd7430cb36d7171f1a"
+      },
+      "non_financial": {
+        "tree_key": "gppe",
+        "tree_version": "production-topt-v0.2.0",
+        "tree_sha256": "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d"
+      },
+      "insurance": {
+        "tree_key": "gppe",
+        "tree_version": "production-topt-v0.2.0",
+        "tree_sha256": "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d"
+      }
+    },
+    "price_to_sales": {
+      "factor_key": "price_to_sales",
+      "factor_version": "0.1.0",
+      "market_value_rule": "shares_outstanding_times_last_unadjusted_close",
+      "price_rule": "last_unadjusted_close_at_or_before_cutoff",
+      "shares_rule": "latest_knowable_shares_outstanding_at_or_before_cutoff",
+      "revenue_rule": "latest_complete_fiscal_year_total_revenue",
+      "unit": {
+        "dimension": "dimensionless",
+        "unit_code": "ratio"
+      },
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      },
+      "missing_market_value_reason": "missing_market_value_input",
+      "missing_revenue_reason": "missing_revenue_fact",
+      "nonpositive_revenue_reason": "nonpositive_revenue"
+    },
+    "price_to_gross_profit": {
+      "factor_key": "price_to_gross_profit",
+      "factor_version": "1.0.0",
+      "market_value_rule": "shares_outstanding_times_last_unadjusted_close",
+      "price_rule": "last_unadjusted_close_at_or_before_cutoff",
+      "shares_rule": "latest_knowable_shares_outstanding_at_or_before_cutoff",
+      "gross_profit_rule": "latest_complete_fiscal_year_gross_profit",
+      "unit": {
+        "dimension": "dimensionless",
+        "unit_code": "ratio"
+      },
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      },
+      "missing_market_value_reason": "missing_market_value_input",
+      "missing_gross_profit_reason": "missing_gross_profit_fact",
+      "nonpositive_gross_profit_reason": "nonpositive_gross_profit"
+    },
+    "tier_valuation": {
+      "factor_key": "three_tier_valuation",
+      "factor_version": "1.0.0",
+      "valuation_basis": "price_to_gross_profit",
+      "bands": [
+        {
+          "tier": "traditional",
+          "labor_efficiency_lower_bound": null,
+          "labor_efficiency_upper_bound": "1000000",
+          "target_pgp_lower_bound": "7.50",
+          "target_pgp_upper_bound": "10.00"
+        },
+        {
+          "tier": "tech",
+          "labor_efficiency_lower_bound": "1000000",
+          "labor_efficiency_upper_bound": "3000000",
+          "target_pgp_lower_bound": "11.43",
+          "target_pgp_upper_bound": "14.29"
+        },
+        {
+          "tier": "large_model_native",
+          "labor_efficiency_lower_bound": "3000000",
+          "labor_efficiency_upper_bound": null,
+          "target_pgp_lower_bound": "26.67",
+          "target_pgp_upper_bound": "40.00"
+        }
+      ],
+      "boundary_rule": "lower_inclusive_upper_exclusive",
+      "target_pgp_selection": "band_midpoint",
+      "provisional_thresholds": false,
+      "unit": {
+        "dimension": "dimensionless",
+        "unit_code": "ratio"
+      },
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      }
+    },
+    "valuation_gap": {
+      "rule_id": "target_pgp_over_current_pgp_minus_one",
+      "formula": "target_pgp/current_pgp-1",
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      },
+      "above_band_outcome": "rejected_valuation_above_tier_band",
+      "ranking_direction": "descending_valuation_gap",
+      "tie_break": "ascending_issuer_id"
+    },
+    "eligibility": {
+      "rule_id": "minimum_consumed_confidence_floor",
+      "minimum_confidence": "0.70",
+      "confidence_semantics": "minimum_consumed_input_confidence",
+      "maximum_input_age_days": 455,
+      "below_floor_reason": "below_confidence_floor",
+      "stale_input_reason": "stale_required_input"
+    },
+    "selection": {
+      "rule_id": "top_n_ranked_eligible",
+      "selection_count": 2
+    },
+    "sizing": {
+      "rule_id": "equal_weight_selected",
+      "weight_formula": "1/selected_count",
+      "quantization": {
+        "decimal_places": 6,
+        "rounding": "half_even"
+      },
+      "empty_selection_behavior": "retain_all_cash"
+    },
+    "execution": {
+      "rule_id": "next_eligible_market_session_open",
+      "lag_sessions": 1,
+      "price_field": "unadjusted_open",
+      "unfilled_order_behavior": "remain_cash"
+    },
+    "transaction_cost": {
+      "rule_id": "per_side_notional_basis_points",
+      "basis_points": "5"
+    },
+    "total_return": {
+      "rule_id": "unadjusted_bars_explicit_corporate_actions",
+      "price_basis": "unadjusted",
+      "corporate_action_processing": "explicit_event_lifecycle_once",
+      "adjusted_prices_affect_returns": false
+    }
+  },
+  "expected": {
+    "strategy_definition_id": "strategy-definition:de4d30e6e9cef8e0820281a63388a2699ba1992d6c7da75ab6af73c32b784ff4",
+    "strategy_definition_sha256": "de4d30e6e9cef8e0820281a63388a2699ba1992d6c7da75ab6af73c32b784ff4"
+  }
+}

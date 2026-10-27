@@ -105,8 +105,7 @@ def _normalized_payload(
     if semantic_type == "financial-fact":
         financial = ticker == "JPM"
         # #394 convergence: total_assets + revenue are captured for every issuer
-        # (the SEC financial-fact adapter provides them), so a financial issuer now
-        # takes the uniform capital-adjusted path -- gross_profit stays None for a
+        # (the SEC financial-fact adapter provides them). gross_profit stays None for a
         # bank (it reports pre-provision profit as its industry-branch numerator).
         payload: dict[str, Any] = {
             **identity,
@@ -118,6 +117,11 @@ def _normalized_payload(
             "revenue": "100000000",
             "shares_outstanding": "10000000",
             "pre_provision_profit": "80000000" if financial else None,
+            # #1518: the bank's four banking leaves. TCE = 50M - 5M - (3M + 2M) = 40M, a fifth of its assets.
+            "stockholders_equity": "50000000" if financial else None,
+            "preferred_stock_value": "5000000" if financial else None,
+            "goodwill": "3000000" if financial else None,
+            "intangible_assets_net_excluding_goodwill": "2000000" if financial else None,
         }
         if financial_vintage is not None:
             payload["vintage"] = financial_vintage
@@ -522,7 +526,8 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert len(results) == 20
     assert len({item.issuer_id for item in results}) == 20
     assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 20
-    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000"), Decimal("700000")}
+    # The bank is 780,000 on its measured TCE (#1518); on total assets it would be 700,000.
+    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000"), Decimal("780000")}
     alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
     # #705: the previous pin was 8 — the dual-listed issuer summed price×shares
     # per listing while every listing carries the COMPANY-total dei share count,
@@ -535,12 +540,14 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     )
     assert alphabet.current_ps == single_class.current_ps, "dual listing must not change the company's P/S"
     financial = next(item for item in results if item.issuer_id == "issuer:lei:8I5DZWZKVSZI1NUHU748")
-    # #394: the financial issuer now takes the uniform capital-adjusted path and flows
-    # through the tier / P-S valuation like every other issuer -- no not-comparable
-    # short-circuit. (80_000_000 - 200_000_000*0.05)/100 = 700_000, not 80M/100.
+    # #394, #1518: the financial issuer flows through the tier / P-S valuation like every other issuer
+    # -- no not-comparable short-circuit. The definition pins the banking tree for it, so the capital
+    # charge is its measured tangible common equity: (80_000_000 - 40_000_000*0.05)/100 = 780_000.
+    # The total-assets value of the same bank is (80_000_000 - 200_000_000*0.05)/100 = 700_000.
     assert financial.availability is ToptCoreAvailability.AVAILABLE
-    assert financial.gppe == Decimal("700000")
-    assert financial.operating_efficiency == Decimal("700000")
+    assert financial.gppe == Decimal("780000")
+    assert financial.operating_efficiency == Decimal("780000")
+    assert financial.capital_adjusted_gross_profit == Decimal("78000000")
     assert financial.tier is not None
     assert financial.current_ps is not None
     assert financial.reason_codes == ()
@@ -1591,9 +1598,9 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     written = seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
     )
-    # 19 non-financial issuers × 5 financial keys + JPM's 4 (no gross_profit on
-    # corpus shape) + 20 last_close rows.
-    assert written == 19 * 5 + 4 + 20
+    # 19 non-financial issuers × 5 financial keys + JPM's 4 (no gross_profit on corpus shape)
+    # + JPM's 4 banking leaves (#1518) + 20 last_close rows.
+    assert written == 19 * 5 + 4 + 4 + 20
 
     executed_at = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
     run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(

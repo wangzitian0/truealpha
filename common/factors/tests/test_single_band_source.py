@@ -52,7 +52,10 @@ _MIGRATIONS = _REPO / "db" / "migrations"
 #: This PR's migration. Every migration from it on is in scope; the older ones are history.
 _FIRST_SCANNED_MIGRATION = "20261013T0201_factors_price_to_gross_profit.sql"
 _DATA = _REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
-_ALLOWED = frozenset({_DATA / LIVE_STRATEGY_DEFINITION_RESOURCE})
+#: The frozen #21 file (definition 1.0.0) holds the same band values as the live file, and the golden
+#: decisions that its replay reads. It is named here on purpose (#1518).
+_FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
+_ALLOWED = frozenset({_DATA / LIVE_STRATEGY_DEFINITION_RESOURCE, _DATA / _FROZEN_RESOURCE})
 _BAND_FIELD = re.compile(
     r"^(?:labor_efficiency|gppe)_(?:lower|upper)(?:_bound)?$|^target_[a-z]+_(?:lower|upper|midpoint)(?:_bound)?$"
 )

@@ -45,7 +45,16 @@ from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LargeModelValueV0Definition, ValuationBasis
 
-from factors.forest import FOREST, GPPE_V0_TREE, AliasKind, IssuerClass, evaluate, required_inputs
+from factors.forest import (
+    FOREST,
+    GPPE_V0_TREE,
+    AliasKind,
+    IssuerClass,
+    bound_tree,
+    capital_adjusted_node,
+    evaluate,
+    required_inputs,
+)
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -113,6 +122,12 @@ class ToptCoreReasonCode(StrEnum):
     MISSING_SHARES_OUTSTANDING = "missing_shares_outstanding"
     MISSING_MARKET_PRICE = "missing_market_price"
     MISSING_PRE_PROVISION_PROFIT = "missing_pre_provision_profit"
+    #: #1518: the four captured leaves of the banking tree (`gppe_banking_tce`). The reason of a leaf
+    #: is `missing_<snapshot field>`, the field being the `topt_snapshot_field` alias of the leaf.
+    MISSING_STOCKHOLDERS_EQUITY = "missing_stockholders_equity"
+    MISSING_PREFERRED_STOCK_VALUE = "missing_preferred_stock_value"
+    MISSING_GOODWILL = "missing_goodwill"
+    MISSING_INTANGIBLE_ASSETS_NET_EXCLUDING_GOODWILL = "missing_intangible_assets_net_excluding_goodwill"
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"
     NONPOSITIVE_SHARES_OUTSTANDING = "nonpositive_shares_outstanding"
@@ -151,6 +166,16 @@ SHARE_BASIS_REASON_CODES = frozenset(
         ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
         ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
     }
+)
+
+
+#: The snapshot fields that only the banking tree reads (#1518): the captured leaves of `gppe_banking_tce`.
+#: `test_core.py` holds this tuple equal to the `topt_snapshot_field` aliases of those leaves.
+TCE_SNAPSHOT_FIELDS = (
+    "stockholders_equity",
+    "preferred_stock_value",
+    "goodwill",
+    "intangible_assets_net_excluding_goodwill",
 )
 
 
@@ -299,12 +324,23 @@ class ToptCoreSnapshotInput(_FrozenModel):
     #: identity above then names a listing only so that the row has coordinates. No value rests on it.
     #: The key is absent from the serialized form when False, so a stored input keeps its content hash.
     primary_listing_undeclared: bool = False
+    #: #1518: the four captured leaves of the banking tree `gppe_banking_tce`. Each name is the
+    #: `topt_snapshot_field` alias of one leaf. A bank carries the values it was captured with. Any other
+    #: issuer carries none. Each key is absent from the serialized form when None, so a snapshot stored
+    #: before #1518 reloads with the same content hash.
+    stockholders_equity: ToptMetricInput | None = None
+    preferred_stock_value: ToptMetricInput | None = None
+    goodwill: ToptMetricInput | None = None
+    intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
 
     @model_serializer(mode="wrap")
-    def omit_false_primary_listing_undeclared(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
         if not self.primary_listing_undeclared:
             data.pop("primary_listing_undeclared", None)
+        for name in TCE_SNAPSHOT_FIELDS:
+            if getattr(self, name) is None:
+                data.pop(name, None)
         return data
 
     @field_validator("cutoff")
@@ -334,6 +370,7 @@ class ToptCoreSnapshotInput(_FrozenModel):
             "headcount": self.headcount,
             "revenue": self.revenue,
             "pre_provision_profit": self.pre_provision_profit,
+            **{name: getattr(self, name) for name in TCE_SNAPSHOT_FIELDS},
         }
         for expected_metric, metric in expected_metrics.items():
             if metric is None:
@@ -626,8 +663,14 @@ def compute_topt_gppe(
     *,
     invocation_id: str,
     gppe_definition: GppeV0Definition,
+    definition: LargeModelValueV0Definition,
 ) -> ToptGppeResult:
-    """Compute the module-2 base output without invoking the tier composite."""
+    """Compute the module-2 base output without invoking the tier composite.
+
+    The tree is the one that ``definition`` pins for the issuer's class (`bound_tree`, #1518): the
+    uniform total-assets tree for a non-financial issuer or an insurer, the tangible-common-equity
+    tree for a bank. The composite evaluates the same pin, so one issuer has one value.
+    """
 
     if not invocation_id.startswith("topt-gppe-invocation:"):
         raise ValueError("invocation_id must be a content-addressed TOPT GPPE invocation")
@@ -639,14 +682,15 @@ def compute_topt_gppe(
             reasons=(ToptCoreReasonCode.PRIMARY_LISTING_UNDECLARED,),
             freshness=_snapshot_freshness(snapshot),
         )
-    # The formula is the registered tree (#528, docs/metric-forest.md): which inputs a class
+    # The formula is the pinned tree (#528, #1518, docs/metric-forest.md): which inputs a class
     # needs, which numerator it uses and how the capital charge is bound are declared there,
     # not branched on here. A captured input names the snapshot field that carries it (a
     # missing one is `missing_<field>`); a parameter names the definition field.
     issuer_class = IssuerClass(snapshot.operating_branch.value)
+    tree = bound_tree(definition, issuer_class)
     inputs: dict[str, Decimal | None] = {}
     reasons_list: list[ToptCoreReasonCode] = []
-    for node in required_inputs(FOREST, GPPE_V0_TREE, issuer_class):
+    for node in required_inputs(FOREST, tree, issuer_class):
         parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
         if parameter is not None:
             inputs[node.key] = getattr(gppe_definition, parameter)
@@ -689,13 +733,12 @@ def compute_topt_gppe(
         )
 
     confidence = min(cell.confidence for cell in snapshot.cell_inputs)
-    # One tree for every class (#394's uniform charge, now the tree's per-class binding): a
-    # bank's numerator is its pre-provision profit, everyone else's is gross profit, and the
-    # same total_assets * risk_free_rate charge is subtracted for all. Financials flow through
-    # the same tier/P-S path. The tree's decimal context is the one this kernel always used.
-    evaluation = evaluate(FOREST, GPPE_V0_TREE, issuer_class=issuer_class, inputs=inputs)
-    capital_adjusted = evaluation.values["capital_adjusted_gross_profit"]
-    gppe = evaluation.values["gppe_uniform_charge_v0"]
+    # One pinned tree per class: a bank's numerator is its pre-provision profit, everyone else's is
+    # gross profit. The capital charge is the tree's: total assets for the uniform tree, measured
+    # tangible common equity for the banking tree. The tree's decimal context is the one this kernel always used.
+    evaluation = evaluate(FOREST, tree, issuer_class=issuer_class, inputs=inputs)
+    capital_adjusted = evaluation.values[capital_adjusted_node(tree, issuer_class)]
+    gppe = evaluation.values[tree.root]
     # Every input was checked present and headcount positive above, so nothing is undefined.
     assert capital_adjusted is not None and gppe is not None and not evaluation.undefined
     return ToptGppeResult(

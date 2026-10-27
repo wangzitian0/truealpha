@@ -8,17 +8,18 @@ that read every record or every period would exclude every issuer. Each test cha
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from factors.composite.strategy_evaluator import (
-    UNIFORM_LABOR_EFFICIENCY_BINDING,
     EvaluatedDecision,
     IssuerInput,
     _required_inputs,
     evaluate_cutoff,
 )
+from factors.forest import IssuerClass
 from truealpha_contracts.strategy import (
     ExclusionReason,
     GoldenDecisionOutcome,
@@ -65,16 +66,18 @@ def _issuer(
         issuer_id="issuer:age",
         records=held,
         knowable_at={key: _CUTOFF - ages.get(key, _FRESH) for key in held} if knowable_at is None else knowable_at,
+        issuer_class=IssuerClass.NON_FINANCIAL,
     )
 
 
 def _decide(issuer: IssuerInput, definition: LargeModelValueV0Definition | None = None) -> EvaluatedDecision:
+    """The decision for one issuer. An issuer built without a class is a non-financial issuer here."""
+    classed = issuer if issuer.issuer_class is not None else replace(issuer, issuer_class=IssuerClass.NON_FINANCIAL)
     [decision] = evaluate_cutoff(
-        [issuer],
+        [classed],
         definition=_definition() if definition is None else definition,
         cutoff_at=_CUTOFF,
         risk_free_rate=Decimal("0"),
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
     )
     return decision
 
@@ -233,6 +236,7 @@ def test_a_stale_issuer_does_not_take_a_rank_from_a_fresh_one() -> None:
         issuer_id="issuer:old",
         records=_records(),
         knowable_at={key: _CUTOFF - timedelta(days=456) for key in _records()},
+        issuer_class=IssuerClass.NON_FINANCIAL,
     )
 
     decisions = {
@@ -242,7 +246,6 @@ def test_a_stale_issuer_does_not_take_a_rank_from_a_fresh_one() -> None:
             definition=_definition(),
             cutoff_at=_CUTOFF,
             risk_free_rate=Decimal("0"),
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         )
     }
 

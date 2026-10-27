@@ -123,18 +123,22 @@ def _expected_input_keys() -> tuple[str, ...]:
         from factors.composite import strategy_evaluator
 
         peg_keys: tuple[str, ...] = strategy_evaluator._input_keys("peg")
-        return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(peg_keys)))
+        return tuple(sorted(set(strategy_evaluator.required_input_keys(load_strategy_definition())) | set(peg_keys)))
     except (
         ImportError,
         AttributeError,
     ):  # the tool also runs where data_engine is not installed (a bare fixture DB job)
         return (
+            "goodwill",
             "gross_profit",
             "headcount",
+            "intangible_assets_net_excluding_goodwill",
             "last_close",
             "net_income",
+            "preferred_stock_value",
             "revenue",
             "shares_outstanding",
+            "stockholders_equity",
             "total_assets",
         )
 

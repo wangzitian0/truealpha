@@ -14,21 +14,24 @@ from importlib import resources
 
 import pytest
 from factors.composite.strategy_evaluator import (
-    UNIFORM_LABOR_EFFICIENCY_BINDING,
     EvaluatedDecision,
     IssuerInput,
     evaluate_cutoff,
     rank_and_select,
 )
-from factors.forest import IssuerClass
+from factors.forest import IssuerClass, bound_tree, uniform_tree_pins
 from truealpha_contracts.strategy import (
     LIVE_STRATEGY_DEFINITION_RESOURCE,
     ExclusionReason,
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
     load_live_strategy_definition,
+    load_strategy_definition,
     load_strategy_definition_corpus,
 )
+
+#: The frozen #21 file: definition 1.0.0 and its golden decisions. The live file is definition 1.1.0.
+_FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 
 _CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 
@@ -43,7 +46,7 @@ def _known_before(records: dict, cutoff: datetime, *, days: int = 3) -> dict[str
 
 
 def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
-    raw = resources.files("truealpha_contracts.data").joinpath(LIVE_STRATEGY_DEFINITION_RESOURCE).read_bytes()
+    raw = resources.files("truealpha_contracts.data").joinpath(_FROZEN_RESOURCE).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
     corpus = json.loads(raw)
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
@@ -68,6 +71,7 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
                     record["input_key"]: datetime.fromisoformat(record["knowable_at"].replace("Z", "+00:00"))
                     for record in decision["inputs"]
                 },
+                issuer_class=IssuerClass(decision["issuer_branch"]),
             )
             for decision in decisions
         ]
@@ -76,7 +80,7 @@ def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
             item.issuer_id: item
             for item in evaluate_cutoff(
                 issuers,
-                labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+                tree_pins=uniform_tree_pins(),
                 definition=definition,
                 cutoff_at=as_of,
                 risk_free_rate=rates[cutoff],
@@ -167,10 +171,14 @@ def test_in_band_issuer_is_not_rejected_above_band() -> None:
         "last_close": (Decimal("1"), Decimal("0.9")),
     }
     cutoff = datetime.fromisoformat("2026-06-30T23:59:59+00:00")
-    issuer = IssuerInput(issuer_id="issuer:inband", records=records, knowable_at=_known_before(records, cutoff))
+    issuer = IssuerInput(
+        issuer_id="issuer:inband",
+        records=records,
+        knowable_at=_known_before(records, cutoff),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
     [decision] = evaluate_cutoff(
         [issuer],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=cutoff,
         risk_free_rate=Decimal("0"),
@@ -225,6 +233,7 @@ def _peg_inputs(*, series: dict | None = None, **overrides: str) -> IssuerInput:
         records=records,
         knowable_at=_known_before(records, _PEG_CUTOFF),
         periodic_records={"net_income": _PEG_SERIES if series is None else series},
+        issuer_class=IssuerClass.NON_FINANCIAL,
     )
 
 
@@ -247,7 +256,6 @@ _DECLINING_SERIES = {
 def test_the_decision_carries_peg_when_module_1s_inputs_are_present() -> None:
     decision = evaluate_cutoff(
         [_peg_inputs()],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -265,7 +273,6 @@ def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() 
     """
     decision = evaluate_cutoff(
         [_peg_inputs(series={})],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -283,7 +290,6 @@ def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -
     # A shrinking issuer must not read as "cheap" through a negative denominator.
     decision = evaluate_cutoff(
         [_peg_inputs(series=_DECLINING_SERIES)],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -311,12 +317,12 @@ def test_peg_rank_orders_by_peg_without_touching_selection() -> None:
             records=_peg_inputs().records,
             knowable_at=_peg_inputs().knowable_at,
             periodic_records={"net_income": _SLOW_SERIES},
+            issuer_class=IssuerClass.NON_FINANCIAL,
         ),
     ]
     decisions = rank_and_select(
         evaluate_cutoff(
             issuers,
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
             definition=definition,
             cutoff_at=_PEG_CUTOFF,
             risk_free_rate=Decimal("0"),
@@ -337,7 +343,6 @@ def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
     decisions = rank_and_select(
         evaluate_cutoff(
             [_peg_inputs(series={})],
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
             definition=definition,
             cutoff_at=_PEG_CUTOFF,
             risk_free_rate=Decimal("0"),
@@ -384,7 +389,6 @@ def test_the_evaluator_projects_the_keys_the_registry_declares() -> None:
     through the one alias map. The same keys as before, from one declaration."""
     from factors.composite.strategy_evaluator import _input_keys
 
-    assert _input_keys("gross_profit_per_employee") == ("gross_profit", "total_assets", "headcount")
     assert _input_keys("price_to_sales") == ("last_close", "shares_outstanding", "revenue")
     assert _input_keys("price_to_gross_profit") == ("last_close", "shares_outstanding", "gross_profit")
     assert _input_keys("peg") == ("last_close", "shares_outstanding", "net_income")
@@ -393,7 +397,6 @@ def test_the_evaluator_projects_the_keys_the_registry_declares() -> None:
 def test_nonpositive_price_does_not_crash_evaluator() -> None:
     decisions = evaluate_cutoff(
         [_peg_inputs(last_close="0")],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -426,7 +429,6 @@ def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) 
 
     decisions = evaluate_cutoff(
         [_peg_inputs()],
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -447,7 +449,12 @@ def test_definition_1_0_0_tiers_a_low_margin_issuer_on_labor_efficiency_only() -
         "last_close": (Decimal("1"), Decimal("0.9")),
     }
     decision = _evaluate_v1(
-        IssuerInput(issuer_id="issuer:thin", records=records, knowable_at=_known_before(records, _V1_CUTOFF))
+        IssuerInput(
+            issuer_id="issuer:thin",
+            records=records,
+            knowable_at=_known_before(records, _V1_CUTOFF),
+            issuer_class=IssuerClass.NON_FINANCIAL,
+        )
     )["issuer:thin"]
     assert decision.tier == "tech"
     assert decision.current_price_to_gross_profit == Decimal("12.0000")
@@ -533,13 +540,11 @@ def test_the_leverage_flag_is_gone_from_the_evaluator() -> None:
     assert "financial_leverage_adjusted" not in inspect.signature(evaluate_cutoff).parameters
 
 
-def test_binding_table_ranks_financial_on_banking_and_every_other_class_on_uniform() -> None:
-    from factors.composite.strategy_evaluator import LABOR_EFFICIENCY_BY_CLASS
-
-    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.FINANCIAL].metric == "gppe_banking_tce_v1"
-    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.NON_FINANCIAL].metric == "gppe_uniform_charge_v0"
-    assert LABOR_EFFICIENCY_BY_CLASS[IssuerClass.INSURANCE].metric == "gppe_uniform_charge_v0"
-    assert None not in LABOR_EFFICIENCY_BY_CLASS
+def test_the_live_definition_ranks_financial_on_banking_and_every_other_class_on_uniform() -> None:
+    live = _definition()
+    assert bound_tree(live, IssuerClass.FINANCIAL).root == "gppe_banking_tce_v1"
+    assert bound_tree(live, IssuerClass.NON_FINANCIAL).root == "gppe_uniform_charge_v0"
+    assert bound_tree(live, IssuerClass.INSURANCE).root == "gppe_uniform_charge_v0"
 
 
 # --- #1176 follow-up: the live path never ranks a classless issuer on a fallback metric -----------
@@ -578,27 +583,37 @@ def test_a_live_issuer_without_a_class_is_unavailable_for_labor_efficiency(shape
     assert decision.exclusion_reason == "missing_issuer_class"
 
 
-def test_the_live_binding_table_has_no_classless_entry() -> None:
-    from factors.composite.strategy_evaluator import LABOR_EFFICIENCY_BY_CLASS
-
-    assert None not in LABOR_EFFICIENCY_BY_CLASS
-
-
-def test_the_frozen_uniform_binding_ranks_a_classless_issuer_on_the_uniform_charge() -> None:
-    # The #21 golden replay passes this binding by name. Its classless decisions stay uniform.
-    from factors.composite.strategy_evaluator import UNIFORM_LABOR_EFFICIENCY_BINDING
-
+def test_the_frozen_replay_pins_rank_a_bank_on_the_uniform_charge() -> None:
+    # The #21 golden replay passes `uniform_tree_pins()` with the frozen definition 1.0.0. Its bank
+    # keeps the total-assets charge that the golden was frozen with. Hand value:
+    # (86,807,000,000 - 4,424,900,000,000 x 0.05) / 318,512 = -422,081.43 (2 dp, half-even).
     records = _without(_TCE_KEYS)
-    issuer = IssuerInput(issuer_id="issuer:acme", records=records, knowable_at=_known_before(records, _PEG_CUTOFF))
+    issuer = _bank(records)
     [decision] = evaluate_cutoff(
         [issuer],
-        definition=_definition(),
+        definition=load_strategy_definition(_FROZEN_RESOURCE),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0.05"),
-        labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+        tree_pins=uniform_tree_pins(),
     )
-    expected = (Decimal("86807000000") - Decimal("4424900000000") * Decimal("0.05")) / Decimal("318512")
-    assert decision.capital_adjusted_labor_efficiency == expected.quantize(Decimal("0.01"))
+    assert decision.capital_adjusted_labor_efficiency == Decimal("-422081.43")
+    assert decision.labor_efficiency_metric == "gppe_uniform_charge_v0"
+
+
+def test_a_definition_that_pins_no_tree_cannot_be_evaluated_without_the_replay_pins() -> None:
+    issuer = IssuerInput(
+        issuer_id="issuer:acme",
+        records=_without(_TCE_KEYS),
+        knowable_at=_known_before(_without(_TCE_KEYS), _PEG_CUTOFF),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    with pytest.raises(ValueError, match="pins no labor-efficiency tree"):
+        evaluate_cutoff(
+            [issuer],
+            definition=load_strategy_definition(_FROZEN_RESOURCE),
+            cutoff_at=_PEG_CUTOFF,
+            risk_free_rate=Decimal("0.05"),
+        )
 
 
 def test_evaluator_excludes_a_bank_without_preferred_stock_value() -> None:
@@ -655,14 +670,14 @@ def test_an_exclusion_after_the_metric_is_chosen_still_names_it() -> None:
 # -- definition 1.0.0: the P/GP valuation basis (#1235) ---------------------------------
 
 
-_V1_CORPUS = load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)
+_V1_CORPUS = load_strategy_definition_corpus(_FROZEN_RESOURCE)
 _V1_CUTOFF = datetime.fromisoformat("2026-10-08T00:00:00+00:00")
 
 
 def test_evaluator_reproduces_every_v1_golden_decision_exactly() -> None:
     """The evaluator half of the agreement. The other half, the file against an independent
     Decimal oracle written from the owner's values, is common/contracts/tests/test_strategy_v1.py."""
-    definition = load_live_strategy_definition()
+    definition = load_strategy_definition(_FROZEN_RESOURCE)
     golden = _V1_CORPUS["golden_decision_set"]
     rates = {rate["cutoff_at"]: Decimal(rate["annualized_rate"]) for rate in golden["risk_free_rates"]}
     by_cutoff: dict[str, list[dict]] = {}
@@ -682,6 +697,7 @@ def test_evaluator_reproduces_every_v1_golden_decision_exactly() -> None:
                     record["input_key"]: datetime.fromisoformat(record["knowable_at"].replace("Z", "+00:00"))
                     for record in decision["inputs"]
                 },
+                issuer_class=IssuerClass(decision["issuer_branch"]),
             )
             for decision in decisions
         ]
@@ -689,7 +705,7 @@ def test_evaluator_reproduces_every_v1_golden_decision_exactly() -> None:
             item.issuer_id: item
             for item in evaluate_cutoff(
                 issuers,
-                labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
+                tree_pins=uniform_tree_pins(),
                 definition=definition,
                 cutoff_at=datetime.fromisoformat(cutoff.replace("Z", "+00:00")),
                 risk_free_rate=rates[cutoff],
@@ -729,7 +745,12 @@ def _v1_issuer(
         "shares_outstanding": (Decimal(market_value), Decimal("0.9")),
         "last_close": (Decimal("1"), Decimal("0.9")),
     }
-    return IssuerInput(issuer_id=issuer_id, records=records, knowable_at=_known_before(records, _V1_CUTOFF))
+    return IssuerInput(
+        issuer_id=issuer_id,
+        records=records,
+        knowable_at=_known_before(records, _V1_CUTOFF),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
 
 
 def _evaluate_v1(*issuers: IssuerInput) -> dict[str, EvaluatedDecision]:
@@ -737,7 +758,6 @@ def _evaluate_v1(*issuers: IssuerInput) -> dict[str, EvaluatedDecision]:
         item.issuer_id: item
         for item in evaluate_cutoff(
             list(issuers),
-            labor_efficiency_by_class=UNIFORM_LABOR_EFFICIENCY_BINDING,
             definition=load_live_strategy_definition(),
             cutoff_at=_V1_CUTOFF,
             risk_free_rate=Decimal("0"),
@@ -805,7 +825,12 @@ def _recorded_ps_issuer(**revenue: str) -> IssuerInput:
     }
     if "value" in revenue:
         records["revenue"] = (Decimal(revenue["value"]), Decimal(revenue.get("confidence", "0.9")))
-    return IssuerInput(issuer_id="issuer:ps", records=records, knowable_at=_known_before(records, _V1_CUTOFF))
+    return IssuerInput(
+        issuer_id="issuer:ps",
+        records=records,
+        knowable_at=_known_before(records, _V1_CUTOFF),
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
 
 
 @pytest.mark.parametrize(
@@ -823,3 +848,57 @@ def test_v1_records_ps_and_never_gates_on_it(revenue: dict[str, str]) -> None:
     assert decision.current_price_to_gross_profit == Decimal("5.0000")
     expected_ps = Decimal("50.0000") if revenue.get("value") == "100" else None
     assert decision.current_price_to_sales == expected_ps
+
+
+# -- definition 1.1.0: the decision evaluates the pinned tree (#1518) ---------------------------------
+
+
+def _jpm_fy2025_bank() -> IssuerInput:
+    # JPM FY2025 10-K (accession 0001628280-26-008131, repo sample apps/data-engine/samples/filings):
+    # equity 362,438M; preferred stock 20,045M; goodwill 52,731M; intangibles 2,600M;
+    # employees 318,512; pre-provision profit 86,807M; total assets 4,424,900M.
+    records = {
+        **_BANK_RECORDS_WITH_TCE,
+        "stockholders_equity": (Decimal("362438000000"), Decimal("0.9")),
+        "preferred_stock_value": (Decimal("20045000000"), Decimal("0.9")),
+        "goodwill": (Decimal("52731000000"), Decimal("0.9")),
+        "intangible_assets_net_excluding_goodwill": (Decimal("2600000000"), Decimal("0.9")),
+    }
+    return _bank(records)
+
+
+def test_the_live_decision_of_a_bank_is_the_hand_derived_tce_value_not_the_total_assets_value() -> None:
+    # Hand computation, rate 0.05:
+    #   TCE          = 362,438M - 20,045M - 52,731M - 2,600M = 287,062M
+    #   real profit  = 86,807M - 287,062M x 0.05             = 72,453.9M
+    #   value        = 72,453.9M / 318,512                   = 227,476.2018... -> 227,476.20 (2 dp, half-even)
+    # The total-assets value of the same bank is (86,807M - 4,424,900M x 0.05) / 318,512 = -422,081.43.
+    [decision] = evaluate_cutoff(
+        [_jpm_fy2025_bank()], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
+    assert decision.capital_adjusted_labor_efficiency == Decimal("227476.20")
+    assert decision.labor_efficiency_metric == "gppe_banking_tce_v1"
+
+
+def test_a_reported_zero_preferred_stock_is_a_value_not_a_gap() -> None:
+    # TCE = 340,000M - 0 - (5,000M + 1,000M) = 334,000M. Real profit = 86,807M - 334,000M x 0.05 = 70,107M.
+    # Value = 70,107M / 318,512 = 220,107.88 (2 dp, half-even).
+    records = {**_BANK_RECORDS_WITH_TCE, "preferred_stock_value": (Decimal("0"), Decimal("0.9"))}
+    [decision] = evaluate_cutoff(
+        [_bank(records)], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+    )
+    assert decision.exclusion_reason is None
+    assert decision.capital_adjusted_labor_efficiency == Decimal("220107.88")
+
+
+def test_a_pin_that_differs_from_the_registered_tree_stops_the_evaluation() -> None:
+    # The tick fails before it ranks anyone, and no row is written (#1518, U9).
+    payload = json.loads(
+        json.dumps(load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)["strategy_definition"])
+    )
+    payload["labor_efficiency_tree_keys"]["financial"]["tree_sha256"] = "0" * 64
+    pinned_elsewhere = LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
+    with pytest.raises(ValueError, match="registered tree has hash"):
+        evaluate_cutoff(
+            [_jpm_fy2025_bank()], definition=pinned_elsewhere, cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0.05")
+        )

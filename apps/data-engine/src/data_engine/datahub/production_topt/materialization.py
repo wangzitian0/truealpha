@@ -11,7 +11,9 @@ from decimal import Decimal
 from functools import cache, partial
 from typing import Any, Self
 
+from factors.forest import definition_pins
 from factors.production_topt import (
+    TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -254,12 +256,22 @@ class SnapshotMember(_FrozenModel):
     #: `freeze_snapshot` records it, so a replay never reads the relation again. The key is absent from
     #: the dump when False, so a snapshot stored before #1518 reloads with the same content hash.
     is_primary: bool = False
+    #: #1518: the four captured leaves of the banking tree `gppe_banking_tce` (`TCE_SNAPSHOT_FIELDS`).
+    #: A leaf is None when the capture holds no value for it. A None leaf is absent from the dump, so a
+    #: snapshot stored before #1518, and the snapshot of any issuer that is not a bank, keep their content hash.
+    stockholders_equity: ToptMetricInput | None = None
+    preferred_stock_value: ToptMetricInput | None = None
+    goodwill: ToptMetricInput | None = None
+    intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
 
     @model_serializer(mode="wrap")
-    def omit_false_is_primary(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
         if not self.is_primary:
             data.pop("is_primary", None)
+        for name in TCE_SNAPSHOT_FIELDS:
+            if getattr(self, name) is None:
+                data.pop(name, None)
         return data
 
     @field_validator("observation_ids")
@@ -372,6 +384,7 @@ class ToptCoreSnapshot(_FrozenModel):
             pre_provision_profit=common_metric("pre_provision_profit"),
             market_value_components=components,
             primary_listing_undeclared=undeclared,
+            **{name: common_metric(name) for name in TCE_SNAPSHOT_FIELDS},
         )
 
 
@@ -909,6 +922,12 @@ class PostgresToptCoreRepository:
                 unit=f"{price.currency}_per_share",
             ),
             is_primary=is_primary,
+            # A leaf that the capture holds no value for stays None: the core names it `missing_<field>`.
+            **{
+                name: _metric(financial_row, name=name, value=getattr(financial, name), unit=financial.currency)
+                for name in TCE_SNAPSHOT_FIELDS
+                if getattr(financial, name) is not None
+            },
         )
 
     def _put_snapshot(self, snapshot: ToptCoreSnapshot) -> None:
@@ -997,9 +1016,14 @@ class PostgresToptCoreRepository:
         # strategy tick evaluates, so the deployed path cannot tier with a second band set.
         definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
+        # The labor-efficiency trees are part of the invocation (#1518): the same snapshot evaluated
+        # under another pin is another invocation, never a conflict with the stored result.
         gppe_invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
             "gppe_definition": gppe_definition.model_dump(mode="json"),
+            "labor_efficiency_trees": {
+                name: pin.model_dump(mode="json") for name, pin in sorted(definition_pins(definition).items())
+            },
         }
         gppe_invocation_sha256 = canonical_sha256(gppe_invocation_payload)
         gppe_invocation_id = f"topt-gppe-invocation:{gppe_invocation_sha256}"
@@ -1008,6 +1032,7 @@ class PostgresToptCoreRepository:
                 factor_input,
                 invocation_id=gppe_invocation_id,
                 gppe_definition=gppe_definition,
+                definition=definition,
             )
             for factor_input in factor_inputs
         )

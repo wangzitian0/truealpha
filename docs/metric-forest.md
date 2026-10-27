@@ -200,7 +200,7 @@ flowchart TB
 | tree | realizes | root = … | sign policy of the root | step |
 |---|---|---|---|---|
 | `gppe @ production-topt-v0.2.0` | labor_efficiency | (operating gross profit − total_assets × rf) / employees | `sign-is-signal`, every class (#59's reading) | **B** (proposed in #909) |
-| `gppe_banking_tce @ v1` (#1176) | labor_efficiency | (pre-provision profit − TCE × rf) / employees, where TCE = stockholders' equity − preferred stock − (goodwill + intangible assets excluding goodwill). FINANCIAL only. | `sign-is-signal`, FINANCIAL (the root) | #1176 |
+| `gppe_banking_tce @ v2` (#1176, #1518) | labor_efficiency | (pre-provision profit − TCE × rf) / employees, where TCE = stockholders' equity − preferred stock − (goodwill + intangible assets excluding goodwill). FINANCIAL only. | `sign-is-signal`, FINANCIAL (the root) | #1176 |
 | `labor_efficiency.operating_financial @ v1` | labor_efficiency, value_creation | operating real profit / employees and financial real profit / employees. `real_profit` = sum of the two. | both `sign-is-signal`: "some managers beat Treasuries, some do not" (#59 item 5) | E |
 | `value_creation.mva @ v1` | value_creation | market value − invested capital | `sign-is-signal` (value destroyed is a signal) | G |
 | `labor_efficiency.labor_cost @ v1` | labor_efficiency | gross profit / (salaries + SBC) (#59 item 2) | `sign-is-signal` | G |
@@ -222,12 +222,15 @@ The decomposition tree (step E) follows the 2026-09-08 proposal on #528:
 | node | tree | applicability | capital base | sign policy | missing input gives |
 |---|---|---|---|---|---|
 | `gppe_uniform_charge_v0` (mart column `gppe`) | `gppe @ production-topt-v0.2.0` | every class | total assets × risk-free rate | `sign-is-signal`, every class | the input's `missing_<field>` reason |
-| `gppe_banking_tce_v1` | `gppe_banking_tce @ v1` | FINANCIAL only | measured tangible common equity | `sign-is-signal`, FINANCIAL | `missing_tangible_common_equity` or `missing_preferred_stock_value`, no zero stand-in |
+| `gppe_banking_tce_v1` | `gppe_banking_tce @ v2` | FINANCIAL only | measured tangible common equity | `sign-is-signal`, FINANCIAL | `missing_tangible_common_equity` or `missing_preferred_stock_value`, no zero stand-in |
 
 The strategy ranks a FINANCIAL issuer on `gppe_banking_tce_v1`. It ranks every other class on
-`gppe_uniform_charge_v0`. One binding table selects the metric per class
-(`LABOR_EFFICIENCY_BY_CLASS` in `factors.composite.strategy_evaluator`). An issuer with no class
-is excluded with `missing_issuer_class`. The frozen #21 replay passes the uniform binding by name.
+`gppe_uniform_charge_v0`. The definition pins one tree per issuer class: `labor_efficiency_tree_keys`
+holds the tree key, the tree version and the tree content hash (strategy definition 1.1.0, #1518).
+`factors.forest.bound_tree` returns the pinned tree and raises when the pin differs from the
+registered tree. The core and the composite evaluate that pin. The bank capital base is measured
+tangible common equity (owner decision D2, 2026-10-26). An issuer with no class is excluded with
+`missing_issuer_class`. The frozen #21 replay of definition 1.0.0 passes `uniform_tree_pins()` by name.
 
 The TCE nodes are `stockholders_equity`, `preferred_stock_value`, `goodwill` and
 `intangible_assets_net_excluding_goodwill` (inputs), and `tangible_deductions`,
@@ -426,8 +429,8 @@ The existing fixed columns stay as a compatibility projection:
   the rule-22 violation that init.md names.
 - `mart.strategy_input_coverage` measures, per issuer, `required_inputs(tree, class)` of the
   trees the strategy consumes. A bank is then required to carry `pre_provision_profit`, not
-  `gross_profit`. Today `LargeModelValueV0Definition.required_input_keys()` does not depend
-  on the issuer class.
+  `gross_profit`. Since #1518, `factors.composite.strategy_evaluator.required_input_keys`
+  derives the keys from the trees that the definition pins for the issuer class.
 
 ## 8. Confidence
 
