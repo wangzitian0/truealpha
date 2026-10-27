@@ -35,13 +35,14 @@ def _row(
     cost: int = 1,
     source: str = "sec",
     endpoint: str = "companyfacts",
+    reason: str | None = None,
 ) -> None:
     connection.execute(
         """
-        insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key)
-        values (%s, %s, 'test', %s, %s, %s, %s)
+        insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key, repeat_reason)
+        values (%s, %s, 'test', %s, %s, %s, %s, %s)
         """,
-        (source, endpoint, when, ok, cost, key),
+        (source, endpoint, when, ok, cost, key, reason),
     )
 
 
@@ -81,6 +82,26 @@ def test_a_key_with_two_successful_rows_is_red_and_the_summary_names_it(connecti
     judgement = fetch_keys_once.evaluate(connection, day=day)
     assert judgement.red and judgement.duplicates == ((KEY, 2),)
     assert f"{KEY} x2" in judgement.summary and "1 key(s) fetched twice" in judgement.summary
+
+
+@pytest.mark.parametrize("reason", ["probe", "window_not_final", "answer_refused", "model_call"])
+def test_a_repeat_that_carries_a_reason_is_no_duplicate(connection: psycopg.Connection, reason: str) -> None:
+    """The gateway names why a second row of a key is no second fetch (#1521). The verdict skips those rows."""
+    day = date(2026, 1, 9)
+    key = f"sec|companyfacts|issuer:cik:{reason}|2026-10-20"  # the cases share one database: one key each
+    _row(connection, _noon(day), key=key)
+    _row(connection, _noon(day) + timedelta(hours=1), key=key, reason=reason)
+    judgement = fetch_keys_once.evaluate(connection, day=day)
+    assert not any(duplicate_key == key for duplicate_key, _rows in judgement.duplicates), judgement.summary
+    assert judgement.keyed >= 2, "a row with a reason still carries its key"
+
+
+def test_two_plain_rows_of_a_key_stay_a_duplicate_next_to_a_row_with_a_reason(connection: psycopg.Connection) -> None:
+    day = date(2026, 1, 10)
+    _row(connection, _noon(day), key=KEY)
+    _row(connection, _noon(day) + timedelta(hours=1), key=KEY)
+    _row(connection, _noon(day) + timedelta(hours=2), key=KEY, reason="probe")
+    assert fetch_keys_once.evaluate(connection, day=day).duplicates == ((KEY, 2),)
 
 
 def test_the_same_key_on_two_utc_days_is_two_fetches_of_two_days_and_not_a_duplicate(

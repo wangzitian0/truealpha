@@ -173,3 +173,129 @@ def test_every_model_call_names_its_fetch_key(moomoo_ledger_db: str, monkeypatch
     rows = _rows(llm.SOURCE)
     assert len(rows) == 2, "the headcount selection and the key health probe"
     assert [endpoint for endpoint, key in rows if key is None] == [], "a model row without a fetch key"
+
+
+# --- #1521 step 3: the gateway derives the repeat reason ------------------------------------
+
+
+class _HttpResponse:
+    """An httpx response: bytes in `content`, a status, and the checks that the callers use."""
+
+    status_code = 200
+
+    def __init__(self, body: bytes) -> None:
+        assert isinstance(body, bytes), "an httpx response holds bytes"
+        self.content = body
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return json.loads(self.content)
+
+
+class _Http:
+    """An httpx-shaped client that answers every GET with one body."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.urls: list[str] = []
+
+    def __enter__(self) -> _Http:
+        return self
+
+    def __exit__(self, *_exc: object) -> None: ...
+
+    def get(self, url: str, **_kwargs: Any) -> _HttpResponse:
+        self.urls.append(url)
+        return _HttpResponse(self.body)
+
+
+def _reasons(source: str) -> list[str | None]:
+    """The repeat reason of every ledger row of ``source``, oldest first."""
+    rows = gateway._pg_execute(
+        "select repeat_reason from staging.api_call_ledger where source = %s order by id", (source,)
+    ).fetchall()
+    return [reason for (reason,) in rows]
+
+
+_SUBMISSIONS = json.dumps({"filings": {"recent": {"form": [], "filingDate": [], "accessionNumber": []}}}).encode()
+_HTML = b"<html><body>Request Rate Threshold Exceeded</body></html>"
+
+
+def test_a_forced_fetch_writes_the_key_and_the_reason_probe(moomoo_ledger_db: str, landed_keys) -> None:
+    from data_engine.sources import sec
+
+    with gateway.probe_scope(True):
+        sec.fetch_company_submissions(320193, http=_Http(_SUBMISSIONS))
+
+    ((endpoint, key),) = _rows("sec")
+    assert key == sec.submissions_key(320193).ledger_key, "a probe row names its key"
+    assert _reasons("sec") == ["probe"]
+    assert landed_keys.bodies == {}, "a probe lands nothing"
+
+
+def test_a_window_that_is_not_final_writes_the_key_and_the_reason_window_not_final(
+    moomoo_ledger_db: str, landed_keys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from data_engine.sources import yahoo
+
+    http = _Http(b'{"chart": {"result": []}}')
+    monkeypatch.setattr(yahoo.httpx, "Client", lambda **_kwargs: http)
+
+    yahoo.fetch_daily_chart("AAPL")  # no `end`: the window ends today and may still change
+
+    ((endpoint, key),) = _rows("yahoo")
+    assert key is not None and key.startswith("yahoo|chart"), "an unfinished window names its key"
+    assert _reasons("yahoo") == ["window_not_final"]
+    assert landed_keys.bodies == {}
+
+
+def test_an_html_answer_for_the_submissions_key_is_not_landed_and_writes_answer_refused(
+    moomoo_ledger_db: str, landed_keys
+) -> None:
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.standards.filing_extraction import latest_periodic_filing
+    from data_engine.sources import sec
+
+    http = _Http(_HTML)
+    with pytest.raises(ValueError):
+        latest_periodic_filing(320193, http=http, cutoff=datetime(2026, 10, 27, tzinfo=UTC))
+
+    assert landed_keys.bodies == {}, "the filing reader landed the HTML under the submissions key (#1502)"
+    ((endpoint, key),) = _rows("sec")
+    assert key == sec.submissions_key(320193).ledger_key, "a refused answer keeps its key"
+    assert _reasons("sec") == ["answer_refused"]
+
+
+def test_a_model_attempt_writes_the_reason_model_call(moomoo_ledger_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from data_engine.sources import llm
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "model": "glm-served",
+            "choices": [
+                {"message": {"content": json.dumps({"value": 17581, "candidate_index": 0, "reason": "total"})}}
+            ],
+            "usage": {"prompt_tokens": 244, "completion_tokens": 61, "total_tokens": 305},
+        }
+    ).encode()
+
+    llm.select_headcount(
+        None,
+        cik=4904,
+        accession="000000490426000013",
+        form="10-K",
+        issuer_label="AEP",
+        candidates=[llm.Candidate(17581, "As of December 31, 2025, AEP had a total of 17,581 employees.")],
+        caller="identity-test",
+        persist=False,
+        transport=lambda _url, _headers, _body: (200, answer),
+        now=lambda: datetime(2026, 9, 7, 12, tzinfo=UTC),
+    )
+
+    assert [key is not None for _endpoint, key in _rows(llm.SOURCE)] == [True]
+    assert _reasons(llm.SOURCE) == ["model_call"]

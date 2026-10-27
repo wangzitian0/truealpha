@@ -118,14 +118,19 @@ def test_a_200_answer_that_is_not_a_json_object_does_not_land_and_the_next_calle
 
     assert "not a JSON object" in first.unavailable[1]
     assert landed_keys.bodies == {}, "the refused answer is not in the index"
-    assert [(row.ok, row.fetch_key) for row in call_ledger] == [(True, None)], "the refused row carries no key"
+    assert [(row.ok, row.fetch_key, row.repeat_reason) for row in call_ledger] == [
+        (True, key.ledger_key, "answer_refused")
+    ], "the refused row keeps its key and says why"
 
     second = issuer_registry.resolve_issuer_classifications({"T1": 1})
 
     assert socket.reads == [1, 1], "the second caller asked SEC again"
     assert second.unavailable == {}
     assert set(landed_keys.bodies) == {key}, "the accepted answer landed"
-    assert [(row.ok, row.fetch_key) for row in call_ledger] == [(True, None), (True, key.ledger_key)]
+    assert [(row.ok, row.fetch_key, row.repeat_reason) for row in call_ledger] == [
+        (True, key.ledger_key, "answer_refused"),
+        (True, key.ledger_key, None),
+    ]
 
 
 def test_a_spent_budget_names_the_issuer_and_does_not_raise(monkeypatch, pauses) -> None:

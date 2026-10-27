@@ -213,7 +213,7 @@ def test_k3_a_failed_fetch_lands_nothing_so_the_next_caller_asks_again(call_ledg
     assert len(attempts) == 2 and landed_keys.bodies == {key: b"{}"}
 
 
-def test_k3_a_window_that_is_not_final_is_asked_each_time_without_a_key(call_ledger, landed_keys) -> None:
+def test_k3_a_window_that_is_not_final_is_asked_each_time_and_its_rows_say_why(call_ledger, landed_keys) -> None:
     key = FetchKey("yahoo", "chart", "symbol:AAPL", "2026-10-16")
     socket: list[str] = []
     client = _socket(socket)
@@ -227,13 +227,17 @@ def test_k3_a_window_that_is_not_final_is_asked_each_time_without_a_key(call_led
     gateway.fetch_once(key, fetch, keep=False)
 
     assert len(socket) == 2 and landed_keys.bodies == {}
-    assert [row.fetch_key for row in call_ledger] == [None, None], "an unfinished window is not a counted key"
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [(key.ledger_key, "window_not_final")] * 2, (
+        "an unfinished window keeps its key, and the reason says that the second request is no duplicate"
+    )
 
 
-def test_k3_an_answer_that_the_caller_refuses_stays_out_of_the_index_and_its_row_carries_no_key(
+def test_k3_an_answer_that_the_registered_rule_refuses_stays_out_of_the_index_and_its_row_says_so(
     call_ledger, landed_keys
 ) -> None:
-    """A refused answer is asked again on purpose, so it is not a counted fetch of the key."""
+    """A refused answer is asked again on purpose, so it is not a counted fetch of the key.
+
+    The rule is the one that `twelve_data_origin` registers for its end-of-day answers; the test passes none."""
     key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
     answers = [b'{"status":"error"}', b'{"close":"1"}']
     socket: list[str] = []
@@ -251,16 +255,18 @@ def test_k3_an_answer_that_the_caller_refuses_stays_out_of_the_index_and_its_row
             ).content
         )
 
-    accept = lambda body: b"error" not in body  # noqa: E731 - the one rule under test
-    assert gateway.fetch_once(key, fetch, accept=accept) == b'{"status":"error"}'
+    assert gateway.fetch_once(key, fetch) == b'{"status":"error"}'
     assert landed_keys.bodies == {}
-    assert gateway.fetch_once(key, fetch, accept=accept) == b'{"close":"1"}'
+    assert gateway.fetch_once(key, fetch) == b'{"close":"1"}'
     assert landed_keys.bodies == {key: b'{"close":"1"}'}
-    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key]
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [
+        (key.ledger_key, "answer_refused"),
+        (key.ledger_key, None),
+    ]
     assert len(socket) == 2
 
 
-def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_alone(call_ledger, landed_keys) -> None:
+def test_k3_a_probe_asks_the_vendor_again_names_its_key_and_leaves_the_index_alone(call_ledger, landed_keys) -> None:
     """A forced tick proves that the release reaches its vendors (`release_fetch_proof`)."""
     key = FetchKey("sec", "companyfacts", "issuer:cik:0000320193", "2026-10-16")
     landed_keys.bodies[key] = b'{"landed":"yesterday"}'
@@ -279,16 +285,16 @@ def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_al
         assert gateway.landed(key) is None
         gateway.land(key, b"ignored")
     assert socket == ["https://data.sec.gov/x"], "the probe must reach the vendor socket"
-    assert [row.fetch_key for row in call_ledger] == [None]
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [(key.ledger_key, "probe")]
     assert landed_keys.bodies == {key: b'{"landed":"yesterday"}'} and landed_keys.reuses == {}
     # Outside the probe the landed key is served again, with no request.
     assert gateway.fetch_once(key, fetch) == b'{"landed":"yesterday"}' and len(socket) == 1
 
 
-def test_k3_a_probe_stamps_no_key_on_a_call_that_names_one(call_ledger, landed_keys) -> None:
-    """Every call names its resource. Inside a probe the row still carries no key, and `land` is a no-op.
+def test_k3_a_probe_row_names_its_key_and_says_probe(call_ledger, landed_keys) -> None:
+    """Every call names its resource. Inside a probe the row carries the reason `probe`, and `land` is a no-op.
 
-    Red when a probe stamps the key: the rows of a forced tick would then count as fetches."""
+    Red when a probe row has no reason: the rows of a forced tick would then count as duplicate fetches."""
     key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
     socket: list[str] = []
     client = _socket(socket)
@@ -299,13 +305,21 @@ def test_k3_a_probe_stamps_no_key_on_a_call_that_names_one(call_ledger, landed_k
     with gateway.probe_scope(True):
         call()
         gateway.land(key, b"ignored")
-    assert [row.fetch_key for row in call_ledger] == [None] and landed_keys.bodies == {}
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [(key.ledger_key, "probe")]
+    assert landed_keys.bodies == {}
     call()
-    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key]
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [
+        (key.ledger_key, "probe"),
+        (key.ledger_key, None),
+    ]
 
 
-def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledger, landed_keys, caplog) -> None:
-    """A rule that cannot read a valid answer must not stay silent: it would unkey every call of a seat."""
+def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(
+    call_ledger, landed_keys, caplog, monkeypatch
+) -> None:
+    """A rule that cannot read a valid answer must not stay silent: it would keep every answer of a seat."""
+    from data_engine.sources import accept_rules
+
     key = FetchKey("yahoo", "chart", "symbol:AAPL", "2026-10-16")
     client = _socket([])
 
@@ -314,13 +328,15 @@ def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledge
             gateway.http_get(client, "yahoo", "chart", "https://q.example/x", identity=identity, caller="test").content
         )
 
-    def broken(_body: bytes) -> bool:
+    def broken(_key: FetchKey, _body: bytes) -> bool:
         raise RuntimeError("calendar unavailable")
 
-    with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
-        assert gateway.fetch_once(key, fetch, accept=broken) == b'{"cik":1652044}'
-    assert "the accept rule of a fetch raised" in caplog.text
-    assert landed_keys.bodies == {} and [row.fetch_key for row in call_ledger] == [None]
+    monkeypatch.setitem(accept_rules.ACCEPT_RULES, ("yahoo", "chart"), broken)
+    with caplog.at_level(logging.ERROR, logger="data_engine.sources.accept_rules"):
+        assert gateway.fetch_once(key, fetch) == b'{"cik":1652044}'
+    assert "the accept rule of yahoo/chart raised" in caplog.text
+    assert landed_keys.bodies == {}
+    assert [(row.fetch_key, row.repeat_reason) for row in call_ledger] == [(key.ledger_key, "answer_refused")]
 
 
 def test_k5_the_standards_crosswalk_read_asks_the_index_before_it_admits_a_call(landed_keys) -> None:
@@ -403,7 +419,7 @@ def test_k3_yahoo_does_not_land_a_closed_session_whose_bar_the_vendor_has_not_pu
 ) -> None:
     """Yahoo can lag after the close. The chart then ends one session early and must be asked again.
 
-    The first, refused request is a request that is asked again on purpose: its row has no key, so
+    The first, refused request is a request that is asked again on purpose: its row says `answer_refused`, so
     `fetch_keys_once` does not count the second request as a duplicate."""
     yahoo_socket.extend([_chart("2026-03-27", "2026-03-30"), _chart("2026-03-30", "2026-03-31")])
     after_close = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
@@ -411,7 +427,8 @@ def test_k3_yahoo_does_not_land_a_closed_session_whose_bar_the_vendor_has_not_pu
     assert landed_keys.bodies == {}
     _fetch_chart(date(2026, 3, 31), after_close)
     assert len(landed_keys.bodies) == 1 and yahoo_socket == []
-    assert [row.fetch_key is None for row in call_ledger] == [True, False]
+    assert [row.repeat_reason for row in call_ledger] == ["answer_refused", None]
+    assert all(row.fetch_key is not None for row in call_ledger)
 
 
 def test_k3_yahoo_does_not_land_a_window_that_ends_after_today(yahoo_socket, landed_keys) -> None:

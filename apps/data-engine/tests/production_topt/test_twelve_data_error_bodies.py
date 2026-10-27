@@ -289,12 +289,11 @@ def test_a_settled_session_lands_both_answers_and_the_next_fetcher_asks_nothing(
     assert len(asked) == 2, "the second fetcher reached the vendor for landed keys"
     assert len(landed_keys.bodies) == 2
     assert [row.fetch_key is not None for row in call_ledger] == [True, True]
-    assert {row.fetch_key.split("|")[3] for row in call_ledger} == {"2026-09-11", "2026-09-12"}
+    # The series key names the settled session that `/eod` answered, after the exclusive window end.
+    assert {row.fetch_key.split("|")[3] for row in call_ledger} == {"2026-09-11", "2026-09-12:2026-09-11"}
 
 
-def test_a_window_whose_newest_row_is_still_forming_is_asked_without_a_key_and_never_landed(
-    vendor, call_ledger, landed_keys
-):
+def test_a_window_whose_newest_row_is_still_forming_is_asked_again_and_never_landed(vendor, call_ledger, landed_keys):
     """`today == cutoff`: the row of the session may still change, so the series is not final."""
     answers, asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES), (200, _SETTLED_SERIES)])
@@ -304,7 +303,8 @@ def test_a_window_whose_newest_row_is_still_forming_is_asked_without_a_key_and_n
 
     assert [url.split("/")[-1].split("?")[0] for url in asked] == ["eod", "time_series", "time_series"]
     assert len(landed_keys.bodies) == 1, "only the end of day landed"
-    assert [row.fetch_key is None for row in call_ledger] == [False, True, True]
+    assert all(row.fetch_key is not None for row in call_ledger)
+    assert [row.repeat_reason for row in call_ledger] == [None, "window_not_final", "window_not_final"]
 
 
 def test_the_no_data_answer_is_returned_to_the_parser_and_stays_out_of_the_index(vendor, landed_keys) -> None:
@@ -331,7 +331,9 @@ def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypa
     assert waits == [], "no request was sent, so there is no minute to wait out"
 
 
-def test_the_series_of_a_session_with_no_end_of_day_is_never_kept_or_keyed(vendor, call_ledger, landed_keys) -> None:
+def test_the_series_of_a_session_with_no_end_of_day_is_never_kept_and_says_why(
+    vendor, call_ledger, landed_keys
+) -> None:
     """`/eod` has no data: the series answers for the last settled session and names no row of its own.
 
     It shares its key with the settled branch, so keeping it would serve a row-less series to a later
@@ -340,13 +342,15 @@ def test_the_series_of_a_session_with_no_end_of_day_is_never_kept_or_keyed(vendo
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
     TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_PARTITION)("AAPL", _PARTITION)
     assert landed_keys.bodies == {}, "a series without an end of day landed"
-    assert [row.fetch_key for row in call_ledger] == [None, None]
+    assert all(row.fetch_key is not None for row in call_ledger)
+    assert [row.repeat_reason for row in call_ledger] == [None, "window_not_final"], "the series is not final"
 
     next_day = date(2026, 9, 14)
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
     TwelveDataQuoteFetcher("k", throttle_seconds=0, today=next_day)("AAPL", _PARTITION)
     assert len(asked) == 4, "the next day asked for the series again"
-    assert landed_keys.bodies == {} and [row.fetch_key for row in call_ledger] == [None] * 4
+    assert landed_keys.bodies == {}
+    assert [row.repeat_reason for row in call_ledger] == [None, "window_not_final"] * 2
 
 
 def test_a_series_answer_without_a_list_of_rows_keeps_the_settled_close_and_is_not_landed(
@@ -358,10 +362,11 @@ def test_a_series_answer_without_a_list_of_rows_keeps_the_settled_close_and_is_n
     quote = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
     assert quote is not None and quote.close == Decimal("332.26999")
     assert len(landed_keys.bodies) == 1, "only the end of day landed"
-    assert [row.fetch_key is None for row in call_ledger] == [False, True]
+    assert [row.repeat_reason for row in call_ledger] == [None, "answer_refused"]
+    assert all(row.fetch_key is not None for row in call_ledger)
 
 
-def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_has_no_key(
+def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_says_so(
     vendor, call_ledger, landed_keys
 ) -> None:
     """The end of day settled the session, but the series window has not published that row yet."""
@@ -376,4 +381,5 @@ def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_h
     TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
 
     assert len(asked) == 3 and len(landed_keys.bodies) == 2, "the series was asked again and then landed"
-    assert [row.fetch_key is None for row in call_ledger] == [False, True, False]
+    assert [row.repeat_reason for row in call_ledger] == [None, "answer_refused", None]
+    assert all(row.fetch_key is not None for row in call_ledger)
