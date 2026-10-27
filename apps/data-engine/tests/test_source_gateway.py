@@ -200,6 +200,7 @@ def test_capacity_windows_follow_what_the_registry_declares() -> None:
 
 class _Response:
     def __init__(self, body: bytes, status_code: int = 200) -> None:
+        assert isinstance(body, bytes), "an httpx response holds bytes"
         self.content = body
         self.status_code = status_code
 

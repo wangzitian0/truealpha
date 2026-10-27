@@ -316,6 +316,7 @@ def test_a_byte_order_mark_does_not_hide_the_date_column() -> None:
 
 class _Response:
     def __init__(self, body: bytes, status: int = 200) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body, self.status = body, status
 
     def __enter__(self) -> _Response:

@@ -112,7 +112,10 @@ def _no_real_sleep(monkeypatch):
 
 
 class _FakeResponse:
+    status = 200
+
     def __init__(self, body: bytes) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body = body
 
     def read(self) -> bytes:
