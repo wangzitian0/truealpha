@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 
 from data_engine import raw_store
@@ -28,8 +28,18 @@ def _figi(ticker: str) -> str:
     return "bbg" + ticker.lower().replace(".", "").rjust(9, "0")
 
 
-def publish_qqq_head(connection, members: Sequence[tuple[str, int]], *, as_of: date = date(2026, 10, 16)) -> None:
-    """Publish (ticker, cik) members as the governed QQQ head. Two tickers with one CIK are one issuer."""
+def publish_qqq_head(
+    connection,
+    members: Sequence[tuple[str, int]],
+    *,
+    as_of: date = date(2026, 10, 16),
+    figures: Mapping[str, tuple[str, str]] | None = None,
+) -> None:
+    """Publish (ticker, cik) members as the governed QQQ head. Two tickers with one CIK are one issuer.
+
+    `figures` maps a ticker to the operator's (market cap, last sale price), as the parser reads them.
+    """
+    figures = figures or {}
     source = UNIVERSE_SOURCES["qqq"]
     fetched_at = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
     body = json.dumps({"members": [ticker for ticker, _cik in members], "as_of": as_of.isoformat()}).encode()
@@ -47,8 +57,9 @@ def publish_qqq_head(connection, members: Sequence[tuple[str, int]], *, as_of: d
         connection.execute(
             """
             insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, last_sale_price,
+                 cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source.etf,
@@ -57,6 +68,8 @@ def publish_qqq_head(connection, members: Sequence[tuple[str, int]], *, as_of: d
                 fetch_id,
                 ticker,
                 ticker,
+                figures.get(ticker, (None, None))[0],
+                figures.get(ticker, (None, None))[1],
                 cik,
                 _figi(ticker),
                 fetched_at,

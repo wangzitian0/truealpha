@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "policy_version": "1.0.0",
+  "description": "The tolerances of the outside comparisons that mart.oracle_outcomes records (#1523). A comparator names one comparison. A row stores the tolerance it was judged by, so a changed tolerance never rewrites an old row.",
+  "comparators": {
+    "operator_listed_units": {
+      "relative_tolerance": "0.05",
+      "explanation": "The index operator quotes a market value and a last sale price per listing. Their quotient is the listed unit count at the operator's own price. The tolerance of 5% passes the drift of a filed share count against a live quote (buybacks, an issue since the filing) and fails a unit error: an ADS ratio of 4 or a class counted twice (ratio 2)."
+    }
+  }
+}
