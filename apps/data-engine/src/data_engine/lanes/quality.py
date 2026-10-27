@@ -59,7 +59,7 @@ from truealpha_contracts.universes import key_of_lane, lane_name, record, served
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
-from data_engine.lanes.capture import TICKS, is_head_scheduled
+from data_engine.lanes.capture import TICKS
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
 from data_engine.quality import fetch_keys_once, job_run_health, runtime_shape, surface_proof
@@ -325,7 +325,7 @@ def stale_served_heads(
         universe_id = str(row[0])
         if universe_prefix and not universe_id.startswith(universe_prefix):
             continue
-        if not is_head_scheduled(universe_id, environment):
+        if not load_environment_contract().is_head_scheduled(universe_id, environment):
             continue
         scheduled += 1
         freshness = str(row[1])

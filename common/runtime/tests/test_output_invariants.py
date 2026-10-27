@@ -942,19 +942,87 @@ def test_a_head_without_a_core_fails(conn: psycopg.Connection, capsys: pytest.Ca
 
 @pytest.mark.parametrize("environment", ["staging", "production", "prod", "preview", "dev", ""])
 @pytest.mark.parametrize("family", ["topt", "qqq", "sp500", "canary", "unknown"])
-def test_the_sql_schedule_predicate_agrees_with_the_environment_contract(
+def test_the_rendered_schedule_predicate_agrees_with_the_environment_contract(
     conn: psycopg.Connection, family: str, environment: str
 ) -> None:
-    """`mart.is_head_scheduled` is the SQL mirror of the contract rule (#1346). It is a copy of the schedule
-    and the contract is the source: a status that changes in the contract must change the function in the
-    same pull request, or this test fails."""
+    """The invariants judge a head only where its environment ticks the universe (#1346). The SQL predicate is
+    rendered from the contract at import (#1522), the way `_render` writes the expected input keys. This runs
+    it in the database for each family and environment and compares it with the contract rule."""
     from truealpha_contracts.environment_contract import load_environment_contract
 
+    contract = load_environment_contract()
     universe_id = f"universe:{family}-us-2026-09-30"
-    row = conn.execute("select mart.is_head_scheduled(%s, %s)", (universe_id, environment)).fetchone()
+    predicate = _module.head_is_scheduled_sql(contract).replace("%", "%%")  # the query passes parameters
+    row = conn.execute(
+        f"select {predicate} from (select %s::text as universe_id, %s::text as environment) h",
+        (universe_id, environment),
+    ).fetchone()
 
     assert row is not None
-    assert row[0] is load_environment_contract().is_head_scheduled(universe_id, environment), (family, environment)
+    assert row[0] is contract.is_head_scheduled(universe_id, environment), (family, environment)
+
+
+def _scheduled_sp500_contract():
+    """The packaged contract with the S&P 500 scheduled in production: a variant record (#1522)."""
+    import json
+
+    from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+
+    raw = json.loads(load_environment_contract().model_dump_json())
+    production = raw["environments"]["production"]
+    production["universes"] = [
+        {"key": entry["key"], "status": "scheduled"} if entry["key"] == "sp500" else entry
+        for entry in production["universes"]
+    ]
+    return EnvironmentContract.model_validate_json(json.dumps(raw))
+
+
+def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_head(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The S&P 500 is stopped in the packaged contract, so no invariant examines its head. A variant that
+    schedules it must change what the invariants examine, with no edit to the SQL (#1522)."""
+    conn.execute("update mart.environment_identity set environment = 'production'")
+    _seed_head(conn, "universe:sp500-us-2026-09-30", _singles("valued", 3))
+
+    def verdict(contract) -> tuple[int, str]:
+        (invariant,) = [inv for inv in _module.render_invariants(contract) if inv.id == PARITY_INVARIANT]
+        code = check(
+            "postgresql://borrowed",
+            require_coverage=True,
+            today=TODAY,
+            exemptions={},
+            invariants=(invariant,),
+            connect=lambda _url: _Borrowed(conn),
+        )
+        captured = capsys.readouterr()
+        return code, captured.out + captured.err
+
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    stopped_code, stopped_output = verdict(load_environment_contract())
+    assert stopped_code == 1 and "examined 0 rows where real data was required" in stopped_output, stopped_output
+
+    code, output = verdict(_scheduled_sp500_contract())
+    assert code == 0, output
+    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
+
+
+def test_no_invariant_needs_the_sql_schedule_function(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Release N+1 of #1522 drops `mart.is_head_scheduled`. A process of release N must already run
+    without it. The function is dropped inside this test's transaction, then every shipped invariant runs."""
+    conn.execute("drop function mart.is_head_scheduled(text, text)")
+    code = check(
+        "postgresql://borrowed",
+        today=TODAY,
+        exemptions={},
+        invariants=_module.INVARIANTS,
+        connect=lambda _url: _Borrowed(conn),
+    )
+    output = capsys.readouterr()
+    assert code == 0, output.out + output.err
 
 
 def test_an_unscheduled_manual_qqq_head_on_staging_does_not_fail_scheduled_topt_head(

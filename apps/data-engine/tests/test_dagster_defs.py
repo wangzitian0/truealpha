@@ -40,7 +40,7 @@ from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 from data_engine.lanes.capture import tick_cron
-from truealpha_contracts.environment_contract import UnknownUniverse
+from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.universes import lane_name
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
@@ -1005,13 +1005,15 @@ def test_the_sp500_universe_has_no_schedule_in_any_environment_and_the_qqq_rule_
         assert capture.is_universe_scheduled("sp500", environment) is False, (environment, SP500_STOPPED_BECAUSE)
         with pytest.raises(UnknownUniverse):
             capture.is_universe_scheduled("universe-list:sp500", environment)  # a lane name is no key
-        assert capture.is_head_scheduled("universe:sp500-us-2026-09-30", environment) is False, (
+        assert load_environment_contract().is_head_scheduled("universe:sp500-us-2026-09-30", environment) is False, (
             environment,
             SP500_STOPPED_BECAUSE,
         )
     for environment, scheduled in (("production", True), ("prod", True), ("staging", False)):
         assert capture.is_universe_scheduled("qqq", environment) is scheduled, environment
-        assert capture.is_head_scheduled("universe:qqq-us-2026-09-30", environment) is scheduled, environment
+        assert load_environment_contract().is_head_scheduled("universe:qqq-us-2026-09-30", environment) is scheduled, (
+            environment
+        )
 
 
 def test_issue_1310_no_running_production_schedule_launches_the_sp500_tick() -> None:
