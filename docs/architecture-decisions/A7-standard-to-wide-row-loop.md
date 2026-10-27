@@ -36,8 +36,8 @@ adapter are declared once in `truealpha_contracts.standards.MetricStandard`.
 
 - **Zero-migration expansion**: A new standard registers in `STANDARDS` as code. It requires
   zero SQL migrations.
-- **Explicit FactPlane**: Each standard owns its table, issuer column, winning source
-  priority, and withdrawn extractors tuple.
+- **Explicit FactPlane**: Each standard owns its table, issuer column, and withdrawn
+  extractors tuple. It names the reconciliation policy that owns its source order.
 - **Two kinds, one row**: `HARD` standards require deterministic rules; `EVALUATIVE`
   standards carry `factor_validation_status` and cannot enter strategy eligibility while
   `unvalidated` (Milestone M2, #773).
@@ -49,7 +49,7 @@ observations:
 - A cell is open only when: (1) no fact is knowable at the cutoff (`no_fact`), (2) the best
   fact is an uncorroborated seed (`seed_only`), or (3) the best fact exceeds `max_age_days`
   (`stale`).
-- Winning observations follow declared `source_priority` before recency (init.md rule 12).
+- Winning observations follow the `source_priority` of the plane's reconciliation policy before recency (init.md rule 12).
 - Closed cells are never re-fetched: vendor spend is proportional to actual missing cells.
 
 ## Decision 3 — All external calls are gated and recorded in api_call_ledger

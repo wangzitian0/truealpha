@@ -259,12 +259,13 @@ def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
 
 def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyPatch) -> None:
     """`output_invariants` also runs where `data_engine` is not installed (a bare fixture DB job).
-    Assert its `ImportError` fallback tuples equal the live registry outputs so they never drift."""
+    Assert its `ImportError` fallback tuples equal the live registry outputs so they never drift.
+    The parser ranks have no fallback: without the registry no parser family has a rank."""
     import builtins
 
     live_keys = _module._expected_input_keys()
     live_primary = _module._primary_market_price_parser()
-    live_ranks = _module._market_price_parser_ranks()
+    assert _module._market_price_parser_ranks(), "the live registry ranks at least one market-price parser family"
 
     real_import = builtins.__import__
 
@@ -276,7 +277,8 @@ def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(builtins, "__import__", _block_data_engine)
     assert _module._expected_input_keys() == live_keys
     assert _module._primary_market_price_parser() == live_primary
-    assert _module._market_price_parser_ranks() == live_ranks
+    assert _module._market_price_parser_ranks() == ()
+    assert _module._rank_values(()) == "(null::text, null::integer)"
 
 
 def test_no_exemption_defers_the_sign_policy() -> None:

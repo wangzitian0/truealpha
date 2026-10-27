@@ -1,7 +1,7 @@
 """A second standard reads ITS plane and reaches ITS adapter (#799).
 
 The loop took a `MetricStandard` and used it for two fields while querying
-`staging.issuer_headcount_facts` with `HEADCOUNT_SOURCE_PRIORITY`, then calling
+`staging.issuer_headcount_facts` with a headcount order, then calling
 `extract_headcount` for every `FILING_SPAN` standard whatever it declared. `STANDARDS` had
 one entry, so every test that passed `standard=` got correct behaviour from the only standard
 it could pass — AGENTS.md rule 7's "proves the parameter, not the wiring", exactly.
@@ -13,11 +13,14 @@ nowhere, so they fail against the old code for the right reason rather than by c
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from data_engine.datahub.standards.backfill import _adapter, _resolve
 from data_engine.datahub.standards.planner import OpenCell, UniverseIssuer, open_cells
+from truealpha_contracts.reconciliation import ReconciliationPolicy
+from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 from truealpha_contracts.standards import (
     STANDARDS,
     EvidenceRequirement,
@@ -44,7 +47,13 @@ OTHER = MetricStandard(
     plane=FactPlane(
         table="staging.fixture_revenue_facts",
         issuer_column="issuer_cik",
-        source_priority=("fixture-extraction", "fixture-seed"),
+        reconciliation_policy=ReconciliationPolicy(
+            policy_version="fixture-priority:v1",
+            source_priority=("fixture-extraction", "fixture-seed"),
+            absolute_tolerance=Decimal("0"),
+            relative_tolerance=Decimal("0"),
+            minimum_independent_origin_groups=1,
+        ),
     ),
     adapter="tests_fixture_module:extract_fixture",
 )
@@ -94,7 +103,7 @@ def test_employees_total_is_unchanged() -> None:
     sql, params = next((s, p) for s, p in connection.statements if "select source, knowable_at" in s)
     assert "staging.issuer_headcount_facts" in sql
     assert "where cik =" in sql
-    assert params[-1] == ["10k-extraction", "manual-review"]
+    assert params[-1] == list(HEADCOUNT_RECONCILIATION_POLICY.source_priority)
 
 
 def test_the_backfill_reaches_the_adapter_the_standard_declares(monkeypatch) -> None:

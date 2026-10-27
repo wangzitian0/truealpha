@@ -57,9 +57,9 @@ window (2,000), not calls; the governed universes use ~120. Every call is still 
 
 `get_financials_statements` (income statement + balance sheet, two gated calls per
 issuer per run) corroborates the SEC company-facts primary per field under
-`financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`):
-priority sec-company-facts, moomoo-financials; relative tolerance **1%**; abstain on
-conflict. Alignment is on the primary's fiscal `period_end` — moomoo stamps a period end
+`FINANCIAL_FACT_RECONCILIATION_POLICY` (`reconciliation_policies.py`):
+priority sec-company-facts, moomoo-financials. The policy holds the tolerance and the
+conflict rule. Alignment is on the primary's fiscal `period_end` — moomoo stamps a period end
 at 00:00 Asia/Shanghai, whose UTC rendering is the day before, so the epoch is converted
 in that zone. The field-id map (income 8001 revenue, 8004 gross profit, 8037 net income,
 8047/8048 basic/diluted EPS; balance sheet 8001 total assets) was established by equality

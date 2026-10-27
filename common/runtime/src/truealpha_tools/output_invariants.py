@@ -56,6 +56,7 @@ from typing import Any
 
 import psycopg
 from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
+from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
@@ -150,16 +151,16 @@ def _primary_market_price_parser() -> str:
 
 def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
     """(parser family, fusion rank) for every registered market-price origin vintage, ranked
-    by the fusion policy's `source_priority` (#862: a cell the primary could not serve is
-    served by the next origin in that order); a literal only where the registry is not
-    importable."""
+    by the price policy's `source_priority` (#862: a cell the primary could not serve is
+    served by the next origin in that order). The parser families come from the registry.
+    Where the registry is not importable, no family has a rank: the failover invariant then
+    reports every substituted origin as unranked."""
     try:
         from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
-        from data_engine.datahub.quality_report import RECONCILIATION_POLICY
     except ImportError:
-        return (("production-topt-live-parser", 0), ("twelve-data-parser", 1), ("moomoo-kline-parser", 2))
+        return ()
     market = {origin.origin_id for origin in registration_for("market-price").origins}
-    priority = RECONCILIATION_POLICY.source_priority
+    priority = reconciliation_policies.RECONCILIATION_POLICY.source_priority
     ranks: dict[str, int] = {}
     for vintage, (source_id, origin_id, _value_key) in SOURCE_BY_PARSER.items():
         if origin_id in market and source_id in priority:
@@ -768,10 +769,16 @@ INVARIANTS: tuple[Invariant, ...] = (
 )
 
 
+def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
+    """The rows of the `ranks` CTE. With no rank, one null row keeps the SQL valid and leaves
+    every parser family unranked."""
+    return ", ".join(f"('{family}', {rank})" for family, rank in ranks) or "(null::text, null::integer)"
+
+
 def _render(invariant: Invariant) -> Invariant:
     """The derived facts enter the SQL as literals, once, here — never at query time."""
     values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
-    ranks = ", ".join(f"('{family}', {rank})" for family, rank in MARKET_PRICE_PARSER_RANKS)
+    ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
     return Invariant(
         id=invariant.id,
         claim=invariant.claim,

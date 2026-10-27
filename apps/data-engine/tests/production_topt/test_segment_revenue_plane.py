@@ -173,7 +173,7 @@ def test_the_writer_and_the_plane_agree(connection) -> None:
     assert sum(r[1] for r in rows) + rows[0][3] == rows[0][2], "the parts and the stored identity agree"
     assert {r[4] for r in rows} == {period_end}
     assert {r[5] for r in rows} == {SEGMENT_SOURCE}
-    assert SEGMENT_SOURCE in STANDARDS["segment_revenue"].plane.source_priority, (
+    assert SEGMENT_SOURCE in STANDARDS["segment_revenue"].plane.reconciliation_policy.source_priority, (
         "a source the standard's fusion priority does not list can never be selected"
     )
     assert {r[6] for r in rows} == {datetime(2025, 12, 12, tzinfo=UTC)}

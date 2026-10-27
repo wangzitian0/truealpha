@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.metrics import METRICS
+from truealpha_contracts.reconciliation import ReconciliationPolicy
 from truealpha_contracts.standards import (
     STANDARDS,
     EvidenceRequirement,
@@ -28,9 +29,9 @@ def test_every_standard_names_a_registered_metric_and_carries_the_loop_fields() 
         # Both were the planner's and the backfill's source code, which made the loop
         # generic in signature and headcount-only in fact.
         assert standard.plane.table.count(".") == 1, "a plane names schema.table"
-        assert standard.plane.source_priority, "a plane declares its winning order"
+        assert standard.plane.reconciliation_policy.source_priority, "a plane names a policy with a winning order"
         assert ":" in standard.adapter, "an adapter is module:function"
-        assert set(standard.evidence_bearing_sources) <= set(standard.plane.source_priority), (
+        assert set(standard.evidence_bearing_sources) <= set(standard.plane.reconciliation_policy.source_priority), (
             f"{name}: a source that satisfies the evidence must be rankable on its own plane"
         )
 
@@ -49,7 +50,17 @@ def test_a_standard_for_an_unregistered_metric_is_refused() -> None:
             # #799: a standard now declares its plane and adapter. Supplied here so the
             # ValidationError this asserts is still the UNREGISTERED-METRIC one and not a
             # missing-field error that would pass the `match=` for the wrong reason.
-            plane=FactPlane(table="staging.nowhere", issuer_column="cik", source_priority=("sec",)),
+            plane=FactPlane(
+                table="staging.nowhere",
+                issuer_column="cik",
+                reconciliation_policy=ReconciliationPolicy(
+                    policy_version="fixture-priority:v1",
+                    source_priority=("sec",),
+                    absolute_tolerance=Decimal("0"),
+                    relative_tolerance=Decimal("0"),
+                    minimum_independent_origin_groups=1,
+                ),
+            ),
             adapter="data_engine.nowhere:extract",
         )
 

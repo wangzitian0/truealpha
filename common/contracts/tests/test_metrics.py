@@ -1,19 +1,15 @@
-import pytest
 from truealpha_contracts.metrics import (
     METRICS,
     MetricSpec,
     UnitFamily,
-    fusion_rank,
     input_key_for_metric,
     is_registered_input_key,
-    source_priority,
 )
-from truealpha_contracts.models import DataSource
 
 
 def test_every_module_core_metric_is_registered():
-    # The seven modules' base inputs (init.md Section 7) must have a declared
-    # fusion order before any parser lands them.
+    # The seven modules' base inputs (init.md Section 7) must be registered
+    # before any parser lands them.
     for metric in (
         "revenue",
         "gross_profit",
@@ -25,26 +21,6 @@ def test_every_module_core_metric_is_registered():
         "employees_total",
     ):
         assert metric in METRICS
-
-
-def test_priorities_are_nonempty_and_deduplicated():
-    assert len(METRICS) > 0
-    for name, spec in METRICS.items():
-        assert spec.source_priority, name
-        assert len(set(spec.source_priority)) == len(spec.source_priority), name
-
-
-def test_fusion_rank_orders_declared_sources_and_excludes_others():
-    assert fusion_rank("revenue", DataSource.SEC) == 0
-    assert fusion_rank("revenue", DataSource.YAHOO) > fusion_rank("revenue", DataSource.TWELVE_DATA)
-    # Unregistered source: evidence stays in staging, never reaches mart.
-    assert fusion_rank("gross_profit", DataSource.YAHOO) is None
-
-
-def test_unregistered_metric_fails_loud():
-    # Fusion must not invent an order for a metric nobody declared.
-    with pytest.raises(KeyError):
-        source_priority("share_of_wallet")
 
 
 def test_gross_profit_declares_the_financial_issuer_branch():
@@ -75,7 +51,6 @@ def test_registering_a_synthetic_metric_needs_no_second_enumeration():
     METRICS[synthetic_name] = MetricSpec(
         name=synthetic_name,
         unit_family=UnitFamily.RATIO,
-        source_priority=(DataSource.SEC,),
         description="A metric registered only for this test.",
     )
     try:

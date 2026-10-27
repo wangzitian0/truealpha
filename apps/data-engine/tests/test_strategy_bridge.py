@@ -19,7 +19,6 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from truealpha_contracts.metrics import METRICS, MetricSpec, UnitFamily
-from truealpha_contracts.models import DataSource
 
 
 @pytest.fixture
@@ -119,7 +118,6 @@ def test_a_newly_registered_metric_needs_no_migration_to_be_admitted(connection)
     METRICS[synthetic_name] = MetricSpec(
         name=synthetic_name,
         unit_family=UnitFamily.RATIO,
-        source_priority=(DataSource.SEC,),
         description="A metric registered only for this test.",
     )
     try:
