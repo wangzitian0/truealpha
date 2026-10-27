@@ -618,6 +618,38 @@
       "cwd": "."
     },
     {
+      "id": "pytest-shard/the-floor-is-not-zero",
+      "guard": "common/runtime/tests/test_pytest_shard.py",
+      "file": "common/runtime/src/truealpha_tools/pytest_shard.py",
+      "find": "WEIGHT_COVERAGE_FLOOR = 0.5\n",
+      "replace": "WEIGHT_COVERAGE_FLOOR = 0.0\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_pytest_shard.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "pytest-shard/a-broken-harvest-blocks",
+      "guard": "common/runtime/tests/test_pytest_shard.py",
+      "file": "common/runtime/src/truealpha_tools/pytest_shard.py",
+      "find": "    if broken:\n        details",
+      "replace": "    if False:\n        details",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_pytest_shard.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "shard-weight-refresh/an-open-pr-blocks-another",
       "guard": "common/runtime/tests/test_shard_weight_refresh.py",
       "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",

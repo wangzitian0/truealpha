@@ -16,6 +16,7 @@ Two properties, proven here so the workflow can be trusted:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -239,30 +240,87 @@ def test_a_measured_file_weighs_its_measured_seconds(tmp_path: Path) -> None:
 
 
 def test_the_weights_still_describe_the_tree_they_weigh() -> None:
-    """Staleness has no symptom. A harvest taken before a directory was added
-    stays valid-looking forever: every lane green, the balance quietly drifting
-    back to a count-based estimate as the unmeasured share grows. The
-    observable is coverage, so that is what is asserted.
+    """Report the harvest coverage of both roots. Fail only when the harvest is broken.
+
+    A harvest taken before a directory was added stays valid-looking: every lane
+    is green and the packing drifts to a test-count estimate as the unweighted
+    share grows. That drift is a speed statistic, so it goes to the CI step
+    summary. It does not block a merge (#1503). Only a coverage below
+    `WEIGHT_COVERAGE_FLOOR` fails, because then the packing is broken.
     """
     weights = pytest_shard.load_weights()
     if not weights:
         pytest.skip("no harvest committed; the tool falls back to test counts by design")
-    files = pytest_shard.collect(SHARDED_ROOT)
-    known = [path for path in files if str(path.relative_to(REPO_ROOT)) in weights]
-    coverage = len(known) / len(files)
-    assert coverage >= 0.9, (
-        f"the harvest covers {coverage:.0%} of {SHARDED_ROOT.name} ({len(known)}/{len(files)} "
-        f"files) — refresh it with tools/harvest_shard_weights.py <run-id> from any green run, "
-        f"or the packing is guessing for the rest"
-    )
+    coverages = [
+        pytest_shard.weight_coverage(
+            str(SHARDED_ROOT.relative_to(REPO_ROOT)), pytest_shard.collect(SHARDED_ROOT), weights, REPO_ROOT
+        ),
+        pytest_shard.weight_coverage("core tests", pytest_shard.collect(CORE_ROOTS), weights, REPO_ROOT),
+    ]
+    pytest_shard.write_step_summary(coverages, os.environ.get("GITHUB_STEP_SUMMARY"))
+    pytest_shard.require_coverage_floor(coverages)
 
-    core_files = pytest_shard.collect(CORE_ROOTS)
-    core_known = [path for path in core_files if str(path.relative_to(REPO_ROOT)) in weights]
-    core_coverage = len(core_known) / len(core_files)
-    assert core_coverage >= 0.9, (
-        f"the harvest covers {core_coverage:.0%} of core tests ({len(core_known)}/{len(core_files)} "
-        f"files) — refresh it with tools/harvest_shard_weights.py <run-id> from any green run."
-    )
+
+def _coverage_of(known: int, total: int) -> pytest_shard.WeightCoverage:
+    """Build the coverage of a fake root of `total` files, of which `known` have a weight."""
+    files = [Path(f"root/test_{index}.py") for index in range(total)]
+    weights = {f"root/test_{index}.py": 1.0 for index in range(known)}
+    return pytest_shard.weight_coverage("root", files, weights, Path("."))
+
+
+@pytest.mark.parametrize(
+    ("known", "total"),
+    [
+        (138, 154),  # 89.6%: the exact count that blocked PR #1540 with the old 90% assertion
+        (119, 133),  # 89.5%: the exact count that blocked PR #1490
+        (77, 154),  # 50.0%: exactly the floor passes
+        (1, 1),
+    ],
+)
+def test_a_harvest_at_or_above_the_floor_does_not_block(known: int, total: int) -> None:
+    pytest_shard.require_coverage_floor([_coverage_of(known, total)])
+
+
+@pytest.mark.parametrize(("known", "total"), [(76, 154), (1, 4), (0, 10), (0, 0)])
+def test_a_harvest_below_the_floor_blocks_and_names_the_root(known: int, total: int) -> None:
+    with pytest.raises(ValueError, match=r"less than 50% of the test files: root "):
+        pytest_shard.require_coverage_floor([_coverage_of(known, total)])
+
+
+def test_one_broken_root_blocks_even_when_the_other_is_complete() -> None:
+    complete = pytest_shard.WeightCoverage(label="complete-root", known=10, total=10)
+    broken = pytest_shard.WeightCoverage(label="broken-root", known=1, total=10)
+    with pytest.raises(ValueError, match=r"broken-root 10\.0% \(1/10\)") as raised:
+        pytest_shard.require_coverage_floor([complete, broken])
+    assert "complete-root" not in str(raised.value), "a complete root must not appear in the failure"
+
+
+def test_the_coverage_counts_files_by_their_repo_relative_path(tmp_path: Path) -> None:
+    """Three real files on disk. Two have a weight under their repo-relative key."""
+    for name in ("test_a.py", "test_b.py", "test_c.py"):
+        (tmp_path / name).write_text("def test_x():\n    pass\n", encoding="utf-8")
+    files = pytest_shard.collect(tmp_path)
+    weights = {"test_a.py": 3.0, "test_b.py": 4.0, "other/test_z.py": 9.0}
+    coverage = pytest_shard.weight_coverage("tmp", files, weights, tmp_path)
+    assert (coverage.known, coverage.total) == (2, 3)
+
+
+def test_the_step_summary_gets_one_line_per_root(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("earlier step\n", encoding="utf-8")
+    coverages = [pytest_shard.WeightCoverage("sharded", 138, 154), pytest_shard.WeightCoverage("core", 143, 146)]
+    pytest_shard.write_step_summary(coverages, str(summary))
+    text = summary.read_text(encoding="utf-8")
+    assert text.startswith("earlier step\n"), "the writer must append and keep the earlier steps"
+    assert "- sharded: 89.6% of test files have a harvested weight (138/154); floor 50%" in text
+    assert "- core: 97.9% of test files have a harvested weight (143/146); floor 50%" in text
+
+
+def test_no_summary_path_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    pytest_shard.write_step_summary([pytest_shard.WeightCoverage("sharded", 1, 2)], None)
+    pytest_shard.write_step_summary([pytest_shard.WeightCoverage("sharded", 1, 2)], "")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_core_shards_carry_equal_measured_work() -> None:

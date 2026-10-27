@@ -57,6 +57,7 @@ from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
 
 from data_engine.config import settings
+from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
@@ -477,6 +478,11 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             else:
                 report_id = persist(connection, report)
                 connection.commit()
+                # #1523: the outside comparisons of the head's run, in a transaction of their own. A
+                # replay of this report writes each comparison once; a failure here is logged only.
+                oracle_rows = record_oracle_outcomes_safely(
+                    connection, report["run_id"], compared_at=executed_at, log=context.log
+                )
                 outcome.summary = f"report persisted for {report['universe_id']}"
     if report is None:
         return json.dumps({"universe": config.universe, "report": None})
@@ -491,6 +497,8 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             **{f"{name}_mean_confidence": family["mean_confidence"] for name, family in report["families"].items()},
             "close_agreement_rate": str(report["accuracy"]["close"]["agreement_rate"]),
             "sec_oracle_issuers_compared": report["accuracy"]["sec_oracle"]["issuers_compared"],
+            "oracle_outcomes_written": oracle_rows is not None,
+            "oracle_outcomes_rows": oracle_rows or 0,
         }
     )
     return json.dumps({"status": "pass", "report_id": report_id, "summary": summary_line(report)})

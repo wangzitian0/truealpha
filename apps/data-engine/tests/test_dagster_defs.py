@@ -209,6 +209,8 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     """Fake every collaborator the op calls, so only the op's own reporting is under
     test. `register_run_evidence` returns the given verdict verbatim."""
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
+    # The registry write has its own test (production_topt/test_head_registry_tick.py); this one asserts the op's reporting.
+    monkeypatch.setattr(capture, "ensure_served_head_artifacts", lambda *_a, **_k: 0)
     monkeypatch.setattr(
         capture,
         "run_topt_pipeline",
@@ -525,7 +527,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     """Rule 6 through the deployed entry point (#729): the tick binds the capacity gate, so
     with production's 480-credit share of the shared Twelve Data key spent, the REAL
     Twelve Data fetcher is refused before it reaches the vendor — the cell stays
-    single-origin with the loss at the `budget` stage — and a spent Yahoo budget defers
+    single-origin with the loss at the `budget` stage — and a full Yahoo rate window defers
     the primary cell. The tick summary and op metadata name both. Red against a tick
     that only records: the fake vendor below fails any request that gets through."""
     from datetime import date
@@ -539,11 +541,12 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
         MarketPriceTarget,
         yahoo_quote_fetcher,
     )
-    from data_engine.sources import yahoo
+    from data_engine.sources import gateway, yahoo
     from truealpha_contracts.datahub import CaptureWorkItem
     from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
-    monkeypatch.setattr(settings, "app_env", "production")
+    # The tier of `settings` is cached for the session, so the test names the environment of the gate itself.
+    monkeypatch.setattr(gateway, "capacity_environment", lambda: "production")
     monkeypatch.setattr(settings, "twelve_data_api_key", "k")
     monkeypatch.setattr(twelve_data_origin.time, "sleep", lambda _seconds: None)
     registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=12, unmet=())
@@ -565,6 +568,11 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     monkeypatch.setattr(twelve_data_origin.urllib.request, "urlopen", no_request)
     monkeypatch.setattr(yahoo.httpx, "Client", NoRequestClient)
     _spent_today(call_ledger, "twelvedata", 480)
+    real_scope = gateway.capacity_scope
+    # The tick binds its own gate. This one refuses a call that has to wait, so the test never sleeps.
+    monkeypatch.setattr(
+        gateway, "capacity_scope", lambda given=None: real_scope(given or gateway.CapacityGate(max_wait_seconds=0.0))
+    )
     origin = twelve_data_origin.twelve_data_origin()
     assert origin is not None
     items = [
@@ -585,7 +593,11 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
 
     def capture_under_the_gate(*args, **kwargs) -> ToptPipelineResult:
         outcomes.append(corroborated.fetch(items[0]))
-        _spent_today(call_ledger, "yahoo", 2000)
+        # Production's Yahoo pace is 2 a second. Rows stamped a moment ahead keep the window full however slow the host is.
+        ahead = datetime.now(UTC) + timedelta(seconds=5)
+        call_ledger.extend(
+            [gateway.CallRecord(source="yahoo", endpoint="x", caller="earlier", called_at=ahead, ok=True)] * 2
+        )
         outcomes.append(deployed_primary.fetch(items[1]))
         return ToptPipelineResult(
             run_id="capture-run:" + "a" * 64,
@@ -604,25 +616,24 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     assert isinstance(deferred, FetchFailure) and deferred.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
     [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
     assert (
-        "; corroborations refused 1 (twelve-data budget 1); capacity refused 2 (twelvedata budget 1, yahoo budget 1);"
+        "; corroborations refused 1 (twelve-data budget 1); capacity refused 2 (twelvedata budget 1, yahoo capacity 1);"
         in summary
     )
-    assert (metadata["budget_exhausted"], metadata["capacity_refused"]) == (2, 2)
+    assert (metadata["budget_exhausted"], metadata["capacity_refused"]) == (1, 2)
 
 
 def test_a_failed_tick_still_says_what_the_gate_refused(monkeypatch, call_ledger) -> None:
     """A capture refused for its shortfall (#538) raises before the summary line; the run
     log must still name the budget that caused it."""
     import pytest
-    from data_engine.config import settings
     from data_engine.sources import gateway
 
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(gateway, "capacity_environment", lambda: "staging")
     _fake_tick(monkeypatch, PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=1, unmet=()))
-    _spent_today(call_ledger, "sec", 5000)
+    _spent_today(call_ledger, "twelvedata", 320)  # staging's share of the 800 a day
 
     def refused_capture(*args, **kwargs):
-        with gateway.record_call("sec", "companyfacts", caller="test", identity=_key("sec", "companyfacts")):
+        with gateway.record_call("twelvedata", "eod", caller="test", identity=_key("twelvedata", "eod")):
             raise AssertionError("a refused request ran")
 
     monkeypatch.setattr(capture, "run_topt_pipeline", refused_capture)
@@ -631,7 +642,9 @@ def test_a_failed_tick_still_says_what_the_gate_refused(monkeypatch, call_ledger
     monkeypatch.setattr(context.log, "warning", lambda message, *args, **kwargs: lines.append(message))
     with pytest.raises(gateway.BudgetExhausted):
         run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
-    assert lines == [f"topt live tick {TICK} failed; corroborations refused 0; capacity refused 1 (sec budget 1)"]
+    assert lines == [
+        f"topt live tick {TICK} failed; corroborations refused 0; capacity refused 1 (twelvedata budget 1)"
+    ]
 
 
 def test_the_two_environments_never_tick_at_the_same_instant() -> None:

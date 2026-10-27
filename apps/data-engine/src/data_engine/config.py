@@ -123,7 +123,8 @@ class Settings(RuntimeSettings):
         default=False, json_schema_extra={"source": "code", "group": "moomoo"}
     )
     # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
-    # 25 req/6s x 100 jobs. Free key: https://www.openfigi.com/api
+    # 250 req/min x 100 jobs (the vendor_accounts row of the environment contract holds the figure).
+    # Free key: https://www.openfigi.com/api
     openfigi_api_key: str = Field(
         default="",
         json_schema_extra={

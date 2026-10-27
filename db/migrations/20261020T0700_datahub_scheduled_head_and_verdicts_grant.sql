@@ -1,30 +1,12 @@
--- #1346 / #1295: Database-level schedule predicate for governed heads and operator read grant
--- on mart.nightly_verdicts so /admin/datahub can display in-environment check verdicts.
+-- #1346 / #1295: operator read grant on mart.nightly_verdicts so /admin/datahub can display in-environment
+-- check verdicts.
 --
--- Mirrors `is_head_scheduled` in `apps/data-engine/src/data_engine/lanes/capture.py`:
---   * `sp500` schedule is stopped in every environment;
---   * `qqq` schedule runs in production only (manual in staging, #1310 / #1256);
---   * `topt` and `canary` schedules run in both staging and production;
---   * unrecognised environments or universe families fail closed (`true`).
-create or replace function mart.is_head_scheduled(
-    p_universe_id text,
-    p_environment text
-)
-returns boolean
-language sql
-immutable
-as $$
-    select case
-        when lower(trim(coalesce(p_environment, ''))) not in ('staging', 'production', 'prod') then true
-        when coalesce(p_universe_id, '') like 'universe:sp500-%' then false
-        when lower(trim(coalesce(p_environment, ''))) = 'staging'
-             and coalesce(p_universe_id, '') like 'universe:qqq-%' then false
-        else true
-    end
-$$;
-
-comment on function mart.is_head_scheduled(text, text) is
-    '#1346, #1256: Whether a governed head universe has an active schedule in the given environment.';
+-- This file used to create `mart.is_head_scheduled(text, text)`, a SQL copy of the schedule of the universes
+-- for the output invariants. Release N of #1522 moved every reader to the predicate that
+-- `output_invariants.head_is_scheduled_sql` writes from the universe record. This release (N+1) removes the
+-- function from this file and drops it from databases that hold it, in
+-- `20261027T1200_datahub_retire_head_scheduled_function.sql`. The chain replays on every boot, so this file must
+-- not create the function again: the drop file would then churn at each boot.
 
 -- Grant app_ops_reader SELECT on mart.nightly_verdicts (#876) so /admin/datahub renders
 -- the in-environment check verdicts directly. Guarded by has_table_privilege so a replay

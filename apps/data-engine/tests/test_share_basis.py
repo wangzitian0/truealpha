@@ -291,10 +291,10 @@ def test_split_history_names_each_series_it_cannot_prove() -> None:
 
 def test_alphabet_primary_listing_is_the_default_topt_symbol() -> None:
     """#1265, #1518: Alphabet has two listings in the TOPT denominator (`GOOG` and `GOOGL`), while
-    `DEFAULT_TOPT_SYMBOLS` ingests `GOOGL`. The classification file names the same listing."""
-    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
+    `TOPT_SYMBOLS` ingests `GOOGL`. The classification file names the same listing."""
     from data_engine.datahub.resolve_coordinates import primary_listing_ids
+    from topt_symbols import TOPT_SYMBOLS
 
-    assert "GOOGL" in DEFAULT_TOPT_SYMBOLS
-    assert "GOOG" not in DEFAULT_TOPT_SYMBOLS
+    assert "GOOGL" in TOPT_SYMBOLS
+    assert "GOOG" not in TOPT_SYMBOLS
     assert primary_listing_ids() == frozenset({"listing:xnas:googl"})

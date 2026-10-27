@@ -49,8 +49,8 @@ def _priority_only_policy(policy_version: str, source_priority: tuple[str, ...])
 # Market price. The first origin is the primary. Each later origin serves a cell that the
 # earlier origins cannot serve (#862).
 # v4 (owner decision 2026-09-17): `grade_consensus` at 0.1% relative tolerance. Three agreeing
-# origins serve their median (HIGH). Two serve their mean (MEDIUM). Any other case serves the
-# primary's value (LOW). The order breaks ties and serves LOW cells.
+# origins serve their median. Two serve their mean. Any other case serves the primary's
+# value. The order breaks ties and serves the cells where no two origins agree.
 RECONCILIATION_POLICY = _consensus_policy(
     "market-price-fusion:v4", ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
 )
@@ -69,7 +69,7 @@ FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
 
 # Financial facts (v2, 0.1%). SEC company-facts is the primary. The moomoo statements are the
 # independent second origin. The report compares each field at the fiscal period end of the
-# primary. An agreeing pair grades MEDIUM. HIGH needs a third independent origin.
+# primary. An agreeing pair serves its mean. A median needs a third independent origin.
 FINANCIAL_FACT_RECONCILIATION_POLICY = _consensus_policy(
     "financial-fact-fusion:v2", ("sec-company-facts:v1", "moomoo-financials:v1")
 )
@@ -79,7 +79,7 @@ FINANCIAL_FACT_RECONCILIATION_POLICY = _consensus_policy(
 # listing or not, so membership compares exactly. The fund weight is the `etf_weight` family
 # under this policy. The tolerance catches a wrong join, which is ten times larger than the
 # price drift between a filed weight and an operator weight. The operator route carries no
-# weight yet, so `etf_weight` has one origin and grades LOW until it does.
+# weight yet, so `etf_weight` has one origin until it does.
 INDEX_MEMBERSHIP_POLICY = ReconciliationPolicy(
     policy_version="index-membership-fusion:v1",
     source_priority=("nasdaq-index:v1", "nport:v1"),

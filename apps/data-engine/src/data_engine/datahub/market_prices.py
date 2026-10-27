@@ -43,6 +43,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import psycopg
+from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
@@ -50,29 +51,32 @@ from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)
 
-# The 20 TOPT symbols spanning the 20 issuers of the TOPT universe
-DEFAULT_TOPT_SYMBOLS: tuple[str, ...] = (
-    "AAPL",
-    "MSFT",
-    "GOOGL",
-    "AMZN",
-    "NVDA",
-    "META",
-    "TSLA",
-    "BRK.B",
-    "AVGO",
-    "COST",
-    "XOM",
-    "JPM",
-    "JNJ",
-    "LLY",
-    "MA",
-    "MU",
-    "NFLX",
-    "V",
-    "WMT",
-    "ABBV",
-)
+
+def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tuple[str, ...]:
+    """The symbols that the market-data lane stores (#1522): the primary listing of each issuer of every
+    universe that holds a price series, has a frozen corpus and is scheduled in this environment.
+
+    The universe record says which universes those are, and the corpus of each says its issuers. A universe
+    whose members come from a published head (the QQQ) has its own lane (`lanes.qqq_prices`).
+    """
+    # Imported here: the `production_topt` package imports this module, so a top-level import is a cycle.
+    from data_engine.datahub.primary_listing import primary_symbols
+    from data_engine.datahub.production_topt import universe_corpus
+    from data_engine.environment_universes import rule_environment
+
+    contract = load_environment_contract()
+    environment = rule_environment()
+    symbols: set[str] = set()
+    for key, universe in contract.universes.items():
+        if (
+            universe.price_series
+            and universe.membership.kind == "frozen_corpus"
+            and contract.is_universe_scheduled(key, environment)
+        ):
+            corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
+            symbols.update(primary_symbols(connection, corpus["topt_denominator"], known_at=known_at))
+    return tuple(sorted(symbols))
+
 
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 #: The ledger seat (`source`) of every Twelve Data request (`source_registrations.LEDGER_CAPACITIES`).
@@ -873,7 +877,7 @@ def should_fetch_monthly_series(
 
 
 def ingest_twelve_data_market_prices(
-    symbols: Sequence[str] = DEFAULT_TOPT_SYMBOLS,
+    symbols: Sequence[str],
     client: TwelveDataClient | None = None,
     connection: psycopg.Connection | None = None,
     daily_lookback_years: int = DAILY_LOOKBACK_YEARS,
@@ -881,7 +885,7 @@ def ingest_twelve_data_market_prices(
     now: datetime | None = None,
     adjust: str = DEFAULT_ADJUST,
 ) -> IngestionSummary:
-    """Ingest 20 TOPT symbols for 3 years daily and 10 years monthly via Twelve Data /time_series.
+    """Ingest `symbols` for 3 years daily and 10 years monthly via Twelve Data /time_series.
 
     Issues 1 call per symbol per series: daily and monthly under `adjust`, plus the daily
     unadjusted series (`UNADJUSTED`, #1131). That is 3 calls per symbol, 60 for 20 symbols.

@@ -326,6 +326,30 @@ def test_a_priority_served_result_cannot_claim_more_than_one_agreeing_origin_gro
         result.model_validate(forged)
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"yahoo:v1": "100", "twelve:v1": "200"},
+        {"yahoo:v1": "100", "twelve:v1": "200", "moomoo:v1": "300"},
+        {"yahoo:v1": "100", "twelve:v1": "200", "moomoo:v1": "300", "fourth:v1": "400"},
+    ],
+    ids=["1 against 1", "1 against 2", "1 against 3"],
+)
+def test_an_agreed_result_with_conflicting_assertions_needs_two_agreeing_origin_groups(values: dict[str, str]) -> None:
+    """#1517: no band is left to say which rule built a result, so the rule-independent form is stated.
+
+    The abstaining rule never agrees past a conflict, and the median rule agrees past one only with a
+    pair or a quorum. A result that says `agreed`, holds one agreeing origin group and names conflicting
+    assertions is neither. Before this clause the model accepted it, and `independent_reconciliation`
+    counts `agreed` results.
+    """
+    result, _ = _reconcile(values)
+    assert result.outcome is ReconciliationOutcome.CONFLICT_PRIORITY_SERVED and len(result.agreeing_assertion_ids) == 1
+    forged = {**result.model_dump(), "result_id": "", "content_sha256": "", "outcome": ReconciliationOutcome.AGREED}
+    with pytest.raises(ValidationError, match="at least two agreeing origin groups"):
+        result.model_validate(forged)
+
+
 # -- #1517 A3: confidence never enters fusion, and fusion names no band ---------------------------
 
 

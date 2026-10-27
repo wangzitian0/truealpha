@@ -520,6 +520,18 @@ class ReconciliationResult(_FrozenModel):
     def normalize_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return _reason_codes(values)
 
+    def _validate_agreement(self, agreeing_ids: set[str], conflicting_ids: set[str]) -> None:
+        """The checks of an `agreed` outcome; any other outcome passes."""
+        if self.outcome is not ReconciliationOutcome.AGREED:
+            return
+        if len(self.origin_group_ids) < self.minimum_independent_origin_groups:
+            raise ValueError("agreement does not meet the bound independent-origin threshold")
+        # Under the median rule an agreeing set may leave outliers beside it (the ignorable fourth
+        # source); it is then a pair or a quorum. The abstaining rule never agrees past a conflict,
+        # so one agreeing group beside a conflict is no agreement.
+        if conflicting_ids and len(agreeing_ids) < PAIR_QUORUM_GROUPS:
+            raise ValueError("an agreed result with conflicting assertions needs at least two agreeing origin groups")
+
     @model_validator(mode="after")
     def identify(self) -> Self:
         selected = self.selected_assertion_id is not None
@@ -572,11 +584,7 @@ class ReconciliationResult(_FrozenModel):
         }
         if self.outcome in selected_outcomes and not selected:
             raise ValueError("an agreed, insufficient-origin, or priority-served result must select an assertion")
-        if self.outcome is ReconciliationOutcome.AGREED:
-            if len(self.origin_group_ids) < self.minimum_independent_origin_groups:
-                raise ValueError("agreement does not meet the bound independent-origin threshold")
-            # Under the median rule an agreeing set may leave outliers beside it (the
-            # ignorable fourth source).
+        self._validate_agreement(agreeing_ids, conflicting_ids)
         if self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS:
             if len(self.origin_group_ids) >= self.minimum_independent_origin_groups:
                 raise ValueError("an insufficient-origin result meets its bound threshold")

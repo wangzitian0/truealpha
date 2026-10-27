@@ -15,7 +15,7 @@ rows. A drill makes the break deliberately, for a few named tickers, and checks 
   the vendors instead of reusing the night's observations, and it runs under a capture
   identity of its own (`drill_capture_version`).
 * **How small.** At most `MAX_DRILL_TICKERS` tickers. Staging's Twelve Data share is
-  3 credits a minute (`source_registrations.derived_environment_shares("twelvedata")`); the drill
+  3 credits a minute (`account_share("twelvedata", "staging")` of the environment contract); the drill
   itself asks no origin more than a forced tick already does, and a small set keeps the
   proof readable.
 * **What it leaves behind.** The run plan and the quality report carry the drill

@@ -20,7 +20,6 @@ from data_engine.datahub.a1_evidence import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
@@ -53,6 +52,7 @@ from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeRe
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from macro_seed import stored_rate_for_cutoff  # noqa: E402
 from split_series_seed import flat_history, share_count_vintage, store_flat_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -1563,7 +1563,7 @@ def _seed_strategy_capture(connection):
             "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20))
         },
     )
-    store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=date(2026, 1, 2), last=CUTOFF.date())
+    store_flat_daily_series(connection, TOPT_SYMBOLS, first=date(2026, 1, 2), last=CUTOFF.date())
     return seeded
 
 
@@ -2122,7 +2122,7 @@ def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_
     def _flat_shape(_day: date) -> tuple[Decimal, Decimal]:
         return (Decimal("40"), Decimal("40"))
 
-    for symbol in DEFAULT_TOPT_SYMBOLS:
+    for symbol in TOPT_SYMBOLS:
         shape = _nvda_shape if symbol == "NVDA" else _flat_shape
         store_daily_series(connection, symbol, shape, first=date(2026, 1, 2), last=close_session)
 

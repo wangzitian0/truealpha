@@ -12,7 +12,7 @@ session). Every check below is one of those load-bearing assumptions, named.
 Cost: 1 Yahoo request + 3 Twelve Data credits (of the 800/day budget) + 2 moomoo
 calls (gated and ledgered like any other; AAPL is already inside the K-line quota
 window once the governed universe has been captured) + 1 U.S. Treasury request (a public
-CSV, no key; 1 of the 100 requests per day that its ledger seat allows).
+CSV, no key; one request at the pace of 1 per second that its ledger seat allows).
 Exit 0 = contract holds; exit 1 = a named assumption drifted. Intended for a
 cron/scheduled run and after any vendor incident. A missing TWELVE_DATA_API_KEY is
 recorded as a FAILED check (a monitor with no credentials is a monitoring gap, not

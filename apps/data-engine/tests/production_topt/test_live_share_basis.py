@@ -29,7 +29,6 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import PlannedRun
 from data_engine.datahub.production_topt.executor import SourceFetchPort
@@ -51,6 +50,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_data
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from macro_seed import seed_rate_for_cutoff  # noqa: E402
 from split_series_seed import SeriesShape, share_count_vintage, store_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 #: The settled session every listing closes on. The corpus partition starts on it.
 SESSION = date(2026, 3, 31)
@@ -201,7 +201,7 @@ def _with_series(url: str, shapes: dict[str, SeriesShape]) -> None:
     `NO_SERIES` has no stored bar in either series.
     """
     with psycopg.connect(url) as connection:
-        for symbol in DEFAULT_TOPT_SYMBOLS:
+        for symbol in TOPT_SYMBOLS:
             if symbol == NO_SERIES:
                 continue
             store_daily_series(connection, symbol, shapes.get(symbol, _flat), first=SERIES_START, last=SESSION)
@@ -394,7 +394,7 @@ def test_an_ambiguous_ratio_step_of_one_symbol_makes_only_its_issuer_unavailable
     Red on main: the tick wrote the filed count for WMT as if no question existed.
     """
     wmt = _served(tick, "WMT")
-    others = {ticker: _served(tick, ticker) for ticker in DEFAULT_TOPT_SYMBOLS if ticker not in {"NVDA", *UNAVAILABLE}}
+    others = {ticker: _served(tick, ticker) for ticker in TOPT_SYMBOLS if ticker not in {"NVDA", *UNAVAILABLE}}
 
     assert wmt.shares is None and wmt.exclusion_reason == "missing_market_value_input", wmt
     named = [message for message in tick.warnings if "split_derivation_failed" in message]

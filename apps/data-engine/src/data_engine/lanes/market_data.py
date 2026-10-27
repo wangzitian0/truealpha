@@ -169,10 +169,12 @@ def _refresh_market_data(
     first. `as_of` here is derived from `now` once, for the two calendar-only cutoff
     functions that only ever wanted a date.
     """
-    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS, ingest_twelve_data_market_prices
+    from data_engine.datahub.market_prices import ingest_twelve_data_market_prices
     from data_engine.datahub.universe_mask import compute_and_persist_universe_mask_from_db
 
-    symbols = tuple(symbols) or DEFAULT_TOPT_SYMBOLS
+    symbols = tuple(symbols)
+    if not symbols:
+        raise ValueError("market data: the universe record names no symbol to store")
 
     summary = ingest_twelve_data_market_prices(
         symbols=symbols,
@@ -284,7 +286,7 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
 
     The bars are committed before they are judged: a stale verdict fails the run and does not
     roll back what the run did ingest."""
-    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
+    from data_engine.datahub.market_prices import stored_symbols
 
     with verdict(
         MARKET_DATA_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
@@ -294,9 +296,10 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
             gateway.capacity_scope(),
             psycopg.connect(settings.database_url) as connection,
         ):
-            _refresh_market_data(context, connection, symbols=DEFAULT_TOPT_SYMBOLS, now=now)
+            symbols = stored_symbols(connection, known_at=now)
+            _refresh_market_data(context, connection, symbols=symbols, now=now)
             connection.commit()
-            freshness = judge_bar_freshness(connection, DEFAULT_TOPT_SYMBOLS, now=now)
+            freshness = judge_bar_freshness(connection, symbols, now=now)
         outcome.summary = freshness.summary
         if not freshness.ok:
             raise dg.Failure(f"market data freshness: {freshness.summary}")

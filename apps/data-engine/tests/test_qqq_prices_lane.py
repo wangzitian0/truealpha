@@ -29,7 +29,6 @@ import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     SINGLE_SOURCE_CONFIDENCE,
     TwelveDataApiError,
     TwelveDataClient,
@@ -38,17 +37,18 @@ from data_engine.datahub.market_prices import (
     most_recent_xnys_session,
     xnys_session_close_utc,
 )
-from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, environment_share
 from data_engine.datahub.production_topt.universe_plane import parse_nasdaq_index_rows
 from data_engine.datahub.share_basis import LiveShareCount, OnCloseBasis, SplitHistory, live_on_close_basis
 from data_engine.lanes import capture, market_data, qqq_prices
 from data_engine.lanes.market_data import _daily_cutoff
 from data_engine.sources import gateway
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.testing import load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from qqq_head_seed import daily_series_client, daily_values, publish_qqq_head  # noqa: E402
 from split_series_seed import store_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 #: The Nasdaq-100 list as the index operator answered it on 2026-08-17 (sha-pinned by `test_universe_plane.py`).
 NASDAQ100_CASSETTE = Path(__file__).parent / "production_topt" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
@@ -110,9 +110,7 @@ def test_the_lane_keeps_the_declared_primary_listing_per_issuer_and_skips_the_to
     )
     resolve_coordinates(connection, denominator["instruments"], as_of=known_at.date(), known_at=known_at)
 
-    assert qqq_prices.target_symbols(connection, denominator, covered=DEFAULT_TOPT_SYMBOLS, known_at=known_at) == (
-        "ADBE",
-    )
+    assert qqq_prices.target_symbols(connection, denominator, covered=TOPT_SYMBOLS, known_at=known_at) == ("ADBE",)
     # Without the TOPT rule each declared issuer adds its primary listing only. GOOG never appears.
     assert qqq_prices.target_symbols(connection, denominator, covered=(), known_at=known_at) == (
         "AAPL",
@@ -159,14 +157,20 @@ def test_the_budget_is_the_need_capped_by_what_the_other_callers_leave(
     assert budget.credits == credits, budget
 
 
-@pytest.mark.parametrize("environment", ["production", "staging", "development"])
-def test_the_share_is_the_one_the_gate_enforces(environment: str) -> None:
-    twelve = LEDGER_CAPACITIES["twelvedata"]
-    assert twelve.daily_budget is not None
+@pytest.mark.parametrize(
+    ("environment", "daily_share"), [("production", 480), ("staging", 320), ("preview", None), ("development", None)]
+)
+def test_the_share_is_the_one_the_gate_enforces(environment: str, daily_share: int | None) -> None:
+    """The lane reads the share through the gate's view. The oracle is the daily limit of the contract row and
+    its percent for the environment; a share below one call (preview, local) is None."""
+    contract_row = load_environment_contract().vendor_accounts.accounts["twelvedata"]
+    per_day = next(limit for limit in contract_row.limits if limit.id == "per_day")
+    assert per_day.amount == 800
+    percent = (contract_row.percent or {}).get(environment)
 
-    assert qqq_prices.environment_share(environment) == environment_share(
-        twelve.daily_budget, twelve.environment_shares, environment
-    )
+    assert qqq_prices.environment_share(environment) == daily_share
+    if daily_share is not None:
+        assert percent is not None and daily_share == per_day.amount * percent // 100
 
 
 @pytest.mark.parametrize(("targets", "need"), [(0, 0), (1, 2), (2, 2), (3, 4), (89, 90), (91, 92)])
@@ -268,18 +272,19 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
     targets = qqq_prices.target_symbols(
         connection,
         _denominator([(f"issuer:{ticker}", ticker) for ticker in tickers]),
-        covered=DEFAULT_TOPT_SYMBOLS,
+        covered=TOPT_SYMBOLS,
         known_at=datetime(2026, 10, 6, 22, tzinfo=UTC),
     )
     refresh = ingest_twelve_data_market_prices(
-        symbols=DEFAULT_TOPT_SYMBOLS,
+        symbols=TOPT_SYMBOLS,
         client=daily_series_client([], [], caller="market_prices.fetch_time_series"),
         connection=None,
         now=datetime(2026, 10, 6, 22, tzinfo=UTC),
     )
-    twelve = LEDGER_CAPACITIES["twelvedata"]
-    per_minute = environment_share(twelve.calls_per_window, twelve.environment_shares, environment)
-    assert per_minute, f"{environment} has no Twelve Data share"
+    twelve = gateway.CAPACITIES["twelvedata"].in_environment(environment)
+    assert twelve is not None and twelve.calls_per_window, f"{environment} has no Twelve Data share"
+    assert twelve.window_seconds is not None
+    per_minute = twelve.calls_per_window
     window = timedelta(seconds=twelve.window_seconds)
     refresh_takes = math.ceil(refresh.total_calls / per_minute) * window
     run_takes = math.ceil(qqq_prices.need_credits(len(targets)) / per_minute) * window

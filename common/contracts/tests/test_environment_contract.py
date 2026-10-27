@@ -302,19 +302,6 @@ def test_generated_typescript_environment_contract_equals_fresh_render(monkeypat
     assert 'universeId.startsWith("universe:qqq-")' not in objectives_text
 
 
-def test_derived_vendor_shares_sum_within_hundred_percent_for_every_shared_seat() -> None:
-    contract = load_environment_contract()
-    assert set(contract.shared_physical_seats) == {"twelvedata", "sec", "yahoo", "moomoo"}
-    for seat in contract.shared_physical_seats:
-        shares = contract.derived_environment_shares(seat)
-        assert shares, f"{seat} must derive non-empty shares"
-        share_map = dict(shares)
-        assert set(share_map) == {"production", "staging"}
-        assert all(0 < pct <= 100 for pct in share_map.values())
-        assert sum(share_map.values()) <= 100
-    assert dict(contract.derived_environment_shares("twelvedata")) == {"production": 60, "staging": 40}
-
-
 def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions() -> None:
     contract = load_environment_contract()
     catalog = load_sentinel_known_answers()

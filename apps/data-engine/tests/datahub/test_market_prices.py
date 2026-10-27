@@ -12,15 +12,16 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.parse
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     PriceBarRecord,
     TwelveDataClient,
     insert_market_prices_daily,
@@ -33,6 +34,9 @@ from data_engine.datahub.market_prices import (
 )
 from data_engine.datahub.production_topt.twelve_data_origin import TwelveDataQuoteFetcher
 from data_engine.sources import gateway
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 
 @pytest.fixture
@@ -499,7 +503,7 @@ def test_xnys_regular_day_close_remains_16_et() -> None:
     assert local_close.minute == 0
 
 
-@pytest.mark.parametrize("symbol", DEFAULT_TOPT_SYMBOLS)
+@pytest.mark.parametrize("symbol", TOPT_SYMBOLS)
 def test_both_twelve_data_paths_send_the_same_vendor_symbol(symbol: str, monkeypatch) -> None:
     """#1060: the market data refresh and the TOPT capture ask Twelve Data for one symbol.
 
