@@ -73,6 +73,12 @@ LATEST_RUN_SQL = """
 """
 _LATEST_RUN_SQL = LATEST_RUN_SQL
 
+
+def latest_run_params(strategy_key: str) -> tuple[str, str]:
+    """The parameters of `LATEST_RUN_SQL`, in the order of its placeholders: the id-prefix pattern of the
+    strategy universe (#1522), then the strategy key. Every executor of the statement takes them from here."""
+    return (id_prefix_like(universe_with_role("strategy")), strategy_key)
+
 # `confidence` is joined from mart.topt_core_results, exactly as the TypeScript twin does:
 # mart.strategy_decisions has no confidence column (#355), and the Python twin hard-coded
 # None while the web rendered 0.85 — the two surfaces disagreed on the same decision. A
@@ -173,7 +179,7 @@ class PostgresStrategyRunRepository:
         try:
             with psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection:
                 with connection.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(_LATEST_RUN_SQL, (id_prefix_like(universe_with_role("strategy")), strategy_id))
+                    cursor.execute(_LATEST_RUN_SQL, latest_run_params(strategy_id))
                     run_row = cursor.fetchone()
                     if run_row is None:
                         return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")

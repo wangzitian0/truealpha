@@ -522,7 +522,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
         run_strategy_replay_for_cutoff,
         seed_strategy_inputs_from_capture,
     )
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     plan = _capture(connection, version="test-governed-strategy-run")
     core = PostgresToptCoreRepository(connection)
@@ -574,7 +574,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
         """,
         (f"strategy-run:{later_sha}", later_sha, strategy_key, later_sha, later_sha, CUTOFF + timedelta(days=1)),
     )
-    row = connection.execute(LATEST_RUN_SQL, (strategy_key,)).fetchone()
+    row = connection.execute(LATEST_RUN_SQL, latest_run_params(strategy_key)).fetchone()
     assert row[0] == governed_run_id and row[3] is True, row
     recency_only = connection.execute(
         "select strategy_run_id from mart.strategy_runs where strategy_key = %s order by executed_at desc limit 1",
