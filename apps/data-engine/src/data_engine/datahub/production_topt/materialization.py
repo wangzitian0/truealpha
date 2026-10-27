@@ -28,7 +28,15 @@ from factors.production_topt import (
 )
 from psycopg import Connection
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.execution import InputEvidenceStatus
@@ -38,6 +46,7 @@ from truealpha_runtime.storage import StorageError
 from data_engine import raw_store
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, resolve_ruleset
 from data_engine.datahub.production_topt.metric_node_values import materialize_metric_node_values
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
@@ -241,6 +250,17 @@ class SnapshotMember(_FrozenModel):
     pre_provision_profit: ToptMetricInput | None
     shares_outstanding: ToptMetricInput
     market_price: ToptMetricInput
+    #: #1518: True when a `primary_listing` row names this listing for an issuer with several listings.
+    #: `freeze_snapshot` records it, so a replay never reads the relation again. The key is absent from
+    #: the dump when False, so a snapshot stored before #1518 reloads with the same content hash.
+    is_primary: bool = False
+
+    @model_serializer(mode="wrap")
+    def omit_false_is_primary(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.is_primary:
+            data.pop("is_primary", None)
+        return data
 
     @field_validator("observation_ids")
     @classmethod
@@ -298,10 +318,14 @@ class ToptCoreSnapshot(_FrozenModel):
         return tuple(self._issuer_factor_input(grouped[issuer_id]) for issuer_id in sorted(grouped))
 
     def _issuer_factor_input(self, members: list[SnapshotMember]) -> ToptCoreSnapshotInput:
-        from data_engine.datahub.canonical_issuer import instrument_sort_key
-
-        ordered = sorted(members, key=lambda member: instrument_sort_key(member.instrument_id))
+        # The listing that a `primary_listing` row names comes first (`is_primary`). An issuer with
+        # several listings and no such listing is unavailable. Its identity names the first instrument
+        # only so that the row has coordinates: no value rests on it.
+        ordered = sorted(members, key=lambda member: (not member.is_primary, member.instrument_id))
         execution = ordered[0]
+        if sum(member.is_primary for member in ordered) > 1:
+            raise ValueError(f"issuer {execution.issuer_id} has more than one primary listing")
+        undeclared = len(ordered) > 1 and not execution.is_primary
         if len({member.operating_branch for member in ordered}) != 1:
             raise ValueError(f"issuer {execution.issuer_id} has inconsistent operating branches")
 
@@ -347,6 +371,7 @@ class ToptCoreSnapshot(_FrozenModel):
             revenue=common_metric("revenue"),
             pre_provision_profit=common_metric("pre_provision_profit"),
             market_value_components=components,
+            primary_listing_undeclared=undeclared,
         )
 
 
@@ -562,6 +587,7 @@ class PostgresToptCoreRepository:
             by_type[row.semantic_type] = row
         histories_by_issuer = self._issuer_split_histories(grouped)
         ruleset = cache(partial(resolve_ruleset, self._connection))
+        primary_by_listing = self._primary_listings(grouped, cutoff=cutoff)
         members = tuple(
             self._snapshot_member(
                 listing_id,
@@ -577,6 +603,7 @@ class PostgresToptCoreRepository:
                     else None
                 ),
                 ruleset=ruleset,
+                is_primary=primary_by_listing.get(listing_id, False),
             )
             for listing_id, by_type in grouped.items()
         )
@@ -591,6 +618,30 @@ class PostgresToptCoreRepository:
         )
         self._put_snapshot(snapshot)
         return snapshot
+
+    def _primary_listings(
+        self, grouped: Mapping[str, Mapping[str, _ObservationRow]], *, cutoff: datetime
+    ) -> dict[str, bool]:
+        """Each listing of an issuer with several listings: True when a `primary_listing` row names it.
+
+        `choose_primary_listings` is the one reader of the relation (#1518). The key of the answer is the
+        key of `grouped`. A listing of an issuer with one listing is not in the answer, and its member has
+        no `is_primary`.
+        """
+        issuer_of: dict[str, str] = {}
+        listing_of: dict[str, str] = {}
+        for key, by_type in grouped.items():
+            payload = (by_type.get("listing-identity") or next(iter(by_type.values()))).payload
+            issuer_of[key], listing_of[key] = str(payload.get("issuer_id", "")), str(payload.get("listing_id", ""))
+        listings_by_issuer: dict[str, list[str]] = {}
+        for key, issuer_id in issuer_of.items():
+            listings_by_issuer.setdefault(issuer_id, []).append(listing_of[key])
+        chosen = choose_primary_listings(self._connection, listings_by_issuer, known_at=cutoff)
+        return {
+            key: chosen[issuer_of[key]] == listing_of[key]
+            for key in grouped
+            if len(listings_by_issuer[issuer_of[key]]) > 1
+        }
 
     def _issuer_split_histories(
         self, grouped: Mapping[str, Mapping[str, _ObservationRow]]
@@ -725,6 +776,7 @@ class PostgresToptCoreRepository:
         histories: Sequence[SplitHistory | Unavailable | None],
         documents: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
         ruleset: Callable[[], ConceptMappingRuleset] | None = None,
+        is_primary: bool = False,
     ) -> SnapshotMember:
         if set(by_type) != _REQUIRED_TYPES:
             raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
@@ -856,6 +908,7 @@ class PostgresToptCoreRepository:
                 value=price.close,
                 unit=f"{price.currency}_per_share",
             ),
+            is_primary=is_primary,
         )
 
     def _put_snapshot(self, snapshot: ToptCoreSnapshot) -> None:

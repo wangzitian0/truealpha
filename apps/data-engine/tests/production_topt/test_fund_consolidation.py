@@ -492,6 +492,10 @@ def _run_deployed_tick(monkeypatch, op, *, spy: list) -> None:
     monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
     # #1323: the tick also reads the issuers whose registry read failed, through the connection.
     monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
+    # #1518: the tick also reads the issuers with several listings and no declared primary listing, through the
+    # connection. These tests fake the connection, so none exists here. The real op is driven in
+    # production_topt/test_primary_listing_one_producer.py, against a database.
+    monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *a, **k: ())
 
     def _spy(connection, *, run_id, cutoff, **kwargs):
         spy.append((run_id, cutoff))

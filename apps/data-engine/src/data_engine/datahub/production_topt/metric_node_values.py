@@ -156,6 +156,10 @@ def materialize_metric_node_values(
     }
     inserted_count = 0
     for factor_input in factor_inputs:
+        # #1518: an issuer with no declared primary listing is unavailable. Its identity is a placeholder,
+        # so no node value rests on it.
+        if factor_input.primary_listing_undeclared:
+            continue
         issuer_class = IssuerClass(factor_input.operating_branch.value)
         freshness = _snapshot_freshness(factor_input)
         base_confidence = min(cell.confidence for cell in factor_input.cell_inputs)

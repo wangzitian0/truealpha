@@ -868,7 +868,7 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from production_topt.test_materialization import _seed_complete_production_run  # noqa: PLC0415
 
-    _seed_complete_production_run(connection)
+    _seed_complete_production_run(connection, declare_primary_listings=False)
     from data_engine.datahub.strategy_history import latest_financial_observations  # noqa: PLC0415
 
     seeded = connection.execute(
@@ -883,11 +883,29 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     assert len(issuer_ids) >= 20
 
     one_id_each = {issuer_id: [issuer_id] for issuer_id in issuer_ids}
+    # #1518: Alphabet has two listings, and no `primary_listing` row names one yet. No listing values it.
+    alphabet = "issuer:lei:5493006MHB84DD0ZWV18"
+    undeclared = latest_financial_observations(
+        connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
+    )
+    assert sorted(undeclared) == [issuer_id for issuer_id in issuer_ids if issuer_id != alphabet]
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates  # noqa: PLC0415
+
+    resolve_coordinates(
+        connection,
+        [
+            [alphabet, "security:cusip:02079K107", "listing:xnas:goog", "GOOG"],
+            [alphabet, "security:cusip:02079K305", "listing:xnas:googl", "GOOGL"],
+        ],
+        as_of=TICK.date(),
+        known_at=TICK,
+    )
     found = latest_financial_observations(
         connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
     )
 
     assert sorted(found) == issuer_ids
+    assert found[alphabet][0]["listing_id"] == "listing:xnas:googl"
     assert all(payload["issuer_id"] == entity for entity, (payload, _record) in found.items())
     assert all(record.startswith("production-topt-integration:") for _payload, record in found.values())
     assert (
@@ -907,14 +925,15 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
         connection, one_id_each, known_at=TICK, parser_version="production-topt-integration-parser:v1"
     )
     assert sorted(skipped) == [issuer_id for issuer_id in issuer_ids if issuer_id != flagged]
-    # #1257: two ids of one entity yield ONE observation. #1347: the ticker of its listing selects it.
+    # #1257: the observations of one entity yield ONE observation. #1518: its declared primary listing selects it.
     paired = latest_financial_observations(
         connection,
-        {"entity:both": issuer_ids[:2]},
+        {alphabet: [alphabet]},
         known_at=TICK,
         parser_version="production-topt-integration-parser:v1",
     )
-    assert list(paired) == ["entity:both"]
+    assert list(paired) == [alphabet]
+    assert paired[alphabet][0]["listing_id"] == "listing:xnas:googl"
     # #1257: these ids name no stored entity, and their lineage names no company-facts CIK, so
     # none resolves. A positive control proves that the resolver still resolves: one issuer with
     # an entity and a company-facts lineage under the same parser resolves, under its UUID.

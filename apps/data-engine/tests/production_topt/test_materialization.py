@@ -25,6 +25,7 @@ from data_engine.datahub.production_topt import PostgresToptCoreRepository, Topt
 from data_engine.datahub.production_topt.materialization import _ObservationRow
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
+from data_engine.datahub.resolve_coordinates import resolve_coordinates
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability, ToptCoreReasonCode
 from psycopg.types.json import Jsonb
@@ -154,6 +155,7 @@ def _seed_complete_production_run(
     cutoff: datetime = CUTOFF,
     financial_vintage: dict[str, Any] | None = None,
     environment: CaptureEnvironment = CaptureEnvironment.PRODUCTION,
+    declare_primary_listings: bool = True,
 ):
     """Seed one complete run in the given capture environment.
 
@@ -161,6 +163,9 @@ def _seed_complete_production_run(
     A semantic type that `valid_to_by_semantic` omits gets an open valid_to.
     The capture sink writes an open valid_to only.
     A `financial_vintage` is written into every financial-fact payload as its `vintage`.
+    `declare_primary_listings` resolves the issuers with several listings, as `plan_and_persist` does before
+    a capture. The resolver then writes their `primary_listing` rows (#1518). With False the store holds
+    no entity, and such an issuer has no primary listing.
     """
     valid_from_by_semantic = valid_from_by_semantic or {}
     valid_to_by_semantic = valid_to_by_semantic or {}
@@ -424,6 +429,16 @@ def _seed_complete_production_run(
     assert terminal_observation_id is not None
     assert unselected_same_request_observation_ids is not None
     assert foreign_observation_id is not None
+    if declare_primary_listings:
+        by_issuer: dict[str, list[list[str]]] = {}
+        for row in denominator["instruments"]:
+            by_issuer.setdefault(str(row[0]), []).append(row)
+        resolve_coordinates(
+            connection,
+            [row for rows in by_issuer.values() if len(rows) > 1 for row in rows],
+            as_of=cutoff.date(),
+            known_at=cutoff,
+        )
     return (
         repository,
         run,
