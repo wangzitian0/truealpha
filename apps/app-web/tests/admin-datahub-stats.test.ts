@@ -7,7 +7,7 @@
  */
 
 import { idPrefixLikesOfRole } from "../src/contracts/universes";
-import { loadDatahubStats } from "../src/server/admin/datahub-stats";
+import { listingRatioReport, loadDatahubStats } from "../src/server/admin/datahub-stats";
 import { __setTestOpsClient } from "../src/server/admin/ops";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -33,6 +33,49 @@ const headRows = [
         complete_subjects: 13,
         universe_subjects: 102,
         ratio: "0.1275",
+      },
+    },
+    // #1519 step 1a: the block that the data engine writes into the quality report. Keys come back from jsonb in
+    // their own order, and the loader orders the rows for reading.
+    listing_ratio: {
+      counts: { parsed: 1, ordinary: 1, unparsed: 1, not_measured: 0 },
+      cells: {
+        "listing:xnas:aapl": {
+          issuer_id: "issuer:cik:0000320193",
+          listing_id: "listing:xnas:aapl",
+          outcome: "ordinary",
+          listing_units_per_share: "1",
+          pattern: "plain_share_title",
+          title: "Common Stock, $0.00001 par value per share",
+          reason: null,
+          accession: "0000320193-25-000079",
+          form: "10-K",
+          filed: "2025-10-31",
+        },
+        "listing:xnas:pdd": {
+          issuer_id: "issuer:cik:0001737806",
+          listing_id: "listing:xnas:pdd",
+          outcome: "parsed",
+          listing_units_per_share: "4",
+          pattern: "depositary_each_representing",
+          title: "American Depositary Shares, each representing four Class A ordinary shares",
+          reason: null,
+          accession: "0001737806-26-000005",
+          form: "20-F",
+          filed: "2026-04-25",
+        },
+        "listing:xnas:zzzz": {
+          issuer_id: "issuer:cik:0000000001",
+          listing_id: "listing:xnas:zzzz",
+          outcome: "unparsed",
+          listing_units_per_share: null,
+          pattern: "unparsed",
+          title: "Units, each consisting of one share and one warrant",
+          reason: "unfamiliar_title",
+          accession: "0000000001-26-000001",
+          form: "10-K",
+          filed: "2026-02-20",
+        },
       },
     },
   },
@@ -391,6 +434,34 @@ const nightlyVerdictRows = [
   assert(
     stats.heads[0].factors[0].ratio === "0.1275",
     "the honest number the 0.78 headline hid",
+  );
+  const ratio = stats.heads[0].listing_ratio;
+  assert(
+    ratio !== null &&
+      ratio.counts.parsed === 1 &&
+      ratio.counts.ordinary === 1 &&
+      ratio.counts.unparsed === 1 &&
+      ratio.counts.not_measured === 0,
+    "the engine's counts of the depositary ratio pass through, the App computes none",
+  );
+  assert(
+    ratio !== null &&
+      ratio.cells.map((cell) => cell.listing_id).join(",") ===
+        "listing:xnas:zzzz,listing:xnas:pdd,listing:xnas:aapl",
+    "the unparsed listing comes first, then the parsed ratio, then the ordinary shares",
+  );
+  assert(
+    ratio !== null &&
+      ratio.cells[0].title === "Units, each consisting of one share and one warrant" &&
+      ratio.cells[0].reason === "unfamiliar_title" &&
+      ratio.cells[0].listing_units_per_share === null &&
+      ratio.cells[1].listing_units_per_share === "4" &&
+      ratio.cells[1].accession === "0001737806-26-000005",
+    "an unparsed listing keeps its title text and reason; a parsed one keeps its ratio and filing",
+  );
+  assert(
+    listingRatioReport(null) === null && listingRatioReport({}) === null && listingRatioReport("x") === null,
+    "a quality report written before the ratio block shows no block, and never a block of zeros",
   );
   assert(stats.sources[0].fetches_total === 728, "source stats pass through");
   assert(stats.runs[0].resolved === 408, "run stats pass through");

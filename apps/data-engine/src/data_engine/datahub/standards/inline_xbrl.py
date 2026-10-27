@@ -99,6 +99,18 @@ class TaggedFact:
     hidden: bool
 
 
+@dataclass(frozen=True)
+class TextFact:
+    """One `ix:nonNumeric` fact: the concept, the id of its context, and its printed text."""
+
+    concept: str
+    #: The `contextRef` as written. The context itself is not resolved: a cover line of a
+    #: multi-class filer sits in a context with a class dimension, and the caller pairs facts by id.
+    context_id: str
+    #: Markup stripped and whitespace collapsed.
+    text: str
+
+
 class InlineXbrl:
     """One filing's tagged numeric facts, parsed once and shared by every reader of it."""
 
@@ -151,6 +163,28 @@ class InlineXbrl:
                     hidden=any(start <= tag.start() < stop for start, stop in self._hidden),
                 )
             )
+        return found
+
+    def text_facts(self, concepts: Collection[str], *, limit: int) -> list[TextFact]:
+        """Every `ix:nonNumeric` tagged with one of `concepts`, in document order, in any context.
+
+        Unlike `text_block`, a context with a dimension is read. The text is cut at `limit`
+        characters. An element that never closes is unreadable and is left out: it would otherwise
+        read as the rest of the document. A `continuedAt` chain is not followed.
+        """
+        found = []
+        for tag in _NON_NUMERIC.finditer(self._raw):
+            attributes = _attributes(tag.group(0))
+            concept = attributes.get("name", "")
+            context_id = attributes.get("contextRef", "")
+            if concept not in concepts or not context_id:
+                continue
+            body = self._element_body(tag)
+            if body is None:
+                continue
+            text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())[:limit]
+            if text:
+                found.append(TextFact(concept=concept, context_id=context_id, text=text))
         return found
 
     def sentence_at(self, offset: int, *, lead: int, span: int) -> str | None:

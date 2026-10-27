@@ -34,6 +34,17 @@ def landed_keys(monkeypatch) -> MemoryLandedKeys:
 
 
 @pytest.fixture(autouse=True)
+def no_annual_filing_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cover reader finds no annual filing, so a test of the real SEC route makes no SEC request (#1519).
+
+    `build_route` gives each run a `CoverRatioReader`. Its default finder reads the SEC archive. A test that
+    reads a cover passes its own finder to the reader, or it puts the deployed finder back over a fake socket."""
+    from data_engine.datahub.standards import listing_unit_ratio
+
+    monkeypatch.setattr(listing_unit_ratio, "latest_annual_filing_over_http", lambda _cik, _cutoff: None)
+
+
+@pytest.fixture(autouse=True)
 def isolate_ambient_database(monkeypatch: pytest.MonkeyPatch) -> None:
     """When DATABASE_URL is unset, data-engine tests must not connect to ambient localhost:5432 (#1197)."""
     if "DATABASE_URL" not in os.environ:

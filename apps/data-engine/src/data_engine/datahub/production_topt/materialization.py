@@ -148,6 +148,18 @@ class FinancialFactPayload(_FrozenModel):
     earnings_cagr_3y: Decimal | None = None
     earnings_cagr_base_period_end: date | None = None
     earnings_cagr_latest_period_end: date | None = None
+    # #1519 step 1a: what the cover of the latest annual filing says about the depositary ratio.
+    # The seven keys are `listing_unit_ratio.PAYLOAD_KEYS`. They are written together, null where
+    # empty, only when the cover reader ran. A payload without them is "not measured". No factor
+    # and no served value reads them yet. `listing_units_per_share` is the number of ordinary
+    # shares that one listed unit stands for.
+    listing_units_per_share: Decimal | None = None
+    ratio_pattern: str | None = None
+    ratio_title: str | None = None
+    ratio_reason: str | None = None
+    ratio_accession: str | None = None
+    ratio_form: str | None = None
+    ratio_filed: date | None = None
 
     @field_validator(
         "gross_profit",
@@ -158,6 +170,7 @@ class FinancialFactPayload(_FrozenModel):
         "pre_provision_profit",
         "net_income",
         "earnings_cagr_3y",
+        "listing_units_per_share",
         "stockholders_equity",
         "preferred_stock_value",
         "goodwill",
