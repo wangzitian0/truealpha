@@ -16,7 +16,8 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
-from data_engine.datahub.canonical_issuer import is_preferred_issuer_ticker, signed_predecessor_ciks
+from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
@@ -55,10 +56,19 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
         if universe == TOPT_UNIVERSE
         else resolve_universe_corpus(connection, universe)
     )
+    rows_by_issuer: dict[str, list[list[str]]] = {}
+    for row in corpus["topt_denominator"]["instruments"]:
+        rows_by_issuer.setdefault(row[0], []).append(row)
+    # The primary listing of the issuer gives its ticker (#1518). The planner needs a label and a CIK,
+    # and both belong to the issuer. With no listing declared, the first row of the corpus stays.
+    primary = choose_primary_listings(
+        connection,
+        {issuer_id: [row[2] for row in rows] for issuer_id, rows in rows_by_issuer.items()},
+        known_at=datetime.now(UTC),
+    )
     issuers: dict[str, UniverseIssuer] = {}
-    for issuer_id, _security_id, listing_id, ticker in corpus["topt_denominator"]["instruments"]:
-        if issuer_id in issuers and not is_preferred_issuer_ticker(ticker, issuers[issuer_id].ticker):
-            continue
+    for issuer_id, rows in rows_by_issuer.items():
+        _issuer, _security_id, listing_id, ticker = next((row for row in rows if row[2] == primary[issuer_id]), rows[0])
         cik: int | None
         if issuer_id.startswith("issuer:cik:"):
             cik = int(issuer_id.removeprefix("issuer:cik:"))

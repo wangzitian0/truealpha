@@ -6,13 +6,17 @@ entity UUIDs from staging.entities / staging.entity_aliases.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
+from functools import cache
+from importlib import resources
 from typing import Any
 
 import psycopg
+from truealpha_contracts.common import canonical_sha256
 
 _UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 ONTOLOGY_ROOT_NAMESPACE = uuid.uuid5(
@@ -52,6 +56,24 @@ def lookup_minted_entity(
 def is_uuid(value: str) -> bool:
     """Return True if value is a valid formatted UUID string."""
     return bool(_UUID_REGEX.match(value))
+
+
+#: The classification file of primary listings (data/primary_listings.v1.json).
+PRIMARY_LISTINGS_FILENAME = "primary_listings.v1.json"
+
+
+@cache
+def primary_listing_ids() -> frozenset[str]:
+    """The listing ids that the packaged classification declares as primary. The file is hash-pinned.
+
+    The file holds a classification, not a measurement. A listing id that is not in it is not primary.
+    The load refuses a file whose listings do not reproduce its own hash.
+    """
+    raw = json.loads(resources.files("data_engine.datahub.data").joinpath(PRIMARY_LISTINGS_FILENAME).read_bytes())
+    listings = sorted(str(item) for item in raw["listings"])
+    if canonical_sha256(listings) != raw["listings_sha256"]:
+        raise ValueError(f"{PRIMARY_LISTINGS_FILENAME}: the listings do not match listings_sha256")
+    return frozenset(listings)
 
 
 _LEI_RE = re.compile(r"^issuer:lei:([0-9A-Za-z]{18}[0-9]{2})$")
@@ -192,6 +214,50 @@ def resolve_entity(
     return minted_id
 
 
+def _assert_relation(
+    connection: psycopg.Connection[Any],
+    relation_type: str,
+    from_entity: uuid.UUID,
+    to_entity: uuid.UUID,
+    *,
+    known_at: datetime,
+) -> None:
+    """Write one `datahub.capture` relation, unless the store already holds that claim.
+
+    The transaction time is the cutoff, or the clock when the cutoff lies ahead of it.
+    """
+    existing = connection.execute(
+        """
+        select 1 from staging.entity_relations
+        where relation_type = %s and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'
+        """,
+        (relation_type, from_entity, to_entity),
+    ).fetchone()
+    if existing:
+        return
+    connection.execute(
+        """
+        with t as (
+            select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time
+        ),
+        r as (
+            select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id,
+                   t.tx_time
+            from t
+        )
+        insert into staging.entity_relations (
+            relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
+            transaction_time, source, raw_ref, method, confidence, mapping_version
+        )
+        select
+            r.rel_id, %(type)s, %(from)s, %(to)s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1'
+        from r
+        on conflict do nothing
+        """,
+        {"known_at": known_at, "type": relation_type, "from": from_entity, "to": to_entity},
+    )
+
+
 def resolve_coordinates(
     connection: psycopg.Connection[Any] | None,
     instruments: Sequence[Sequence[str]],
@@ -222,66 +288,11 @@ def resolve_coordinates(
         instrument_uuid = resolve_entity(connection, instrument_raw, "instrument", as_of=as_of, known_at=known_at)
         listing_uuid = resolve_entity(connection, listing_raw, "listing", as_of=as_of, known_at=known_at)
 
-        # Wire relations if not existing
-        existing_issues = connection.execute(
-            """
-            select 1 from staging.entity_relations
-            where relation_type = 'issues' and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'
-            """,
-            (issuer_uuid, instrument_uuid),
-        ).fetchone()
-        if not existing_issues:
-            connection.execute(
-                """
-                with t as (
-                    select least(%s::timestamptz, clock_timestamp()) as tx_time
-                ),
-                r as (
-                    select staging.entity_relation_uuid('issues', %s, %s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id,
-                           t.tx_time
-                    from t
-                )
-                insert into staging.entity_relations (
-                    relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
-                    transaction_time, source, raw_ref, method, confidence, mapping_version
-                )
-                select
-                    r.rel_id, 'issues', %s, %s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1'
-                from r
-                on conflict do nothing
-                """,
-                (known_at, issuer_uuid, instrument_uuid, issuer_uuid, instrument_uuid),
-            )
-
-        existing_listed = connection.execute(
-            """
-            select 1 from staging.entity_relations
-            where relation_type = 'listed_as' and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'
-            """,
-            (instrument_uuid, listing_uuid),
-        ).fetchone()
-        if not existing_listed:
-            connection.execute(
-                """
-                with t as (
-                    select least(%s::timestamptz, clock_timestamp()) as tx_time
-                ),
-                r as (
-                    select staging.entity_relation_uuid('listed_as', %s, %s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id,
-                           t.tx_time
-                    from t
-                )
-                insert into staging.entity_relations (
-                    relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
-                    transaction_time, source, raw_ref, method, confidence, mapping_version
-                )
-                select
-                    r.rel_id, 'listed_as', %s, %s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1'
-                from r
-                on conflict do nothing
-                """,
-                (known_at, instrument_uuid, listing_uuid, instrument_uuid, listing_uuid),
-            )
+        _assert_relation(connection, "issues", issuer_uuid, instrument_uuid, known_at=known_at)
+        _assert_relation(connection, "listed_as", instrument_uuid, listing_uuid, known_at=known_at)
+        # The classification file names the primary listing. This resolver writes it, and no one else does.
+        if listing_raw in primary_listing_ids():
+            _assert_relation(connection, "primary_listing", issuer_uuid, listing_uuid, known_at=known_at)
 
         result[subject_id] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
 

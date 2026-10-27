@@ -788,22 +788,10 @@ def test_the_sensor_launches_once_for_new_evidence_and_is_otherwise_quiet(fresh_
     }
 
 
-def test_entity_identity_views_match_preferred_dual_share_tickers(connection) -> None:
-    """#1359 SSOT drift guard: PRIMARY_ISSUER_TICKERS outranks SECONDARY_ISSUER_TICKERS in
-    canonical_issuer.py, mart.entity_identity, and mart.entity_display_resolution even when
-    the secondary class is recorded after the primary class."""
-    from data_engine.datahub.canonical_issuer import (
-        PRIMARY_ISSUER_TICKERS,
-        SECONDARY_ISSUER_TICKERS,
-        is_preferred_issuer_ticker,
-        ticker_preference_rank,
-    )
-
-    assert PRIMARY_ISSUER_TICKERS == frozenset({"GOOGL"})
-    assert SECONDARY_ISSUER_TICKERS == frozenset({"GOOG"})
-    assert is_preferred_issuer_ticker("GOOGL", "GOOG")
-    assert ticker_preference_rank("GOOGL") < ticker_preference_rank("AAPL") < ticker_preference_rank("GOOG")
-
+def test_entity_identity_views_follow_the_primary_listing_relation(connection) -> None:
+    """#1518: the resolver writes `primary_listing` from `primary_listings.v1.json`. `mart.entity_identity`
+    and `mart.entity_display_resolution` read it, even when the secondary class is recorded after the
+    primary class."""
     # Seed GOOGL first and GOOG second (newer transaction_time) so recency alone would pick GOOG.
     _seed_both_universes(connection)
     _seed_nport_crosswalk(connection, GOOGL, GOOG)

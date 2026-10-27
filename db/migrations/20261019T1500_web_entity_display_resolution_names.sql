@@ -6,8 +6,10 @@
 -- staging.etf_constituent_facts (company_name), display_name resolved to NULL and the Web UI
 -- rendered bare tickers without company names.
 --
--- Boot-lock guard: create or replace view takes ACCESS EXCLUSIVE on the view. Replace the view
--- only when its stored definition differs from the candidate definition below.
+-- Superseded: 20261027T1000_datahub_primary_listing_relation.sql redefines the view later in the
+-- chain (#1518) and owns its definition. Replacing it here would take ACCESS EXCLUSIVE on the view on
+-- every replay, only for that file to replace it again. So this file creates the view only on a
+-- database that has none.
 
 do $$
 declare
@@ -124,14 +126,9 @@ left join constituent_names cn on cn.ticker = upper(rt.ticker)
 order by rt.issuer_id;
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_display_resolution') is null
-       or pg_get_viewdef(to_regclass('mart.entity_display_resolution'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    if to_regclass('mart.entity_display_resolution') is null then
         execute 'create or replace view mart.entity_display_resolution as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 

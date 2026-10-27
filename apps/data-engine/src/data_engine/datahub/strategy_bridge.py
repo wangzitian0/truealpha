@@ -31,7 +31,7 @@ from functools import cache, partial
 from typing import Any
 
 import psycopg
-from factors.composite.strategy_evaluator import evaluate_cutoff
+from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.forest import IssuerClass
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
@@ -40,9 +40,9 @@ from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
-from data_engine.datahub.canonical_issuer import ticker_sort_key
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
@@ -145,9 +145,10 @@ def seed_strategy_inputs_from_capture(
 ) -> int:
     """Land the run's captured cells as provenance-neutral strategy inputs.
 
-    One listing per issuer supplies ``last_close``. The ticker of the run's listing-identity
-    cell selects it (``ticker_sort_key``, #1347): the primary share class first, then the
-    lowest listing_id. The SEC shares figure is issuer-level, so a dual-class issuer's market
+    One listing per issuer supplies ``last_close``: its primary listing (``choose_primary_listings``,
+    #1518). An issuer with several listings and no declared primary listing gets no input row.
+    ``undeclared_primary_listing_issuers`` names it, and the tick excludes it with that reason.
+    The SEC shares figure is issuer-level, so a dual-class issuer's market
     value uses its primary class's price — an approximation already reflected in the price
     confidence. Missing fields are simply not seeded; the evaluator excludes those
     issuers with explicit reasons rather than receiving fabricated values.
@@ -187,20 +188,12 @@ def seed_strategy_inputs_from_capture(
     # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
     # Resolve the target run's issuer_id for each listing from listing-identity or
     # financial-fact before bucketing price observations.
-    listing_to_issuer: dict[str, str] = {
-        str(payload["listing_id"]): str(payload["issuer_id"])
-        for semantic_type, _conf, payload, _obs_at in rows
-        if semantic_type in ("listing-identity", "financial-fact")
-    }
+    listing_to_issuer = _run_listings(connection, run_id)
+    primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
 
-    # issuer -> (canonical listing, payload, confidence, the observation's own knowable_at)
+    # issuer -> (primary listing, payload, confidence, the observation's own knowable_at)
     financial: dict[str, tuple[str, dict, Decimal, datetime]] = {}
     price: dict[str, tuple[str, dict, Decimal, datetime]] = {}
-    # The run's tickers are read once, when the first issuer with two listings needs them.
-    run_tickers = cache(partial(_run_listing_tickers, connection, run_id))
-
-    def listing_key(listing_id: str) -> tuple[tuple[bool, int, str], str]:
-        return ticker_sort_key(run_tickers().get(listing_id)), listing_id
 
     for semantic_type, confidence, payload, observed_at in rows:
         if semantic_type == "listing-identity":
@@ -212,8 +205,7 @@ def seed_strategy_inputs_from_capture(
             else listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
         )
         bucket = financial if semantic_type == "financial-fact" else price
-        current = bucket.get(issuer_id)
-        if current is None or listing_key(listing_id) < listing_key(current[0]):
+        if primary.get(issuer_id) == listing_id and issuer_id not in bucket:
             bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
 
     on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)
@@ -260,26 +252,46 @@ def seed_strategy_inputs_from_capture(
     return written
 
 
-# The ticker of each listing of the run, as its listing-identity cell names it (#1347).
-_RUN_LISTING_TICKERS_SQL = """
-select distinct p.normalized_payload ->> 'listing_id', p.normalized_payload ->> 'ticker'
+# The issuer and the listing of each listing-identity and financial-fact cell of the run.
+_RUN_LISTINGS_SQL = """
+select distinct p.normalized_payload ->> 'listing_id', p.normalized_payload ->> 'issuer_id'
 from raw.capture_obligations ob
 join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
 join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
 join staging.capture_observation_payloads p on p.observation_id = o.observation_id
 where ob.run_id = %s
-  and o.semantic_type = 'listing-identity'
-  and p.normalized_payload ->> 'ticker' is not null
+  and o.semantic_type in ('listing-identity', 'financial-fact')
 order by 1, 2
 """
 
 
-def _run_listing_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
-    """The ticker of each listing of the run. A listing whose cells name two tickers keeps the first."""
-    tickers: dict[str, str] = {}
-    for listing_id, ticker in connection.execute(_RUN_LISTING_TICKERS_SQL, (run_id,)).fetchall():
-        tickers.setdefault(str(listing_id), str(ticker))
-    return tickers
+def _run_listings(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
+    """The issuer of each listing of the run. A listing that two cells give to two issuers keeps the last."""
+    return {
+        str(listing_id): str(issuer_id)
+        for listing_id, issuer_id in connection.execute(_RUN_LISTINGS_SQL, (run_id,)).fetchall()
+    }
+
+
+def _listings_by_issuer(listing_to_issuer: Mapping[str, str]) -> dict[str, list[str]]:
+    by_issuer: dict[str, list[str]] = {}
+    for listing_id, issuer_id in listing_to_issuer.items():
+        by_issuer.setdefault(issuer_id, []).append(listing_id)
+    return by_issuer
+
+
+def undeclared_primary_listing_issuers(
+    connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime
+) -> tuple[str, ...]:
+    """The issuers of the run that have several listings and no declared primary listing (#1518).
+
+    The seed writes no input for them. The tick excludes each one with
+    `ExclusionReason.PRIMARY_LISTING_UNDECLARED`.
+    """
+    chosen = choose_primary_listings(
+        connection, _listings_by_issuer(_run_listings(connection, run_id)), known_at=cutoff
+    )
+    return tuple(sorted(issuer_id for issuer_id, listing_id in chosen.items() if listing_id is None))
 
 
 # The ticker of each listing of the given issuers in the run. The listing-identity cells name
@@ -446,12 +458,22 @@ def run_strategy_replay_for_cutoff(
 
     ``plausibility_refusals`` maps an issuer id to the reason the plausibility gate refused
     its row in this capture (#1323). That issuer's decision is excluded with the reason and the
-    others are ranked without it. Required, so a caller cannot skip the gate's verdict."""
+    others are ranked without it. The tick adds the issuers with no declared primary listing (#1518).
+    An issuer of the map without an input row still gets its excluded decision.
+    Required, so a caller cannot skip the gate's verdict."""
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
     issuer_classes = _issuer_classes_for_run(connection, capture_run_id)
     issuer_inputs = [
         replace(item, issuer_class=issuer_classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff)
+    ]
+    # An issuer that the seed wrote no row for, such as one with no declared primary listing, has no
+    # input here. Its refusal still gives it a decision with its reason.
+    seeded = {item.issuer_id for item in issuer_inputs}
+    issuer_inputs += [
+        IssuerInput(issuer_id=issuer_id, records={}, knowable_at={})
+        for issuer_id in sorted(plausibility_refusals)
+        if issuer_id not in seeded
     ]
     evaluated = evaluate_cutoff(
         issuer_inputs,

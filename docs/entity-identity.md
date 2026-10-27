@@ -61,6 +61,7 @@ fund is an issuer.
 |---|---|---|
 | `issues` | issuer → instrument | the issuer of an instrument; one issuer per instrument at a time |
 | `listed_as` | instrument → listing | the instrument trades as this listing; one instrument per listing at a time |
+| `primary_listing` | issuer → listing | the listing that the engines use for an issuer with several listings; `resolve_coordinates` writes it from `primary_listings.v1.json` (#1518) |
 | `holds` | fund → instrument | a holding; the weights stay in `staging.fund_holding_facts` |
 | `member_of` | entity → universe | membership over a validity interval (the "universe member" is this edge, and the edge has its own UUID) |
 | `subsidiary_of` | organization → organization | corporate control |
@@ -73,8 +74,12 @@ fund is an issuer.
 | `superseded_by` | entity → entity (same kind) | a merge; the resolver follows it |
 | `split_into` | entity → entity (same kind) | part of the source continues as the target from `valid_from` |
 
-Only `issues`, `listed_as` and the three identity edges have a writer after PR-2. The others
+Only `issues`, `listed_as`, `primary_listing` and the three identity edges have a writer. The others
 are registered so that their shape is fixed before anything writes them.
+
+`choose_primary_listings` (`datahub/primary_listing.py`) is the one reader of `primary_listing`. An issuer with
+several listings and no row has no primary listing. Its engine marks it unavailable with the reason
+`primary_listing_undeclared`. Both mart views read the same relation.
 
 ## 2. Minting: UUIDv5 from the birth alias
 
@@ -313,7 +318,7 @@ UUIDs without touching them.
     with a pinned `search_path` (#953). Before that they were not, and every
     `mart_readonly` select on this view failed with `permission denied for schema
     staging` — which is why #954's App-side twin never ran.
-  - Since #1337 the view calls neither helper. One set-based pass (`20261015T0900`) gives
+  - Since #1337 the view calls neither helper. One set-based pass (`20261015T0900`, redefined by `20261027T1000`) gives
     the survivor and the alias end of every row, as the helpers give them at `'infinity'`.
     `common/runtime/tests/test_entity_identity_view.py` compares the view with the definition
     that calls the helpers.

@@ -21,12 +21,10 @@
 -- A change to either helper needs the same change here.
 -- libs/runtime/tests/test_entity_identity_view.py compares this view with the old definition.
 --
--- This is the last migration that defines the view, so it owns the shape and the comment.
--- 20260923T1800 creates the view only on a database that has none.
---
--- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view.
--- The view is replaced only when its stored definition differs from the one below.
--- A temporary view with the same text gives the comparison through pg_get_viewdef.
+-- Superseded: 20261027T1000_datahub_primary_listing_relation.sql redefines the view later in the
+-- chain (#1518) and owns its shape. Replacing the view here would take ACCESS EXCLUSIVE on it on
+-- every replay, only for that file to replace it again. So this file creates the view only on a
+-- database that has none. 20260923T1800 creates it first, so this file keeps the comment.
 do $$
 declare
     wanted constant text := $view$
@@ -197,14 +195,9 @@ left join issuer_listings ilist on ilist.issuer_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_identity') is null
-       or pg_get_viewdef(to_regclass('mart.entity_identity'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    if to_regclass('mart.entity_identity') is null then
         execute 'create or replace view mart.entity_identity as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 

@@ -35,11 +35,8 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 from truealpha_contracts.standards import STANDARDS, confidence_for
 from truealpha_contracts.theme_purity import THEMES, ThemeDefinition
 
-from data_engine.datahub.canonical_issuer import (
-    expand_issuer_alias_ids,
-    is_canonical_issuer_id,
-    is_preferred_issuer_ticker,
-)
+from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids, is_canonical_issuer_id
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.status_dimensions import LOW_CONFIDENCE_FLOOR
 from data_engine.sources import llm
 
@@ -390,8 +387,14 @@ def _resolve_member_tickers(
     members: Mapping[int, str],
     *,
     tickers: Mapping[str, str] | None,
+    known_at: datetime,
 ) -> dict[str, str]:
-    """Resolve each partitioned member's subject_id to its ticker across UUIDs and legacy aliases (#1263, #1265)."""
+    """Resolve each partitioned member's subject_id to its ticker across UUIDs and legacy aliases (#1263, #1265).
+
+    Several aliases of one issuer can name several tickers. The primary listing of the issuer decides
+    among them (`choose_primary_listings`, #1518). With none declared, the issuer takes its ticker from
+    `mart.entity_identity`.
+    """
     if not partitions:
         return {}
     provided = {k: v for k, v in (tickers or {}).items() if v}
@@ -409,14 +412,12 @@ def _resolve_member_tickers(
     if unresolved_uuids:
         if provided:
             expanded = expand_issuer_alias_ids(connection, unresolved_uuids)
-            for subject_id, aliases in expanded.items():
-                best: str | None = None
-                for alias in aliases:
-                    candidate = provided.get(alias)
-                    if candidate is not None and (best is None or is_preferred_issuer_ticker(candidate, best)):
-                        best = candidate
-                if best is not None:
-                    resolved[subject_id] = best
+            named = {
+                subject_id: sorted({provided[alias] for alias in aliases if alias in provided})
+                for subject_id, aliases in expanded.items()
+            }
+            chosen = choose_primary_listings(connection, {k: v for k, v in named.items() if v}, known_at=known_at)
+            resolved.update({subject_id: ticker for subject_id, ticker in chosen.items() if ticker is not None})
 
         still_missing = [uid for uid in unresolved_uuids if uid not in resolved]
         if still_missing:
@@ -464,7 +465,7 @@ def materialize_theme_purity(
     )
     members = governed_members(connection, run_id=run_id)
     partitions = load_partitions(connection, cutoff=cutoff, ciks=members.keys())
-    resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers)
+    resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers, known_at=cutoff)
     written: list[ThemePurity] = []
     for partition in partitions:
         subject_id = members[partition.cik]

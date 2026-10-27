@@ -2,7 +2,8 @@
 
 The view of 20260923T1800 called `staging.entity_survivor()` and `staging.entity_alias_valid_to()`
 for each row. On production, one evaluation took 1.4 s to 3 s. 20261015T0900 gives the same values
-for all rows at once, through common table expressions.
+for all rows at once, through common table expressions. 20261027T1000 (#1518) ranks the listings of one
+issuer by the relation `primary_listing`, not by ticker literals.
 
 The checks:
 
@@ -40,14 +41,17 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db" / "migrations"
 #: The definition before #1337. Its `$view$` text is the reference of the equivalence checks.
 LEGACY_ID_MIGRATION = MIGRATIONS / "20260923T1800_datahub_mart_entity_identity_legacy_id.sql"
-#: The definition of #1337. It is the last file that defines the view.
+#: The definition of #1337. It creates the view only on a database that has none.
 SET_BASED_MIGRATION = MIGRATIONS / "20261015T0900_datahub_mart_entity_identity_set_based.sql"
+#: The definition of #1518. It reads the relation `primary_listing`. It is the last file that defines the view.
+PRIMARY_LISTING_MIGRATION = MIGRATIONS / "20261027T1000_datahub_primary_listing_relation.sql"
 #: Every file that defines the view. Each boot replays all of them.
 VIEW_MIGRATIONS = (
     MIGRATIONS / "20260921T2100_datahub_mart_entity_identity.sql",
     MIGRATIONS / "20260923T0800_datahub_mart_entity_identity_listing_id.sql",
     LEGACY_ID_MIGRATION,
     SET_BASED_MIGRATION,
+    PRIMARY_LISTING_MIGRATION,
 )
 
 COLUMNS = ("entity_id", "kind", "current_ticker", "name", "cik", "lei", "listing_id", "legacy_id")
@@ -615,12 +619,11 @@ def test_equal_confidence_and_transaction_time_tie_breaks_by_alias_id(conn: psyc
     assert all_rows(conn, "mart.entity_identity") == all_rows(conn, OLD_VIEW)
 
 
-def test_multi_class_issuer_prefers_primary_share_class_ticker_and_listing(conn: psycopg.Connection) -> None:
-    """#1347: an issuer with both GOOG and GOOGL listings at the same transaction_time resolves to GOOGL."""
-    store = Store(conn)
-    issuer = store.mint("issuer", "lei", lei(902), at=T0)
-    inst_c = store.mint("instrument", "figi", figi(902), at=T0)
-    inst_a = store.mint("instrument", "figi", figi(903), at=T0)
+def seed_two_listings_of_one_issuer(store: Store, n: int) -> tuple[str, str, str]:
+    """One issuer with the instruments and listings GOOG and GOOGL at one transaction time."""
+    issuer = store.mint("issuer", "lei", lei(n), at=T0)
+    inst_c = store.mint("instrument", "figi", figi(n), at=T0)
+    inst_a = store.mint("instrument", "figi", figi(n + 1), at=T0)
     list_c = store.mint("listing", "mic-ticker", "XNAS:GOOG", at=T0)
     store.alias(list_c, "legacy-id", "listing:xnas:goog", at=T0)
     list_a = store.mint("listing", "mic-ticker", "XNAS:GOOGL", at=T0)
@@ -629,9 +632,37 @@ def test_multi_class_issuer_prefers_primary_share_class_ticker_and_listing(conn:
     store.relate("listed_as", inst_c, list_c, at=T0)
     store.relate("issues", issuer, inst_a, at=T0)
     store.relate("listed_as", inst_a, list_a, at=T0)
+    return issuer, list_c, list_a
+
+
+def identity_of(conn: psycopg.Connection, issuer: str) -> tuple[Any, ...]:
     row = conn.execute(
-        "select current_ticker, listing_id from mart.entity_identity where entity_id = %s::uuid",
-        (issuer,),
+        "select current_ticker, listing_id from mart.entity_identity where entity_id = %s::uuid", (issuer,)
     ).fetchone()
-    assert row == ("GOOGL", "listing:xnas:googl")
+    assert row is not None
+    return row
+
+
+def test_multi_class_issuer_follows_the_primary_listing_relation(conn: psycopg.Connection) -> None:
+    """#1518: the listing that a `primary_listing` row names comes first. The old definition ranked GOOGL by literal."""
+    store = Store(conn)
+    issuer, _list_c, list_a = seed_two_listings_of_one_issuer(store, 902)
+    store.relate("primary_listing", issuer, list_a, at=T0)
+
+    assert identity_of(conn, issuer) == ("GOOGL", "listing:xnas:googl")
     assert_same_rows_as_the_old_definition(conn)
+
+
+def test_the_view_ranks_by_the_relation_and_not_by_a_ticker(conn: psycopg.Connection) -> None:
+    """#1518: a row that names GOOG puts GOOG first. The newest row decides. A retracted row decides nothing."""
+    store = Store(conn)
+    issuer, list_c, list_a = seed_two_listings_of_one_issuer(store, 904)
+    store.relate("primary_listing", issuer, list_c, at=T0)
+
+    assert identity_of(conn, issuer) == ("GOOG", "listing:xnas:goog")
+
+    named_googl = store.relate("primary_listing", issuer, list_a, at=T0 + HOUR)
+    assert identity_of(conn, issuer) == ("GOOGL", "listing:xnas:googl")
+
+    store.retract_relation(named_googl, at=T0 + 2 * HOUR)
+    assert identity_of(conn, issuer) == ("GOOG", "listing:xnas:goog")
