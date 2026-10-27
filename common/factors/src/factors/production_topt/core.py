@@ -2,22 +2,22 @@
 
 **One band set (#1235).** The tier bands are not written here. `compute_topt_core` reads
 them from the strategy definition that the deployed strategy tick also evaluates
-(`truealpha_contracts.strategy.load_live_strategy_definition`, definition 1.0.0). The
+(`truealpha_contracts.strategy.load_live_strategy_definition`, definition 1.1.0). The
 engine tiers by capital-adjusted GPPE and values by P/GP = market value / the operating
 numerator that GPPE consumes. Each row stamps that definition's id and content hash as
 `tier_definition_id` / `tier_definition_sha256`, the same hash that
 `mart.strategy_runs.definition_content_sha256` carries.
 
-**Converged onto the base `large_model_value_v0` semantics (#394, `production-topt-v0.2.0`).**
-GPPE is one uniform capital-adjusted formula for every issuer —
-`(numerator - total_assets*risk_free_rate)/headcount`, where the numerator is the
-parser's industry-branch profit (pre-provision profit for financial issuers, gross
-profit otherwise) — identical to `factors.base.gross_profit_per_employee`. Since #528 the
-formula is not written here: `compute_topt_gppe` evaluates the registered tree
-`factors.forest.GPPE_V0_TREE`, which reproduces the former kernel byte for byte. The
-v0.1.0 financial short-circuit (`pre_provision_profit/headcount` with no capital
-charge, then `FINANCIAL_VALUATION_NOT_COMPARABLE`) is retired; financial issuers now
-flow through the same tier / P-S valuation path as every other issuer.
+**One tree per class, pinned by the definition (#394, #1518).** GPPE is the tree of the metric forest
+that the strategy definition pins for the issuer class (`factors.forest.bound_tree`). A non-financial
+issuer or an insurer takes the uniform tree `gppe` (`production-topt-v0.2.0`):
+`(numerator - total_assets*risk_free_rate)/headcount`. A bank takes the tree `gppe_banking_tce`: its
+capital charge is measured tangible common equity (owner decision D2, 2026-10-26). The numerator is the
+parser's industry-branch profit (pre-provision profit for financial issuers, gross profit otherwise). The
+strategy composite evaluates the same pin, so one issuer has one value. The v0.1.0 financial
+short-circuit (`pre_provision_profit/headcount` with no capital charge, then
+`FINANCIAL_VALUATION_NOT_COMPARABLE`) is retired; financial issuers flow through the same tier / P-S
+valuation path as every other issuer.
 
 Rows written under the former TOPT-own bands (P/S 3-4, 8-10, 20-30, stamped with a
 `three-tier-definition:` id) stay as an append-only prior vintage. This module still
@@ -260,13 +260,14 @@ class ToptMarketValueComponent(_FrozenModel):
 
 
 class GppeV0Definition(_FrozenModel):
-    """v0.2.0 uniform capital-adjusted labor-efficiency definition.
+    """The rate and the pin of the labor-efficiency definition of the TOPT core (v0.2.0).
 
-    Converged onto the base `large_model_value_v0` (#394): one formula for every
-    issuer, `(numerator - total_assets*risk_free_rate)/headcount`, where the
-    numerator is the parser's industry-branch profit (pre-provision profit for
-    financial issuers, gross profit otherwise). v0.1.0's financial short-circuit
-    (`pre_provision_profit/headcount`, no capital charge) is retired.
+    It holds the risk-free rate and the version of the uniform tree. The formula is not here: the
+    strategy definition pins the tree of each issuer class (#1518). The uniform tree is
+    `(numerator - total_assets*risk_free_rate)/headcount`, where the numerator is the parser's
+    industry-branch profit (pre-provision profit for financial issuers, gross profit otherwise). The
+    banking tree charges measured tangible common equity instead of total assets. v0.1.0's financial
+    short-circuit (`pre_provision_profit/headcount`, no capital charge) is retired.
     """
 
     definition_id: str = Field(default="", pattern=r"^(?:|gppe-definition:[0-9a-f]{64})$")

@@ -15,6 +15,7 @@ Three checks, from weakest to strongest:
 from __future__ import annotations
 
 import itertools
+import json
 import random
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
@@ -29,6 +30,7 @@ from factors.forest import (
     NodeKind,
     evaluate,
     required_inputs,
+    uniform_tree_pins,
 )
 from factors.production_topt import (
     TCE_SNAPSHOT_FIELDS,
@@ -42,7 +44,12 @@ from factors.production_topt import (
     ToptMetricInput,
     compute_topt_gppe,
 )
-from truealpha_contracts.strategy import load_live_strategy_definition
+from truealpha_contracts.strategy import (
+    LIVE_STRATEGY_DEFINITION_RESOURCE,
+    LargeModelValueV0Definition,
+    load_live_strategy_definition,
+    load_strategy_definition_corpus,
+)
 
 CUTOFF = datetime(2026, 9, 16, tzinfo=UTC)
 IDS = tuple(f"normalized-observation:{character * 64}" for character in "1234")
@@ -441,3 +448,24 @@ def test_the_snapshot_fields_of_the_banking_leaves_are_the_aliases_of_the_regist
         if node.kind is NodeKind.INPUT
     }
     assert aliased == set(TCE_SNAPSHOT_FIELDS) | {"pre_provision_profit", "headcount"}
+
+
+def test_a_changed_pin_changes_the_core_value() -> None:
+    # Mutation proof (#1518 3b): pin the financial class to the uniform tree and the core gives the
+    # total-assets value for the same bank snapshot. A core that ignored the definition would give the
+    # banking value twice. The uniform value is the one that main@f5807a7 published for these inputs
+    # (the former GOLDEN case `jpm_production_rate`): (86,807M - 4,424,900M x 0.05) / 318,512.
+    payload = json.loads(
+        json.dumps(load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)["strategy_definition"])
+    )
+    payload["labor_efficiency_tree_keys"]["financial"] = uniform_tree_pins()["financial"].model_dump()
+    repinned = LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
+    result = compute_topt_gppe(
+        _snapshot("financial", None, "86807000000", "4424900000000", "318512", JPM_TCE_LEAVES),
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=repinned,
+    )
+    assert str(result.gppe) == "-422081.4286431908373938815492037977"
+    assert result.capital_adjusted_gross_profit == Decimal("-134438000000")
+    assert _bank_result("0.05", JPM_TCE_LEAVES).gppe != result.gppe
