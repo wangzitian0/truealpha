@@ -68,7 +68,6 @@ def _assertion(
     value: Decimal | None,
     value_sha256: str | None = None,
     knowable_at: datetime = datetime(2025, 2, 15, tzinfo=UTC),
-    confidence_score: Decimal = Decimal("0.80"),
     lineage_complete: bool = True,
 ) -> SourceAssertion:
     return SourceAssertion(
@@ -80,7 +79,6 @@ def _assertion(
         normalized_value_sha256=value_sha256 or digest,
         numeric_value=value,
         confidence_assessment_id=f"confidence-assessment:{digest}",
-        confidence_score=confidence_score,
         lineage_node_ids=(f"raw-object:{digest}", f"source-vintage:{digest}"),
         lineage_complete=lineage_complete,
     )
@@ -94,7 +92,6 @@ def _agreeing_result(cell: ReconciliationCell | None = None):
         source_id="source:sec:v1",
         origin_group_id="origin:sec:v1",
         value=Decimal("100"),
-        confidence_score=Decimal("0.75"),
     )
     corroborating = _assertion(
         cell,
@@ -102,7 +99,6 @@ def _agreeing_result(cell: ReconciliationCell | None = None):
         source_id="source:vendor-a:v1",
         origin_group_id="origin:vendor-a:v1",
         value=Decimal("100"),
-        confidence_score=Decimal("0.99"),
     )
     result = reconcile_source_assertions(
         cell=cell,
@@ -113,12 +109,11 @@ def _agreeing_result(cell: ReconciliationCell | None = None):
     return cell, primary, corroborating, result
 
 
-def test_independent_agreement_uses_priority_not_confidence_or_input_order() -> None:
+def test_independent_agreement_uses_priority_not_input_order() -> None:
     cell, primary, corroborating, result = _agreeing_result()
 
     assert result.outcome is ReconciliationOutcome.AGREED
     assert result.selected_assertion_id == primary.assertion_id
-    assert result.selected_confidence_score == Decimal("0.75")
     assert result.origin_group_ids == ("origin:sec:v1", "origin:vendor-a:v1")
 
     reordered = reconcile_source_assertions(
@@ -564,7 +559,6 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
     assert report.summary.freshness == Decimal("0.25")
     assert report.summary.independent_reconciliation == Decimal("0.25")
     assert report.summary.conflicted_count == 1
-    assert report.summary.denominator_mean_confidence_score == Decimal("0.1875")
     assert tuple(item.policy_id for item in report.reconciliation_policies) == tuple(
         sorted((policy.policy_id, secondary_policy.policy_id))
     )
@@ -600,7 +594,6 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
         freshness=Decimal("0"),
         independent_reconciliation=Decimal("0"),
         lineage_completeness=Decimal("0"),
-        denominator_mean_confidence_score=Decimal("0"),
         origin_composition=(),
     )
 
@@ -725,7 +718,6 @@ def test_agreed_result_cannot_be_deserialized_without_a_selected_assertion() -> 
             "selected_assertion_id": None,
             "selected_value_sha256": None,
             "selected_numeric_value": None,
-            "selected_confidence_score": None,
         }
     )
 
@@ -761,26 +753,4 @@ def test_non_finite_decimal_inputs_are_rejected(value: Decimal) -> None:
             source_id="source:sec:v1",
             origin_group_id="origin:sec:v1",
             value=value,
-        )
-    with pytest.raises(ValidationError, match="non-finite Decimal"):
-        _assertion(
-            cell,
-            digest=SHA_A,
-            source_id="source:sec:v1",
-            origin_group_id="origin:sec:v1",
-            value=Decimal("100"),
-            confidence_score=value,
-        )
-
-
-def test_confidence_uses_the_repository_normalized_scale() -> None:
-    cell = _cell()
-    with pytest.raises(ValidationError, match="less than or equal to 1"):
-        _assertion(
-            cell,
-            digest=SHA_A,
-            source_id="source:sec:v1",
-            origin_group_id="origin:sec:v1",
-            value=Decimal("100"),
-            confidence_score=Decimal("75"),
         )

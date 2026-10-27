@@ -509,13 +509,11 @@ def test_financial_branch_uses_its_own_numerator_for_the_domain_bound() -> None:
 
 def _price_entry(source_id: str, day: str, value: str):
     from datetime import UTC, datetime
-    from decimal import Decimal
 
     origin = "origin:yahoo:v1" if source_id == "yahoo-chart:v1" else "origin:twelve-data:v1"
     return (
         source_id,
         datetime.fromisoformat(day).replace(tzinfo=UTC),
-        Decimal("0.85"),
         hashlib.sha256(f"{source_id}:{day}:{value}".encode()).hexdigest(),
         "normalized-observation:" + hashlib.sha256(f"{source_id}{day}".encode()).hexdigest(),
         "source-vintage:" + "a" * 64,
@@ -655,11 +653,10 @@ def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
             normalized_value_sha256=payload_sha,
             numeric_value=Decimal(str(extra["value"])),
             confidence_assessment_id=f"confidence-assessment:{payload_sha}",
-            confidence_score=confidence,
             lineage_node_ids=(vintage_id, raw_object),
             lineage_complete=True,
         )
-        for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+        for source_id, knowable_at, payload_sha, obs_id, vintage_id, raw_object, extra in entries
     )
     result = reconcile_source_assertions(
         cell=cell,
@@ -725,11 +722,10 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
                 normalized_value_sha256=payload_sha,
                 numeric_value=Decimal(str(extra["value"])),
                 confidence_assessment_id=f"confidence-assessment:{payload_sha}",
-                confidence_score=confidence,
                 lineage_node_ids=(vintage_id, raw_object),
                 lineage_complete=True,
             )
-            for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+            for source_id, knowable_at, payload_sha, obs_id, vintage_id, raw_object, extra in entries
         )
         result = reconcile_source_assertions(
             cell=cell,
@@ -780,14 +776,12 @@ def _bar_entry(source_id: str, day: str, **values: str | None):
     """A market-price observation carrying the whole bar (the parser v10 / twelve-data
     v3 payload shape) as `_reconcile_market_price_cells` folds it."""
     from datetime import UTC, datetime
-    from decimal import Decimal
 
     origin = "origin:yahoo:v1" if source_id == "yahoo-chart:v1" else "origin:twelve-data:v1"
     bar = {"open": None, "high": None, "low": None, "close": None, "volume": None, **values}
     return (
         source_id,
         datetime.fromisoformat(day).replace(tzinfo=UTC),
-        Decimal("0.85"),
         hashlib.sha256(f"{source_id}:{day}:{sorted(bar.items())}".encode()).hexdigest(),
         "normalized-observation:" + hashlib.sha256(f"{source_id}{day}".encode()).hexdigest(),
         "source-vintage:" + "a" * 64,
@@ -963,7 +957,6 @@ def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_
 
 def _financial_entry(source: str, payload: dict, *, knowable: str = "2026-02-18"):
     from datetime import UTC, datetime
-    from decimal import Decimal
 
     from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
     from data_engine.datahub.quality_report import classify_financial_fact_entry
@@ -973,7 +966,6 @@ def _financial_entry(source: str, payload: dict, *, knowable: str = "2026-02-18"
     entry = classify_financial_fact_entry(
         parser,
         datetime.fromisoformat(knowable).replace(tzinfo=UTC),
-        Decimal("0.9"),
         digest,
         "normalized-observation:" + hashlib.sha256(source.encode()).hexdigest(),
         "source-vintage:" + "a" * 64,
@@ -1078,7 +1070,6 @@ def test_one_conflicting_field_abstains_the_subject() -> None:
 
 def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ignored() -> None:
     from datetime import UTC, datetime
-    from decimal import Decimal
 
     from data_engine.datahub.quality_report import classify_financial_fact_entry, reconcile_financial_fact_entries
 
@@ -1090,7 +1081,6 @@ def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ig
         classify_financial_fact_entry(
             "probe-parser:v1",
             datetime(2026, 1, 1, tzinfo=UTC),
-            Decimal("0.5"),
             "a" * 64,
             "normalized-observation:" + "b" * 64,
             "source-vintage:" + "c" * 64,

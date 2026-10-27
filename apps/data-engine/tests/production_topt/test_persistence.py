@@ -586,6 +586,36 @@ def test_a_corroboration_that_cannot_be_persisted_never_fails_the_primary(connec
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 
 
+def test_the_quality_report_names_no_band_and_serves_the_stamped_confidence(connection) -> None:
+    """#1517 A3: a close with three agreeing origins serves the same value with no `band` key and
+    no 1.00. The report mean is the mean of the stamps the run holds: the bound observation with the
+    highest stamp of each requested cell, over the requested count. Fusion never writes a number back."""
+    plan = _capture(connection, version="test-no-band", corroborate=True)
+    report = quality_report.build_report(connection, plan.run_id)
+    cells = report["reconciliation_cells"]
+    assert len(cells) == 21
+    assert {cell["origin_groups"] for cell in cells.values()} == {3}
+    for listing, cell in cells.items():
+        assert cell["outcome"] == "agreed", listing
+        for graded in (cell, *cell["fields"].values()):
+            assert {"band", "confidence"}.isdisjoint(graded), listing
+    stamped_mean = connection.execute(
+        """
+        select (sum(top) / %s)::numeric(10, 4)
+        from (
+            select max(o.confidence) as top
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+            where ob.run_id = %s
+            group by ob.obligation_id
+        ) per_cell
+        """,
+        (report["requested_count"], plan.run_id),
+    ).fetchone()[0]
+    assert Decimal(report["denominator_mean_confidence"]) == stamped_mean
+
+
 def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     """The report grades five fields per market-price cell, each from two real
     assertions written through the deployed sink and read back through the deployed
