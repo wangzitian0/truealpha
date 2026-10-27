@@ -7,7 +7,7 @@
  */
 
 import { idPrefixLikesOfRole } from "../src/contracts/universes";
-import { listingRatioReport, loadDatahubStats } from "../src/server/admin/datahub-stats";
+import { LEDGER_COVERAGE_DAYS, listingRatioReport, loadDatahubStats } from "../src/server/admin/datahub-stats";
 import { __setTestOpsClient } from "../src/server/admin/ops";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -98,6 +98,20 @@ const trafficRows = [
     avg_ms: 310,
     last_call: "2026-09-05 22:19:44+00",
     last_error: "No data is available on the specified dates",
+  },
+];
+// #1521 step 6: one row of the key and run coverage table, as `LEDGER_COVERAGE_SQL` returns it.
+const ledgerCoverageRows = [
+  {
+    day: "2026-10-27",
+    source: "moomoo",
+    endpoint: "get_research_analyst_consensus",
+    calls: 30,
+    no_key: 4,
+    by_reason: { probe: 2 },
+    keys_twice: 1,
+    run_share: "0.7500",
+    calls_per_run: "7.5",
   },
 ];
 const recentCallRows = [
@@ -267,8 +281,9 @@ const nightlyVerdictRows = [
 ];
 
 {
+  let coverageParams: unknown[] | undefined;
   __setTestOpsClient({
-    query: async (sql: string) => {
+    query: async (sql: string, params?: unknown[]) => {
       if (typeof sql === "string" && sql.includes("nightly_verdicts"))
         return { rows: nightlyVerdictRows } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
@@ -290,6 +305,10 @@ const nightlyVerdictRows = [
       }
       // #729: the ledger reads also join raw.fetches, so they are matched BEFORE the
       // sources stub, on the ledger table itself; per-source aggregate vs recent list.
+      if (typeof sql === "string" && sql.includes("with ledger as")) {
+        coverageParams = params;
+        return { rows: ledgerCoverageRows } as never;
+      }
       if (typeof sql === "string" && sql.includes("api_call_ledger")) {
         return {
           rows: sql.includes("group by l.source")
@@ -306,6 +325,14 @@ const nightlyVerdictRows = [
   assert(
     stats.traffic.length === 1 && stats.traffic[0].source === "twelvedata",
     "traffic rows pass through",
+  );
+  assert(
+    stats.ledgerCoverage.length === 1 &&
+      stats.ledgerCoverage[0].no_key === 4 &&
+      stats.ledgerCoverage[0].by_reason.probe === 2 &&
+      stats.ledgerCoverage[0].run_share === "0.7500" &&
+      JSON.stringify(coverageParams) === JSON.stringify([LEDGER_COVERAGE_DAYS]),
+    "the coverage rows pass through unchanged, and the window is the bound LEDGER_COVERAGE_DAYS (#1521)",
   );
   assert(
     stats.nightlyVerdicts.length === 2 &&

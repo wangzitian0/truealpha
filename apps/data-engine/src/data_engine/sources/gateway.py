@@ -1084,7 +1084,7 @@ def fetch_once(
 
     ``fetch`` makes exactly ONE external request through the gateway (`http_get`, `urlopen`,
     `SourceGateway.call`) and names ``key`` as its identity. The ledger row of that request carries
-    the key, and the nightly verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises
+    the key, and the coverage table of `/admin/datahub` counts rows per key. A ``fetch`` that raises
     lands nothing, so a failed or refused call is tried again by the next caller.
 
     The registered rule of the key (`accept_rules`) judges the answer. An answer it refuses (an error body
