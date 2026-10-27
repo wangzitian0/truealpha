@@ -127,3 +127,45 @@ def test_the_run_names_definition_1_1_0_and_the_root_node_holds_the_pinned_tree_
     assert version == "1.1.0"
     assert run_hash == live.content_sha256
     assert root == (pin.tree_version, pin.tree_sha256)
+
+
+def test_the_frozen_snapshot_carries_the_banking_leaves_of_the_bank_only_and_an_old_snapshot_reloads(
+    tick: Tick,
+) -> None:
+    """The member of the bank holds its four banking leaves. Every other member holds none, so its content
+    hash does not move. A snapshot stored before #1518 has no leaves: it reloads, and its bank is
+    unavailable with the four fields named (a replay of such a run reads nothing else)."""
+    from data_engine.datahub.production_topt.materialization import ToptCoreSnapshot
+    from factors.production_topt import (
+        TCE_SNAPSHOT_FIELDS,
+        GppeV0Definition,
+        ToptCoreAvailability,
+        compute_topt_gppe,
+    )
+
+    with psycopg.connect(tick.url) as reader:
+        stored = reader.execute(
+            "select payload from staging.topt_core_snapshots where run_id = %s", (tick.metadata["capture_run_id"],)
+        ).fetchone()
+    assert stored is not None
+    payload = dict(stored[0])
+    banks = [member for member in payload["members"] if member["operating_branch"] == "financial"]
+    others = [member for member in payload["members"] if member["operating_branch"] != "financial"]
+    assert len(banks) == 1 and others
+    assert set(TCE_SNAPSHOT_FIELDS) <= set(banks[0]), "the bank carries its four leaves"
+    assert not any(set(TCE_SNAPSHOT_FIELDS) & set(member) for member in others), "no other member carries one"
+
+    for member in payload["members"]:
+        for name in TCE_SNAPSHOT_FIELDS:
+            member.pop(name, None)
+    reloaded = ToptCoreSnapshot.model_validate(payload)
+    (bank_input,) = [item for item in reloaded.factor_inputs() if item.operating_branch.value == "financial"]
+    result = compute_topt_gppe(
+        bank_input,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate=_rate(tick)),
+        definition=load_live_strategy_definition(),
+    )
+
+    assert result.availability is ToptCoreAvailability.UNAVAILABLE
+    assert {reason.value for reason in result.reason_codes} == {f"missing_{name}" for name in TCE_SNAPSHOT_FIELDS}

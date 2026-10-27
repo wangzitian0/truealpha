@@ -244,7 +244,7 @@ def test_the_guard_sees_a_planted_band_set() -> None:
 def test_no_hardcoded_risk_free_rate_or_margin_gate_in_runtime_code() -> None:
     """Topic 1: eliminates scattered 0.35 margin gates and 0.05 risk-free rate constants.
 
-    The live strategy definition (large_model_value_v0_definition_1_0_0.json) is the sole
+    The live strategy definition (`LIVE_STRATEGY_DEFINITION_RESOURCE`, 1.1.0) is the sole
     source of parameters for valuation bands, midpoint, and risk-free rates. Runtime code
     in apps/ and common/ must not declare hardcoded literals for these values.
     """
