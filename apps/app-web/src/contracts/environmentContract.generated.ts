@@ -30,8 +30,8 @@ export interface SentinelMemberContract {
   readonly trait: string;
 }
 
-export const ENVIRONMENT_CONTRACT_VERSION = "2.0.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "12e1f2d4bcf55cdee4deca77134e827b2b28a2a6c8b00dd96adec1e4a08a05e8" as const;
+export const ENVIRONMENT_CONTRACT_VERSION = "3.0.0" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "388f4783ce243a528c6871cf5919e29e53fc8dce20de41e8814940aacd437e91" as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   {
