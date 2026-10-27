@@ -1,17 +1,20 @@
-"""Consumer-facing metric node value reader from `mart.metric_node_values` (#1413 F4).
+"""MCP reader of `mart.metric_node_values` (#1413 F4).
 
 Reads any metric-forest node by `node_key` at the governed head (`mart.served_head` where
 `universe_id like 'universe:topt-%'`, falling back to the acceptance-gated TOPT run when
-no pointer has been advanced yet). Mirrors `apps/app-web/src/server/mart/metric-node-values.ts`
-so App and MCP return identical rows for any `node_key`.
+no pointer has been advanced yet). The reader derives `confidence_band` from the stored
+`confidence` with `confidence_band` (#1517 A2); it never reads the stored column.
 """
 
 from __future__ import annotations
+
+from decimal import Decimal
 
 import psycopg
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from truealpha_contracts.confidence_bands import confidence_band
 from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
 
 _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, ValidationError)
@@ -117,7 +120,6 @@ class PostgresMetricNodeValueRepository:
                            v.source_evidence_status,
                            v.factor_validation_status,
                            v.confidence::text as confidence,
-                           v.confidence_band,
                            v.tree_version,
                            v.tree_sha256
                     from mart.metric_node_values v
@@ -145,7 +147,7 @@ class PostgresMetricNodeValueRepository:
                         source_evidence_status=r["source_evidence_status"],
                         factor_validation_status=r["factor_validation_status"],
                         confidence=r["confidence"],
-                        confidence_band=r["confidence_band"],
+                        confidence_band=confidence_band(None if r["confidence"] is None else Decimal(r["confidence"])),
                         tree_version=r["tree_version"],
                         tree_sha256=r["tree_sha256"],
                     )

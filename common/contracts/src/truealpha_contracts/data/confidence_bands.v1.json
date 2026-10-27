@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "description": "The two thresholds of the confidence bands, on the 0 to 1 scale (#1517). A band is a display word of one stored confidence. Below medium_from is low. No confidence has no band.",
+  "high_from": "0.80",
+  "medium_from": "0.60"
+}

@@ -336,7 +336,6 @@ def test_f4_postgres_metric_node_value_repository_reads_any_node_key(monkeypatch
                             "source_evidence_status": "verified",
                             "factor_validation_status": "accepted",
                             "confidence": "0.92",
-                            "confidence_band": "high",
                             "tree_version": "production-topt-v0.2.0",
                             "tree_sha256": "f" * 64,
                         }
@@ -351,6 +350,7 @@ def test_f4_postgres_metric_node_value_repository_reads_any_node_key(monkeypatch
     assert report.node_key == "custom_node_v1"
     assert report.available_count == 1
     assert report.cells[0].value == "9000000"
+    assert report.cells[0].confidence_band == "high"
 
 
 def test_b1_b2_backtest_overrides_and_parameter_sweep(monkeypatch: pytest.MonkeyPatch) -> None:

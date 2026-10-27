@@ -399,7 +399,7 @@ append-only. Each row carries:
 - `availability_status`, `reason_codes` (the evaluator's `undefined` reasons: `missing_input`,
   `undefined_operand`, `zero_denominator`);
 - `source_evidence_status`, `factor_validation_status` (#747);
-- `confidence` and `confidence_band`;
+- `confidence`, and the legacy `confidence_band` column (no writer fills it and no reader selects it; the MCP reader derives the band from `confidence`);
 - `tree_id`, `tree_version` and `tree_sha256` for derived cells;
 - `input_observation_ids`.
 
@@ -429,18 +429,18 @@ The existing fixed columns stay as a compatibility projection:
   `gross_profit`. Today `LargeModelValueV0Definition.required_input_keys()` does not depend
   on the issuer class.
 
-## 8. Confidence bands
+## 8. Confidence
 
-- **Input nodes** name the confidence-report family that bands them: `gross_profit`,
+- **Input nodes** name the confidence-report family that gives their cells a confidence: `gross_profit`,
   `pre_provision_profit`, `total_assets` and `headcount` already exist in
   `confidence_report.FAMILIES`. A new input node needs a family, and the family gets its
   reconciliation policy the way #854 added them. Step D adds a test that every forest
   input's family exists.
 - **Derived nodes** take `minimum-consumed`:
   - the value confidence is the minimum consumed (init.md §7);
-  - the band is the worst band consumed, in the order `missing < low < medium < high`;
+  - the band word is a display function of that minimum (`confidence_band`), not a stored value;
   - parameters are excluded, because they are declared, not measured.
-- **Step I** adds the report's node section: a band per `(issuer, node, period)` read from
+- **Step I** adds the report's node section: a confidence per `(issuer, node, period)` read from
   `mart.metric_node_values`. The App renders it beside the three status dimensions.
 
 ## 9. Graph and embedding stores

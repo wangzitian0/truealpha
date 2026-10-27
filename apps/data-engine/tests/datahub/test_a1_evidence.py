@@ -97,7 +97,7 @@ def test_the_gate_thresholds_are_the_accepted_demands_own_numbers() -> None:
     assert (
         objective["minimum_independent_origin_groups"] == ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups
     )
-    assert objective["confidence_target_band"] == "high"
+    assert "confidence_target_band" not in objective
 
 
 def test_a_report_meeting_every_objective_raises_no_objection() -> None:
@@ -109,7 +109,7 @@ def test_a_report_meeting_every_objective_raises_no_objection() -> None:
     [
         ("denominator_coverage", {"terminal_coverage": "0.9900"}),
         ("availability", {"availability": "0.9400"}),
-        # 0.6999 x 100 = 69.99, just under the demanded 70 on the presentation scale.
+        # 0.6999 is just under the demanded 0.70.
         ("continuous_confidence", {"denominator_mean_confidence": "0.6999"}),
         # One canonical origin: nothing corroborated it (#344's missing second origin).
         (
