@@ -270,15 +270,15 @@ def test_tick_window_holds_against_the_real_staging_cron_schedule() -> None:
     """The window this tool guards must open no later than the first staging
     tick it exists to protect, and cover the last one — read from the actual
     schedule, not a second copy of the literal times."""
-    from data_engine.lanes.capture import CANARY_DAILY_CRON, QQQ_LIVE_CRON, live_topt_cron
+    from data_engine.lanes.capture import tick_cron
 
     def cron_time(expr: str) -> time:
         minute, hour = expr.split()[:2]
         return time(int(hour), int(minute))
 
-    topt_staging = cron_time(live_topt_cron("staging"))
-    qqq = cron_time(QQQ_LIVE_CRON)
-    canary = cron_time(CANARY_DAILY_CRON)
+    topt_staging = cron_time(tick_cron("topt", "staging"))
+    qqq = cron_time(tick_cron("qqq", "production"))
+    canary = cron_time(tick_cron("canary", "staging"))
 
     assert topt_staging < qqq < canary, "the ticks this comment orders must still be ordered"
     assert TICK_WINDOW_START == topt_staging, "the window must open exactly at the first staging tick"

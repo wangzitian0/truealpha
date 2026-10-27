@@ -56,6 +56,7 @@ from typing import Any
 
 import psycopg
 from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
 
@@ -74,7 +75,7 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # The universe belongs to the governed key. Without it these invariants measured whichever
 # pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
 # every invariant below silently changed population.
-SERVED_UNIVERSE_PREFIX = "universe:topt-"
+SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
 #: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
 #: A 10-K is due 90 days after the fiscal year ends. A late filer gets 15 more days (Form 12b-25).
 #: Just before a filing, the newest annual period of a current filer is the year before.
@@ -90,7 +91,7 @@ REVENUE_MAX_AGE_MONTHS = 18
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
-      and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
+      and universe_id like '{SERVED_UNIVERSE_LIKE}'
     order by advanced_at desc limit 1
 """
 # Mirrors strategy-run-repository.ts (#575): the run the governed capture head resolves

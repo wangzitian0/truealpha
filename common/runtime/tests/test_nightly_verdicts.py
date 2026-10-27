@@ -39,6 +39,11 @@ def _main_set(_ref: str) -> str:
     return _module.EXPECTATIONS_PATH.read_text(encoding="utf-8")
 
 
+def _main_contract(_ref: str) -> str:
+    """The deployed release declares exactly main's environment contract."""
+    return (REPO_ROOT / _module.RELEASE_CONTRACT_PATH).read_text(encoding="utf-8")
+
+
 def _verdict(name: str, hours_ago: float, *, ok: bool | None = True, summary: str = "ok") -> dict[str, object]:
     return {"check": name, "ran_at": (NOW - timedelta(hours=hours_ago)).isoformat(), "ok": ok, "summary": summary}
 
@@ -49,7 +54,8 @@ def _all_green(hours_ago: float = 7.0) -> list[dict[str, object]]:
 
 def _run(verdicts: object, **kwargs: object) -> int:
     kwargs.setdefault("reader", _main_set)
-    return check(URL, environment="staging", http_get=_health(verdicts), now=NOW, **kwargs)
+    kwargs.setdefault("contract_reader", _main_contract)
+    return check(URL, environment="production", http_get=_health(verdicts), now=NOW, **kwargs)
 
 
 def test_every_check_green_and_on_time_passes(capsys: pytest.CaptureFixture[str]) -> None:
@@ -145,7 +151,12 @@ def test_a_release_before_the_report_is_not_a_failure(capsys: pytest.CaptureFixt
     def http_get(url: str) -> tuple[int, str]:
         return 200, json.dumps({"status": "ok", "git_sha": "v0.0.56"})
 
-    assert check(URL, environment="production", http_get=http_get, reader=_main_set, now=NOW) == 0
+    assert (
+        check(
+            URL, environment="production", http_get=http_get, reader=_main_set, contract_reader=_main_contract, now=NOW
+        )
+        == 0
+    )
     assert "predates" in capsys.readouterr().out
 
 
@@ -177,7 +188,7 @@ def test_the_expectations_are_read_at_the_data_engines_release() -> None:
             {"git_sha": "v0.0.71", "data_engine_git_sha": "v0.0.70", "nightly_verdicts": _all_green()}
         )
 
-    assert check(URL, http_get=http_get, reader=reader, now=NOW) == 0
+    assert check(URL, http_get=http_get, reader=reader, contract_reader=_main_contract, now=NOW) == 0
     assert asked == ["v0.0.70"]
 
 
@@ -309,17 +320,12 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
 # --- one list per environment: the contract says which universes an environment runs ---
 
 
-def _main_contract(_ref: str) -> str:
-    """The deployed release declares exactly main's environment contract."""
-    return (REPO_ROOT / _module.RELEASE_CONTRACT_PATH).read_text(encoding="utf-8")
-
-
 def _universe_checks() -> list[str]:
-    return sorted(name for name in EXPECTED if _module.universe_key_of(name) is not None)
+    return sorted(name for name in EXPECTED if "@" in name)
 
 
 def _qqq_checks() -> list[str]:
-    return [name for name in EXPECTED if _module.universe_key_of(name) == "qqq"]
+    return [name for name in EXPECTED if name.endswith("@universe-list:qqq")]
 
 
 def test_the_per_universe_checks_of_the_qqq_universe_are_the_three_the_owner_named() -> None:
@@ -371,78 +377,72 @@ def test_a_report_that_holds_the_staging_checks_only_is_green_in_staging_with_th
     assert f"all {len(EXPECTED) - len(qqq)} nightly checks are green" in capsys.readouterr().out
 
 
-def test_a_release_whose_contract_predates_the_universe_list_is_asked_for_every_check() -> None:
+def _named_set(_ref: str) -> str:
+    """A release that predates the universe records: it declares its per-universe checks by name."""
+    declared = json.loads(_module.EXPECTATIONS_PATH.read_text(encoding="utf-8"))
+    declared["checks"].update({name: {"cadence_hours": 24, "job": "j"} for name in _universe_checks()})
+    del declared["per_universe"]
+    return json.dumps(declared)
+
+
+def test_a_release_that_predates_the_universe_records_is_asked_for_every_check_it_names() -> None:
     """The release that staging serves before this change records the QQQ checks: they stay bounded there."""
     old_contract = json.dumps({"environments": {"staging": {"strategy_universe": "topt"}}})
     verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
 
-    assert (
-        check(
-            URL,
-            environment="staging",
-            http_get=_health(verdicts),
-            now=NOW,
-            reader=_main_set,
-            contract_reader=lambda ref: old_contract,
-        )
-        == 1
-    )
-    assert (
-        check(
-            URL,
-            environment="staging",
-            http_get=_health(verdicts),
-            now=NOW,
-            reader=_main_set,
-            contract_reader=lambda ref: None,
-        )
-        == 1
-    ), "a release without the contract file is asked for every check"
+    for contract_reader in (lambda ref: old_contract, lambda ref: None):
+        assert _run(verdicts, reader=_named_set, contract_reader=contract_reader) == 1
+    assert _run(_all_green(), reader=_named_set, contract_reader=lambda ref: old_contract) == 0
 
 
-def test_an_unreadable_contract_bounds_every_check_rather_than_none(capsys: pytest.CaptureFixture[str]) -> None:
-    verdicts = [v for v in _all_green() if v["check"] not in set(_qqq_checks())]
+def test_a_release_whose_checks_need_the_universe_records_and_whose_contract_has_none_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The per-universe checks name no universe: with no record to expand them over they would be missed."""
+    old_contract = json.dumps({"environments": {"staging": {"strategy_universe": "topt"}}})
+    assert _run(_all_green(), contract_reader=lambda ref: old_contract) == 1
+    assert "holds no universe records" in capsys.readouterr().err
 
+
+def test_an_unreadable_contract_fails_the_check(capsys: pytest.CaptureFixture[str]) -> None:
     def broken(ref: str) -> str:
         raise _module.VerdictCheckFailure(f"cannot read the contract at {ref}")
 
-    code = check(
-        URL,
-        environment="staging",
-        http_get=_health(verdicts),
-        now=NOW,
-        reader=_main_set,
-        contract_reader=broken,
-    )
-    assert code == 1
-    assert "every universe is bounded" in capsys.readouterr().err
+    assert _run(_all_green(), contract_reader=broken) == 1
+    assert "cannot read the contract" in capsys.readouterr().err
 
 
-def test_a_universe_that_the_contract_does_not_list_keeps_its_checks() -> None:
-    """A false red beats a silent miss: a check of an unknown universe is still bounded."""
+def test_a_per_universe_check_is_dropped_only_where_its_universe_is_not_scheduled() -> None:
     expectations = {
-        "theme_purity@universe-list:nasdaq100": _module.Expectation("theme_purity@universe-list:nasdaq100", 24, "j"),
         "theme_purity@universe-list:qqq": _module.Expectation("theme_purity@universe-list:qqq", 24, "j"),
+        "theme_purity@topt": _module.Expectation("theme_purity@topt", 24, "j"),
         "runtime_shape": _module.Expectation("runtime_shape", 24, "j"),
     }
-    kept = _module.expected_in(expectations, frozenset({"topt"}), frozenset({"topt", "qqq"}))
+    kept = _module.expected_in(expectations, ["topt"])
 
-    assert sorted(kept) == ["runtime_shape", "theme_purity@universe-list:nasdaq100"]
+    assert sorted(kept) == ["runtime_shape", "theme_purity@topt"]
+
+
+def _contract_of(universes: object, *, staging: list[str], production: list[str]) -> str:
+    """A contract whose environments schedule the given keys (``universes`` holds the records)."""
+    return json.dumps(
+        {
+            "universes": universes,
+            "environments": {
+                name: {"universes": [{"key": key, "status": "scheduled"} for key in keys]}
+                for name, keys in (("staging", staging), ("production", production))
+            },
+        }
+    )
+
+
+_RECORDS = {"topt": {"lane_name": "topt"}, "qqq": {"lane_name": "universe-list:qqq"}}
 
 
 def test_the_alias_prod_reads_the_production_entry_of_the_contract() -> None:
     """A contract in which production schedules TOPT only and staging schedules TOPT and QQQ. The alias `prod`
     must drop the QQQ checks as `production` does; an alias that fell through to "unknown" would keep them."""
-    contract = json.dumps(
-        {
-            "environments": {
-                "staging": {
-                    "universes": [{"key": "topt", "status": "scheduled"}, {"key": "qqq", "status": "scheduled"}]
-                },
-                "production": {"universes": [{"key": "topt", "status": "scheduled"}]},
-            }
-        }
-    )
+    contract = _contract_of(_RECORDS, staging=["topt", "qqq"], production=["topt"])
 
     expected = {
         environment: set(
@@ -458,6 +458,26 @@ def test_the_alias_prod_reads_the_production_entry_of_the_contract() -> None:
     assert not set(_qqq_checks()) & expected["prod"]
 
 
+def test_a_fourth_universe_of_the_contract_gets_its_per_universe_checks_without_an_edit_here() -> None:
+    """The expansion reads the records: a universe added to the contract is watched, with no entry in the checks file."""
+    records = {**_RECORDS, "dow": {"lane_name": "universe-list:dow"}}
+    contract = _contract_of(records, staging=["topt"], production=["topt", "qqq", "dow"])
+
+    production = _module.expectations_for(
+        "v0.0.70", _main_set, environment="production", contract_reader=lambda ref: contract
+    )[0]
+    staging = _module.expectations_for(
+        "v0.0.70", _main_set, environment="staging", contract_reader=lambda ref: contract
+    )[0]
+
+    assert {name for name in production if name.endswith("@universe-list:dow")} == {
+        "datahub_confidence_report@universe-list:dow",
+        "question_coverage@universe-list:dow",
+        "theme_purity@universe-list:dow",
+    }
+    assert not {name for name in staging if name.endswith("@universe-list:dow")}
+
+
 @pytest.mark.parametrize(
     "universes",
     [
@@ -470,15 +490,12 @@ def test_the_alias_prod_reads_the_production_entry_of_the_contract() -> None:
     ],
     ids=["entry-not-an-object", "not-a-list", "no-status", "no-key", "unknown-status", "key-not-text"],
 )
-def test_a_universe_list_the_tool_cannot_read_bounds_every_check(universes: object) -> None:
+def test_a_universe_list_the_tool_cannot_read_fails_the_check(universes: object) -> None:
     """Unknown is not green: a malformed list must not drop a check silently."""
-    contract = json.dumps({"environments": {"staging": {"universes": universes}}})
-    expectations, source = _module.expectations_for(
-        "v0.0.70", _main_set, environment="staging", contract_reader=lambda ref: contract
-    )
+    contract = json.dumps({"universes": _RECORDS, "environments": {"staging": {"universes": universes}}})
 
-    assert expectations is not None and set(expectations) == set(EXPECTED)
-    assert "every universe is bounded" in source
+    with pytest.raises(_module.VerdictCheckFailure):
+        _module.expectations_for("v0.0.70", _main_set, environment="staging", contract_reader=lambda ref: contract)
 
 
 def _release_repo(tmp_path: Path, tag: str = "v0.0.70") -> Path:
