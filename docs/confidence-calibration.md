@@ -8,9 +8,11 @@ Production threshold or a claim that the full TOPT universe is calibrated.
 Implementation (#1333, #1352): `common/factors/src/factors/confidence.py`
 (`evaluate_continuous_confidence` and `verify_confidence_calibration_report`) is
 called by `apps/data-engine/src/data_engine/datahub/confidence_report.py` on
-every governed head to compute deterministic `0-1` `confidence` and `0-100`
-`score_100` alongside each cell's consensus band. The DTOs live in
-`common/contracts/src/truealpha_contracts/confidence.py`.
+every governed head to compute one deterministic `confidence` from 0 to 1 for each
+cell. The DTOs live in `common/contracts/src/truealpha_contracts/confidence.py`.
+The display band of a confidence is `confidence_band`
+(`common/contracts/src/truealpha_contracts/confidence_bands.py`); its two thresholds
+are in `data/confidence_bands.v1.json`.
 
 Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
@@ -37,15 +39,13 @@ E   = sum(independence_weight_g * Q_g)
 S   = 1 - exp(-E)
 ```
 
-The normalized stored score and the human-readable score are:
+The stored confidence is:
 
 ```text
 confidence = S * agreement^0.35
                * semantic_mapping_quality^0.25
                * lineage_completeness^0.20
                * required_component_completeness^0.20
-
-score_100 = 100 * confidence
 ```
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
@@ -59,18 +59,18 @@ separate queryable facts rather than being replaced by this scalar.
 
 ## Sensitivity
 
-| Scenario | Score / 100 | Interpretation |
+| Scenario | Confidence | Interpretation |
 |---|---:|---|
-| One near-perfect independent source | 63.1391 | One origin cannot reach the high-confidence range alone. |
-| Two independent agreeing sources | 86.4128 | Independent corroboration raises support materially. |
-| Three independent agreeing sources | 94.9916 | Additional support approaches but never equals certainty. |
-| Same-origin duplicate | 63.1391 | A mirror is deduplicated and adds no support. |
-| Stale source (`freshness=0.5`) | 39.2869 | Cadence-relative staleness lowers evidence continuously. |
-| Semantic mismatch (`M=0.5`) | 53.0935 | Mapping ambiguity or definition drift remains visible. |
-| Partial lineage (`L=0.5`) | 54.9658 | Broken provenance edges reduce trust. |
-| Missing components (`K=0.5`) | 54.9658 | Required cells remain in the denominator and are penalized. |
-| Two independent sources in conflict (`A=0.2`) | 49.1970 | Source count cannot hide material disagreement. |
-| Yahoo/Twelve Data four-symbol anchor | 51.4702 | Aggregate agreement is high, but missing Twelve raw bytes prevent a second source contribution. |
+| One near-perfect independent source | 0.631391 | One origin cannot reach the high-confidence range alone. |
+| Two independent agreeing sources | 0.864128 | Independent corroboration raises support materially. |
+| Three independent agreeing sources | 0.949916 | Additional support approaches but never equals certainty. |
+| Same-origin duplicate | 0.631391 | A mirror is deduplicated and adds no support. |
+| Stale source (`freshness=0.5`) | 0.392869 | Cadence-relative staleness lowers evidence continuously. |
+| Semantic mismatch (`M=0.5`) | 0.530935 | Mapping ambiguity or definition drift remains visible. |
+| Partial lineage (`L=0.5`) | 0.549658 | Broken provenance edges reduce trust. |
+| Missing components (`K=0.5`) | 0.549658 | Required cells remain in the denominator and are penalized. |
+| Two independent sources in conflict (`A=0.2`) | 0.491970 | Source count cannot hide material disagreement. |
+| Yahoo/Twelve Data four-symbol anchor | 0.514702 | Aggregate agreement is high, but missing Twelve raw bytes prevent a second source contribution. |
 
 ## Empirical Boundary
 

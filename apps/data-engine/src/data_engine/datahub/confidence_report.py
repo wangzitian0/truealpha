@@ -2,21 +2,25 @@
 
 The standard, verbatim: "HIGH confidence = multiple sources agree, MEDIUM = multiple sources
 present, LOW = covered by one source". This module grades every (metric family, subject)
-cell of the run the governed pointer heads into one of four bands and persists the result
-as one append-only, content-addressed `mart.datahub_confidence_report` row:
+cell of the run the governed pointer heads and persists the result as one append-only,
+content-addressed `mart.datahub_confidence_report` row. A cell carries:
 
-* `high`     — at least two INDEPENDENT origins asserted a value and the accepted fusion
-               engine (`reconcile_source_assertions`, #343) graded them `agreed` under the
-               family's declared, content-addressed tolerance policy;
-* `medium`   — at least two origins asserted a value but they are not two sources: no
-               agreement policy exists for the family, or they disagree beyond tolerance,
-               or they share one lineage (two readers of one 10-K are one source);
-* `low`      — exactly one origin asserted a value;
-* `missing`  — no origin asserted a value for the cell.
+* `confidence`          — one decimal from 0 to 1, evaluated from what the origins asserted;
+* `independent_origins` — the number of independent lineages that asserted a value;
+* `reason`              — why the cell holds the origins it holds: `independent_origins_agree`
+                          (three groups or more agreed under the family's content-addressed
+                          tolerance policy, or both routes of the index-membership plane
+                          listed the listing), `two_origins_agree`, `no_agreement_policy`,
+                          `same_lineage` (two readers of one 10-K are one source),
+                          `not_agreed_within_tolerance`, `cross_origin_conflict`,
+                          `single_origin` and its variants, or `no_origin_value`.
+
+The report holds no band word (#1517). A band is a display function of `confidence`
+(`truealpha_contracts.confidence_bands`). Rows written before that change keep their words.
 
 Independence is a property of LINEAGE, not of origin id: a mirror, a reseller, or a second
 parser of the same document never corroborates its original
-(docs/datahub-quality-report.md, reconciliation step 3). The bands are computed from what
+(docs/datahub-quality-report.md, reconciliation step 3). The cells are computed from what
 each origin actually asserted; the stored `confidence` column on
 `staging.capture_normalized_observations` is a per-semantic constant and takes no part in
 them — the report says so in its metadata, from a measurement rather than a remark.
@@ -24,8 +28,8 @@ them — the report says so in its metadata, from a measurement rather than a re
 Every field of the session's bar is its own family (#865): open, high, low and close under
 the deployed market-price policy (`quality_report.RECONCILIATION_POLICY`), volume under its
 own (`VOLUME_RECONCILIATION_POLICY`), each read from the payload key the origin wrote it
-under — so a field's HIGH is exactly what the quality report's `field_reconciliation` calls
-agreed (#850), and the close's HIGH is what the pointer gate calls corroborated. An origin
+under — so a field's `two_origins_agree` is exactly what the quality report's `field_reconciliation`
+calls agreed (#850), and the close's agreement is what the pointer gate calls corroborated. An origin
 whose payload lacks a field (Twelve Data v2 carried the close alone) asserts nothing for
 that family: it is present with no value, never a conflict. Index membership gets the
 policy it never had (`INDEX_MEMBERSHIP_POLICY`): the index operator's constituent list
@@ -34,10 +38,10 @@ stated tolerance whenever both routes carry one. The fundamentals the quality re
 (revenue, gross profit, net income, total assets; #854) reconcile here under the same
 `FINANCIAL_FACT_RECONCILIATION_POLICY` (#866): the primary's figure at its fiscal period
 end against a second origin's figure at that same period, in the primary's currency —
-agreed is HIGH, beyond tolerance MEDIUM, a second origin that never published the
-primary's period LOW (`second_origin_other_period`, the financial analogue of #622).
-Headcount, pre-provision profit and shares outstanding have no policy and grade `medium`
-at most with two origins.
+agreed is `two_origins_agree`, beyond tolerance `not_agreed_within_tolerance`, a second
+origin that never published the primary's period `second_origin_other_period` (the financial
+analogue of #622). Headcount, pre-provision profit and shares outstanding have no policy and
+grade `no_agreement_policy` with two origins.
 
 The ACCURACY section is the half a self-consistent warehouse cannot supply: for every bar
 field and every fused fundamental, the agreement the engine already computed,
@@ -55,7 +59,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from enum import StrEnum
 from typing import Any, Protocol
 
 from factors.confidence import evaluate_continuous_confidence
@@ -183,27 +186,14 @@ DEFAULT_SAMPLE_SUBJECTS: Mapping[str, tuple[str, ...]] = {
 }
 DEFAULT_ORACLE_ISSUERS = 5
 
-BAND_DEFINITIONS: Mapping[str, str] = {
-    "high": "at least three independent origin groups agreed within 0.1% tolerance; served value is median, confidence 1.00",
-    "medium": "exactly two independent origin groups agreed within 0.1% tolerance; served value is mean",
-    "low": "single origin, or no consensus; served value is priority source",
-    "missing": "no origin asserted a value",
-}
 INDEPENDENCE_RULE = (
     "two origins are independent when their lineages differ; a mirror, reseller or second "
-    "parser of one document is the same source and grades medium at most"
+    "parser of one document is the same source and never corroborates its original"
 )
 
 _CIK_ID = re.compile(r"^issuer:cik:(\d+)$")
 _RATIO_PLACES = Decimal("0.0001")
 _DELTA_PLACES = Decimal("0.000001")
-
-
-class Band(StrEnum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    MISSING = "missing"
 
 
 @dataclass(frozen=True)
@@ -266,7 +256,6 @@ LINEAGE_OUTCOME_MASS: Mapping[str, tuple[Decimal, Decimal]] = {
 class CellGrade:
     family: str
     subject_id: str
-    band: Band
     reason: str
     origins: tuple[str, ...]
     independent_origins: int
@@ -278,11 +267,9 @@ class CellGrade:
     excluded: tuple[str, ...] = ()
     values: Mapping[str, str | None] = field(default_factory=dict)
     confidence: Decimal = Decimal("0")
-    score_100: Decimal = Decimal("0")
 
     def payload(self) -> dict[str, Any]:
         return {
-            "band": self.band.value,
             "reason": self.reason,
             "origins": list(self.origins),
             "independent_origins": self.independent_origins,
@@ -292,7 +279,6 @@ class CellGrade:
             "comparison": self.comparison,
             "excluded": list(self.excluded),
             "confidence": str(self.confidence),
-            "score_100": str(self.score_100),
         }
 
 
@@ -503,19 +489,22 @@ def _deltas(
     return str(integral if worst == integral else worst), str(relative)
 
 
+#: The reasons of a cell that serves no value: the confidence of such a cell is 0.
+UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_eligible_origin"})
+
+
 def _continuous_confidence_for_cell(
     policy: FamilyPolicy,
     subject_id: str,
     valued: Sequence[OriginValue],
     *,
-    band: Band,
     reason: str,
     relative_delta: str | None,
     cutoff: datetime,
-) -> tuple[Decimal, Decimal]:
-    """Evaluate continuous 0-1 confidence and 0-100 score_100 via factors.confidence."""
-    if not valued or band is Band.MISSING:
-        return Decimal("0"), Decimal("0")
+) -> Decimal:
+    """Evaluate the continuous 0-1 confidence of one cell via factors.confidence."""
+    if not valued or reason in UNSERVED_REASONS:
+        return Decimal("0")
     sources: list[SourceConfidenceEvidence] = []
     for origin in valued:
         succ, fail = LINEAGE_OUTCOME_MASS.get(origin.lineage, (Decimal("12"), Decimal("0")))
@@ -560,7 +549,7 @@ def _continuous_confidence_for_cell(
             required_component_completeness=Decimal("1"),
         ),
     )
-    return evaluation.confidence, evaluation.score_100
+    return evaluation.confidence
 
 
 def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
@@ -587,7 +576,6 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
     tolerance = policy.reconciliation.policy_id if policy.reconciliation else None
 
     def grade(
-        band: Band,
         reason: str,
         origins_asserting: tuple[str, ...],
         independent: int,
@@ -597,11 +585,10 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
         relative: str | None = None,
         comparison: str | None = None,
     ) -> CellGrade:
-        confidence, score_100 = _continuous_confidence_for_cell(
+        confidence = _continuous_confidence_for_cell(
             policy,
             subject_id,
             valued,
-            band=band,
             reason=reason,
             relative_delta=relative,
             cutoff=cutoff,
@@ -609,7 +596,6 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
         return CellGrade(
             family=policy.family,
             subject_id=subject_id,
-            band=band,
             reason=reason,
             origins=origins_asserting,
             independent_origins=independent,
@@ -621,11 +607,10 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             excluded=excluded_ids,
             values=values,
             confidence=confidence,
-            score_100=score_100,
         )
 
     if not valued:
-        return grade(Band.MISSING, "no_origin_value", (), 0)
+        return grade("no_origin_value", (), 0)
     asserted = tuple(sorted(origin.origin_id for origin in valued))
     independent = len({origin.lineage for origin in valued})
     if len(valued) == 1:
@@ -639,16 +624,13 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             reason = "second_origin_other_period"
         else:
             reason = "single_origin"
-        return grade(Band.LOW, reason, asserted, 1)
+        return grade(reason, asserted, 1)
     comparison, numeric = _numeric_for_comparison(policy, valued)
     delta, relative = _deltas(policy, numeric, valued)
     if independent < 2:
-        return grade(
-            Band.MEDIUM, "same_lineage", asserted, independent, delta=delta, relative=relative, comparison=comparison
-        )
+        return grade("same_lineage", asserted, independent, delta=delta, relative=relative, comparison=comparison)
     if policy.reconciliation is None:
         return grade(
-            Band.MEDIUM,
             "no_agreement_policy",
             asserted,
             independent,
@@ -659,37 +641,31 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
     result = _reconcile(policy, subject_id, valued, numeric, cutoff)
     if result.band is not None:
         if result.band is ConsensusBand.HIGH:
-            band = Band.HIGH
             reason = "independent_origins_agree"
         elif result.band is ConsensusBand.MEDIUM:
-            band = Band.MEDIUM
             reason = "two_origins_agree"
         elif result.band is ConsensusBand.LOW:
-            band = Band.LOW
             reason = (
                 "cross_origin_conflict"
                 if result.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED
                 else "single_eligible_origin"
             )
         else:
-            band = Band.MISSING
             reason = (
                 "not_knowable_at_cutoff"
                 if result.outcome == ReconciliationOutcome.NOT_YET_KNOWABLE
                 else "no_eligible_origin"
             )
     else:
-        graded = {
-            ReconciliationOutcome.AGREED: (Band.HIGH, "independent_origins_agree"),
-            ReconciliationOutcome.CONFLICT_ABSTAINED: (Band.MEDIUM, "not_agreed_within_tolerance"),
-            ReconciliationOutcome.CONFLICT_PRIORITY_SERVED: (Band.LOW, "cross_origin_conflict"),
-            ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS: (Band.LOW, "single_eligible_origin"),
-            ReconciliationOutcome.NOT_YET_KNOWABLE: (Band.MISSING, "not_knowable_at_cutoff"),
-            ReconciliationOutcome.UNAVAILABLE: (Band.MISSING, "no_eligible_origin"),
-        }
-        band, reason = graded.get(result.outcome, (Band.LOW, "unknown"))
+        reason = {
+            ReconciliationOutcome.AGREED: "independent_origins_agree",
+            ReconciliationOutcome.CONFLICT_ABSTAINED: "not_agreed_within_tolerance",
+            ReconciliationOutcome.CONFLICT_PRIORITY_SERVED: "cross_origin_conflict",
+            ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS: "single_eligible_origin",
+            ReconciliationOutcome.NOT_YET_KNOWABLE: "not_knowable_at_cutoff",
+            ReconciliationOutcome.UNAVAILABLE: "no_eligible_origin",
+        }.get(result.outcome, "unknown")
     return grade(
-        band,
         reason,
         asserted,
         independent,
@@ -733,8 +709,8 @@ def _reconcile(
                 normalized_value_sha256=value_sha,
                 numeric_value=numeric[origin.origin_id],
                 confidence_assessment_id=f"confidence-assessment:{value_sha}",
-                # The engine never arbitrates on confidence (rule 12) and the bands never
-                # read it; a full score here is a placeholder the result does not carry.
+                # The engine never arbitrates on confidence (rule 12) and the report never
+                # reads it; a full score here is a placeholder the result does not carry.
                 confidence_score=Decimal("1"),
                 lineage_node_ids=(observation_id,),
                 lineage_complete=True,
@@ -746,10 +722,10 @@ def _reconcile(
 
 
 def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, Any]:
-    """Per-family counts, shares, the agreement rate over COMPARED cells (two independent
-    origins under a policy), the tolerance used and the origins involved."""
+    """Per-family cell counts by independent origins, the mean confidence, the agreement rate over
+    COMPARED cells (two independent origins under a policy), the tolerance used and the origins involved."""
     rows = list(grades)
-    counts = Counter(grade.band.value for grade in rows)
+    by_origins = Counter(grade.independent_origins for grade in rows)
     total = len(rows)
     compared = sum(
         1
@@ -763,17 +739,16 @@ def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, An
     )
     agreed = sum(1 for grade in rows if grade.outcome == ReconciliationOutcome.AGREED.value)
     reasons = Counter(grade.reason for grade in rows)
-    mean_score_100 = (
-        str((sum((grade.score_100 for grade in rows), Decimal(0)) / Decimal(total)).quantize(_RATIO_PLACES))
+    mean_confidence = (
+        str((sum((grade.confidence for grade in rows), Decimal(0)) / Decimal(total)).quantize(_RATIO_PLACES))
         if total
         else "0"
     )
     return {
         "semantic_type": policy.semantic_type,
         "cells": total,
-        **{band.value: counts.get(band.value, 0) for band in Band},
-        "share": {band.value: _ratio(counts.get(band.value, 0), total) or "0" for band in Band},
-        "mean_score_100": mean_score_100,
+        "by_independent_origins": {str(origins): by_origins[origins] for origins in sorted(by_origins)},
+        "mean_confidence": mean_confidence,
         "compared": compared,
         "agreed": agreed,
         "agreement_rate": _ratio(agreed, compared),
@@ -828,8 +803,8 @@ def stored_confidence_metadata(rows: Iterable[tuple[str, Decimal, int]]) -> dict
         "constant_per_semantic": all(len(values) == 1 for values in by_semantic.values()),
         "note": (
             "staging.capture_normalized_observations.confidence is stamped per semantic by the parser, "
-            "not computed by the formula in docs/confidence-calibration.md; the bands above are derived "
-            "from origin counts, lineage and the reconciliation outcome only"
+            "not computed by the formula in docs/confidence-calibration.md; the cell reasons and "
+            "independent origin counts are derived from origin counts, lineage and the reconciliation outcome only"
         ),
     }
 
@@ -1454,7 +1429,7 @@ def field_accuracy(
     return {
         "origins": summary.get("origins", []),
         "compared": summary.get("compared", 0),
-        "agreed": summary.get("agreed", summary.get("high", 0)),
+        "agreed": summary.get("agreed", 0),
         "agreement_rate": summary.get("agreement_rate"),
         "tolerance_policy": _policy_payload(policy.reconciliation),
         "quality_report_id": quality_report_id,
@@ -1473,7 +1448,6 @@ def _sample_entry(grade: CellGrade) -> dict[str, Any]:
         "delta": grade.delta,
         "relative_delta": grade.relative_delta,
         "comparison": grade.comparison,
-        "verdict": grade.band.value,
         "reason": grade.reason,
         "excluded": list(grade.excluded),
     }
@@ -1590,7 +1564,6 @@ def build_report(
         "cutoff": cutoff.astimezone(UTC).isoformat(),
         "generated_at": executed_at.astimezone(UTC).isoformat(),
         "environment": environment,
-        "bands": dict(BAND_DEFINITIONS),
         "independence_rule": INDEPENDENCE_RULE,
         "subjects": len(subjects),
         "sources_connected": lineages,
@@ -1652,8 +1625,9 @@ def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for name, family in report["families"].items():
         rate = family.get("agreement_rate")
+        origins = ", ".join(f"{count} with {number}" for number, count in family["by_independent_origins"].items())
         parts.append(
-            f"{name}: high {family['high']} / medium {family['medium']} / low {family['low']} / missing {family['missing']}"
-            + (f" (agreement {rate})" if rate is not None else "")
+            f"{name}: {family['cells']} cells ({origins} independent origins), mean confidence "
+            f"{family['mean_confidence']}" + (f", agreement {rate}" if rate is not None else "")
         )
     return f"{report['universe_id']} @ {report['cutoff']}: " + "; ".join(parts)

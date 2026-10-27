@@ -6,6 +6,7 @@ oracle or a low score. Each required phrase names the replacement. No database i
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,7 @@ FORBIDDEN = {
 REQUIRED = {
     "uniform metric named": "gppe_uniform_charge_v0",
     "banking metric named": "gppe_banking_tce_v1",
-    "continuous score": "Confidence is one continuous score on 0 to 100",
+    "continuous score": "Confidence is one continuous score from 0 to 1",
     "source prior order": "SEC filings, then moomoo, then Twelve Data, then yfinance",
     "vendor timestamp accepted": "`vendor_timestamp`",
     "listing session key": "`(listing, session_date)`",
@@ -59,3 +60,12 @@ def test_the_success_section_counts_a_low_score_value_as_produced() -> None:
 def test_a3_does_not_block_a_source_without_a_falsifier() -> None:
     assert "is inventory, not data" not in A3
     assert "lowest prior and a dashboard flag" in A3
+
+
+def test_the_band_thresholds_in_init_md_equal_the_json_file_that_holds_them() -> None:
+    """Rule 29: init.md copies the two thresholds, and this test holds the copy equal to its source."""
+    bands = (ROOT / "common/contracts/src/truealpha_contracts/data/confidence_bands.v1.json").read_text()
+    thresholds = json.loads(bands)
+    high, medium = thresholds["high_from"], thresholds["medium_from"]
+    sentence = f"High is a confidence of {high} or more. Medium is {medium} to below {high}. Low is below {medium}."
+    assert sentence in INIT, "init.md and confidence_bands.v1.json disagree on the band thresholds"

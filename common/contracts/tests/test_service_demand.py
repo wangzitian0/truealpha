@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.service_demand import (
-    ConfidenceTargetBand,
     DataHubServiceDemand,
     DataQualityObjective,
     DemandIntakeReasonCode,
@@ -100,8 +99,7 @@ def _demand() -> DataHubServiceDemand:
         minimum_availability=Decimal("0.95"),
         confidence_policy_id=f"confidence-policy:{'3' * 64}",
         confidence_policy_sha256="3" * 64,
-        minimum_confidence_score=Decimal("70"),
-        confidence_target_band=ConfidenceTargetBand.HIGH,
+        minimum_confidence_score=Decimal("0.70"),
         minimum_independent_origin_groups=2,
         report_cadence=timedelta(days=1),
         report_dimensions=frozenset(QualityReportDimension),
@@ -148,7 +146,7 @@ def test_topt_service_demand_is_content_addressed_source_neutral_and_round_trips
 
     assert repeated == demand
     assert demand.service_demand_id.endswith(demand.content_sha256)
-    assert demand.quality_objective.minimum_confidence_score == Decimal("70")
+    assert demand.quality_objective.minimum_confidence_score == Decimal("0.70")
     assert demand.quality_objective.minimum_independent_origin_groups == 2
     forbidden_keys = {"provider", "source", "credential", "host", "bucket", "database", "latest"}
     assert forbidden_keys.isdisjoint(_nested_keys(payload))
@@ -182,14 +180,6 @@ def test_intake_rejects_non_json_payload_without_raising() -> None:
 
     assert report.status is DemandIntakeStatus.REJECTED
     assert report.reason_codes == (DemandIntakeReasonCode.CROSS_CONTRACT_INVALID,)
-
-
-def test_high_confidence_target_requires_two_independent_origin_groups() -> None:
-    payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
-    payload["minimum_independent_origin_groups"] = 1
-
-    with pytest.raises(ValidationError, match="at least two independent origin groups"):
-        DataQualityObjective.model_validate(payload)
 
 
 def test_quality_objective_requires_every_v1_report_dimension() -> None:
@@ -352,7 +342,7 @@ def test_required_field_rejects_absent_sample_assertion() -> None:
 
 def test_decimal_quality_targets_reject_binary_float() -> None:
     payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
-    payload["minimum_confidence_score"] = 70.0
+    payload["minimum_confidence_score"] = 0.7
 
     with pytest.raises(ValidationError, match="binary float"):
         DataQualityObjective.model_validate(payload)

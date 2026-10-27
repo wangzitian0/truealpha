@@ -76,13 +76,6 @@ class ValidTimeBehavior(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
-class ConfidenceTargetBand(StrEnum):
-    WEAK = "weak"
-    PROVISIONAL = "provisional"
-    HIGH = "high"
-    VERY_HIGH = "very_high"
-
-
 class QualityReportDimension(StrEnum):
     DENOMINATOR = "denominator"
     TERMINAL_STATE = "terminal_state"
@@ -332,8 +325,7 @@ class DataQualityObjective(_FrozenModel):
     minimum_availability: Decimal = Field(ge=0, le=1)
     confidence_policy_id: str = Field(pattern=r"^confidence-policy:[0-9a-f]{64}$")
     confidence_policy_sha256: str = Field(pattern=_SHA256)
-    minimum_confidence_score: Decimal = Field(ge=0, le=100)
-    confidence_target_band: ConfidenceTargetBand
+    minimum_confidence_score: Decimal = Field(ge=0, le=1)
     minimum_independent_origin_groups: int = Field(ge=1)
     origin_group_rule: Literal["canonical_original_source"] = "canonical_original_source"
     conflict_behavior: Literal["report_and_abstain"] = "report_and_abstain"
@@ -359,9 +351,6 @@ class DataQualityObjective(_FrozenModel):
             raise ValueError("confidence policy ID and hash disagree")
         if self.report_cadence <= timedelta(0):
             raise ValueError("quality report cadence must be positive")
-        high_bands = {ConfidenceTargetBand.HIGH, ConfidenceTargetBand.VERY_HIGH}
-        if self.confidence_target_band in high_bands and self.minimum_independent_origin_groups < 2:
-            raise ValueError("high confidence requires at least two independent origin groups")
         if not _REQUIRED_QUALITY_REPORT_DIMENSIONS_V1 <= self.report_dimensions:
             raise ValueError("quality reports must retain every required dimension")
         _identify(self, id_field="quality_objective_id", prefix="quality-objective")
@@ -570,7 +559,6 @@ def evaluate_datahub_service_demand(payload: dict[str, Any]) -> DataHubDemandInt
 
 
 __all__ = [
-    "ConfidenceTargetBand",
     "DataHubDemandIntakeReport",
     "DataHubServiceDemand",
     "DataQualityObjective",
