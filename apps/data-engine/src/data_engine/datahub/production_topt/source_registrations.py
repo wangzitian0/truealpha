@@ -20,9 +20,11 @@ Ordering matters: obligations are expanded in `registered_semantic_types()` orde
 their ordinals feed content-addressed identities, so the order below is the order the
 deployed runs have always used.
 
-Capacity (init.md rule 6, #729) is declared here too, once per ledger seat, in
+Capacity (init.md rule 6, #729, #1520) is read here, once per ledger seat, in
 `LEDGER_CAPACITIES`: a registration or origin names its seat and receives that
 declaration, and `sources.gateway` derives the capacities it enforces from the same table.
+No number is written in this file. Every figure comes from the vendor account row of the seat in
+`environment_contract.v1.json`, and the share of an environment comes from `account_share`.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ from importlib import import_module
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 from truealpha_contracts.strategy import RiskFreeInstrument
 
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
@@ -82,51 +84,30 @@ class RouteBuilder(Protocol):
     def __call__(self, context: RouteContext, cells: Sequence[RouteCell]) -> SourceFetchPort: ...
 
 
-def environment_share(value: int, shares: Sequence[tuple[str, int]], environment: str) -> int | None:
-    """``value`` scaled to ``environment``'s percentage of a shared allowance.
-
-    Unsplit (no shares) is the whole value; an environment the split does not name gets
-    None — it has no share, which the gateway refuses rather than reading as unlimited.
-    Floored, so the environments' shares can never sum past the vendor's allowance.
-    """
-    if not shares:
-        return value
-    percent = dict(shares).get(environment)
-    return None if percent is None else value * percent // 100
-
-
 @dataclass(frozen=True)
 class CapacityDeclaration:
-    """What one ledger seat may spend (init.md §1 rule 6 as amended 2026-09-04, #729).
+    """What one ledger seat may spend: the pace and the daily budget of its vendor account (#729, #1520).
 
-    Declared once, in `LEDGER_CAPACITIES` below, and nowhere else: `sources.gateway`
-    derives its `CAPACITIES` from that table and enforces it before every gated call.
-    (Until 2026-09-16 the gateway carried a hand-kept copy that disagreed with this one —
-    SEC 8/s against 10/s, moomoo 60/30 s against 8/30 s — and nothing read this one.)
+    Read from the vendor account row of the seat in `environment_contract.v1.json` and nowhere else:
+    `sources.gateway` derives its `CAPACITIES` from `LEDGER_CAPACITIES`, and enforces it before every gated call.
+    The figures are the WHOLE account figures. The share of one environment is `account_share` of the
+    contract; `SourceCapacity.in_environment` applies it.
 
-    - ``calls_per_window`` / ``window_seconds``: the pace the gateway queues calls to.
+    - ``calls_per_window`` / ``window_seconds``: the rate window of the account that the gateway queues calls to.
     - ``daily_budget``: calls per UTC day, checked against the environment's own
-      ``staging.api_call_ledger`` before the call. None where neither the vendor nor we
-      declare one: the seat is then paced, not budgeted. The unit is the request (a
-      ledger row), not the row's ``cost``: a model call records its tokens as cost, and
-      every vendor seat declared here charges one credit per request. A seat budgeted in
-      another unit (tokens per day) needs its own dimension, not this one.
-    - ``concurrency``: declared, not enforced — every lane calls its vendors sequentially.
-    - ``environment_shares``: ``(environment, percent)`` pairs for an allowance that ONE
-      credential serves in several environments. Each environment gets its percentage of
-      the rate window and of the daily budget and enforces it from its own ledger — the
-      only ledger it can read (§3.1: environments never share one). The percentages sum to
-      at most 100 and the scaled values are floored, so the environments can never jointly
-      overspend the vendor. An environment the split does not name is refused.
-    - ``documented``: the vendor's published limit the numbers are sized against, cited.
-      Prose, so it is not part of the content-addressed payload.
+      ``staging.api_call_ledger`` before the call. None where the account has no daily limit: the seat is
+      then paced, not budgeted. The unit is the request (a ledger row), not the row's ``cost``.
+    - ``concurrency``: declared, not enforced: every lane calls its vendors sequentially.
+    - ``account``: the vendor account of the seat. None for a seat with no account figure.
+    - ``documented``: the limits of the account with their evidence kind. Derived, so it is not part of
+      the content-addressed payload.
     """
 
     calls_per_window: int
     window_seconds: int
     daily_budget: int | None = None
     concurrency: int = 1
-    environment_shares: tuple[tuple[str, int], ...] = ()
+    account: str | None = None
     documented: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
@@ -135,20 +116,6 @@ class CapacityDeclaration:
                 raise ValueError(f"capacity {name} must be positive")
         if self.daily_budget is not None and self.daily_budget <= 0:
             raise ValueError("a daily budget must be positive; declare None for an unbudgeted seat")
-        names = [environment for environment, _ in self.environment_shares]
-        if len(names) != len(set(names)):
-            raise ValueError(f"an environment appears twice in the split: {names}")
-        known = {environment.value for environment in CaptureEnvironment}
-        for environment, percent in self.environment_shares:
-            if environment not in known:
-                raise ValueError(f"{environment!r} is not a capture environment")
-            if not 0 < percent <= 100:
-                raise ValueError(f"{environment}'s share must be a percentage in (0, 100], got {percent}")
-            for value in (self.calls_per_window, self.daily_budget):
-                if value is not None and environment_share(value, self.environment_shares, environment) == 0:
-                    raise ValueError(f"{environment}'s {percent}% of {value} floors to zero")
-        if sum(percent for _, percent in self.environment_shares) > 100:
-            raise ValueError(f"the environment shares sum past the vendor's allowance: {self.environment_shares}")
 
 
 @dataclass(frozen=True)
@@ -191,13 +158,23 @@ def _seat_capacity(owner: OriginRegistration | SourceRegistration, name: str) ->
 def _capacity_payload(capacity: CapacityDeclaration | None) -> dict[str, Any] | None:
     if capacity is None:
         return None
-    return {
+    payload: dict[str, Any] = {
         "calls_per_window": capacity.calls_per_window,
         "window_seconds": capacity.window_seconds,
         "daily_budget": capacity.daily_budget,
         "concurrency": capacity.concurrency,
-        "environment_shares": [list(pair) for pair in capacity.environment_shares],
     }
+    if capacity.account is not None:
+        # The shares of every named environment sign the registration, so a percent that moves makes a new id.
+        contract = load_environment_contract()
+        payload["account"] = capacity.account
+        payload["shares"] = {
+            environment: {
+                limit.limit_id: limit.share for limit in contract.account_share(capacity.account, environment).limits
+            }
+            for environment in contract.vendor_accounts.default_percent
+        }
+    return payload
 
 
 @dataclass(frozen=True)
@@ -371,130 +348,61 @@ MOOMOO_FINANCIALS_MAPPING_VERSION = "moomoo-financials-map:v1"
 # The headline key the registry reads back; the financial-fact fusion reads every
 # corroborated field by name (`quality_report.FINANCIAL_FACT_FUSION_FIELDS`).
 MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
-# -- rule 6: every ledger seat's capacity, declared once (#729) ---------------------------
+# -- rule 6: every ledger seat's capacity, read once from its vendor account (#729, #1520) ---
 #
-# The keys are the `source` a call is recorded under in `staging.api_call_ledger`. Numbers
-# are sized against the vendor's published limit (cited per entry) and against the
-# ledger's measured traffic: production's busiest day of 2026-09-08..15 was 152 yahoo /
-# 152 twelvedata / 354 sec calls, staging's 42 twelvedata / 1,824 sec (the standards
-# backfill of 2026-09-15). A ceiling the vendor does not publish is ours and says so.
-
-#: One Twelve Data key serves staging and production (#491, #574), so its allowance is
-#: split: production runs three universes (TOPT, QQQ, canary), staging TOPT and the
-#: canary, with QQQ only on a manual trigger. 60 % is 4 credits/minute and 480/day
-#: (production spent at most 152); 40 % is 3/minute and 320/day (staging at most 42,
-#: ~250 with a manual QQQ). The two minute shares sum to 7 of 8, so the environments'
-#: concurrent canaries (both at 23:47 UTC — the 2026-09-07 23:48 ledger rows show 18
-#: credits in one minute across the two) can no longer jointly trip the vendor's window.
-#: The market-data lane (`lanes/market_data.py`) adds 60 calls to a production weekday: 20
-#: symbols times three series (daily split-adjusted, daily unadjusted, monthly split-adjusted,
-#: #1131). That run is at 21:15 UTC, before the capture ticks. 60 plus the busiest capture day
-#: (152) is 212 of production's 480. `test_the_lane_fits_the_twelve_data_production_share`
-#: measures the lane's calls and holds this sum inside the share.
-#: The QQQ price lane (`lanes/qqq_prices.py`, #1277) spends only what the other callers leave below
-#: 85 % of the share. init.md section 5 holds its formula and the measured spend.
+# The keys are the `source` a call is recorded under in `staging.api_call_ledger`. Each seat draws
+# from one vendor account row of `environment_contract.v1.json`. The row holds the limits of the vendor
+# with their evidence, and the percent of each environment. The rate window and the daily budget of
+# a seat are the request limits of its account: the limit with a window of one UTC day is the daily
+# budget, and the one other request limit is the rate window.
 
 
-def derived_environment_shares(seat: str) -> tuple[tuple[str, int], ...]:
-    """Derive per-environment percentage shares for a shared physical seat from
-    ``environment_contract.v1.json`` (#1416 E3)."""
-    return load_environment_contract().derived_environment_shares(seat)
+def _declaration(seat: str) -> CapacityDeclaration:
+    """The whole-account pace and budget of ``seat``, read from its vendor account row."""
+    contract = load_environment_contract()
+    name = contract.account_of_seat(seat)
+    figures = [
+        (limit, limit.amount, limit.window_seconds)
+        for limit in contract.vendor_accounts.accounts[name].limits
+        if limit.unit == "request" and limit.amount is not None and limit.window_seconds is not None
+    ]
+    rates = [figure for figure in figures if figure[2] != DAY_SECONDS]
+    days = [figure for figure in figures if figure[2] == DAY_SECONDS]
+    if len(rates) != 1 or len(days) > 1:
+        raise ValueError(
+            f"vendor account {name!r}: the gate paces one rate window and one daily budget, "
+            f"the row holds {[figure[0].id for figure in figures]}"
+        )
+    ((_, calls, window),) = rates
+    return CapacityDeclaration(
+        calls_per_window=calls,
+        window_seconds=window,
+        daily_budget=days[0][1] if days else None,
+        account=name,
+        documented=f"vendor account {name}: "
+        + "; ".join(
+            f"{limit.id} {amount} per {seconds} s ({limit.evidence.kind})" for limit, amount, seconds in figures
+        ),
+    )
 
 
-_MODEL_SEAT = load_environment_contract().model_seat
+def _ledger_capacities() -> Mapping[str, CapacityDeclaration]:
+    contract = load_environment_contract()
+    model = contract.model_seat
+    declared = {seat: _declaration(seat) for seat in contract.vendor_seats if seat != model.seat}
+    # The model seat is the one seat with no account figure: the provider states none (`none_published`).
+    # Its pace stays the sum of the per-environment limits of `model_seat` until step 5 of #1520 removes it.
+    # The model call path paces each attempt with the limits of its own environment (`sources.model_policy`).
+    declared[model.seat] = CapacityDeclaration(
+        calls_per_window=sum(limits.calls_per_minute for limits in model.environments.values()),
+        window_seconds=60,
+        concurrency=sum(limits.max_concurrent_calls for limits in model.environments.values()),
+        documented="model_seat of environment_contract.v1.json (#1444): sum over environments; account limit unmeasured",
+    )
+    return MappingProxyType(declared)
 
-LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = MappingProxyType(
-    {
-        # SEC fair access allows at most 10 requests per second per requester and
-        # publishes no daily cap. 8/s is declared: both environments reach SEC from one
-        # host, and before this gate a production tick fired 18 `submissions` requests
-        # in one second (2026-09-08 22:15:35). 5,000/day is our runaway backstop, per
-        # environment (2.7x staging's busiest day).
-        "sec": CapacityDeclaration(
-            calls_per_window=8,
-            window_seconds=1,
-            daily_budget=5000,
-            documented="SEC EDGAR fair access: max 10 requests/second; no daily cap",
-        ),
-        # N-PORT filings are read from the same SEC hosts under the same policy.
-        "nport": CapacityDeclaration(
-            calls_per_window=8,
-            window_seconds=1,
-            daily_budget=5000,
-            documented="SEC EDGAR fair access (same hosts as sec): max 10 requests/second",
-        ),
-        # Twelve Data's plan: 8 API credits per minute and 800 per day; `/eod` and
-        # `/time_series` cost one credit each. Derived per environment from the contract (#1416 E3).
-        "twelvedata": CapacityDeclaration(
-            calls_per_window=8,
-            window_seconds=60,
-            daily_budget=800,
-            environment_shares=derived_environment_shares("twelvedata"),
-            documented="Twelve Data Basic (free) plan: 8 API credits/minute, 800/day; one key for both environments",
-        ),
-        # OpenFIGI v3 with an API key: 25 requests per 6 seconds (100 jobs each); no
-        # daily limit is published, so the seat is paced, not budgeted.
-        "openfigi": CapacityDeclaration(
-            calls_per_window=25,
-            window_seconds=6,
-            documented="OpenFIGI v3 keyed: 25 requests/6 s, 100 jobs/request; no daily limit",
-        ),
-        # moomoo OpenAPI rate-limits quote endpoints at 60 requests per 30 s EACH and has
-        # no call quota (init.md §5, 2026-07-10). `moomoo_ledger` paces 8 per 30 s across
-        # every endpoint — conservative, and the pace the origins actually see — and gates
-        # historical K-lines at 2,000 distinct stocks per rolling 30-day window (#1411 K2).
-        "moomoo": CapacityDeclaration(
-            calls_per_window=8,
-            window_seconds=30,
-            documented="moomoo OpenAPI: 60 requests/30 s per quote endpoint; no call quota",
-        ),
-        # Yahoo's chart endpoint publishes no limit and has no SLA (init.md §9); the
-        # ceiling is ours. 2,000/day is 13x production's busiest day — room for a forced
-        # re-fetch of every universe with the executor's three attempts per cell.
-        "yahoo": CapacityDeclaration(
-            calls_per_window=2,
-            window_seconds=1,
-            daily_budget=2000,
-            documented="none published (unofficial endpoint, no SLA)",
-        ),
-        # Nasdaq's index-constituent endpoint publishes no limit; the weekly refresh
-        # makes one call.
-        "nasdaq-index": CapacityDeclaration(
-            calls_per_window=1,
-            window_seconds=1,
-            daily_budget=50,
-            documented="none published",
-        ),
-        # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): one public CSV per
-        # calendar year, no key. A request returns every registered macro series of one year.
-        # The nightly run makes one request. The first run makes one request per year back to
-        # `first_year` of the macro registration. 100 per day is our runaway backstop, per environment.
-        # It is twice the first run (27 requests in 2026), so the first run and its replays fit.
-        "us-treasury": CapacityDeclaration(
-            calls_per_window=1,
-            window_seconds=1,
-            daily_budget=100,
-            documented="none published (public CSV on home.treasury.gov, no key)",
-        ),
-        # The model seat: the sum of the per-environment limits of the model seat in the
-        # environment contract (#1444). The account is shared with other users and its own limit is
-        # not measured. The model call path paces each attempt with the limits of its own
-        # environment (`sources.model_policy`), not with this sum. No daily budget is declared: the
-        # ledger of both environments shows no volume quota (252 calls in 5 hours, no refusal).
-        _MODEL_SEAT.seat: CapacityDeclaration(
-            calls_per_window=sum(limits.calls_per_minute for limits in _MODEL_SEAT.environments.values()),
-            window_seconds=60,
-            concurrency=sum(limits.max_concurrent_calls for limits in _MODEL_SEAT.environments.values()),
-            documented="model_seat of environment_contract.v1.json (#1444): sum over environments; account limit unmeasured",
-        ),
-        "search": CapacityDeclaration(
-            calls_per_window=20,
-            window_seconds=60,
-            daily_budget=500,
-            documented="placeholder seat (#732)",
-        ),
-    }
-)
+
+LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = _ledger_capacities()
 
 REGISTRATIONS: tuple[SourceRegistration, ...] = (
     SourceRegistration(
@@ -643,8 +551,8 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         # files of 2023 to 2026 is four days (a Friday and the Tuesday after a Monday holiday). One day
         # more admits the run that comes before the Treasury publishes.
         max_age_days=5,
-        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat allows 100
-        # requests per day, and this load needs one request per year.
+        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat has a pace of one
+        # request per second and no daily budget, and this load needs one request per year.
         first_year=2000,
         notes=(
             "The Treasury obtains its input quotes at about 3:30 PM New York time on each business day. "

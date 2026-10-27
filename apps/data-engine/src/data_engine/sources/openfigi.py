@@ -5,7 +5,7 @@ N-PORT identifies holdings by CUSIP/ISIN (foreign CUSIPs are placeholder zeros),
 and moomoo/SEC need market-local codes.
 
 Rate limits (docs, and observed 2026-07-11): without an API key 25 mapping
-requests/min with 10 jobs each; with a free key 25 req/6s with 100 jobs each.
+requests/min with 10 jobs each; with a free key 250 requests per 60 s with 100 jobs each.
 429s are expected at the keyless tier — handled by sleep-and-retry, so a full
 ~1,100-ISIN universe takes ~5 minutes keyless and seconds with a key."""
 

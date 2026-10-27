@@ -106,16 +106,6 @@ def test_the_run_verdict_carries_the_image_verdict(monkeypatch: pytest.MonkeyPat
 # --- #1416 E3/E4: derived vendor shares and sentinel known-answer oracles ----------------
 
 
-def test_source_registrations_carries_no_hand_set_twelve_data_share_constant() -> None:
-    from data_engine.datahub.production_topt import source_registrations
-
-    assert not hasattr(source_registrations, "TWELVE_DATA_ENVIRONMENT_SHARES"), (
-        "#1416 E3: TWELVE_DATA_ENVIRONMENT_SHARES must be deleted in favour of derived_environment_shares"
-    )
-    shares = source_registrations.derived_environment_shares("twelvedata")
-    assert dict(shares) == {"production": 60, "staging": 40}
-
-
 def test_sentinel_known_answers_pass_on_grounded_values_and_fail_when_mutated_by_10x() -> None:
     """#1416 E4: mutation test — changing one stored value by 10x fails the oracle,
     and an answer for a period older than the latest filing is treated as stale, not failed."""

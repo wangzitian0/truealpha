@@ -68,12 +68,12 @@ from data_engine.datahub.market_prices import (
     oldest_session_within_lag,
     xnys_session_close_utc,
 )
-from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, environment_share
 from data_engine.datahub.universe_mask import UniverseMaskReason
 from data_engine.lanes import backtest as backtest_lane
 from data_engine.lanes import market_data
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 from data_engine.quality import nightly_verdicts
+from data_engine.sources import gateway
 from truealpha_runtime.testing import load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
@@ -560,8 +560,8 @@ def test_refresh_market_data_takes_its_mask_cutoffs_from_the_split_adjusted_seri
 def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
     """Rule 6 ratchet. The measured calls of one lane run, plus the busiest measured capture day, fit the daily share.
 
-    152 is production's busiest capture day of 2026-09-08..15, as recorded beside
-    `derived_environment_shares` in `source_registrations.py`.
+    152 is production's busiest capture day of 2026-09-08..15. The daily share is the one that the gate
+    enforces: `gateway.CAPACITIES["twelvedata"].in_environment("production")`.
     """
     measured_busiest_capture_day = 152
     requests: list[tuple[str, str, str]] = []
@@ -569,9 +569,9 @@ def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
 
     _refresh_market_data(dg.build_op_context(), connection, symbols=TOPT_SYMBOLS, now=LANE_NOW, client=client)
 
-    twelve = LEDGER_CAPACITIES["twelvedata"]
-    assert twelve.daily_budget is not None
-    production_budget = environment_share(twelve.daily_budget, twelve.environment_shares, "production")
+    production = gateway.CAPACITIES["twelvedata"].in_environment("production")
+    assert production is not None
+    production_budget = production.daily_budget
     assert production_budget is not None
     assert len(requests) + measured_busiest_capture_day <= production_budget, (
         f"the lane makes {len(requests)} Twelve Data calls a run; production's daily share is {production_budget}"
@@ -599,10 +599,10 @@ def test_the_backtest_starts_after_the_refresh_has_ended_in_each_environment(con
         now=LANE_NOW,
         client=_adjust_aware_client(requests, []),
     )
-    twelve = LEDGER_CAPACITIES["twelvedata"]
-    calls_per_window = environment_share(twelve.calls_per_window, twelve.environment_shares, environment)
-    assert calls_per_window, f"{environment} has no Twelve Data share"
-    refresh_duration = timedelta(seconds=math.ceil(len(requests) / calls_per_window) * twelve.window_seconds)
+    twelve = gateway.CAPACITIES["twelvedata"].in_environment(environment)
+    assert twelve is not None and twelve.calls_per_window, f"{environment} has no Twelve Data share"
+    assert twelve.window_seconds is not None
+    refresh_duration = timedelta(seconds=math.ceil(len(requests) / twelve.calls_per_window) * twelve.window_seconds)
 
     cron = load_tool("scheduler_liveness").Cron
     refresh, backtest = cron.parse(market_data.MARKET_DATA_REFRESH_CRON), cron.parse(backtest_lane.BACKTEST_CRON)

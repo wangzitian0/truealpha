@@ -34,13 +34,15 @@ failed capture — the write failure is logged with the full row instead.
 
 Declared capacity is enforced before the call (#729 criterion 4)
 ----------------------------------------------------------------
-Every seat's capacity is declared once, in the source registry
-(`source_registrations.LEDGER_CAPACITIES`); ``CAPACITIES`` here is derived from it. A
-`CapacityGate` enforces it BEFORE the request: it queues the call until the seat's rate
-window has room and refuses it — `BudgetExhausted`, nothing sent, nothing recorded — when
-the environment's daily budget is spent. Both checks read the environment's own ledger,
-so every process of an environment shares them; the process's own admissions are counted
-too, so a ledger that lags a call cannot let the next one through.
+Every seat's capacity is read once, in the source registry
+(`source_registrations.LEDGER_CAPACITIES`), from the vendor account row of the environment contract
+(#1520); ``CAPACITIES`` here is derived from it. A `CapacityGate` enforces the share of its environment
+BEFORE the request: it queues the call until the seat's rate window has room and refuses it —
+`BudgetExhausted`, nothing sent, nothing recorded — when the environment's daily budget is spent. It refuses
+the call with `ShareBelowOneCall` when the share of the environment is less than one call in a window. Both
+checks read the environment's own ledger, so every process of an environment shares them. The seats of one
+account (`sec`, `nport`) count together. The process's own admissions are counted too, so a ledger that
+lags a call cannot let the next one through.
 
 Two ways in, one gate:
 
@@ -75,15 +77,11 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
-from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.source_registrations import (
-    LEDGER_CAPACITIES,
-    CapacityDeclaration,
-    environment_share,
-)
+from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, CapacityDeclaration
 from data_engine.sources import accept_rules
 from data_engine.sources.landed_keys import LandedKeys, PostgresLandedKeys
 
@@ -110,15 +108,15 @@ _REDACTED_KEY_MARKERS = ("apikey", "api_key", "api-key", "token", "secret", "pas
 class SourceCapacity:
     """The gateway's view of one ledger seat's declared capacity.
 
-    Derived: `CAPACITIES` is computed from `source_registrations.LEDGER_CAPACITIES`, the
-    one place a number is written (the 2026-09-16 design audit found this module's own
-    table disagreeing with the registry's). Tests build their own to drive a gate with a
-    synthetic limit.
+    Derived: `CAPACITIES` is computed from `source_registrations.LEDGER_CAPACITIES`, which reads the vendor
+    account row of the environment contract. Tests build their own to drive a gate with a synthetic limit.
 
     ``None`` in a dimension means nothing is declared for it: a gate does not pace an
-    unwindowed seat and does not budget an unbudgeted one. `SourceGateway.call` requires
-    both (`enforceable`). ``environment_shares`` splits a shared allowance per environment
-    (see `CapacityDeclaration`); `in_environment` resolves it.
+    unwindowed seat and does not budget an unbudgeted one. `SourceGateway.call` requires a
+    rate window (`enforceable`). ``account`` names the vendor account that several environments call: the
+    figures are then the whole account figures and `in_environment` applies the share of one environment
+    (`EnvironmentContract.account_share`). ``pool`` lists the seats of that account, which the gate counts
+    together.
     """
 
     source: str
@@ -126,7 +124,8 @@ class SourceCapacity:
     calls_per_window: int | None
     daily_budget: int | None = None
     note: str = ""
-    environment_shares: tuple[tuple[str, int], ...] = ()
+    account: str | None = None
+    pool: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.window_seconds is None) != (self.calls_per_window is None):
@@ -138,40 +137,44 @@ class SourceCapacity:
 
     @classmethod
     def declared(cls, source: str, declaration: CapacityDeclaration) -> SourceCapacity:
+        pool = (
+            ()
+            if declaration.account is None
+            else load_environment_contract().vendor_accounts.accounts[declaration.account].seats
+        )
         return cls(
             source,
             float(declaration.window_seconds),
             declaration.calls_per_window,
             declaration.daily_budget,
             declaration.documented,
-            declaration.environment_shares,
+            declaration.account,
+            pool,
         )
 
     @property
     def enforceable(self) -> bool:
-        """Whether `SourceGateway.call` can throttle and budget this source."""
-        return self.window_seconds is not None and self.daily_budget is not None
+        """Whether `SourceGateway.call` can throttle this source."""
+        return self.window_seconds is not None
 
     @property
-    def shared(self) -> bool:
-        return bool(self.environment_shares)
+    def seats(self) -> tuple[str, ...]:
+        """The seats that spend this capacity together: the seats of the account, or this seat alone."""
+        return self.pool or (self.source,)
 
     def in_environment(self, environment: str) -> SourceCapacity | None:
-        """What ``environment`` may spend: the whole seat when it is not shared, the
-        environment's share when it is, and None when a shared seat grants it none."""
-        if not self.environment_shares:
+        """What ``environment`` may spend: the whole seat when it has no account, the share of the
+        environment (`account_share`) when it has one, and None when the share is less than one call."""
+        if self.account is None:
             return self
-        if dict(self.environment_shares).get(environment) is None:
+        share = load_environment_contract().account_share(self.account, environment)
+        if not share.admits_a_call:
             return None
         return replace(
             self,
-            calls_per_window=None
-            if self.calls_per_window is None
-            else environment_share(self.calls_per_window, self.environment_shares, environment),
-            daily_budget=None
-            if self.daily_budget is None
-            else environment_share(self.daily_budget, self.environment_shares, environment),
-            environment_shares=(),
+            calls_per_window=None if self.window_seconds is None else share.share_in_window(int(self.window_seconds)),
+            daily_budget=None if self.daily_budget is None else share.share_in_window(DAY_SECONDS),
+            account=None,
         )
 
 
@@ -519,18 +522,36 @@ class BudgetExhausted(CapacityExceeded):
     shared key looked like a quiet vendor until the governed head stopped advancing). A
     primary adapter classifies the cell `deferred_capacity`, a corroborating origin is lost
     at the `budget` stage, and the tick's corroboration audit counts every refusal.
-    ``budget`` is None when the seat is shared and this environment has no share at all.
     """
 
-    def __init__(self, source: str, *, environment: str, budget: int | None, spent: int) -> None:
-        if budget is None:
-            reason = f"no share of the seat's shared daily budget is declared for {environment}"
-        else:
-            reason = f"daily budget {budget} spent ({spent} calls today) in {environment}"
-        super().__init__(source, reason)
+    def __init__(self, source: str, *, environment: str, budget: int, spent: int) -> None:
+        super().__init__(source, f"daily budget {budget} spent ({spent} calls today) in {environment}")
         self.environment = environment
         self.budget = budget
         self.spent = spent
+
+
+#: The reason of a refusal when the share of an environment is less than one call in a window (#1520).
+SHARE_BELOW_ONE_CALL = "share_below_one_call"
+
+
+class ShareBelowOneCall(CapacityExceeded):
+    """The share of this environment in the vendor account is less than one call in a limit window.
+
+    The contract gives the environment percent 0, or a floor of 0 (amount x percent // 100). The contract
+    loads and the image boots: only the call is refused, nothing is sent and nothing is recorded. An
+    environment that the percent table does not name (local, CI) meets this refusal at an account that it
+    may not call: Twelve Data, OpenFIGI and moomoo. A local run of `universe_refresh` with a bound gate is refused
+    at the OpenFIGI step. This is intended (working choice U1 of #1520): a local run never spends a shared key.
+    """
+
+    def __init__(self, source: str, *, environment: str, account: str) -> None:
+        super().__init__(
+            source,
+            f"{SHARE_BELOW_ONE_CALL}: the {account} account gives {environment} less than one call in a limit window",
+        )
+        self.environment = environment
+        self.account = account
 
 
 _refusal_listeners: contextvars.ContextVar[tuple[Callable[[CapacityExceeded], None], ...]] = contextvars.ContextVar(
@@ -667,36 +688,38 @@ class CapacityGate:
         declared = self.capacities.get(source)
         if declared is None:
             _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
-        capacity = declared.in_environment(self._environment()) if declared.shared else declared
+        capacity = declared.in_environment(self._environment())
         if capacity is None:
-            _refuse(BudgetExhausted(source, environment=self._environment(), budget=None, spent=0))
+            _refuse(ShareBelowOneCall(source, environment=self._environment(), account=str(declared.account)))
+        seats = capacity.seats
         if capacity.daily_budget is not None:
-            self._check_daily_budget(source, capacity.daily_budget)
+            self._check_daily_budget(source, seats, capacity.daily_budget)
         if capacity.window_seconds is not None and capacity.calls_per_window is not None:
-            waited = self._queue(source, capacity.window_seconds, capacity.calls_per_window)
+            waited = self._queue(source, seats, capacity.window_seconds, capacity.calls_per_window)
             if waited and capacity.daily_budget is not None:
                 # Another process may have spent the last of the budget while this call queued.
-                self._check_daily_budget(source, capacity.daily_budget)
+                self._check_daily_budget(source, seats, capacity.daily_budget)
         today = self.now().astimezone(UTC).date()
-        self._admitted[source] = (today, self._admitted_today(source, today) + 1)
+        self._admitted[seats[0]] = (today, self._admitted_today(seats[0], today) + 1)
 
     def _environment(self) -> str:
         return self.environment if self.environment is not None else capacity_environment()
 
-    def _admitted_today(self, source: str, today: date) -> int:
-        day, admitted = self._admitted.get(source, (today, 0))
+    def _admitted_today(self, pool: str, today: date) -> int:
+        day, admitted = self._admitted.get(pool, (today, 0))
         return admitted if day == today else 0
 
-    def _check_daily_budget(self, source: str, budget: int) -> None:
+    def _check_daily_budget(self, source: str, seats: tuple[str, ...], budget: int) -> None:
         today = self.now().astimezone(UTC).date()
-        recorded = self.spent_since(source, datetime.combine(today, clock_time.min, tzinfo=UTC))
-        spent = max(recorded, self._admitted_today(source, today))
+        since = datetime.combine(today, clock_time.min, tzinfo=UTC)
+        recorded = sum(self.spent_since(seat, since) for seat in seats)
+        spent = max(recorded, self._admitted_today(seats[0], today))
         if spent >= budget:
             _refuse(BudgetExhausted(source, environment=self._environment(), budget=budget, spent=spent))
 
-    def _queue(self, source: str, window: float, calls: int) -> float:
-        """Wait until the window has room; returns how long it waited."""
-        local = self._windows.setdefault(source, deque())
+    def _queue(self, source: str, seats: tuple[str, ...], window: float, calls: int) -> float:
+        """Wait until the window has room for the seats that spend it together; returns how long it waited."""
+        local = self._windows.setdefault(seats[0], deque())
         waited = 0.0
         while True:
             tick = self.clock()
@@ -705,7 +728,10 @@ class CapacityGate:
             wait = window - (tick - local[0]) if len(local) >= calls else 0.0
             if self.recent_calls is not None:
                 at = self.now()
-                recorded, oldest = self.recent_calls(source, at - timedelta(seconds=window))
+                since = at - timedelta(seconds=window)
+                windows = [self.recent_calls(seat, since) for seat in seats]
+                recorded = sum(count for count, _ in windows)
+                oldest = min((first for _, first in windows if first is not None), default=None)
                 if recorded >= calls and oldest is not None:
                     wait = max(wait, window - (at - oldest).total_seconds() + _EXPIRY_MARGIN_SECONDS)
             if wait <= 0:
@@ -1092,14 +1118,14 @@ class SourceGateway:
     """One path to a vendor or model for callers that must be throttled and budgeted
     explicitly (#740: the standards lane's SEC filings, the model and search seats).
 
-    `call` admits through the gateway's own `CapacityGate` — the declared daily budget
-    against the ledger, the rate window paced — runs the callable, and records the
+    `call` admits through the gateway's own `CapacityGate` — the daily budget against the ledger
+    where the account has one, the rate window paced — runs the callable, and records the
     attempt. Recording goes through `record_call`, so the row has the same shape as every
     adapter's — and when the callable itself goes through `http_get`/`urlopen`, the two
     collapse into ONE row carrying the status, the digest and the URI. The row goes through
     `emit` like every other row (autocommit, so a rollback of the caller's transaction keeps
-    it); a refused call is `CapacityExceeded` and writes nothing. A seat must declare both a
-    window and a daily budget to be called here.
+    it); a refused call is `CapacityExceeded` and writes nothing. A seat must declare a
+    rate window to be called here.
     """
 
     connection: Any
@@ -1135,8 +1161,7 @@ class SourceGateway:
             _refuse(
                 CapacityExceeded(
                     source,
-                    "declared capacity is not enforceable here — SourceGateway.call needs a rate window "
-                    "and a daily budget",
+                    "declared capacity is not enforceable here — SourceGateway.call needs a rate window",
                 )
             )
         return capacity

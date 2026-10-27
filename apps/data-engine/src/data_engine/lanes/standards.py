@@ -70,8 +70,7 @@ STANDARD_BACKFILL_CRON = "7 9 * * 0"
 #: contract lists them (staging runs TOPT only): `scheduled_universe_names()` gives them at the tick.
 
 STANDARD_HISTORY_JOB_NAME = "standard_history_backfill_pipeline"
-# Monday 09:07 UTC: the day after the weekly backfill. The SEC daily budget counts per UTC
-# day, so the two runs never share one budget.
+# Monday 09:07 UTC: the day after the weekly backfill. The two runs never share one SEC rate window.
 STANDARD_HISTORY_CRON = "7 9 * * 1"
 # The backtest reads the universe that holds the strategy role (A6, decision 6).
 STANDARD_HISTORY_MONTHS = 36

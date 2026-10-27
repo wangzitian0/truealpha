@@ -164,14 +164,6 @@ def test_the_registration_declares_the_seat_the_cost_the_axis_and_three_series()
         macro_registration_for("us_cpi")
 
 
-def test_the_seat_budget_covers_the_first_run_and_leaves_room_for_replays() -> None:
-    """One request per year since `first_year`, in one run. Replays of the day add none (single fetch per key)."""
-    first_run = date.today().year - REGISTRATION.first_year + 1
-    budget = LEDGER_CAPACITIES["us-treasury"].daily_budget
-    assert budget is not None
-    assert first_run * REGISTRATION.per_key_cost <= budget // 2, "the first run spends at most half of the day"
-
-
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -386,22 +378,25 @@ def test_an_error_status_is_refused_by_name_and_recorded_as_a_failed_call(monkey
 def test_the_seat_has_a_declared_capacity_and_the_raw_source_uses_its_name() -> None:
     assert DataSource.US_TREASURY.value == "us-treasury" == treasury_rates.SOURCE.value == REGISTRATION.ledger_seat
     seat = LEDGER_CAPACITIES["us-treasury"]
-    assert seat.daily_budget is not None and seat.calls_per_window >= 1
+    assert seat.daily_budget is None and seat.calls_per_window >= 1, "one rate window, no daily number (OD2 A of #1520)"
     assert gateway.CAPACITIES["us-treasury"].enforceable
 
 
-def test_a_spent_daily_budget_refuses_the_call_before_anything_is_sent(monkeypatch, call_ledger) -> None:
+def test_a_full_rate_window_refuses_the_call_before_anything_is_sent(monkeypatch, call_ledger) -> None:
     seen = _answer(monkeypatch, SAMPLE_2026)
-    now = datetime.now(UTC)
-    for _ in range(LEDGER_CAPACITIES["us-treasury"].daily_budget or 0):
-        call_ledger.append(
-            gateway.CallRecord(source="us-treasury", endpoint="x", caller="earlier run", called_at=now, ok=True)
+    call_ledger.append(
+        gateway.CallRecord(
+            source="us-treasury", endpoint="x", caller="earlier run", called_at=datetime.now(UTC), ok=True
         )
+    )
     gate = gateway.CapacityGate(
-        spent_since=call_ledger.calls_since, recent_calls=call_ledger.window, environment="production"
+        spent_since=call_ledger.calls_since,
+        recent_calls=call_ledger.window,
+        environment="production",
+        max_wait_seconds=0.0,
     )
 
-    with gateway.capacity_scope(gate), pytest.raises(gateway.BudgetExhausted):
+    with gateway.capacity_scope(gate), pytest.raises(gateway.CapacityExceeded, match="rate window"):
         fetch_year(2026, _KEY)
 
     assert seen == [], "the Treasury was never asked"
