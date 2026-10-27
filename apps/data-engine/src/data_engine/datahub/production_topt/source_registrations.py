@@ -585,7 +585,7 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         origins=(
             # Second origin: moomoo's vendor-normalized annual income statement and balance
             # sheet, value-reconciled per field against the XBRL facts under
-            # `quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`. Enabled per environment
+            # `reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY`. Enabled per environment
             # by MOOMOO_FINANCIALS_ORIGIN_ENABLED. The primary (company-facts) writes the
             # shared primary vintage, so it is identified by the registration itself.
             OriginRegistration(

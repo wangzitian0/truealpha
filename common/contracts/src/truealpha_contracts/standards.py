@@ -1,8 +1,8 @@
 """Metric standards: the unit the standard→wide-row loop maps onto every issuer (#735, #733).
 
 A `MetricStandard` says what a field MEANS and what counts as its value, on top of the
-metric registry's fusion entry (`metrics.METRICS`: unit family, `source_priority`, period
-kind). The registry answers "which source wins"; the standard answers "what is the value
+metric registry entry (`metrics.METRICS`: unit family, period kind). The plane's
+reconciliation policy answers "which source wins"; the standard answers "what is the value
 at all" — the acceptance rule a candidate must satisfy, the evidence a landed value must
 carry, whether the column is a hard (deterministic, corroborated) or an evaluative
 (model-judged) factor, and how old a value may be before the planner reopens the cell.
@@ -26,6 +26,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.metrics import METRICS
+from truealpha_contracts.reconciliation import ReconciliationPolicy
+from truealpha_contracts.reconciliation_policies import (
+    HEADCOUNT_RECONCILIATION_POLICY,
+    SEGMENT_REVENUE_RECONCILIATION_POLICY,
+)
 
 
 class StandardKind(StrEnum):
@@ -36,10 +41,10 @@ class StandardKind(StrEnum):
 class FactPlane(BaseModel):
     """WHERE a standard's facts live, and which source wins among them.
 
-    The metric registry answers "which source wins"; this answers "wins among what". Both
-    were the planner's source code until #799: `open_cells` took a `MetricStandard` and
-    queried `staging.issuer_headcount_facts` with `HEADCOUNT_SOURCE_PRIORITY` regardless,
-    so a second standard would have planned against headcount facts under its own name.
+    The reconciliation policy answers "which source wins"; this answers "wins among what".
+    The planner took both from its own source code until #799: `open_cells` took a
+    `MetricStandard` and queried `staging.issuer_headcount_facts` regardless, so a second
+    standard would have planned against headcount facts under its own name.
 
     `table` and `issuer_column` are identifiers the planner interpolates, never user input —
     a standard is code, declared in `STANDARDS` below and reviewed as code.
@@ -50,9 +55,10 @@ class FactPlane(BaseModel):
     table: str = Field(pattern=r"^[a-z_]+\.[a-z_]+$")
     #: The column holding the issuer key the planner joins on (a CIK today).
     issuer_column: str = Field(pattern=r"^[a-z_]+$")
-    #: Source labels in winning order — init.md rule 12's declared priority, source first
-    #: and recency second. A source absent from this tuple sorts last.
-    source_priority: tuple[str, ...] = Field(min_length=1)
+    #: The policy whose `source_priority` orders the sources of this plane: source first and
+    #: recency second (init.md rule 12). `reconciliation_policies` holds every instance. A
+    #: source absent from the order sorts last.
+    reconciliation_policy: ReconciliationPolicy
     #: Extractor revisions whose rows are no longer admissible, because the rule was MEASURED
     #: to land wrong values. The plane is append-only, so the rows stay — as history of what
     #: was believed — and every reader treats them as absent: they close no planner cell, so
@@ -167,10 +173,7 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
             plane=FactPlane(
                 table="staging.issuer_headcount_facts",
                 issuer_column="cik",
-                # Was `production_topt.headcount.HEADCOUNT_SOURCE_PRIORITY`, imported by the
-                # planner. Declared here so the standard carries its own answer and the
-                # planner carries none.
-                source_priority=("10k-extraction", "manual-review"),
+                reconciliation_policy=HEADCOUNT_RECONCILIATION_POLICY,
             ),
             adapter="data_engine.datahub.standards.filing_extraction:extract_headcount",
         ),
@@ -196,7 +199,7 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
             plane=FactPlane(
                 table="staging.issuer_segment_revenue_facts",
                 issuer_column="cik",
-                source_priority=("10k-segment-extraction",),
+                reconciliation_policy=SEGMENT_REVENUE_RECONCILIATION_POLICY,
                 # v1 read "one segment" from a sentence. Landed Berkshire Hathaway as one
                 # segment on "expenses considered significant for one operating segment may not
                 # be significant in others"; over 106 filings it fired on 48 issuers, at least

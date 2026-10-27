@@ -60,16 +60,18 @@ from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
 from truealpha_contracts.reconciliation import (
-    CONSENSUS_RELATIVE_TOLERANCE,
     HIGH_CONSENSUS_CONFIDENCE,
-    ConflictBehavior,
     ConsensusBand,
     ReconciliationCell,
     ReconciliationOutcome,
-    ReconciliationPolicy,
     ReconciliationResult,
     SourceAssertion,
     reconcile_source_assertions,
+)
+from truealpha_contracts.reconciliation_policies import (
+    FIELD_RECONCILIATION_POLICIES,
+    FINANCIAL_FACT_RECONCILIATION_POLICY,
+    RECONCILIATION_POLICY,
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_runtime import S3RawObjectStore
@@ -87,129 +89,19 @@ from data_engine.datahub.production_topt.source_registrations import (
     registration_for,
 )
 
-
-# Declared fusion policy for the market-price cells (init.md rule 12).
-#
-# v3 -> v4 (owner decision 2026-09-17): every family is graded by the owner's rule
-# (`truealpha_contracts.reconciliation.grade_consensus`), at the owner's tolerance of 0.1%:
-# three agreeing independent origins are HIGH and serve their median, two are MEDIUM and
-# serve their mean, anything else is LOW and serves the highest-priority origin. The
-# owner's words, verbatim (2026-09-17 session): "三个源且误差小于千分之一，取中间的数，并且标记为置信度
-# 100% high，可以忽略偶发的第四个源。如果有两个源一致标记为 middle。其他情况是 low。" This
-# supersedes the 30bp tolerance below and the abstain-on-any-disagreement behaviour; the
-# priority order is kept, and now only breaks ties and serves LOW cells. The superseded
-# policies stay declared (`SUPERSEDED_RECONCILIATION_POLICIES`) so a historical report's
-# policy id still resolves.
-#
-# History, v1 -> v2 (#719): tolerance 0.1% -> 0.3%. The 0.1% calibration dated from the
-# era when cross-run reuse fed BOTH origins the same bound observation, so
-# "agreement" was byte-identity and the tolerance was never exercised. #691
-# (identity-coordinate reuse) made TOPT capture genuinely twice, and the honest
-# consolidated-tape vs primary-close spread surfaced immediately: 2026-08-31
-# AAPL 317.23/316.85 (0.12%), AVGO 370.82/370.34 (0.13%), MU 956.68/958.73
-# (0.21%) — three abstentions, corroborated share 18/21 < 0.95, and the TOPT
-# governed pointer refused for four days on vendor microstructure noise. 30bp
-# clears the observed spread with margin while a real error (splits, 2x, fat
-# fingers) still lands orders of magnitude outside it; the plausibility oracle
-# and the #705 recompute oracle own that regime.
-#
-# v2 -> v3: a third origin, moomoo's daily K-line close (`moomoo_origin`), joins the
-# priority list last. The tolerance is unchanged; conflict behaviour is unchanged (any
-# disagreeing representative abstains the cell — three origins do not out-vote). A source
-# absent from the priority list is `unregistered` to the engine and silently excluded,
-# which is why the policy has to change for the origin to count at all.
-def _consensus_policy(policy_version: str, source_priority: tuple[str, ...]) -> ReconciliationPolicy:
-    """A family policy under the owner's rule: 0.1% relative, no absolute slack."""
-    return ReconciliationPolicy(
-        policy_version=policy_version,
-        source_priority=source_priority,
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=CONSENSUS_RELATIVE_TOLERANCE,
-        minimum_independent_origin_groups=2,
-        conflict_behavior=ConflictBehavior.MEDIAN_CONSENSUS,
-    )
-
-
-_PRICE_SOURCE_PRIORITY = ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
-RECONCILIATION_POLICY = _consensus_policy("market-price-fusion:v4", _PRICE_SOURCE_PRIORITY)
-# Volume is not a price. It is each vendor's own aggregation of the consolidated tape,
-# and since 2026-09-17 it is graded like every other family (0.1%, the owner's rule); the
-# reasoning below is the superseded v1's 2% and is kept as history. The staging soak had
-# measured the same-evening spread well above 0.1%, so most volume cells now grade MEDIUM
-# or LOW until the vendors settle — by the owner's decision, not a calibration.
-#
-# and it settles later than the prices do (late prints, corrections), so it gets its
-# own policy rather than the 30bp one. The number is measured where it can be: the
-# settled 2026-08-14 AAPL bars on the cassette pair agree EXACTLY on volume
-# (28,186,700 from both vendors, `test_real_vendor_bytes`), so the tolerance exists
-# for the same-evening capture, where the primary's consolidated figure is still
-# absorbing late prints. 2% (200bp) covers that regime with margin, while a
-# primary-listing-only count — roughly half the consolidated tape, the different
-# quantity a volume mix-up produces — stays a conflict by an order of magnitude.
-# Provisional the way the price policy's v1 was: the staging soak measures the real
-# spread and this number moves from that measurement, in a version (#719's lesson).
-# A volume conflict never touches the close's grade, so miscalibration here cannot
-# freeze the governed pointer the way #719's did.
-VOLUME_RECONCILIATION_POLICY = _consensus_policy("market-volume-fusion:v2", _PRICE_SOURCE_PRIORITY)
+# The fusion policies and their source orders live in
+# `truealpha_contracts.reconciliation_policies` (init.md rule 12).
 # The served value: its grade is the cell's headline outcome.
 _HEADLINE_FIELD = "close"
-# Every field of the session's bar, each reconciled as its own cell under its own
-# policy. Open/high/low are the same quantity class as close, from the same two
-# tapes, and share its policy.
+# Every field of the session's bar, each reconciled as its own cell under its own policy
+# (`FIELD_RECONCILIATION_POLICIES`). Open/high/low are the same quantity class as close,
+# from the same two tapes, and share its policy.
 PRICE_BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
-FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
-    "open": RECONCILIATION_POLICY,
-    "high": RECONCILIATION_POLICY,
-    "low": RECONCILIATION_POLICY,
-    "close": RECONCILIATION_POLICY,
-    "volume": VOLUME_RECONCILIATION_POLICY,
-}
 # The unit each field's cell is declared in — part of the content-addressed cell identity,
 # shared with the confidence report so both grade the same cell.
 FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
 
 
-# Declared fusion policy for the financial-fact cells, under the owner's rule since
-# 2026-09-17 (v2, 0.1%): with two origins (SEC, moomoo) an agreeing pair is MEDIUM and a
-# disagreeing one LOW — HIGH needs a third independent origin. The v1 reasoning below
-# (1%, abstain on disagreement) is history. SEC company-facts is
-# the pinned primary, moomoo's vendor-normalized statements the independent second origin,
-# reconciled PER FIELD at the primary's fiscal period end. A vendor-normalized statement
-# and an XBRL fact differ by definition, not only by rounding: measured on the four
-# captured issuers (DDOG, DUOL, NICE, SHOP; FY2023-FY2025) revenue, gross profit, total
-# assets and EPS are byte-equal and net income differs by at most 0.70% (NICE: moomoo
-# reports ProfitLoss before minority interest, the primary NetIncomeLoss after it). 1%
-# clears that with margin while a wrong period, a currency, or a units error still lands
-# orders of magnitude outside; disagreement abstains and reports, as for prices.
-FINANCIAL_FACT_RECONCILIATION_POLICY = _consensus_policy(
-    "financial-fact-fusion:v2", ("sec-company-facts:v1", "moomoo-financials:v1")
-)
-#: The policies the owner's rule replaced, exactly as they were declared, so the policy id a
-#: historical report carries still resolves (`reconciliation_policy_by_id`). Never graded
-#: against again.
-SUPERSEDED_RECONCILIATION_POLICIES: tuple[ReconciliationPolicy, ...] = (
-    ReconciliationPolicy(
-        policy_version="market-price-fusion:v3",
-        source_priority=_PRICE_SOURCE_PRIORITY,
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.003"),
-        minimum_independent_origin_groups=2,
-    ),
-    ReconciliationPolicy(
-        policy_version="market-volume-fusion:v1",
-        source_priority=_PRICE_SOURCE_PRIORITY,
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.02"),
-        minimum_independent_origin_groups=2,
-    ),
-    ReconciliationPolicy(
-        policy_version="financial-fact-fusion:v1",
-        source_priority=("sec-company-facts:v1", "moomoo-financials:v1"),
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.01"),
-        minimum_independent_origin_groups=2,
-    ),
-)
 # Which origin group each parser vintage's observations belong to.
 #
 # EVERY primary vintage is enumerated, not just the current one, and the enumeration comes

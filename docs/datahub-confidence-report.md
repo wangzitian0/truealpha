@@ -61,9 +61,9 @@ report measures the distinct values per semantic in the run and records
 
 | family | semantic | origins today | policy |
 |---|---|---|---|
-| `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), unit USD, served-day narrowing; one family per bar field (#865) |
-| `volume` | market-price | the same origins | `market-volume-fusion:v1` (`quality_report.VOLUME_RECONCILIATION_POLICY`, 2 % relative), unit shares, served-day narrowing |
-| `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`, 1 % relative), aligned on the primary's fiscal period end in the primary's currency (#866) |
+| `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `RECONCILIATION_POLICY` (`reconciliation_policies.py`), unit USD, served-day narrowing; one family per bar field (#865) |
+| `volume` | market-price | the same origins | `VOLUME_RECONCILIATION_POLICY` (`reconciliation_policies.py`), unit shares, served-day narrowing |
+| `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `FINANCIAL_FACT_RECONCILIATION_POLICY` (`reconciliation_policies.py`), aligned on the primary's fiscal period end in the primary's currency (#866) |
 | `pre_provision_profit`, `shares_outstanding` | financial-fact | `origin:sec-company-facts:v1` | none — a single origin gives `single_origin`, two lineages give `no_agreement_policy` |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage gives `same_lineage` |
 | `index_membership` | index-membership plane (QQQ) | `origin:nasdaq-index:v1` (`staging.etf_constituent_facts`), `origin:nport:v1` (`mart.fund_holdings_resolved`) | `index-membership-fusion:v1` (new), presence compared exactly |

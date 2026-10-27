@@ -18,7 +18,7 @@ rather than the run failing.
 Yahoo has no SLA and must not be the sole dependency on a critical path (init.md §5, §9).
 When it cannot serve a cell — `SourceUnavailableError`, `TimeoutError`, or no bar at all —
 the executor, once the primary's retries are spent, asks `failover`: the same registered
-origins, in `RECONCILIATION_POLICY.source_priority` order, for the close of the TARGET's
+origins, in `reconciliation_policies.RECONCILIATION_POLICY.source_priority` order, for the close of the TARGET's
 settled session. The first that has it serves the cell as ITSELF — its parser identity, its
 bytes under its own vendor prefix, its record id — with `served_by_failover` in the payload
 and its confidence one grade (`PRICE_GRADE_STEP`) below its normal one. The remaining
@@ -35,6 +35,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
@@ -174,11 +175,7 @@ def failover_order(origins: Sequence[CorroboratingOrigin]) -> tuple[Corroboratin
     mart reads. Anything else would be `unregistered` to the fusion engine — its cell
     dropping out of the report — or unreadable by the snapshot.
     """
-    # Imported here: the policy lives with the report that applies it, and this module is
-    # imported by the origins the report never needs.
-    from data_engine.datahub.quality_report import RECONCILIATION_POLICY
-
-    priority = RECONCILIATION_POLICY.source_priority
+    priority = reconciliation_policies.RECONCILIATION_POLICY.source_priority
     ranked: list[tuple[int, int, CorroboratingOrigin]] = []
     for position, origin in enumerate(origins):
         coordinate = SOURCE_BY_PARSER.get(origin.parser_version)
@@ -519,7 +516,7 @@ def build_route(
         )
         for cell in cells
     }
-    # Priority order is the fusion policy's (`quality_report.RECONCILIATION_POLICY`); an
+    # Priority order is the fusion policy's (`reconciliation_policies.RECONCILIATION_POLICY`); an
     # origin that is not configured for this environment is simply not asked. The same
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
     try:

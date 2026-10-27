@@ -40,10 +40,13 @@ A market-price observation asserts the session's whole bar — `open`, `high`, `
 metrics at HIGH confidence" is a count of fields whose two origins agreed, not a count
 of cells whose close did:
 
-| field | policy | relative tolerance | unit |
-|---|---|---|---|
-| open, high, low, close | `market-price-fusion:v3` | 0.3% (30 bp) | USD |
-| volume | `market-volume-fusion:v1` | 2% (200 bp) | shares |
+| field | policy | unit |
+|---|---|---|
+| open, high, low, close | `RECONCILIATION_POLICY` | USD |
+| volume | `VOLUME_RECONCILIATION_POLICY` | shares |
+
+`common/contracts/src/truealpha_contracts/reconciliation_policies.py` holds every policy.
+Each policy holds its version, its source order and its tolerance.
 
 Volume is not a price: it is each vendor's own aggregation of the consolidated tape and
 settles later than the prices (late prints, corrections). The settled 2026-08-14 AAPL
@@ -68,11 +71,9 @@ the close's, over the full requested denominator.
 
 ### Policies in force
 
-- `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`): priority
-  `yahoo-chart:v1`, `twelve-data:v1`, `moomoo-kline:v1`; relative tolerance 0.3%;
-  assertions narrowed to the served bar's trading day first (#622).
-- `financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`):
-  priority `sec-company-facts:v1`, `moomoo-financials:v1`; relative tolerance 1%;
+- `RECONCILIATION_POLICY` (`reconciliation_policies.py`): assertions narrowed to the
+  served bar's trading day first (#622).
+- `FINANCIAL_FACT_RECONCILIATION_POLICY` (`reconciliation_policies.py`):
   reconciled per field (`revenue`, `gross_profit`, `net_income`, `total_assets`) at the
   PRIMARY's fiscal period end. The report carries `financial_fact_reconciliation_cells`
   per subject with the per-field outcomes, and its own KPI pair
@@ -91,7 +92,7 @@ Yahoo has no SLA (init.md §5, §9). When it cannot serve a market-price cell �
 `SourceUnavailableError` (`transient_network`) or `TimeoutError` (`timeout`) after every
 retry, or no bar at all (`field_unavailable`) — the capture executor asks the source for a
 failover, and the market-price adapter asks the registered origins in
-`market-price-fusion:v3` priority order (`twelve-data:v1`, then `moomoo-kline:v1`) for the
+`RECONCILIATION_POLICY` priority order for the
 close of the target's settled session. The first that has it serves the cell:
 
 - as itself: its parser vintage, its bytes under its own vendor prefix, its record id

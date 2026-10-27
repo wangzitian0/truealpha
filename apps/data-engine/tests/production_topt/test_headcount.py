@@ -1,6 +1,6 @@
 """Headcount PIT lookup, active source filtering, and 18-digit SEC accession enforcement (#1264).
 
-Every active headcount source (`_ACTIVE_HEADCOUNT_SOURCES`) must cite an 18-digit SEC
+Every active headcount source (`HEADCOUNT_RECONCILIATION_POLICY.source_priority`) must cite an 18-digit SEC
 accession and filing date on write and on read. Retired `'curated-10k-2025'` rows and
 legacy uncited `2026-01-01` `manual-review` rows remain in the append-only table by
 trigger design and are filtered out by `lookup_headcount(connection, cik, cutoff)` so a
@@ -21,13 +21,12 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt.headcount import (
-    _ACTIVE_HEADCOUNT_SOURCES,
-    HEADCOUNT_SOURCE_PRIORITY,
     PostgresHeadcountExtractor,
     lookup_headcount,
     record_headcount,
     validate_cited_headcount_fact,
 )
+from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 _CIK = 9991264
 
@@ -59,11 +58,10 @@ def _load_seed_module():
 
 
 def test_active_headcount_sources_excludes_curated_10k_2025() -> None:
-    """#1264: `'curated-10k-2025'` is removed from `_ACTIVE_HEADCOUNT_SOURCES` and
-    `HEADCOUNT_SOURCE_PRIORITY`."""
-    assert "curated-10k-2025" not in _ACTIVE_HEADCOUNT_SOURCES
-    assert "curated-10k-2025" not in HEADCOUNT_SOURCE_PRIORITY
-    assert _ACTIVE_HEADCOUNT_SOURCES == ("10k-extraction", "manual-review")
+    """#1264: `'curated-10k-2025'` is not a source of the headcount policy."""
+    active = HEADCOUNT_RECONCILIATION_POLICY.source_priority
+    assert "curated-10k-2025" not in active
+    assert set(active) == {"10k-extraction", "manual-review"}
 
 
 def test_record_headcount_enforces_18_digit_sec_accession_for_active_sources() -> None:
@@ -81,7 +79,7 @@ def test_record_headcount_enforces_18_digit_sec_accession_for_active_sources() -
             confidence=Decimal("0.70"),
         )
 
-    for source in _ACTIVE_HEADCOUNT_SOURCES:
+    for source in HEADCOUNT_RECONCILIATION_POLICY.source_priority:
         with pytest.raises(ValueError, match="18-digit SEC accession"):
             record_headcount(
                 None,  # type: ignore[arg-type]
