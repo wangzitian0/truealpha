@@ -239,8 +239,8 @@ def _edge(connection, relation_type: str, from_id, to_id) -> bool:
 
 
 def _seed_both_universes(connection) -> None:
-    _seed_complete_production_run(connection)
-    _seed_complete_production_run(connection, corpus=_plane_corpus())
+    _seed_complete_production_run(connection, declare_primary_listings=False)
+    _seed_complete_production_run(connection, corpus=_plane_corpus(), declare_primary_listings=False)
 
 
 def test_every_id_form_of_one_company_resolves_to_one_entity(connection) -> None:
@@ -439,7 +439,7 @@ def test_a_retracted_listing_line_does_not_block_a_later_one(connection) -> None
     occupied = _mint(connection, "listing", "listing:xnas:msft")
     _line(connection, _mint(connection, "instrument", "security:test:msft-squatter"), occupied)
 
-    _seed_complete_production_run(connection)
+    _seed_complete_production_run(connection, declare_primary_listings=False)
     written = _backfill(connection)
     assert written["failed"] == [], written
     assert written["held_back"].get("skipped:store-holds-another-endpoint") == 1, written

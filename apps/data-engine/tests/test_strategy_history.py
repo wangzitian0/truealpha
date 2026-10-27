@@ -868,7 +868,7 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from production_topt.test_materialization import _seed_complete_production_run  # noqa: PLC0415
 
-    _seed_complete_production_run(connection)
+    _seed_complete_production_run(connection, declare_primary_listings=False)
     from data_engine.datahub.strategy_history import latest_financial_observations  # noqa: PLC0415
 
     seeded = connection.execute(
