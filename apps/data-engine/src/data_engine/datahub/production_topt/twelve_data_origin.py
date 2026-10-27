@@ -73,6 +73,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -88,6 +89,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     TWELVE_DATA_VALUE_KEY,
 )
 from data_engine.sources import gateway
+from data_engine.sources.accept_rules import accept_rule
 
 log = logging.getLogger(__name__)
 
@@ -549,9 +551,10 @@ class TwelveDataQuoteFetcher:
         """The vendor's body for one request, or the classified `TwelveDataError` it
         carries; the "no data is available" body is returned for the parser to read.
 
-        ``final`` is False for a window whose newest row is still forming. Such a request carries no
-        fetch key and uses no index. ``must_hold`` is the session whose row the answer has to hold
-        before it lands; an answer without it is asked again."""
+        ``final`` is False for a window whose newest row is still forming. Such a request uses no index and
+        its row carries `window_not_final`. ``must_hold`` is the session whose row the answer has to hold
+        before it lands; an answer without it is asked again. The key names that session, so the registered
+        rule of the key can read it (`_series_holds_the_settled_row`)."""
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
         # Twelve Data answers "no end of day for this date" with HTTP 400 and a JSON
         # error body — and urlopen RAISES on any non-2xx. Letting that raise propagate
@@ -579,9 +582,9 @@ class TwelveDataQuoteFetcher:
             default_as_of=gateway.utc_day(),
             exclude=("apikey",),
         )
-
-        def final_answer(answer: bytes) -> bool:
-            return carries_data(None, answer) and (must_hold is None or holds_row(answer, must_hold))
+        if must_hold is not None:
+            # The series answers for the settled session that `/eod` named: another session is another resource.
+            key = replace(key, as_of=f"{key.as_of}{_SETTLED_SEPARATOR}{must_hold.isoformat()}")
 
         def fetch(identity: FetchKey) -> bytes:
             self._requests += 1
@@ -594,7 +597,7 @@ class TwelveDataQuoteFetcher:
             return body
 
         requests_before = self._requests
-        body = gateway.fetch_once(key, fetch, keep=final, accept=final_answer)
+        body = gateway.fetch_once(key, fetch, keep=final)
         if self._requests == requests_before:
             self._index_hits += 1
         return body
@@ -622,6 +625,25 @@ def carries_data(http_status: int | None, body: bytes) -> bool:
         and payload.get("status") != "error"
         and not (http_status is not None and http_status >= 400)
     )
+
+
+#: Between the window end and the settled session in the `as_of` of a series key (`2026-07-30:2026-07-29`).
+_SETTLED_SEPARATOR = ":"
+
+
+@accept_rule("twelvedata", "eod")
+def _eod_carries_data(_key: FetchKey, body: bytes) -> bool:
+    """An end-of-day answer is kept when it is data: not an error and not the "no data" absence."""
+    return carries_data(None, body)
+
+
+@accept_rule("twelvedata", "time_series")
+def _series_holds_the_settled_row(key: FetchKey, body: bytes) -> bool:
+    """A series answer is kept when it is data and holds the row of the settled session named by its key.
+
+    A series that has no settled session in its key (no end of day answered) needs data only."""
+    settled = key.as_of.partition(_SETTLED_SEPARATOR)[2]
+    return carries_data(None, body) and (not settled or holds_row(body, date.fromisoformat(settled)))
 
 
 def twelve_data_origin(*, connection: Any = None) -> CorroboratingOrigin | None:

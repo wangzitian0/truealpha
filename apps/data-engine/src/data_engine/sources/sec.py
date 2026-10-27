@@ -14,6 +14,7 @@ import httpx
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
+from data_engine.sources.accept_rules import accept_rule
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
@@ -87,8 +88,12 @@ def ticker_to_cik(ticker: str) -> int:
     return cik
 
 
-def _is_json_object(body: bytes) -> bool:
-    """Whether ``body`` is a JSON object. Text that is not JSON is not one."""
+@accept_rule("sec", "submissions")
+def _is_json_object(_key: FetchKey, body: bytes) -> bool:
+    """Whether ``body`` is a JSON object. Text that is not JSON is not one.
+
+    A 200 answer that is not a JSON object is not the submissions of the issuer (#1323). The rule is the one
+    of every reader of that key, the filing readers included (#1502)."""
     try:
         return isinstance(json.loads(body.decode()), dict)
     except ValueError:
@@ -109,9 +114,9 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
                 return _get(c, "submissions", url, "sec.fetch_company_submissions", identity)
         return _get(http, "submissions", url, "sec.fetch_company_submissions", identity)
 
-    # A 200 answer that is not a JSON object is not the submissions of the issuer. It stays out of the index,
-    # so the retry of the registry and the next caller ask SEC again (#1323).
-    body = gateway.fetch_once(submissions_key(cik), fetch, accept=_is_json_object)
+    # The registered rule of the key keeps an answer that is no JSON object out of the index, so the retry of
+    # the registry and the next caller ask SEC again (#1323).
+    body = gateway.fetch_once(submissions_key(cik), fetch)
     payload = json.loads(body.decode())
     if not isinstance(payload, dict):
         raise ValueError(f"the submissions of CIK {cik} are not a JSON object")

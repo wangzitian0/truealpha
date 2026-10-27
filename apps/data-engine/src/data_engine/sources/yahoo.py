@@ -35,6 +35,7 @@ import httpx
 
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
+from data_engine.sources.accept_rules import accept_rule
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 USER_AGENT = "TrueAlpha research wangzitian.ai@icloud.com"
@@ -121,11 +122,17 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
             resp.raise_for_status()
             return bytes(resp.content)
 
-    body = gateway.fetch_once(key, fetch, keep=settled_end, accept=lambda answer: _session_is_final(answer, end))
+    body = gateway.fetch_once(key, fetch, keep=settled_end)
     # Decoded with parse_float=Decimal so the response is never routed through a
     # Python float — that would add a second rounding on top of the vendor's.
     payload = json.loads(body.decode(), parse_float=Decimal)
     return body, _parse_chart_response(payload)
+
+
+@accept_rule("yahoo", "chart")
+def _chart_settles_its_session(key: FetchKey, body: bytes) -> bool:
+    """The rule of every chart key: the as-of of the key is the session that the window ends on."""
+    return _session_is_final(body, date.fromisoformat(key.as_of))
 
 
 def _session_is_final(body: bytes, end: date) -> bool:

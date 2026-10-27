@@ -50,6 +50,12 @@ class FetchKey:
         return KEY_SEPARATOR.join((self.seat, self.endpoint, self.canonical_entity_id, self.as_of))
 
     @classmethod
+    def from_ledger_key(cls, ledger_key: str) -> FetchKey:
+        """The key that `ledger_key` renders. A part holds no separator, so the split is exact."""
+        seat, endpoint, canonical_entity_id, as_of = ledger_key.split(KEY_SEPARATOR)
+        return cls(seat, endpoint, canonical_entity_id, as_of)
+
+    @classmethod
     def for_batch(cls, seat: str, endpoint: str, members: Iterable[str], as_of: str) -> FetchKey:
         """The key of one request that names a set of members (ISINs, tickers) in its body.
 

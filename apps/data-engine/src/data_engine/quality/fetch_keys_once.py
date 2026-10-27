@@ -6,9 +6,9 @@ from stored bytes (`sources.landed_keys`). This check proves it from the environ
 ledger, the only record of what was asked of a vendor.
 
 The check reads the UTC day that has just ended. A key is a duplicate when the ledger holds two
-successful rows with that key on that day. A failed attempt (a 429, a timeout) is not a fetch, so
-a retry never counts. The ledger of an environment is its own database, so the count is per
-environment.
+successful rows with that key on that day that carry no repeat reason. A failed attempt (a 429, a
+timeout) is not a fetch, so a retry never counts. The ledger of an environment is its own database, so
+the count is per environment.
 
 The verdict is red when:
 
@@ -22,13 +22,15 @@ Calls without a key are counted and named by seat and endpoint (``unkeyed``). Th
 judge them. A caller that does not name its key cannot prove that it fetched once. The number is the work
 left.
 
-Three kinds of request are unkeyed on purpose:
+Four kinds of request carry a key and a repeat reason (`api_call_ledger.repeat_reason`). The gateway
+derives the reason from the call itself, and the duplicate count skips these rows (#1521):
 
-- A window that is not final yet (a chart whose session has not closed).
-- An answer that the fetch refuses to keep (an answer without the row of its session). The next request
-  asks again.
-- Every request of a forced tick (`force_fetch`). A forced tick is a probe: it asks the vendors again,
-  and it neither reads nor writes the index.
+- `probe`: every request of a forced tick (`force_fetch`). A forced tick asks the vendors again, and it
+  neither reads nor writes the index.
+- `window_not_final`: a window that is not final yet (a chart whose session has not closed).
+- `answer_refused`: an answer that the registered rule of the key refuses (an answer without the row of its
+  session). The next request asks again.
+- `model_call`: a model attempt. The same request can be asked again.
 
 An operator deletes a row from `staging.landed_fetch_keys` to fetch a landed key again.
 """
@@ -45,7 +47,7 @@ SUMMARY_KEYS = 3
 DUPLICATES_SQL = """
 select fetch_key, count(*)
 from staging.api_call_ledger
-where called_at >= %s and called_at < %s and fetch_key is not null and ok
+where called_at >= %s and called_at < %s and fetch_key is not null and ok and repeat_reason is null
 group by fetch_key
 having count(*) > 1
 order by count(*) desc, fetch_key

@@ -282,7 +282,7 @@ def test_a_second_tick_of_the_same_cutoff_makes_zero_repeated_vendor_requests(ti
     assert dict(added) == {}, f"the second tick reached the vendor socket again: {dict(added)}"
 
 
-def test_a_forced_tick_is_a_probe_that_reaches_every_vendor_and_leaves_unkeyed_rows(ticks: Ticks) -> None:
+def test_a_forced_tick_is_a_probe_that_reaches_every_vendor_and_writes_the_reason_probe(ticks: Ticks) -> None:
     """The boot canary forces a fetch to prove that the release reaches its vendors (`release_fetch_proof`).
 
     Red when the index serves a forced tick: the release proof then passes with no vendor call."""
@@ -292,15 +292,22 @@ def test_a_forced_tick_is_a_probe_that_reaches_every_vendor_and_leaves_unkeyed_r
     # GOOG and GOOGL share one CIK: the first tick asks it once, and a probe has no index to share it by.
     assert all(probed[path] >= first[path] for path in first)
     with psycopg.connect(ticks.url) as connection:
-        unkeyed = connection.execute(
+        probes = connection.execute(
+            "select count(*), count(*) filter (where fetch_key is null) from staging.api_call_ledger "
+            "where repeat_reason = 'probe' and ok and source in ('sec', 'yahoo') and caller not like 'injected-%'"
+        ).fetchone()
+        fetches = connection.execute(
             "select count(*) from staging.api_call_ledger "
-            "where fetch_key is null and ok and source in ('sec', 'yahoo') and caller not like 'injected-%'"
+            "where repeat_reason is null and fetch_key is not null and ok and caller not like 'injected-%'"
         ).fetchone()[0]
-        keyed = connection.execute(
-            "select count(*) from staging.api_call_ledger where fetch_key is not null and ok and caller not like 'injected-%'"
+        other = connection.execute(
+            "select count(*) from staging.api_call_ledger "
+            "where repeat_reason is distinct from 'probe' and ok and source in ('sec', 'yahoo') "
+            "and caller not like 'injected-%' and fetch_key is null"
         ).fetchone()[0]
-    assert unkeyed == sum(probed.values()), "each probe request is a ledger row without a key"
-    assert keyed == sum(ticks.requests_after_first.values()), "the first tick is the only keyed fetch of each key"
+    assert probes == (sum(probed.values()), 0), "each probe request is a ledger row with its key and the reason probe"
+    assert fetches == sum(ticks.requests_after_first.values()), "the first tick is the only plain fetch of each key"
+    assert other == 0, "every call of the ticks names its key"
 
 
 def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) -> None:
@@ -308,7 +315,7 @@ def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) ->
     with psycopg.connect(ticks.url) as connection:
         rows = connection.execute(
             "select fetch_key, count(*) from staging.api_call_ledger "
-            "where fetch_key is not null and ok and caller not like 'injected-%' group by 1"
+            "where fetch_key is not null and ok and repeat_reason is null and caller not like 'injected-%' group by 1"
         ).fetchall()
         reuse = connection.execute("select coalesce(sum(reuse_count), 0) from staging.landed_fetch_keys").fetchone()[0]
     keys = {key for key, _count in rows}

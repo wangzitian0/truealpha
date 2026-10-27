@@ -19,6 +19,9 @@ error status, or raised before an answer arrived:
 - ``capacity_window_id`` — the vendor window the call was charged to (``twelvedata:day:
   2026-09-04``), so "used vs declared" is one GROUP BY;
 - ``run_key`` — the Dagster run that made the call, bound by the op (`run_scope`).
+- ``fetch_key`` — the key of the resource that the call fetched: the ``identity`` of the call (#1521);
+- ``repeat_reason`` — why a second row of that key is no duplicate fetch: ``probe``, ``window_not_final``,
+  ``answer_refused`` or ``model_call``. The gateway derives it from the call itself; no caller passes one.
 
 Why the writer is autocommit and never raises
 --------------------------------------------
@@ -70,6 +73,8 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
+from truealpha_contracts.environment_contract import load_environment_contract
+
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.source_registrations import (
@@ -77,12 +82,20 @@ from data_engine.datahub.production_topt.source_registrations import (
     CapacityDeclaration,
     environment_share,
 )
+from data_engine.sources import accept_rules
 from data_engine.sources.landed_keys import LandedKeys, PostgresLandedKeys
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 _ERROR_LIMIT = 500
+
+#: Why a second row with the same fetch key is not a duplicate fetch (#1521). The gateway derives it from
+#: the attributes of the call; no caller passes one. A row carries at most one, in this order.
+PROBE = "probe"  # a forced run asks the vendor again on purpose (`probe_scope`)
+WINDOW_NOT_FINAL = "window_not_final"  # the request is not final, so the next caller asks again (`keep=False`)
+MODEL_CALL = "model_call"  # a model attempt: the same request can be asked again (a retry, a later replay)
+ANSWER_REFUSED = "answer_refused"  # the registered rule of the key refused the answer (`accept_rules`)
 # Matched case-insensitively as substrings of the lower-cased key, so `APIKEY`, `ApiKey`,
 # `access_token` and `x-api-key` are all blanked (review on #741).
 _REDACTED_KEY_MARKERS = ("apikey", "api_key", "api-key", "token", "secret", "password", "auth", "key")
@@ -228,6 +241,9 @@ class CallRecord:
     #: What the response says it cost in output tokens; reasoning tokens only when it reports them.
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
+    #: Why a repeat of `fetch_key` is not a duplicate fetch: `PROBE`, `WINDOW_NOT_FINAL`, `MODEL_CALL` or
+    #: `ANSWER_REFUSED`. Derived by the gateway; None for an ordinary call (#1521 step 3).
+    repeat_reason: str | None = None
 
     def observe(self, *, status_code: int | None = None, body: bytes | str | None = None) -> None:
         """Record what the vendor answered. Call once the response is in hand.
@@ -235,6 +251,8 @@ class CallRecord:
         Text is digested as UTF-8; anything that is not bytes-like leaves the digest
         empty rather than turning a recorded call into a raised one — the ledger
         observes the vendor's answer, it never decides whether the caller may have it.
+        An answer with a success status that the registered rule of the key refuses gets the reason
+        `answer_refused`; the row keeps its key.
         """
         if status_code is not None:
             self.status_code = int(status_code)
@@ -247,11 +265,12 @@ class CallRecord:
             return
         self.payload_sha256 = digest
         self.byte_length = len(raw)
-        # An answer that the fetch refuses to keep (a window that is not final) is not a counted fetch:
-        # the request is asked again on purpose, so its row carries no key (#1411 K7).
-        accept = _fetch_accept.get()
-        if self.fetch_key is not None and accept is not None and not _accepts(accept, raw):
-            self.fetch_key = None
+        if self.fetch_key is None or self.repeat_reason is not None:
+            return
+        if self.status_code is not None and self.status_code >= 400:
+            return
+        if not accept_rules.accepts(FetchKey.from_ledger_key(self.fetch_key), raw):
+            self.repeat_reason = ANSWER_REFUSED
 
     def fail(self, error: str) -> None:
         """Mark the call failed with a vendor-side reason (a 4xx body, a bad return code)."""
@@ -354,8 +373,10 @@ _ATTEMPT_COLUMNS = ("attempt", "provider_code", "request_params")
 _TOKEN_COLUMNS = ("completion_tokens", "reasoning_tokens")
 #: A keyed fetch (#1411 K7): `20261021T1200_datahub_landed_fetch_keys.sql`.
 _KEY_COLUMNS = ("fetch_key",)
+#: The reason that a repeat of the key is no duplicate (#1521 step 3): `20261027T0543_datahub_ledger_repeat_reason.sql`.
+_REASON_COLUMNS = ("repeat_reason",)
 #: Each group is written by a record that sets one of its columns.
-_OPTIONAL_GROUPS = (_ATTEMPT_COLUMNS, _TOKEN_COLUMNS, _KEY_COLUMNS)
+_OPTIONAL_GROUPS = (_ATTEMPT_COLUMNS, _TOKEN_COLUMNS, _KEY_COLUMNS, _REASON_COLUMNS)
 
 
 @functools.cache
@@ -717,12 +738,27 @@ def _exact_cost(cost: Decimal | int) -> Decimal:
 
 
 _active: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("external_call_active", default=None)
-#: The rule that decides whether the answer of that request may be kept (`fetch_once(accept=...)`).
-_fetch_accept: contextvars.ContextVar[Callable[[bytes], bool] | None] = contextvars.ContextVar(
-    "external_call_fetch_accept", default=None
-)
+#: False while `fetch_once(keep=False)` makes a request that is not final: its row carries `window_not_final`.
+_window_final: contextvars.ContextVar[bool] = contextvars.ContextVar("external_call_window_final", default=True)
 #: True inside a probe: a forced run that asks every vendor again and uses no index (`probe_scope`).
 _probe: contextvars.ContextVar[bool] = contextvars.ContextVar("external_call_probe", default=False)
+
+
+@functools.cache
+def _model_seat() -> str:
+    """The ledger seat of the model provider, named once by the environment contract."""
+    return load_environment_contract().model_seat.seat
+
+
+def _creation_reason(source: str) -> str | None:
+    """The repeat reason that the state at the start of a call decides: probe, unfinished window, model."""
+    if _probe.get():
+        return PROBE
+    if not _window_final.get():
+        return WINDOW_NOT_FINAL
+    if source == _model_seat():
+        return MODEL_CALL
+    return None
 
 
 @contextmanager
@@ -741,8 +777,9 @@ def record_call(
     call and re-raised unchanged.
 
     ``identity`` is the fetch key of the resource that the request asks for (#1521): the row names
-    it. A call that names no resource does not type-check and raises `TypeError` at the call. A probe
-    (`probe_scope`) writes no key, so the nightly verdict lists its rows as unkeyed.
+    it. A call that names no resource does not type-check and raises `TypeError` at the call. The row
+    also carries the reason that a repeat of its key is no duplicate, derived from the call itself:
+    a probe, a window that is not final, a model attempt, or (in `observe`) a refused answer.
 
     Inside a `capacity_scope`, the bound gate admits the call BEFORE the block runs: a
     refusal raises `CapacityExceeded` here, the request is never made and no row is
@@ -775,7 +812,8 @@ def record_call(
         cost=_exact_cost(cost),
         run_key=_run_key.get(),
         capacity_window_id=capacity_window_id(source, called_at),
-        fetch_key=None if _probe.get() else identity.ledger_key,
+        fetch_key=identity.ledger_key,
+        repeat_reason=_creation_reason(source),
     )
     token = _active.set(record)
     try:
@@ -940,22 +978,13 @@ def urlopen(
 # --- landed keys (#1411 K3): each key is fetched once -----------------------------------
 
 
-def _accepts(accept: Callable[[bytes], bool], body: bytes) -> bool:
-    """Whether ``accept`` keeps ``body``. A rule that raises on an answer it cannot read refuses it."""
-    try:
-        return bool(accept(body))
-    except Exception:  # noqa: BLE001 - an unreadable answer is not a final one
-        log.exception("the accept rule of a fetch raised; the answer is treated as not final")
-        return False
-
-
 @contextmanager
 def probe_scope(active: bool = True) -> Iterator[None]:
     """Make every keyed fetch in the block a probe when ``active``.
 
     A forced tick (`force_fetch`, #874) exists to prove that the deployed release reaches its vendors
-    (`quality.release_fetch_proof`). A probe therefore asks the vendor again, carries no fetch key, and
-    neither reads nor writes the index of landed keys. The verdict lists its rows as unkeyed."""
+    (`quality.release_fetch_proof`). A probe therefore asks the vendor again and neither reads nor writes
+    the index of landed keys. Its rows carry their key and the reason `probe`, so the verdict skips them."""
     token = _probe.set(active)
     try:
         yield
@@ -1005,27 +1034,12 @@ def land(
         log.exception("landing %s failed; the next call for this key will fetch again", key.ledger_key)
 
 
-@contextmanager
-def _answer_rule(accept: Callable[[bytes], bool] | None) -> Iterator[None]:
-    """Judge the answer of the request in the block with ``accept``: a row whose answer it refuses carries no key."""
-    token = _fetch_accept.set(accept)
-    try:
-        yield
-    finally:
-        _fetch_accept.reset(token)
-
-
-def _never_final(_body: bytes) -> bool:
-    return False
-
-
 def fetch_once(
     key: FetchKey,
     fetch: Callable[[FetchKey], bytes],
     *,
     content_type: str = "application/json",
     keep: bool = True,
-    accept: Callable[[bytes], bool] | None = None,
 ) -> bytes:
     """The bytes of ``key``: from the index when it landed, else from ``fetch(key)`` once.
 
@@ -1034,23 +1048,25 @@ def fetch_once(
     the key, and the nightly verdict `fetch_keys_once` counts rows per key. A ``fetch`` that raises
     lands nothing, so a failed or refused call is tried again by the next caller.
 
-    ``accept`` judges the answer. An answer it refuses (an error body with status 200, a window whose
-    session has not settled) goes to the caller, stays out of the index, and its ledger row carries no
-    key, because the next caller asks again on purpose. ``keep=False`` is the same for a request that is
-    not final at all: no key, nothing read from or written to the index. Inside a `probe_scope` every
-    request is like that."""
+    The registered rule of the key (`accept_rules`) judges the answer. An answer it refuses (an error body
+    with status 200, a window whose session has not settled) goes to the caller and stays out of the index;
+    its row keeps the key and carries `answer_refused`. ``keep=False`` is a request that is not final at
+    all: nothing is read from or written to the index, and its row carries `window_not_final`. Inside a
+    `probe_scope` every request is like that, with the reason `probe`."""
     if _probe.get():
         return fetch(key)
     if not keep:
-        with _answer_rule(_never_final):
+        token = _window_final.set(False)
+        try:
             return fetch(key)
+        finally:
+            _window_final.reset(token)
     hit = landed(key)
     if hit is not None:
         return hit
     started = _utcnow()
-    with _answer_rule(accept):
-        body = fetch(key)
-    if accept is None or _accepts(accept, body):
+    body = fetch(key)
+    if accept_rules.accepts(key, body):
         land(key, body, content_type=content_type, fetched_at=started)
     return body
 
