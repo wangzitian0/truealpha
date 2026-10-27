@@ -131,6 +131,17 @@ class ConstituentRow(TypedDict):
     ticker: str
     name: str
     market_cap: str | None
+    last_sale_price: str | None
+
+
+def _decimal_text(raw: object, *, prefix: str = "") -> str | None:
+    """A base-10 figure the operator wrote with thousands separators and a currency sign, as text.
+
+    None when the operator wrote none or something else: a changed format reads as absent, never as a number.
+    """
+    text = str(raw if raw is not None else "").replace(",", "").strip()
+    text = text.removeprefix(prefix).strip()
+    return text if text.replace(".", "", 1).isdigit() else None
 
 
 def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
@@ -141,14 +152,16 @@ def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
     for row in rows:
         if not row.get("symbol"):
             continue
-        market_cap = str(row.get("marketCap", "")).replace(",", "").strip()
         out.append(
             {
                 "ticker": str(row["symbol"]).strip().upper(),
                 "name": str(row.get("companyName", "")).strip(),
                 # The operator's own per-constituent market cap; the official fund
                 # WEIGHT is #63's N-PORT plane, never derived here.
-                "market_cap": market_cap if market_cap.replace(".", "", 1).isdigit() else None,
+                "market_cap": _decimal_text(row.get("marketCap")),
+                # The operator quotes the last sale price beside every cap ("$86.60"); the pair
+                # is the only outside witness of a listed unit count (#1523).
+                "last_sale_price": _decimal_text(row.get("lastSalePrice"), prefix="$"),
             }
         )
     if len(out) < 90:  # NDX is ~100-102; a short list is a source failure, not a small index
@@ -267,7 +280,8 @@ def refresh_etf_constituents(
         # fetch body so the denominator's raw lineage points at exactly what was
         # decided, under DataSource.RELEASE like other release-derived assertions.
         rows: list[ConstituentRow] = [
-            {"ticker": ticker, "name": ticker, "market_cap": None} for ticker in source.static_members
+            {"ticker": ticker, "name": ticker, "market_cap": None, "last_sale_price": None}
+            for ticker in source.static_members
         ]
         body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
         fetch_source = DataSource.RELEASE
@@ -319,8 +333,9 @@ def refresh_etf_constituents(
         connection.execute(
             """
             insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, last_sale_price,
+                 cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source.etf,
@@ -330,6 +345,7 @@ def refresh_etf_constituents(
                 row["ticker"],
                 row["name"],
                 row.get("market_cap"),
+                row.get("last_sale_price"),
                 cik_index[row["ticker"].replace(".", "-")],
                 figis[row["ticker"]],
                 fetched_at,

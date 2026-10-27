@@ -13,6 +13,7 @@ import hashlib
 import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -72,6 +73,43 @@ def test_the_operator_bytes_parse_to_the_full_index() -> None:
     aapl = next(row for row in rows if row["ticker"] == "AAPL")
     assert aapl["market_cap"] == "4464797487400"
     assert sum(1 for row in rows if row["market_cap"]) >= 100
+
+
+def test_the_operator_bytes_carry_the_last_sale_price_beside_the_market_cap() -> None:
+    """#1523 S1: the operator quotes a price with every cap, and the pair is the only outside
+    witness of a listed share count (cap / price). The parser keeps both."""
+    rows = {row["ticker"]: row for row in parse_nasdaq_index_rows(_bytes())}
+    assert (rows["PDD"]["market_cap"], rows["PDD"]["last_sale_price"]) == ("120689786013", "86.60")
+    assert rows["AAPL"]["last_sale_price"] == "307.167"
+    assert all(row["last_sale_price"] for row in rows.values())
+
+
+def test_refresh_lands_the_last_sale_price_beside_the_market_cap(connection, monkeypatch) -> None:
+    """Through the refresh job's own function: the stored row of PDD holds the cap and the price."""
+    from data_engine.datahub.production_topt import universe_plane
+    from data_engine.sources import sec
+
+    body = _bytes()
+    tickers = [row["ticker"] for row in parse_nasdaq_index_rows(body)]
+    monkeypatch.setattr(universe_plane, "_get", lambda *_args, **_kwargs: (200, body))
+    monkeypatch.setattr(universe_plane, "_resolve_figis", lambda *_a, **_k: {t: f"bbg-{t.lower()}" for t in tickers})
+    monkeypatch.setattr(
+        sec, "ticker_cik_index", lambda: {t.replace(".", "-"): 100000 + i for i, t in enumerate(tickers)}
+    )
+
+    landed = universe_plane.refresh_etf_constituents(
+        connection, UNIVERSE_SOURCES["qqq"], as_of=date(2026, 10, 24), openfigi_api_key="test"
+    )
+
+    assert landed == 102
+    stored = connection.execute(
+        "select market_cap, last_sale_price from staging.etf_constituent_facts where etf_symbol = 'qqq' and ticker = 'PDD'"
+    ).fetchone()
+    assert stored == (Decimal("120689786013"), Decimal("86.60"))
+    unpriced = connection.execute(
+        "select count(*) from staging.etf_constituent_facts where etf_symbol = 'qqq' and last_sale_price is null"
+    ).fetchone()
+    assert unpriced == (0,)
 
 
 def test_a_truncated_response_refuses_to_parse() -> None:
