@@ -473,9 +473,9 @@ def test_every_history_run_request_names_its_tick_and_is_a_valid_run_config() ->
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 10, 12, 9, 7, tzinfo=UTC))
     requests = list(standards.standard_history_schedule.evaluate_tick(context).run_requests)
     assert [request.run_key for request in requests] == [
-        f"history:2026-10-12T09:07:00+00:00:{universe}" for universe in standards.STANDARD_HISTORY_UNIVERSES
+        f"history:2026-10-12T09:07:00+00:00:{universe}" for universe in ("topt",)
     ]
-    for request, universe in zip(requests, standards.STANDARD_HISTORY_UNIVERSES, strict=True):
+    for request, universe in zip(requests, ("topt",), strict=True):
         assert set(request.run_config["ops"]) == {"run_standard_history"}
         config = standards.StandardHistoryConfig(**request.run_config["ops"]["run_standard_history"]["config"])
         assert config.executed_at == "2026-10-12T09:07:00+00:00"

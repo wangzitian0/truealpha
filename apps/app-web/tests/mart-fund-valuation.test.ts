@@ -7,6 +7,7 @@
  * all shows an absent aggregate, never a zero.
  */
 
+import { idPrefixLikeOfRole } from "../src/contracts/universes";
 import { loadFundValuation } from "../src/server/mart/fund-valuation";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
@@ -70,14 +71,20 @@ const CONSOLIDATION = {
 
 function fakeRunner(
   headRows: Record<string, unknown>[],
-  capture: { runParam?: unknown },
+  capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown },
   consolidationRows: Record<string, unknown>[] = [CONSOLIDATION],
 ) {
   return async <T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> => {
     const client: MartClientLike = {
       query: async (sql: string, params?: readonly unknown[]) => {
-        if (sql.includes("current_pointer_head") || sql.includes("served_head")) return { rows: headRows };
-        if (sql.includes("topt_capture_status")) return { rows: [] };
+        if (sql.includes("current_pointer_head") || sql.includes("served_head")) {
+          capture.headParam = params?.[0];
+          return { rows: headRows };
+        }
+        if (sql.includes("topt_capture_status")) {
+          capture.fallbackParam = params?.[0];
+          return { rows: [] };
+        }
         // Filed/resolved mass is the filing's, not the run's: answered whether or not a
         // governed run exists.
         if (sql.includes("fund_holdings_coverage")) {
@@ -113,9 +120,13 @@ function fakeRunner(
 }
 
 {
-  const capture: { runParam?: unknown } = {};
+  const capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown } = {};
   const funds = await loadFundValuation(fakeRunner([{ run_id: "capture-run:abc" }], capture));
   assert(funds.length === 1, "one fund");
+  assert(
+    capture.headParam === idPrefixLikeOfRole("fund_consolidation"),
+    "the pointer query binds the id prefix of the fund-consolidation universe",
+  );
   const fund = funds[0];
   assert(capture.runParam === "capture-run:abc", "the governed head run parameterizes the join");
   assert(fund.runId === "capture-run:abc", "the run id is reported for provenance");
@@ -135,7 +146,7 @@ function fakeRunner(
 {
   // A refused consolidation (coverage below the definition's floors) must not render as
   // a gap of zero: the aggregate is absent and the reason says why.
-  const capture: { runParam?: unknown } = {};
+  const capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown } = {};
   const funds = await loadFundValuation(
     fakeRunner([{ run_id: "capture-run:abc" }], capture, [
       {
@@ -158,7 +169,7 @@ function fakeRunner(
 {
   // A run whose tick predates #727 wrote no consolidation row. The lines still render;
   // the aggregate is absent rather than silently computed here.
-  const capture: { runParam?: unknown } = {};
+  const capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown } = {};
   const funds = await loadFundValuation(fakeRunner([{ run_id: "capture-run:abc" }], capture, []));
   assert(funds[0].weightedGap === null, "no consolidation row means no aggregate");
   assert(funds[0].totalWeightPct === "99.50", "the filed mass is the filing's, not the run's");
@@ -168,9 +179,13 @@ function fakeRunner(
 }
 
 {
-  const capture: { runParam?: unknown } = {};
+  const capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown } = {};
   const funds = await loadFundValuation(fakeRunner([], capture));
   assert(capture.runParam === "capture-run:none", "no governed run joins nothing instead of guessing one");
+  assert(
+    capture.fallbackParam === idPrefixLikeOfRole("fund_consolidation"),
+    "the acceptance fallback binds the id prefix of the fund-consolidation universe",
+  );
   assert(funds.length === 1 && funds[0].runId === null, "the absence of a run is reported, not hidden");
   assert(funds[0].valuedWeightPct === "0.00", "nothing is valued without a run");
   assert(funds[0].weightedGap === null, "no weighted gap without a run — absent, not zero");
@@ -179,7 +194,7 @@ function fakeRunner(
 
 {
   // An unavailable (withheld, >30d) head joins nothing and renders unvalued with runId: null (#1062)
-  const capture: { runParam?: unknown } = {};
+  const capture: { runParam?: unknown; headParam?: unknown; fallbackParam?: unknown } = {};
   const funds = await loadFundValuation(
     fakeRunner(
       [

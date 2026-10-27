@@ -55,7 +55,9 @@ class _Tables:
         #: Universe prefixes whose pointer ever named a run with purity rows; by default the
         #: rows there are TOPT's.
         self.theme_universes = (
-            set(theme_universes) if theme_universes is not None else ({"universe:topt-"} if self.theme_runs else set())
+            set(theme_universes)
+            if theme_universes is not None
+            else ({"universe:topt-us-"} if self.theme_runs else set())
         )
         self._rows: list = []
 
@@ -140,7 +142,7 @@ def test_every_surface_on_the_head_with_an_agreeing_report_is_green(monkeypatch)
     )
     verdicts = prove(tables, executed_at=NOW)
     assert all(v.ok for v in verdicts), [v.line for v in verdicts if not v.ok]
-    assert summary_lines(verdicts)[-1] == "report surface proof: 5/5 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
 
 
 def test_a_stale_head_on_an_unscheduled_universe_gives_a_green_proof(monkeypatch) -> None:
@@ -272,7 +274,7 @@ def test_production_2026_09_17_names_both_mismatches_and_what_the_theme_plane_ho
     )
     verdicts = prove(tables, executed_at=NOW)
     lines = summary_lines(verdicts)
-    assert lines[-1] == "report surface proof: 3/5 surfaces serve the governed head; 2 do not"
+    assert lines[-1] == "report surface proof: 4/6 surfaces serve the governed head; 2 do not"
     themes = next(v for v in verdicts if v.surface == "/research/themes")
     assert themes.state == "MISMATCH"
     assert "no segment partition is knowable at the head's cutoff" in themes.line
@@ -300,7 +302,7 @@ def test_a_mismatch_in_a_settling_universe_is_in_progress_and_named(monkeypatch)
     # A quiet universe's mismatch is not excused by another universe settling.
     assert by_surface["/research/themes"].state == "MISMATCH"
     assert summary_lines(verdicts)[-1] == (
-        "report surface proof: 3/5 surfaces serve the governed head; 1 in progress; 1 do not"
+        "report surface proof: 4/6 surfaces serve the governed head; 1 in progress; 1 do not"
     )
 
 
@@ -342,7 +344,7 @@ TOPT_CUTOFF = datetime(2026, 9, 16, 22, 15, tzinfo=UTC)
 QQQ_CUTOFF = datetime(2026, 9, 16, 23, 20, tzinfo=UTC)
 TOPT_HEAD = "capture-run:c2a75d9baef8" + "0" * 52
 QQQ_HEAD = "capture-run:a62da9660ff9" + "0" * 52
-BOTH_COVERED = {"universe:topt-", "universe:qqq-"}
+BOTH_COVERED = {"universe:topt-us-", "universe:qqq-us-"}
 SETTLING = "head_reports_pipeline run 1a2b3c4d is started"
 
 
@@ -381,7 +383,7 @@ def test_production_2026_09_17_themes_serve_the_qqq_head_whose_tick_cuts_off_las
         "MATCH /research/themes: serves capture-run:a62da9660ff9 vs head capture-run:a62da9660ff9"
         " — the universe-list:qqq head, the newest of a universe with theme rows"
     )
-    assert summary_lines(verdicts)[-1] == "report surface proof: 5/5 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
 
 
 def test_a_themes_page_serving_no_governed_head_is_still_a_mismatch(monkeypatch) -> None:
@@ -455,7 +457,7 @@ def test_a_universe_the_theme_lane_never_covered_is_not_expected_on_the_themes_p
     """No run QQQ's pointer ever named has purity rows (its segment backfill has landed
     nothing): the reader cannot select a QQQ run, so TOPT's head is the one it serves."""
     _production(monkeypatch)
-    tables = _production_tables(themes=TOPT_HEAD, theme_runs={TOPT_HEAD}, theme_universes={"universe:topt-"})
+    tables = _production_tables(themes=TOPT_HEAD, theme_runs={TOPT_HEAD}, theme_universes={"universe:topt-us-"})
     themes = _themes(prove(tables, executed_at=NOW))
     assert (themes.state, themes.universe, themes.expected_run) == ("MATCH", "topt", TOPT_HEAD)
 
@@ -469,12 +471,12 @@ def test_staging_with_only_a_topt_head_serves_the_topt_head_on_the_themes_page(m
         themes=TOPT_HEAD,
         coverage=[(TOPT_UNIVERSE, TOPT_HEAD, REPORT)],
         theme_runs={TOPT_HEAD, OLD},
-        theme_universes={"universe:topt-"},
+        theme_universes={"universe:topt-us-"},
     )
     verdicts = prove(tables, executed_at=NOW)
     themes = _themes(verdicts)
     assert (themes.state, themes.universe, themes.expected_run) == ("MATCH", "topt", TOPT_HEAD)
-    assert summary_lines(verdicts)[-1] == "report surface proof: 5/5 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
 
 
 # --- the settling window, against the real schema ---------------------------------------
@@ -611,12 +613,7 @@ def test_the_theme_lane_covers_a_universe_once_a_run_its_pointer_named_has_rows(
     none until its own rows land."""
     from data_engine.quality.surface_proof import themes_verdict
 
-    topt_universe, qqq_universe = "universe:topt-themes-910-test", "universe:qqq-themes-910-test"
-    monkeypatch.setattr(
-        surface_proof,
-        "UNIVERSE_PREFIXES",
-        {"universe-list:qqq": "universe:qqq-themes-910-", "topt": "universe:topt-themes-910-"},
-    )
+    topt_universe, qqq_universe = "universe:topt-us-themes-910-test", "universe:qqq-us-themes-910-test"
     topt_run, qqq_old, qqq_run = ("capture-run:" + digit * 64 for digit in "789")
     heads = {
         "topt": surface_proof.GovernedHead(topt_universe, topt_run, TOPT_CUTOFF),
@@ -760,12 +757,7 @@ def test_a_universe_whose_runs_hold_only_fill_rows_is_not_covered_by_the_theme_l
     """The lane covers a universe once a run its pointer named has theme rows. A fill is not one."""
     from data_engine.quality.surface_proof import themes_verdict
 
-    topt_universe, qqq_universe = "universe:topt-fill-1117-test", "universe:qqq-fill-1117-test"
-    monkeypatch.setattr(
-        surface_proof,
-        "UNIVERSE_PREFIXES",
-        {"universe-list:qqq": "universe:qqq-fill-1117-", "topt": "universe:topt-fill-1117-"},
-    )
+    topt_universe, qqq_universe = "universe:topt-us-fill-1117-test", "universe:qqq-us-fill-1117-test"
     topt_run, qqq_run = ("capture-run:" + digit * 64 for digit in "ab")
     heads = {
         "topt": surface_proof.GovernedHead(topt_universe, topt_run, TOPT_CUTOFF),

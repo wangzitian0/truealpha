@@ -23,7 +23,7 @@ from typing import Any
 import psycopg
 from truealpha_contracts import topt_read as topt_read_module
 from truealpha_contracts.topt_read import PostgresToptGppeRepository
-from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 RUN_ID = "capture-run:" + "b" * 64
 
@@ -136,7 +136,7 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
 
     fallback_call = next((s, p) for s, p in calls if "topt_capture_status" in s and "datahub_quality_report" in s)
     assert "universe_id like %s" in fallback_call[0]
-    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+    assert fallback_call[1] == (id_prefix_like(universe_with_role("strategy")),)
 
 
 def test_latest_withheld_when_served_head_is_unavailable(monkeypatch: Any) -> None:
@@ -190,7 +190,7 @@ def test_latest_fallback_returns_unavailable_when_only_canary_run_exists(monkeyp
         if "served_head" in sql:
             return []
         if "topt_capture_status" in sql and "datahub_quality_report" in sql:
-            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+            if params and params == (id_prefix_like(universe_with_role("strategy")),):
                 return []
             return [{"run_id": "capture-run:canary"}]
         raise AssertionError(f"unexpected query: {sql}")
@@ -204,7 +204,7 @@ def test_latest_fallback_returns_unavailable_when_only_canary_run_exists(monkeyp
     assert result.reason == "no accepted (quality-reported) production TOPT run"
     fallback_call = next((s, p) for s, p in calls if "topt_capture_status" in s and "datahub_quality_report" in s)
     assert "universe_id like %s" in fallback_call[0]
-    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+    assert fallback_call[1] == (id_prefix_like(universe_with_role("strategy")),)
 
 
 def test_requested_count_follows_the_runs_own_denominator(monkeypatch: Any) -> None:

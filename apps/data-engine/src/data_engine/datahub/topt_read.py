@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 
 class PostgresToptReadRepository:
@@ -46,7 +46,7 @@ class PostgresToptReadRepository:
               and universe_id like %s
             order by advanced_at desc limit 1
             """,
-            (f"{SERVED_UNIVERSE_PREFIX}%",),
+            (id_prefix_like(universe_with_role("strategy")),),
         ).fetchone()
         if row is None:  # fallback: no pointer advanced yet (#378)
             row = self._connection.execute(
@@ -58,7 +58,7 @@ class PostgresToptReadRepository:
                 and s.universe_id like %s
                 order by q.created_at desc, q.report_id desc limit 1
                 """,
-                (f"{SERVED_UNIVERSE_PREFIX}%",),
+                (id_prefix_like(universe_with_role("strategy")),),
             ).fetchone()
         return None if row is None else row[0]
 

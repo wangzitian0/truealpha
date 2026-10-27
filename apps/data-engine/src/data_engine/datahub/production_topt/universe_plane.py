@@ -17,7 +17,7 @@ image — adding an ETF meant writing code. It is now data end to end:
 4. the capture pipeline resolves its universe FROM the governed head
    (`resolve_universe_corpus`), never from a checked-in file.
 
-Adding an ETF is one `UniverseSource` entry (and later, one table row) — the
+Adding an ETF is one universe record in `environment_contract.v1.json` — the
 refresh job handles the rest. Membership changes over time by design: the
 weekly refresh publishes a new version only when the mapping actually changed.
 """
@@ -37,7 +37,9 @@ from typing import Any, TypedDict
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.universes import lane_name, record
 
 from data_engine import raw_store
 from data_engine.datahub.fetch_key import FetchKey
@@ -58,11 +60,14 @@ _BROWSER_HEADERS = {
 
 @dataclass(frozen=True)
 class UniverseSource:
-    """One ETF/index universe: where its constituents come from and what it is called."""
+    """One ETF/index universe: where its constituents come from and what it is called.
 
-    etf: str  # e.g. "qqq"
+    Built from the universe record (`truealpha_contracts.universes`); no field is stated here. The
+    head kind is `lane_name(etf)` and the universe id starts with `record(etf).id_prefix`.
+    """
+
+    etf: str  # the key of the universe record, e.g. "qqq"
     index_api: str  # the operator's constituents endpoint ("" for a static-member source)
-    universe_prefix: str  # e.g. "qqq-us" -> universe:qqq-us-<report_date>
     label: str
     # The one exchange that lists EVERY member, or None for a multi-exchange source. A source
     # declares it only when its definition entails it (the Nasdaq-100 lists Nasdaq names; the
@@ -78,45 +83,30 @@ class UniverseSource:
     # universes that are not a filing fund (the canary's static list has no N-PORT).
     nport_ticker: str | None = None
 
-    @property
-    def head_kind(self) -> str:
-        return f"universe-list:{self.etf}"
+
+def universe_sources() -> dict[str, UniverseSource]:
+    """The constituent plane of every universe record whose members an index API or a static list gives (#1522).
+
+    A frozen corpus (TOPT) has no plane. The canary is a hand-picked list of five issuers, one per real code
+    branch, all XNAS so the source-level MIC stays honest (#648): the post-deploy canary run drives the REAL
+    pipeline over them and asserts named expectations.
+    """
+    sources: dict[str, UniverseSource] = {}
+    for key, universe in load_environment_contract().universes.items():
+        membership = universe.membership
+        if membership.kind in ("index_api", "static"):
+            sources[key] = UniverseSource(
+                etf=key,
+                index_api=membership.url or "",
+                label=universe.label,
+                mic=membership.mic,
+                static_members=membership.members,
+                nport_ticker=membership.nport_ticker,
+            )
+    return sources
 
 
-UNIVERSE_SOURCES: dict[str, UniverseSource] = {
-    "qqq": UniverseSource(
-        etf="qqq",
-        index_api="https://api.nasdaq.com/api/quote/list-type/nasdaq100",
-        universe_prefix="qqq-us",
-        label="Nasdaq-100 (QQQ) constituents, from the index operator's API",
-        mic="xnas",
-        nport_ticker="QQQ",
-    ),
-    "sp500": UniverseSource(
-        etf="sp500",
-        index_api="https://api.nasdaq.com/api/quote/list-type/sp500",
-        universe_prefix="sp500-us",
-        label="S&P 500 constituents, from the index constituent plane",
-        mic=None,
-        nport_ticker="IVV",
-    ),
-    # #648: five hand-picked issuers, one per real code branch, all XNAS so the
-    # source-level MIC stays honest: AAPL (non-financial mega), GOOGL+GOOG (one
-    # dual-class issuer -> issuer_count < instrument_count), ASML (foreign IFRS
-    # filer -> the honest-unavailable path), HBAN (SIC 6021 -> FINANCIAL branch,
-    # pre-provision numerator), CINF (SIC 6331 -> INSURANCE branch). The
-    # post-deploy canary run drives the REAL pipeline over these six listings
-    # (five issuers) and asserts named expectations — deploy and verify become
-    # one fact.
-    "canary": UniverseSource(
-        etf="canary",
-        index_api="",
-        universe_prefix="canary-us",
-        label="Deploy-verification canary: five issuers spanning every operating branch",
-        mic="xnas",
-        static_members=("AAPL", "GOOGL", "GOOG", "ASML", "HBAN", "CINF"),
-    ),
-}
+UNIVERSE_SOURCES: dict[str, UniverseSource] = universe_sources()
 
 
 def _get(
@@ -475,7 +465,7 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
         raise LookupError(f"no listing exchange resolved for any constituent of {source.etf}")
     issuer_ids = {row[0] for row in instruments}
     return {
-        "universe_id": f"universe:{source.universe_prefix}-{report_date.isoformat()}",
+        "universe_id": f"{record(source.etf).id_prefix}{report_date.isoformat()}",
         "list_version_id": "",
         "list_label": source.label,
         "accession": None,
@@ -500,7 +490,7 @@ def current_head_mapping_sha(connection: Connection[Any], source: UniverseSource
         join staging.contract_objects object on object.contract_id = head.contract_id
         where head.kind = %s
         """,
-        (source.head_kind,),
+        (lane_name(source.etf),),
     ).fetchone()
     return None if row is None else str(row[0])
 
@@ -519,17 +509,17 @@ def publish_universe_list(
     connection.execute(
         "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
         "values (%s, %s, %s, %s) on conflict (contract_id) do nothing",
-        (contract_id, source.head_kind, content_sha256, Jsonb(denominator)),
+        (contract_id, lane_name(source.etf), content_sha256, Jsonb(denominator)),
     )
     sequence_row = connection.execute(
         "select coalesce(max(sequence), 0) + 1 from staging.accepted_rulesets where kind = %s",
-        (source.head_kind,),
+        (lane_name(source.etf),),
     ).fetchone()
     assert sequence_row is not None
     sequence = int(sequence_row[0])
     connection.execute(
         "insert into staging.accepted_rulesets (kind, contract_id, sequence, note) values (%s, %s, %s, %s)",
-        (source.head_kind, contract_id, sequence, note),
+        (lane_name(source.etf), contract_id, sequence, note),
     )
     return contract_id, sequence
 

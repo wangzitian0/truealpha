@@ -47,15 +47,6 @@ LANE_MODULES: tuple[str, ...] = (
 )
 
 
-def production_only_schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
-    """Return RUNNING when `app_env` is production (`production` / `prod`), else STOPPED."""
-    return (
-        dg.DefaultScheduleStatus.RUNNING
-        if app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
-    )
-
-
 def lane_definitions(app_env: str | None = None) -> dict[str, dg.Definitions]:
     """Import every registered lane and return its `defs`, keyed by module name."""
     definitions: dict[str, dg.Definitions] = {}

@@ -14,12 +14,12 @@ import {
   PEG_CONVENTION_LABELS,
   PEG_GROWTH_CONVENTIONS,
   projectPegByConvention,
-  RANKING_UNIVERSE_LABELS,
   RANKING_UNIVERSES,
   type PegGrowthConvention,
-  type RankingUniverse,
   valuationBasisLabel,
 } from "@/contracts/strategyRun";
+import { universeRecord } from "@/contracts/environmentContract.generated";
+import { universeWithRole } from "@/contracts/universes";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ function buildRankingsHref(params: {
   cursor?: string | null;
   cutoff?: string;
   convention?: PegGrowthConvention;
-  universe?: RankingUniverse;
+  universe?: string | null;
 }): string {
   const query = new URLSearchParams();
   if (params.cursor) query.set("cursor", params.cursor);
@@ -35,7 +35,7 @@ function buildRankingsHref(params: {
   if (params.convention && params.convention !== "historical_cagr") {
     query.set("convention", params.convention);
   }
-  if (params.universe && params.universe !== "topt") {
+  if (params.universe && params.universe !== universeWithRole("strategy")) {
     query.set("universe", params.universe);
   }
   const qs = query.toString();
@@ -52,10 +52,11 @@ export default async function RankingsPage({
   const params = await searchParams;
   const convention = normalizePegConvention(params.convention);
   const selectedUniverse = normalizeRankingUniverse(params.universe);
+  // loadRanking reads the raw value: a universe outside the record has no rows (#1522).
   const state = await loadRanking(principal.context, {
     cutoffAt: params.cutoff,
     cursor: params.cursor ?? null,
-    universe: selectedUniverse,
+    universe: params.universe,
   });
   const names = await loadEntityDisplayMap();
   // #1235: one run, one definition, one basis. Under definition 1.0.0 the gap divides P/GP.
@@ -133,6 +134,7 @@ export default async function RankingsPage({
                   universe: univ,
                 })}
                 data-universe-selector={univ}
+                title={universeRecord(univ).label}
                 aria-current={active ? "page" : undefined}
                 className={`rounded-md px-2.5 py-1 font-mono text-xs font-medium uppercase transition ${
                   active
@@ -140,7 +142,7 @@ export default async function RankingsPage({
                     : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200"
                 }`}
               >
-                {RANKING_UNIVERSE_LABELS[univ]}
+                {univ.toUpperCase()}
               </Link>
             );
           })}
@@ -153,12 +155,12 @@ export default async function RankingsPage({
             <p className="text-sm text-gray-500">
               Cutoff {state.data.cutoffAt} — {state.data.page.total} member(s) · Convention:{" "}
               <span className="font-mono text-gray-300">{convention}</span> · Universe:{" "}
-              <span className="font-mono uppercase text-gray-300">{selectedUniverse}</span>
+              <span className="font-mono uppercase text-gray-300">{state.data.universe}</span>
             </p>
             <CardExportButton
               cutoff={params.cutoff}
               convention={convention}
-              universe={selectedUniverse}
+              universe={state.data.universe}
             />
           </div>
           <div className="overflow-x-auto rounded-xl border border-border">

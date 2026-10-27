@@ -228,7 +228,7 @@ def test_refreshing_the_stalest_half_each_weekday_keeps_every_symbol_valid_at_ev
     cron = load_tool("scheduler_liveness").Cron
     start, end = datetime(2026, 10, 26, tzinfo=UTC), datetime(2027, 1, 9, tzinfo=UTC)
     runs = cron.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(start, end)
-    ticks = cron.parse(capture.QQQ_LIVE_CRON).fires_between(start, end)
+    ticks = cron.parse(capture.tick_cron("qqq", "production")).fires_between(start, end)
     symbols = [f"S{number:03d}" for number in range(targets)]
     per_run = qqq_prices.need_credits(targets) // qqq_prices.CREDITS_PER_SYMBOL
     stored: dict[str, date] = {}
@@ -273,7 +273,7 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
     week = (datetime(2026, 10, 12, tzinfo=UTC), datetime(2026, 10, 18, 23, 59, tzinfo=UTC))
     refreshes = cron.parse(market_data.MARKET_DATA_REFRESH_CRON).fires_between(*week)
     runs = cron.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(*week)
-    core = cron.parse(capture.live_topt_cron(environment))
+    core = cron.parse(capture.tick_cron("topt", environment))
     assert len(runs) == len(refreshes) == 5, "one run after each weekday refresh"
     for refreshed, run in zip(refreshes, runs, strict=True):
         assert run >= refreshed + refresh_takes, (
@@ -606,14 +606,14 @@ def test_the_job_and_its_weekday_schedule_are_deployed() -> None:
     ("app_env", "expected"),
     [
         ("production", dg.DefaultScheduleStatus.RUNNING),
-        ("staging", dg.DefaultScheduleStatus.RUNNING),
+        ("staging", dg.DefaultScheduleStatus.STOPPED),
         ("development", dg.DefaultScheduleStatus.STOPPED),
     ],
 )
-def test_the_schedule_runs_where_the_market_data_refresh_runs(
+def test_the_schedule_runs_where_the_contract_schedules_the_qqq_universe(
     monkeypatch: pytest.MonkeyPatch, app_env: str, expected: dg.DefaultScheduleStatus
 ) -> None:
-    """Staging runs the schedule too: its budget, not an environment case, keeps it from calling."""
+    """Staging runs TOPT only (#1416), so its QQQ prices wait: the status follows the contract, not an environment case."""
     monkeypatch.setattr(settings, "app_env", app_env)
     try:
         reloaded = importlib.reload(qqq_prices)

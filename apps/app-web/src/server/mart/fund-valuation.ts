@@ -13,14 +13,15 @@
  * function here, against this header — the drift #727 recorded.
  *
  * Head resolution mirrors topt-gppe-repository.ts / truealpha_contracts.topt_read
- * (pointer first, acceptance fallback), additionally scoped to the QQQ universe:
- * this surface prices QQQ's holdings, and the newest pointer across ALL
+ * (pointer first, acceptance fallback), additionally scoped to the universe with role
+ * `fund_consolidation` (QQQ today): this surface prices that fund's holdings, and the newest pointer across ALL
  * universes can belong to the canary. A fund->universe registry is the
  * multi-fund tranche's problem.
  */
 
 import { formatRatio } from "@/client/format";
 import type { ValuationBasis } from "@/contracts/strategyRun";
+import { idPrefixLikeOfRole } from "@/contracts/universes";
 import { withMartReadonly } from "./db";
 import type { MartClientLike } from "./topt-gppe-repository";
 
@@ -72,7 +73,7 @@ const QQQ_POINTER_HEAD_SQL = `
   select run_id, freshness, availability, staleness_reason
   from mart.served_head
   where factor_id = 'gross_profit_per_employee'
-    and universe_id like 'universe:qqq-us-%'
+    and universe_id like $1
   order by advanced_at desc limit 1
 `;
 
@@ -82,7 +83,7 @@ const QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL = `
   join mart.datahub_quality_report q on q.run_id = s.run_id
   where s.environment = (select environment from mart.environment_identity)
     and s.complete
-    and s.universe_id like 'universe:qqq-us-%'
+    and s.universe_id like $1
   order by q.created_at desc, q.report_id desc limit 1
 `;
 
@@ -178,7 +179,8 @@ export async function loadFundValuation(
   runWithClient: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> = withMartReadonly,
 ): Promise<FundValuation[]> {
   return runWithClient(async (client) => {
-    let head = await client.query(QQQ_POINTER_HEAD_SQL);
+    const fundUniverseLike = idPrefixLikeOfRole("fund_consolidation");
+    let head = await client.query(QQQ_POINTER_HEAD_SQL, [fundUniverseLike]);
     let rawRunId: unknown = null;
     if (head.rows.length > 0) {
       const row = head.rows[0];
@@ -188,7 +190,7 @@ export async function loadFundValuation(
         rawRunId = row.run_id;
       }
     } else {
-      head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL);
+      head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL, [fundUniverseLike]);
       rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
     }
     // Fail toward "no run" on a malformed head row: String(null) would forge

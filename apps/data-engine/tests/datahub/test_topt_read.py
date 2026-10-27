@@ -15,7 +15,7 @@ from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.topt_read import PostgresToptReadRepository
 from factors.production_topt import GppeV0Definition
-from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from production_topt.test_materialization import _CORPUS_OBJECTIVES, _seed_complete_production_run  # noqa: E402
@@ -160,7 +160,7 @@ def test_fallback_head_scopes_to_served_universe() -> None:
         if "current_pointer_head" in sql:
             return None
         if "topt_capture_status" in sql and "datahub_quality_report" in sql:
-            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+            if params and params == (id_prefix_like(universe_with_role("strategy")),):
                 return (run_id,)
             return None
         raise AssertionError(f"unexpected query: {sql}")
@@ -172,7 +172,7 @@ def test_fallback_head_scopes_to_served_universe() -> None:
     assert resolved == run_id
     fallback_call = next((s, p) for s, p in conn.calls if "topt_capture_status" in s)
     assert "s.universe_id like %s" in fallback_call[0]
-    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+    assert fallback_call[1] == (id_prefix_like(universe_with_role("strategy")),)
 
 
 def test_fallback_head_returns_none_when_only_canary_run_exists() -> None:
@@ -181,7 +181,7 @@ def test_fallback_head_returns_none_when_only_canary_run_exists() -> None:
             return None
         if "topt_capture_status" in sql and "datahub_quality_report" in sql:
             # Query filters by universe:topt-%, so canary run is excluded
-            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+            if params and params == (id_prefix_like(universe_with_role("strategy")),):
                 return None
             return ("capture-run:canary",)
         raise AssertionError(f"unexpected query: {sql}")
@@ -193,4 +193,4 @@ def test_fallback_head_returns_none_when_only_canary_run_exists() -> None:
     assert resolved is None
     fallback_call = next((s, p) for s, p in conn.calls if "topt_capture_status" in s)
     assert "s.universe_id like %s" in fallback_call[0]
-    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+    assert fallback_call[1] == (id_prefix_like(universe_with_role("strategy")),)

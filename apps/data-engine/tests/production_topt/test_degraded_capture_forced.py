@@ -610,7 +610,7 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
 def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(tick_database_url, monkeypatch) -> None:
     """#877's live defect, confirmed: a forced TOPT tick shares the scheduled tick's cutoff."""
     from data_engine.datahub.question_coverage import peg_cells
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     # Settled session vs. run clock, same as above (#530 item 1).
     day = date(2026, 3, 31)
@@ -645,7 +645,7 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
         reader.execute("set session_replication_role = replica")
         reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
         reader.execute("set session_replication_role = origin")
-        latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
+        latest = reader.execute(LATEST_RUN_SQL, latest_run_params(_STRATEGY)).fetchone()
         assert (latest[0], latest[3]) == (forced["strategy_run_id"], True)
 
         peg = peg_cells(reader, run_id=forced["capture_run_id"])
@@ -661,7 +661,7 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
 def test_a_degraded_forced_tick_advances_head_as_degraded(tick_database_url, monkeypatch) -> None:
     """Under weak gate policy, a degraded forced tick advances the head monotonically with degraded telemetry."""
     from data_engine.datahub.question_coverage import peg_cells
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     # Settled session vs. run clock, same as above (#530 item 1).
     day = date(2026, 3, 31)
@@ -690,7 +690,7 @@ def test_a_degraded_forced_tick_advances_head_as_degraded(tick_database_url, mon
         reader.execute("set session_replication_role = replica")
         reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
         reader.execute("set session_replication_role = origin")
-        latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
+        latest = reader.execute(LATEST_RUN_SQL, latest_run_params(_STRATEGY)).fetchone()
         assert (latest[0], latest[3]) == (degraded["strategy_run_id"], True)
         assert reader.execute("select strategy_run_id from mart.governed_strategy_run").fetchall() == [
             (degraded["strategy_run_id"],)

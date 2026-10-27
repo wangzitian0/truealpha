@@ -1,7 +1,7 @@
 /**
  * Universe provenance for the Operate world (#539 data-driven universes).
  *
- * Every governed universe head (kind 'universe-list:<etf>'), its version
+ * Every governed universe head (kind: the lane name of a universe record), its version
  * history, and the newest constituent snapshot WITH raw lineage — ticker rows
  * join back to the exact bytes the index operator answered (`raw.fetches`
  * sha256 + object URI), so "where did this universe come from" is a click,
@@ -10,6 +10,7 @@
  */
 
 import type { PoolClient } from "pg";
+import { laneNames, universeOfLane } from "@/contracts/universes";
 import { withOpsReader } from "./ops";
 
 export interface UniverseVersionRow {
@@ -47,7 +48,7 @@ const VERSIONS_SQL = `
          o.payload->>'instrument_mapping_sha256' as mapping_sha256
   from staging.accepted_rulesets r
   join staging.contract_objects o on o.contract_id = r.contract_id
-  where r.kind like 'universe-list:%'
+  where r.kind = any($1::text[])
   order by r.kind, r.sequence desc
 `;
 
@@ -63,7 +64,7 @@ const MEMBERS_SQL = `
 
 export async function loadUniverses(): Promise<UniverseOverview> {
   return withOpsReader(async (client: Pick<PoolClient, "query">) => {
-    const versions = await client.query(VERSIONS_SQL);
+    const versions = await client.query(VERSIONS_SQL, [laneNames()]);
     const history = versions.rows as UniverseVersionRow[];
     const heads: UniverseVersionRow[] = [];
     const seen = new Set<string>();
@@ -75,8 +76,8 @@ export async function loadUniverses(): Promise<UniverseOverview> {
     }
     const members: Record<string, UniverseMemberRow[]> = {};
     for (const head of heads) {
-      const etf = head.kind.replace("universe-list:", "");
-      const result = await client.query(MEMBERS_SQL, [etf]);
+      // `etf_symbol` holds the universe key; the head kind is the lane name of the record.
+      const result = await client.query(MEMBERS_SQL, [universeOfLane(head.kind)]);
       members[head.kind] = result.rows as UniverseMemberRow[];
     }
     return { heads, history, members };

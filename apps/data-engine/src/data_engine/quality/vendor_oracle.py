@@ -43,6 +43,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from psycopg import Connection
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 from data_engine.datahub.fetch_key import FetchKey
 
@@ -260,7 +261,7 @@ def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decima
         -- of the governed key.
         with head as (
             select target_run_id from mart.current_pointer_head
-            where universe_id like 'universe:topt-%'
+            where universe_id like %s
             order by sequence desc limit 1
         ),
         payloads as (
@@ -280,7 +281,8 @@ def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decima
           on financial.subject_id = identity.subject_id and financial.semantic_type = 'financial-fact'
         where identity.semantic_type = 'listing-identity'
         order by 1
-        """
+        """,
+        (id_prefix_like(universe_with_role("strategy")),),
     ).fetchall()
     return tuple((str(row[0]).upper(), row[1], row[2]) for row in rows)
 

@@ -9,8 +9,18 @@
 export interface EnvironmentTickRule {
   readonly scheduled: boolean;
   readonly cron: string;
-  readonly tick_type: "strategy" | "fund" | "index" | "sentinel";
   readonly estimated_listings: number;
+}
+
+export interface UniverseRecordContract {
+  readonly key: string;
+  readonly region: string;
+  readonly id_prefix: string;
+  readonly lane_name: string;
+  readonly label: string;
+  readonly roles: readonly ("strategy" | "fund_consolidation" | "sentinel")[];
+  /** Whether some environment schedules the universe, or runs it as a sentinel. */
+  readonly scheduled_somewhere: boolean;
 }
 
 export interface SentinelMemberContract {
@@ -20,8 +30,8 @@ export interface SentinelMemberContract {
   readonly trait: string;
 }
 
-export const ENVIRONMENT_CONTRACT_VERSION = "1.10.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "730f526f8da5d60207878c2c7ee78b6731d55253919a9192a966ede528f8372f" as const;
+export const ENVIRONMENT_CONTRACT_VERSION = "1.11.0" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "53754dbfff773619c06d138e55b3de8abf254e81925308fbe5263866dec16317" as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   {
@@ -92,13 +102,11 @@ export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, 
     "topt": {
       "scheduled": true,
       "cron": "45 22 * * *",
-      "tick_type": "strategy",
       "estimated_listings": 21
     },
     "canary": {
       "scheduled": true,
       "cron": "47 23 * * *",
-      "tick_type": "sentinel",
       "estimated_listings": 6
     }
   },
@@ -106,36 +114,108 @@ export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, 
     "topt": {
       "scheduled": true,
       "cron": "15 22 * * *",
-      "tick_type": "strategy",
       "estimated_listings": 21
     },
     "qqq": {
       "scheduled": true,
       "cron": "20 23 * * *",
-      "tick_type": "fund",
       "estimated_listings": 102
     },
     "sp500": {
       "scheduled": false,
       "cron": "15 1 * * *",
-      "tick_type": "index",
       "estimated_listings": 503
     },
     "canary": {
       "scheduled": true,
       "cron": "47 23 * * *",
-      "tick_type": "sentinel",
       "estimated_listings": 6
     }
   }
 } as const;
 
-export const KNOWN_TICK_KEYS: readonly string[] = ["canary", "qqq", "sp500", "topt"] as const;
+export const UNIVERSES: readonly UniverseRecordContract[] = [
+  {
+    "key": "topt",
+    "region": "us",
+    "id_prefix": "universe:topt-us-",
+    "lane_name": "topt",
+    "label": "TOPT: the frozen top-100 corpus",
+    "roles": [
+      "strategy"
+    ],
+    "scheduled_somewhere": true
+  },
+  {
+    "key": "qqq",
+    "region": "us",
+    "id_prefix": "universe:qqq-us-",
+    "lane_name": "universe-list:qqq",
+    "label": "Nasdaq-100 (QQQ) constituents, from the index operator's API",
+    "roles": [
+      "fund_consolidation"
+    ],
+    "scheduled_somewhere": true
+  },
+  {
+    "key": "sp500",
+    "region": "us",
+    "id_prefix": "universe:sp500-us-",
+    "lane_name": "universe-list:sp500",
+    "label": "S&P 500 constituents, from the index constituent plane",
+    "roles": [],
+    "scheduled_somewhere": false
+  },
+  {
+    "key": "canary",
+    "region": "us",
+    "id_prefix": "universe:canary-us-",
+    "lane_name": "universe-list:canary",
+    "label": "Deploy-verification canary: five issuers spanning every operating branch",
+    "roles": [
+      "sentinel"
+    ],
+    "scheduled_somewhere": true
+  }
+] as const;
+
+/** The record of the universe `key`. A key outside the record throws (#1522). */
+export function universeRecord(key: string): UniverseRecordContract {
+  const found = UNIVERSES.find((universe) => universe.key === key);
+  if (!found) {
+    throw new Error(`"${key}" is no universe of the environment contract`);
+  }
+  return found;
+}
+
+/** The key of the universe that governs `universeId`: the longest id prefix wins; the id is not split. Null when none matches. */
+export function findUniverseOfId(universeId: string): string | null {
+  const matches = UNIVERSES.filter((universe) => universeId.startsWith(universe.id_prefix));
+  if (matches.length === 0) {
+    return null;
+  }
+  return matches.reduce((best, universe) => (universe.id_prefix.length > best.id_prefix.length ? universe : best)).key;
+}
+
+/** The key of the universe that governs `universeId`. An id that starts with no id prefix throws. */
+export function universeOfId(universeId: string): string {
+  const key = findUniverseOfId(universeId);
+  if (key === null) {
+    throw new Error(`"${universeId}" starts with no universe id prefix of the environment contract`);
+  }
+  return key;
+}
+
+/** The SQL `like` pattern of every universe id of the universe `key`. */
+export function idPrefixLike(key: string): string {
+  return `${universeRecord(key).id_prefix}%`;
+}
 
 /**
- * Generated from environment_contract.v1.json (#1416 E1/E2).
- * Fails closed (returns true) when environment is unrecognised or universeId maps to no tick key of the contract.
- * A tick key that another environment declares and this one does not is not scheduled here.
+ * Generated from environment_contract.v1.json (#1416 E1/E2, #1522).
+ * Fails closed (returns true) when environment is unrecognised or universeId starts with no id prefix of the
+ * records (the Python twin and the SQL function answer the same way until step 2 of #1522 retires the function).
+ * A universe that another environment ticks and this one does not is not scheduled here.
  */
 export function isHeadScheduledFromContract(
   universeId: string,
@@ -150,11 +230,10 @@ export function isHeadScheduledFromContract(
   if (!envTicks) {
     return true;
   }
-  const stripped = universeId.startsWith("universe:") ? universeId.slice("universe:".length) : universeId;
-  const key = stripped.split("-", 1)[0] || "";
-  const rule = envTicks[key];
-  if (!rule) {
-    return !KNOWN_TICK_KEYS.includes(key);
+  const key = findUniverseOfId(universeId);
+  if (key === null) {
+    return true;
   }
-  return rule.scheduled;
+  const rule = envTicks[key];
+  return rule ? rule.scheduled : false;
 }

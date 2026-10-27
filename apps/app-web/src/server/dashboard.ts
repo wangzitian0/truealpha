@@ -18,7 +18,6 @@ import {
   matchesRankingUniverse,
   normalizeRankingUniverse,
   type AccessContext,
-  type RankingUniverse,
 } from "@/contracts/strategyRun";
 import {
   StrategyRunReadAdapter,
@@ -46,7 +45,8 @@ export interface OverviewData {
 
 export interface RankingData {
   cutoffAt: string;
-  universe: RankingUniverse;
+  /** The key of the universe the rows belong to. */
+  universe: string;
   rows: readonly RankingRow[];
   page: PageInfo;
 }
@@ -101,15 +101,17 @@ export async function loadOverview(
 
 export async function loadRanking(
   context: AccessContext | null,
-  params: { cutoffAt?: string; cursor?: string | null; limit?: number; universe?: RankingUniverse | string } = {},
+  params: { cutoffAt?: string; cursor?: string | null; limit?: number; universe?: string } = {},
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<RankingData>> {
   return guard<RankingData>(context, async (mart, ctx) => {
+    // A universe outside the record has no rows. It never falls back to another universe (#1522).
+    const universe = normalizeRankingUniverse(params.universe);
+    if (universe === null) return { kind: "empty" };
     const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
     if (cutoffAt === null) return { kind: "empty" };
-    const universe = normalizeRankingUniverse(params.universe);
     const allRows = await mart.ranking(ctx, cutoffAt);
-    const rows = allRows.filter((row) => matchesRankingUniverse(row.provenance.universeVersion, universe));
+    const rows = allRows.filter((row) => matchesRankingUniverse(row.provenance.universeId, universe));
     if (rows.length === 0) return { kind: "empty" };
     const page = paginate(rows, params.cursor ?? null, params.limit);
     return { kind: "ready", data: { cutoffAt, universe, rows: page.items, page: page.info } };

@@ -9,6 +9,7 @@
 
 import type { AccessContext } from "../src/contracts/strategyRun";
 import type { ToptGppeReport } from "../src/contracts/toptGppe";
+import { idPrefixLikeOfRole } from "../src/contracts/universes";
 import { loadQualityFunnel } from "../src/server/admin/funnel";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -153,8 +154,9 @@ const TEST_CONTEXT: AccessContext = {
     ptrQuery !== undefined &&
       ptrQuery.sql.includes("environment, universe_id, age_hours as age") &&
       ptrQuery.sql.includes("coalesce(run_id, head_run_id) = $1") &&
-      ptrQuery.sql.includes("universe_id like 'universe:topt-%'") &&
-      ptrQuery.params?.[0] === runId,
+      ptrQuery.sql.includes("universe_id like $2") &&
+      ptrQuery.params?.[0] === runId &&
+      ptrQuery.params?.[1] === idPrefixLikeOfRole("strategy"),
     "L5 pointer query scopes to the governed TOPT run/universe instead of picking canary-topt3 alphabetically (#1363)",
   );
 
@@ -208,7 +210,7 @@ const TEST_CONTEXT: AccessContext = {
   assert(isHeadScheduled("universe:topt-us-2026-03-31", "staging") === true, "TOPT is scheduled in staging");
   assert(
     isHeadScheduled("universe:nasdaq100-us-2026-09-30", "staging") === true,
-    "a universe key that the contract does not declare fails closed (scheduled)",
+    "an id that starts with no id prefix of the record fails closed, as the SQL function does until step 2 of #1522",
   );
   assert(
     resolveHeadFreshness("stale", "universe:sp500-us-2026-09-30", "production") === "manual",

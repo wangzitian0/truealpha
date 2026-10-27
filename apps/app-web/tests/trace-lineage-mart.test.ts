@@ -31,7 +31,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Client, type PoolClient } from "pg";
 
+import { universeRecord } from "../src/contracts/environmentContract.generated";
 import type { AccessContext } from "../src/contracts/strategyRun";
+import { universeWithRole } from "../src/contracts/universes";
 import { GovernedRunNotice } from "../src/components/trace-inputs-table";
 import { loadTrace } from "../src/server/dashboard";
 import { __setTestClient } from "../src/server/mart/db";
@@ -235,7 +237,7 @@ if (admin !== null) {
             target_run_id, sequence, previous_run_id, advanced_at)
          values ($1, $2, (select environment from mart.environment_identity), $3, 'v1',
                  'gross_profit_per_employee', $4, 0, null, now())`,
-        [`current-pointer:${pointerSha}`, pointerSha, `universe:topt-trace-${hex(4)}`, boundCapture],
+        [`current-pointer:${pointerSha}`, pointerSha, `${universeRecord(universeWithRole("strategy")).id_prefix}trace-${hex(4)}`, boundCapture],
       );
       const head = await admin.query("select run_id from mart.served_head where run_id = $1", [boundCapture]);
       assert(head.rows.length === 1, "the seed must give mart.served_head a head for the bound capture run");

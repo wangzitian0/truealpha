@@ -1,13 +1,14 @@
 """The universes that an environment runs, read from the environment contract (#1410, #1416).
 
 `environment_contract.v1.json` lists the universes of each environment and the status of each:
-``scheduled`` or ``stopped``. This module turns that list into the names that the lanes use: ``topt``
-and ``universe-list:qqq``. No lane keeps a universe list of its own.
+``scheduled`` or ``stopped``. This module turns that list into the lane names of the universe records
+(`truealpha_contracts.universes`): ``topt`` and ``universe-list:qqq``. No lane keeps a universe list of its own.
 """
 
 from __future__ import annotations
 
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
 
@@ -22,15 +23,10 @@ def rule_environment(app_env: str | None = None) -> str:
     return environment if environment in contract.environments else UNRECOGNISED_ENVIRONMENT_RULE
 
 
-def universe_name(key: str) -> str:
-    """The name that the lanes give a universe key: ``topt`` stays, any other key is ``universe-list:<key>``."""
-    return key if key == "topt" else f"universe-list:{key}"
-
-
 def scheduled_universe_names(app_env: str | None = None) -> tuple[str, ...]:
     """The universes that ``app_env`` runs on a schedule, in contract order."""
     scheduled = load_environment_contract().scheduled_universes(rule_environment(app_env))
-    return tuple(universe_name(key) for key in scheduled)
+    return tuple(lane_name(key) for key in scheduled)
 
 
 def any_environment_universe_names() -> tuple[str, ...]:
@@ -43,4 +39,4 @@ def any_environment_universe_names() -> tuple[str, ...]:
     keys: list[str] = []
     for environment in contract.environments:
         keys.extend(key for key in contract.scheduled_universes(environment) if key not in keys)
-    return tuple(universe_name(key) for key in keys)
+    return tuple(lane_name(key) for key in keys)

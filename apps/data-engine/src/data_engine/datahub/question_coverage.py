@@ -27,10 +27,8 @@ from truealpha_contracts.question_requirements import (
     QuestionRequirement,
     QuestionScope,
 )
+from truealpha_contracts.universes import key_of_lane, record
 
-#: The backfill lane names universes by their list; the governed pointer names them by
-#: `universe:<list>-<region>-<partition>`. The prefix picks the newest head for the list.
-UNIVERSE_PREFIXES: Mapping[str, str] = {"universe-list:qqq": "universe:qqq-", "topt": "universe:topt-"}
 GOVERNING_FACTOR = "gross_profit_per_employee"
 #: A column that exists but whose row carries no reason yet (#747 scope 3 pending).
 UNRECORDED_REASON = "unrecorded_reason"
@@ -57,6 +55,18 @@ class GovernedHead:
     universe_id: str
     run_id: str
     cutoff: datetime
+
+
+#: What every lane records when a universe of the record has no governed head: a pending verdict with this summary.
+NO_HEAD_SUMMARY = "no governed head"
+
+
+@dataclass(frozen=True)
+class NoHead:
+    """The answer for a known universe whose pointer has not advanced yet. It is no error."""
+
+    key: str
+    summary: str = NO_HEAD_SUMMARY
 
 
 def declared_environment(connection: Connection[Any]) -> str:
@@ -113,6 +123,15 @@ def governed_head(connection: Connection[Any], *, universe_prefix: str) -> Gover
     if row is None:
         return None
     return GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
+
+
+def governed_head_of(connection: Connection[Any], key: str) -> GovernedHead | NoHead:
+    """The governed head of the universe ``key``, or `NoHead` when its pointer has not advanced.
+
+    A key outside the record raises `UnknownUniverse`: there is no default universe.
+    """
+    head = governed_head(connection, universe_prefix=record(key).id_prefix)
+    return NoHead(key) if head is None else head
 
 
 def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
@@ -356,9 +375,9 @@ def compile_report(
     executed_at: datetime,
 ) -> dict[str, Any] | None:
     """The report for one lane universe, or None when it has no governed head yet."""
-    prefix = UNIVERSE_PREFIXES.get(universe, universe)
-    head = governed_head(connection, universe_prefix=prefix)
-    if head is None:
+    key = key_of_lane(universe)
+    head = governed_head_of(connection, key)
+    if isinstance(head, NoHead):
         return None
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
@@ -373,7 +392,7 @@ def compile_report(
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
-        if prefix.startswith("universe:topt-")
+        if "strategy" in record(key).roles
         else (),
         "mart.issuer_supply_chain_exposure.exposure_score": supply_chain_cells(connection, head.run_id),
         "mart.issuer_analyst_ratings.consensus_rating": analyst_rating_cells(connection, head.run_id),

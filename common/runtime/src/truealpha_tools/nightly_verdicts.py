@@ -21,6 +21,8 @@ these rules for each environment and shows the result; it opens no issue (ADR A8
 
 Which checks are expected is declared once, in `tools/nightly_verdicts.json`, and
 `common/runtime/tests/test_nightly_verdicts.py` holds that set equal to what the lanes record.
+A per-universe check (`per_universe` in that file) names no universe: the tool expands it over the lane
+names of the universes that some environment of the release's contract schedules (#1522).
 The set is read AS THE DEPLOYED RELEASE DECLARED IT (`git show <release>:tools/...`): a check
 added on main is not demanded of a production release that lags by design and does not run
 it yet, and a release that predates the file bounds nothing. When the release cannot be
@@ -29,8 +31,7 @@ resolved here, main's set is used — a false red beats a silent miss.
 A per-universe check (`theme_purity@universe-list:qqq`) is expected only in an environment whose
 contract schedules that universe. The contract is read AS THE SAME RELEASE DECLARED IT
 (`environment_contract.v1.json`): staging runs TOPT only, so it is not asked for a QQQ verdict
-(owner decision of 2026-10-21). A release whose contract predates the universe list bounds every
-check, as before.
+(owner decision of 2026-10-21).
 
 Exit codes:
   0 - every expected check's newest verdict is green and within twice its cadence, or the
@@ -66,6 +67,15 @@ FirstDeclared = Callable[[str, str], datetime | None]
 DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?status=success&per_page=100"
 
 EXPECTATIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "nightly_verdicts.json"
+CONTRACT_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "common"
+    / "contracts"
+    / "src"
+    / "truealpha_contracts"
+    / "data"
+    / "environment_contract.v1.json"
+)
 #: The same file as a release's tree names it.
 RELEASE_EXPECTATIONS_PATH = "tools/nightly_verdicts.json"
 #: The environment contract as a release's tree names it. It lists the universes of each environment.
@@ -111,22 +121,22 @@ class HealthReport:
     governed_pointers: object = None
 
 
-def parse_expectations(text: str) -> dict[str, Expectation]:
+def parse_expectations(text: str, lanes: Sequence[str] = ()) -> dict[str, Expectation]:
+    """The checks of an expectations file. Each ``per_universe`` check becomes one check per lane name in ``lanes``."""
     raw = json.loads(text)
+    entries = {name: entry for name, entry in raw["checks"].items()}
+    entries.update({f"{check}@{lane}": entry for check, entry in raw.get("per_universe", {}).items() for lane in lanes})
     return {
         name: Expectation(name, float(entry["cadence_hours"]), str(entry.get("job", "")))
-        for name, entry in raw["checks"].items()
+        for name, entry in entries.items()
     }
 
 
-def load_expectations(path: Path = EXPECTATIONS_PATH) -> dict[str, Expectation]:
-    return parse_expectations(path.read_text(encoding="utf-8"))
-
-
-def universe_key_of(check: str) -> str | None:
-    """The universe key of a per-universe check: ``theme_purity@universe-list:qqq`` gives ``qqq``."""
-    _, at, universe = check.partition("@")
-    return universe.removeprefix("universe-list:") if at else None
+def load_expectations(path: Path = EXPECTATIONS_PATH, contract_path: Path = CONTRACT_PATH) -> dict[str, Expectation]:
+    """The expected checks of this checkout, per-universe checks expanded over its contract."""
+    return parse_expectations(
+        path.read_text(encoding="utf-8"), scheduled_lanes(contract_path.read_text(encoding="utf-8"))
+    )
 
 
 def _universe_entries(spec: object) -> list[dict[str, str]]:
@@ -143,34 +153,44 @@ def _universe_entries(spec: object) -> list[dict[str, str]]:
     return entries  # type: ignore[return-value]
 
 
-def scheduled_universes(contract_text: str, environment: str) -> tuple[frozenset[str], frozenset[str]] | None:
-    """(the universe keys that ``environment`` schedules, every universe key of the contract).
+def _lane_names(contract: dict) -> dict[str, str]:
+    """key -> lane name, for every universe record of the contract."""
+    records = contract.get("universes")
+    if not isinstance(records, dict) or not all(
+        isinstance(record, dict) and isinstance(record.get("lane_name"), str) for record in records.values()
+    ):
+        raise VerdictCheckFailure("the environment contract holds no universe records this tool can read")
+    return {key: record["lane_name"] for key, record in records.items()}
 
-    None when the contract predates the universe list or does not name ``environment``: nothing is
-    dropped then. Raises ``VerdictCheckFailure`` for a list in a shape this tool cannot read: the caller then
-    bounds every check.
+
+def scheduled_lanes(contract_text: str, environment: str | None = None) -> list[str]:
+    """The lane names of the universes that ``environment`` schedules, or, without one, that some environment schedules.
+
+    Raises ``VerdictCheckFailure`` for a contract without universe records or a list in a shape this tool
+    cannot read; the caller then fails, because a check it cannot expand is a check it would miss.
     """
-    environments = json.loads(contract_text).get("environments", {})
-    name = "production" if environment.strip().lower() == "prod" else environment.strip().lower()
-    spec = environments.get(name)
-    if not isinstance(spec, dict) or "universes" not in spec:
-        return None
-    known = frozenset(entry["key"] for other in environments.values() for entry in _universe_entries(other))
-    scheduled = frozenset(entry["key"] for entry in _universe_entries(spec) if entry["status"] == "scheduled")
-    return scheduled, known
+    contract = json.loads(contract_text)
+    lanes = _lane_names(contract)
+    environments = contract.get("environments", {})
+    if environment is None:
+        specs = list(environments.values())
+    else:
+        name = "production" if environment.strip().lower() == "prod" else environment.strip().lower()
+        specs = [environments[name]] if name in environments else []
+    scheduled: list[str] = []
+    for spec in specs:
+        for entry in _universe_entries(spec):
+            if entry["status"] == "scheduled" and lanes[entry["key"]] not in scheduled:
+                scheduled.append(lanes[entry["key"]])
+    return scheduled
 
 
-def expected_in(
-    expectations: dict[str, Expectation], scheduled: frozenset[str], known: frozenset[str]
-) -> dict[str, Expectation]:
-    """``expectations`` without the per-universe checks of a universe that the environment does not schedule.
-
-    A universe that the contract does not list at all keeps its checks: a false red beats a silent miss.
-    """
+def expected_in(expectations: dict[str, Expectation], scheduled: Sequence[str]) -> dict[str, Expectation]:
+    """``expectations`` without the per-universe checks of a universe that the environment does not schedule."""
     return {
         name: expectation
         for name, expectation in expectations.items()
-        if (key := universe_key_of(name)) is None or key not in known or key in scheduled
+        if "@" not in name or name.partition("@")[2] in scheduled
     }
 
 
@@ -276,8 +296,10 @@ def expectations_for(
 ) -> tuple[dict[str, Expectation] | None, str]:
     """(what the deployed release records in ``environment``, where that answer came from).
 
-    With an ``environment`` and a ``contract_reader``, the per-universe checks of a universe that the
-    release's contract does not schedule in that environment are dropped.
+    The per-universe checks of the release expand over the universes that its contract schedules in some
+    environment. With an ``environment``, the checks of a universe that the contract does not schedule in
+    that environment are dropped. A release whose contract holds no universe records declares its
+    per-universe checks by name, and nothing is dropped.
     """
     if release is None:
         return load_expectations(), "the release identity is unreadable, so main's set is bounded"
@@ -287,23 +309,22 @@ def expectations_for(
         return load_expectations(), f"{exc}; main's set is bounded"
     if text is None:
         return None, f"{release} predates {RELEASE_EXPECTATIONS_PATH}"
-    expectations, source = parse_expectations(text), f"as {release} declares them"
-    if not environment or contract_reader is None:
-        return expectations, source
+    source = f"as {release} declares them"
+    contract_text = (contract_reader or git_release_reader(path=RELEASE_CONTRACT_PATH))(release)
     try:
-        contract_text = contract_reader(release)
-        universes = scheduled_universes(contract_text, environment) if contract_text is not None else None
-    except (VerdictCheckFailure, json.JSONDecodeError, AttributeError, TypeError) as exc:
-        return (
-            expectations,
-            f"{source}; the contract of {release} could not be read ({exc}), so every universe is bounded",
-        )
-    if universes is None:
+        lanes = scheduled_lanes(contract_text) if contract_text is not None else None
+    except (VerdictCheckFailure, json.JSONDecodeError, AttributeError, TypeError):
+        lanes = None
+    if lanes is None and "per_universe" in json.loads(text):
+        raise VerdictCheckFailure(f"the contract of {release} holds no universe records to expand its checks over")
+    expectations = parse_expectations(text, lanes or [])
+    if not environment or lanes is None or contract_text is None:
         return expectations, source
-    kept = expected_in(expectations, *universes)
+    scheduled = scheduled_lanes(contract_text, environment)
+    kept = expected_in(expectations, scheduled)
     if len(kept) == len(expectations):
         return kept, source
-    return kept, f"{source}; the universes {environment} schedules: {', '.join(sorted(universes[0])) or 'none'}"
+    return kept, f"{source}; the universes {environment} schedules: {', '.join(sorted(scheduled)) or 'none'}"
 
 
 def _gh_api(path: str) -> str:
@@ -475,9 +496,13 @@ def check_nightly_verdicts(
     if report.verdicts is None:
         print(f"{name} serves a release that predates nightly_verdicts on /api/health; nothing to bound yet")
         return 0
-    expectations, source = expectations_for(
-        report.release, reader, environment=environment, contract_reader=contract_reader
-    )
+    try:
+        expectations, source = expectations_for(
+            report.release, reader, environment=environment, contract_reader=contract_reader
+        )
+    except VerdictCheckFailure as exc:
+        print(f"nightly verdict check failed: {exc}", file=sys.stderr)
+        return 1
     if expectations is None:
         print(f"{name}: the data engine release {source}; nothing to bound yet")
         return 0

@@ -1000,9 +1000,11 @@ def test_the_confidence_job_is_scheduled_after_the_invariants_and_runs_per_unive
         assert request.run_config["ops"]["run_confidence_report"]["config"]["executed_at"] == tick.isoformat()
 
 
-def test_default_sample_subjects_are_five_qqq_names_and_five_topt_issuers() -> None:
-    assert len(cr.DEFAULT_SAMPLE_SUBJECTS["universe-list:qqq"]) == 5
-    assert len(cr.DEFAULT_SAMPLE_SUBJECTS["topt"]) == 5
+def test_the_report_samples_are_five_qqq_names_and_five_topt_issuers() -> None:
+    from truealpha_contracts.universes import record
+
+    assert len(record("qqq").report_sample) == 5
+    assert len(record("topt").report_sample) == 5
 
 
 # -- persistence (real schema; skips without a local Postgres) --------------------------------------

@@ -203,7 +203,7 @@ def test_the_schedule_runs_before_every_consumer_of_the_night() -> None:
     assert macro_data.MACRO_DATA_REFRESH_CRON == f"{minute} {hour} * * *"
     from data_engine.lanes import backtest, capture, market_data
 
-    consumers = [market_data.MARKET_DATA_REFRESH_CRON, backtest.BACKTEST_CRON, capture.live_topt_cron("production")]
+    consumers = [market_data.MARKET_DATA_REFRESH_CRON, backtest.BACKTEST_CRON, capture.tick_cron("topt", "production")]
     for cron in consumers:
         consumer_minute, consumer_hour = (int(part) for part in cron.split()[:2])
         assert (hour, minute) < (consumer_hour, consumer_minute), cron

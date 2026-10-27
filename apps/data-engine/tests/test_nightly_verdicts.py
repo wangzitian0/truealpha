@@ -299,7 +299,7 @@ def test_the_confidence_report_records_a_verdict_for_each_universe_the_environme
         config = quality.ConfidenceReportConfig(executed_at="2026-09-16T00:45:00+00:00", universe=universe)
         quality.run_confidence_report(dg.build_op_context(), config)
     assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
-        (f"datahub_confidence_report@{universe}", True, "no governed head; no report") for universe in universes
+        (f"datahub_confidence_report@{universe}", None, "no governed head") for universe in universes
     ]
     assert all(row["ran_at"] == datetime.fromisoformat("2026-09-16T00:45:00+00:00") for row in written)
 
@@ -493,15 +493,6 @@ def test_the_runs_that_hold_a_universe_are_its_ticks_and_its_report_writers() ->
         {"ops": {"run_standard_backfill": {"config": {"executed_at": TICK}}}},
     )
     assert list(quality.runs_in_flight(instance)) == ["universe-list:qqq"]
-
-
-def test_every_universe_the_proof_judges_has_a_tick_it_waits_for() -> None:
-    """A universe whose tick the wait cannot see would be judged mid-commit again."""
-    from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
-    from data_engine.lanes.capture import TICKS
-
-    watched = {tick.universe_head_kind or "topt" for tick in TICKS}
-    assert set(UNIVERSE_PREFIXES) <= watched
 
 
 # --- the standards lane's daily head reports -------------------------------------------

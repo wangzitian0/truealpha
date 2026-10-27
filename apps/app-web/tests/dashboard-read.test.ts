@@ -27,6 +27,9 @@ import {
 import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboard";
 import { decisionAvailability, StrategyRunReadAdapter, type StrategyRunRepositoryLike } from "../src/server/mart/research-read";
 import { paginate } from "../src/server/mart/pagination";
+import type { DecisionProvenance } from "../src/server/mart/strategy-run-repository";
+import { universeRecord } from "../src/contracts/environmentContract.generated";
+import { universeWithRole } from "../src/contracts/universes";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -59,7 +62,28 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
  * specific values — the adapter's own default is mart-backed (#370). */
 function fixtureAdapter(): StrategyRunReadAdapter {
   return new StrategyRunReadAdapter({
-    getLatest: (strategyId, context) => new FixtureStrategyRunRepository().getLatest(strategyId, context),
+    getLatest: async (strategyId, context) => {
+      const report = await new FixtureStrategyRunRepository().getLatest(strategyId, context);
+      if (!("decisions" in report)) return report;
+      // The fixture joins no core results, so each decision names its universe here. A row without a
+      // universe id belongs to no ranking universe (#1522).
+      const provenance = new Map<string, DecisionProvenance>(
+        report.decisions.map((decision) => [
+          decision.issuer_id,
+          {
+            operating_period_end: null,
+            revenue_period_end: null,
+            shares_period_end: null,
+            universe_id: `${universeRecord(universeWithRole("strategy")).id_prefix}2026-06-30`,
+            universe_version: null,
+            universe_sha256: null,
+            gppe_definition_sha256: null,
+            tier_definition_sha256: null,
+          },
+        ]),
+      );
+      return { ...report, provenance };
+    },
   }, EMPTY_MART);
 }
 

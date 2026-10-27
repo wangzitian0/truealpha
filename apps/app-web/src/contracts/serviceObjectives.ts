@@ -38,23 +38,22 @@ export const UTC_DAY_START_SQL =
   "(date_trunc('day', now() at time zone 'utc') at time zone 'utc')";
 
 /**
- * #1362: Canonical SQL predicate excluding synthetic canary universes from
- * multi-vendor corroboration and plausibility checks.
+ * #1362 / #1522: Canonical SQL predicate excluding the sentinel universes (the canary) from
+ * multi-vendor corroboration and plausibility checks. The query binds
+ * `idPrefixLikesOfRole("sentinel")` as `$1`.
  */
-export const NON_CANARY_UNIVERSE_WHERE =
-  "s.universe_id not like 'universe:canary%' and s.universe_id not like 'canary%'";
+export const NON_CANARY_UNIVERSE_WHERE = "s.universe_id not like all ($1::text[])";
 
 /**
- * #1362: Synthetic canary universes validate pipeline liveness and do not run multi-vendor
- * price corroboration (matching NON_CANARY_UNIVERSE_WHERE).
+ * #1362 / #1522: A sentinel universe (the canary) validates pipeline liveness and runs no multi-vendor
+ * price corroboration (matching NON_CANARY_UNIVERSE_WHERE). An id outside the record throws.
  */
 export function isCanaryUniverse(universeId: string): boolean {
-  return (
-    universeId.startsWith("canary") || universeId.startsWith("universe:canary")
-  );
+  return universeIdHasRole(universeId, "sentinel");
 }
 
 import { isHeadScheduledFromContract } from "./environmentContract.generated";
+import { universeIdHasRole } from "./universes";
 
 /**
  * #1318 / #1359 / #1362 / #1416: Generated from `environment_contract.v1.json` via

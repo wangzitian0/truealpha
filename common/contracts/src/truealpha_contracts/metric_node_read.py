@@ -1,7 +1,7 @@
 """MCP reader of `mart.metric_node_values` (#1413 F4).
 
-Reads any metric-forest node by `node_key` at the governed head (`mart.served_head` where
-`universe_id like 'universe:topt-%'`, falling back to the acceptance-gated TOPT run when
+Reads any metric-forest node by `node_key` at the governed head (`mart.served_head` whose
+`universe_id` starts with the id prefix of the strategy universe record, falling back to the acceptance-gated TOPT run when
 no pointer has been advanced yet). The reader derives `confidence_band` from the stored
 `confidence` with `confidence_band` (#1517 A2); it never reads the stored column.
 """
@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from truealpha_contracts.confidence_bands import confidence_band
-from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, ValidationError)
 
@@ -83,7 +83,7 @@ class PostgresMetricNodeValueRepository:
                       and universe_id like %s
                     order by advanced_at desc limit 1
                     """,
-                    (f"{SERVED_UNIVERSE_PREFIX}%",),
+                    (id_prefix_like(universe_with_role("strategy")),),
                 ).fetchone()
                 if head is not None and (head["availability"] == "unavailable" or head["run_id"] is None):
                     reason = head["staleness_reason"] or "older_than_30d"
@@ -99,7 +99,7 @@ class PostgresMetricNodeValueRepository:
                           and s.universe_id like %s
                         order by q.created_at desc, q.report_id desc limit 1
                         """,
-                        (f"{SERVED_UNIVERSE_PREFIX}%",),
+                        (id_prefix_like(universe_with_role("strategy")),),
                     ).fetchone()
                 if head is None or head["run_id"] is None:
                     return MetricNodeValueUnavailable(

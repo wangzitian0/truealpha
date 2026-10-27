@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from collections.abc import Collection, Mapping
 from contextlib import contextmanager
@@ -40,6 +41,9 @@ from factors.base.analyst_track_record import (
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from variant_contract import serve_variant, variant_text  # noqa: E402
+
 
 def _issuer_id(name: str) -> str:
     """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
@@ -64,6 +68,14 @@ def _isolated_moomoo_ledger(idle_moomoo_gate, monkeypatch):
     # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
     # over 25 tickers would run for a minute; the pacing is not what these tests assert.
     monkeypatch.setattr(mm, "throttle", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _universe_of_this_run():
+    """The verdict rows of one run need a lane of their own: the table is append-only and shared. A universe
+    record of that lane, scheduled in production, makes the lane a universe of the contract."""
+    with serve_variant(variant_text(key="t771", lane=UNIQUE_UNIVERSE, id_prefix="universe:t771-us-")):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -972,7 +984,7 @@ def test_the_universe_run_with_an_open_error_fails_every_ticker_like_a_total_fet
 # these names only, so rows that a development database holds from earlier work cannot change a result.
 _TOKEN = uuid.uuid4().hex
 HEAD_RUN = "capture-run:" + _TOKEN * 2
-HEAD_UNIVERSE_ID = f"universe:t771-{_TOKEN[:12]}"
+HEAD_UNIVERSE_ID = f"universe:t771-us-{_TOKEN[:12]}"
 UNIQUE_UNIVERSE = f"universe-list:t771-{_TOKEN[:12]}"
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
 QQQ = "universe-list:qqq"

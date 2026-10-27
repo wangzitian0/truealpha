@@ -39,12 +39,13 @@ import {
   PEG_CONVENTION_LABELS,
   PEG_GROWTH_CONVENTIONS,
   projectPegByConvention,
-  RANKING_UNIVERSE_LABELS,
   RANKING_UNIVERSES,
   type AccessContext,
   type StrategyRunDecision,
   type StrategyRunReport,
 } from "../src/contracts/strategyRun";
+import { UNIVERSES } from "../src/contracts/environmentContract.generated";
+import { universeWithRole } from "../src/contracts/universes";
 import { handleCardExportGet, XHS_CARD_HEIGHT, XHS_CARD_WIDTH } from "../src/server/cards/xhs-card";
 import { loadEntityDetail, loadRanking } from "../src/server/dashboard";
 import {
@@ -176,7 +177,8 @@ const seededProvenance = new Map<string, DecisionProvenance>([
       operating_period_end: "2025-12-31",
       revenue_period_end: "2025-12-31",
       shares_period_end: "2025-12-31",
-      universe_version: "universe:topt-us-2026-06-30",
+      universe_id: "universe:topt-us-2026-06-30",
+      universe_version: "topt-candidate-2026-03-31-v1",
       universe_sha256: "a".repeat(64),
       gppe_definition_sha256: "b".repeat(64),
       tier_definition_sha256: "c".repeat(64),
@@ -189,7 +191,8 @@ const seededProvenance = new Map<string, DecisionProvenance>([
       operating_period_end: "2025-12-31",
       revenue_period_end: "2025-12-31",
       shares_period_end: "2025-12-31",
-      universe_version: "universe:qqq-us-2026-06-30",
+      universe_id: "universe:qqq-us-2026-06-30",
+      universe_version: "qqq-us-2026-06-30-v1",
       universe_sha256: "d".repeat(64),
       gppe_definition_sha256: "b".repeat(64),
       tier_definition_sha256: "c".repeat(64),
@@ -283,15 +286,27 @@ const adapter = new StrategyRunReadAdapter(
     "AC3: non-historical convention appends explicit growth_convention_unsourced:consensus code",
   );
 
-  // SSOT helper: RankingUniverse & end-to-end universe filtering in loadRanking
-  assert(RANKING_UNIVERSES.join(",") === "topt,qqq", "SSOT: RANKING_UNIVERSES must define topt,qqq");
-  assert(normalizeRankingUniverse(undefined) === "topt", "SSOT: default universe must be topt");
+  // SSOT helper: the ranking universes derive from the universe record (#1522).
+  for (const record of UNIVERSES) {
+    assert(
+      RANKING_UNIVERSES.includes(record.key) === (record.scheduled_somewhere && !record.roles.includes("sentinel")),
+      `SSOT: ${record.key} is a ranking universe exactly when some environment schedules it and it is no sentinel`,
+    );
+  }
+  assert(
+    RANKING_UNIVERSES.includes("topt") && RANKING_UNIVERSES.includes("qqq") && !RANKING_UNIVERSES.includes("canary"),
+    "SSOT: topt and qqq are ranking universes, the canary sentinel is not",
+  );
+  assert(normalizeRankingUniverse(undefined) === universeWithRole("strategy"), "SSOT: default universe has role strategy");
+  assert(normalizeRankingUniverse("") === universeWithRole("strategy"), "SSOT: an empty value gives the strategy universe");
   assert(normalizeRankingUniverse("QQQ") === "qqq", "SSOT: QQQ normalizes to qqq");
-  assert(RANKING_UNIVERSE_LABELS.qqq.includes("QQQ"), "SSOT: qqq label must describe QQQ universe");
-  assert(matchesRankingUniverse("universe:topt-us-2026-06-30", "topt"), "SSOT: topt matches universe:topt-*");
-  assert(!matchesRankingUniverse("universe:topt-us-2026-06-30", "qqq"), "SSOT: qqq rejects universe:topt-*");
-  assert(matchesRankingUniverse("universe:qqq-us-2026-06-30", "qqq"), "SSOT: qqq matches universe:qqq-*");
-  assert(!matchesRankingUniverse("universe:qqq-us-2026-06-30", "topt"), "SSOT: topt rejects universe:qqq-*");
+  assert(normalizeRankingUniverse("nasdaq100") === null, "SSOT: a value outside the record gives null, never the strategy universe");
+  assert(matchesRankingUniverse("universe:topt-us-2026-06-30", "topt"), "SSOT: topt matches universe:topt-us-*");
+  assert(!matchesRankingUniverse("universe:topt-us-2026-06-30", "qqq"), "SSOT: qqq rejects universe:topt-us-*");
+  assert(matchesRankingUniverse("universe:qqq-us-2026-06-30", "qqq"), "SSOT: qqq matches universe:qqq-us-*");
+  assert(!matchesRankingUniverse("universe:qqq-us-2026-06-30", "topt"), "SSOT: topt rejects universe:qqq-us-*");
+  assert(!matchesRankingUniverse(null, "topt") && !matchesRankingUniverse(undefined, "qqq"), "SSOT: a row with no universe id belongs to no universe");
+  assert(!matchesRankingUniverse("topt-candidate-2026-03-31-v1", "topt"), "SSOT: a universe version is no universe id");
 
   const toptRanking = await loadRanking(TEST_CONTEXT, { universe: "topt" }, adapter);
   assert(toptRanking.kind === "ready", "AC3: loadRanking(topt) must return ready");
@@ -337,6 +352,7 @@ const adapter = new StrategyRunReadAdapter(
     operating_period_end: "2025-12-31",
     revenue_period_end: "2025-12-31",
     shares_period_end: "2025-12-31",
+    universe_id: "universe:topt-us-2026-06-30",
     universe_version: "v1",
     universe_sha256: "a".repeat(64),
     gppe_definition_sha256: "b".repeat(64),

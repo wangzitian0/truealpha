@@ -52,8 +52,8 @@ function assert(condition: unknown, message: string): asserts condition {
         // Universes in alphabetical order: canary, topt-core, and an unscheduled staging QQQ head.
         return {
           rows: [
-            { environment: "production", universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z", age_hours: 12.5, freshness: "fresh", availability: "available" },
-            { environment: "production", universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z", age_hours: 4.2, freshness: "fresh", availability: "available" },
+            { environment: "production", universe_id: "universe:canary-us-2026-07-20", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z", age_hours: 12.5, freshness: "fresh", availability: "available" },
+            { environment: "production", universe_id: "universe:topt-us-2026-03-31", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z", age_hours: 4.2, freshness: "fresh", availability: "available" },
             { environment: "staging", universe_id: "universe:qqq-us-t5", target_run_id: "capture-run:q".padEnd(20, "q"), sequence: 1, advanced_at: "2026-07-10T22:19:00Z", age_hours: 170.0, freshness: "stale", availability: "available", staleness_reason: "older_than_3d" },
           ],
         };
@@ -76,7 +76,7 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.data.runs !== "unavailable" && outcome.data.runs[0].durationSeconds === 252, "duration = end - start");
   assert(outcome.data.pointers.length === 3, "one pointer row per universe, none collapsed");
   assert(
-    outcome.data.pointers[1].universeId === "topt-core" && outcome.data.pointers[1].sequence === 7,
+    outcome.data.pointers[1].universeId === "universe:topt-us-2026-03-31" && outcome.data.pointers[1].sequence === 7,
     "the core universe survives next to the canary",
   );
   assert(outcome.data.pointers[1].ageHours === 4.2 && outcome.data.pointers[1].freshness === "fresh", "age and freshness passed through");

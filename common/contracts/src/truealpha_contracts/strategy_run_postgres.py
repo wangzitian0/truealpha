@@ -38,6 +38,7 @@ from truealpha_contracts.strategy_run import (
     StrategyRunReport,
     StrategyRunUnavailable,
 )
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 # Any of these mean the query failed, returned nothing, or returned rows that
 # no longer match the DTO shape (schema drift) -- a caller-facing crash here
@@ -62,7 +63,7 @@ LATEST_RUN_SQL = """
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
-                 and h.universe_id like 'universe:topt-%%'
+                 and h.universe_id like %s
            ) as is_governed,
            r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
@@ -71,6 +72,13 @@ LATEST_RUN_SQL = """
     limit 1
 """
 _LATEST_RUN_SQL = LATEST_RUN_SQL
+
+
+def latest_run_params(strategy_key: str) -> tuple[str, str]:
+    """The parameters of `LATEST_RUN_SQL`, in the order of its placeholders: the id-prefix pattern of the
+    strategy universe (#1522), then the strategy key. Every executor of the statement takes them from here."""
+    return (id_prefix_like(universe_with_role("strategy")), strategy_key)
+
 
 # `confidence` is joined from mart.topt_core_results, exactly as the TypeScript twin does:
 # mart.strategy_decisions has no confidence column (#355), and the Python twin hard-coded
@@ -172,7 +180,7 @@ class PostgresStrategyRunRepository:
         try:
             with psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection:
                 with connection.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(_LATEST_RUN_SQL, (strategy_id,))
+                    cursor.execute(_LATEST_RUN_SQL, latest_run_params(strategy_id))
                     run_row = cursor.fetchone()
                     if run_row is None:
                         return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
