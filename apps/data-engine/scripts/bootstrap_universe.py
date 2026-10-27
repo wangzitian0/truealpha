@@ -42,7 +42,7 @@ from data_engine import db, raw_store, universe
 from data_engine.config import settings
 from data_engine.datahub.production_topt.holdings_enrichment import figi_from_raw
 from data_engine.sources import gateway, nport, openfigi
-from data_engine.sources.sec import TICKERS_URL
+from data_engine.sources.sec import TICKERS_URL, company_tickers_key
 from data_engine.sources.sec import client as sec_client
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
@@ -76,7 +76,14 @@ class EtfFetch:
 
 
 def fetch_sec_ticker_map(client, conn, fetched_at: datetime) -> tuple[int, dict[str, tuple[int, str]]]:
-    resp = client.get(TICKERS_URL)
+    resp = gateway.http_get(
+        client,
+        "sec",
+        "company_tickers",
+        TICKERS_URL,
+        identity=company_tickers_key(),
+        caller="bootstrap_universe.fetch_sec_ticker_map",
+    )
     resp.raise_for_status()
     data = resp.json()
     raw_id = raw_store.insert_fetch(
