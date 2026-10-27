@@ -700,20 +700,20 @@ export function listingRatioReport(block: unknown): ListingRatioReport | null {
   if (counts === undefined || counts === null || cells === undefined || cells === null) return null;
   const rows: ListingRatioCell[] = [];
   for (const [key, raw] of Object.entries(cells)) {
-    const cell = raw as Record<string, unknown>;
-    const outcome = RATIO_OUTCOMES.find((candidate) => candidate === cell.outcome);
+    const entry = raw as Record<string, unknown>;
+    const outcome = RATIO_OUTCOMES.find((candidate) => candidate === entry.outcome);
     if (outcome === undefined) continue;
     rows.push({
-      listing_id: text(cell.listing_id) ?? key,
-      issuer_id: text(cell.issuer_id),
+      listing_id: text(entry.listing_id) ?? key,
+      issuer_id: text(entry.issuer_id),
       outcome,
-      listing_units_per_share: text(cell.listing_units_per_share),
-      pattern: text(cell.pattern),
-      title: text(cell.title),
-      reason: text(cell.reason),
-      accession: text(cell.accession),
-      form: text(cell.form),
-      filed: text(cell.filed),
+      listing_units_per_share: text(entry.listing_units_per_share),
+      pattern: text(entry.pattern),
+      title: text(entry.title),
+      reason: text(entry.reason),
+      accession: text(entry.accession),
+      form: text(entry.form),
+      filed: text(entry.filed),
     });
   }
   rows.sort(
