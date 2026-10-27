@@ -4,7 +4,7 @@ This module tests the four core pillars of Topic 2:
 1. Quota SSOT:
    - Every registered vendor source and origin binds a declared ledger seat in LEDGER_CAPACITIES.
    - Rate limit bounds, window durations, and environment shares must be positive and fit within allowances.
-   - Deployed source modules route vendor network calls through gateway and api_call_ledger.
+   - A vendor call that leaves the gateway fails `test_source_gateway.py` (one AST scan of `src/` and `scripts/`).
 2. Scope SSOT & Denominator Integrity:
    - Obligation planning strictly computes the exact Cartesian product of members and semantics.
    - Anti-exclusion: No dropping failing tickers to fabricate a green completion status.
@@ -24,11 +24,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -56,14 +54,6 @@ from truealpha_contracts.datahub import CaptureCampaign, CaptureRun, CaptureSche
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 from truealpha_runtime.testing import skip_or_fail
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DATA_ENGINE_DIR = REPO_ROOT / "apps" / "data-engine"
-SRC_DIR = DATA_ENGINE_DIR / "src" / "data_engine"
-SCRIPTS_DIR = DATA_ENGINE_DIR / "scripts"
-
-_NETWORK_CALL_PATTERN = re.compile(r"urlopen\(|httpx\.Client\(|requests\.(get|post|Session)\(")
-
 
 # ======================================================================================
 # Pillar 1: Quota SSOT
@@ -125,29 +115,6 @@ def test_quota_ssot_origin_registration_refuses_undeclared_or_conflicting_seat()
 
     with pytest.raises(ValueError, match="contradicts the 'sec' seat"):
         OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), CapacityDeclaration(5, 1), "sec")
-
-
-def test_quota_ssot_vendor_call_sites_must_import_gateway() -> None:
-    """All external vendor network calls must route through sources.gateway and the ledger."""
-    offenders: list[str] = []
-    # Scan production source tree
-    for path in sorted(SRC_DIR.rglob("*.py")):
-        if path.name == "gateway.py":
-            continue
-        text = path.read_text(encoding="utf-8")
-        if _NETWORK_CALL_PATTERN.search(text) and "from data_engine.sources import gateway" not in text:
-            offenders.append(str(path.relative_to(DATA_ENGINE_DIR)))
-
-    # Scan operational scripts
-    for path in sorted(SCRIPTS_DIR.glob("*.py")):
-        if path.name in {"capture_factor_matrix_samples.py", "capture_strategy_evidence.py"}:
-            # One-off test corpus extraction scripts targeting static fixture assets
-            continue
-        text = path.read_text(encoding="utf-8")
-        if _NETWORK_CALL_PATTERN.search(text) and "from data_engine.sources import gateway" not in text:
-            offenders.append(str(path.relative_to(DATA_ENGINE_DIR)))
-
-    assert not offenders, f"Network call sites found bypassing external call ledger: {offenders}"
 
 
 # ======================================================================================

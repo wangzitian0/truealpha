@@ -163,6 +163,9 @@ class ExclusionReason(StrEnum):
     #: The issuer registry gave no classification after its attempts, so the run cannot say which
     #: numerator describes this issuer. The tick excludes only this issuer (#1323).
     REGISTRY_UNAVAILABLE = "registry_unavailable"
+    #: The issuer has several listings and no `primary_listing` relation names one (#1518). The strategy
+    #: cannot say which listing values the issuer, so it excludes the issuer. It never ranks listings by ticker.
+    PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
 
 
 class RiskFreeInstrument(StrEnum):

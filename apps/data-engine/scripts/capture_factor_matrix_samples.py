@@ -20,6 +20,8 @@ from time import sleep
 from typing import Any
 
 import httpx
+from data_engine.datahub.fetch_key import FetchKey
+from data_engine.sources import gateway
 
 DATA_ENGINE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PLAN = DATA_ENGINE_ROOT / "samples/factor_matrix/capture_plan.v2.json"
@@ -365,9 +367,18 @@ def _fetch(
     sleeper: Callable[[float], None],
 ) -> tuple[bytes, bytes, bytes]:
     endpoint, params, metadata, credential = _request_details(plan, provider, provider_symbol, start, end, environ)
+    seat, label = ("yahoo", "chart") if provider == "yahoo" else ("twelvedata", "time_series")
     for attempt in range(2):
         try:
-            response = client.get(endpoint, params=params)
+            response = gateway.http_get(
+                client,
+                seat,
+                label,
+                endpoint,
+                identity=FetchKey(seat, label, f"symbol:{provider_symbol}", f"{start.isoformat()}:{end.isoformat()}"),
+                caller="capture_factor_matrix_samples._fetch",
+                params=params,
+            )
         except httpx.HTTPError as exc:
             raise CaptureError(f"{provider} {provider_symbol}: request failed ({type(exc).__name__})") from None
         if response.status_code != 429 or attempt == 1:
@@ -654,4 +665,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("capture_factor_matrix_samples"):
+        main()

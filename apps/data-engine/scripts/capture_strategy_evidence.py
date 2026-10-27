@@ -19,11 +19,14 @@ from io import StringIO
 from pathlib import Path
 
 import httpx
-from data_engine.sources.sec import COMPANY_FACTS_URL
+from data_engine.datahub.fetch_key import FetchKey
+from data_engine.sources import gateway
+from data_engine.sources.sec import COMPANY_FACTS_URL, company_facts_key
 from data_engine.sources.sec import client as sec_client
 from data_engine.sources.yahoo import CHART_URL, USER_AGENT, fetch_daily_bars
 
 SAMPLE_ROOT = Path(__file__).resolve().parents[1] / "samples"
+CALLER = "capture_strategy_evidence"
 CAPTURE_DATE = date(2026, 7, 12)
 PRICE_SYMBOLS = ("DDOG", "DUOL", "NICE", "SHOP", "JPM", "ADM", "NVDA", "META", "PLUG")
 PRICE_PERIOD_DAYS = {symbol: 3 * 366 for symbol in PRICE_SYMBOLS} | {"META": 5 * 366}
@@ -90,6 +93,23 @@ def _write_immutable(path: Path, body: bytes) -> None:
     print(f"captured {path.relative_to(SAMPLE_ROOT)} ({len(body)} bytes)")
 
 
+def _page_key(url: str) -> FetchKey:
+    """The key of a public web page that the script keeps as a sample: the page, on the day of the capture."""
+    return FetchKey("public-web", "page", f"url:{url}", gateway.utc_day())
+
+
+def _chart_key(symbol: str, params: dict[str, str]) -> FetchKey:
+    """The key of one Yahoo chart window: the symbol, the window end as the as-of, the other parameters in the label."""
+    return FetchKey.for_request(
+        "yahoo",
+        "chart",
+        {"symbol": symbol, **params},
+        entity_param="symbol",
+        as_of_params=("period2",),
+        default_as_of=gateway.utc_day(),
+    )
+
+
 def capture_sec(*, resume: bool) -> None:
     with sec_client() as http:
         for ticker, cik in COMPANIES.items():
@@ -97,7 +117,14 @@ def capture_sec(*, resume: bool) -> None:
             if resume and path.exists():
                 print(f"resume skip {path.relative_to(SAMPLE_ROOT)}")
                 continue
-            response = http.get(COMPANY_FACTS_URL.format(cik=cik))
+            response = gateway.http_get(
+                http,
+                "sec",
+                "companyfacts",
+                COMPANY_FACTS_URL.format(cik=cik),
+                identity=company_facts_key(cik),
+                caller=CALLER,
+            )
             response.raise_for_status()
             _write_immutable(path, response.content)
         for relative_path, (cik, archive_path) in SEC_ARTIFACTS.items():
@@ -105,7 +132,8 @@ def capture_sec(*, resume: bool) -> None:
                 print(f"resume skip {relative_path}")
                 continue
             url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{archive_path}"
-            response = http.get(url)
+            archive_key = FetchKey("sec", "archive", f"filing:{cik:010d}:{archive_path}", gateway.utc_day())
+            response = gateway.http_get(http, "sec", "archive", url, identity=archive_key, caller=CALLER)
             response.raise_for_status()
             _write_immutable(SAMPLE_ROOT / relative_path, response.content)
 
@@ -132,7 +160,14 @@ def capture_events(*, resume: bool) -> None:
         if resume and jpm_announcement_path.exists():
             print(f"resume skip {JPM_DIVIDEND_PATH}")
         else:
-            response = http.get(JPM_DIVIDEND_URL)
+            response = gateway.http_get(
+                http,
+                "public-web",
+                "page",
+                JPM_DIVIDEND_URL,
+                identity=_page_key(JPM_DIVIDEND_URL),
+                caller=CALLER,
+            )
             response.raise_for_status()
             announcement = unescape(response.text)
             required_tokens = ("$1.40 per share", "July 31, 2025", "July 3, 2025")
@@ -158,7 +193,7 @@ def capture_events(*, resume: bool) -> None:
             if resume and (SAMPLE_ROOT / relative_path).exists():
                 print(f"resume skip {relative_path}")
                 continue
-            response = http.get(url)
+            response = gateway.http_get(http, "public-web", "page", url, identity=_page_key(url), caller=CALLER)
             response.raise_for_status()
             _write_immutable(SAMPLE_ROOT / relative_path, response.content)
 
@@ -172,7 +207,15 @@ def capture_events(*, resume: bool) -> None:
         if resume and jpm_path.exists():
             print("resume skip events/JPM_YAHOO_EVENTS_20250501_20250810.json")
         else:
-            response = http.get(CHART_URL.format(symbol="JPM"), params=params)
+            response = gateway.http_get(
+                http,
+                "yahoo",
+                "chart",
+                CHART_URL.format(symbol="JPM"),
+                identity=_chart_key("JPM", params),
+                caller=CALLER,
+                params=params,
+            )
             response.raise_for_status()
             normalized = json.dumps(response.json(), sort_keys=True, separators=(",", ":")).encode()
             _write_immutable(jpm_path, normalized)
@@ -187,7 +230,15 @@ def capture_events(*, resume: bool) -> None:
         if resume and nvda_path.exists():
             print("resume skip events/NVDA_YAHOO_EVENTS_20240501_20240701.json")
         else:
-            response = http.get(CHART_URL.format(symbol="NVDA"), params=split_params)
+            response = gateway.http_get(
+                http,
+                "yahoo",
+                "chart",
+                CHART_URL.format(symbol="NVDA"),
+                identity=_chart_key("NVDA", split_params),
+                caller=CALLER,
+                params=split_params,
+            )
             response.raise_for_status()
             normalized = json.dumps(response.json(), sort_keys=True, separators=(",", ":")).encode()
             _write_immutable(nvda_path, normalized)
@@ -285,4 +336,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("capture_strategy_evidence"):
+        main()

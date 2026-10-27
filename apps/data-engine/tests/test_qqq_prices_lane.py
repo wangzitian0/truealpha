@@ -94,21 +94,31 @@ def _calls(ledger: gateway.MemoryLedger, caller: str, at: datetime, count: int, 
 # --- which symbols, in which order ------------------------------------------------------------
 
 
-def test_the_lane_keeps_one_primary_listing_per_issuer_and_skips_the_topt_issuers() -> None:
+def test_the_lane_keeps_the_declared_primary_listing_per_issuer_and_skips_the_topt_issuers(connection) -> None:
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
+
+    known_at = datetime(2026, 10, 6, 22, tzinfo=UTC)
     denominator = _denominator(
         [
             ("issuer:cik:0000320193", "AAPL"),  # a TOPT symbol: the market-data lane stores it
             ("issuer:cik:0001652044", "GOOG"),  # Alphabet, the secondary class
-            ("issuer:cik:0001652044", "GOOGL"),  # Alphabet, the primary class and a TOPT symbol
+            ("issuer:cik:0001652044", "GOOGL"),  # Alphabet, the declared primary listing and a TOPT symbol
             ("issuer:cik:0000796343", "ADBE"),
-            ("issuer:cik:0001754301", "FOXA"),  # two listings of one issuer that no rule ranks:
-            ("issuer:cik:0001754301", "FOX"),  # the ticker text breaks the tie
+            ("issuer:cik:0001754301", "FOXA"),  # two listings of one issuer, and no row declares either:
+            ("issuer:cik:0001754301", "FOX"),  # the issuer adds no symbol (#1518)
         ]
     )
+    resolve_coordinates(connection, denominator["instruments"], as_of=known_at.date(), known_at=known_at)
 
-    assert qqq_prices.target_symbols(denominator, covered=DEFAULT_TOPT_SYMBOLS) == ("ADBE", "FOX")
-    # Without the TOPT rule each issuer still adds its primary class only. GOOG never appears.
-    assert qqq_prices.target_symbols(denominator, covered=()) == ("AAPL", "ADBE", "FOX", "GOOGL")
+    assert qqq_prices.target_symbols(connection, denominator, covered=DEFAULT_TOPT_SYMBOLS, known_at=known_at) == (
+        "ADBE",
+    )
+    # Without the TOPT rule each declared issuer adds its primary listing only. GOOG never appears.
+    assert qqq_prices.target_symbols(connection, denominator, covered=(), known_at=known_at) == (
+        "AAPL",
+        "ADBE",
+        "GOOGL",
+    )
 
 
 def test_symbols_without_both_series_come_first_then_the_oldest() -> None:
@@ -246,7 +256,9 @@ def test_refreshing_the_stalest_half_each_weekday_keeps_every_symbol_valid_at_ev
 
 
 @pytest.mark.parametrize("environment", ["production", "staging"])
-def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_tick(environment: str) -> None:
+def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_tick(
+    environment: str, connection
+) -> None:
     """Both durations are calls divided by the environment's per-minute share.
 
     The refresh's calls are measured through its own ingest function. This lane's calls are its need
@@ -254,7 +266,10 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
     """
     tickers = [row["ticker"] for row in parse_nasdaq_index_rows(NASDAQ100_CASSETTE.read_bytes())]
     targets = qqq_prices.target_symbols(
-        _denominator([(f"issuer:{ticker}", ticker) for ticker in tickers]), covered=DEFAULT_TOPT_SYMBOLS
+        connection,
+        _denominator([(f"issuer:{ticker}", ticker) for ticker in tickers]),
+        covered=DEFAULT_TOPT_SYMBOLS,
+        known_at=datetime(2026, 10, 6, 22, tzinfo=UTC),
     )
     refresh = ingest_twelve_data_market_prices(
         symbols=DEFAULT_TOPT_SYMBOLS,

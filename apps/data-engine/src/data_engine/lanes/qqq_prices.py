@@ -7,7 +7,7 @@ them is unavailable. This lane stores both series (`adjust = 'splits'` and `adju
 the other QQQ listings.
 
 Symbols. The listings of the governed QQQ head (the lane name of its record), which the QQQ tick
-captures. The lane keeps one listing per issuer: the primary class (`canonical_issuer.ticker_sort_key`).
+captures. The lane keeps one listing per issuer: the primary listing (`primary_listing.choose_primary_listings`).
 It skips an issuer whose primary listing is a TOPT symbol, because the market-data lane stores it.
 So Alphabet adds no symbol (GOOGL is a TOPT symbol), and the lane never stores GOOG.
 
@@ -51,7 +51,6 @@ from pydantic import Field
 from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
-from data_engine.datahub.canonical_issuer import ticker_sort_key
 from data_engine.datahub.market_prices import (
     DEFAULT_TOPT_SYMBOLS,
     MAX_BAR_LAG_SESSIONS,
@@ -64,9 +63,11 @@ from data_engine.datahub.market_prices import (
     ingest_daily_series,
 )
 from data_engine.datahub.price_series import load_daily_series
+from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, split_history
+from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
 
@@ -85,18 +86,28 @@ HEADROOM_PERCENT = 85
 RESERVE_DAYS = 7
 
 
-def target_symbols(denominator: Mapping[str, Any], *, covered: Collection[str]) -> tuple[str, ...]:
+def target_symbols(
+    connection: psycopg.Connection[Any],
+    denominator: Mapping[str, Any],
+    *,
+    covered: Collection[str],
+    known_at: datetime,
+) -> tuple[str, ...]:
     """The primary listing of each issuer in the universe, less the symbols in `covered`, by symbol.
 
-    `ticker_sort_key` ranks the listings of an issuer; the listing id breaks a tie. A listing
-    without a ticker names no price series.
+    `choose_primary_listings` names the primary listing of an issuer with several listings (#1518).
+    An issuer with several listings and none declared adds no symbol. A listing without a ticker names
+    no price series.
     """
     fields = list(denominator["instrument_tuple_fields"])
     issuer_at, listing_at, ticker_at = (fields.index(name) for name in ("issuer_id", "listing_id", "ticker"))
-    listings: dict[str, list[tuple[str | None, str]]] = {}
+    tickers: dict[str, str | None] = {}
+    listings: dict[str, list[str]] = {}
     for row in denominator["instruments"]:
-        listings.setdefault(str(row[issuer_at]), []).append((row[ticker_at] or None, str(row[listing_at])))
-    primaries = (min(rows, key=lambda item: (ticker_sort_key(item[0]), item[1]))[0] for rows in listings.values())
+        tickers[str(row[listing_at])] = row[ticker_at] or None
+        listings.setdefault(str(row[issuer_at]), []).append(str(row[listing_at]))
+    chosen = choose_primary_listings(connection, listings, known_at=known_at)
+    primaries = (tickers[listing] for listing in chosen.values() if listing is not None)
     return tuple(sorted({ticker for ticker in primaries if ticker and ticker not in covered}))
 
 
@@ -289,7 +300,7 @@ def _refresh_qqq_prices(
 ) -> RefreshOutcome:
     """The op body, apart from the Dagster plumbing, so a test can drive it with a fake vendor and its own connection."""
     corpus = resolve_universe_corpus(connection, lane_name("qqq"))
-    symbols = target_symbols(corpus["topt_denominator"], covered=DEFAULT_TOPT_SYMBOLS)
+    symbols = target_symbols(connection, corpus["topt_denominator"], covered=DEFAULT_TOPT_SYMBOLS, known_at=now)
     spend = ledger_spend(now.astimezone(UTC).date())
     budget = credit_budget(
         share=environment_share(environment),
@@ -321,14 +332,13 @@ class QqqPriceRefreshConfig(dg.Config):
     max_symbols: int | None = Field(default=None, ge=1)
 
 
-@dg.op
+@external_op
 def refresh_qqq_prices_op(context: dg.OpExecutionContext, config: QqqPriceRefreshConfig) -> None:
     """Store both daily series of the stalest QQQ symbols within this environment's Twelve Data budget.
 
     Every request is attributed to this run in the ledger and admitted by the rule-6 gate first.
     """
     with (
-        gateway.run_scope(f"dagster:{context.run_id}"),
         gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):

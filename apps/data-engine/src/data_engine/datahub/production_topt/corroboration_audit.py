@@ -9,7 +9,7 @@ exactly like "the vendor had nothing" until a pointer froze days later (#574/#62
 Every such site now calls `record_lost_corroboration`: a warning naming the origin, the
 stage and the exception type (with the traceback), and one count in the tally of the
 tick it happened in. The tally is scoped the way the external call ledger scopes its
-run key (`gateway.run_scope`): a context variable the tick binds around the capture, so
+run key (`external_op`, `gateway.run_scope`): a context variable the tick binds around the capture, so
 the adapters, the vendor fetchers and the sink report into it without any signature
 between the tick and them learning about it. Outside a tally (a script, a unit test)
 the warning is still logged and nothing is counted.

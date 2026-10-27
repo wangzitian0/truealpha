@@ -15,7 +15,7 @@ NPORT-P is unambiguous). Raw XML lands in apps/data-engine/data/samples/.
 import sys
 from pathlib import Path
 
-from data_engine.sources import nport
+from data_engine.sources import gateway, nport
 from data_engine.sources.sec import client as sec_client
 
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "samples"
@@ -47,4 +47,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("probe_etf_holdings"):
+        main()

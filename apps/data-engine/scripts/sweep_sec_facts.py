@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 
 import httpx
 from data_engine import db, raw_store
-from data_engine.sources import sec
+from data_engine.sources import gateway, sec
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
 
@@ -71,4 +71,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with gateway.script_run("sweep_sec_facts"):
+        main()

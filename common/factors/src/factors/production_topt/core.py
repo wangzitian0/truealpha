@@ -133,6 +133,9 @@ class ToptCoreReasonCode(StrEnum):
     SHARE_COUNT_UNDATED = "share_count_undated"
     SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
     CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+    #: #1518: the issuer has several listings and no `primary_listing` row names one. The snapshot
+    #: builder cannot say which listing values the issuer, so the issuer is unavailable.
+    PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
 
 
 #: The reason codes above that name a share count with no proven share basis (#1277). A test holds this set
@@ -292,6 +295,17 @@ class ToptCoreSnapshotInput(_FrozenModel):
     revenue: ToptMetricInput | None
     pre_provision_profit: ToptMetricInput | None
     market_value_components: tuple[ToptMarketValueComponent, ...]
+    #: #1518: True when the issuer has several listings and no `primary_listing` row names one. The
+    #: identity above then names a listing only so that the row has coordinates. No value rests on it.
+    #: The key is absent from the serialized form when False, so a stored input keeps its content hash.
+    primary_listing_undeclared: bool = False
+
+    @model_serializer(mode="wrap")
+    def omit_false_primary_listing_undeclared(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.primary_listing_undeclared:
+            data.pop("primary_listing_undeclared", None)
+        return data
 
     @field_validator("cutoff")
     @classmethod
@@ -617,6 +631,14 @@ def compute_topt_gppe(
 
     if not invocation_id.startswith("topt-gppe-invocation:"):
         raise ValueError("invocation_id must be a content-addressed TOPT GPPE invocation")
+    if snapshot.primary_listing_undeclared:
+        return _unavailable_gppe(
+            snapshot,
+            invocation_id=invocation_id,
+            gppe_definition=gppe_definition,
+            reasons=(ToptCoreReasonCode.PRIMARY_LISTING_UNDECLARED,),
+            freshness=_snapshot_freshness(snapshot),
+        )
     # The formula is the registered tree (#528, docs/metric-forest.md): which inputs a class
     # needs, which numerator it uses and how the capital charge is bound are declared there,
     # not branched on here. A captured input names the snapshot field that carries it (a

@@ -27,11 +27,10 @@ from infra2_sdk.deploy import (
     HttpGet,
     ReleaseIdentityError,
     default_http_get,
-    identifier_kind,
     identity_from_body,
     poll_until_healthy,
 )
-from infra2_sdk.refs import ReleaseError, resolve_image_digest
+from infra2_sdk.refs import ReleaseError, identifier_kind, resolve_image_digest
 
 if TYPE_CHECKING:
     from infra2_sdk.transport import HttpTransport

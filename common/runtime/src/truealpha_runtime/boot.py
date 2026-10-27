@@ -10,6 +10,6 @@ error -- names, never values.
 
 from __future__ import annotations
 
-from infra2_sdk.manifests import assert_environment
+from infra2_sdk.runtime.config_schema import assert_environment
 
 __all__ = ["assert_environment"]

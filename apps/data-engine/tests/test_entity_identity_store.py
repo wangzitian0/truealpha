@@ -239,8 +239,8 @@ def _edge(connection, relation_type: str, from_id, to_id) -> bool:
 
 
 def _seed_both_universes(connection) -> None:
-    _seed_complete_production_run(connection)
-    _seed_complete_production_run(connection, corpus=_plane_corpus())
+    _seed_complete_production_run(connection, declare_primary_listings=False)
+    _seed_complete_production_run(connection, corpus=_plane_corpus(), declare_primary_listings=False)
 
 
 def test_every_id_form_of_one_company_resolves_to_one_entity(connection) -> None:
@@ -439,7 +439,7 @@ def test_a_retracted_listing_line_does_not_block_a_later_one(connection) -> None
     occupied = _mint(connection, "listing", "listing:xnas:msft")
     _line(connection, _mint(connection, "instrument", "security:test:msft-squatter"), occupied)
 
-    _seed_complete_production_run(connection)
+    _seed_complete_production_run(connection, declare_primary_listings=False)
     written = _backfill(connection)
     assert written["failed"] == [], written
     assert written["held_back"].get("skipped:store-holds-another-endpoint") == 1, written
@@ -788,34 +788,33 @@ def test_the_sensor_launches_once_for_new_evidence_and_is_otherwise_quiet(fresh_
     }
 
 
-def test_entity_identity_views_match_preferred_dual_share_tickers(connection) -> None:
-    """#1359 SSOT drift guard: PRIMARY_ISSUER_TICKERS outranks SECONDARY_ISSUER_TICKERS in
-    canonical_issuer.py, mart.entity_identity, and mart.entity_display_resolution even when
-    the secondary class is recorded after the primary class."""
-    from data_engine.datahub.canonical_issuer import (
-        PRIMARY_ISSUER_TICKERS,
-        SECONDARY_ISSUER_TICKERS,
-        is_preferred_issuer_ticker,
-        ticker_preference_rank,
-    )
-
-    assert PRIMARY_ISSUER_TICKERS == frozenset({"GOOGL"})
-    assert SECONDARY_ISSUER_TICKERS == frozenset({"GOOG"})
-    assert is_preferred_issuer_ticker("GOOGL", "GOOG")
-    assert ticker_preference_rank("GOOGL") < ticker_preference_rank("AAPL") < ticker_preference_rank("GOOG")
+def test_entity_identity_views_follow_the_primary_listing_relation(connection) -> None:
+    """#1518: the resolver writes `primary_listing` from `primary_listings.v1.json`. `mart.entity_identity`
+    reads it, even when the secondary class is recorded after the primary class. Before the resolver ran,
+    no row names a listing, and the view has no ticker literal to fall back on."""
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
     # Seed GOOGL first and GOOG second (newer transaction_time) so recency alone would pick GOOG.
     _seed_both_universes(connection)
     _seed_nport_crosswalk(connection, GOOGL, GOOG)
     assert _backfill(connection)["failed"] == []
-
     issuer_entity = _resolve(connection, "cik", GOOGL["cik"])
+    declared = "select count(*) from staging.entity_relations where relation_type = 'primary_listing'"
+    assert connection.execute(declared).fetchone() == (0,)
+
+    trios = [
+        [
+            f"issuer:lei:{ids['lei']}",
+            f"security:cusip:{ids['cusip']}",
+            ids["listing"],
+            ids["listing"].split(":")[2].upper(),
+        ]
+        for ids in (GOOG, GOOGL)
+    ]
+    resolve_coordinates(connection, trios, as_of=TODAY, known_at=NOW)
+
+    assert connection.execute(declared).fetchone() == (1,)
     identity_row = connection.execute(
-        """
-        select current_ticker, listing_id
-        from mart.entity_identity
-        where entity_id = %s
-        """,
-        (issuer_entity,),
+        "select current_ticker, listing_id from mart.entity_identity where entity_id = %s", (issuer_entity,)
     ).fetchone()
     assert identity_row == ("GOOGL", "listing:xnas:googl")

@@ -1,0 +1,8 @@
+{
+  "classification": "primary_listing",
+  "description": "The listing that an issuer with several listings declares as its primary listing. A listing id here is the id that the universe corpora spell. The coordinate resolver writes the relation primary_listing for each one that it resolves.",
+  "listings": [
+    "listing:xnas:googl"
+  ],
+  "listings_sha256": "4f6af35f56a5a047ce65389c06cc69b805f6cbdd78e32aa0aabc482b5883d557"
+}
