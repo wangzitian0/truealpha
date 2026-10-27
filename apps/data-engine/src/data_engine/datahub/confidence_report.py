@@ -9,7 +9,8 @@ content-addressed `mart.datahub_confidence_report` row. A cell carries:
 * `independent_origins` — the number of independent lineages that asserted a value;
 * `reason`              — why the cell holds the origins it holds: `independent_origins_agree`
                           (three groups or more agreed under the family's content-addressed
-                          tolerance policy), `two_origins_agree`, `no_agreement_policy`,
+                          tolerance policy, or both routes of the index-membership plane
+                          listed the listing), `two_origins_agree`, `no_agreement_policy`,
                           `same_lineage` (two readers of one 10-K are one source),
                           `not_agreed_within_tolerance`, `cross_origin_conflict`,
                           `single_origin` and its variants, or `no_origin_value`.
