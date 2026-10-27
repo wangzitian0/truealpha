@@ -79,6 +79,7 @@ def latest_run_params(strategy_key: str) -> tuple[str, str]:
     strategy universe (#1522), then the strategy key. Every executor of the statement takes them from here."""
     return (id_prefix_like(universe_with_role("strategy")), strategy_key)
 
+
 # `confidence` is joined from mart.topt_core_results, exactly as the TypeScript twin does:
 # mart.strategy_decisions has no confidence column (#355), and the Python twin hard-coded
 # None while the web rendered 0.85 — the two surfaces disagreed on the same decision. A
