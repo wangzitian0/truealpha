@@ -15,8 +15,8 @@ Every universe has one record in ``universes`` (#1522): its key, id prefix, lane
 price series flag, report sample and tick cron per environment. No other file keeps its own copy or list of
 a universe key, an id prefix, a lane name, a member list or a tick time.
 Each environment holds a list of universes it runs. A universe is ``scheduled`` or ``stopped``.
-A stopped universe names the precondition that unlocks it. No other file says that a universe is
-stopped (owner decision of 2026-10-21).
+The status is the only gate of a universe tick. No other field, verdict or count of nights holds it
+back (owner decision D5 of 2026-10-26). No other file says that a universe is stopped.
 
 The contract also holds the measured run times of every deployed Dagster job. The data-engine
 run launcher derives each run's maximum runtime from them (#1442). It holds the memory capacity
@@ -145,42 +145,11 @@ class EnvironmentTickContract(_StrictFrozenModel):
     estimated_listings: int = Field(ge=0)
 
 
-class UnlockEndToEnd(_StrictFrozenModel):
-    """The universe that must run end to end in ``environment`` before a stopped universe starts."""
-
-    environment: EnvironmentKey
-    universe: str = Field(min_length=1)
-
-
-class UnlockVerdict(_StrictFrozenModel):
-    """The nightly verdict that must be green for ``consecutive_green_nights`` nights in a row."""
-
-    name: str = Field(pattern=r"^[a-z0-9_]+$")
-    environment: EnvironmentKey
-    consecutive_green_nights: int = Field(ge=1)
-
-
-class UniverseUnlock(_StrictFrozenModel):
-    """The machine-readable precondition of a stopped universe. Both parts must hold."""
-
-    end_to_end: UnlockEndToEnd
-    verdict: UnlockVerdict
-
-
 class EnvironmentUniverse(_StrictFrozenModel):
-    """One universe of an environment and its status. A stopped universe names its unlock."""
+    """One universe of an environment and its status. The status is the only gate of its tick."""
 
     key: str = Field(min_length=1)
     status: UniverseStatus
-    unlock: UniverseUnlock | None = None
-
-    @model_validator(mode="after")
-    def _only_a_stopped_universe_has_an_unlock(self) -> Self:
-        if (self.status == "stopped") != (self.unlock is not None):
-            raise ValueError(
-                f"{self.key}: a {self.status} universe {'needs' if self.status == 'stopped' else 'must not have'} an unlock"
-            )
-        return self
 
 
 class EnvironmentSpec(_StrictFrozenModel):
@@ -684,8 +653,7 @@ class EnvironmentContract(_StrictFrozenModel):
                     f"{env_name}: the ticks {sorted(spec.ticks)} and the universe records with a cron {sorted(ticking)} differ"
                 )
             listed = {entry.key for entry in spec.universes}
-            named = listed | {entry.unlock.end_to_end.universe for entry in spec.universes if entry.unlock is not None}
-            unknown = sorted(named - set(self.universes))
+            unknown = sorted(listed - set(self.universes))
             if unknown:
                 raise ValueError(f"{env_name}: the environment names universes with no record: {unknown}")
             served_ticks = {key for key in spec.ticks if not self.universes[key].is_sentinel}
@@ -716,16 +684,6 @@ class EnvironmentContract(_StrictFrozenModel):
             raise ValueError(f"model seat limits name unknown environments: {unknown}")
         if self.model_seat.seat not in self.vendor_seats:
             raise ValueError(f"the model seat {self.model_seat.seat!r} belongs to no vendor account")
-        for spec in self.environments.values():
-            for universe in spec.universes:
-                if universe.unlock is None:
-                    continue
-                needed = universe.unlock.end_to_end
-                if self.universe_status(needed.universe, needed.environment) != "scheduled":
-                    raise ValueError(
-                        f"{spec.environment}/{universe.key}: the unlock needs {needed.universe} end to end in"
-                        f" {needed.environment}, and that universe is not scheduled there"
-                    )
         return self
 
     def _tick_listings(self, tick: str) -> list[int]:
@@ -805,21 +763,6 @@ class EnvironmentContract(_StrictFrozenModel):
         if spec is None:
             return ()
         return tuple(entry.key for entry in spec.universes if entry.status == "scheduled")
-
-    @property
-    def stopped_universe_keys(self) -> frozenset[str]:
-        """The universes that some environment lists as stopped: they wait for their unlock."""
-        return frozenset(
-            entry.key for spec in self.environments.values() for entry in spec.universes if entry.status == "stopped"
-        )
-
-    def unlock_of(self, universe: str, environment: str | None) -> UniverseUnlock | None:
-        """The precondition of a stopped ``universe`` in ``environment``, or None when it is not stopped there."""
-        spec = self.environments.get(self.normalize_environment(environment))
-        if spec is None:
-            return None
-        self.record(universe)
-        return next((entry.unlock for entry in spec.universes if entry.key == universe), None)
 
     def expects_verdict(self, check: str, environment: str | None) -> bool:
         """Whether ``environment`` records the nightly verdict ``check``.

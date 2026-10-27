@@ -32,7 +32,7 @@ The loop has four steps: data, formula, backtest, and conversation with reports.
 
 ### 0.3 Universes and roles
 
-**Universes.** Each environment has one target scope. Production targets TOPT, QQQ and the S&P 500. QQQ runs end to end first. The S&P 500 starts when its unlock holds. S&P 500 membership comes from IVV holdings, and the ETF proxy is accepted. Staging runs TOPT plus the sentinel listings. Preview checks the release path and makes no live vendor call. The environment contract holds the scope, cadence and trigger of each environment and the unlock of the S&P 500 (`common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`, Section 3.1).
+**Universes.** Each environment has one target scope. Production targets TOPT, QQQ and the S&P 500. QQQ runs end to end first. The S&P 500 tick stays stopped while its contract status is `stopped`. S&P 500 membership comes from IVV holdings, and the ETF proxy is accepted. Staging runs TOPT plus the sentinel listings. Preview checks the release path and makes no live vendor call. The environment contract holds the scope, cadence and trigger of each environment and the status of each universe (`common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`, Section 3.1).
 
 **Roles.** The product has two roles for users: a viewing user (a member) and an administrator. It later has a regular user, a VIP and an administrator. A VIP is an entitlement tier on a member. A VIP is not a new principal kind (`PrincipalKind` and `ActiveEntitlementGrant` in `common/contracts/src/truealpha_contracts/access.py`, rule 26).
 
@@ -222,8 +222,8 @@ answers one question, with the smallest scope that can prove the answer false.
   answers must agree.
 - **Production pursues completeness.** Its target scope is TOPT, QQQ and the S&P 500,
   the strategy included (Section 0.3). It keeps the accuracy checks of staging. The S&P 500
-  tick stays stopped until its unlock holds. The environment contract (cited below) holds
-  the unlock and the current state of each tick.
+  tick stays stopped while its contract status is `stopped`. The environment contract (cited
+  below) holds the current status of each tick.
 
 Local and GitHub CI prove the code on recorded inputs and call no vendor. The runtime
 names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `staging`,

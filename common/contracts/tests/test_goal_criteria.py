@@ -109,19 +109,6 @@ def test_the_m0_of_root_two_is_topt_and_qqq_and_the_s_and_p_500_is_the_next_tier
     assert b1.tier == "M1" and "S&P 500" in b1.statement and "next production tier" in b1.statement
 
 
-def test_the_s_and_p_500_criterion_names_the_unlock_that_the_contract_holds() -> None:
-    """The prose and the machine-readable unlock say the same: the verdict name and the number of nights."""
-    from truealpha_contracts.environment_contract import load_environment_contract
-
-    unlock = load_environment_contract().unlock_of("sp500", "production")
-
-    assert unlock is not None
-    statement = _criterion("R2.B1").statement
-    assert unlock.verdict.name in statement
-    assert f"{unlock.verdict.consecutive_green_nights} consecutive nights" in statement
-    assert f"{unlock.end_to_end.universe.upper()} runs end to end on {unlock.end_to_end.environment}" in statement
-
-
 def test_the_s_and_p_500_membership_comes_from_the_ivv_holdings_and_the_filing_is_the_oracle() -> None:
     criterion = _criterion("R2.B12")
 

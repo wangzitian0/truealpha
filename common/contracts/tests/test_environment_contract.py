@@ -117,17 +117,24 @@ def test_the_one_universe_list_replaces_the_strategy_universe_fields_and_the_sch
             assert "scheduled" not in tick, (name, key)
 
 
-def test_the_sp500_unlock_is_qqq_end_to_end_and_three_green_nights_of_fetch_keys_once() -> None:
-    """Owner decision of 2026-10-21. The verdict `fetch_keys_once` is built by another lane."""
+def test_the_contract_is_version_three_because_the_unlock_shape_is_gone() -> None:
+    """The unlock block left the file and the model: a breaking change of the contract shape (#1523 S5)."""
     contract = load_environment_contract()
-    unlock = contract.unlock_of("sp500", "production")
 
-    assert unlock is not None
-    assert (unlock.end_to_end.environment, unlock.end_to_end.universe) == ("production", "qqq")
-    assert (unlock.verdict.name, unlock.verdict.environment) == ("fetch_keys_once", "production")
-    assert unlock.verdict.consecutive_green_nights == 3
-    assert contract.unlock_of("qqq", "production") is None, "a scheduled universe has no precondition"
-    assert contract.unlock_of("sp500", "staging") is None, "staging does not list the SP500"
+    assert contract.contract_version == _raw_contract()["contract_version"] == "3.0.0"
+    assert contract.schema_version == 1
+
+
+def test_a_stopped_universe_is_stopped_by_its_status_alone() -> None:
+    """Owner decision D5 of 2026-10-26: no gate other than the status holds a universe back."""
+    contract = load_environment_contract()
+    entries = [entry for entry in _raw_contract()["environments"]["production"]["universes"] if entry["key"] == "sp500"]
+
+    assert entries == [{"key": "sp500", "status": "stopped"}]
+    assert EnvironmentUniverse(key="sp500", status="stopped").status == "stopped"
+    assert contract.universe_status("sp500", "production") == "stopped"
+    assert contract.is_universe_scheduled("sp500", "production") is False
+    assert contract.is_head_scheduled("universe:sp500-us-2026-09-30", "production") is False
 
 
 @pytest.mark.parametrize(
@@ -138,33 +145,36 @@ def test_the_scheduled_universes_of_an_environment(environment: str, expected: t
     assert load_environment_contract().scheduled_universes(environment) == expected
 
 
-def test_the_stopped_universe_keys_are_the_universes_that_wait_for_an_unlock() -> None:
-    assert load_environment_contract().stopped_universe_keys == frozenset({"sp500"})
-
-
-def test_unlocking_a_universe_in_the_file_makes_the_contract_schedule_it() -> None:
+def test_a_changed_status_in_the_file_makes_the_contract_schedule_the_universe() -> None:
     """The status is read, not copied: a changed file changes every answer. This is the mutation of #1310."""
 
-    def unlock_sp500(raw: dict) -> None:
-        raw["environments"]["production"]["universes"][2] = {"key": "sp500", "status": "scheduled"}
+    def schedule_sp500(raw: dict) -> None:
+        raw["environments"]["production"]["universes"][2]["status"] = "scheduled"
 
-    contract = _contract_with(unlock_sp500)
+    contract = _contract_with(schedule_sp500)
 
     assert contract.is_universe_scheduled("sp500", "production") is True
     assert contract.is_head_scheduled("universe:sp500-us-2026-09-30", "production") is True
     assert contract.scheduled_universes("production") == ("topt", "qqq", "sp500")
-    assert contract.stopped_universe_keys == frozenset()
+
+
+#: The block that a stopped universe held before contract version 3.0.0. The model refuses it now.
+_RETIRED_UNLOCK = {
+    "end_to_end": {"environment": "production", "universe": "qqq"},
+    "verdict": {"name": "fetch_keys_once", "environment": "production", "consecutive_green_nights": 3},
+}
 
 
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda raw: raw["environments"]["production"]["universes"][2].pop("unlock"), "needs an unlock"),
         (
-            lambda raw: raw["environments"]["production"]["universes"][0].update(
-                unlock=raw["environments"]["production"]["universes"][2]["unlock"]
-            ),
-            "must not have an unlock",
+            lambda raw: raw["environments"]["production"]["universes"][2].update(unlock=_RETIRED_UNLOCK),
+            "Extra inputs are not permitted",
+        ),
+        (
+            lambda raw: raw["environments"]["production"]["universes"][0].update(unlock=_RETIRED_UNLOCK),
+            "Extra inputs are not permitted",
         ),
         (
             lambda raw: raw["environments"]["production"]["universes"].append({"key": "topt", "status": "scheduled"}),
@@ -175,29 +185,15 @@ def test_unlocking_a_universe_in_the_file_makes_the_contract_schedule_it() -> No
             "differ",
         ),
         (lambda raw: raw["environments"]["staging"]["ticks"].pop("topt"), "differ"),
-        (
-            lambda raw: raw["environments"]["production"]["universes"][2]["unlock"]["end_to_end"].update(
-                environment="staging"
-            ),
-            "not scheduled there",
-        ),
-        (
-            lambda raw: raw["environments"]["production"]["universes"][2]["unlock"]["verdict"].update(
-                consecutive_green_nights=0
-            ),
-            "greater than or equal to 1",
-        ),
         (lambda raw: raw["environments"]["production"].update(strategy_universe="topt"), "strategy_universe"),
         (lambda raw: raw["environments"]["production"]["ticks"]["qqq"].update(scheduled=True), "scheduled"),
     ],
     ids=[
-        "stopped-without-unlock",
-        "scheduled-with-unlock",
+        "unlock-key-on-a-stopped-universe",
+        "unlock-key-on-a-scheduled-universe",
         "universe-listed-twice",
         "universe-without-tick",
         "tick-without-universe",
-        "unlock-needs-a-universe-that-staging-does-not-run",
-        "unlock-needs-zero-nights",
         "old-strategy-universe-field",
         "old-scheduled-flag",
     ],
@@ -283,11 +279,6 @@ def test_the_universe_records_hold_the_names_the_lanes_and_the_pointer_use() -> 
 def test_a_universe_record_that_breaks_a_rule_is_refused(mutate, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         _contract_with(mutate)
-
-
-def test_a_stopped_universe_needs_the_unlock_to_be_built_from_the_model() -> None:
-    with pytest.raises(ValidationError, match="needs an unlock"):
-        EnvironmentUniverse(key="sp500", status="stopped")
 
 
 def test_generated_typescript_environment_contract_equals_fresh_render(monkeypatch: pytest.MonkeyPatch) -> None:

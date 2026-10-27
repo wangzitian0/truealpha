@@ -795,7 +795,7 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
     # #1310 / #67: the SP500 tick and constituent refresh stay registered and STOPPED until #206 /
     # a Twelve Data budget and valid constituent endpoint exist; the 4 staggered Standards Plane
     # schedules stay STOPPED until per-form standard implementations exist in ALL_STANDARDS.
-    stopped_universe_keys = {"sp500"}
+    stopped_keys = {"sp500"}
     stopped_schedule_names = {
         "sp500_live_schedule",
         "sp500_universe_refresh_schedule",
@@ -817,7 +817,7 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
     for env in ("production", "prod", " PRODUCTION "):
         prod_defs = dagster_defs.build_definitions(env)
         for key in active_universe_keys:
-            assert capture.is_universe_scheduled(key, env) is (key not in stopped_universe_keys), (key, env)
+            assert capture.is_universe_scheduled(key, env) is (key not in stopped_keys), (key, env)
 
         expected_schedules = {
             "topt_live_schedule": "15 22 * * *",
@@ -978,13 +978,13 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
 
 
-# -- #1310: the SP500 schedule stays STOPPED until the unlock of the contract holds ------------------------
+# -- #1310: the SP500 schedule stays STOPPED while its status in the contract is stopped ------------------
 
 #: Every failure below shows this text, so a person who flips the SP500 status reads the reason first.
 SP500_STOPPED_BECAUSE = (
-    "environment_contract.v1.json holds the SP500 as stopped until QQQ runs end to end on production and the "
-    "verdict fetch_keys_once is green for 3 consecutive nights. #1310: one SP500 tick needs about 1,000 "
-    "Twelve Data credits, and production owns 480 credits a day."
+    "environment_contract.v1.json holds the SP500 as stopped in production. The status is the only gate: "
+    "no unlock, no verdict and no count of nights holds the tick back (owner decision D5 of 2026-10-26). "
+    "#1310: one SP500 tick needs about 1,000 Twelve Data credits, and production owns 480 credits a day."
 )
 
 
@@ -1001,6 +1001,25 @@ def _running_sp500_schedules(rows: dict[str, tuple[str, str]]) -> list[str]:
         name
         for name, (job_name, status) in rows.items()
         if job_name == dagster_defs.SP500_LIVE_JOB_NAME and status == dg.DefaultScheduleStatus.RUNNING.name
+    )
+
+
+def test_the_sp500_entry_of_the_contract_holds_a_status_and_no_other_gate() -> None:
+    """Owner decision D5 of 2026-10-26: the status is the only gate of the SP500 tick. The packaged file
+    that the daemon loads holds the entry `{key, status}` and no precondition. The deployed builder then
+    registers the SP500 schedule as STOPPED from that one fact."""
+    from importlib import resources
+
+    from truealpha_contracts.environment_contract import ENVIRONMENT_CONTRACT_RESOURCE
+
+    raw = json.loads(resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text())
+    entries = [entry for entry in raw["environments"]["production"]["universes"] if entry["key"] == "sp500"]
+
+    assert entries == [{"key": "sp500", "status": "stopped"}], SP500_STOPPED_BECAUSE
+    assert capture.is_universe_scheduled("sp500", "production") is False, SP500_STOPPED_BECAUSE
+    built = dagster_defs.build_definitions("production")
+    assert _schedule_rows(built)["sp500_live_schedule"] == (dagster_defs.SP500_LIVE_JOB_NAME, "STOPPED"), (
+        SP500_STOPPED_BECAUSE
     )
 
 
@@ -1127,8 +1146,8 @@ def test_the_sp500_stop_is_read_from_the_contract_and_from_no_constant() -> None
         "from truealpha_contracts import environment_contract as contract_module\n"
         "raw = json.loads(resources.files('truealpha_contracts.data').joinpath('environment_contract.v1.json').read_text())\n"
         "raw['environments']['production']['universes'][2] = {'key': 'sp500', 'status': 'scheduled'}\n"
-        "unlocked = contract_module.EnvironmentContract.model_validate_json(json.dumps(raw))\n"
-        "contract_module.load_environment_contract = lambda: unlocked\n"
+        "scheduled = contract_module.EnvironmentContract.model_validate_json(json.dumps(raw))\n"
+        "contract_module.load_environment_contract = lambda: scheduled\n"
         "from data_engine import dagster_defs\n"
         "rows = {s.name: s.default_status.name for s in dagster_defs.defs.schedules}\n"
         "print(json.dumps(rows))\n"
@@ -1164,7 +1183,7 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
 
     raw = json.loads(load_environment_contract().model_dump_json())
     raw["environments"]["production"]["universes"][2] = {"key": "sp500", "status": "scheduled"}
-    unlocked = EnvironmentContract.model_validate_json(json.dumps(raw))
+    scheduled_contract = EnvironmentContract.model_validate_json(json.dumps(raw))
 
     class _Source:
         def __init__(self, etf: str) -> None:
@@ -1180,9 +1199,11 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
     with pytest.raises(UnknownUniverse):
         universe_refresh._is_source_refresh_enabled(_Source("universe-the-contract-does-not-list"))
 
-    monkeypatch.setattr(capture, "load_environment_contract", lambda: unlocked)
+    monkeypatch.setattr(capture, "load_environment_contract", lambda: scheduled_contract)
     monkeypatch.setattr(settings, "app_env", "production")
-    assert enabled() == {"qqq": True, "sp500": True, "canary": True}, "the contract unlocks the SP500"
+    assert enabled() == {"qqq": True, "sp500": True, "canary": True}, (
+        "a scheduled status in the contract schedules the SP500"
+    )
     monkeypatch.setattr(settings, "app_env", "staging")
     assert enabled() == {"qqq": False, "sp500": False, "canary": True}, "staging does not list the SP500"
 

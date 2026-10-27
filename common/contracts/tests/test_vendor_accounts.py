@@ -50,11 +50,11 @@ def _limits(raw: dict[str, Any]):
 # -- the row replaces the demand estimate ---------------------------------------------------------
 
 
-def test_the_contract_is_version_two_and_keeps_no_demand_estimate() -> None:
+def test_the_contract_keeps_no_demand_estimate() -> None:
+    """The version of the contract has one pin: `test_environment_contract.py`."""
     raw = _raw()
     contract = load_environment_contract()
 
-    assert contract.contract_version == raw["contract_version"] == "2.0.0"
     text = json.dumps(raw)
     for predecessor in ("planned_daily_demand", "allocation_basis", "shared_physical_seats"):
         assert predecessor not in text, predecessor
