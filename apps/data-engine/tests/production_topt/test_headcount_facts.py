@@ -158,8 +158,8 @@ def test_seed_issuer_headcounts_carries_real_sec_accessions_across_backtest_wind
     import sys
     from pathlib import Path
 
-    from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
     from data_engine.datahub.production_topt.headcount import validate_cited_headcount_fact
+    from topt_symbols import TOPT_SYMBOLS
 
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "seed_issuer_headcounts.py"
     spec = importlib.util.spec_from_file_location("seed_issuer_headcounts", script_path)
@@ -183,7 +183,7 @@ def test_seed_issuer_headcounts_carries_real_sec_accessions_across_backtest_wind
         by_ticker.setdefault(fact.ticker, []).append(fact)
 
     earliest_backtest_cutoff = datetime(2023, 4, 28, 23, 59, 59, tzinfo=UTC)
-    for symbol in DEFAULT_TOPT_SYMBOLS:
+    for symbol in TOPT_SYMBOLS:
         assert symbol in by_ticker, f"missing reviewed headcount facts for {symbol}"
         eligible = [fact for fact in by_ticker[symbol] if fact.knowable_at <= earliest_backtest_cutoff]
         assert eligible, f"{symbol} has no headcount fact knowable on or before {earliest_backtest_cutoff.date()}"

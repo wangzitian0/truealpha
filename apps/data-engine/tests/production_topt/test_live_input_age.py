@@ -23,7 +23,6 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import PlannedRun
 from data_engine.datahub.production_topt.executor import SourceFetchPort
@@ -45,6 +44,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_data
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from macro_seed import seed_rate_for_cutoff  # noqa: E402
 from split_series_seed import share_count_vintage, store_flat_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 #: The settled session every listing closes on. The corpus partition starts on it.
 SESSION = date(2026, 3, 31)
@@ -214,7 +214,7 @@ def tick() -> Iterator[Tick]:
         monkeypatch.setattr(composition, "build_routes", _routes)
         monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: ())
         with psycopg.connect(url) as connection:
-            store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=CLOSE)
+            store_flat_daily_series(connection, TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=CLOSE)
             # The tick reads the risk-free rate of its cutoff from the stored series (#1255).
             seed_rate_for_cutoff(connection, TICK)
             connection.commit()
@@ -289,7 +289,7 @@ def test_an_issuer_whose_inputs_are_older_than_the_limit_is_excluded_as_stale(ti
 
 def test_the_other_issuers_stay_eligible(tick: Tick) -> None:
     """One stale issuer does not touch the others. JPM is a bank and has its own exclusion reasons."""
-    others = [t for t in DEFAULT_TOPT_SYMBOLS if t not in AGE_DAYS and t != _BANK_TICKER]
+    others = [t for t in TOPT_SYMBOLS if t not in AGE_DAYS and t != _BANK_TICKER]
 
     served = {ticker: _served(tick, ticker) for ticker in others}
 

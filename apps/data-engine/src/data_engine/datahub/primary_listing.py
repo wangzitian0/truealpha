@@ -22,7 +22,7 @@ import psycopg
 
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
 
-__all__ = ("PRIMARY_LISTING_UNDECLARED", "choose_primary_listings")
+__all__ = ("PRIMARY_LISTING_UNDECLARED", "choose_primary_listings", "primary_symbols")
 
 #: The reason of an unavailable issuer: it has several listings, and no `primary_listing` row names one.
 PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
@@ -92,6 +92,28 @@ def choose_primary_listings(
             None,
         )
     return chosen
+
+
+def primary_symbols(
+    connection: psycopg.Connection[Any], denominator: Mapping[str, Any], *, known_at: datetime
+) -> tuple[str, ...]:
+    """The ticker of the primary listing of each issuer in the universe denominator, by symbol (#1522).
+
+    The denominator is the one of a universe corpus: the frozen TOPT file or a published head. An issuer
+    with several listings and none declared adds no symbol (`choose_primary_listings`). A listing without a
+    ticker names no price series. Every lane that stores a price series for a universe asks this function.
+    """
+    fields = list(denominator["instrument_tuple_fields"])
+    issuer_at, listing_at, ticker_at = (fields.index(name) for name in ("issuer_id", "listing_id", "ticker"))
+    tickers: dict[str, str | None] = {}
+    listings: dict[str, list[str]] = {}
+    for row in denominator["instruments"]:
+        tickers[str(row[listing_at])] = row[ticker_at] or None
+        listings.setdefault(str(row[issuer_at]), []).append(str(row[listing_at]))
+    chosen = choose_primary_listings(connection, listings, known_at=known_at)
+    return tuple(
+        sorted({ticker for listing in chosen.values() if listing is not None and (ticker := tickers[listing])})
+    )
 
 
 def _listing_entity(connection: psycopg.Connection[Any], listing: str, as_of: date, known_at: datetime) -> str | None:

@@ -47,9 +47,11 @@ import importlib
 import json
 import math
 import os
+import sys
 import urllib.parse
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import dagster as dg
@@ -57,7 +59,6 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     MAX_BAR_LAG_SESSIONS,
     PriceBarRecord,
     TwelveDataApiError,
@@ -74,6 +75,9 @@ from data_engine.lanes import market_data
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 from data_engine.quality import nightly_verdicts
 from truealpha_runtime.testing import load_tool
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 
 @pytest.fixture
@@ -563,7 +567,7 @@ def test_the_lane_fits_the_twelve_data_production_share(connection) -> None:
     requests: list[tuple[str, str, str]] = []
     client = _adjust_aware_client(requests, [])
 
-    _refresh_market_data(dg.build_op_context(), connection, symbols=DEFAULT_TOPT_SYMBOLS, now=LANE_NOW, client=client)
+    _refresh_market_data(dg.build_op_context(), connection, symbols=TOPT_SYMBOLS, now=LANE_NOW, client=client)
 
     twelve = LEDGER_CAPACITIES["twelvedata"]
     assert twelve.daily_budget is not None
@@ -591,7 +595,7 @@ def test_the_backtest_starts_after_the_refresh_has_ended_in_each_environment(con
     _refresh_market_data(
         dg.build_op_context(),
         connection,
-        symbols=DEFAULT_TOPT_SYMBOLS,
+        symbols=TOPT_SYMBOLS,
         now=LANE_NOW,
         client=_adjust_aware_client(requests, []),
     )
@@ -759,6 +763,15 @@ def fake_connection(monkeypatch) -> _Connection:
     return fake
 
 
+@pytest.fixture
+def one_symbol(monkeypatch) -> None:
+    """The symbols the lane stores come from the corpus and the relation, which a fake connection cannot answer.
+    These tests assert what the lane records after its ingest, so they name one symbol."""
+    from data_engine.datahub import market_prices
+
+    monkeypatch.setattr(market_prices, "stored_symbols", lambda *_a, **_k: ("AAPL",))
+
+
 def _run_job() -> dg.ExecuteInProcessResult:
     return market_data.market_data_refresh_pipeline_job.execute_in_process(
         tags={nightly_verdicts.TICK_TAG: TICK}, raise_on_error=False
@@ -770,7 +783,9 @@ def test_the_lane_declares_the_verdict_it_records() -> None:
     assert nightly_verdicts.is_valid_name("market_data_freshness")
 
 
-def test_a_fresh_run_records_a_green_verdict_after_the_commit(monkeypatch, written, fake_connection) -> None:
+def test_a_fresh_run_records_a_green_verdict_after_the_commit(
+    monkeypatch, written, fake_connection, one_symbol
+) -> None:
     commits_when_judged: list[int] = []
     monkeypatch.setattr(market_data, "_refresh_market_data", lambda *_a, **_k: {})
 
@@ -792,7 +807,7 @@ def test_a_fresh_run_records_a_green_verdict_after_the_commit(monkeypatch, writt
 
 
 def test_a_stale_run_records_a_red_verdict_and_fails_the_run_but_keeps_the_ingest(
-    monkeypatch, written, fake_connection
+    monkeypatch, written, fake_connection, one_symbol
 ) -> None:
     monkeypatch.setattr(market_data, "_refresh_market_data", lambda *_a, **_k: {})
     monkeypatch.setattr(
@@ -810,7 +825,41 @@ def test_a_stale_run_records_a_red_verdict_and_fails_the_run_but_keeps_the_inges
     assert fake_connection.commits == 1, "a stale verdict must not roll back the bars this run ingested"
 
 
-def test_a_crashing_ingest_records_a_red_verdict(monkeypatch, written, fake_connection) -> None:
+def _denominator(*tickers: str) -> dict[str, Any]:
+    """A universe denominator of single-listing issuers, one for each ticker."""
+    return {
+        "instrument_tuple_fields": ["issuer_id", "instrument_id", "listing_id", "ticker"],
+        "instruments": [
+            [f"issuer:cik:{index:010d}", f"instrument:{ticker.lower()}", f"listing:xnas:{ticker.lower()}", ticker]
+            for index, ticker in enumerate(tickers, start=1)
+        ],
+    }
+
+
+def test_the_lane_stores_the_primary_listing_of_a_21st_issuer(monkeypatch, written, fake_connection) -> None:
+    """The symbols of the lane come from the corpus of the universe record (#1522): an issuer that the corpus
+    gains is stored with no edit in the lane. The 20-symbol tuple used to ignore it. This runs the deployed job."""
+    from data_engine.datahub.production_topt import universe_corpus
+
+    monkeypatch.setattr(
+        universe_corpus, "load_corpus", lambda _filename: {"topt_denominator": _denominator("AAPL", "ZZZZ")}
+    )
+    asked: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        market_data, "_refresh_market_data", lambda _context, _connection, *, symbols, now: asked.append(tuple(symbols))
+    )
+    monkeypatch.setattr(
+        market_data,
+        "judge_bar_freshness",
+        lambda _connection, symbols, *, now: market_data.BarFreshness(ok=True, summary=f"bars of {len(symbols)}"),
+    )
+
+    assert _run_job().success
+    assert asked == [("AAPL", "ZZZZ")]
+    assert [row["summary"] for row in written] == ["bars of 2"]
+
+
+def test_a_crashing_ingest_records_a_red_verdict(monkeypatch, written, fake_connection, one_symbol) -> None:
     """The 2026-09-24..10-05 shape: the lane failed 8 times and no verdict row said so."""
 
     def crash(*_a: object, **_k: object) -> None:

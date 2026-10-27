@@ -29,7 +29,6 @@ import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     SINGLE_SOURCE_CONFIDENCE,
     TwelveDataApiError,
     TwelveDataClient,
@@ -49,6 +48,7 @@ from truealpha_runtime.testing import load_tool
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from qqq_head_seed import daily_series_client, daily_values, publish_qqq_head  # noqa: E402
 from split_series_seed import store_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 #: The Nasdaq-100 list as the index operator answered it on 2026-08-17 (sha-pinned by `test_universe_plane.py`).
 NASDAQ100_CASSETTE = Path(__file__).parent / "production_topt" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
@@ -110,9 +110,7 @@ def test_the_lane_keeps_the_declared_primary_listing_per_issuer_and_skips_the_to
     )
     resolve_coordinates(connection, denominator["instruments"], as_of=known_at.date(), known_at=known_at)
 
-    assert qqq_prices.target_symbols(connection, denominator, covered=DEFAULT_TOPT_SYMBOLS, known_at=known_at) == (
-        "ADBE",
-    )
+    assert qqq_prices.target_symbols(connection, denominator, covered=TOPT_SYMBOLS, known_at=known_at) == ("ADBE",)
     # Without the TOPT rule each declared issuer adds its primary listing only. GOOG never appears.
     assert qqq_prices.target_symbols(connection, denominator, covered=(), known_at=known_at) == (
         "AAPL",
@@ -268,11 +266,11 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
     targets = qqq_prices.target_symbols(
         connection,
         _denominator([(f"issuer:{ticker}", ticker) for ticker in tickers]),
-        covered=DEFAULT_TOPT_SYMBOLS,
+        covered=TOPT_SYMBOLS,
         known_at=datetime(2026, 10, 6, 22, tzinfo=UTC),
     )
     refresh = ingest_twelve_data_market_prices(
-        symbols=DEFAULT_TOPT_SYMBOLS,
+        symbols=TOPT_SYMBOLS,
         client=daily_series_client([], [], caller="market_prices.fetch_time_series"),
         connection=None,
         now=datetime(2026, 10, 6, 22, tzinfo=UTC),

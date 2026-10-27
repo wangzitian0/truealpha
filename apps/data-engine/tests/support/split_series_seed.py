@@ -16,12 +16,12 @@ from typing import Any
 
 import psycopg
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     PriceBarRecord,
     insert_market_prices_daily,
     is_xnys_trading_day,
 )
 from data_engine.datahub.share_basis import SplitHistory
+from topt_symbols import TOPT_SYMBOLS
 
 #: The (unadjusted close, split-adjusted close) of one symbol on one session. None stores no bar.
 SeriesShape = Callable[[date], tuple[Decimal | None, Decimal | None]]
@@ -61,7 +61,7 @@ def store_flat_topt_series(connection: Any, *, last: date, first: date = date(20
     The member builder never keeps a filed count without series that prove the splits (#1277). A test
     that expects an available core result stores the series first. `last` is on or after the close session.
     """
-    store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=first, last=last)
+    store_flat_daily_series(connection, TOPT_SYMBOLS, first=first, last=last)
 
 
 def store_topt_series(database_url: str, *, first: date = date(2025, 12, 1), last: date = date(2026, 9, 30)) -> None:
@@ -70,7 +70,7 @@ def store_topt_series(database_url: str, *, first: date = date(2025, 12, 1), las
     The default span holds every settled session and every share-count date the tick tests use.
     """
     with psycopg.connect(database_url) as connection:
-        store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=first, last=last)
+        store_flat_daily_series(connection, TOPT_SYMBOLS, first=first, last=last)
         connection.commit()
 
 

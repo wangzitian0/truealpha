@@ -30,7 +30,6 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import PlannedRun
 from data_engine.datahub.production_topt.executor import SourceFetchPort
@@ -54,6 +53,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_data
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from macro_seed import seed_risk_free_rate  # noqa: E402
 from split_series_seed import share_count_vintage, store_flat_daily_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 SESSION = date(2026, 3, 31)
 TICK = datetime(2026, 4, 1, 22, 15, tzinfo=UTC)
@@ -234,7 +234,7 @@ def world() -> Iterator[World]:
         monkeypatch.setattr(composition, "build_routes", build_routes)
         monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: ())
         with psycopg.connect(url) as connection:
-            store_flat_daily_series(connection, DEFAULT_TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=CLOSE)
+            store_flat_daily_series(connection, TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=CLOSE)
             connection.commit()
         yield World(url, route_builds)
 
@@ -312,7 +312,7 @@ def test_every_strategy_decision_uses_the_stored_rate_of_the_previous_business_d
     world.store_rates(STORED)
     metadata = world.tick()
 
-    tickers = [ticker for ticker in DEFAULT_TOPT_SYMBOLS if ticker != _BANK_TICKER]
+    tickers = [ticker for ticker in TOPT_SYMBOLS if ticker != _BANK_TICKER]
     assert len(tickers) == 19
     for ticker in tickers:
         outcome, value, reason = _decision(world, metadata, ticker)
