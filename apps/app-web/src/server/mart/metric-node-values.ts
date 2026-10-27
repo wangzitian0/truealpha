@@ -2,12 +2,13 @@
  * #1413 (F4): TypeScript mirror of `truealpha_contracts.metric_node_read.PostgresMetricNodeValueRepository`.
  *
  * Reads `mart.metric_node_values` by `node_key` at the governed head (`mart.served_head` where
- * `universe_id like 'universe:topt-%'`, falling back to the acceptance-gated TOPT run when
+ * `universe_id` starts with the id prefix of the universe with role `strategy`, falling back to the acceptance-gated TOPT run when
  * no pointer has advanced yet). Both App and MCP resolve the same head and return identical rows.
  *
  * Server-only; never import into a client component.
  */
 
+import { idPrefixLikeOfRole } from "@/contracts/universes";
 import { withMartReadonly } from "./db";
 import type { MartClientLike } from "./topt-gppe-repository";
 
@@ -45,7 +46,7 @@ const POINTER_HEAD_SQL = `
   select run_id, freshness, availability, staleness_reason
   from mart.served_head
   where factor_id = 'gross_profit_per_employee'
-    and universe_id like 'universe:topt-%'
+    and universe_id like $1
   order by advanced_at desc limit 1
 `;
 
@@ -55,7 +56,7 @@ const ACCEPTANCE_FALLBACK_HEAD_SQL = `
   join mart.datahub_quality_report q on q.run_id = s.run_id
   where s.environment = (select environment from mart.environment_identity)
     and s.complete
-    and s.universe_id like 'universe:topt-%'
+    and s.universe_id like $1
   order by q.created_at desc, q.report_id desc limit 1
 `;
 
@@ -162,7 +163,8 @@ export class MartMetricNodeValueRepository {
     }
 
     return this.runWithClient(async (client) => {
-      let head = await client.query(POINTER_HEAD_SQL);
+      const servedUniverseLike = idPrefixLikeOfRole("strategy");
+      let head = await client.query(POINTER_HEAD_SQL, [servedUniverseLike]);
       if (head.rows.length > 0) {
         const row = head.rows[0];
         if (row.availability === "unavailable" || row.run_id === null) {
@@ -173,7 +175,7 @@ export class MartMetricNodeValueRepository {
           return { node_key: nodeKey, reason: `head_unavailable: ${reason}` };
         }
       } else {
-        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL);
+        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL, [servedUniverseLike]);
       }
       if (head.rows.length === 0 || head.rows[0].run_id === null) {
         return { node_key: nodeKey, reason: "no accepted (quality-reported) production TOPT run" };

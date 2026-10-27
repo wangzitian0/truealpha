@@ -19,6 +19,7 @@ import {
   type RankingCardData,
   type EntityCardData,
 } from "../src/server/cards/xhs-card";
+import { universeWithRole } from "../src/contracts/universes";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -27,6 +28,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const mockData: RankingCardData = {
   cutoffAt: "2026-03-31T22:15:00Z",
   totalMembers: 20,
+  universe: universeWithRole("strategy"),
   items: [
     {
       rank: 1,

@@ -18,6 +18,7 @@ import { MartToptGppeRepository, type MartClientLike } from "@/server/mart/topt-
 import type { ToptGppeRepositoryLike } from "@/server/topt-quality";
 import type { AccessContext } from "@/contracts/strategyRun";
 import { resolveHeadFreshness, type HeadFreshness } from "@/contracts/serviceObjectives";
+import { idPrefixLikeOfRole } from "@/contracts/universes";
 import type { ReadState } from "@/server/read-state";
 
 export interface FunnelLayer {
@@ -79,9 +80,9 @@ export async function loadQualityFunnel(
           // Scope L5 to the governed TOPT head (matching MartToptGppeRepository.POINTER_HEAD_SQL).
           // Without a WHERE filter, `order by universe_id` picked `canary-topt3` first (#1363).
           "from mart.served_head " +
-          "where coalesce(run_id, head_run_id) = $1 or universe_id like 'universe:topt-%' " +
+          "where coalesce(run_id, head_run_id) = $1 or universe_id like $2 " +
           "order by (coalesce(run_id, head_run_id) = $1) desc, advanced_at desc limit 1",
-        [runId],
+        [runId, idPrefixLikeOfRole("strategy")],
       );
       const ptrRow = ptr.rows[0];
       return [

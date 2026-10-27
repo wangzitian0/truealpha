@@ -21,6 +21,9 @@ import { randomBytes } from "node:crypto";
 
 import type { ClientBase } from "pg";
 
+import { universeRecord } from "../src/contracts/environmentContract.generated";
+import { universeWithRole } from "../src/contracts/universes";
+
 /** The part of a pg client that the seed needs. A `Client` and a `PoolClient` both fit it. */
 export type SeedDb = Pick<ClientBase, "query">;
 
@@ -223,7 +226,7 @@ export async function seedResult(
         freshness, reason_codes, input_observation_ids, gppe_invocation_id, gppe_result_id,
         gppe_definition_id, gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload,
         created_at, availability_status, source_evidence_status, factor_validation_status)
-     values ($1, $2, $3, $4, $5, $6, 'universe:topt-test', 'v1', $7, $8::timestamptz, $9, $10, $11,
+     values ($1, $2, $3, $4, $5, $6, $20, 'v1', $7, $8::timestamptz, $9, $10, $11,
              'non_financial', 'capital_adjusted_gppe', 'available', 12.5, 1, 12.5, 'tech',
              15, 20, 18.75, 20, 0.5, 0.85, 'fresh', '{}', $12, $13, $14, $15, $16, $17, $18, '{}'::jsonb,
              $19::timestamptz, 'available', 'verified', 'not_evaluated')`,
@@ -247,6 +250,8 @@ export async function seedResult(
       `three-tier-definition:${hex()}`,
       hex(),
       args.createdAt,
+      // The core result belongs to the strategy universe of the record, so the rankings readers select it (#1522).
+      `${universeRecord(universeWithRole("strategy")).id_prefix}seed`,
     ],
   );
   return { resultId, byListing };

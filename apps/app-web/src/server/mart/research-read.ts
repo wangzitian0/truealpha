@@ -166,6 +166,7 @@ function provenanceOf(inputs: DecisionProvenance | undefined): Provenance {
 		operatingPeriodEnd: inputs?.operating_period_end ?? null,
 		revenuePeriodEnd: inputs?.revenue_period_end ?? null,
 		sharesPeriodEnd: inputs?.shares_period_end ?? null,
+		universeId: inputs?.universe_id ?? null,
 		universeVersion: inputs?.universe_version ?? null,
 		universeSha256: inputs?.universe_sha256 ?? null,
 		gppeDefinitionSha256: inputs?.gppe_definition_sha256 ?? null,
@@ -177,6 +178,8 @@ export interface Provenance {
 	operatingPeriodEnd: string | null;
 	revenuePeriodEnd: string | null;
 	sharesPeriodEnd: string | null;
+	/** The governed universe id; the ranking filter reads it. Null when no core result was joined. */
+	universeId: string | null;
 	universeVersion: string | null;
 	universeSha256: string | null;
 	gppeDefinitionSha256: string | null;

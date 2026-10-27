@@ -9,7 +9,8 @@
  */
 
 import { useState } from "react";
-import type { PegGrowthConvention, RankingUniverse } from "@/contracts/strategyRun";
+import type { PegGrowthConvention } from "@/contracts/strategyRun";
+import { universeWithRole } from "@/contracts/universes";
 
 interface CardExportButtonProps {
   cutoff?: string;
@@ -17,7 +18,7 @@ interface CardExportButtonProps {
   kind?: "ranking" | "entity";
   format?: "png" | "svg";
   convention?: PegGrowthConvention;
-  universe?: RankingUniverse;
+  universe?: string;
 }
 
 export function CardExportButton({
@@ -26,7 +27,7 @@ export function CardExportButton({
   kind,
   format = "png",
   convention = "historical_cagr",
-  universe = "topt",
+  universe = universeWithRole("strategy"),
 }: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
 
@@ -38,7 +39,7 @@ export function CardExportButton({
     if (cutoff) query.set("cutoff", cutoff);
     if (issuerId) query.set("issuer", issuerId);
     if (convention !== "historical_cagr") query.set("convention", convention);
-    if (!issuerId && universe !== "topt") query.set("universe", universe);
+    if (!issuerId && universe !== universeWithRole("strategy")) query.set("universe", universe);
     query.set("format", format);
 
     const ext = format === "svg" ? "svg" : "png";

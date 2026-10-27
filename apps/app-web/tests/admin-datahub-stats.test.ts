@@ -6,6 +6,7 @@
  * Run standalone: `bun run tests/admin-datahub-stats.test.ts`.
  */
 
+import { idPrefixLikesOfRole } from "../src/contracts/universes";
 import { loadDatahubStats } from "../src/server/admin/datahub-stats";
 import { __setTestOpsClient } from "../src/server/admin/ops";
 
@@ -403,6 +404,7 @@ const nightlyVerdictRows = [
 // PLAUSIBILITY_SQL / CORROBORATION_SQL must exclude canary% runs.
 {
   const capturedSqls: string[] = [];
+  const capturedParams = new Map<string, readonly unknown[] | undefined>();
   const staleAndWithheldHeads = [
     {
       universe_id: "universe:qqq-us-2026-06-30",
@@ -435,7 +437,7 @@ const nightlyVerdictRows = [
       factor_availability: {},
     },
     {
-      universe_id: "universe:withheld-direct",
+      universe_id: "universe:topt-us-2026-03-31",
       sequence: 3,
       advanced_at: "2026-09-01 00:00:00+00",
       target_run_id: "capture-run:" + "c".repeat(64),
@@ -450,7 +452,7 @@ const nightlyVerdictRows = [
     },
     {
       environment: "production",
-      universe_id: "canary-topt3",
+      universe_id: "universe:canary-us-2026-10-19",
       sequence: 4,
       advanced_at: "2026-10-19 06:00:00+00",
       target_run_id: "capture-run:" + "d".repeat(64),
@@ -483,8 +485,9 @@ const nightlyVerdictRows = [
   ];
 
   __setTestOpsClient({
-    query: async (sql: string) => {
+    query: async (sql: string, params?: readonly unknown[]) => {
       capturedSqls.push(sql);
+      capturedParams.set(sql, params);
       if (typeof sql === "string" && sql.includes("nightly_verdicts"))
         return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
@@ -523,7 +526,7 @@ const nightlyVerdictRows = [
     "head with non-numeric 'unavailable' availability is degraded",
   );
   assert(
-    stats.heads[3].universe_id === "canary-topt3" &&
+    stats.heads[3].universe_id === "universe:canary-us-2026-10-19" &&
       stats.heads[3].is_corroboration_degraded === false &&
       stats.heads[3].is_degraded === false,
     "canary% head is exempt from multi-vendor corroboration degradation (#1362)",
@@ -550,17 +553,20 @@ const nightlyVerdictRows = [
   const sourcesSql = capturedSqls.find(
     (s) => s.includes("from raw.fetches") && s.includes("fetches_total"),
   );
+  // The sentinel patterns come from the universe record, bound as $1. An empty array would exclude nothing.
+  const sentinelLikes = idPrefixLikesOfRole("sentinel");
+  assert(sentinelLikes.length > 0, "the record holds at least one sentinel universe");
   assert(
     plausibilitySql !== undefined &&
-      plausibilitySql.toLowerCase().includes("not like") &&
-      plausibilitySql.toLowerCase().includes("canary%"),
-    "PLAUSIBILITY_SQL filters out synthetic canary% universes",
+      plausibilitySql.toLowerCase().includes("not like all ($1::text[])") &&
+      JSON.stringify(capturedParams.get(plausibilitySql)?.[0]) === JSON.stringify(sentinelLikes),
+    "PLAUSIBILITY_SQL filters out the sentinel universes of the record",
   );
   assert(
     corroborationSql !== undefined &&
-      corroborationSql.toLowerCase().includes("not like") &&
-      corroborationSql.toLowerCase().includes("canary%"),
-    "CORROBORATION_SQL filters out synthetic canary% universes",
+      corroborationSql.toLowerCase().includes("not like all ($1::text[])") &&
+      JSON.stringify(capturedParams.get(corroborationSql)?.[0]) === JSON.stringify(sentinelLikes),
+    "CORROBORATION_SQL filters out the sentinel universes of the record",
   );
   assert(
     coverageSql !== undefined &&

@@ -19,6 +19,7 @@
  * Run standalone: `bun run tests/topt-gppe-repository.test.ts`.
  */
 
+import { idPrefixLikeOfRole } from "../src/contracts/universes";
 import { MartToptGppeRepository, type MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -104,9 +105,16 @@ function fakeRunner(
   const result = await new MartToptGppeRepository(runner).latest();
   assert("cells" in result, `expected a report, got unavailable: ${JSON.stringify(result)}`);
   assert(result.run_id === RUN_ID, "run_id must round-trip from the fallback head query");
-  assert(calls.some((c) => c.sql.includes("current_pointer_head") || c.sql.includes("served_head")), "must try the pointer first");
+  assert(
+    calls.some(
+      (c) =>
+        (c.sql.includes("current_pointer_head") || c.sql.includes("served_head")) &&
+        c.params?.[0] === idPrefixLikeOfRole("strategy"),
+    ),
+    "must try the pointer first, scoped to the id prefix of the strategy universe",
+  );
   const fallbackCall = calls.find((c) => c.sql.includes("topt_capture_status") && c.sql.includes("datahub_quality_report"));
-  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like 'universe:topt-%'"), "fallback query must filter to universe:topt-%");
+  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like $1") && fallbackCall.params?.[0] === idPrefixLikeOfRole("strategy"), "fallback query must bind the id prefix of the strategy universe");
 
   console.log("#434 topt-gppe-repository acceptance-fallback ready path passed");
 }
@@ -126,7 +134,7 @@ function fakeRunner(
   assert(result.reason.includes("no accepted"), `unexpected reason: ${result.reason}`);
   assert(calls.length === 2, `expected exactly two queries (pointer, then fallback), got ${calls.length}`);
   const fallbackCall = calls.find((c) => c.sql.includes("topt_capture_status"));
-  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like 'universe:topt-%'"), "fallback query must filter to universe:topt-%");
+  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like $1") && fallbackCall.params?.[0] === idPrefixLikeOfRole("strategy"), "fallback query must bind the id prefix of the strategy universe");
 
   console.log("#433 topt-gppe-repository no-accepted-run path passed");
 }

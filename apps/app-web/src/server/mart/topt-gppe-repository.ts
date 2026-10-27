@@ -17,6 +17,7 @@
  */
 
 import type { ToptGppeCell, ToptGppeReport, ToptGppeUnavailable } from "@/contracts/toptGppe";
+import { idPrefixLikeOfRole } from "@/contracts/universes";
 import { withMartReadonly } from "./db";
 
 /** The subset of `pg`'s `PoolClient` this repository needs — narrow enough that
@@ -32,7 +33,8 @@ const POINTER_HEAD_SQL = `
     -- The universe is part of the governed key. Without it this served whichever pipeline
     -- advanced last: the canary universe's 24-cell run displaced the 84-cell TOPT core,
     -- which is how a module card came to read "available" at 4% coverage.
-    and universe_id like 'universe:topt-%'
+    -- $1 is the id prefix of the universe with role "strategy" (#1522).
+    and universe_id like $1
   order by advanced_at desc limit 1
 `;
 
@@ -42,7 +44,7 @@ const ACCEPTANCE_FALLBACK_HEAD_SQL = `
   join mart.datahub_quality_report q on q.run_id = s.run_id
   where s.environment = (select environment from mart.environment_identity)
     and s.complete
-    and s.universe_id like 'universe:topt-%'
+    and s.universe_id like $1
   order by q.created_at desc, q.report_id desc limit 1
 `;
 
@@ -124,7 +126,8 @@ export class MartToptGppeRepository {
     }
 
     return this.runWithClient(async (client) => {
-      let head = await client.query(POINTER_HEAD_SQL);
+      const servedUniverseLike = idPrefixLikeOfRole("strategy");
+      let head = await client.query(POINTER_HEAD_SQL, [servedUniverseLike]);
       if (head.rows.length > 0) {
         const row = head.rows[0];
         if (row.availability === "unavailable" || row.run_id === null) {
@@ -135,7 +138,7 @@ export class MartToptGppeRepository {
           return { reason: `head_unavailable: ${reason}` };
         }
       } else {
-        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL);
+        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL, [servedUniverseLike]);
       }
       if (head.rows.length === 0 || head.rows[0].run_id === null) {
         return { reason: "no accepted (quality-reported) production TOPT run" };

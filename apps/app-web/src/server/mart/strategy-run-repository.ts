@@ -37,6 +37,7 @@ import {
 	type ValuationTier,
 } from "@/contracts/strategyRun";
 import { strategyRunDefinitionOf } from "@/contracts/strategyDefinition";
+import { idPrefixLikeOfRole } from "@/contracts/universes";
 import {
 	type RegisteredStrategyDefinition,
 	STRATEGY_DEFINITION_REGISTRY,
@@ -76,11 +77,11 @@ export const LATEST_RUN_SQL = `
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
-                 and h.universe_id like 'universe:topt-%'
+                 and h.universe_id like $1
            ) as is_governed,
            r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
-    where r.strategy_key = $1
+    where r.strategy_key = $2
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
     limit 1
 `;
@@ -141,7 +142,7 @@ export const DECISIONS_SQL = `
          -- metric computation in common/factors, and this adds no metric.
          t.confidence,
          t.operating_period_end, t.revenue_period_end, t.shares_period_end,
-         t.universe_version, t.universe_sha256,
+         t.universe_id, t.universe_version, t.universe_sha256,
          t.gppe_definition_sha256, t.tier_definition_sha256
   from mart.strategy_decisions d
   left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
@@ -322,6 +323,9 @@ export interface DecisionProvenance {
 	operating_period_end: string | null;
 	revenue_period_end: string | null;
 	shares_period_end: string | null;
+	/** The governed universe id (`universe:<key>-<region>-<date>`). `universe_version` is another coordinate
+	 * (`topt-candidate-2026-03-31-v1`) and starts with no id prefix (#1522). */
+	universe_id: string | null;
 	universe_version: string | null;
 	universe_sha256: string | null;
 	gppe_definition_sha256: string | null;
@@ -336,6 +340,7 @@ export function provenanceFromRow(
 		operating_period_end: dateString(row.operating_period_end),
 		revenue_period_end: dateString(row.revenue_period_end),
 		shares_period_end: dateString(row.shares_period_end),
+		universe_id: textOrNull(row.universe_id),
 		universe_version: textOrNull(row.universe_version),
 		universe_sha256: textOrNull(row.universe_sha256),
 		gppe_definition_sha256: textOrNull(row.gppe_definition_sha256),
@@ -362,7 +367,10 @@ export class MartStrategyRunRepository {
 		try {
 			[runRow, decisionRows] = await withMartReadonly(
 				async (client: PoolClient) => {
-					const run = await client.query(LATEST_RUN_SQL, [strategyId]);
+					const run = await client.query(LATEST_RUN_SQL, [
+						idPrefixLikeOfRole("strategy"),
+						strategyId,
+					]);
 					if (run.rows.length === 0) return [undefined, []] as const;
 					const decisions = await client.query(DECISIONS_SQL, [
 						run.rows[0].strategy_run_id,

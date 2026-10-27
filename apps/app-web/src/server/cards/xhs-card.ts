@@ -21,12 +21,10 @@ import {
 } from "@/client/format";
 import {
   normalizePegConvention,
-  normalizeRankingUniverse,
   PEG_CONVENTION_LABELS,
   projectPegByConvention,
   type AccessContext,
   type PegGrowthConvention,
-  type RankingUniverse,
   type ValuationBasis,
   valuationBasisLabel,
 } from "@/contracts/strategyRun";
@@ -61,7 +59,8 @@ export interface RankingCardData {
   totalMembers: number;
   items: RankingCardItem[];
   pegConvention?: PegGrowthConvention;
-  universe?: RankingUniverse;
+  /** The key of the universe the rows belong to. */
+  universe: string;
 }
 
 function escapeXml(unsafe: string): string {
@@ -120,7 +119,7 @@ export function buildRankingCardJson(data: RankingCardData) {
     template_version: CARD_TEMPLATE_VERSION,
     title: "Valuation Rankings",
     cutoff_at: data.cutoffAt,
-    universe: data.universe ?? "topt",
+    universe: data.universe,
     peg_convention: data.pegConvention ?? "historical_cagr",
     generated_at: new Date().toISOString(),
     research_risk_note:
@@ -1124,7 +1123,8 @@ export async function handleCardExportGet(
   const cutoff = searchParams.get("cutoff") ?? undefined;
   const format = searchParams.get("format") ?? "png";
   const convention = normalizePegConvention(searchParams.get("convention"));
-  const universe = normalizeRankingUniverse(searchParams.get("universe"));
+  // A universe outside the record has no rows, so loadRanking answers empty and the route answers 404 (#1522).
+  const universeParam = searchParams.get("universe") ?? undefined;
   const persist = searchParams.get("persist") !== "0";
   const documents = deps.documents ?? new PostgresDocumentsRepository();
 
@@ -1210,7 +1210,7 @@ export async function handleCardExportGet(
 
   const state = await loadRanking(
     principal.context,
-    { cutoffAt: cutoff, cursor: null, universe },
+    { cutoffAt: cutoff, cursor: null, universe: universeParam },
     deps.adapter,
   );
   if (state.kind !== "ready") {
@@ -1226,7 +1226,7 @@ export async function handleCardExportGet(
     cutoffAt: state.data.cutoffAt,
     totalMembers: state.data.page.total,
     pegConvention: convention,
-    universe,
+    universe: state.data.universe,
     items: state.data.rows.map((row) => ({
       rank: row.rank,
       issuerId: row.issuerId,
@@ -1250,7 +1250,7 @@ export async function handleCardExportGet(
     });
   }
 
-  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(universe)}:${toStableToken(convention)}:${toStableToken(format)}`;
+  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(state.data.universe)}:${toStableToken(convention)}:${toStableToken(format)}`;
   const fileStem = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}`;
 
   if (format === "svg") {

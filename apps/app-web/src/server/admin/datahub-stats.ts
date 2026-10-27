@@ -20,6 +20,7 @@ import {
   isCanaryUniverse,
   resolveHeadFreshness,
 } from "../../contracts/serviceObjectives";
+import { idPrefixLikesOfRole } from "../../contracts/universes";
 import { withOpsReader } from "./ops";
 
 export interface FactorAvailabilityRow {
@@ -486,7 +487,7 @@ const VALIDATION_SQL = `
          'latest ' || to_char(s.cutoff, 'MM-DD HH24:MI') || ' — ' || (s.success_count + s.unchanged_count)
            || '/' || s.obligation_count || ' resolved' as detail
   from mart.topt_capture_status s
-  where s.universe_id like 'universe:canary%'
+  where s.universe_id like any ($1::text[])
   order by s.cutoff desc limit 1
 `;
 const REUSE_SQL = `
@@ -634,6 +635,8 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
 
 export async function loadDatahubStats(): Promise<DatahubStats> {
   return withOpsReader(async (client) => {
+    // $1 of VALIDATION_SQL, PLAUSIBILITY_SQL and CORROBORATION_SQL: the id patterns of the sentinel universes (#1522).
+    const sentinelLikes = idPrefixLikesOfRole("sentinel");
     const [
       heads,
       sources,
@@ -655,10 +658,10 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<HeadDbRow>(HEADS_SQL),
       client.query<SourceStatRow>(SOURCES_SQL),
       client.query<CaptureRunRow>(RUNS_SQL),
-      client.query<ValidationRow>(VALIDATION_SQL),
+      client.query<ValidationRow>(VALIDATION_SQL, [sentinelLikes]),
       client.query<ValidationRow>(REUSE_SQL),
-      client.query<ValidationRow>(PLAUSIBILITY_SQL),
-      client.query<ValidationRow>(CORROBORATION_SQL),
+      client.query<ValidationRow>(PLAUSIBILITY_SQL, [sentinelLikes]),
+      client.query<ValidationRow>(CORROBORATION_SQL, [sentinelLikes]),
       client.query<ValidationRow>(CAPACITY_TD_SQL),
       client.query<ValidationRow>(CAPACITY_REUSE_SQL),
       client.query<ValidationRow>(CAPACITY_DB_SQL),

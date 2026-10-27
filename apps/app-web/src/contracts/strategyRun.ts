@@ -16,7 +16,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { UNIVERSES, findUniverseOfId } from "./environmentContract.generated";
 import { asStrategyRunDefinition, type StrategyRunDefinition } from "./strategyDefinition";
+import { universeWithRole } from "./universes";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const CUTOFF_PATTERN =
@@ -118,31 +120,30 @@ export function projectPegByConvention(
 	};
 }
 
-/** Universe scopes selectable on rankings (#1360). */
-export const RANKING_UNIVERSES = ["topt", "qqq"] as const;
-export type RankingUniverse = (typeof RANKING_UNIVERSES)[number];
+/**
+ * Universe scopes selectable on rankings (#1360, #1522): every record that is no sentinel and that some
+ * environment schedules. A universe that gets scheduled appears here with no edit.
+ */
+export const RANKING_UNIVERSES: readonly string[] = UNIVERSES.filter(
+	(universe) => !universe.roles.includes("sentinel") && universe.scheduled_somewhere,
+).map((universe) => universe.key);
 
-export const RANKING_UNIVERSE_LABELS: Record<RankingUniverse, string> = {
-	topt: "TOPT (Top-100)",
-	qqq: "QQQ (Nasdaq-100)",
-};
-
-export function normalizeRankingUniverse(value: unknown): RankingUniverse {
+/**
+ * The universe key that `value` names. An empty or absent value gives the universe with role `strategy`.
+ * A value that is no key of the record gives null: the caller returns no rows.
+ */
+export function normalizeRankingUniverse(value: unknown): string | null {
 	const normalized = typeof value === "string" ? value.toLowerCase().trim() : "";
-	return (RANKING_UNIVERSES as readonly string[]).includes(normalized)
-		? (normalized as RankingUniverse)
-		: "topt";
+	if (normalized === "") return universeWithRole("strategy");
+	return UNIVERSES.some((universe) => universe.key === normalized) ? normalized : null;
 }
 
-/** Checks whether a decision row's universe_version matches the requested ranking universe (#1360). */
+/** Whether a decision row belongs to the ranking universe `universe`. A row with no universe id, or an id outside the record, belongs to none (#1360, #1522). */
 export function matchesRankingUniverse(
-	universeVersion: string | null | undefined,
-	universe: RankingUniverse,
+	universeId: string | null | undefined,
+	universe: string,
 ): boolean {
-	const isQqq =
-		typeof universeVersion === "string" &&
-		universeVersion.toLowerCase().includes("qqq");
-	return universe === "qqq" ? isQqq : !isQqq;
+	return typeof universeId === "string" && findUniverseOfId(universeId) === universe;
 }
 
 export interface StrategyRunDecision {
