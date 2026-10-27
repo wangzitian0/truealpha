@@ -169,15 +169,6 @@ class OpenDClient:
         normalized = to_jsonable(statements)
         return normalized if isinstance(normalized, Mapping) else {}
 
-    def valuation_detail(self, code: str, *, valuation_type: int = 1) -> Mapping[str, Any]:
-        from data_engine.jsonable import to_jsonable
-        from data_engine.sources import moomoo
-
-        with moomoo.connect() as ctx:
-            valuation = moomoo.get_valuation_detail(ctx, code, valuation_type=valuation_type, caller=CALLER)
-        normalized = to_jsonable(valuation)
-        return normalized if isinstance(normalized, Mapping) else {}
-
 
 def moomoo_code(symbol: str) -> str:
     """moomoo's code for a US listing: the canonical ticker under the `US.` market prefix."""

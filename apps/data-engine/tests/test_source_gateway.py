@@ -307,15 +307,9 @@ def test_index_operator_fetch_is_one_nasdaq_index_row(call_ledger, monkeypatch) 
     assert (row.source, row.endpoint, row.ok) == ("nasdaq-index", "constituents", True)
 
 
-def test_moomoo_failures_reach_the_same_ledger_with_their_error(call_ledger, monkeypatch) -> None:
+@pytest.mark.usefixtures("idle_moomoo_gate")
+def test_moomoo_failures_reach_the_same_ledger_with_their_error(call_ledger) -> None:
     from data_engine.sources import moomoo as mm
-    from data_engine.sources import moomoo_ledger as ledger
-
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "postgres")
-    monkeypatch.setattr(ledger, "calls_this_month", lambda: 0)
-    monkeypatch.setattr(ledger, "calls_today", lambda **kw: 0)
-    monkeypatch.setattr(gateway, "postgres_writer", call_ledger)
-    ledger._recent_calls.clear()
 
     def raises(ctx):
         raise TimeoutError("OpenD did not answer")
@@ -355,18 +349,15 @@ def test_every_network_call_site_imports_the_gateway() -> None:
 
 
 class _Ledger:
-    """Enough of a connection for the gateway: a daily count and an append."""
+    """Enough of a connection for the gateway's budget read: a daily count. A row never reaches it:
+    the gateway writes through `emit` (the `call_ledger` fixture), so an INSERT here is an error."""
 
     def __init__(self, spent_today: int = 0) -> None:
         self.spent_today = spent_today
-        self.rows: list[tuple] = []
 
     def execute(self, sql: str, params: tuple = ()):
-        if sql.lstrip().startswith("select count"):
-            return _Row((self.spent_today,))
-        assert "insert into staging.api_call_ledger" in sql
-        self.rows.append(params)
-        return _Row(None)
+        assert sql.lstrip().startswith("select count"), "the gateway writes rows through emit, not this connection"
+        return _Row((self.spent_today,))
 
 
 class _Row:
@@ -377,12 +368,15 @@ class _Row:
         return self._value
 
 
-def _four(row: tuple) -> tuple:
-    """(source, endpoint, caller, ok) out of the rich row — the four #740 asserted on."""
-    return (row[0], row[1], row[2], row[4])
+def _four(row: gateway.CallRecord) -> tuple:
+    """(source, endpoint, caller, ok) of a row — the four #740 asserted on."""
+    return (row.source, row.endpoint, row.caller, row.ok)
 
 
 def _gateway(ledger: _Ledger, capacity: gateway.SourceCapacity, clock: list[float], slept: list[float]):
+    """A gateway on a fake clock. The shared window is read by the wall clock, so it is off here and the
+    gate paces on its own window; `test_the_explicit_gateway_waits_for_other_processes_in_the_shared_window`
+    covers the shared read."""
     return gateway.SourceGateway(
         ledger,
         caller="test",
@@ -390,47 +384,45 @@ def _gateway(ledger: _Ledger, capacity: gateway.SourceCapacity, clock: list[floa
         clock=lambda: clock[0],
         sleep=lambda seconds: (slept.append(seconds), clock.__setitem__(0, clock[0] + seconds)),
         now=lambda: datetime(2026, 9, 4, 12, tzinfo=UTC),
+        recent_calls=None,
     )
 
 
-def test_every_gateway_call_lands_in_the_ledger_with_its_caller_and_outcome() -> None:
-    ledger = _Ledger()
-    gw = _gateway(ledger, gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
+def test_every_gateway_call_lands_in_the_ledger_with_its_caller_and_outcome(call_ledger) -> None:
+    gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
 
     assert gw.call("sec", "submissions", lambda: "ok") == "ok"
     with pytest.raises(RuntimeError, match="boom"):
         gw.call("sec", "archive", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    assert [_four(r) for r in ledger.rows] == [("sec", "submissions", "test", True), ("sec", "archive", "test", False)]
-    assert ledger.rows[1][6] == "RuntimeError: boom", "the failed row carries the error (#729)"
+    assert [_four(r) for r in call_ledger] == [("sec", "submissions", "test", True), ("sec", "archive", "test", False)]
+    assert call_ledger[1].error == "RuntimeError: boom", "the failed row carries the error (#729)"
 
 
 def test_a_gateway_call_around_an_adapter_is_one_row_with_the_adapters_detail(call_ledger) -> None:
     """The standards lane wraps `sec.ticker_cik_index(http)` in `gateway.call`; the adapter
-    itself goes through `http_get`. That must be ONE row — on the gateway's connection,
-    with the status, the digest and the URI the inner call observed."""
+    itself goes through `http_get`. That must be ONE row, with the status, the digest and
+    the URI the inner call observed."""
     from data_engine.sources import sec
 
-    ledger = _Ledger()
-    gw = _gateway(ledger, gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
+    gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     body = json.dumps({"0": {"ticker": "AAPL", "cik_str": 320193}}).encode()
     index = gw.call("sec", "company_tickers", lambda: sec.ticker_cik_index(_Client(_Response(body))))
 
     assert index == {"AAPL": 320193}
-    assert call_ledger == [], "the inner http_get did not emit a second row"
-    (row,) = ledger.rows
-    assert _four(row) == ("sec", "company_tickers", "test", True)
-    assert row[5] == 200 and row[9] == hashlib.sha256(body).hexdigest() and row[8] == sec.TICKERS_URL
+    (row,) = call_ledger
+    assert _four(row) == ("sec", "company_tickers", "test", True), "the inner http_get did not emit a second row"
+    assert row.status_code == 200 and row.payload_sha256 == hashlib.sha256(body).hexdigest()
+    assert row.request_uri == sec.TICKERS_URL
 
 
-def test_a_gateway_call_that_returns_the_body_records_its_digest() -> None:
+def test_a_gateway_call_that_returns_the_body_records_its_digest(call_ledger) -> None:
     """`filing_extraction._get_bytes` returns the bytes, not a response: the row still
     names them (Copilot on #741)."""
-    ledger = _Ledger()
-    gw = _gateway(ledger, gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
+    gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     assert gw.call("sec", "archive", lambda: b"<xml/>") == b"<xml/>"
-    (row,) = ledger.rows
-    assert row[9] == hashlib.sha256(b"<xml/>").hexdigest() and row[10] == 6
+    (row,) = call_ledger
+    assert row.payload_sha256 == hashlib.sha256(b"<xml/>").hexdigest() and row.byte_length == 6
 
 
 def test_a_call_inside_a_full_window_waits_for_the_window_to_roll() -> None:
@@ -444,34 +436,31 @@ def test_a_call_inside_a_full_window_waits_for_the_window_to_roll() -> None:
     assert slept and slept[0] == pytest.approx(1.0)
 
 
-def test_the_daily_budget_refuses_rather_than_fires() -> None:
-    ledger = _Ledger(spent_today=5)
-    gw = _gateway(ledger, gateway.SourceCapacity("search", 60.0, 20, 5), [0.0], [])
+def test_the_daily_budget_refuses_rather_than_fires(call_ledger) -> None:
+    gw = _gateway(_Ledger(spent_today=5), gateway.SourceCapacity("search", 60.0, 20, 5), [0.0], [])
 
     with pytest.raises(gateway.CapacityExceeded, match="daily budget 5 spent"):
         gw.call("search", "query", lambda: "must not run")
-    assert ledger.rows == []  # a refused call spends nothing and records nothing
+    assert call_ledger == []  # a refused call spends nothing and records nothing
 
 
-def test_capacity_one_defers_the_second_call_of_the_day() -> None:
+def test_capacity_one_defers_the_second_call_of_the_day(call_ledger) -> None:
     """#729 criterion 4, #735 acceptance: red-proof shape — with capacity 1 the second
     call is refused, not fired."""
-    ledger = _Ledger(spent_today=0)
-    gw = _gateway(ledger, gateway.SourceCapacity("filing-extraction-model", 60.0, 10, 1), [0.0], [])
+    gw = _gateway(_Ledger(spent_today=0), gateway.SourceCapacity("filing-extraction-model", 60.0, 10, 1), [0.0], [])
 
     gw.call("filing-extraction-model", "select", lambda: "first")
     with pytest.raises(gateway.CapacityExceeded):
         gw.call("filing-extraction-model", "select", lambda: "second")
-    assert len(ledger.rows) == 1
+    assert len(call_ledger) == 1
 
 
-def test_the_daily_count_resets_when_the_utc_day_rolls_over() -> None:
+def test_the_daily_count_resets_when_the_utc_day_rolls_over(call_ledger) -> None:
     """Review on #740: a long-lived gateway must not carry yesterday's count into today."""
-    ledger = _Ledger(spent_today=0)
     clock, slept = [0.0], []
     day = [datetime(2026, 9, 4, 23, 59, tzinfo=UTC)]
     gw = gateway.SourceGateway(
-        ledger,
+        _Ledger(spent_today=0),
         caller="test",
         capacities={"sec": gateway.SourceCapacity("sec", 1.0, 100, 2)},
         clock=lambda: clock[0],
@@ -484,7 +473,7 @@ def test_the_daily_count_resets_when_the_utc_day_rolls_over() -> None:
         gw.call("sec", "c", lambda: None)
     day[0] = datetime(2026, 9, 5, 0, 1, tzinfo=UTC)  # midnight passed; the ledger says 0 today
     gw.call("sec", "d", lambda: None)  # allowed again
-    assert [r[1] for r in ledger.rows] == ["a", "b", "d"]
+    assert [r.endpoint for r in call_ledger] == ["a", "b", "d"]
 
 
 def test_an_undeclared_or_unbudgeted_source_cannot_be_called_through_the_gateway() -> None:
@@ -839,3 +828,86 @@ def test_the_daily_calls_split_the_warehouse_ledger_by_caller_and_utc_day(wareho
         ("lane-b", date(2026, 10, 15)): 1,
     }
     assert gateway.MemoryLedger(records).daily_calls(seat, since, until) == expected
+
+
+# --- #1521 step 1: one writer for every external call ------------------------------------
+
+
+@pytest.fixture
+def moomoo_caller(warehouse_seat):
+    """A caller name no other test writes, and an empty moomoo pacing window; the moomoo rows it
+    wrote are deleted afterwards (the seat name `moomoo` is fixed, so the caller is the key)."""
+    from data_engine.sources import moomoo_ledger
+
+    moomoo_ledger._recent_calls.clear()
+    caller = f"{warehouse_seat}-caller"
+    try:
+        yield caller
+    finally:
+        gateway._pg_execute("delete from staging.api_call_ledger where source = 'moomoo' and caller = %s", (caller,))
+
+
+def test_a_moomoo_call_writes_one_row_through_emit(moomoo_caller, monkeypatch) -> None:
+    from data_engine.sources import moomoo as mm
+
+    emitted: list[gateway.CallRecord] = []
+    real_emit = gateway.emit
+
+    def spy(record, *args, **kwargs):
+        emitted.append(record)
+        return real_emit(record, *args, **kwargs)
+
+    monkeypatch.setattr(gateway, "emit", spy)
+    with gateway.run_scope("dagster:moomoo-run"):
+        payload = mm._call(
+            object(),
+            "get_research_analyst_consensus",
+            moomoo_caller,
+            lambda ctx: (mm.moomoo.RET_OK, {"rating": "buy"}),
+            request_uri="US.AAPL",
+        )
+
+    assert payload == {"rating": "buy"}
+    assert [(r.source, r.endpoint, r.caller) for r in emitted] == [
+        ("moomoo", "get_research_analyst_consensus", moomoo_caller)
+    ], "the one writer: the row passes `emit`, not a second INSERT path"
+    raw = mm.canonical_moomoo_bytes({"rating": "buy"})
+    rows = gateway._pg_execute(
+        "select ok, status_code, request_uri, payload_sha256, byte_length, run_key "
+        "from staging.api_call_ledger where source = 'moomoo' and caller = %s",
+        (moomoo_caller,),
+    ).fetchall()
+    assert rows == [(True, 0, "moomoo://US.AAPL", hashlib.sha256(raw).hexdigest(), len(raw), "dagster:moomoo-run")]
+
+
+def test_a_row_the_ledger_rejects_leaves_the_moomoo_payload_with_the_caller(warehouse_seat, caplog) -> None:
+    """Decision A of #1521: the vendor answer is kept and the full row goes to the log. Postgres text
+    cannot hold a NUL byte, so the ledger rejects this row for real."""
+    from data_engine.sources import moomoo as mm
+    from data_engine.sources import moomoo_ledger
+
+    moomoo_ledger._recent_calls.clear()
+    with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
+        payload = mm._call(
+            object(), "get_company_profile", f"{warehouse_seat}\x00", lambda ctx: (mm.moomoo.RET_OK, "kept")
+        )
+
+    assert payload == "kept"
+    assert "external call ledger write failed" in caplog.text
+    assert '"source": "moomoo"' in caplog.text, "the unrecorded row is at least in the run log"
+
+
+def test_a_gateway_call_row_survives_the_rollback_of_the_callers_transaction(warehouse_seat) -> None:
+    import psycopg
+
+    seat = warehouse_seat
+    capacity = gateway.SourceCapacity(seat, 60.0, 100, 10)
+    with psycopg.connect(gateway.settings.database_url) as caller:
+        gw = gateway.SourceGateway(
+            caller, caller="rollback-test", capacities={seat: capacity}, environment="production"
+        )
+        assert gw.call(seat, "probe", lambda: "answer") == "answer"
+        caller.rollback()
+
+    row = gateway._pg_execute("select count(*) from staging.api_call_ledger where source = %s", (seat,)).fetchone()
+    assert row == (1,), "the vendor was called; the caller's rollback does not undo the audit row"

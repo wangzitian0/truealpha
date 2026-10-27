@@ -635,48 +635,6 @@ def test_each_group_of_migrated_columns_is_written_only_by_a_record_that_sets_on
     assert len(params) == len(_columns(sql)) and params[-1] == "k" and params[len(gateway._BASE_COLUMNS)] == 2
 
 
-@pytest.mark.parametrize(
-    "fields",
-    [{"attempt": 1, "provider_code": "1302"}, {"fetch_key": "k"}, {"attempt": 2, "fetch_key": "k"}],
-    ids=["attempt-group", "key-group", "both-groups"],
-)
-def test_a_row_with_a_migrated_column_is_written_in_a_savepoint_and_falls_back_to_the_base_row(fields) -> None:
-    """On the caller's own transaction a failed statement would abort it: the insert with a migrated
-    column runs in a savepoint, and the base row is written when the column is missing."""
-    import psycopg
-
-    events: list[str] = []
-
-    class Connection:
-        def execute(self, sql: str, params: tuple = ()) -> None:
-            events.append("base" if sql == gateway._INSERT_SQL else "migrated")
-            if sql != gateway._INSERT_SQL:
-                raise psycopg.errors.UndefinedColumn("no such column")
-
-        def transaction(self):
-            class Savepoint:
-                def __enter__(self) -> None:
-                    events.append("savepoint begin")
-
-                def __exit__(self, kind: object, *_rest: object) -> bool:
-                    events.append("savepoint rolled back" if kind else "savepoint released")
-                    return False
-
-            return Savepoint()
-
-    record = gateway.CallRecord(
-        source="sec",
-        endpoint="e",
-        caller="t",
-        called_at=datetime.now(UTC),
-        **fields,  # type: ignore[arg-type]
-    )
-    gateway.SourceGateway(Connection(), caller="t")._write(record)
-    richer = len(gateway._insert_ladder(record)) - 1
-    assert richer >= 1
-    assert events == ["savepoint begin", "migrated", "savepoint rolled back"] * richer + ["base"]
-
-
 def test_a_row_falls_back_group_by_group_when_only_the_later_migrations_have_not_run(monkeypatch) -> None:
     """The attempt columns exist, the token columns do not: the row keeps its attempt, provider code
     and parameters, and loses only the tokens."""

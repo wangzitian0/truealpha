@@ -73,6 +73,7 @@ from data_engine.datahub.quality_report import (
     classify_financial_fact_entry,
     reconcile_financial_fact_entries,
 )
+from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
 from factors.production_topt import OperatingBranch
@@ -571,16 +572,12 @@ class _FakeQuoteContext:
 
 
 @pytest.fixture
-def opend(monkeypatch, tmp_path):
-    """A fake OpenD behind the REAL `sources.moomoo` path, with the json ledger isolated.
+def opend(monkeypatch, moomoo_ledger_db):
+    """A fake OpenD behind the REAL `sources.moomoo` path, over an isolated ledger database.
 
-    Pinned to the json backend exactly as `test_moomoo_call` does, so a developer .env
-    with MOOMOO_LEDGER_BACKEND=postgres cannot land fake rows in a real ledger."""
-    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
-    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
+    `moomoo_ledger_db` is a throwaway copy, so a developer .env cannot land fake rows in a real ledger."""
     monkeypatch.setattr(mm.settings, "moomoo_opend_host", "opend.test")
     monkeypatch.setattr(mm.settings, "moomoo_opend_port", 11111)
-    ledger._recent_calls.clear()
     income, balance = _statements("DDOG")
     ctx = _FakeQuoteContext(income, balance)
 
@@ -596,17 +593,15 @@ def test_a_kline_request_is_gated_recorded_and_unadjusted(opend) -> None:
     bars = OpenDClient().history_kline("US.AAPL", start=_PARTITION - timedelta(days=14), end=_PARTITION)
     assert [bar["close"] for bar in bars] == [334.55, 337.10, 338.19]
     assert ledger.calls_this_month() == 1, "every OpenD call is a ledger row"
-    recorded = ledger._load()["calls"][-1]
-    assert (recorded["endpoint"], recorded["caller"], recorded["ok"]) == (
-        "request_history_kline",
-        "moomoo_origin",
-        True,
-    )
     expected_raw = canonical_bytes(bars)
-    assert recorded["payload_sha256"] == hashlib.sha256(expected_raw).hexdigest(), (
+    (recorded,) = gateway._pg_execute(
+        "select endpoint, caller, ok, payload_sha256, byte_length from staging.api_call_ledger where source = 'moomoo'"
+    ).fetchall()
+    assert recorded[:3] == ("request_history_kline", "moomoo_origin", True)
+    assert recorded[3] == hashlib.sha256(expected_raw).hexdigest(), (
         "ledger payload_sha256 must match the exact canonical_bytes landed in raw.fetches (#1358)"
     )
-    assert recorded["byte_length"] == len(expected_raw)
+    assert recorded[4] == len(expected_raw)
     (kwargs,) = opend.kline_kwargs
     assert kwargs["autype"] == mm.moomoo.AuType.NONE, (
         "unadjusted: the primary's raw close, not a forward-adjusted series"
@@ -771,17 +766,16 @@ def test_the_financials_fetcher_lands_each_statement_under_its_own_key() -> None
     assert second.calls == [], "the second fetcher reached OpenD for landed statements"
 
 
-def test_the_moomoo_ledger_row_carries_the_key_of_the_fetch_that_made_the_call(monkeypatch) -> None:
-    """`sources.moomoo._call` writes its own ledger row; the verdict counts it only if it names the key."""
-    from data_engine.config import settings
+@pytest.mark.usefixtures("idle_moomoo_gate")
+def test_the_moomoo_ledger_row_carries_the_key_of_the_fetch_that_made_the_call(call_ledger) -> None:
+    """`sources.moomoo._call` records through `record_call`; the verdict counts the row only if it names the key."""
     from data_engine.datahub.fetch_key import FetchKey
-    from data_engine.sources import gateway
 
-    rows: list[gateway.CallRecord] = []
-    monkeypatch.setattr(settings, "moomoo_ledger_backend", "postgres")
-    monkeypatch.setattr(gateway, "postgres_writer", rows.append)
+    def kline(ctx):
+        return mm.moomoo.RET_OK, []
+
     key = FetchKey("moomoo", "history_kline", "symbol:AAPL", "2026-07-29")
     with gateway.fetching(key):
-        ledger.record("request_history_kline", "test", True, request_uri="moomoo://US.AAPL")
-    ledger.record("request_history_kline", "test", True, request_uri="moomoo://US.AAPL")
-    assert [row.fetch_key for row in rows] == [key.ledger_key, None]
+        mm._call(object(), "request_history_kline", "test", kline, request_uri="US.AAPL")
+    mm._call(object(), "request_history_kline", "test", kline, request_uri="US.AAPL")
+    assert [row.fetch_key for row in call_ledger] == [key.ledger_key, None]
