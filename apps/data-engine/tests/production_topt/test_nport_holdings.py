@@ -4,6 +4,7 @@ and insert nothing on a re-run of the same filing."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,18 +33,22 @@ _ATOM = f"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 class _Response:
+    """An httpx response: `.content` is bytes, `.text` decodes them and `.json()` parses them."""
+
+    status_code = 200
+
     def __init__(self, body: bytes | dict):
-        self._body = body
+        self.content: bytes = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    @property
+    def text(self) -> str:
+        return self.content.decode()
 
     def raise_for_status(self) -> None:
         return None
 
     def json(self):
-        return self._body
-
-    @property
-    def content(self) -> bytes:
-        return self._body
+        return json.loads(self.content)
 
 
 class _FakeSec:

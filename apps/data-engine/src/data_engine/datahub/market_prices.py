@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from data_engine.config import settings
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)
@@ -439,7 +440,20 @@ class TwelveDataClient:
         `gateway.capacity_scope()`/`gateway.run_scope()` around it -- `lanes.market_data`
         does (#938 contract item 3); a caller that does not is only ledgered, not gated."""
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
-        status, body = gateway.urlopen(TWELVE_DATA_SEAT, "time_series", req, caller=self.caller, timeout=30)
+        # The request names its own resource: the query holds the symbol, the interval and the window.
+        params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+        identity = FetchKey.for_request(
+            TWELVE_DATA_SEAT,
+            "time_series",
+            params,
+            entity_param="symbol",
+            as_of_params=("end_date", "date"),
+            default_as_of=gateway.utc_day(),
+            exclude=("apikey",),
+        )
+        status, body = gateway.urlopen(
+            TWELVE_DATA_SEAT, "time_series", req, identity=identity, caller=self.caller, timeout=30
+        )
         return status or 0, body
 
     def fetch_time_series(

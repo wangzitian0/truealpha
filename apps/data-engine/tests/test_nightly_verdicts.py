@@ -601,6 +601,7 @@ def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written
 
 class _Answer:
     def __init__(self, body: bytes, status: int = 200) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body = body
         self.status = status
 

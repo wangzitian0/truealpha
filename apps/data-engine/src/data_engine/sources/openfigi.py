@@ -11,6 +11,7 @@ requests/min with 10 jobs each; with a free key 25 req/6s with 100 jobs each.
 
 import time
 
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 MAPPING_URL = "https://api.openfigi.com/v3/mapping"
@@ -37,6 +38,7 @@ def map_isins(
     for start in range(0, len(isins), chunk_size):
         batch = isins[start : start + chunk_size]
         jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]
+        identity = FetchKey.for_batch("openfigi", "mapping", batch, gateway.utc_day())
         # Keyless-tier 429s are routine (limit resets per minute); a flat wait
         # beats parsing Retry-After (not always present). Bounded so a service
         # incident / IP ban fails loudly instead of hanging the bootstrap
@@ -45,7 +47,14 @@ def map_isins(
             # Every attempt is a ledger row (#729): a 429 is a failed request that still
             # counted against the vendor window, so it is recorded as one.
             resp = gateway.http_post(
-                client, "openfigi", "mapping", MAPPING_URL, caller="openfigi.map_isins", json=jobs, headers=headers
+                client,
+                "openfigi",
+                "mapping",
+                MAPPING_URL,
+                identity=identity,
+                caller="openfigi.map_isins",
+                json=jobs,
+                headers=headers,
             )
             if resp.status_code != 429:
                 resp.raise_for_status()

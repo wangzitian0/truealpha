@@ -36,11 +36,17 @@ from data_engine.dagster_defs import (
     topt_live_schedule,
 )
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import stub_rate  # noqa: E402
+
+
+def _key(source: str, endpoint: str) -> FetchKey:
+    """The identity of a call that the test makes: the test names no resource of its own."""
+    return FetchKey(source, endpoint, "symbol:TEST", "2026-10-27")
 
 
 def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
@@ -609,7 +615,7 @@ def test_a_failed_tick_still_says_what_the_gate_refused(monkeypatch, call_ledger
     _spent_today(call_ledger, "sec", 5000)
 
     def refused_capture(*args, **kwargs):
-        with gateway.record_call("sec", "companyfacts", caller="test"):
+        with gateway.record_call("sec", "companyfacts", caller="test", identity=_key("sec", "companyfacts")):
             raise AssertionError("a refused request ran")
 
     monkeypatch.setattr(capture, "run_topt_pipeline", refused_capture)

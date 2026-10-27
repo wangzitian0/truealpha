@@ -136,6 +136,8 @@ ISSUERS = [
 
 class _Response:
     def __init__(self, *, json_body: Any = None, content: bytes = b"") -> None:
+        assert isinstance(content, bytes), "an httpx response holds bytes"
+        self.status_code = 200
         self._json = json_body
         # An httpx response carries the same document as bytes and as parsed JSON.
         self.content = content if json_body is None else json.dumps(json_body).encode()

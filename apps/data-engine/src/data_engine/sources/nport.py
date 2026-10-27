@@ -13,9 +13,11 @@ Pitfalls encoded here (verified on QQQ/ARKK/IVV/AGIX/MCHI):
   resolves (561/563 MCHI lines have one).
 """
 
+import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
@@ -48,9 +50,17 @@ def fund_series(client, ticker: str) -> tuple[int, str]:
     """(trust CIK, series id) for a fund ticker via SEC's official mapping.
     Raises KeyError if absent — notably SPY (a UIT) is not in this file; use an
     equivalent management-company ETF (IVV/VOO) instead."""
-    resp = gateway.http_get(client, "nport", "mf_tickers", MF_TICKERS_URL, caller="nport.fund_series")
-    resp.raise_for_status()
-    for cik, series_id, _class_id, symbol in resp.json()["data"]:
+
+    def fetch(identity: FetchKey) -> bytes:
+        resp = gateway.http_get(
+            client, "nport", "mf_tickers", MF_TICKERS_URL, identity=identity, caller="nport.fund_series"
+        )
+        resp.raise_for_status()
+        return bytes(resp.content)
+
+    # One mapping file for every fund of the day: the second ticker reads the landed bytes.
+    body = gateway.fetch_once(FetchKey("nport", "mf_tickers", "sec:mf-tickers", gateway.utc_day()), fetch)
+    for cik, series_id, _class_id, symbol in json.loads(body)["data"]:
         if symbol.upper() == ticker.upper():
             return int(cik), series_id
     raise KeyError(f"ticker not found in SEC mutual-fund/ETF mapping: {ticker}")
@@ -61,11 +71,21 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
     series' most recent NPORT-P. The filing date is the transaction time of
     everything derived from the filing — the moment its contents became publicly
     knowable — which is NOT the ingestion time (runtime contract)."""
-    resp = gateway.http_get(
-        client, "nport", "browse", BROWSE_URL.format(series_id=series_id), caller="nport.latest_nport_accession"
-    )
-    resp.raise_for_status()
-    atom = ET.fromstring(resp.content)
+
+    def fetch(identity: FetchKey) -> bytes:
+        resp = gateway.http_get(
+            client,
+            "nport",
+            "browse",
+            BROWSE_URL.format(series_id=series_id),
+            identity=identity,
+            caller="nport.latest_nport_accession",
+        )
+        resp.raise_for_status()
+        return bytes(resp.content)
+
+    body = gateway.fetch_once(FetchKey("nport", "browse", f"series:{series_id}", gateway.utc_day()), fetch)
+    atom = ET.fromstring(body)
     acc = atom.findtext(".//a:entry/a:content/a:accession-number", None, _ATOM_NS)
     filing_date = atom.findtext(".//a:entry/a:content/a:filing-date", None, _ATOM_NS)
     if acc is None or filing_date is None:
@@ -74,8 +94,14 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
 
 
 def fetch_nport_xml(client, cik: int, accession: str) -> bytes:
+    # The caller lands these bytes itself, so the key names the request and the index is not read.
     resp = gateway.http_get(
-        client, "nport", "archive", ARCHIVE_URL.format(cik=cik, accession=accession), caller="nport.fetch_nport_xml"
+        client,
+        "nport",
+        "archive",
+        ARCHIVE_URL.format(cik=cik, accession=accession),
+        identity=FetchKey("nport", "archive", f"filing:{cik}:{accession}", gateway.utc_day()),
+        caller="nport.fetch_nport_xml",
     )
     resp.raise_for_status()
     return resp.content

@@ -1,11 +1,19 @@
 import pytest
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
 
 
 def _kline(code: str) -> None:
     """One K-line call on ``code`` through the real wrapper: gate, throttle, call, record."""
-    mm._call(object(), "request_history_kline", "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri=code)
+    mm._call(
+        object(),
+        "request_history_kline",
+        "test",
+        lambda ctx: (mm.moomoo.RET_OK, []),
+        request_uri=code,
+        identity=FetchKey("moomoo", "request_history_kline", "symbol:TEST", "2026-10-27"),
+    )
 
 
 def test_gate_allows_calls_under_quota(moomoo_ledger_db, monkeypatch):

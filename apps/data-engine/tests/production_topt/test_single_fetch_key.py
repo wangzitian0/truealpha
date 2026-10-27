@@ -131,7 +131,14 @@ def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(moom
     from data_engine.sources import moomoo as mm
 
     def spend(endpoint: str, code: str) -> None:
-        mm._call(object(), endpoint, "test", lambda ctx: (mm.moomoo.RET_OK, []), request_uri=code)
+        mm._call(
+            object(),
+            endpoint,
+            "test",
+            lambda ctx: (mm.moomoo.RET_OK, []),
+            request_uri=code,
+            identity=FetchKey("moomoo", endpoint, "symbol:TEST", "2026-10-27"),
+        )
 
     assert not hasattr(ledger.settings, "moomoo_monthly_call_budget")
     monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 2)
@@ -175,8 +182,10 @@ def test_k3_a_second_fetch_of_a_landed_key_makes_no_vendor_call_and_records_a_re
     socket: list[str] = []
     client = _socket(socket)
 
-    def fetch() -> bytes:
-        response = gateway.http_get(client, "sec", "companyfacts", "https://data.sec.gov/x", caller="test")
+    def fetch(identity: FetchKey) -> bytes:
+        response = gateway.http_get(
+            client, "sec", "companyfacts", "https://data.sec.gov/x", identity=identity, caller="test"
+        )
         return bytes(response.content)
 
     first = gateway.fetch_once(key, fetch)
@@ -192,7 +201,7 @@ def test_k3_a_failed_fetch_lands_nothing_so_the_next_caller_asks_again(call_ledg
     key = FetchKey("sec", "companyfacts", "issuer:cik:0000000001", "2026-10-16")
     attempts: list[int] = []
 
-    def fetch() -> bytes:
+    def fetch(identity: FetchKey) -> bytes:
         attempts.append(1)
         if len(attempts) == 1:
             raise httpx.ConnectError("refused")
@@ -209,8 +218,10 @@ def test_k3_a_window_that_is_not_final_is_asked_each_time_without_a_key(call_led
     socket: list[str] = []
     client = _socket(socket)
 
-    def fetch() -> bytes:
-        return bytes(gateway.http_get(client, "yahoo", "chart", "https://q.example/x", caller="test").content)
+    def fetch(identity: FetchKey) -> bytes:
+        return bytes(
+            gateway.http_get(client, "yahoo", "chart", "https://q.example/x", identity=identity, caller="test").content
+        )
 
     gateway.fetch_once(key, fetch, keep=False)
     gateway.fetch_once(key, fetch, keep=False)
@@ -233,8 +244,12 @@ def test_k3_an_answer_that_the_caller_refuses_stays_out_of_the_index_and_its_row
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
 
-    def fetch() -> bytes:
-        return bytes(gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test").content)
+    def fetch(identity: FetchKey) -> bytes:
+        return bytes(
+            gateway.http_get(
+                client, "twelvedata", "eod", "https://q.example/x", identity=identity, caller="test"
+            ).content
+        )
 
     accept = lambda body: b"error" not in body  # noqa: E731 - the one rule under test
     assert gateway.fetch_once(key, fetch, accept=accept) == b'{"status":"error"}'
@@ -252,8 +267,12 @@ def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_al
     socket: list[str] = []
     client = _socket(socket)
 
-    def fetch() -> bytes:
-        return bytes(gateway.http_get(client, "sec", "companyfacts", "https://data.sec.gov/x", caller="test").content)
+    def fetch(identity: FetchKey) -> bytes:
+        return bytes(
+            gateway.http_get(
+                client, "sec", "companyfacts", "https://data.sec.gov/x", identity=identity, caller="test"
+            ).content
+        )
 
     with gateway.probe_scope(True):
         assert gateway.fetch_once(key, fetch) == b'{"cik":1652044}'
@@ -266,26 +285,23 @@ def test_k3_a_probe_asks_the_vendor_again_carries_no_key_and_leaves_the_index_al
     assert gateway.fetch_once(key, fetch) == b'{"landed":"yesterday"}' and len(socket) == 1
 
 
-def test_k3_a_probe_stamps_no_key_on_the_paths_that_call_fetching_directly(call_ledger, landed_keys) -> None:
-    """Twelve Data calls `landed`, `fetching` and `land`; every row, moomoo's included, reads the stamp.
+def test_k3_a_probe_stamps_no_key_on_a_call_that_names_one(call_ledger, landed_keys) -> None:
+    """Every call names its resource. Inside a probe the row still carries no key, and `land` is a no-op.
 
-    Red when `fetching` stamps inside a probe: the rows of a forced tick would then count as fetches."""
+    Red when a probe stamps the key: the rows of a forced tick would then count as fetches."""
     key = FetchKey("twelvedata", "eod", "symbol:AAPL", "2026-10-16")
     socket: list[str] = []
     client = _socket(socket)
 
     def call() -> None:
-        gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", caller="test")
+        gateway.http_get(client, "twelvedata", "eod", "https://q.example/x", identity=key, caller="test")
 
     with gateway.probe_scope(True):
-        with gateway.fetching(key):
-            call()
+        call()
         gateway.land(key, b"ignored")
     assert [row.fetch_key for row in call_ledger] == [None] and landed_keys.bodies == {}
-    with gateway.fetching(key):
-        call()
     call()
-    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key, None], "the stamp ends with the block"
+    assert [row.fetch_key for row in call_ledger] == [None, key.ledger_key]
 
 
 def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledger, landed_keys, caplog) -> None:
@@ -293,8 +309,10 @@ def test_k3_an_accept_rule_that_raises_refuses_the_answer_and_says_so(call_ledge
     key = FetchKey("yahoo", "chart", "symbol:AAPL", "2026-10-16")
     client = _socket([])
 
-    def fetch() -> bytes:
-        return bytes(gateway.http_get(client, "yahoo", "chart", "https://q.example/x", caller="test").content)
+    def fetch(identity: FetchKey) -> bytes:
+        return bytes(
+            gateway.http_get(client, "yahoo", "chart", "https://q.example/x", identity=identity, caller="test").content
+        )
 
     def broken(_body: bytes) -> bool:
         raise RuntimeError("calendar unavailable")
@@ -310,7 +328,7 @@ def test_k5_the_standards_crosswalk_read_asks_the_index_before_it_admits_a_call(
     calls: list[str] = []
 
     class StandardsGateway:
-        def call(self, source: str, endpoint: str, fn: Any) -> Any:
+        def call(self, source: str, endpoint: str, fn: Any, *, identity: FetchKey) -> Any:
             calls.append(f"{source}/{endpoint}")
             return fn()
 

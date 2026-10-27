@@ -31,6 +31,7 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.datahub import treasury_rates
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.source_registrations import (
     LEDGER_CAPACITIES,
     MACRO_REGISTRATIONS,
@@ -315,6 +316,7 @@ def test_a_byte_order_mark_does_not_hide_the_date_column() -> None:
 
 class _Response:
     def __init__(self, body: bytes, status: int = 200) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self._body, self.status = body, status
 
     def __enter__(self) -> _Response:
@@ -351,7 +353,7 @@ def test_the_url_is_the_treasury_file_of_the_year() -> None:
 def test_the_fetch_is_one_ledger_row_with_the_digest_of_the_bytes(monkeypatch, call_ledger) -> None:
     seen = _answer(monkeypatch, SAMPLE_2026)
 
-    body = fetch_year(2026)
+    body = fetch_year(2026, _KEY)
 
     assert body == SAMPLE_2026
     (request,) = seen
@@ -368,13 +370,14 @@ def test_the_fetch_is_one_ledger_row_with_the_digest_of_the_bytes(monkeypatch, c
     assert row.payload_sha256 == hashlib.sha256(SAMPLE_2026).hexdigest()
     assert row.byte_length == len(SAMPLE_2026)
     assert row.caller == "treasury_rates.fetch_year"
+    assert row.fetch_key == _KEY.ledger_key, "the row names the key of the request"
 
 
 def test_an_error_status_is_refused_by_name_and_recorded_as_a_failed_call(monkeypatch, call_ledger) -> None:
     _answer(monkeypatch, b"", status=503)
 
     with pytest.raises(TreasuryFetchError, match="HTTP 503 for the 2026 file"):
-        fetch_year(2026)
+        fetch_year(2026, _KEY)
 
     (row,) = call_ledger
     assert (row.source, row.status_code, row.ok) == ("us-treasury", 503, False)
@@ -399,7 +402,7 @@ def test_a_spent_daily_budget_refuses_the_call_before_anything_is_sent(monkeypat
     )
 
     with gateway.capacity_scope(gate), pytest.raises(gateway.BudgetExhausted):
-        fetch_year(2026)
+        fetch_year(2026, _KEY)
 
     assert seen == [], "the Treasury was never asked"
 
@@ -436,7 +439,7 @@ def _years(*bodies: tuple[int, bytes]):
     asked: list[int] = []
     files = dict(bodies)
 
-    def fetch(year: int) -> bytes:
+    def fetch(year: int, _key: FetchKey) -> bytes:
         asked.append(year)
         return files[year]
 
@@ -460,6 +463,7 @@ def _all_years() -> dict[int, bytes]:
 FOUR_YEARS = dataclasses.replace(REGISTRATION, first_year=2023)
 NOW = datetime(2026, 10, 14, 21, 0, tzinfo=UTC)
 TODAY = NOW.date()
+_KEY = fetch_key_of(2026, on=TODAY)
 
 
 def _refresh(connection, fetch, *, store=None, now: datetime = NOW, registration=FOUR_YEARS):
@@ -719,7 +723,7 @@ def test_a_year_that_fails_after_its_first_write_leaves_no_trace(connection, mon
 def test_a_failed_fetch_of_the_current_year_still_lets_the_backfill_run_and_then_fails_the_run(connection) -> None:
     files = _all_years()
 
-    def fetch(year: int) -> bytes:
+    def fetch(year: int, _key: FetchKey) -> bytes:
         if year == 2026:
             raise TreasuryFetchError("the Treasury answered HTTP 503 for the 2026 file")
         return files[year]
@@ -941,7 +945,7 @@ def test_the_fetch_time_is_read_after_the_answer_arrives(connection) -> None:
     answered = started + timedelta(seconds=5)
     now = {"value": started}
 
-    def slow_fetch(year: int) -> bytes:
+    def slow_fetch(year: int, _key: FetchKey) -> bytes:
         now["value"] += timedelta(seconds=5)
         return revised
 

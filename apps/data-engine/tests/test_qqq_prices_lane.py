@@ -291,6 +291,7 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
 
 class _Answer:
     def __init__(self, body: bytes) -> None:
+        assert isinstance(body, bytes), "a urllib response reads bytes"
         self.status = 200
         self._body = body
 

@@ -91,6 +91,7 @@ def test_the_requested_window_is_anchored_on_the_caller_cutoff(monkeypatch) -> N
 
     class _Response:
         content = b'{"chart": {"result": []}}'
+        status_code = 200
 
         def raise_for_status(self) -> None: ...
 

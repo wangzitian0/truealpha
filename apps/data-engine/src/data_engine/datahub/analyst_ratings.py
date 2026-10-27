@@ -6,8 +6,9 @@ Materialized table: mart.issuer_analyst_ratings.
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -29,6 +30,7 @@ from truealpha_contracts.confidence import (
 )
 
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 _CONFIDENCE_POLICY = ContinuousConfidencePolicy()
@@ -147,12 +149,14 @@ def _count_from_share(total: int, share: object) -> int:
 
 
 def _is_empty(payload: object) -> bool:
-    """True for the answers that say "nothing here": None, an empty mapping, an empty frame."""
+    """True for the answers that say "nothing here": None, an empty mapping, an empty frame.
+
+    The landed canonical JSON renders an empty frame as an empty list."""
     if payload is None:
         return True
     if isinstance(payload, pd.DataFrame):
         return payload.empty
-    return isinstance(payload, Mapping) and not payload
+    return isinstance(payload, (Mapping, list)) and not payload
 
 
 def _whole_number(payload: Mapping[str, Any], key: str) -> int:
@@ -312,6 +316,22 @@ def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+def _research_payload(code: str, endpoint: str, request: Callable[[FetchKey], Any]) -> Any:
+    """The answer of one moomoo research endpoint for ``code``, asked once per UTC day (#1521).
+
+    The key names the endpoint and the symbol. A second run on the same day reads the landed
+    bytes, so OpenD is asked nothing and the ledger holds no second row."""
+    from data_engine.sources import gateway
+    from data_engine.sources.moomoo import canonical_moomoo_bytes
+
+    key = FetchKey("moomoo", endpoint, f"symbol:{code.removeprefix('US.')}", gateway.utc_day())
+
+    def fetch(identity: FetchKey) -> bytes:
+        return canonical_moomoo_bytes(request(identity))
+
+    return json.loads(gateway.fetch_once(key, fetch).decode())
+
+
 def _fetch_rating_enrichment(
     ctx: Any, code: str, *, as_of: datetime
 ) -> tuple[list[AnalystRatingItem], bool, dict[date, Decimal]]:
@@ -321,7 +341,13 @@ def _fetch_rating_enrichment(
     summary_items: list[AnalystRatingItem] = []
     if hasattr(ctx, "get_research_rating_summary"):
         try:
-            summary_payload = get_rating_summary(ctx, code, caller="capture_ticker_analyst_ratings")
+            summary_payload = _research_payload(
+                code,
+                "get_research_rating_summary",
+                lambda identity: get_rating_summary(
+                    ctx, code, caller="capture_ticker_analyst_ratings", identity=identity
+                ),
+            )
             summary_items = parse_rating_summary(summary_payload, as_of=as_of)
         except Exception:  # noqa: BLE001
             summary_items = []
@@ -329,7 +355,13 @@ def _fetch_rating_enrichment(
     profit_growth: dict[date, Decimal] = {}
     if hasattr(ctx, "get_valuation_detail"):
         try:
-            val_payload = get_valuation_detail(ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings")
+            val_payload = _research_payload(
+                code,
+                "get_valuation_detail",
+                lambda identity: get_valuation_detail(
+                    ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings", identity=identity
+                ),
+            )
             has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
             if isinstance(val_payload, Mapping):
                 profit_growth = parse_valuation_profit_growth(val_payload, cutoff=as_of.date())
@@ -408,7 +440,13 @@ def _ticker_row(
     try:
         from data_engine.sources.moomoo import get_analyst_consensus
 
-        payload = get_analyst_consensus(ctx, code, caller="capture_ticker_analyst_ratings")
+        payload = _research_payload(
+            code,
+            "get_research_analyst_consensus",
+            lambda identity: get_analyst_consensus(
+                ctx, code, caller="capture_ticker_analyst_ratings", identity=identity
+            ),
+        )
         consensus_row = _consensus_row(payload, company_id)
         summary_items, has_valuation, profit_growth = _fetch_rating_enrichment(ctx, code, as_of=as_of)
     except Exception as exc:
