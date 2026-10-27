@@ -476,8 +476,8 @@
       "id": "nightly-verdicts/a-recorded-check-cannot-go-unwatched",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "apps/data-engine/src/data_engine/lanes/quality.py",
-      "find": "    FETCH_KEYS_ONCE_VERDICT,\n)\n",
-      "replace": "    FETCH_KEYS_ONCE_VERDICT,\n    \"unwatched_check\",\n)\n",
+      "find": "    RUNTIME_SHAPE_VERDICT,\n)\n",
+      "replace": "    RUNTIME_SHAPE_VERDICT,\n    \"unwatched_check\",\n)\n",
       "command": [
         "uv",
         "run",

@@ -161,7 +161,7 @@ def test_a_changed_status_in_the_file_makes_the_contract_schedule_the_universe()
 #: The block that a stopped universe held before contract version 3.0.0. The model refuses it now.
 _RETIRED_UNLOCK = {
     "end_to_end": {"environment": "production", "universe": "qqq"},
-    "verdict": {"name": "fetch_keys_once", "environment": "production", "consecutive_green_nights": 3},
+    "verdict": {"name": "job_run_health", "environment": "production", "consecutive_green_nights": 3},
 }
 
 

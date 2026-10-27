@@ -93,6 +93,8 @@ comment on table mart.served_artifact is
     '#1062: Registry of served artifacts. Each row names the lane that refreshes it and its cadence family.';
 
 -- One row per line. The data-engine registry test reads these lines from this file.
+-- The row `fetch-keys-once` is gone (#1521 step 6): its schedule no longer exists, and the chain must not insert it
+-- again at each boot. `20261027T1300_datahub_retire_fetch_keys_once_artifact.sql` deletes it where a database holds it.
 with seed (artifact_key, lane, schedule_name, universe_like, family, served_to, wired) as (
     values
     ('head:topt', 'capture', 'topt_live_schedule', 'universe:topt-%', 'daily', 'consumers', true),
@@ -126,7 +128,6 @@ with seed (artifact_key, lane, schedule_name, universe_like, family, served_to, 
     ('model-key-health', 'quality', 'model_key_health_schedule', null, 'daily', 'operators', false),
     ('release-fetch-proof', 'quality', 'release_fetch_proof_schedule', null, 'daily', 'operators', false),
     ('runtime-shape', 'quality', 'runtime_shape_schedule', null, 'daily', 'operators', false),
-    ('fetch-keys-once', 'quality', 'fetch_keys_once_schedule', null, 'daily', 'operators', false),
     ('job-run-health', 'quality', 'job_run_health_schedule', null, 'daily', 'operators', false),
     ('entity-identity', 'entity_identity', null, null, 'weekly', 'consumers', false),
     ('triggers', 'triggers', null, null, 'daily', 'internal', false),

@@ -312,6 +312,7 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
     /^Datahub$/i,
     /Question coverage matrix/i,
     /Traffic \(external calls, today UTC\)/i,
+    /Fetch key and run coverage/i,
     /^Sources$/i,
     /^Recent capture runs$/i,
   ]) {

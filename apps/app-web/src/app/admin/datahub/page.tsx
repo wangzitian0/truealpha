@@ -12,6 +12,7 @@ import Link from "next/link";
 
 import { formatCell } from "@/client/format";
 import {
+  LEDGER_COVERAGE_DAYS,
   loadDatahubStats,
   loadVerdictHistory,
   type ListingRatioCell,
@@ -19,6 +20,8 @@ import {
   type QuestionCoverageQuestion,
 } from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
+
+import { LedgerCoverageTable } from "./ledger-coverage";
 
 export const dynamic = "force-dynamic";
 
@@ -937,6 +940,21 @@ export default async function AdminDatahubPage({
             </table>
           </div>
         )}
+      </div>
+
+      <div className="space-y-3" id="ledger-coverage">
+        <div>
+          <h2 className="text-lg font-semibold">Fetch key and run coverage (call ledger, last {LEDGER_COVERAGE_DAYS} UTC days)</h2>
+          <p className="text-sm text-gray-500">
+            One row per UTC day, vendor and endpoint (#1521). <span className="font-mono">no key</span> counts rows
+            with no fetch key; rows written before the key was required stay there on their own days.{" "}
+            <span className="font-mono">repeat reasons</span> counts the rows that the gateway marks as an intended
+            repeat. <span className="font-mono">keys twice</span> counts the keys with two successful rows and no
+            reason on the day; a failed retry does not count. <span className="font-mono">with run</span> is the share
+            of rows that name a run. This table replaces the nightly fetch-key verdict and gates nothing.
+          </p>
+        </div>
+        <LedgerCoverageTable rows={stats.ledgerCoverage} />
       </div>
 
       <div className="space-y-3">

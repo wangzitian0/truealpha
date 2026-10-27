@@ -9,8 +9,8 @@ are a fake HTTP socket under the deployed clients: the real `sec` and `yahoo` cl
 gateway, the real call ledger and the real index of landed keys, all in an isolated database.
 
 What the tests judge is the socket and the ledger. A request that reaches the socket again for a key
-that landed, or a fetch key with two successful ledger rows on one UTC day, fails them. The nightly
-verdict `fetch_keys_once` reads the same ledger and names the key when a duplicate is injected.
+that landed, or a fetch key with two successful ledger rows on one UTC day, fails them. The coverage table of
+`/admin/datahub` (`LEDGER_COVERAGE_SQL`) shows the same count to an operator.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     sec_financial_fetcher,
 )
 from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
-from data_engine.lanes.quality import FetchKeysOnceConfig, run_fetch_keys_once
-from data_engine.quality import fetch_keys_once
 from data_engine.sources import gateway
 from factors.production_topt import OperatingBranch
 from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
@@ -294,28 +292,31 @@ def test_a_forced_tick_is_a_probe_that_reaches_every_vendor_and_writes_the_reaso
     with psycopg.connect(ticks.url) as connection:
         probes = connection.execute(
             "select count(*), count(*) filter (where fetch_key is null) from staging.api_call_ledger "
-            "where repeat_reason = 'probe' and ok and source in ('sec', 'yahoo') and caller not like 'injected-%'"
+            "where repeat_reason = 'probe' and ok and source in ('sec', 'yahoo')"
         ).fetchone()
         fetches = connection.execute(
-            "select count(*) from staging.api_call_ledger "
-            "where repeat_reason is null and fetch_key is not null and ok and caller not like 'injected-%'"
+            "select count(*) from staging.api_call_ledger where repeat_reason is null and fetch_key is not null and ok"
         ).fetchone()[0]
         other = connection.execute(
             "select count(*) from staging.api_call_ledger "
             "where repeat_reason is distinct from 'probe' and ok and source in ('sec', 'yahoo') "
-            "and caller not like 'injected-%' and fetch_key is null"
+            "and fetch_key is null"
         ).fetchone()[0]
     assert probes == (sum(probed.values()), 0), "each probe request is a ledger row with its key and the reason probe"
     assert fetches == sum(ticks.requests_after_first.values()), "the first tick is the only plain fetch of each key"
     assert other == 0, "every call of the ticks names its key"
 
 
+@pytest.mark.criterion("R2.B2")
 def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) -> None:
-    """The ledger of the environment shows each key once, and the keys carry the vendors' paths."""
+    """The ledger of the environment shows each key once, and the keys carry the vendors' paths (#1418 R2.B2).
+
+    A repeat with a `repeat_reason` is no duplicate; a failed row is no fetch. The dashboard table
+    `LEDGER_COVERAGE_SQL` counts keys by the same rule."""
     with psycopg.connect(ticks.url) as connection:
         rows = connection.execute(
             "select fetch_key, count(*) from staging.api_call_ledger "
-            "where fetch_key is not null and ok and repeat_reason is null and caller not like 'injected-%' group by 1"
+            "where fetch_key is not null and ok and repeat_reason is null group by 1"
         ).fetchall()
         reuse = connection.execute("select coalesce(sum(reuse_count), 0) from staging.landed_fetch_keys").fetchone()[0]
     keys = {key for key, _count in rows}
@@ -323,52 +324,3 @@ def test_no_fetch_key_has_two_successful_ledger_rows_on_one_day(ticks: Ticks) ->
     assert any(key.startswith("sec|companyfacts|issuer:cik:") for key in keys), keys
     assert any(key.startswith("yahoo|chart") and "|symbol:" in key for key in keys), keys
     assert reuse > 0, "the second tick read the index, and each read counts as a reuse"
-
-
-def test_the_nightly_verdict_is_green_on_these_ticks_and_names_an_injected_duplicate(ticks: Ticks) -> None:
-    """`fetch_keys_once` reads the ledger of the two ticks: green. One duplicate row turns it red, by key."""
-    with psycopg.connect(ticks.url, autocommit=True) as connection:
-        green = fetch_keys_once.evaluate(connection, day=ticks.day)
-        assert green.keyed > 0 and green.duplicates == () and not green.red, green.summary
-        key = connection.execute(
-            "select fetch_key from staging.api_call_ledger where fetch_key like 'sec|companyfacts|%' limit 1"
-        ).fetchone()[0]
-        _inject(connection, "injected-duplicate", key)
-        try:
-            red = fetch_keys_once.evaluate(connection, day=ticks.day)
-        finally:
-            _clean(connection)
-    assert red.red and dict(red.duplicates) == {key: 2}, red.summary
-    assert key in red.summary
-
-
-def test_the_dagster_check_records_a_red_verdict_for_a_duplicate_and_fails_the_run(ticks: Ticks) -> None:
-    """The deployed op `run_fetch_keys_once` fails with the key named, and the verdict row is red."""
-    key = "sec|companyfacts|issuer:cik:9999999999|" + ticks.day.isoformat()
-    with psycopg.connect(ticks.url, autocommit=True) as connection:
-        _inject(connection, "injected-first", key)
-        _inject(connection, "injected-second", key)
-        try:
-            with pytest.raises(dg.Failure, match="fetched twice"):
-                run_fetch_keys_once(dg.build_op_context(), FetchKeysOnceConfig(day=ticks.day.isoformat()))
-            row = connection.execute(
-                "select ok, summary from mart.nightly_verdicts where check_name = 'fetch_keys_once' "
-                "order by verdict_id desc limit 1"
-            ).fetchone()
-        finally:
-            _clean(connection)
-    assert row is not None and row[0] is False and key in row[1], row
-
-
-def _inject(connection: psycopg.Connection, caller: str, key: str) -> None:
-    connection.execute(
-        """
-        insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, cost, fetch_key)
-        values ('sec', 'companyfacts', %s, now(), true, 1, %s)
-        """,
-        (caller, key),
-    )
-
-
-def _clean(connection: psycopg.Connection) -> None:
-    connection.execute("delete from staging.api_call_ledger where caller like 'injected-%'")

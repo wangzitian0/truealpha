@@ -141,6 +141,29 @@ export interface RecentCallRow {
   landed_fetch_id: number | null;
 }
 
+/**
+ * #1521 step 6: what the ledger says about fetch keys and runs, per UTC day, vendor and endpoint. The table replaced
+ * the nightly fetch-key verdict: the numbers are on the page and no check turns red on them. SQL computes every
+ * count and ratio; the App formats them.
+ */
+export interface LedgerCoverageRow {
+  /** The UTC day, `YYYY-MM-DD`. */
+  day: string;
+  source: string;
+  endpoint: string;
+  calls: number;
+  /** Rows whose `fetch_key` is null. Rows written before #1521 step 2 stay in this count. */
+  no_key: number;
+  /** Rows per `repeat_reason`. The gateway derives the reason; a repeat with a reason is no duplicate fetch. */
+  by_reason: Record<string, number>;
+  /** Keys with two or more successful rows and no reason on this day. A failed retry never counts. */
+  keys_twice: number;
+  /** The share of rows that name a run, a fraction from 0 to 1 as text. */
+  run_share: string;
+  /** The rows that name a run, divided by the distinct runs; null when no row names a run. */
+  calls_per_run: string | null;
+}
+
 export interface QuestionCoverageQuestion {
   question: string;
   text: string;
@@ -441,6 +464,7 @@ export interface DatahubStats {
   capacity: ValidationRow[];
   traffic: TrafficSourceRow[];
   recentCalls: RecentCallRow[];
+  ledgerCoverage: LedgerCoverageRow[];
 }
 
 /**
@@ -631,6 +655,66 @@ const RECENT_CALLS_SQL = `
   order by l.called_at desc, l.id desc
   limit 40
 `;
+
+/**
+ * #1521 step 6: the UTC days of the coverage table, today included. A weekly lane (the universe refresh) writes
+ * rows on one day of seven, so a window of seven days could show none of them. Eight days always holds one.
+ */
+export const LEDGER_COVERAGE_DAYS = 8;
+
+/**
+ * #1521 step 6: key and run coverage of the call ledger, one row per UTC day, vendor and endpoint. `$1` is
+ * `LEDGER_COVERAGE_DAYS`. A key counts as fetched twice when it has two successful rows with no repeat reason on
+ * the day: the rule of the retired nightly verdict. The ledger is append-only, so rows written before
+ * #1521 step 2 keep their null key and show on their own days. Shares and ratios are computed here, never in the App.
+ */
+export const LEDGER_COVERAGE_SQL = `
+  with ledger as (
+    select (l.called_at at time zone 'utc')::date as day, l.source, l.endpoint,
+           l.ok, l.fetch_key, l.run_key, l.repeat_reason
+    from staging.api_call_ledger l
+    where l.called_at >= ${UTC_DAY_START_SQL} - ($1::int - 1) * interval '1 day'
+  ),
+  per_reason as (
+    select day, source, endpoint, jsonb_object_agg(repeat_reason, rows) as by_reason
+    from (
+      select day, source, endpoint, repeat_reason, count(*)::int as rows
+      from ledger
+      where repeat_reason is not null
+      group by day, source, endpoint, repeat_reason
+    ) reasons
+    group by day, source, endpoint
+  ),
+  twice as (
+    select day, source, endpoint, count(*)::int as keys_twice
+    from (
+      select day, source, endpoint, fetch_key
+      from ledger
+      where ok and fetch_key is not null and repeat_reason is null
+      group by day, source, endpoint, fetch_key
+      having count(*) > 1
+    ) repeated
+    group by day, source, endpoint
+  ),
+  totals as (
+    select day, source, endpoint,
+           count(*)::int as calls,
+           (count(*) filter (where fetch_key is null))::int as no_key,
+           round(count(*) filter (where run_key is not null)::numeric / count(*), 4)::text as run_share,
+           round(count(*) filter (where run_key is not null)::numeric / nullif(count(distinct run_key), 0), 1)::text
+             as calls_per_run
+    from ledger
+    group by day, source, endpoint
+  )
+  select to_char(t.day, 'YYYY-MM-DD') as day, t.source, t.endpoint, t.calls, t.no_key,
+         coalesce(r.by_reason, '{}'::jsonb) as by_reason,
+         coalesce(w.keys_twice, 0) as keys_twice,
+         t.run_share, t.calls_per_run
+  from totals t
+  left join per_reason r using (day, source, endpoint)
+  left join twice w using (day, source, endpoint)
+  order by t.day desc, t.source, t.endpoint
+`;
 const CAPACITY_REUSE_SQL = `
   select 'reuse ratio (24h)' as check,
          case when coalesce(sum(obligation_count), 0) = 0 then 'idle'
@@ -749,6 +833,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       duration,
       traffic,
       recentCalls,
+      ledgerCoverage,
       questionCoverage,
       confidence,
       nightlyVerdicts,
@@ -766,6 +851,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<ValidationRow>(CAPACITY_DURATION_SQL),
       client.query<TrafficSourceRow>(TRAFFIC_SQL),
       client.query<RecentCallRow>(RECENT_CALLS_SQL),
+      client.query<LedgerCoverageRow>(LEDGER_COVERAGE_SQL, [LEDGER_COVERAGE_DAYS]),
       client.query<QuestionCoverageDbRow>(QUESTION_COVERAGE_SQL),
       client.query<ConfidenceReportDbRow>(CONFIDENCE_REPORT_SQL),
       client.query<NightlyVerdictRow>(NIGHTLY_VERDICTS_SQL),
@@ -886,6 +972,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       ],
       traffic: traffic.rows,
       recentCalls: recentCalls.rows,
+      ledgerCoverage: ledgerCoverage.rows,
     };
   });
 }

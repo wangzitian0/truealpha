@@ -78,7 +78,6 @@
     "apps/data-engine/tests/test_entity_display_resolution_view.py": 3.17,
     "apps/data-engine/tests/test_entity_identity_store.py": 25.27,
     "apps/data-engine/tests/test_factor_matrix_sample_capture.py": 0.09,
-    "apps/data-engine/tests/test_fetch_keys_once.py": 5.16,
     "apps/data-engine/tests/test_freshness_registry.py": 0.0,
     "apps/data-engine/tests/test_frozen_topt_list_version_single_definition.py": 0.28,
     "apps/data-engine/tests/test_headcount_source_priority.py": 0.0,

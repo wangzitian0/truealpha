@@ -132,7 +132,6 @@
       "window": "per environment per day",
       "oracle": "repository",
       "status": "partial",
-      "verdict_keys": ["fetch_keys_once"],
       "pending_on": "#1411 K3: the N-PORT archive, OpenFIGI, universe-list and price-lane calls carry a fetch key but are not read from the landed index"
     },
     {

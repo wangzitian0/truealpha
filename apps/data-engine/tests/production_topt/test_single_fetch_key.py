@@ -420,7 +420,7 @@ def test_k3_yahoo_does_not_land_a_closed_session_whose_bar_the_vendor_has_not_pu
     """Yahoo can lag after the close. The chart then ends one session early and must be asked again.
 
     The first, refused request is a request that is asked again on purpose: its row says `answer_refused`, so
-    `fetch_keys_once` does not count the second request as a duplicate."""
+    the coverage table of `/admin/datahub` does not count the second request as a duplicate."""
     yahoo_socket.extend([_chart("2026-03-27", "2026-03-30"), _chart("2026-03-30", "2026-03-31")])
     after_close = datetime(2026, 3, 31, 23, 0, tzinfo=UTC)
     _fetch_chart(date(2026, 3, 31), after_close)
