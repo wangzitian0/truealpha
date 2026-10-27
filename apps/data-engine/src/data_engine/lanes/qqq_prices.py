@@ -7,7 +7,7 @@ them is unavailable. This lane stores both series (`adjust = 'splits'` and `adju
 the other QQQ listings.
 
 Symbols. The listings of the governed QQQ head (the lane name of its record), which the QQQ tick
-captures. The lane keeps one listing per issuer: the primary listing (`primary_listing.choose_primary_listings`).
+captures. The lane keeps one listing per issuer: the primary listing (`primary_listing.primary_symbols`).
 It skips an issuer whose primary listing is a TOPT symbol, because the market-data lane stores it.
 So Alphabet adds no symbol (GOOGL is a TOPT symbol), and the lane never stores GOOG.
 
@@ -52,7 +52,6 @@ from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    DEFAULT_TOPT_SYMBOLS,
     MAX_BAR_LAG_SESSIONS,
     SPLIT_ADJUSTED,
     TWELVE_DATA_SEAT,
@@ -61,9 +60,10 @@ from data_engine.datahub.market_prices import (
     TwelveDataClient,
     TwelveDataRateLimitError,
     ingest_daily_series,
+    stored_symbols,
 )
 from data_engine.datahub.price_series import load_daily_series
-from data_engine.datahub.primary_listing import choose_primary_listings
+from data_engine.datahub.primary_listing import primary_symbols
 from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, split_history
@@ -95,20 +95,12 @@ def target_symbols(
 ) -> tuple[str, ...]:
     """The primary listing of each issuer in the universe, less the symbols in `covered`, by symbol.
 
-    `choose_primary_listings` names the primary listing of an issuer with several listings (#1518).
-    An issuer with several listings and none declared adds no symbol. A listing without a ticker names
-    no price series.
+    `primary_symbols` names them (#1518, #1522): an issuer with several listings and none declared adds no
+    symbol, and a listing without a ticker names no price series.
     """
-    fields = list(denominator["instrument_tuple_fields"])
-    issuer_at, listing_at, ticker_at = (fields.index(name) for name in ("issuer_id", "listing_id", "ticker"))
-    tickers: dict[str, str | None] = {}
-    listings: dict[str, list[str]] = {}
-    for row in denominator["instruments"]:
-        tickers[str(row[listing_at])] = row[ticker_at] or None
-        listings.setdefault(str(row[issuer_at]), []).append(str(row[listing_at]))
-    chosen = choose_primary_listings(connection, listings, known_at=known_at)
-    primaries = (tickers[listing] for listing in chosen.values() if listing is not None)
-    return tuple(sorted({ticker for ticker in primaries if ticker and ticker not in covered}))
+    return tuple(
+        symbol for symbol in primary_symbols(connection, denominator, known_at=known_at) if symbol not in covered
+    )
 
 
 def refresh_order(symbols: Sequence[str], newest: Mapping[str, date]) -> list[str]:
@@ -300,7 +292,8 @@ def _refresh_qqq_prices(
 ) -> RefreshOutcome:
     """The op body, apart from the Dagster plumbing, so a test can drive it with a fake vendor and its own connection."""
     corpus = resolve_universe_corpus(connection, lane_name("qqq"))
-    symbols = target_symbols(connection, corpus["topt_denominator"], covered=DEFAULT_TOPT_SYMBOLS, known_at=now)
+    covered = stored_symbols(connection, known_at=now)
+    symbols = target_symbols(connection, corpus["topt_denominator"], covered=covered, known_at=now)
     spend = ledger_spend(now.astimezone(UTC).date())
     budget = credit_budget(
         share=environment_share(environment),

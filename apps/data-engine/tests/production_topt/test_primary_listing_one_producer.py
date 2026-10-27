@@ -27,7 +27,6 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import PlannedRun
 from data_engine.datahub.production_topt.executor import SourceFetchPort
@@ -43,6 +42,8 @@ from factors.production_topt import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_live_input_age as age  # noqa: E402
 from macro_seed import seed_rate_for_cutoff  # noqa: E402
@@ -225,9 +226,7 @@ def _run_tick(*, declared: bool) -> Iterator[Tick]:
             monkeypatch.setattr(resolve_coordinates, "primary_listing_ids", lambda: frozenset())
         with psycopg.connect(url) as connection:
             alphabet = seed_backfilled_alphabet(connection)
-            store_flat_daily_series(
-                connection, DEFAULT_TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=DEFAULT_CLOSE
-            )
+            store_flat_daily_series(connection, TOPT_SYMBOLS, first=SERIES_START, last=SESSION, close=DEFAULT_CLOSE)
             seed_rate_for_cutoff(connection, TICK)
             connection.commit()
         context = dg.build_op_context()

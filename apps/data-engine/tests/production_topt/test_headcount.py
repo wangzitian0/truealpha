@@ -19,7 +19,6 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt.headcount import (
     PostgresHeadcountExtractor,
     lookup_headcount,
@@ -27,6 +26,9 @@ from data_engine.datahub.production_topt.headcount import (
     validate_cited_headcount_fact,
 )
 from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 _CIK = 9991264
 
@@ -164,8 +166,7 @@ def test_lookup_headcount_resolves_cited_filings_across_2023_2026_backtest_windo
     (`2026-03-31`), with zero rows stamped `2026-01-01`."""
     module = _load_seed_module()
     ciks_by_ticker = {
-        ticker.replace(".", "-"): 800000 + idx
-        for idx, ticker in enumerate(sorted(set(DEFAULT_TOPT_SYMBOLS) | {"GOOGL"}))
+        ticker.replace(".", "-"): 800000 + idx for idx, ticker in enumerate(sorted(set(TOPT_SYMBOLS) | {"GOOGL"}))
     }
     for cik in ciks_by_ticker.values():
         connection.execute(
@@ -183,7 +184,7 @@ def test_lookup_headcount_resolves_cited_filings_across_2023_2026_backtest_windo
     assert module.seed_reviewed_headcounts(connection, ciks_by_ticker=ciks_by_ticker) == 0
 
     for cutoff in (date(2023, 4, 28), date(2024, 4, 30), date(2025, 4, 30), date(2026, 3, 31)):
-        for ticker in DEFAULT_TOPT_SYMBOLS:
+        for ticker in TOPT_SYMBOLS:
             lookup_ticker = ("GOOGL" if ticker == "GOOG" else ticker).replace(".", "-")
             cik = ciks_by_ticker[lookup_ticker]
             resolved = lookup_headcount(connection, cik, cutoff)

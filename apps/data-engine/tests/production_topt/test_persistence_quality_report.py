@@ -23,7 +23,6 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
@@ -61,6 +60,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectS
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from split_series_seed import store_flat_daily_series, store_flat_topt_series  # noqa: E402
+from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
@@ -1187,7 +1187,7 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
     with isolated_test_database("report_share_count") as url, psycopg.connect(url) as connection:
         store = _InMemoryObjectStore()
         plan = _capture(connection, version="test-1346-share-count", object_store=store)
-        stored = [symbol for symbol in DEFAULT_TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
+        stored = [symbol for symbol in TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
         store_flat_daily_series(connection, stored, first=date(2026, 1, 2), last=CUTOFF.date())
         core = PostgresToptCoreRepository(connection)
         snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
