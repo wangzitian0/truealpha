@@ -66,6 +66,7 @@ from truealpha_contracts.datahub import (
     RetryPolicy,
     SourceRequest,
 )
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.evidence_graph import (
     BitemporalStamp,
     EvidenceGraphWriter,
@@ -74,6 +75,7 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+from truealpha_contracts.universes import id_prefix_like, schedule_name
 
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
@@ -260,6 +262,45 @@ def ensure_environment_identity(
         """,
         {"environment": env_str},
     )
+
+
+def ensure_served_head_artifacts(connection: psycopg.Connection[Any]) -> int:
+    """Register the head of every universe of the record in `mart.served_artifact` (#1522). Returns the rows written.
+
+    `mart.served_head` grades a head by the cadence of its registry row, and a head with no row gets the
+    strictest limit. The seed of `20261006T1020` holds the rows of the four universes of its day: history, and
+    they stay. A universe that the record adds needs a row, and the record is the one place that says so.
+
+    The statement reads first and writes only a missing row, with `on conflict do nothing`. A row that exists is
+    never touched: not rewritten, not locked. The steady state of a tick holds a read lock on the table and no
+    write lock, so a boot replay of the chain does not wait on a tick (#1412).
+    """
+    contract = load_environment_contract()
+    wanted = {
+        f"head:{key}": (
+            "capture",
+            schedule_name(key),
+            id_prefix_like(key),
+            "daily",
+            "operators" if universe.is_sentinel else "consumers",
+            True,
+        )
+        for key, universe in contract.universes.items()
+    }
+    present = {
+        str(row[0])
+        for row in connection.execute(
+            "select artifact_key from mart.served_artifact where artifact_key = any(%s)", (list(wanted),)
+        ).fetchall()
+    }
+    missing = {artifact_key: row for artifact_key, row in wanted.items() if artifact_key not in present}
+    for artifact_key, row in missing.items():
+        connection.execute(
+            "insert into mart.served_artifact (artifact_key, lane, schedule_name, universe_like, family, served_to, wired) "
+            "values (%s, %s, %s, %s, %s, %s, %s) on conflict (artifact_key) do nothing",
+            (artifact_key, *row),
+        )
+    return len(missing)
 
 
 def plan_and_persist(
@@ -1046,6 +1087,7 @@ __all__ = [
     "FORCED_VERSION_SUFFIX",
     "build_routes",
     "ensure_environment_identity",
+    "ensure_served_head_artifacts",
     "forced_capture_version",
     "live_version_for",
     "plan_and_persist",
