@@ -78,6 +78,7 @@ WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
 LIVENESS = "scheduler-liveness.yml"
 AUTO_RELEASE = "auto-release-staging.yml"
+SHARD_REFRESH = "shard-weight-refresh.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -738,7 +739,7 @@ def test_every_schedule_in_this_repository_is_one_the_liveness_check_can_read() 
         expressions = tool.schedule_of(path.read_text(encoding="utf-8"))
         if expressions is not None:
             scheduled[path.name] = tool.largest_gap([tool.Cron.parse(item) for item in expressions], now)
-    assert {DELIVERY, REPROOF, NIGHTLY, LIVENESS} <= set(scheduled), sorted(scheduled)
+    assert {DELIVERY, REPROOF, NIGHTLY, LIVENESS, SHARD_REFRESH} <= set(scheduled), sorted(scheduled)
 
 
 # --- issue-close-guard -------------------------------------------------------
@@ -1004,6 +1005,274 @@ def test_auto_release_has_only_the_permissions_it_needs() -> None:
     assert permissions["pull-requests"] == "read"
     assert permissions["issues"] == "write", "the staging-red issue is opened, commented on and closed (#1468 F1)"
     assert set(permissions) == {"contents", "actions", "pull-requests", "issues"}
+
+
+# --- shard-weight refresh (#1503) ---------------------------------------------
+
+REFRESH_PAT_GUARD = "Require a credential that can push a branch and open a pull request"
+REFRESH_HARVEST = "Harvest the newest green main run that carries durations"
+REFRESH_DECIDE = "Decide whether one refresh pull request is worth opening"
+REFRESH_OPEN = "Open one refresh pull request"
+
+
+def test_shard_weight_refresh_has_a_schedule_and_a_manual_replay_and_no_merge_trigger() -> None:
+    """Every background job needs two triggers. A pull_request or push trigger would make it a gate."""
+    on = triggers(SHARD_REFRESH)
+    assert set(on) == {"schedule", "workflow_dispatch"}, f"shard-weight-refresh triggers on {sorted(on)}"
+    assert on["schedule"] == [{"cron": "23 4 * * 0"}]
+    assert job(SHARD_REFRESH, "refresh")["if"] == "github.ref == 'refs/heads/main'", (
+        "a dispatch on another branch would open a pull request from that branch's tool"
+    )
+
+
+def test_shard_weight_refresh_has_read_grants_only_and_pushes_with_the_pat() -> None:
+    """The default token cannot create pull requests here, and its pushes start no run.
+    The PAT does both. Only the guard, the checkout and the opening step may hold it."""
+    workflow = yaml.safe_load(source(SHARD_REFRESH))
+    assert workflow["permissions"] == {"contents": "read", "actions": "read", "pull-requests": "read"}
+    assert "permissions" not in workflow["jobs"]["refresh"], "a job-level grant would replace the workflow grant"
+
+    refresh_steps = job(SHARD_REFRESH, "refresh")["steps"]
+    names = [spec.get("name") for spec in refresh_steps]
+    checkout_index = next(
+        index for index, spec in enumerate(refresh_steps) if str(spec.get("uses", "")).startswith("actions/checkout")
+    )
+    assert names.index(REFRESH_PAT_GUARD) < checkout_index, "the guard must run before checkout"
+    guard = step(SHARD_REFRESH, REFRESH_PAT_GUARD)
+    assert guard["env"] == {"INFRA2_PAT": "${{ secrets.INFRA2_PAT }}"}
+    assert "exit 1" in str(guard["run"])
+    assert refresh_steps[checkout_index]["with"]["token"] == "${{ secrets.INFRA2_PAT }}"
+    assert refresh_steps[checkout_index]["with"]["ref"] == "main"
+
+    holders = [spec.get("name") or spec.get("uses") for spec in refresh_steps if "INFRA2_PAT" in spec_text(spec)]
+    assert holders == [REFRESH_PAT_GUARD, "actions/checkout@v4", REFRESH_OPEN], holders
+    assert step(SHARD_REFRESH, REFRESH_OPEN)["env"]["GH_TOKEN"] == "${{ secrets.INFRA2_PAT }}"
+    for reader in (REFRESH_HARVEST, REFRESH_DECIDE):
+        assert step(SHARD_REFRESH, reader)["env"]["GH_TOKEN"] == "${{ github.token }}"
+    for spec in refresh_steps:
+        assert "${{" not in str(spec.get("run", "")), f"{spec.get('name')} interpolates an expression into the shell"
+
+
+def test_shard_weight_refresh_opens_at_most_one_pull_request_and_only_when_the_tool_says_so() -> None:
+    decide = step(SHARD_REFRESH, REFRESH_DECIDE)
+    run = str(decide["run"])
+    assert 'gh pr list --head "$REFRESH_BRANCH" --state open' in run, "the count must cover the refresh branch"
+    assert "tools/shard_weight_refresh.py" in run and '--open-prs "$open_prs"' in run
+    opener = step(SHARD_REFRESH, REFRESH_OPEN)
+    assert opener["if"] == "steps.decide.outputs.open_pr == 'true'"
+    script = str(opener["run"])
+    assert 'git push --force origin "$REFRESH_BRANCH"' in script
+    assert "git add tools/pytest_shard_weights.json" in script, "the pull request holds the weights file only"
+    assert "Refs #1503" in script and "Closes #1503" not in script
+    assert yaml.safe_load(source(SHARD_REFRESH))["env"]["REFRESH_BRANCH"] == "ci/refresh-shard-weights"
+
+
+def test_shard_weight_refresh_tries_the_next_run_when_one_run_has_no_durations() -> None:
+    """A green main run can skip the Python lanes. The harvest tool fails closed on its log."""
+    run = str(step(SHARD_REFRESH, REFRESH_HARVEST)["run"])
+    assert "--event push --status success" in run and "--limit 10" in run
+    assert "for run_id in $run_ids; do" in run
+    assert "tools/harvest_shard_weights.py" in run
+    assert run.count("exit 1") == 2, "no green run and no run with durations must each fail the job"
+
+
+# The next tests run the step's own script text against stub `gh` and harvest programs. A workflow
+# edit that loosens the step changes what these tests execute.
+
+_STUB_GH = """#!/bin/bash
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+  "run list")
+    case "$*" in
+      *"--workflow ci-required.yml"*"--branch main"*"--event push"*"--status success"*) printf '%s' "$STUB_RUN_IDS" ;;
+      *) echo "unexpected run list arguments: $*" >&2; exit 9 ;;
+    esac ;;
+  "pr create") ;;
+  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
+esac
+"""
+
+_STUB_HARVEST = """import os
+import sys
+from pathlib import Path
+
+run_id = sys.argv[1]
+out = sys.argv[sys.argv.index("--out") + 1]
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write(f"harvest {run_id}\\n")
+if run_id in os.environ.get("STUB_BAD_RUNS", "").split():
+    print(f"harvest: run {run_id} yielded no durations", file=sys.stderr)
+    raise SystemExit(1)
+Path(out).write_text("{}")
+"""
+
+
+def _stub_environment(tmp_path: Path) -> dict[str, str]:
+    """An environment whose `gh` is a recorder. `git` is the real one with no user configuration."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(_STUB_GH, encoding="utf-8")
+    gh.chmod(0o755)
+    (tmp_path / "runner").mkdir(exist_ok=True)
+    return {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "RUNNER_TEMP": str(tmp_path / "runner"),
+        "GITHUB_OUTPUT": str(tmp_path / "github_output"),
+        "GH_TOKEN": "unused",
+        "STUB_LOG": str(tmp_path / "stub.log"),
+    }
+
+
+def _run_refresh_harvest_step(tmp_path: Path, run_ids: str, bad_runs: str) -> subprocess.CompletedProcess[str]:
+    (tmp_path / "tools").mkdir(exist_ok=True)
+    (tmp_path / "tools" / "harvest_shard_weights.py").write_text(_STUB_HARVEST, encoding="utf-8")
+    environment = _stub_environment(tmp_path) | {"STUB_RUN_IDS": run_ids, "STUB_BAD_RUNS": bad_runs}
+    return subprocess.run(
+        ["bash", "-c", str(step(SHARD_REFRESH, REFRESH_HARVEST)["run"])],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env=environment,
+    )
+
+
+def test_the_refresh_harvest_takes_the_newest_run_that_carries_durations(tmp_path: Path) -> None:
+    result = _run_refresh_harvest_step(tmp_path, run_ids="13\n12\n11", bad_runs="13 12")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert (tmp_path / "github_output").read_text(encoding="utf-8") == "run_id=11\n"
+    assert (tmp_path / "stub.log").read_text(encoding="utf-8").splitlines()[1:] == [
+        "harvest 13",
+        "harvest 12",
+        "harvest 11",
+    ], "the step must try the runs from the newest to the oldest"
+
+
+def test_the_refresh_harvest_stops_at_the_first_run_that_works(tmp_path: Path) -> None:
+    result = _run_refresh_harvest_step(tmp_path, run_ids="13\n12\n11", bad_runs="")
+    assert result.returncode == 0
+    assert (tmp_path / "github_output").read_text(encoding="utf-8") == "run_id=13\n"
+    assert "harvest 12" not in (tmp_path / "stub.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("run_ids", "bad_runs", "message"),
+    [
+        ("13\n12", "13 12", "none of the newest 10 green main runs carries pytest durations"),
+        ("", "", "no green ci-required run on main"),
+    ],
+)
+def test_the_refresh_harvest_fails_the_job_instead_of_reporting_nothing_to_do(
+    tmp_path: Path, run_ids: str, bad_runs: str, message: str
+) -> None:
+    result = _run_refresh_harvest_step(tmp_path, run_ids=run_ids, bad_runs=bad_runs)
+    assert result.returncode != 0
+    assert message in result.stdout
+    assert not (tmp_path / "github_output").exists(), "a failed harvest must publish no run id"
+
+
+def _repo_with_a_weights_change(tmp_path: Path) -> tuple[Path, Path]:
+    """A bare `origin`, and a checkout of its `main` whose weights file the tool has rewritten."""
+    origin = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    environment = _stub_environment(tmp_path)
+    identity = ["-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+
+    def git(cwd: Path, *arguments: str) -> None:
+        subprocess.run(["git", *identity, *arguments], cwd=cwd, check=True, capture_output=True, env=environment)
+
+    origin.mkdir()
+    git(origin, "init", "-q", "--bare", "-b", "main")
+    work.mkdir()
+    git(work, "init", "-q", "-b", "main")
+    weights = work / "tools" / "pytest_shard_weights.json"
+    weights.parent.mkdir()
+    weights.write_text('{"seconds_by_file": {}}\n', encoding="utf-8")
+    git(work, "add", ".")
+    git(work, "commit", "-q", "-m", "base")
+    git(work, "remote", "add", "origin", str(origin))
+    git(work, "push", "-q", "origin", "main")
+    weights.write_text('{"seconds_by_file": {"tests/test_new.py": 3.0}}\n', encoding="utf-8")
+    (work / "scratch.txt").write_text("not part of the refresh\n", encoding="utf-8")
+    return origin, work
+
+
+def _run_refresh_open_step(tmp_path: Path, work: Path) -> subprocess.CompletedProcess[str]:
+    environment = _stub_environment(tmp_path) | {
+        "REFRESH_BRANCH": yaml.safe_load(source(SHARD_REFRESH))["env"]["REFRESH_BRANCH"],
+        "HARVEST_RUN_ID": "77",
+        "REASON": "the harvest gives weights to 1 test files that lack one",
+        "JOB_URL": "https://example.invalid/runs/1",
+        "GITHUB_REPOSITORY": "owner/repo",
+    }
+    return subprocess.run(
+        ["bash", "-c", str(step(SHARD_REFRESH, REFRESH_OPEN)["run"])],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env=environment,
+    )
+
+
+def _origin_git(tmp_path: Path, origin: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_stub_environment(tmp_path),
+    ).stdout.strip()
+
+
+def test_the_refresh_pushes_one_commit_of_the_weights_file_and_opens_the_pull_request(tmp_path: Path) -> None:
+    origin, work = _repo_with_a_weights_change(tmp_path)
+    result = _run_refresh_open_step(tmp_path, work)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+    title = "[truealpha-ci] Refresh the shard weights from run 77 (#1503)"
+    assert (
+        _origin_git(tmp_path, origin, "log", "main..ci/refresh-shard-weights", "--format=%s%n%an")
+        == f"{title}\ngithub-actions[bot]"
+    )
+    changed = _origin_git(tmp_path, origin, "diff", "--name-only", "main", "ci/refresh-shard-weights")
+    assert changed == "tools/pytest_shard_weights.json", "the commit must hold the weights file and nothing else"
+
+    gh_calls = (tmp_path / "stub.log").read_text(encoding="utf-8").splitlines()
+    assert gh_calls == [
+        f"pr create --repo owner/repo --base main --head ci/refresh-shard-weights --title {title} --body-file {tmp_path}/runner/pr_body.md"
+    ]
+    body = (tmp_path / "runner" / "pr_body.md").read_text(encoding="utf-8")
+    assert "Decision: the harvest gives weights to 1 test files that lack one." in body
+    assert "Refs #1503" in body and "Closes" not in body
+
+
+def test_the_refresh_replaces_a_stale_branch_left_by_an_earlier_pull_request(tmp_path: Path) -> None:
+    """A merged or closed refresh leaves its branch on origin. The next push must replace it."""
+    origin, work = _repo_with_a_weights_change(tmp_path)
+    identity = ["-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+    environment = _stub_environment(tmp_path)
+    for arguments in (
+        ["switch", "-q", "-c", "ci/refresh-shard-weights"],
+        ["commit", "-q", "--allow-empty", "-m", "stale refresh"],
+        ["push", "-q", "origin", "ci/refresh-shard-weights"],
+        ["switch", "-q", "main"],
+        ["branch", "-q", "-D", "ci/refresh-shard-weights"],
+    ):
+        subprocess.run(["git", *identity, *arguments], cwd=work, check=True, capture_output=True, env=environment)
+
+    result = _run_refresh_open_step(tmp_path, work)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    subjects = _origin_git(tmp_path, origin, "log", "ci/refresh-shard-weights", "--format=%s")
+    assert subjects.splitlines()[0].startswith("[truealpha-ci] Refresh the shard weights")
+    assert "stale refresh" not in subjects
 
 
 # --- one migration applier (#984) --------------------------------------------
