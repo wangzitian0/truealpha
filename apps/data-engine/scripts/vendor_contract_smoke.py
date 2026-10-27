@@ -24,6 +24,7 @@ Usage:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import urllib.parse
 from datetime import UTC, datetime, timedelta
@@ -49,9 +50,10 @@ def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes
 
     query = urllib.parse.urlencode({**params, "apikey": api_key})
     url = f"https://api.twelvedata.com/{path}?{query}"
+    # A monitor asks the vendor on purpose: its endpoint label keeps its rows off the production key of the same session.
     identity = FetchKey.for_request(
         "twelvedata",
-        path,
+        f"contract_smoke:{path}",
         params,
         entity_param="symbol",
         as_of_params=("date", "end_date"),
@@ -179,7 +181,8 @@ def check_us_treasury() -> None:
     today = datetime.now(UTC).date()
     for year in (today.year, today.year - 1):
         try:
-            body = treasury_rates.fetch_year(year, treasury_rates.fetch_key_of(year, on=today))
+            monitor_key = dataclasses.replace(treasury_rates.fetch_key_of(year, on=today), endpoint="contract_smoke")
+            body = treasury_rates.fetch_year(year, monitor_key)
             parsed = treasury_rates.parse_par_yield_csv(body, year=year)
         except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
             _check(f"us-treasury: the {year} file is reachable and parses", False, f"{type(error).__name__}: {error}")
@@ -215,6 +218,7 @@ def check_moomoo() -> None:
     annual statement row (`financial_type == 7`) carrying the calibrated field ids with
     an epoch period end. Needs the OpenD coordinates; unconfigured is a FAILED check,
     as for a missing Twelve Data key — a monitor without access is a gap, not a skip."""
+    from data_engine.datahub.fetch_key import FetchKey
     from data_engine.datahub.production_topt.moomoo_origin import (
         BALANCE_SHEET_FIELDS,
         INCOME_FIELDS,
@@ -224,6 +228,7 @@ def check_moomoo() -> None:
         parse_settled_close,
         period_end_of,
     )
+    from data_engine.sources import gateway
 
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
         _check("moomoo: OPEND coordinates configured", False, "checks skipped — set MOOMOO_OPEND_HOST/PORT")
@@ -231,7 +236,12 @@ def check_moomoo() -> None:
     client = OpenDClient()
     today = datetime.now(UTC).date()
     try:
-        bars = client.history_kline("US.AAPL", start=today - timedelta(days=14), end=today - timedelta(days=1))
+        bars = client.history_kline(
+            "US.AAPL",
+            start=today - timedelta(days=14),
+            end=today - timedelta(days=1),
+            identity=FetchKey("moomoo", "history_kline", "symbol:US.AAPL", gateway.utc_day()),
+        )
     except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
         _check("moomoo: OpenD reachable and K-line answers", False, f"{type(error).__name__}: {error}")
         return
@@ -252,7 +262,11 @@ def check_moomoo() -> None:
     except Exception as error:  # noqa: BLE001
         _check("moomoo: the window parses to a settled close", False, f"{type(error).__name__}: {error}")
     try:
-        income = client.financial_statements("US.AAPL", statement_type=INCOME_STATEMENT)
+        income = client.financial_statements(
+            "US.AAPL",
+            statement_type=INCOME_STATEMENT,
+            identity=FetchKey("moomoo", "financial_statements:income", "symbol:US.AAPL", gateway.utc_day()),
+        )
     except Exception as error:  # noqa: BLE001
         _check("moomoo: income statement answers", False, f"{type(error).__name__}: {error}")
         return
