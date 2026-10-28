@@ -319,7 +319,7 @@ def test_aapl_known_answers_are_recorded_as_superseded_on_a_newer_filing(tick: T
         row = rows[("AAPL", "filing", field)]
         assert (row["result"], row["reason"]) == ("not_comparable", "superseded")
         assert row["period"] == "2025-09-27"
-        assert row["source"] == "sec-edgar-filing"
+        assert row["source"] == "0000320193-25-000079"
         assert row["oracle_kind"] == "filing"
         assert row["oracle_value"] is None
         assert row["tolerance"] is None
