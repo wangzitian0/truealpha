@@ -18,6 +18,7 @@ from factors.composite.strategy_evaluator import (
     IssuerInput,
     _required_inputs,
     evaluate_cutoff,
+    required_input_keys,
 )
 from factors.forest import IssuerClass
 from truealpha_contracts.strategy import (
@@ -257,8 +258,9 @@ def test_a_stale_issuer_does_not_take_a_rank_from_a_fresh_one() -> None:
 
 def test_the_age_rule_and_the_missing_input_rule_share_one_list_of_required_inputs() -> None:
     """The list follows the valuation basis: P/S needs revenue, P/GP records it."""
-    by_gross_profit = [key for key, _reason in _required_inputs(ValuationBasis.PRICE_TO_GROSS_PROFIT)]
-    by_sales = [key for key, _reason in _required_inputs(ValuationBasis.PRICE_TO_SALES)]
+    consumed = required_input_keys(_definition(), IssuerClass.NON_FINANCIAL)
+    by_gross_profit = [key for key, _reason in _required_inputs(ValuationBasis.PRICE_TO_GROSS_PROFIT, consumed)]
+    by_sales = [key for key, _reason in _required_inputs(ValuationBasis.PRICE_TO_SALES, consumed)]
 
     assert by_gross_profit == list(_REQUIRED)
     assert by_sales == ["gross_profit", "total_assets", "headcount", "revenue", "shares_outstanding", "last_close"]

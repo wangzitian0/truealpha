@@ -281,19 +281,23 @@ def main() -> int:
             "staging.strategy_backtest_inputs.input_key still carries an enumerated CHECK. "
             "init.md rule 22: adding a metric is a registry edit, not a migration"
         )
-    bridge = REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "strategy_bridge.py"
+    bridge = REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "input_cells.py"
     # A LITERAL list of metric names is the violation; deriving the same mapping from the
     # registry is the fix, so match the literal rather than the variable's name.
-    if bridge.exists() and re.search(r"^_STRATEGY_PERIODIC_KEYS\s*=\s*[({\[]\s*[\"']", bridge.read_text(), re.M):
+    # A missing file is a failure: a guard whose file moved would otherwise check nothing (#1518).
+    bridge_text = bridge.read_text() if bridge.exists() else ""
+    if not bridge_text:
+        failures.append(f"{bridge.relative_to(REPO)} is missing: the guard of the metric-key tuples checks nothing")
+    if re.search(r"^_STRATEGY_PERIODIC_KEYS\s*=\s*[({\[]\s*[\"']", bridge_text, re.M):
         failures.append(
-            "strategy_bridge._STRATEGY_PERIODIC_KEYS hard-codes which metrics are period-shaped inside "
+            "input_cells._STRATEGY_PERIODIC_KEYS hard-codes which metrics are period-shaped inside "
             "generic transport — init.md rule 22 forbids branching on record type; declare it on the registry"
         )
     # Same shape, the other list this bridge derives from the registry (#770): a literal
     # tuple of metric names is the regression `_STRATEGY_FINANCIAL_KEYS` used to be.
-    if bridge.exists() and re.search(r"^_STRATEGY_FINANCIAL_KEYS\s*=\s*\(\s*\n\s*[\"']", bridge.read_text(), re.M):
+    if re.search(r"^_STRATEGY_FINANCIAL_KEYS\s*=\s*\(\s*\n\s*[\"']", bridge_text, re.M):
         failures.append(
-            "strategy_bridge._STRATEGY_FINANCIAL_KEYS hard-codes a metric name list inside generic transport "
+            "input_cells._STRATEGY_FINANCIAL_KEYS hard-codes a metric name list inside generic transport "
             "— init.md rule 22 forbids it; derive it from truealpha_contracts.metrics.METRICS instead"
         )
 

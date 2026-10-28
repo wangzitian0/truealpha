@@ -57,6 +57,8 @@ MISSING_TCE_FLAG = "missing_tangible_common_equity"
 MISSING_PREFERRED_FLAG = "missing_preferred_stock_value"
 #: The flag of a negative tangible common equity: the tree refuses it, so the charge is never a credit (#1518).
 NEGATIVE_TCE_FLAG = "negative_tangible_common_equity"
+#: The flag of a headcount that is zero or negative. The strategy maps it to `nonpositive_headcount`, as the core does.
+NONPOSITIVE_EMPLOYEES_FLAG = "non_positive_employees_total"
 _MISSING_LEAF_FLAGS = {
     "stockholders_equity": MISSING_TCE_FLAG,
     "goodwill": MISSING_TCE_FLAG,
@@ -135,7 +137,7 @@ def gross_profit_per_employee(
             if flag not in flags:
                 flags.append(flag)
         elif metric == _EMPLOYEES_TOTAL and fact.value <= 0:
-            flags.append("non_positive_employees_total")
+            flags.append(NONPOSITIVE_EMPLOYEES_FLAG)
         else:
             tree_inputs[node.key] = fact.value
             consumed.append(fact)

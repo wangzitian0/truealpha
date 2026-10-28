@@ -45,9 +45,8 @@ from truealpha_contracts.strategy import (
 )
 
 from factors.base.gross_profit_per_employee import (
-    MISSING_PREFERRED_FLAG,
-    MISSING_TCE_FLAG,
     NEGATIVE_TCE_FLAG,
+    NONPOSITIVE_EMPLOYEES_FLAG,
     gross_profit_per_employee,
 )
 from factors.base.peg import peg
@@ -89,10 +88,15 @@ _PEG_WINDOW_FLAG_PREFIXES = ("cagr_years:", "window:")
 # (init.md rule 22, #770) -- this module used to keep its own copy under this name.
 _METRIC_FOR_KEY = INPUT_KEY_ALIASES
 
-# Fixed evaluation order for a missing required input -> its exact reason code.
+# Fixed evaluation order for a missing required input -> its exact reason code. The order lists every
+# input that any pinned tree consumes. An issuer is tested on the inputs of its own class only (#1518).
 _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
     ("total_assets", ExclusionReason.MISSING_TOTAL_ASSETS_FACT),
+    ("stockholders_equity", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+    ("goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+    ("intangible_assets_net_excluding_goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
+    ("preferred_stock_value", ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
     ("headcount", ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE),
     ("revenue", ExclusionReason.MISSING_REVENUE_FACT),
     ("shares_outstanding", ExclusionReason.MISSING_MARKET_VALUE_INPUT),
@@ -112,24 +116,27 @@ def _recorded_only_input_keys(basis: ValuationBasis) -> frozenset[str]:
     return frozenset(_input_keys("price_to_sales")) - frozenset(_input_keys(basis.value))
 
 
-def _required_inputs(basis: ValuationBasis) -> tuple[tuple[str, ExclusionReason], ...]:
+def _required_inputs(basis: ValuationBasis, consumed: frozenset[str]) -> tuple[tuple[str, ExclusionReason], ...]:
     """The inputs whose absence excludes an issuer under ``basis``, with their exclusion reasons.
 
-    The missing-input rule and the input-age limit (#1255) both read this list. A key that
-    cannot exclude by absence cannot exclude by age.
+    ``consumed`` is the set that the pinned tree of the issuer class reads (`required_input_keys`). The
+    missing-input rule, the input-age limit (#1255) and the confidence floor all read this list. A key that
+    cannot exclude by absence cannot exclude by age or by confidence.
     """
     recorded_only = _recorded_only_input_keys(basis)
-    return tuple((key, reason) for key, reason in _REQUIRED_INPUT_REASONS if key not in recorded_only)
+    return tuple(
+        (key, reason) for key, reason in _REQUIRED_INPUT_REASONS if key in consumed and key not in recorded_only
+    )
 
 
-#: Factor flags that name a missing banking input, and the exclusion reason each one carries.
+#: Factor flags that name a banking input that is not usable, and the exclusion reason each one carries.
 _BANKING_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
-    (MISSING_PREFERRED_FLAG, ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
-    (MISSING_TCE_FLAG, ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
     (NEGATIVE_TCE_FLAG, ExclusionReason.NEGATIVE_TANGIBLE_COMMON_EQUITY),
 )
-#: Refusal flags of the valuation multiples that have an exact exclusion reason (#1235).
+#: Refusal flags of the labor-efficiency tree and of the valuation multiples that have an exact exclusion reason.
+#: The core gives the same reason for a headcount that is not positive (#1518).
 _MULTIPLE_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
+    (NONPOSITIVE_EMPLOYEES_FLAG, ExclusionReason.NONPOSITIVE_HEADCOUNT),
     ("nonpositive_gross_profit", ExclusionReason.NONPOSITIVE_GROSS_PROFIT),
 )
 #: The feeder that computes each valuation basis. The basis is the factor's registered name.
@@ -146,6 +153,19 @@ def _labor_efficiency_keys(forest: Forest, tree: MetricTree, issuer_class: Issue
         for node in required_inputs(forest, tree, issuer_class)
         if node.alias(AliasKind.DEFINITION_PARAMETER) is None
     ]
+
+
+def _consumed_input_keys(forest: Forest, trees: Mapping[IssuerClass, MetricTree]) -> frozenset[str]:
+    """The input keys that the given trees consume, plus the inputs of price-to-sales.
+
+    The decision rules (missing input, age, confidence floor) and the coverage metric read this one
+    derivation. Market value is shares times the last close. P/GP divides the same market value by the
+    gross profit that the tree already consumes.
+    """
+    keys = set(_input_keys("price_to_sales"))
+    for issuer_class, tree in trees.items():
+        keys.update(_labor_efficiency_keys(forest, tree, issuer_class))
+    return frozenset(keys)
 
 
 def required_input_keys(
@@ -166,11 +186,30 @@ def required_input_keys(
     """
     pinned = definition_pins(definition) if pins is None else pins
     classes = [IssuerClass(name) for name in pinned] if issuer_class is None else [issuer_class]
-    keys = set(_input_keys("price_to_sales"))
-    for each in classes:
-        tree = bound_tree(definition, each, forest=forest, pins=pins)
-        keys.update(_labor_efficiency_keys(forest, tree, each))
-    return frozenset(keys)
+    return _consumed_input_keys(
+        forest, {each: bound_tree(definition, each, forest=forest, pins=pins) for each in classes}
+    )
+
+
+def deciding_input_keys(
+    definition: LargeModelValueV0Definition,
+    issuer_class: IssuerClass,
+    *,
+    forest: Forest = FOREST,
+    pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
+) -> frozenset[str]:
+    """The input keys whose absence, age or confidence can exclude an issuer of ``issuer_class`` (#1518).
+
+    These are the `required_input_keys` of the class less the inputs that only a recorded factor reads.
+    The evaluator tests exactly this set. The TOPT core snapshot reads it too, so an input that is too old
+    for the decision is too old for the core.
+    """
+    return frozenset(
+        key
+        for key, _reason in _required_inputs(
+            definition.valuation_basis, required_input_keys(definition, issuer_class, forest=forest, pins=pins)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -342,11 +381,16 @@ def _evaluate_issuer(
     gap_q = definition.valuation_gap.quantization
     basis = definition.valuation_basis
 
-    recorded_only = _recorded_only_input_keys(basis)
-    required = _required_inputs(basis)
+    # An issuer with no class, or a class with no pin, has no tree and so no list of consumed inputs. It is
+    # excluded first. Every other issuer is tested on the inputs of its own pinned tree (#1518).
+    tree = None if issuer.issuer_class is None else trees.get(issuer.issuer_class)
+    if issuer.issuer_class is None or tree is None:
+        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=None), None
+    metric = tree.root
+    required = _required_inputs(basis, _consumed_input_keys(forest, {issuer.issuer_class: tree}))
     missing = next((reason for key, reason in required if key not in issuer.records), None)
     if missing is not None:
-        return _excluded(issuer.issuer_id, missing, confidence=None), None
+        return _excluded(issuer.issuer_id, missing, confidence=None, labor_efficiency_metric=metric), None
 
     # The age limit comes after the missing-input rule and before the confidence floor (#1255).
     if _has_stale_required_input(
@@ -355,20 +399,28 @@ def _evaluate_issuer(
         as_of=as_of,
         maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
     ):
-        return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, confidence=None), None
-
-    consumed_confidence = min(
-        confidence for key, (_value, confidence) in issuer.records.items() if key not in recorded_only
-    )
-    if consumed_confidence < definition.eligibility.minimum_confidence:
         return (
-            _excluded(issuer.issuer_id, ExclusionReason.BELOW_CONFIDENCE_FLOOR, confidence=consumed_confidence),
+            _excluded(
+                issuer.issuer_id,
+                ExclusionReason.STALE_REQUIRED_INPUT,
+                confidence=None,
+                labor_efficiency_metric=metric,
+            ),
             None,
         )
 
-    tree = None if issuer.issuer_class is None else trees.get(issuer.issuer_class)
-    if issuer.issuer_class is None or tree is None:
-        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=consumed_confidence), None
+    consumed_confidence = min(issuer.records[key][1] for key, _reason in required)
+    if consumed_confidence < definition.eligibility.minimum_confidence:
+        return (
+            _excluded(
+                issuer.issuer_id,
+                ExclusionReason.BELOW_CONFIDENCE_FLOOR,
+                confidence=consumed_confidence,
+                labor_efficiency_metric=metric,
+            ),
+            None,
+        )
+
     gppe_result = gross_profit_per_employee(
         _facts_for(issuer, _labor_efficiency_keys(forest, tree, issuer.issuer_class), as_of=as_of),
         entity_id=issuer.issuer_id,

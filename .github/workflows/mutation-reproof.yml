@@ -51,6 +51,7 @@ on:
       - "apps/app-web/tests/sign-out-button.test.ts"
       - "apps/app-web/tests/sign-out-journey.test.ts"
       - "apps/app-web/tests/source-contracts.test.ts"
+      - "apps/data-engine/src/data_engine/datahub/input_cells.py"
       - "apps/data-engine/src/data_engine/datahub/strategy_bridge.py"
       - "apps/data-engine/src/data_engine/lanes/quality.py"
       - "apps/data-engine/src/data_engine/quality/nightly_verdicts.py"

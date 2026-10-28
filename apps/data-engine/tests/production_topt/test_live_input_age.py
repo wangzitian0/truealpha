@@ -15,7 +15,7 @@ import json
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -59,6 +59,12 @@ SERIES_START = date(2024, 1, 2)
 #: Days between a filing and the tick, per ticker. A ticker that this map omits files 59 days before the tick.
 AGE_DAYS = {"AAPL": LIMIT_DAYS - 1, "MSFT": LIMIT_DAYS, "GOOGL": LIMIT_DAYS + 1, "AMZN": 700}
 DEFAULT_AGE_DAYS = 59
+#: Days that the headcount of a ticker is older than the filing of its statements. Empty here.
+HEADCOUNT_EXTRA_AGE_DAYS: dict[str, int] = {}
+#: Tickers whose gross profit the revenue proxy derives (#533). Empty here (`test_tick_one_projection`).
+PROXY_TICKERS: frozenset[str] = frozenset()
+#: Tickers whose statements hold no total assets. Empty here (`test_tick_one_projection`).
+NO_TOTAL_ASSETS_TICKERS: frozenset[str] = frozenset()
 _BANK_TICKER = "JPM"
 
 
@@ -87,9 +93,20 @@ def _bundle(branch: OperatingBranch, *, cik: int, ticker: str) -> FinancialFacts
     accession = f"0000{cik}-26-000001"
     filed_at = _filed_at(ticker)
     cover = filed_at.date() - timedelta(days=12)
+    proxy = ticker in PROXY_TICKERS
+    vintages = {"shares_outstanding": share_count_vintage(filed=filed_at.date(), own_date=cover, accession=accession)}
+    if proxy:
+        # The revenue proxy sets the gross profit equal to the revenue under one filing (#533).
+        vintages["gross_profit"] = {
+            "accession": accession,
+            "filed": filed_at.date().isoformat(),
+            "form": "10-K",
+            "period_end": cover.isoformat(),
+        }
     return FinancialFactsBundle(
-        gross_profit=Decimal("80000000") if financial else Decimal("210000000"),
-        total_assets=Decimal("200000000"),
+        gross_profit=Decimal("100000000") if proxy else Decimal("80000000") if financial else Decimal("210000000"),
+        gross_profit_is_revenue_proxy=proxy,
+        total_assets=None if ticker in NO_TOTAL_ASSETS_TICKERS else Decimal("200000000"),
         shares_outstanding=FILED_SHARES,
         revenue=Decimal("100000000"),
         pre_provision_profit=Decimal("80000000") if financial else None,
@@ -100,9 +117,7 @@ def _bundle(branch: OperatingBranch, *, cik: int, ticker: str) -> FinancialFacts
         raw_bytes=_company_facts(FILED_SHARES, filed=filed_at.date(), cover=cover, accession=accession),
         knowable_at=filed_at,
         shares_period_end=cover,
-        vintages={
-            "shares_outstanding": share_count_vintage(filed=filed_at.date(), own_date=cover, accession=accession)
-        },
+        vintages=vintages,
     )
 
 
@@ -134,6 +149,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL,
+                revenue_proxy_allowed=ticker in PROXY_TICKERS,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -153,8 +169,10 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
             connection,
             cik=cik,
             headcount=Decimal("164000"),
-            # The headcount is one day older than the filing, so the filing alone sets the `knowable_at` of the facts.
-            knowable_at=_filed_at(ticker) - timedelta(days=1),
+            # Each input carries its own `knowable_at` (#1518). The headcount became knowable with the filing, so
+            # the age of every input of an issuer is the age of its filing. `HEADCOUNT_EXTRA_AGE_DAYS` ages one
+            # headcount past its filing (`test_tick_one_projection`).
+            knowable_at=_filed_at(ticker) - timedelta(days=HEADCOUNT_EXTRA_AGE_DAYS.get(ticker, 0)),
             source="test-fixture",
             evidence_ref=f"test:{ticker}",
             confidence=Decimal("0.7"),
@@ -268,8 +286,11 @@ def test_the_fixture_ages_the_inputs_by_the_limit_of_the_live_definition(tick: T
     assert load_live_strategy_definition().eligibility.maximum_input_age_days == LIMIT_DAYS
     for ticker, days in AGE_DAYS.items():
         served = _served(tick, ticker)
-        for key in ("gross_profit", "total_assets", "headcount", "revenue", "shares_outstanding"):
+        for key in ("gross_profit", "total_assets", "headcount", "revenue"):
             assert TICK - served.knowable_at[key] == timedelta(days=days), (ticker, key, served.knowable_at)
+        # The share count names its own filing in the vintage (#1518). A filing is knowable at the end of its day.
+        filed_day = _filed_at(ticker).date()
+        assert served.knowable_at["shares_outstanding"] == datetime.combine(filed_day, time.max, tzinfo=UTC), ticker
         assert TICK - served.knowable_at["last_close"] < timedelta(days=5), "the close is recent"
 
 

@@ -49,7 +49,7 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
@@ -67,6 +67,7 @@ from data_engine.datahub.canonical_issuer import (
     ConflictingPredecessorError as ConflictingPredecessorError,
 )
 from data_engine.datahub.canonical_issuer import stored_entity_of
+from data_engine.datahub.input_cells import InputCell, financial_input_rows, vintage_knowable_at
 from data_engine.datahub.price_series import load_daily_series, split_events_by_symbol
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
@@ -92,7 +93,7 @@ from data_engine.datahub.share_basis import (
     share_count_as_of,
     share_count_concepts,
 )
-from data_engine.datahub.strategy_bridge import financial_input_rows, load_strategy_definition
+from data_engine.datahub.strategy_bridge import load_strategy_definition
 
 DEFAULT_MONTHS = 36
 
@@ -103,9 +104,6 @@ UNADJUSTED_BARS = "none"
 SPLIT_ADJUSTED_BARS = "splits"
 
 _COMPANY_FACTS_PREFIX = "companyfacts:CIK"
-#: The payload carries a period series as ``<metric>_by_period``. Its filings sit in the
-#: vintage under ``<metric>_periods``.
-_PERIOD_SERIES_SUFFIX = "_periods"
 
 #: The input row this module writes beside the financial inputs.
 _LAST_CLOSE_KEY = "last_close"
@@ -256,11 +254,6 @@ def is_schedule_cutoff(value: datetime, schedule: QuarterlyCutoffSchedule) -> bo
     return quarter_end_cutoffs(schedule, start=utc, end=utc) == [utc]
 
 
-def end_of_day(day: date) -> datetime:
-    """The last instant of a filed day: 23:59:59.999999Z."""
-    return datetime.combine(day, time.max, tzinfo=UTC)
-
-
 def admit_input(cutoff_at: datetime, knowable_at: datetime) -> None:
     """Raise ``LookAheadError`` unless the input is knowable before the cutoff's calendar date."""
     if knowable_at.astimezone(UTC).date() >= cutoff_at.astimezone(UTC).date():
@@ -270,36 +263,6 @@ def admit_input(cutoff_at: datetime, knowable_at: datetime) -> None:
 
 
 # -- per-key filing times ---------------------------------------------------------------
-
-
-def _entry_knowable_at(entry: object) -> datetime | None:
-    """The instant one vintage entry became known, or None when it names none.
-
-    A headcount entry carries the ``knowable_at`` its extractor stamped. An XBRL entry carries
-    the ``filed`` date of its filing, which is knowable at the end of that day.
-    """
-    if not isinstance(entry, Mapping):
-        return None
-    stamp = entry.get("knowable_at")
-    if stamp:
-        parsed = datetime.fromisoformat(str(stamp))
-        if parsed.tzinfo is None:
-            raise ValueError(f"vintage knowable_at {stamp!r} carries no time zone")
-        return parsed
-    filed = entry.get("filed")
-    return end_of_day(date.fromisoformat(str(filed))) if filed else None
-
-
-def vintage_knowable_at(payload: Mapping[str, Any]) -> Callable[[str, str | None], datetime | None]:
-    """The ``knowable_at_of`` callback for ``financial_input_rows``, read from the payload vintage."""
-    vintage = payload.get("vintage") or {}
-
-    def knowable_at_of(input_key: str, period_end: str | None) -> datetime | None:
-        if period_end is None:
-            return _entry_knowable_at(vintage.get(input_key))
-        return _entry_knowable_at((vintage.get(f"{input_key}{_PERIOD_SERIES_SUFFIX}") or {}).get(period_end))
-
-    return knowable_at_of
 
 
 # -- stored inputs ----------------------------------------------------------------------
@@ -659,7 +622,7 @@ def project_issuer_rows(
             {item.work_item_id: target}, fetcher, headcount_extractor=headcount_extractor, ruleset=ruleset
         )
         outcome = adapter.fetch(item)
-        projected: list[tuple[str, str, Decimal, datetime, str | None]] = []
+        projected: list[InputCell] = []
         if isinstance(outcome, FetchSuccess):
             if outcome.record is None:
                 raise RuntimeError(f"the SEC adapter returned a success without a record for {issuer.issuer_id}")
@@ -675,10 +638,8 @@ def project_issuer_rows(
         else:
             no_outcome += 1
         bar = last_close(issuer.ticker, cutoff_at)
-        for input_key, value, confidence, knowable_at, fiscal_period in projected:
-            row = HistoryRow(
-                issuer.issuer_id, cutoff_at, input_key, Decimal(str(value)), confidence, knowable_at, fiscal_period
-            )
+        for input_key, value, _unit, confidence, knowable_at, fiscal_period in projected:
+            row = HistoryRow(issuer.issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period)
             if input_key == SHARES_KEY and fiscal_period is None and bar is not None:
                 if splits is None:
                     splits = split_events(issuer.ticker)
