@@ -1166,3 +1166,31 @@ def test_oracle_cell_agreement_applies_delta_curve_and_reports_oracle_none() -> 
         Decimal("1"),
         ("oracle:none",),
     )
+
+
+class _FakeFinanceConnection:
+    """Returns the financial-fact rows in observation-id order, as the SQL does."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        self._rows = rows
+
+    def execute(self, _sql: str, _params: tuple) -> _FakeFinanceConnection:
+        return self
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+def test_the_newest_knowable_financial_fact_of_an_issuer_wins_not_the_last_observation_id() -> None:
+    older = datetime(2026, 3, 1, tzinfo=UTC)
+    newer = datetime(2026, 6, 1, tzinfo=UTC)
+    # The id of the older observation sorts last, so an id-ordered overwrite would keep the stale one.
+    rows = [
+        ("issuer:cik:0000000001", "aaa-newer", newer, {"vintage": "new"}),
+        ("issuer:cik:0000000001", "zzz-older", older, {"vintage": "old"}),
+    ]
+
+    held = oracle_outcomes._query_fin_by_issuer(_FakeFinanceConnection(rows), "run-1")
+
+    assert held["issuer:cik:0000000001"] == ("aaa-newer", newer, {"vintage": "new"})
+    assert held["0000000001"] == ("aaa-newer", newer, {"vintage": "new"})

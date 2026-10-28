@@ -592,9 +592,15 @@ def _query_fin_by_issuer(
     ).fetchall()
     fin_by_issuer: dict[str, tuple[str, datetime, dict[str, Any]]] = {}
     for iss_id, obs_id, know_at, payload in fin_rows:
-        fin_by_issuer[iss_id] = (obs_id, know_at, payload)
+        # The newest knowable observation of an issuer wins. The observation id is a content hash,
+        # so its order says nothing about time; it only breaks a tie of equal times.
+        keys = [iss_id]
         if str(iss_id).startswith("issuer:cik:"):
-            fin_by_issuer[str(iss_id).removeprefix("issuer:cik:")] = (obs_id, know_at, payload)
+            keys.append(str(iss_id).removeprefix("issuer:cik:"))
+        for key in keys:
+            held = fin_by_issuer.get(key)
+            if held is None or (know_at, obs_id) >= (held[1], held[0]):
+                fin_by_issuer[key] = (obs_id, know_at, payload)
     return fin_by_issuer
 
 

@@ -1,26 +1,40 @@
 -- #1517: Append-only per-cell confidence table in mart and nullable staging observation confidence.
 
-create table if not exists mart.cell_confidence (
-    cell_confidence_id bigserial primary key,
-    run_id text not null,
-    subject_id text not null,
-    semantic_type text not null,
-    metric text not null,
-    observation_id text,
-    confidence numeric(10, 6) not null check (confidence >= 0 and confidence <= 1),
-    policy_hash text not null,
-    input_hash text not null,
-    reason_codes text[] not null default '{}'::text[],
-    recorded_at timestamptz not null default now(),
-    constraint cell_confidence_run_subject_metric_unique unique (run_id, subject_id, metric)
-);
-
-create index if not exists idx_mart_cell_confidence_run_subject
-    on mart.cell_confidence (run_id, subject_id);
-
-create index if not exists idx_mart_cell_confidence_observation
-    on mart.cell_confidence (observation_id)
-    where observation_id is not null;
+-- Every statement runs on every boot. The table and each index are made only when the catalog says
+-- they are missing, so a settled database takes no lock.
+do $$
+begin
+    if to_regclass('mart.cell_confidence') is null then
+        create table mart.cell_confidence (
+            cell_confidence_id bigserial primary key,
+            run_id text not null,
+            subject_id text not null,
+            semantic_type text not null,
+            metric text not null,
+            observation_id text,
+            confidence numeric(10, 6) not null check (confidence >= 0 and confidence <= 1),
+            policy_hash text not null,
+            input_hash text not null,
+            reason_codes text[] not null default '{}'::text[],
+            recorded_at timestamptz not null default now(),
+            constraint cell_confidence_run_subject_metric_unique unique (run_id, subject_id, metric)
+        );
+    end if;
+    if not exists (
+        select 1 from pg_indexes
+        where schemaname = 'mart' and indexname = 'idx_mart_cell_confidence_run_subject'
+    ) then
+        create index idx_mart_cell_confidence_run_subject on mart.cell_confidence (run_id, subject_id);
+    end if;
+    if not exists (
+        select 1 from pg_indexes
+        where schemaname = 'mart' and indexname = 'idx_mart_cell_confidence_observation'
+    ) then
+        create index idx_mart_cell_confidence_observation
+            on mart.cell_confidence (observation_id)
+            where observation_id is not null;
+    end if;
+end $$;
 
 do $$
 begin
