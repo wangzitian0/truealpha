@@ -108,6 +108,8 @@ def _bundle(shares: Decimal, *, cik: int) -> FinancialFactsBundle:
         raw_bytes=raw.encode(),
         knowable_at=datetime.combine(FILED, datetime.min.time(), tzinfo=UTC),
         shares_period_end=COVER_DATE,
+        operating_period_end=ANNUAL_END,
+        revenue_period_end=ANNUAL_END,
         vintages={"shares_outstanding": share_count_vintage(filed=FILED, own_date=COVER_DATE, accession=accession)},
     )
 

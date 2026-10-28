@@ -619,7 +619,9 @@ def _extract_metric_from_payload(
         val = None if raw is None else Decimal(str(raw))
         vintage = payload.get("vintage") or {}
         hc_vintage = vintage.get("headcount") or {}
-        period = hc_vintage.get("period_end") or payload.get("revenue_period_end")
+        period = (
+            hc_vintage.get("period_end") or payload.get("revenue_period_end") or payload.get("operating_period_end")
+        )
         know_at = None
         if hc_vintage.get("knowable_at"):
             try:
