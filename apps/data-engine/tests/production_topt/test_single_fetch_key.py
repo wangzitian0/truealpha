@@ -140,23 +140,20 @@ def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(moom
             identity=FetchKey("moomoo", endpoint, "symbol:TEST", "2026-10-27"),
         )
 
-    assert not hasattr(ledger.settings, "moomoo_monthly_call_budget")
-    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 2)
+    from data_engine.config import settings
+
+    assert not hasattr(settings, "moomoo_monthly_call_budget")
+    monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: 2)
 
     spend("request_history_kline", "US.AAPL")
     spend("request_history_kline", "US.MSFT")
 
-    # Re-requesting an already-used stock in the 30d window succeeds
+    # Re-requesting an already-used stock in the 7d window succeeds
     ledger.gate("request_history_kline", "test", request_uri="moomoo://US.AAPL")
 
     # Requesting a 3rd distinct stock raises BudgetExceededError
-    with pytest.raises(ledger.BudgetExceededError, match="30d K-line distinct-stock quota exhausted"):
+    with pytest.raises(ledger.BudgetExceededError, match="7d K-line distinct-stock quota exhausted"):
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.NVDA")
-
-    # Daily call anomaly triggers only above 2x planned_p99
-    assert ledger.is_daily_call_anomaly(planned_p99=1) is False
-    spend("get_company_profile", "US.NVDA")
-    assert ledger.is_daily_call_anomaly(planned_p99=1) is True
 
 
 # --- K3: the gateway serves a landed key with no vendor call -------------------------
@@ -497,7 +494,7 @@ def test_k4_d1_twelve_data_quote_fetcher_reads_staging_market_prices_daily_witho
             assert params == ("AAPL", date(2026, 10, 16))
             return _FakeCursor()
 
-    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=0, connection=_FakeConnection())
+    fetcher = TwelveDataQuoteFetcher("test-key", connection=_FakeConnection())
     quote = fetcher("AAPL", date(2026, 10, 16))
     assert quote is not None
     assert quote.close == Decimal("227.55")

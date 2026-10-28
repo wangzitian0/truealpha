@@ -24,8 +24,16 @@ from data_engine.config import settings
 from data_engine.lanes import standards
 from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
+from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 
 TESTS_DIR = Path(__file__).resolve().parent
+
+
+@pytest.fixture(autouse=True)
+def _external_identity_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "environment_tier", RuntimeEnvironmentTier.PRODUCTION)
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(gateway.CapacityGate, "_queue", lambda self, *a, **k: 0.0)
 
 
 def _rows(source: str) -> list[tuple[str, str | None]]:
@@ -78,7 +86,6 @@ def analyst_world(moomoo_ledger_db: str, monkeypatch: pytest.MonkeyPatch) -> Ite
         yield opend
 
     monkeypatch.setattr(mm, "connect", connect)
-    monkeypatch.setattr(mm, "throttle", lambda: None)
     world._capture_head(connection, monkeypatch)
     try:
         yield opend

@@ -130,16 +130,25 @@ def test_symbols_without_both_series_come_first_then_the_oldest() -> None:
 # --- how much -----------------------------------------------------------------------------------
 
 
+def test_headroom_percent_matches_utilization_ceiling() -> None:
+    """Issue #1520 completeness criterion 4a:
+    credit_budget ceiling = share * 70 // 100: 336 for 480, 252 for 360 in test_qqq_prices_lane.py."""
+    budget_480 = qqq_prices.credit_budget(share=480, reserve=0, spent_today=0, targets=0)
+    assert budget_480.ceiling == 336
+    budget_360 = qqq_prices.credit_budget(share=360, reserve=0, spent_today=0, targets=0)
+    assert budget_360.ceiling == 252
+
+
 @pytest.mark.parametrize(
     ("environment", "reserve", "spent_today", "targets", "credits"),
     [
-        # Production as measured: 85 % of 480 is 408. 408 - 284 = 124 covers the need of 89 targets, 90.
-        ("production", PRODUCTION_OTHER_CALLERS_DAY, 0, 89, 90),
-        # A larger universe meets the ceiling, not its need of 300: 408 - 284 = 124.
-        ("production", PRODUCTION_OTHER_CALLERS_DAY, 0, 300, 124),
-        # A second run on one day spends what the first one left: 408 - 284 - 70 = 54.
-        ("production", PRODUCTION_OTHER_CALLERS_DAY, 70, 300, 54),
-        # Staging as measured: 85 % of 320 is 272, less than the 306 the other callers spend.
+        # Production as measured: 70 % of 480 is 336. 336 - 284 = 52.
+        ("production", PRODUCTION_OTHER_CALLERS_DAY, 0, 89, 52),
+        # A larger universe meets the ceiling: 336 - 284 = 52.
+        ("production", PRODUCTION_OTHER_CALLERS_DAY, 0, 300, 52),
+        # A second run on one day spends what the first one left: 336 - 284 - 70 <= 0 -> 0.
+        ("production", PRODUCTION_OTHER_CALLERS_DAY, 70, 300, 0),
+        # Staging as measured: 70 % of 320 is 224, less than the 306 the other callers spend.
         ("staging", STAGING_OTHER_CALLERS_DAY, 0, 89, 0),
         # An empty ledger: the need alone.
         ("production", 0, 0, 89, 90),
@@ -423,8 +432,8 @@ def test_runs_store_both_series_through_the_gateway_and_a_failed_symbol_goes_fir
     publish_qqq_head(connection, FIVE_TARGETS)
     now = datetime.now(UTC)
     sessions = _recent_sessions(now, 5)
-    # 408 - 396 leaves this lane 12 credits a day: two runs of 6.
-    _calls(call_ledger, OTHER_CALLER, _yesterday(now), 396)
+    # 336 - 324 leaves this lane 12 credits a day: two runs of 6.
+    _calls(call_ledger, OTHER_CALLER, _yesterday(now), 324)
     vendor = _vendor(monkeypatch, sessions, failing={"T1277B": 404})
 
     first = _run(connection, now)
@@ -575,7 +584,7 @@ def test_staging_fetches_nothing_while_its_measured_spend_fills_its_share(
 
     outcome = _run(connection, now, environment="staging")
 
-    assert (outcome.budget.ceiling, outcome.budget.reserve, outcome.budget.credits) == (272, 306, 0)
+    assert (outcome.budget.ceiling, outcome.budget.reserve, outcome.budget.credits) == (224, 306, 0)
     assert (outcome.planned, vendor.requests) == ((), [])
     assert outcome.skipped_reason is not None
 

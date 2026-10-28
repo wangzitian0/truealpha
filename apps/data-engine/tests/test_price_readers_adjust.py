@@ -152,7 +152,7 @@ def test_twelve_data_origin_reads_unadjusted_bar_only(connection) -> None:
     symbol = "T1411TDORIG"
     trading_date = date(2026, 9, 21)
     _write_both_series(connection, symbol, trading_date, unadjusted_last=False)
-    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=0, connection=connection)
+    fetcher = TwelveDataQuoteFetcher("test-key", connection=connection)
     quote = fetcher(symbol, trading_date)
     assert quote is not None
     assert quote.close == Decimal(UNADJUSTED_CLOSE)

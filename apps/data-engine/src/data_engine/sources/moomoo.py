@@ -16,6 +16,7 @@ ledger writer, `gateway.record_call` (#1521).
 """
 
 import json
+import logging
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,7 +26,9 @@ import moomoo
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources.gateway import record_call
-from data_engine.sources.moomoo_ledger import gate, normalize_stock_uri, throttle
+from data_engine.sources.moomoo_ledger import gate, normalize_stock_uri, stored_history_kl_quota
+
+logger = logging.getLogger(__name__)
 
 
 class MoomooConnectionError(Exception):
@@ -74,7 +77,7 @@ def canonical_moomoo_bytes(payload) -> bytes:
 
 
 def _call(ctx, endpoint: str, caller: str, fn, *, identity: FetchKey, request_uri: str | None = None):
-    """Gate, throttle, call, record — the one path every moomoo call must go through.
+    """Gate, call, record — the one path every moomoo call must go through.
 
     moomoo's SDK return shape isn't uniform: most calls return (ret, data),
     but get_rating_change returns (ret, data, next_page, all_count). ret is
@@ -92,9 +95,8 @@ def _call(ctx, endpoint: str, caller: str, fn, *, identity: FetchKey, request_ur
     stays with the caller (#1521, the same rule as every other source).
     """
     gate(endpoint, caller, request_uri=request_uri)
-    throttle()
     with record_call(
-        "moomoo", endpoint, identity=identity, caller=caller, request_uri=normalize_stock_uri(request_uri), admit=False
+        "moomoo", endpoint, identity=identity, caller=caller, request_uri=normalize_stock_uri(request_uri)
     ) as call:
         try:
             result = fn(ctx)
@@ -338,17 +340,34 @@ def get_history_kline(
             return (res[0], res[1])
         return res
 
+    if stored_history_kl_quota() is None and hasattr(ctx, "get_history_kl_quota"):
+        try:
+            get_history_kl_quota(
+                ctx,
+                caller=caller,
+                identity=FetchKey("moomoo", "get_history_kl_quota", f"kline_quota:{code}", identity.as_of),
+            )
+        except Exception:
+            logger.warning("Could not refresh moomoo historical kline quota reading", exc_info=True)
+
     bars = _call(ctx, "request_history_kline", caller, _invoke, request_uri=f"moomoo://{code}", identity=identity)
     return bars, page_req_key[0]
 
 
 def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin", identity: FetchKey):
     """The historical-candlestick quota already spent this window: `(used, remaining,
-    detail_list)`. Read-only and cheap; the staging verification step reads it so the
-    first K-line tick can state its quota cost rather than assume it."""
-    return _call(
+    detail_list)`. Read-only and cheap; stores the reading in moomoo_ledger (#1520)."""
+    res = _call(
         ctx, "get_history_kl_quota", caller, lambda c: c.get_history_kl_quota(get_detail=False), identity=identity
     )
+    if isinstance(res, (tuple, list)) and len(res) >= 2:
+        try:
+            from data_engine.sources.moomoo_ledger import store_history_kl_quota
+
+            store_history_kl_quota(int(res[0]) + int(res[1]))
+        except Exception:
+            logger.warning("Failed to store moomoo get_history_kl_quota reading", exc_info=True)
+    return res
 
 
 # moomoo's Python SDK doesn't expose these as enum classes (unlike e.g.

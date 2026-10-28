@@ -69,7 +69,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
@@ -108,8 +107,6 @@ VALUE_KEY = TWELVE_DATA_VALUE_KEY
 
 _EOD_URL = "https://api.twelvedata.com/eod"
 _TIME_SERIES_URL = "https://api.twelvedata.com/time_series"
-# The free tier allows 8 requests per minute; one full TOPT tick is 21 listings.
-_THROTTLE_SECONDS = 8
 _LOOKBACK_DAYS = 10
 # Keys that only ever appear on a live quote (`/price`) or a real-time snapshot
 # (`/quote`, whose `extended_*` fields are exactly the post-market trade that made v1
@@ -383,14 +380,12 @@ class TwelveDataQuoteFetcher:
         self,
         api_key: str,
         *,
-        throttle_seconds: int = _THROTTLE_SECONDS,
         today: date | None = None,
         connection: Any = None,
     ) -> None:
         if not api_key:
             raise ValueError("Twelve Data origin requires an API key")
         self._api_key = api_key
-        self._throttle_seconds = throttle_seconds
         self._today = today
         self._connection = connection
         self._cache: dict[tuple[str, date], MarketPriceQuote | None] = {}
@@ -464,48 +459,24 @@ class TwelveDataQuoteFetcher:
         if stored is not None:
             self._cache[key] = stored
             return stored
-        marker = self._marker()
         try:
             quote = self._fetch(symbol, cutoff)
         except Exception as error:  # noqa: BLE001 - a second origin that errors is simply absent
-            # Absorbed here rather than raised, so the throttle below still runs: a
-            # rate-limited request that skipped its wait would fire the next symbol
-            # immediately and rate-limit the rest of the tick with it. A
-            # `NotASessionCloseError` lands here too — a refused quantity leaves the cell
+            # A `NotASessionCloseError` lands here too — a refused quantity leaves the cell
             # honestly single-origin instead of corroborating it with the wrong number.
             # Absent, but not silent (#885): a revoked key, a spent minute, a refused
             # quantity and a gate refusal are logged with their type and counted in the
             # tick's summary.
             record_lost_corroboration(ORIGIN, FETCH, symbol, error)
             quote = None
-            # A call the rule-6 gate refused was never sent: there is no request to wait out.
-            if isinstance(error, gateway.CapacityExceeded):
-                marker = self._marker(refused=True)
         self._cache[key] = quote
-        if self._throttle_seconds and self._sent_since(marker):
-            time.sleep(self._throttle_seconds)
         return quote
 
-    def _marker(self, *, refused: bool = False) -> tuple[int, int, bool]:
-        return self._requests, self._index_hits, refused
-
-    def _sent_since(self, marker: tuple[int, int, bool]) -> bool:
-        """Whether a request may be pending on the vendor's minute since ``marker``.
-
-        No wait follows a call that the gate refused, or one that only read landed keys."""
-        requests, hits, refused = marker
-        if refused:
-            return False
-        return self._requests > requests or self._index_hits == hits
-
     def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
-        marker = self._marker()
         settled = parse_session_close(
             self._get(_EOD_URL, {"symbol": symbol, "date": str(cutoff)}),
             partition=cutoff,
         )
-        if self._throttle_seconds and self._sent_since(marker):
-            time.sleep(self._throttle_seconds)
         series_params = {
             "symbol": symbol,
             "interval": "1day",

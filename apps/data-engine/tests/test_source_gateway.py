@@ -259,7 +259,7 @@ def test_twelve_data_no_end_of_day_is_a_failed_twelvedata_row_with_the_key_redac
         raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(body))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    fetcher = origin.TwelveDataQuoteFetcher("s3cret-key", throttle_seconds=0)
+    fetcher = origin.TwelveDataQuoteFetcher("s3cret-key")
     assert fetcher._get(origin._EOD_URL, {"symbol": "AAPL", "date": "2026-08-29"}) == body
 
     (row,) = call_ledger
@@ -1135,7 +1135,7 @@ def moomoo_caller(warehouse_seat):
     wrote are deleted afterwards (the seat name `moomoo` is fixed, so the caller is the key)."""
     from data_engine.sources import moomoo_ledger
 
-    moomoo_ledger._recent_calls.clear()
+    moomoo_ledger.reset_stored_history_kl_quota()
     caller = f"{warehouse_seat}-caller"
     try:
         yield caller
@@ -1181,9 +1181,7 @@ def test_a_row_the_ledger_rejects_leaves_the_moomoo_payload_with_the_caller(ware
     """Decision A of #1521: the vendor answer is kept and the full row goes to the log. Postgres text
     cannot hold a NUL byte, so the ledger rejects this row for real."""
     from data_engine.sources import moomoo as mm
-    from data_engine.sources import moomoo_ledger
 
-    moomoo_ledger._recent_calls.clear()
     with caplog.at_level(logging.ERROR, logger="data_engine.sources.gateway"):
         payload = mm._call(
             object(),

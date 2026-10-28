@@ -11,15 +11,14 @@ Two guarantees live here.
    `conflict_abstained` instead of corroborating. The parser now asks for the partition
    date's settled end-of-day close and *refuses* anything else, so a live quote cannot
    silently become a corroboration input again.
-2. **Throttle.** A rate-limited request that skipped its wait would fire the next symbol
-   immediately and rate-limit the rest of the tick with it, so one refused request becomes
-   many. The throttle belongs to every outcome, not just the successful one.
+2. **Pacing.** Pacing is enforced by CapacityGate, with 0 sleeps outside the gate (#1520).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.parse
 from datetime import date, timedelta
 from decimal import Decimal
@@ -91,7 +90,7 @@ class _RecordingFetcher(TwelveDataQuoteFetcher):
     """The real fetcher with its HTTP call and its sleep replaced by records."""
 
     def __init__(self, outcomes: dict[str, object]) -> None:
-        super().__init__("test-key", throttle_seconds=1)
+        super().__init__("test-key")
         self._outcomes = outcomes
         self.slept: list[int] = []
         self.requested: list[str] = []
@@ -107,7 +106,7 @@ class _RecordingFetcher(TwelveDataQuoteFetcher):
 @pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     slept: list[float] = []
-    monkeypatch.setattr("data_engine.datahub.production_topt.twelve_data_origin.time.sleep", slept.append)
+    monkeypatch.setattr(time, "sleep", slept.append)
     return slept
 
 
@@ -163,7 +162,7 @@ def test_the_partition_dates_settled_close_is_accepted() -> None:
 def test_the_fetcher_asks_for_the_partition_dates_end_of_day(http) -> None:
     requested, bodies = http
     bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
-    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+    quote = TwelveDataQuoteFetcher("test-key")("AAPL", _PARTITION)
 
     assert quote is not None and quote.close == Decimal("338.19000")
     # v3: the settled close is asked of `/eod` FIRST; the bar's series request follows
@@ -213,7 +212,7 @@ def test_a_refused_quantity_leaves_the_cell_single_origin(http, caplog) -> None:
     """
     requested, bodies = http
     bodies.extend([_LIVE_PRICE])
-    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)
+    fetcher = TwelveDataQuoteFetcher("test-key")
     with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
         assert fetcher("AAPL", _PARTITION) is None
         assert fetcher("AAPL", _PARTITION) is None  # the cached refusal is not a second loss
@@ -235,7 +234,7 @@ def test_no_end_of_day_falls_back_to_the_last_settled_session(http) -> None:
     """
     requested, bodies = http
     bodies.extend([_NO_END_OF_DAY, _TIME_SERIES_WITH_IN_PROGRESS_ROW])
-    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+    quote = TwelveDataQuoteFetcher("test-key")("AAPL", _PARTITION)
 
     assert quote is not None and quote.as_of == date(2026, 7, 28)
     assert quote.close == Decimal("337.10000")
@@ -285,13 +284,13 @@ def test_no_key_means_no_second_origin(monkeypatch) -> None:
     assert origin_module.twelve_data_origin() is None
 
 
-# -- the throttle belongs to every outcome ---------------------------------------------
+# -- no pacing copies outside the gate (#1520) -----------------------------------------
 
 
-def test_a_refused_request_still_throttles_and_is_absent(_no_real_sleep) -> None:
+def test_a_refused_request_has_no_throttle_and_is_absent(_no_real_sleep) -> None:
     fetcher = _RecordingFetcher({"AAPL": RuntimeError("429 rate limited")})
     assert fetcher("AAPL", _CUTOFF) is None
-    assert _no_real_sleep == [1], "a failed second-origin request must still wait its turn"
+    assert _no_real_sleep == [], "0 sleeps outside the gate (#1520)"
 
 
 def test_api_key_is_required() -> None:
@@ -305,17 +304,17 @@ def test_one_request_per_symbol_per_run(_no_real_sleep) -> None:
     assert fetcher("AAPL", _CUTOFF) is None
     assert fetcher("AAPL", _CUTOFF) is None
     assert fetcher.requested == ["AAPL"], "a cached outcome must not re-hit the provider"
-    assert _no_real_sleep == [1], "the cached call must not throttle again"
+    assert _no_real_sleep == [], "0 sleeps outside the gate (#1520)"
 
 
-def test_the_fallback_request_takes_its_own_throttle_turn(_no_real_sleep, http) -> None:
-    """Two requests in one call must consume two turns, or a fallback tick doubles the rate."""
+def test_the_fallback_request_records_zero_sleeps_outside_gate(_no_real_sleep, http) -> None:
+    """A Twelve Data fetch records 0 sleeps outside the gate (#1520)."""
     requested, bodies = http
     bodies.extend([_NO_END_OF_DAY, _TIME_SERIES_WITH_IN_PROGRESS_ROW])
-    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=1)
+    fetcher = TwelveDataQuoteFetcher("test-key")
     assert fetcher("AAPL", _PARTITION) is not None
     assert len(requested) == 2
-    assert _no_real_sleep == [1, 1], "the fallback request must wait its turn like any other"
+    assert _no_real_sleep == [], "0 sleeps outside the gate (#1520)"
 
 
 def test_an_http_error_status_still_reaches_the_fallback(_no_real_sleep, monkeypatch) -> None:
@@ -335,7 +334,7 @@ def test_an_http_error_status_still_reaches_the_fallback(_no_real_sleep, monkeyp
         return _FakeResponse(_TIME_SERIES_WITH_IN_PROGRESS_ROW)
 
     monkeypatch.setattr(origin_module.urllib.request, "urlopen", fake_urlopen)
-    fetcher = TwelveDataQuoteFetcher("k", throttle_seconds=1)
+    fetcher = TwelveDataQuoteFetcher("k")
     quote = fetcher("AAPL", _PARTITION)
     assert len(requested) == 2, "the fallback request must fire after an HTTP-error /eod"
     assert quote is not None and quote.as_of == date(2026, 7, 28)
@@ -379,7 +378,7 @@ def test_a_settled_partition_date_attaches_the_bar_from_time_series(http) -> Non
     the series body, because it is the response every asserted number came from."""
     requested, bodies = http
     bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
-    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+    quote = TwelveDataQuoteFetcher("test-key")("AAPL", _PARTITION)
 
     assert quote is not None and quote.as_of == _PARTITION
     assert quote.close == Decimal("338.19000")
@@ -403,7 +402,7 @@ def test_a_bar_still_moving_after_the_close_corroborates_close_only(http) -> Non
     must NOT corroborate — the cell keeps the settled close and nothing else."""
     requested, bodies = http
     bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_IN_PROGRESS_ROW])
-    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+    quote = TwelveDataQuoteFetcher("test-key")("AAPL", _PARTITION)
 
     assert quote is not None and quote.close == Decimal("338.19000")
     assert (quote.open, quote.high, quote.low, quote.volume) == (None, None, None, None)
@@ -416,20 +415,20 @@ def test_a_failed_bar_request_leaves_the_settled_close_intact(http) -> None:
     cell is exactly what it was before this vintage — a settled, corroborated close."""
     requested, bodies = http
     bodies.extend([_SETTLED_EOD, _NO_END_OF_DAY])
-    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+    quote = TwelveDataQuoteFetcher("test-key")("AAPL", _PARTITION)
 
     assert quote is not None and quote.close == Decimal("338.19000")
     assert quote.open is None and quote.volume is None
     assert quote.raw_bytes == _SETTLED_EOD
 
 
-def test_the_bar_request_takes_its_own_throttle_turn(_no_real_sleep, http) -> None:
+def test_the_bar_request_records_zero_sleeps_outside_gate(_no_real_sleep, http) -> None:
     requested, bodies = http
     bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
-    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=1)
+    fetcher = TwelveDataQuoteFetcher("test-key")
     assert fetcher("AAPL", _PARTITION) is not None
     assert len(requested) == 2
-    assert _no_real_sleep == [1, 1], "the bar request must wait its turn like any other"
+    assert _no_real_sleep == [], "0 sleeps outside the gate (#1520)"
 
 
 def test_the_fallback_settled_row_carries_its_bar() -> None:

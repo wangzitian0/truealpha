@@ -28,7 +28,6 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from data_engine import db, jsonable, raw_store
-from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
@@ -94,14 +93,18 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
         conn.commit()
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--codes", default=None, help="comma-separated moomoo codes (default: every KG moomoo line)")
     parser.add_argument("--limit", type=int, default=None, help="stop after N successful calls (spot-check runs)")
     parser.add_argument("--all-endpoints", action="store_true", help="all 14 endpoints, not just the factor core set")
     parser.add_argument("--refetch", action="store_true", help="pull new vintages even where rows exist")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and budget state, make no calls")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
 
     conn = db.connect()
     if args.codes:
@@ -112,12 +115,13 @@ def main() -> None:
 
     plan = plan_calls(conn, codes, endpoints, args.refetch)
     used = calls_this_month()
+    rate = int(gateway.CAPACITIES["moomoo"].calls_per_window)
     print(
         f"universe: {len(codes)} listing lines x {len(endpoints)} endpoints; "
         f"{len(plan)} calls to make (rest already fetched)\n"
         f"ledger: {used} used this month; "
-        f"throttle {settings.moomoo_calls_per_30s}/30s "
-        f"=> est. {len(plan) * 30 / settings.moomoo_calls_per_30s / 3600:.1f}h"
+        f"capacity {rate}/30s "
+        f"=> est. {len(plan) * 30 / rate / 3600:.1f}h"
     )
     if args.dry_run:
         conn.close()

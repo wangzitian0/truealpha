@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -256,8 +255,6 @@ def _resolve_figis(
             data = result.get("data") or []
             if data:
                 resolved[job["idValue"]] = str(data[0].get("shareClassFIGI") or data[0]["figi"]).lower()
-        if not api_key:
-            time.sleep(3)  # 25 req/min anonymous ceiling, with margin
     return resolved
 
 

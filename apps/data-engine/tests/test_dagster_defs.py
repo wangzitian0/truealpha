@@ -530,6 +530,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     single-origin with the loss at the `budget` stage — and a full Yahoo rate window defers
     the primary cell. The tick summary and op metadata name both. Red against a tick
     that only records: the fake vendor below fails any request that gets through."""
+    import time
     from datetime import date
 
     from data_engine.config import settings
@@ -548,7 +549,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     # The tier of `settings` is cached for the session, so the test names the environment of the gate itself.
     monkeypatch.setattr(gateway, "capacity_environment", lambda: "production")
     monkeypatch.setattr(settings, "twelve_data_api_key", "k")
-    monkeypatch.setattr(twelve_data_origin.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=12, unmet=())
     _fake_tick(monkeypatch, registration)
 

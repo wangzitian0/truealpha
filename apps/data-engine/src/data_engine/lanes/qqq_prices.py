@@ -48,6 +48,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from pydantic import Field
+from truealpha_contracts.environment_contract import UTILIZATION_CEILING
 from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
@@ -80,8 +81,6 @@ QQQ_PRICE_CALLER = "qqq_prices.fetch_time_series"
 CREDITS_PER_SYMBOL = origin_per_key_cost("twelve-data:v1")
 #: A run after the close of session D serves the ticks of D and of the next `MAX_BAR_LAG_SESSIONS` sessions.
 REFRESH_EVERY_SESSIONS = MAX_BAR_LAG_SESSIONS + 1
-#: The percentage of the environment's daily share that all callers together may plan to spend.
-HEADROOM_PERCENT = 85
 #: The complete UTC days before today whose busiest day sets the reserve of the other callers.
 RESERVE_DAYS = 7
 
@@ -120,7 +119,7 @@ class CreditBudget:
 
     #: The environment's daily share of the Twelve Data seat. 0 when the environment has no share.
     share: int
-    #: floor(HEADROOM_PERCENT % of the share): what all callers together may plan to spend in a day.
+    #: floor(UTILIZATION_CEILING % of the share): what all callers together may plan to spend in a day.
     ceiling: int
     #: The largest daily spend of the other callers over the last `RESERVE_DAYS` complete UTC days.
     reserve: int
@@ -145,7 +144,7 @@ def need_credits(targets: int) -> int:
 def credit_budget(*, share: int | None, reserve: int, spent_today: int, targets: int) -> CreditBudget:
     """The credits one run may spend: its need, capped by what the other callers leave below the headroom."""
     granted = share or 0
-    ceiling = granted * HEADROOM_PERCENT // 100
+    ceiling = granted * int(round(UTILIZATION_CEILING * 100)) // 100
     need = need_credits(targets)
     credits = max(0, min(need, ceiling - reserve - spent_today))
     return CreditBudget(

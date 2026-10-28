@@ -55,7 +55,7 @@ def isolate_ambient_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def idle_moomoo_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The moomoo gate reads an empty ledger and the pacing window is empty (#1521).
+    """The moomoo gate reads an empty ledger (#1520, #1521).
 
     The gate reads `staging.api_call_ledger`; a unit test that runs the real `_call` over a fake
     OpenD must not open a database connection. The rows still go through `emit` into the
@@ -63,8 +63,8 @@ def idle_moomoo_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     from data_engine.sources import moomoo_ledger
 
     monkeypatch.setattr(moomoo_ledger, "calls_today", lambda: 0)
-    monkeypatch.setattr(moomoo_ledger, "kline_distinct_stocks_30d", lambda: set())
-    moomoo_ledger._recent_calls.clear()
+    monkeypatch.setattr(moomoo_ledger, "kline_distinct_stocks_7d", lambda: set())
+    moomoo_ledger.reset_stored_history_kl_quota()
 
 
 @pytest.fixture(scope="session")
@@ -92,7 +92,7 @@ def moomoo_ledger_db(_moomoo_database: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(gateway, "_writer", gateway.postgres_writer)
     gateway._pg_reset()
     gateway._pg_execute("delete from staging.api_call_ledger")
-    moomoo_ledger._recent_calls.clear()
+    moomoo_ledger.reset_stored_history_kl_quota()
     try:
         yield _moomoo_database
     finally:
