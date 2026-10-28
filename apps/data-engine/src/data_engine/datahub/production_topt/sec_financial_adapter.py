@@ -1401,10 +1401,10 @@ class SecFinancialFactAdapter:
         )
 
     def _listing_ratio_fields(self, target: SecTarget) -> dict[str, Any]:
-        """The payload keys of the cover read, or none when no reader ran (#1519, step 1a).
+        """The payload keys of the cover read, or none when no reader ran (#1519).
 
-        Measured and stored only: no factor reads these keys yet. An issuer that the registry could not
-        read is excluded from the tick, so its cover is not read and its payload says "not measured".
+        An issuer that the registry could not read is excluded from the tick, so its cover is not read
+        and its payload says "not measured".
         """
         if self._listing_ratio_reader is None or target.registry_unavailable:
             return {}

@@ -19,6 +19,7 @@ from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.share_basis import (
     CLOSE_JUMP_BEYOND_SERIES,
     LISTINGS_DISAGREE,
+    MISSING_LISTING_UNIT_RATIO,
     NO_SPLIT_ADJUSTED_SERIES,
     NO_UNADJUSTED_SERIES,
     SERIES_DO_NOT_COVER,
@@ -29,6 +30,7 @@ from data_engine.datahub.share_basis import (
     OnCloseBasis,
     SplitHistory,
     Unavailable,
+    listing_units_per_share_of,
     live_on_close_basis,
     on_close_basis,
     split_history,
@@ -128,6 +130,7 @@ def test_on_close_basis_applies_the_splits_after_the_basis_date_through_the_sess
         close_session=SESSION,
         close_knowable_at=CLOSE_KNOWABLE,
         splits=splits,
+        listing_units_per_share=1,
     )
     unchanged = on_close_basis(
         SHARES,
@@ -136,10 +139,50 @@ def test_on_close_basis_applies_the_splits_after_the_basis_date_through_the_sess
         close_session=SESSION,
         close_knowable_at=CLOSE_KNOWABLE,
         splits=splits,
+        listing_units_per_share=1,
     )
 
     assert adjusted == OnCloseBasis(SHARES * 10, CLOSE_KNOWABLE, 10), "the split after the session is not applied"
     assert unchanged == OnCloseBasis(SHARES, COUNT_KNOWABLE, 1), "a count dated on the ex-date already holds it"
+
+
+def test_on_close_basis_divides_by_listing_units_per_share_and_refuses_missing_ratio() -> None:
+    converted = on_close_basis(
+        SHARES,
+        COUNT_KNOWABLE,
+        basis_date=OWN_DATE,
+        close_session=SESSION,
+        close_knowable_at=CLOSE_KNOWABLE,
+        splits=(),
+        listing_units_per_share=Decimal(4),
+    )
+    assert converted == OnCloseBasis(SHARES / 4, COUNT_KNOWABLE, 1)
+
+    for invalid in (None, Decimal(0), Decimal(-2), False):
+        missing = on_close_basis(
+            SHARES,
+            COUNT_KNOWABLE,
+            basis_date=OWN_DATE,
+            close_session=SESSION,
+            close_knowable_at=CLOSE_KNOWABLE,
+            splits=(),
+            listing_units_per_share=invalid,  # type: ignore[arg-type]
+        )
+        assert isinstance(missing, Unavailable) and missing.reason == MISSING_LISTING_UNIT_RATIO
+
+    # `live_on_close_basis` checks the ratio before the stored series: an issuer with no stored bars
+    # and no proven ratio names `missing_listing_unit_ratio`, not `no_split_adjusted_series`.
+    live_missing = live_on_close_basis(
+        _count(),
+        [None],
+        listing_units_per_share=None,
+        documents=_no_read,
+        ruleset=_no_read,
+    )
+    assert isinstance(live_missing, Unavailable) and live_missing.reason == MISSING_LISTING_UNIT_RATIO
+    assert listing_units_per_share_of({"listing_units_per_share": "4"}) == Decimal(4)
+    assert listing_units_per_share_of({"listing_units_per_share": None}) is None
+    assert listing_units_per_share_of({}) is None
 
 
 _CLASSED = {
@@ -154,20 +197,30 @@ _CLASSED = {
 def test_a_split_between_the_count_and_its_filing_is_resolved_by_the_stored_document(kind: str) -> None:
     documents, expected = _CLASSED[kind]
 
-    outcome = live_on_close_basis(_count(), [_history()], documents=lambda: documents, ruleset=lambda: DEFAULT_RULESET)
+    outcome = live_on_close_basis(
+        _count(), [_history()], listing_units_per_share=1, documents=lambda: documents, ruleset=lambda: DEFAULT_RULESET
+    )
 
     assert outcome == expected
 
 
 def test_a_count_no_stored_document_classes_is_unavailable_when_a_split_lies_before_its_filing() -> None:
     """The projector falls back to the filing date here. The live path does not guess a class."""
-    outcome = live_on_close_basis(_count(), [_history()], documents=lambda: [], ruleset=lambda: DEFAULT_RULESET)
+    outcome = live_on_close_basis(
+        _count(), [_history()], listing_units_per_share=1, documents=lambda: [], ruleset=lambda: DEFAULT_RULESET
+    )
 
     assert isinstance(outcome, Unavailable) and outcome.reason == SHARE_BASIS_AMBIGUOUS, outcome
 
 
 def test_the_stored_documents_are_not_read_when_the_split_follows_the_filing() -> None:
-    outcome = live_on_close_basis(_count(), [_history(ex_date=date(2026, 3, 16))], documents=_no_read, ruleset=_no_read)
+    outcome = live_on_close_basis(
+        _count(),
+        [_history(ex_date=date(2026, 3, 16))],
+        listing_units_per_share=1,
+        documents=_no_read,
+        ruleset=_no_read,
+    )
 
     assert outcome == OnCloseBasis(SHARES * 10, CLOSE_KNOWABLE, 10)
 
@@ -182,7 +235,9 @@ def test_the_stored_documents_are_not_read_when_the_split_follows_the_filing() -
 def test_series_that_do_not_span_the_basis_date_to_the_close_make_the_issuer_unavailable(
     span: dict[str, date], uncovered: str
 ) -> None:
-    outcome = live_on_close_basis(_count(), [_history(ex_date=None, **span)], documents=_no_read, ruleset=_no_read)
+    outcome = live_on_close_basis(
+        _count(), [_history(ex_date=None, **span)], listing_units_per_share=1, documents=_no_read, ruleset=_no_read
+    )
 
     assert isinstance(outcome, Unavailable) and outcome.reason == SERIES_DO_NOT_COVER, uncovered
 
@@ -190,7 +245,11 @@ def test_series_that_do_not_span_the_basis_date_to_the_close_make_the_issuer_una
 def test_series_one_session_behind_the_close_value_the_issuer_when_the_close_holds_still() -> None:
     """In winter the market-data refresh can run before the vendor lists the day's bar (#1262)."""
     outcome = live_on_close_basis(
-        _count(), [_flat_history(CLOSE, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+        _count(),
+        [_flat_history(CLOSE, last=PREVIOUS_SESSION)],
+        listing_units_per_share=1,
+        documents=_no_read,
+        ruleset=_no_read,
     )
 
     assert outcome == VALUED
@@ -199,7 +258,11 @@ def test_series_one_session_behind_the_close_value_the_issuer_when_the_close_hol
 def test_a_close_at_one_tenth_of_the_last_stored_close_is_a_jump_beyond_the_series() -> None:
     """A 10-for-1 split on the session the series do not hold yet: the issuer is excluded that night."""
     outcome = live_on_close_basis(
-        _count(), [_flat_history(CLOSE * 10, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+        _count(),
+        [_flat_history(CLOSE * 10, last=PREVIOUS_SESSION)],
+        listing_units_per_share=1,
+        documents=_no_read,
+        ruleset=_no_read,
     )
 
     assert isinstance(outcome, Unavailable) and outcome.reason == CLOSE_JUMP_BEYOND_SERIES, outcome
@@ -219,7 +282,11 @@ def test_a_close_on_the_jump_limit_is_excluded_and_a_close_just_inside_is_valued
     last_stored: Decimal, live: Decimal, expected: object
 ) -> None:
     outcome = live_on_close_basis(
-        _count(close=live), [_flat_history(last_stored, last=PREVIOUS_SESSION)], documents=_no_read, ruleset=_no_read
+        _count(close=live),
+        [_flat_history(last_stored, last=PREVIOUS_SESSION)],
+        listing_units_per_share=1,
+        documents=_no_read,
+        ruleset=_no_read,
     )
 
     assert (outcome.reason if isinstance(outcome, Unavailable) else outcome) == expected, outcome
@@ -228,7 +295,11 @@ def test_a_close_on_the_jump_limit_is_excluded_and_a_close_just_inside_is_valued
 def test_a_listing_without_stored_bars_takes_the_splits_of_the_issuers_other_listing() -> None:
     """Alphabet: the market-data lane stores GOOGL, not GOOG. The close can be GOOG's."""
     outcome = live_on_close_basis(
-        _count(), [None, _history("GOOGL", ex_date=date(2026, 3, 16))], documents=_no_read, ruleset=_no_read
+        _count(),
+        [None, _history("GOOGL", ex_date=date(2026, 3, 16))],
+        listing_units_per_share=1,
+        documents=_no_read,
+        ruleset=_no_read,
     )
 
     assert outcome == OnCloseBasis(SHARES * 10, CLOSE_KNOWABLE, 10)
@@ -238,6 +309,7 @@ def test_two_listings_that_show_different_splits_make_the_issuer_unavailable() -
     outcome = live_on_close_basis(
         _count(),
         [_history("GOOGL", ex_date=date(2026, 3, 16)), _history("GOOG", ex_date=None)],
+        listing_units_per_share=1,
         documents=_no_read,
         ruleset=_no_read,
     )
@@ -246,7 +318,9 @@ def test_two_listings_that_show_different_splits_make_the_issuer_unavailable() -
 
 
 def test_an_issuer_with_no_stored_bars_on_any_listing_is_unavailable() -> None:
-    outcome = live_on_close_basis(_count(), [None, None], documents=_no_read, ruleset=_no_read)
+    outcome = live_on_close_basis(
+        _count(), [None, None], listing_units_per_share=1, documents=_no_read, ruleset=_no_read
+    )
 
     assert isinstance(outcome, Unavailable) and outcome.reason == NO_SPLIT_ADJUSTED_SERIES, outcome
 
@@ -261,7 +335,9 @@ def test_an_issuer_with_no_stored_bars_on_any_listing_is_unavailable() -> None:
     ],
 )
 def test_a_count_without_its_own_date_or_its_filing_date_is_unavailable(entry: dict[str, str]) -> None:
-    outcome = live_on_close_basis(_count(entry), [_history(ex_date=None)], documents=_no_read, ruleset=_no_read)
+    outcome = live_on_close_basis(
+        _count(entry), [_history(ex_date=None)], listing_units_per_share=1, documents=_no_read, ruleset=_no_read
+    )
 
     assert isinstance(outcome, Unavailable) and outcome.reason == SHARE_COUNT_UNDATED, outcome
 
@@ -269,7 +345,9 @@ def test_a_count_without_its_own_date_or_its_filing_date_is_unavailable(entry: d
 def test_a_gap_of_one_listing_makes_the_issuer_unavailable_with_its_reason() -> None:
     gap = Unavailable(NO_SPLIT_ADJUSTED_SERIES, "GOOG: unadjusted bars without split-adjusted bars")
 
-    outcome = live_on_close_basis(_count(), [gap, _history("GOOGL")], documents=_no_read, ruleset=_no_read)
+    outcome = live_on_close_basis(
+        _count(), [gap, _history("GOOGL")], listing_units_per_share=1, documents=_no_read, ruleset=_no_read
+    )
 
     assert outcome == gap
 

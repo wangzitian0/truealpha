@@ -162,11 +162,11 @@ class FinancialFactPayload(_FrozenModel):
     earnings_cagr_3y: Decimal | None = None
     earnings_cagr_base_period_end: date | None = None
     earnings_cagr_latest_period_end: date | None = None
-    # #1519 step 1a: what the cover of the latest annual filing says about the depositary ratio.
+    # #1519: what the cover of the latest annual filing says about the depositary ratio.
     # The seven keys are `listing_unit_ratio.PAYLOAD_KEYS`. They are written together, null where
-    # empty, only when the cover reader ran. A payload without them is "not measured". No factor
-    # and no served value reads them yet. `listing_units_per_share` is the number of ordinary
-    # shares that one listed unit stands for.
+    # empty, only when the cover reader ran. A payload without them is "not measured".
+    # `listing_units_per_share` is the number of ordinary shares that one listed unit stands for;
+    # `_snapshot_member` passes it to `live_on_close_basis`.
     listing_units_per_share: Decimal | None = None
     ratio_pattern: str | None = None
     ratio_title: str | None = None
@@ -877,6 +877,7 @@ class PostgresToptCoreRepository:
                     close=price.close,
                 ),
                 histories,
+                listing_units_per_share=financial.listing_units_per_share,
                 documents=documents if documents is not None else (lambda: ()),
                 ruleset=ruleset if ruleset is not None else (lambda: DEFAULT_RULESET),
             )
@@ -893,6 +894,12 @@ class PostgresToptCoreRepository:
                     outcome.reason,
                     outcome.detail,
                 )
+        elif shares_value is not None:
+            if financial.listing_units_per_share is None or financial.listing_units_per_share <= 0:
+                shares_value = None
+                shares_reason = ToptCoreReasonCode.MISSING_LISTING_UNIT_RATIO
+            elif financial.listing_units_per_share != 1:
+                shares_value = shares_value / financial.listing_units_per_share
 
         # #1518: one age limit. A cell that the issuer's decision consumes and that became knowable more than
         # `maximum_input_age_days` before the cutoff makes the financial cell stale. The decision tests the same

@@ -59,6 +59,7 @@ from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from split_series_seed import store_flat_daily_series, store_flat_topt_series  # noqa: E402
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
@@ -336,6 +337,7 @@ def _routes(
         lambda cik, cutoff, branch: _bundle(branch, blank_numerator=cik in blank_ciks),
         headcount_extractor=headcount_extractor,
         corroborating_origins=(financial_second_origin,) if corroborate else (),
+        listing_ratio_reader=plain_share_ratio,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 

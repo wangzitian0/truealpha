@@ -61,6 +61,7 @@ from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from macro_seed import stored_rate_for_cutoff  # noqa: E402
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -344,6 +345,7 @@ def _routes(
         lambda cik, cutoff, branch: _bundle(branch, blank_numerator=cik in blank_ciks),
         headcount_extractor=headcount_extractor,
         corroborating_origins=(financial_second_origin,) if corroborate else (),
+        listing_ratio_reader=plain_share_ratio,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 

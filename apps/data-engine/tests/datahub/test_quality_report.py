@@ -295,6 +295,7 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
         "shares_outstanding": "10000000",
         # The member builder dates the share count to put it on the basis of the close (#1277).
         "shares_period_end": "2026-08-01",
+        "listing_units_per_share": "1",
         "net_income": "50000000",
         "stockholders_equity": "120000000",
         "preferred_stock_value": "0",

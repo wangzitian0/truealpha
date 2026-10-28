@@ -77,6 +77,7 @@ from data_engine.datahub.production_topt.issuer_registry import UNAVAILABLE_PAYL
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     HeadcountExtractor,
+    ListingRatioReader,
     SecFinancialFactAdapter,
     SecTarget,
     build_bundle,
@@ -89,10 +90,13 @@ from data_engine.datahub.share_basis import (
     SHARES_KEY,
     STATEMENT,
     UNRECOGNISED,
+    Unavailable,
+    listing_units_per_share_of,
     on_close_basis,
     share_count_as_of,
     share_count_concepts,
 )
+from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 
 DEFAULT_MONTHS = 36
@@ -581,6 +585,7 @@ def project_issuer_rows(
     last_close: PriceReader,
     split_events: SplitReader,
     ruleset: ConceptMappingRuleset,
+    listing_ratio_reader: ListingRatioReader | None = None,
 ) -> Projection:
     """The input rows of one issuer at each cutoff. Reads only. Writes nothing.
 
@@ -589,6 +594,7 @@ def project_issuer_rows(
     headcount extractor admits a fact knowable through the end of that same day.
     """
     documents: dict[int, tuple[bytes, dict[str, Any]] | None] = {}
+    ratio_reader = listing_ratio_reader if listing_ratio_reader is not None else CoverRatioReader()
 
     def fetcher(cik: int, as_of: date, branch: OperatingBranch) -> Any:
         if cik not in documents:
@@ -617,9 +623,14 @@ def project_issuer_rows(
             revenue_proxy_allowed=issuer.revenue_proxy_allowed,
             predecessor_cik=issuer.predecessor_cik,
             predecessor_signed=issuer.predecessor_signed,
+            ticker=issuer.ticker,
         )
         adapter = SecFinancialFactAdapter(
-            {item.work_item_id: target}, fetcher, headcount_extractor=headcount_extractor, ruleset=ruleset
+            {item.work_item_id: target},
+            fetcher,
+            headcount_extractor=headcount_extractor,
+            ruleset=ruleset,
+            listing_ratio_reader=ratio_reader,
         )
         outcome = adapter.fetch(item)
         projected: list[InputCell] = []
@@ -640,21 +651,34 @@ def project_issuer_rows(
         bar = last_close(issuer.ticker, cutoff_at)
         for input_key, value, _unit, confidence, knowable_at, fiscal_period in projected:
             row = HistoryRow(issuer.issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period)
-            if input_key == SHARES_KEY and fiscal_period is None and bar is not None:
-                if splits is None:
-                    splits = split_events(issuer.ticker)
-                basis = share_count_as_of(
-                    (payload.get("vintage") or {}).get(SHARES_KEY),
-                    row.value,
-                    [stored[1] for stored in documents.values() if stored is not None],
-                    cover_concepts=cover_concepts,
-                    statement_concepts=statement_concepts,
-                    filed_fallback=row.knowable_at.astimezone(UTC).date(),
+            if input_key == SHARES_KEY and fiscal_period is None:
+                filed_date = row.knowable_at.astimezone(UTC).date()
+                if bar is not None:
+                    if splits is None:
+                        splits = split_events(issuer.ticker)
+                    basis = share_count_as_of(
+                        (payload.get("vintage") or {}).get(SHARES_KEY),
+                        row.value,
+                        [stored[1] for stored in documents.values() if stored is not None],
+                        cover_concepts=cover_concepts,
+                        statement_concepts=statement_concepts,
+                        filed_fallback=filed_date,
+                    )
+                    bases[basis.kind] += 1
+                    basis_as_of = basis.as_of
+                else:
+                    basis_as_of = filed_date
+                on_basis = _on_close_basis(
+                    row,
+                    bar,
+                    splits or (),
+                    as_of=basis_as_of,
+                    listing_units_per_share=listing_units_per_share_of(payload),
                 )
-                bases[basis.kind] += 1
-                on_basis = _on_close_basis(row, bar, splits, as_of=basis.as_of)
-                split_adjusted += on_basis is not row
-                row = on_basis
+                if on_basis is None:
+                    continue
+                row, adjusted = on_basis
+                split_adjusted += adjusted
             rows.append(_checked(row))
         if bar is not None:
             rows.append(
@@ -675,24 +699,39 @@ def project_issuer_rows(
     )
 
 
-def _on_close_basis(shares: HistoryRow, bar: LastClose, splits: Sequence[SplitEvent], *, as_of: date) -> HistoryRow:
-    """The share row on the share basis of ``bar``, or the row itself when no split lies between.
+def _on_close_basis(
+    shares: HistoryRow,
+    bar: LastClose | None,
+    splits: Sequence[SplitEvent],
+    *,
+    as_of: date,
+    listing_units_per_share: Decimal | None,
+) -> tuple[HistoryRow, bool] | None:
+    """The share row on the share basis of ``bar``, with whether a split moved it, or None when unavailable.
 
-    The filed count is on the basis of ``as_of`` (``share_count_as_of``). ``on_close_basis`` applies
-    every split after that date and on or before the close's session. The session is the UTC date
-    of the close's knowable time, which is before the cutoff date.
+    The filed count is on the basis of ``as_of`` (``share_count_as_of``). ``on_close_basis`` converts
+    ordinary shares into listed units and applies every split after ``as_of`` and on or before the
+    close's session. When the listing unit ratio is unknown, the count is dropped.
     """
+    close_session = as_of if bar is None else bar.knowable_at.astimezone(UTC).date()
+    close_knowable_at = shares.knowable_at if bar is None else bar.knowable_at
     basis = on_close_basis(
         shares.value,
         shares.knowable_at,
         basis_date=as_of,
-        close_session=bar.knowable_at.astimezone(UTC).date(),
-        close_knowable_at=bar.knowable_at,
-        splits=splits,
+        close_session=close_session,
+        close_knowable_at=close_knowable_at,
+        splits=() if bar is None else splits,
+        listing_units_per_share=listing_units_per_share,
     )
-    if basis.factor == 1:
-        return shares
-    return dataclasses.replace(shares, value=basis.value, knowable_at=basis.knowable_at)
+    if isinstance(basis, Unavailable):
+        return None
+    row = (
+        shares
+        if (basis.value, basis.knowable_at) == (shares.value, shares.knowable_at)
+        else dataclasses.replace(shares, value=basis.value, knowable_at=basis.knowable_at)
+    )
+    return row, basis.factor != 1
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
@@ -767,6 +806,7 @@ def run_strategy_history(
     split_events: SplitReader | None = None,
     ruleset: ConceptMappingRuleset | None = None,
     schedule: QuarterlyCutoffSchedule | None = None,
+    listing_ratio_reader: ListingRatioReader | None = None,
 ) -> HistorySummary:
     """Project every issuer over the cutoffs of the tick and insert the new rows.
 
@@ -784,6 +824,7 @@ def run_strategy_history(
         else postgres_split_events(connection, [issuer.ticker for issuer in issuers])
     )
     rules = ruleset if ruleset is not None else resolve_ruleset(connection)
+    ratio_reader = listing_ratio_reader if listing_ratio_reader is not None else CoverRatioReader()
     inserted = already_present = no_outcome = undated = split_adjusted = 0
     basis_cover = basis_statement = basis_unrecognised = 0
     for issuer in issuers:
@@ -795,6 +836,7 @@ def run_strategy_history(
             last_close=reader,
             split_events=splits,
             ruleset=rules,
+            listing_ratio_reader=ratio_reader,
         )
         skipped = _write_new_rows(connection, issuer, projection.rows)
         already_present += skipped

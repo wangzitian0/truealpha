@@ -47,14 +47,14 @@ def test_moomoo_code_derivation():
         ("CH", "688111"): ("SH.688111", 0.9),
     }
     for (token, ticker), expected in cases.items():
-        listing = universe.Listing(exch_token=token, ticker=ticker, name=None, security_type=None)
+        listing = universe.Listing(exch_token=token, ticker=ticker, name=None)
         assert universe.moomoo_code(listing) == expected
-    unknown_range = universe.Listing(exch_token="CH", ticker="400001", name=None, security_type=None)
+    unknown_range = universe.Listing(exch_token="CH", ticker="400001", name=None)
     assert universe.moomoo_code(unknown_range) is None
 
 
 def test_sec_ticker_normalization():
-    us = universe.Listing(exch_token="US", ticker="BRK/B", name=None, security_type=None)
-    hk = universe.Listing(exch_token="HK", ticker="700", name=None, security_type=None)
+    us = universe.Listing(exch_token="US", ticker="BRK/B", name=None)
+    hk = universe.Listing(exch_token="HK", ticker="700", name=None)
     assert universe.sec_ticker(us) == "BRK-B"
     assert universe.sec_ticker(hk) is None

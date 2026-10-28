@@ -7,6 +7,16 @@ ticker (`dei:TradingSymbol`) in one context. `cover_html` writes that shape. The
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+
+from data_engine.datahub.standards.listing_unit_ratio import PATTERN_PLAIN_SHARE, ListingUnitRatio
+
+
+def plain_share_ratio(_cik: int, _cutoff: date, _ticker: str | None) -> ListingUnitRatio:
+    """A reader for tests of non-ratio behavior: one ordinary share per listing unit."""
+    return ListingUnitRatio(Decimal(1), PATTERN_PLAIN_SHARE, title="Common stock")
+
 
 def cover_html(*lines: tuple[str | None, str]) -> bytes:
     """An inline XBRL cover. Each line is (ticker or None, title); one line is one context."""

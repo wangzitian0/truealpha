@@ -116,6 +116,7 @@ def _normalized_payload(
             "headcount": "100",
             "revenue": "100000000",
             "shares_outstanding": "10000000",
+            "listing_units_per_share": "1",
             "pre_provision_profit": "80000000" if financial else None,
             # #1518: the bank's four banking leaves. TCE = 50M - 5M - (3M + 2M) = 40M, a fifth of its assets.
             "stockholders_equity": "50000000" if financial else None,

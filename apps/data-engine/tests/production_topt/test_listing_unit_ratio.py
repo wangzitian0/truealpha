@@ -1,4 +1,4 @@
-"""The depositary ratio through the deployed tick (#1519, step 1a).
+"""The depositary ratio through the deployed tick and the history projector (#1519, step 1a and step 1b).
 
 These tests drive the deployed Dagster op `run_topt_live_tick` over the deployed route builder
 (`composition.build_routes` and `sec_financial_adapter.build_route`). The SEC host is a fake socket under
@@ -11,14 +11,18 @@ one cover per issuer. NVDA is PDD-shaped: its cover title says "each representin
 shares". Five issuers show the failure shapes: an unfamiliar title, a refused document, no annual filing, a
 cover of another ticker and a plain title. Every other issuer has a plain title.
 
-Step 1a only measures. The tests below judge three things.
+The tests below judge four things.
 
 1. The payload of each issuer carries the outcome, and an `unparsed` outcome never aborts the capture of the
-   issuer's numbers (criterion b).
+   issuer's raw financial-fact numbers.
 2. The cover read adds no `submissions` request and one archive request for each issuer (the SEC calls that
    the issue estimates).
-3. The core result and the frozen factor input of every issuer are the same with and without the reader
-   (criterion c). The PDD-shaped listing still multiplies the ordinary count by the close: step 1b changes that.
+3. `on_close_basis` divides the ordinary share count by `listing_units_per_share` before splits, so the
+   PDD-shaped listing values `current_pgp = (ordinary / 4 * close) / gross_profit`. An unparsed cover or a
+   missing ratio field makes `shares_outstanding` and the core result `unavailable` with
+   `missing_listing_unit_ratio`, and drops `shares_outstanding` from the seeded strategy inputs.
+4. The history projector (`strategy_history.project_issuer_rows`) converts shares by the cover ratio and
+   drops `shares_outstanding` when the cover does not parse.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +178,8 @@ class Observed:
     factor_inputs: dict[str, Any]  # issuer id -> the frozen input of the core
     core: dict[str, tuple[Any, ...]]  # issuer id -> the value columns of mart.topt_core_results
     decisions: dict[str, str | None]  # issuer id -> exclusion reason
+    seeded_shares: dict[str, Decimal]  # issuer id -> seeded shares_outstanding in staging.strategy_backtest_inputs
+    refused_rules: tuple[str, ...]  # plausibility run-refusal rules recorded by judge_strategy
     status: tuple[int, int, bool]  # obligations, failed, complete
     report: dict[str, Any]  # the persisted quality report
     cik_of: dict[str, int]
@@ -181,24 +187,6 @@ class Observed:
     submissions_per_cik: Counter[int]
     archive_per_cik: Counter[int]
     requests_after_a_second_reader: Counter[str]
-
-
-#: The keys of a frozen factor input that name an observation, a run or a snapshot. The id of an observation is the
-#: hash of its payload, so a payload with more keys has another id. The values of the inputs do not change.
-_IDENTITY_KEYS = frozenset({"input_id", "observation_ids", "snapshot_id", "run_id", "release_manifest_id"})
-
-
-def _without_identity(node: Any) -> Any:
-    """The values of a frozen input with its identities removed. `cell_inputs` follow the order of the observation
-    ids, which are hashes, so they are put in the order of their own values."""
-    if isinstance(node, dict):
-        kept = {key: _without_identity(value) for key, value in node.items() if key not in _IDENTITY_KEYS}
-        if "cell_inputs" in kept:
-            kept["cell_inputs"] = sorted(kept["cell_inputs"], key=lambda cell: json.dumps(cell, sort_keys=True))
-        return kept
-    if isinstance(node, list):
-        return [_without_identity(item) for item in node]
-    return node
 
 
 _CORE_VALUE_COLUMNS = (
@@ -255,11 +243,24 @@ def _arm_deployed_route(monkeypatch: pytest.MonkeyPatch, host: FakeSecHost, *, r
 
 
 def _observe(*, reader_on: bool) -> Observed:
+    from data_engine.lanes import capture
+
     with isolated_test_database("ratio_on" if reader_on else "ratio_off") as url, pytest.MonkeyPatch.context() as mp:
         store_topt_series(url)
         store_risk_free_series(url)
         host = FakeSecHost()
         _arm_deployed_route(mp, host, reader_on=reader_on)
+        real_judge_strategy = capture.judge_strategy
+        refused_rules: list[str] = []
+
+        def record_judge_strategy(*args: Any, **kwargs: Any) -> Any:
+            verdict = real_judge_strategy(*args, **kwargs)
+            refused_rules.extend(violation.rule for violation in verdict.run_refusals)
+            # Without the reader, every issuer lacks `listing_units_per_share`, so `judge_strategy` refuses the
+            # empty eligible set. Commit the control tick's rows in the isolated DB so tests can inspect them.
+            return verdict if reader_on else replace(verdict, run_refusals=())
+
+        mp.setattr(capture, "judge_strategy", record_judge_strategy)
         executed_at = datetime.combine(SESSION, time(22, 15), tzinfo=UTC)
         metadata = _live_topt_tick(url, mp, executed_at=executed_at, accept=True)
         run_id = metadata["capture_run_id"]
@@ -319,6 +320,12 @@ def _observe(*, reader_on: bool) -> Observed:
                     (metadata["strategy_run_id"],),
                 ).fetchall()
             )
+            seeded_shares = {
+                issuer_id: Decimal(str(value))
+                for issuer_id, value in reader.execute(
+                    "select issuer_id, value from staging.strategy_backtest_inputs where input_key = 'shares_outstanding'"
+                ).fetchall()
+            }
             status = reader.execute(
                 "select obligation_count, failed_count, complete from mart.topt_capture_status where run_id = %s",
                 (run_id,),
@@ -332,6 +339,8 @@ def _observe(*, reader_on: bool) -> Observed:
             factor_inputs=factor_inputs,
             core=core,
             decisions=decisions,
+            seeded_shares=seeded_shares,
+            refused_rules=tuple(refused_rules),
             status=(status[0], status[1], status[2]),
             report=report,
             cik_of=dict(host.cik_by_ticker),
@@ -392,12 +401,20 @@ def test_a_plain_title_gives_one_ordinary_share(ticks: Ticks) -> None:
         ("META", REASON_TICKER_NOT_ON_COVER, None),
     ],
 )
-def test_an_unparsed_outcome_names_its_reason_and_keeps_the_numbers_of_the_issuer(
+def test_an_unparsed_outcome_names_its_reason_and_marks_the_issuer_unavailable_with_missing_listing_unit_ratio(
     ticks: Ticks, ticker: str, reason: str, title: str | None
 ) -> None:
     """The offline company facts carry gross profit, revenue and shares for every issuer. A cover that cannot be read
-    must leave them in the payload and the core row."""
+    keeps the raw figures in the payload, refuses the share count on close basis with `missing_listing_unit_ratio`,
+    marks the core row unavailable with `missing_listing_unit_ratio`, and excludes the strategy decision."""
     payload = ticks.measured.payloads[ticker]
+    issuer_id = payload["issuer_id"]
+    listing_id = ticks.measured.listing_of[ticker]
+    component = next(
+        item
+        for item in ticks.measured.factor_inputs[issuer_id]["market_value_components"]
+        if item["listing_id"] == listing_id
+    )
 
     assert payload["listing_units_per_share"] is None
     assert payload["ratio_pattern"] == PATTERN_UNPARSED
@@ -408,7 +425,13 @@ def test_an_unparsed_outcome_names_its_reason_and_keeps_the_numbers_of_the_issue
         "100000000",
         "10000000",
     )
-    assert ticks.measured.core[payload["issuer_id"]][2] == "available"
+    assert component["shares_outstanding"]["availability"] == "unavailable"
+    assert component["shares_outstanding"]["value"] is None
+    assert component["shares_outstanding"]["unavailable_reason"] == "missing_listing_unit_ratio"
+    assert ticks.measured.core[issuer_id][2] == "unavailable"
+    assert ticks.measured.core[issuer_id][14] == ["missing_listing_unit_ratio"]
+    assert issuer_id not in ticks.measured.seeded_shares
+    assert ticks.measured.decisions[issuer_id] == "missing_market_value_input"
 
 
 def test_every_listing_carries_all_seven_keys_and_the_tick_captures_every_cell(ticks: Ticks) -> None:
@@ -418,11 +441,17 @@ def test_every_listing_carries_all_seven_keys_and_the_tick_captures_every_cell(t
     for ticker, payload in measured.payloads.items():
         assert all(key in payload for key in PAYLOAD_KEYS), ticker
     assert measured.status == (84, 0, True), "no obligation failed because a cover did not parse"
-    # The offline bundle of the bank has no preferred-stock figure (`_bundle_without_preferred_stock`), so the
-    # strategy excludes it. That is the same with and without the reader. No decision is excluded because of a cover.
-    expected = Counter({None: 19, "missing_preferred_stock_value": 1})
-    assert Counter(measured.decisions.values()) == expected
-    assert Counter(ticks.before.decisions.values()) == expected
+    # Four issuers have unparsed covers (`AMZN`, `AAPL`, `GOOGL`, `META`) and are excluded with
+    # `missing_market_value_input`. The bank (`JPM`) has no preferred-stock figure and is excluded with
+    # `missing_preferred_stock_value`. The remaining 15 issuers (including `NVDA` with ratio 4) are evaluated.
+    assert Counter(measured.decisions.values()) == Counter(
+        {None: 15, "missing_market_value_input": 4, "missing_preferred_stock_value": 1}
+    )
+    # Without the reader, no payload carries `listing_units_per_share`, so all 19 non-bank issuers lack a
+    # share basis and are excluded with `missing_market_value_input`.
+    assert Counter(ticks.before.decisions.values()) == Counter(
+        {"missing_market_value_input": 19, "missing_preferred_stock_value": 1}
+    )
 
 
 def test_the_route_before_this_change_writes_no_ratio_key(ticks: Ticks) -> None:
@@ -456,40 +485,198 @@ def test_a_second_reader_of_the_same_filing_makes_no_request(ticks: Ticks) -> No
     assert ticks.measured.requests_after_a_second_reader == ticks.measured.requests
 
 
-# --- criterion (c): no served number changes ----------------------------------------------------------------
+# --- Step 1b: share conversion on close basis and refusal on missing ratio ----------------------------------
 
 
-def test_the_frozen_factor_input_of_every_listing_is_the_same_with_and_without_the_reader(ticks: Ticks) -> None:
-    measured, before = ticks.measured.factor_inputs, ticks.before.factor_inputs
-
-    assert len(measured) == len(before) == 20, "one frozen input for each issuer; an empty comparison proves nothing"
-    assert _without_identity(measured) == _without_identity(before)
-    shares = [
-        component["shares_outstanding"]
-        for issuer in measured.values()
-        for component in issuer["market_value_components"]
-    ]
-    assert len(shares) == 21 and {item["availability"] for item in shares} == {"available"}
-
-
-def test_the_core_result_of_every_listing_is_the_same_with_and_without_the_reader(ticks: Ticks) -> None:
-    measured, before = ticks.measured.core, ticks.before.core
-
-    assert len(measured) == len(before) == 20
-    assert measured == before
-    assert sum(row[2] == "available" for row in measured.values()) >= 19, "the comparison covers real values"
-
-
-def test_the_pdd_shaped_listing_still_multiplies_the_ordinary_count_by_the_close(ticks: Ticks) -> None:
-    """Step 1b fixes this. Step 1a must not: the ratio is measured, and no value reads it. Ordinary shares 10,000,000
-    times the close 40 is the market value, whatever the cover says."""
-    issuer = ticks.measured.payloads["NVDA"]["issuer_id"]
-    (component,) = ticks.measured.factor_inputs[issuer]["market_value_components"]
+def test_the_pdd_shaped_listing_divides_ordinary_shares_by_four_before_multiplying_by_close(ticks: Ticks) -> None:
+    """Step 1b converts the ordinary share count to listing units (`10,000,000 / 4 = 2,500,000`) before
+    multiplying by the close (`40`), so `current_pgp = (ordinary / 4 * close) / gross_profit`."""
+    nvda_issuer = ticks.measured.payloads["NVDA"]["issuer_id"]
+    msft_issuer = ticks.measured.payloads["MSFT"]["issuer_id"]
+    (nvda_component,) = ticks.measured.factor_inputs[nvda_issuer]["market_value_components"]
+    (msft_component,) = ticks.measured.factor_inputs[msft_issuer]["market_value_components"]
 
     assert ticks.measured.payloads["NVDA"]["listing_units_per_share"] == "4"
-    assert Decimal(component["shares_outstanding"]["value"]) == Decimal("10000000")
-    assert Decimal(component["market_price"]["value"]) == Decimal("40")
-    assert ticks.measured.core[issuer] == ticks.before.core[issuer]
+    assert Decimal(nvda_component["shares_outstanding"]["value"]) == Decimal("2500000")
+    assert Decimal(nvda_component["market_price"]["value"]) == Decimal("40")
+    assert Decimal(msft_component["shares_outstanding"]["value"]) == Decimal("10000000")
+    assert ticks.measured.seeded_shares[nvda_issuer] == Decimal("2500000")
+    assert ticks.measured.seeded_shares[msft_issuer] == Decimal("10000000")
+
+    nvda_core = ticks.measured.core[nvda_issuer]
+    msft_core = ticks.measured.core[msft_issuer]
+    with localcontext(Context(prec=34)):
+        expected_market_cap = (Decimal("10000000") / Decimal(4)) * Decimal("40")
+        expected_pgp = expected_market_cap / Decimal("210000000")
+        expected_ps = expected_market_cap / Decimal("100000000")
+        expected_msft_pgp = (Decimal("10000000") * Decimal("40")) / Decimal("210000000")
+
+    assert nvda_core[2] == "available"
+    assert nvda_core[10] == expected_ps == Decimal("1")
+    assert nvda_core[21] == expected_pgp
+    assert msft_core[10] == Decimal("4") == 4 * nvda_core[10]
+    assert msft_core[21] == expected_msft_pgp
+
+
+def test_missing_listing_unit_ratio_in_payload_marks_every_share_count_and_core_result_unavailable(
+    ticks: Ticks,
+) -> None:
+    """When the payload has no `listing_units_per_share` field (`ticks.before`), every listing's share count
+    is unavailable with `missing_listing_unit_ratio`, no share count is seeded, and every non-bank core row
+    is unavailable with `missing_listing_unit_ratio`."""
+    before = ticks.before
+    shares = [
+        component["shares_outstanding"]
+        for issuer in before.factor_inputs.values()
+        for component in issuer["market_value_components"]
+    ]
+    assert len(shares) == 21
+    assert {item["availability"] for item in shares} == {"unavailable"}
+    assert {item["unavailable_reason"] for item in shares} == {"missing_listing_unit_ratio"}
+    assert before.seeded_shares == {}
+    assert ticks.measured.refused_rules == ()
+    assert before.refused_rules == ("empty-eligible-set", "empty-eligible-set")
+
+    bank_issuer = before.payloads[_BANK_TICKER]["issuer_id"]
+    for issuer_id, row in before.core.items():
+        assert row[2] == "unavailable"
+        if issuer_id == bank_issuer:
+            assert row[14] == ["missing_preferred_stock_value"]
+        else:
+            assert row[14] == ["missing_listing_unit_ratio"]
+
+
+def test_the_history_projector_converts_shares_by_the_cover_ratio_and_drops_unparsed_counts() -> None:
+    """`strategy_history.project_issuer_rows` reads the cover at `as_of`, divides `shares_outstanding` by
+    `listing_units_per_share`, and drops `shares_outstanding` when the cover does not parse."""
+    from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+    from data_engine.datahub.standards.filing_extraction import FilingDocument
+    from data_engine.datahub.strategy_history import HistoryIssuer, LastClose, project_issuer_rows
+    from factors.production_topt import OperatingBranch
+
+    cutoff = datetime(2026, 4, 1, tzinfo=UTC)
+    close = LastClose(Decimal("40"), Decimal("0.90"), datetime(2026, 3, 31, 20, 0, tzinfo=UTC))
+    document = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": PERIOD,
+                                "start": "2025-01-01",
+                                "val": 100_000_000,
+                                "filed": FILED,
+                                "form": "20-F",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "accn": "0001-2026-02-20",
+                            }
+                        ]
+                    }
+                },
+                "GrossProfit": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": PERIOD,
+                                "start": "2025-01-01",
+                                "val": 210_000_000,
+                                "filed": FILED,
+                                "form": "20-F",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "accn": "0001-2026-02-20",
+                            }
+                        ]
+                    }
+                },
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": PERIOD,
+                                "val": 500_000_000,
+                                "filed": FILED,
+                                "form": "20-F",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "accn": "0001-2026-02-20",
+                            }
+                        ]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": PERIOD,
+                                "val": 10_000_000,
+                                "filed": FILED,
+                                "form": "20-F",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "accn": "0001-2026-02-20",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    raw_bytes = json.dumps(document).encode()
+
+    def project(ticker: str, cover: bytes | None) -> dict[str, Decimal]:
+        issuer = HistoryIssuer(
+            issuer_id=f"issuer:{ticker.lower()}",
+            instrument_id=f"security:{ticker.lower()}",
+            listing_id=f"listing:xnas:{ticker.lower()}",
+            ticker=ticker,
+            cik=900001,
+            operating_branch=OperatingBranch.NON_FINANCIAL,
+        )
+        reader = CoverRatioReader(
+            lambda cik, _as_of: (
+                None
+                if cover is None
+                else FilingDocument(
+                    cik=cik,
+                    accession="000090000126000001",
+                    form="20-F",
+                    filing_date=date(2026, 2, 20),
+                    primary_document="cover.htm",
+                    url="https://www.sec.gov/Archives/edgar/data/900001/000090000126000001/cover.htm",
+                    body=cover,
+                )
+            )
+        )
+        projection = project_issuer_rows(
+            issuer,
+            [cutoff],
+            load_facts=lambda _cik: (raw_bytes, document),
+            headcount_extractor=lambda _cik, _as_of: None,
+            last_close=lambda _symbol, _cutoff: close,
+            split_events=lambda _symbol: (),
+            ruleset=DEFAULT_RULESET,
+            listing_ratio_reader=reader,
+        )
+        return {row.input_key: row.value for row in projection.rows if row.fiscal_period is None}
+
+    pdd_rows = project("PDD", cover_html(("PDD", PDD_TITLE)))
+    assert pdd_rows["shares_outstanding"] == Decimal("2500000")
+    assert pdd_rows["last_close"] == Decimal("40")
+    assert pdd_rows["revenue"] == Decimal("100000000")
+
+    plain_rows = project("MSFT", cover_html(("MSFT", PLAIN_TITLE)))
+    assert plain_rows["shares_outstanding"] == Decimal("10000000")
+
+    unfamiliar_rows = project("AMZN", cover_html(("AMZN", UNFAMILIAR_TITLE)))
+    assert "shares_outstanding" not in unfamiliar_rows
+    assert unfamiliar_rows["revenue"] == Decimal("100000000")
+    assert unfamiliar_rows["last_close"] == Decimal("40")
+
+    missing_filing_rows = project("GOOGL", None)
+    assert "shares_outstanding" not in missing_filing_rows
 
 
 # --- the dashboard row --------------------------------------------------------------------------------------

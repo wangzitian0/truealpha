@@ -155,6 +155,7 @@ class ToptCoreReasonCode(StrEnum):
     SHARE_COUNT_UNDATED = "share_count_undated"
     SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
     CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+    MISSING_LISTING_UNIT_RATIO = "missing_listing_unit_ratio"
     #: #1518: the issuer has several listings and no `primary_listing` row names one. The snapshot
     #: builder cannot say which listing values the issuer, so the issuer is unavailable.
     PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
@@ -172,6 +173,7 @@ SHARE_BASIS_REASON_CODES = frozenset(
         ToptCoreReasonCode.SHARE_COUNT_UNDATED,
         ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
         ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
+        ToptCoreReasonCode.MISSING_LISTING_UNIT_RATIO,
     }
 )
 

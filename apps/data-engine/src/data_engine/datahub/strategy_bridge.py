@@ -52,7 +52,9 @@ from data_engine.datahub.share_basis import (
     LiveShareCount,
     OnCloseBasis,
     Unavailable,
+    listing_units_per_share_of,
     live_on_close_basis,
+    on_close_basis,
     split_history,
 )
 from data_engine.datahub.share_count_entry import share_count_entry
@@ -283,8 +285,24 @@ def _counts_on_close_basis(
         for issuer_id in financial.keys() & price.keys()
         if financial[issuer_id][1].get(SHARES_KEY) is not None and price[issuer_id][1].get("close") is not None
     )
+    outcomes: dict[str, OnCloseBasis | Unavailable] = {}
+    for issuer_id, (_listing, payload, _confidence, observed_at) in financial.items():
+        shares_raw = payload.get(SHARES_KEY)
+        if shares_raw is None or issuer_id in meeting:
+            continue
+        knowable = live_knowable_at(payload, observed_at)(SHARES_KEY, None)
+        filed_day = knowable.astimezone(UTC).date()
+        outcomes[issuer_id] = on_close_basis(
+            Decimal(str(shares_raw)),
+            knowable,
+            basis_date=filed_day,
+            close_session=filed_day,
+            close_knowable_at=knowable,
+            splits=(),
+            listing_units_per_share=listing_units_per_share_of(payload),
+        )
     if not meeting:
-        return {}
+        return outcomes
     tickers: dict[str, list[str]] = {}
     for issuer_id, ticker in connection.execute(_LISTING_TICKERS_SQL, (run_id, meeting)).fetchall():
         tickers.setdefault(str(issuer_id), []).append(str(ticker))
@@ -293,7 +311,6 @@ def _counts_on_close_basis(
     split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
     histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
     ruleset = cache(partial(resolve_ruleset, connection))
-    outcomes: dict[str, OnCloseBasis | Unavailable] = {}
     for issuer_id in meeting:
         _listing, payload, _confidence, observed_at = financial[issuer_id]
         _price_listing, close_payload, _close_confidence, close_observed_at = price[issuer_id]
@@ -309,6 +326,7 @@ def _counts_on_close_basis(
                 close=Decimal(str(close_payload["close"])),
             ),
             [histories[symbol] for symbol in names],
+            listing_units_per_share=listing_units_per_share_of(payload),
             documents=partial(_company_facts_documents, connection, run_id, issuer_id, parser_version),
             ruleset=ruleset,
         )
@@ -354,17 +372,20 @@ def _on_close_basis_rows(rows: Sequence[InputCell], outcome: OnCloseBasis | Unav
     """The financial input cells with the scalar share count on the share basis of the close.
 
     ``None`` means the count meets no close: the cells stay as they are. An ``Unavailable`` drops
-    the share cell. A factor of 1 keeps the cell unchanged, so a run without a split seeds the
-    same bytes as before.
+    the share cell. When the value and knowable time are unchanged, the cell stays as it is.
     """
-    if outcome is None or (isinstance(outcome, OnCloseBasis) and outcome.factor == 1):
+    if outcome is None:
         return list(rows)
     kept: list[InputCell] = []
     for cell in rows:
         if cell.input_key != SHARES_KEY or cell.fiscal_period is not None:
             kept.append(cell)
         elif isinstance(outcome, OnCloseBasis):
-            kept.append(cell._replace(value=outcome.value, knowable_at=outcome.knowable_at))
+            kept.append(
+                cell
+                if (outcome.value, outcome.knowable_at) == (cell.value, cell.knowable_at)
+                else cell._replace(value=outcome.value, knowable_at=outcome.knowable_at)
+            )
     return kept
 
 

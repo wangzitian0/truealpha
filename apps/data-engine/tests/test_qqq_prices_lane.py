@@ -233,6 +233,7 @@ def _valid_at_tick(stored: date | None, close: date) -> bool:
     outcome = live_on_close_basis(
         count,
         (history,),
+        listing_units_per_share=1,
         documents=lambda: pytest.fail("no split: the documents are not read"),
         ruleset=lambda: pytest.fail("no split: the ruleset is not read"),
     )

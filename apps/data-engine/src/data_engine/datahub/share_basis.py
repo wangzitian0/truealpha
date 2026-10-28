@@ -147,19 +147,49 @@ def on_close_basis(
     close_session: date,
     close_knowable_at: datetime,
     splits: Sequence[SplitEvent],
-) -> OnCloseBasis:
+    listing_units_per_share: Decimal | int | None,
+) -> OnCloseBasis | Unavailable:
     """The count on the share basis of the close of ``close_session``.
+
+    ``listing_units_per_share`` is the number of ordinary shares that one listed unit stands for
+    (#1519): 1 for a plain share, 4 for PDD's ADS. When it is None or non-positive, the count is
+    unavailable with ``missing_listing_unit_ratio``. Otherwise ``value`` is divided by the ratio
+    before applying splits.
 
     The filed count is on the basis of ``basis_date`` (``share_count_as_of``). A split with an
     ex-date after that date and on or before the close's session multiplies it. The product is
-    knowable once both the count and the close are. Without such a split, the count and its
-    knowable time are returned unchanged.
+    knowable once both the count and the close are. Without such a split, the converted count and
+    its knowable time are returned unchanged.
     """
+    if listing_units_per_share is None or isinstance(listing_units_per_share, bool):
+        return Unavailable(
+            MISSING_LISTING_UNIT_RATIO,
+            "the share count has no proven listing unit ratio",
+        )
+    ratio = Decimal(listing_units_per_share)
+    if ratio <= 0:
+        return Unavailable(
+            MISSING_LISTING_UNIT_RATIO,
+            f"the listing unit ratio must be positive; got {listing_units_per_share!r}",
+        )
+    in_listed_units = value if ratio == 1 else value / ratio
     factor = split_factor_between(splits, after=basis_date, through=close_session)
     if factor == 1:
-        return OnCloseBasis(value, knowable_at, factor)
-    adjusted = value * Decimal(factor.numerator) / Decimal(factor.denominator)
+        return OnCloseBasis(in_listed_units, knowable_at, factor)
+    adjusted = in_listed_units * Decimal(factor.numerator) / Decimal(factor.denominator)
     return OnCloseBasis(adjusted, max(knowable_at, close_knowable_at), factor)
+
+
+def listing_units_per_share_of(payload: Mapping[str, Any]) -> Decimal | None:
+    """The positive listing-unit ratio in ``payload``, or None when absent or unparseable."""
+    raw = payload.get("listing_units_per_share")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        ratio = Decimal(str(raw))
+    except Exception:  # noqa: BLE001
+        return None
+    return ratio if ratio > 0 else None
 
 
 # -- the live path: a close that the stored series did not supply ------------------------------
@@ -173,6 +203,7 @@ LISTINGS_DISAGREE = "listings_disagree_on_splits"
 SHARE_COUNT_UNDATED = "share_count_undated"
 SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
 CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
+MISSING_LISTING_UNIT_RATIO = "missing_listing_unit_ratio"
 
 #: The smallest common split, 3-for-2, moves a close by the factor 1.5. When the stored series end
 #: before the close's session, a close at x1.5 or more, or at x0.667 or less, of the last stored
@@ -291,10 +322,15 @@ def live_on_close_basis(
     count: LiveShareCount,
     histories: Sequence[SplitHistory | Unavailable | None],
     *,
+    listing_units_per_share: Decimal | int | None,
     documents: Callable[[], Sequence[Mapping[str, Any]]],
     ruleset: Callable[[], ConceptMappingRuleset],
 ) -> OnCloseBasis | Unavailable:
     """The live count on the basis of its close, or the named reason why the issuer has no market value.
+
+    ``listing_units_per_share`` is checked before the stored price series (#1519): an issuer whose
+    annual-filing cover gives no proven unit ratio is unavailable with ``missing_listing_unit_ratio``
+    even when it holds no stored daily series.
 
     ``histories`` holds one entry per listing of the issuer. A listing without stored bars adds
     nothing, and the listings with stored bars must agree. The basis date is the count's own
@@ -302,6 +338,15 @@ def live_on_close_basis(
     two dates makes the class matter. Then the stored document classes the count
     (``share_count_as_of``); ``documents`` and ``ruleset`` are read only in that case.
     """
+    if (
+        listing_units_per_share is None
+        or isinstance(listing_units_per_share, bool)
+        or Decimal(listing_units_per_share) <= 0
+    ):
+        return Unavailable(
+            MISSING_LISTING_UNIT_RATIO,
+            "the share count has no proven listing unit ratio",
+        )
     gaps = [history for history in histories if isinstance(history, Unavailable)]
     if gaps:
         return Unavailable(gaps[0].reason, "; ".join(gap.detail for gap in gaps))
@@ -362,6 +407,7 @@ def live_on_close_basis(
         close_session=close,
         close_knowable_at=count.close_knowable_at,
         splits=known[0].events,
+        listing_units_per_share=listing_units_per_share,
     )
 
 
@@ -370,6 +416,7 @@ __all__ = [
     "CLOSE_JUMP_LIMIT",
     "COVER",
     "LISTINGS_DISAGREE",
+    "MISSING_LISTING_UNIT_RATIO",
     "NO_SPLIT_ADJUSTED_SERIES",
     "NO_UNADJUSTED_SERIES",
     "SERIES_DO_NOT_COVER",
@@ -384,6 +431,7 @@ __all__ = [
     "ShareBasis",
     "SplitHistory",
     "Unavailable",
+    "listing_units_per_share_of",
     "live_on_close_basis",
     "on_close_basis",
     "share_count_as_of",

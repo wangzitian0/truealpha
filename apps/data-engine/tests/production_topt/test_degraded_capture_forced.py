@@ -49,6 +49,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectS
 from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from macro_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import share_count_vintage, store_topt_series  # noqa: E402
 
@@ -200,6 +201,7 @@ def _offline_routes(
                 operating_branch=(
                     OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL
                 ),
+                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -235,6 +237,7 @@ def _offline_routes(
         sec_targets,
         lambda cik, cutoff, branch: bundle(ticker_by_cik[cik], branch),
         headcount_extractor=PostgresHeadcountExtractor(connection),
+        listing_ratio_reader=plain_share_ratio,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 
