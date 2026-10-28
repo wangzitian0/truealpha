@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_version": "1.1.0",
+  "policy_version": "1.2.0",
   "description": "The tolerances of the outside comparisons that mart.oracle_outcomes records (#1523). A comparator names one comparison. A row stores the tolerance it was judged by, so a changed tolerance never rewrites an old row.",
   "comparators": {
     "operator_listed_units": {
@@ -10,6 +10,10 @@
     "independent_parse_annual_figures": {
       "relative_tolerance": "0.0001",
       "explanation": "A second parser reads the stored SEC company-facts document of the issuer and finds the latest annual revenue and gross profit that were filed by the cutoff. The served figure came from the same bytes, so a correct served figure equals the second figure. The tolerance of 0.01% leaves room for the precision of the quotient only. It fails any other concept, any other period and any unit error."
+    },
+    "sentinel_known_answers": {
+      "relative_tolerance": "0.01",
+      "explanation": "Filing-derived known answers for sentinel issuers (#1523). The row stores the policy tolerance or the answer's own relative tolerance when specified."
     }
   }
 }

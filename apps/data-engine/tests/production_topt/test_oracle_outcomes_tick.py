@@ -1,4 +1,4 @@
-"""#1523 S2a and S2b through the deployed op: the QQQ tick records the outside comparisons of its run.
+"""#1523 S2a, S2b, and S2c through the deployed op: the QQQ tick records the outside comparisons of its run.
 
 The op is `run_qqq_live_tick`, as the schedule launches it. The vendor answers are offline and pass
 through the deployed adapters. The capture, freeze, materialization, plausibility gate, pointer
@@ -310,10 +310,26 @@ def test_a_figure_that_the_stored_filing_repeats_is_an_independent_parse_agree_r
     assert len([key for key in rows if key[1] == "independent_parse"]) == 4
 
 
+def test_aapl_known_answers_are_recorded_as_superseded_on_a_newer_filing(tick: Tick) -> None:
+    """The tick serves 2025-12-31; AAPL FY2025 known answers cover 2025-09-27 (S2c)."""
+    rows = _all_rows(tick.url, tick.metadata["capture_run_id"])
+    for field in ("gross_profit_per_employee", "employees_total"):
+        row = rows[("AAPL", "filing", field)]
+        assert (row["result"], row["reason"]) == ("not_comparable", "superseded")
+        assert row["period"] == "2025-09-27"
+        assert row["source"] == "sec-edgar-filing"
+        assert row["oracle_kind"] == "filing"
+        assert row["oracle_value"] is not None
+        assert row["tolerance"] is not None
+        assert row["ratio"] is None
+        assert row["compared_at"] == TICK
+    assert len([key for key in rows if key[1] == "filing"]) == 2
+
+
 def test_the_pointer_advances_whatever_the_comparison_says(tick: Tick) -> None:
     """A `disagree` row is data. The run committed, and the governed pointer heads it."""
     assert tick.metadata["pointer_advanced"] is True
-    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 6
+    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 8
     with psycopg.connect(tick.url) as reader:
         head = reader.execute(
             "select count(*) from mart.current_pointer_head where target_run_id = %s",
@@ -331,7 +347,7 @@ def test_a_second_run_of_the_same_run_id_writes_no_second_row(tick: Tick) -> Non
         )
         connection.commit()
         after = connection.execute("select count(*) from mart.oracle_outcomes").fetchone()
-    assert again == 0 and before == after == (6,)
+    assert again == 0 and before == after == (8,)
 
 
 def test_a_writer_that_raises_does_not_stop_the_tick(failing_tick: Tick) -> None:

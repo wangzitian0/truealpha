@@ -37,17 +37,8 @@ from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 from data_engine import release_identity
 from data_engine.config import settings
-
-
-def _aapl_gppe_band() -> tuple[Decimal, Decimal]:
-    catalog = load_sentinel_known_answers()
-    for answer in catalog.answers:
-        if answer.answer_id == "aapl-gppe-fy2025" and answer.lower_bound and answer.upper_bound:
-            return (Decimal(answer.lower_bound), Decimal(answer.upper_bound))
-    return (Decimal("300000"), Decimal("4000000"))
-
-
-_AAPL_GPPE_BAND = _aapl_gppe_band()
+from data_engine.datahub.production_topt.source_registrations import registered_semantic_types
+from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 
 
 def evaluate_known_answer(
@@ -114,11 +105,20 @@ def evaluate_sentinel_known_answers(
             if require_all_issuers:
                 failures.append(f"{answer.answer_id} ({answer.ticker}): issuer {answer.issuer_id} missing")
             continue
-        if answer.metric not in row:
-            continue
-        period_key = f"{answer.metric}_period_end"
+        metric_key: str = answer.metric
+        if metric_key not in row:
+            alias = {"gross_profit_per_employee": "gppe", "employees_total": "headcount"}.get(metric_key)
+            if alias and alias in row:
+                metric_key = alias
+            elif metric_key == "gppe" and "gross_profit_per_employee" in row:
+                metric_key = "gross_profit_per_employee"
+            elif metric_key == "headcount" and "employees_total" in row:
+                metric_key = "employees_total"
+            else:
+                continue
+        period_key = f"{metric_key}_period_end"
         actual_period = str(row[period_key]) if row.get(period_key) is not None else None
-        verdict = evaluate_known_answer(answer, row.get(answer.metric), actual_period_end=actual_period)
+        verdict = evaluate_known_answer(answer, row.get(metric_key), actual_period_end=actual_period)
         if verdict is not None:
             failures.append(verdict)
     return failures
@@ -202,51 +202,17 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         "select issuer_count, instrument_count, observation_count from staging.topt_core_snapshots where run_id = %s",
         (run_id,),
     ).fetchone()
+    static_members = UNIVERSE_SOURCES["canary"].static_members
+    expected_instruments = len(static_members)
+    expected_observations = expected_instruments * len(registered_semantic_types())
+    catalog = load_sentinel_known_answers()
+    ciks = {a.ticker: a.cik for a in catalog.answers}
+    expected_issuers = len({ciks.get(t, t) for t in static_members})
+    expected_snapshot = (expected_issuers, expected_instruments, expected_observations)
     if snapshot is None:
         bad.append("no frozen snapshot")
-    elif snapshot != (5, 6, 24):
-        # Six listings, five issuers: GOOGL+GOOG share one issuer, and 5 < 6 proves
-        # dual-class identity survived end to end.
-        bad.append(f"snapshot counts {snapshot} != (5, 6, 24)")
-
-    expected_branches = {
-        "issuer:cik:0000320193": "non_financial",  # AAPL
-        "issuer:cik:0000049196": "financial",  # HBAN, SIC 6021
-        "issuer:cik:0000020286": "insurance",  # CINF, SIC 6331
-    }
-    for legacy_cik, expected in expected_branches.items():
-        cik_digits = legacy_cik.removeprefix("issuer:cik:")
-        got = connection.execute(
-            "select operating_branch from mart.topt_core_results"
-            " where run_id = %s and ("
-            "   issuer_id = %s"
-            "   or issuer_id::text = (select staging.entity_resolve('cik', %s, current_date, now())::text)"
-            ")",
-            (run_id, legacy_cik, cik_digits),
-        ).fetchone()
-        if got is None:
-            bad.append(f"{legacy_cik}: no row in mart")
-        elif got[0] != expected:
-            bad.append(f"{legacy_cik}: operating_branch {got[0]!r} != {expected!r}")
-
-    aapl = connection.execute(
-        "select availability, gppe from mart.topt_core_results"
-        " where run_id = %s and ("
-        "   issuer_id = %s"
-        "   or issuer_id::text = (select staging.entity_resolve('cik', %s, current_date, now())::text)"
-        ")",
-        (run_id, "issuer:cik:0000320193", "0000320193"),
-    ).fetchone()
-    if aapl is None:
-        bad.append("AAPL row missing from mart")
-    else:
-        availability, gppe = aapl
-        if availability != "available":
-            bad.append(f"AAPL not available (availability={availability})")
-        elif gppe is None:
-            bad.append("AAPL available but GPPE is NULL")
-        elif not (_AAPL_GPPE_BAND[0] <= gppe <= _AAPL_GPPE_BAND[1]):
-            bad.append(f"AAPL GPPE {gppe} outside {_AAPL_GPPE_BAND}")
+    elif snapshot != expected_snapshot:
+        bad.append(f"snapshot counts {snapshot} != {expected_snapshot}")
 
     # #705: a multi-listing issuer's P/S must equal the recomputation from any
     # single listing's own captured payloads — every listing carries the
@@ -301,8 +267,8 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     ).fetchone()
     if report is None or report[0] is None:
         bad.append("quality report missing factor_availability (#644)")
-    elif int(report[0]) != 6:
-        bad.append(f"factor_availability universe_subjects {report[0]} != 6")
+    elif int(report[0]) != expected_instruments:
+        bad.append(f"factor_availability universe_subjects {report[0]} != {expected_instruments}")
 
     bad.extend(_infra_failures(connection, run_id))
     return bad

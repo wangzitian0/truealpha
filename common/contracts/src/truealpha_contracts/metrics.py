@@ -156,6 +156,11 @@ _SPECS = (
         unit_family=UnitFamily.PERCENTAGE,
         description="Annual profit growth rate in percentage points for consensus-convention PEG (#1354).",
     ),
+    MetricSpec(
+        name="gross_profit_per_employee",
+        unit_family=UnitFamily.PER_EMPLOYEE,
+        description="Gross profit per employee for non-financial issuers (#1523).",
+    ),
 )
 
 
@@ -176,7 +181,11 @@ METRICS: dict[str, MetricSpec] = _build_registry(_SPECS)
 # registry. This is the one place the two vocabularies are reconciled; a key not listed
 # here IS the registered metric name (init.md rule 22 -- no second enumeration of metric
 # identity, just the narrow spelling difference this alias carries).
-INPUT_KEY_ALIASES: dict[str, str] = {"headcount": "employees_total", "last_close": "price"}
+INPUT_KEY_ALIASES: dict[str, str] = {
+    "headcount": "employees_total",
+    "last_close": "price",
+    "gppe": "gross_profit_per_employee",
+}
 
 
 def is_registered_input_key(input_key: str) -> bool:

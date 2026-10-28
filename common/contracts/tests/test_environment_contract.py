@@ -309,6 +309,18 @@ def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions(
         assert Decimal(entry.max_theme_share) == Decimal("0.00")
 
 
+def test_quantitative_sentinel_known_answers_resolve_to_registered_metrics() -> None:
+    from truealpha_contracts.metrics import is_registered_input_key
+
+    catalog = load_sentinel_known_answers()
+    quantitative = [a for a in catalog.answers if a.metric != "operating_branch"]
+    assert len(quantitative) > 0
+    for answer in quantitative:
+        assert is_registered_input_key(answer.metric), (
+            f"answer {answer.answer_id} metric {answer.metric} is not in the canonical metric registry"
+        )
+
+
 def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     init_text = (REPO_ROOT / "init.md").read_text(encoding="utf-8")
     release_text = (REPO_ROOT / "docs" / "release-protocol.md").read_text(encoding="utf-8")

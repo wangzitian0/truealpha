@@ -25,11 +25,19 @@ from data_engine.datahub import confidence_report, oracle_outcomes
 from data_engine.datahub.oracle_outcomes import (
     AGREE,
     DISAGREE,
+    FILING_KIND,
     INDEPENDENT_COMPARATOR,
+    KNOWN_ANSWERS_COMPARATOR,
+    NO_OBSERVATION,
+    NO_SERVED_VALUE,
     NOT_COMPARABLE,
     OPERATOR_COMPARATOR,
+    PRIOR_PERIOD,
+    SUPERSEDED,
     OperatorFigure,
+    canonical_metric,
     compare_independent_parse,
+    compare_known_answer,
     compare_listed_units,
     served_listed_units,
 )
@@ -46,6 +54,7 @@ from factors.production_topt import (
     ToptMarketValueComponent,
     ToptMetricInput,
 )
+from truealpha_contracts.environment_contract import SentinelKnownAnswer
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.testing import InMemoryRawObjectStore
@@ -389,10 +398,168 @@ def test_a_figure_of_the_other_sign_is_a_disagree_row_with_a_ratio_the_table_can
     assert (outcome.served_value, outcome.oracle_value) == (Decimal(served), Decimal(witness))
 
 
+# -- the known answers, pure -------------------------------------------------------------
+
+KNOWN_ANSWERS_TOLERANCE = load_oracle_policy().relative_tolerance(KNOWN_ANSWERS_COMPARATOR)
+
+
+def _known_answer(
+    *,
+    metric: str = "revenue",
+    kind: str = "numeric",
+    expected_value: str | None = "1000",
+    lower_bound: str | None = None,
+    upper_bound: str | None = None,
+    relative_tolerance: str | None = "0.01",
+    period_end: str = "2025-12-31",
+) -> SentinelKnownAnswer:
+    return SentinelKnownAnswer(
+        answer_id=f"test-{metric}",
+        ticker="TEST",
+        issuer_id="issuer:cik:0000000001",
+        cik="0000000001",
+        metric=metric,
+        period_end=period_end,
+        accession="0000000001-26-000001",
+        kind=kind,
+        expected_value=expected_value,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        relative_tolerance=relative_tolerance,
+        source_citation="Test citation",
+    )
+
+
+def test_a_served_revenue_that_matches_known_answer_agrees() -> None:
+    answer = _known_answer(metric="revenue", expected_value="1000")
+    outcome = compare_known_answer(
+        answer,
+        Decimal("1000"),
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.ratio, outcome.period) == (AGREE, Decimal(1), "2025-12-31")
+    assert (outcome.served_value, outcome.oracle_value) == (Decimal(1000), Decimal(1000))
+    assert outcome.oracle_kind == FILING_KIND
+    assert outcome.field == "revenue"
+    assert outcome.source == "0000000001-26-000001"
+    assert outcome.tolerance == Decimal("0.01")
+
+
+def test_a_revenue_ten_times_known_answer_is_one_disagree_with_ratio_ten() -> None:
+    """#1523 S2 completeness criterion: Revenue x10 gives one disagree."""
+    answer = _known_answer(metric="revenue", expected_value="1000")
+    outcome = compare_known_answer(
+        answer,
+        Decimal("10000"),
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.ratio, outcome.period) == (DISAGREE, Decimal(10), "2025-12-31")
+    assert outcome.tolerance == Decimal("0.01")
+
+
+def test_a_newer_period_than_known_answer_gives_superseded() -> None:
+    """#1523 S2 completeness criterion: a newer period gives superseded."""
+    answer = _known_answer(metric="revenue", expected_value="1000", period_end="2025-09-27")
+    outcome = compare_known_answer(
+        answer,
+        Decimal("1000"),
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.reason, outcome.period) == (NOT_COMPARABLE, SUPERSEDED, "2025-09-27")
+    assert outcome.ratio is None and outcome.tolerance is None
+
+
+def test_an_older_period_than_known_answer_gives_prior_period() -> None:
+    answer = _known_answer(metric="revenue", expected_value="1000", period_end="2025-12-31")
+    outcome = compare_known_answer(
+        answer,
+        Decimal("1000"),
+        actual_period_end="2024-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.reason) == (NOT_COMPARABLE, PRIOR_PERIOD)
+
+
+def test_a_missing_served_value_gives_no_served_value() -> None:
+    answer = _known_answer(metric="revenue", expected_value="1000")
+    outcome = compare_known_answer(
+        answer,
+        None,
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.reason) == (NOT_COMPARABLE, NO_SERVED_VALUE)
+
+
+def test_a_missing_observation_id_gives_no_observation() -> None:
+    answer = _known_answer(metric="revenue", expected_value="1000")
+    outcome = compare_known_answer(
+        answer,
+        Decimal("1000"),
+        actual_period_end="2025-12-31",
+        observation_id=None,
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert (outcome.result, outcome.reason) == (NOT_COMPARABLE, NO_OBSERVATION)
+
+
+def test_a_band_known_answer_agrees_inside_and_disagrees_outside() -> None:
+    answer = _known_answer(
+        metric="gppe",
+        kind="band",
+        lower_bound="300000",
+        upper_bound="4000000",
+        expected_value=None,
+        relative_tolerance=None,
+    )
+    inside = compare_known_answer(
+        answer,
+        Decimal("1070000"),
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert inside.result == AGREE
+    assert inside.field == "gross_profit_per_employee"
+    assert inside.oracle_value == Decimal("2150000")
+
+    outside = compare_known_answer(
+        answer,
+        Decimal("10700000"),
+        actual_period_end="2025-12-31",
+        observation_id="normalized-observation:1",
+        knowable_at=KNOWN,
+        policy_tolerance=KNOWN_ANSWERS_TOLERANCE,
+    )
+    assert outside.result == DISAGREE
+
+
+def test_canonical_metric_maps_gppe_and_headcount_to_registered_names() -> None:
+    assert canonical_metric("gppe") == "gross_profit_per_employee"
+    assert canonical_metric("headcount") == "employees_total"
+    assert canonical_metric("revenue") == "revenue"
+
+
 def test_every_comparator_of_the_writer_has_a_tolerance_in_the_policy() -> None:
     policy = load_oracle_policy()
-    assert {OPERATOR_COMPARATOR, INDEPENDENT_COMPARATOR} <= set(policy.comparators)
+    assert {OPERATOR_COMPARATOR, INDEPENDENT_COMPARATOR, KNOWN_ANSWERS_COMPARATOR} <= set(policy.comparators)
     assert policy.relative_tolerance(INDEPENDENT_COMPARATOR) == Decimal("0.0001")
+    assert policy.relative_tolerance(KNOWN_ANSWERS_COMPARATOR) == Decimal("0.01")
 
 
 # -- the writer on a real schema -------------------------------------------------------
