@@ -39,6 +39,7 @@ from factors.base.analyst_track_record import (
     AnalystRatingItem,
     analyst_track_record,
 )
+from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
 
@@ -68,6 +69,8 @@ def _isolated_moomoo_ledger(idle_moomoo_gate, monkeypatch):
     """Run the real `_call` wrapper over the in-memory ledger (`call_ledger`), never the staging table."""
     # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
     # over 25 tickers would run for a minute; the pacing is not what these tests assert.
+    monkeypatch.setattr(settings, "environment_tier", RuntimeEnvironmentTier.PRODUCTION)
+    monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(gateway.CapacityGate, "_queue", lambda self, *a, **k: 0.0)
 
 

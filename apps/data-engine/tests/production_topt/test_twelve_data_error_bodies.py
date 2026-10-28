@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import logging
+import time
 import urllib.error
 from datetime import date
 from decimal import Decimal
@@ -107,7 +108,7 @@ def vendor(monkeypatch):
         return _Response(body)
 
     monkeypatch.setattr(origin_module.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(origin_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     return answers, asked
 
 
@@ -244,7 +245,7 @@ def test_the_parsers_raise_a_classified_body_they_are_handed() -> None:
 
 def test_a_request_the_gate_refused_costs_no_throttle_wait(monkeypatch) -> None:
     slept: list[float] = []
-    monkeypatch.setattr(origin_module.time, "sleep", slept.append)
+    monkeypatch.setattr(time, "sleep", slept.append)
 
     class Refused(TwelveDataQuoteFetcher):
         def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
@@ -320,7 +321,7 @@ def test_the_no_data_answer_is_returned_to_the_parser_and_stays_out_of_the_index
 
 def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypatch) -> None:
     waits: list[float] = []
-    monkeypatch.setattr(origin_module.time, "sleep", waits.append)
+    monkeypatch.setattr(time, "sleep", waits.append)
     answers, _asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES)])
 

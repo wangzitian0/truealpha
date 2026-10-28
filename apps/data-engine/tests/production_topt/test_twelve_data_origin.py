@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.parse
 from datetime import date, timedelta
 from decimal import Decimal
@@ -105,7 +106,7 @@ class _RecordingFetcher(TwelveDataQuoteFetcher):
 @pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     slept: list[float] = []
-    monkeypatch.setattr("data_engine.datahub.production_topt.twelve_data_origin.time.sleep", slept.append)
+    monkeypatch.setattr(time, "sleep", slept.append)
     return slept
 
 

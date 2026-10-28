@@ -432,8 +432,8 @@ def test_runs_store_both_series_through_the_gateway_and_a_failed_symbol_goes_fir
     publish_qqq_head(connection, FIVE_TARGETS)
     now = datetime.now(UTC)
     sessions = _recent_sessions(now, 5)
-    # 408 - 396 leaves this lane 12 credits a day: two runs of 6.
-    _calls(call_ledger, OTHER_CALLER, _yesterday(now), 396)
+    # 336 - 324 leaves this lane 12 credits a day: two runs of 6.
+    _calls(call_ledger, OTHER_CALLER, _yesterday(now), 324)
     vendor = _vendor(monkeypatch, sessions, failing={"T1277B": 404})
 
     first = _run(connection, now)
@@ -584,7 +584,7 @@ def test_staging_fetches_nothing_while_its_measured_spend_fills_its_share(
 
     outcome = _run(connection, now, environment="staging")
 
-    assert (outcome.budget.ceiling, outcome.budget.reserve, outcome.budget.credits) == (272, 306, 0)
+    assert (outcome.budget.ceiling, outcome.budget.reserve, outcome.budget.credits) == (224, 306, 0)
     assert (outcome.planned, vendor.requests) == ((), [])
     assert outcome.skipped_reason is not None
 
