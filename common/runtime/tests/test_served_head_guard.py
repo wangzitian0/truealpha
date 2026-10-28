@@ -120,6 +120,7 @@ NOT_SERVED = {
     "mart.topt_core_invocations": "factor invocation records; no consumer reads them",
     "mart.topt_gppe_invocations": "factor invocation records; no consumer reads them",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
+    "mart.cell_confidence": "append-only per-cell confidence of one run; no reader moves to it until stage B3 (#1517)",
 }
 
 

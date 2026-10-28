@@ -211,3 +211,51 @@ def test_a_seat_and_a_capacity_that_disagree_are_refused() -> None:
         OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="never-declared")
     origin = OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="sec")
     assert origin.capacity is registry.LEDGER_CAPACITIES["sec"]
+
+
+def test_every_registered_source_and_origin_declares_reliability_prior_in_init_order() -> None:
+    """#1517 B1: the registry holds one reliability prior per source in init.md order."""
+    from dataclasses import replace
+    from decimal import Decimal
+
+    import pytest
+    from data_engine.datahub.production_topt.source_registrations import (
+        MACRO_REGISTRATIONS,
+        source_reliability_prior,
+    )
+
+    for registration in REGISTRATIONS:
+        assert registration.reliability_prior is not None
+        assert Decimal("0") < registration.reliability_prior <= Decimal("1")
+        for origin in registration.origins:
+            assert origin.reliability_prior is not None
+            assert Decimal("0") < origin.reliability_prior <= Decimal("1")
+
+    for macro in MACRO_REGISTRATIONS:
+        assert macro.reliability_prior is not None
+        assert Decimal("0") < macro.reliability_prior <= Decimal("1")
+
+    p_release = source_reliability_prior("release-derived")
+    p_sec = source_reliability_prior("sec-company-facts")
+    p_moomoo = source_reliability_prior("origin:moomoo-financials:v1")
+    p_twelve = source_reliability_prior("origin:twelve-data:v1")
+    p_yahoo = source_reliability_prior("origin:yahoo:v1")
+    p_prose = source_reliability_prior("origin:sec-10k:v1")
+    assert p_release is not None and p_sec is not None and p_moomoo is not None
+    assert p_twelve is not None and p_yahoo is not None and p_prose is not None
+    assert p_release == Decimal("1") > p_sec > p_moomoo > p_twelve > p_yahoo > p_prose
+
+    base = REGISTRATIONS[-1]
+    mutated = replace(base)
+    object.__setattr__(mutated, "reliability_prior", Decimal("0.50"))
+    assert mutated.entry_id != base.entry_id
+
+    with pytest.raises(ValueError, match="contradicts"):
+        OriginRegistration(
+            "probe:v1",
+            "origin:sec-company-facts:v1",
+            "revenue",
+            ("p:v1",),
+            ledger_seat="sec",
+            reliability_prior=Decimal("0.50"),
+        )

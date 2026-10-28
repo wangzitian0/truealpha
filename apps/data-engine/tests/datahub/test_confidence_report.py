@@ -835,6 +835,83 @@ def test_every_cell_carries_one_confidence_from_0_to_1_and_the_family_rolls_up_i
     assert "mean_score_100" not in summary
 
 
+def test_classify_cell_reflects_oracle_outcome_mass_cell_agreement_and_definitional_semantics() -> None:
+    """#1517 B1-B2, #1523 S4: filing disagree outcomes lower origin confidence; comparable oracle rows
+    drive cell agreement and reason codes; release-derived cells evaluate to 1 with confidence.definitional."""
+    from data_engine.datahub.oracle_outcomes import oracle_outcome_mass_by_origin
+
+    rev_policy = family_policy("revenue")
+    sec_obs = OriginValue(
+        "origin:sec-company-facts:v1",
+        "sec-company-facts:v1",
+        "sec-company-facts",
+        "1000",
+        observation_id="obs:aapl:rev",
+    )
+    baseline = classify_cell(rev_policy, "listing:xnas:aapl", (sec_obs,), CUTOFF)
+    assert "oracle:none" in baseline.reason_codes
+    assert len(baseline.policy_hash) == 64 and len(baseline.input_hash) == 64
+
+    disagree_rows = [
+        {
+            "observation_id": f"obs:fail:{idx}",
+            "subject_id": f"issuer:cik:{idx:010d}",
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "disagree",
+            "compared_at": CUTOFF,
+        }
+        for idx in range(1, 6)
+    ]
+    mass_with_failures = oracle_outcome_mass_by_origin(disagree_rows, cutoff=CUTOFF)
+    after_origin_failures = classify_cell(
+        rev_policy,
+        "listing:xnas:aapl",
+        (sec_obs,),
+        CUTOFF,
+        outcome_mass_by_origin=mass_with_failures,
+    )
+    assert after_origin_failures.confidence < baseline.confidence
+
+    cell_disagree_row = [
+        {
+            "observation_id": "obs:aapl:rev",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "served_value": Decimal("1200"),
+            "oracle_value": Decimal("1000"),
+            "ratio": Decimal("1.20"),
+            "result": "disagree",
+            "compared_at": CUTOFF,
+        }
+    ]
+    with_cell_disagree = classify_cell(
+        rev_policy,
+        "listing:xnas:aapl",
+        (sec_obs,),
+        CUTOFF,
+        outcome_mass_by_origin=mass_with_failures,
+        oracle_outcomes=cell_disagree_row,
+        subject_aliases=("issuer:cik:0000320193",),
+    )
+    assert with_cell_disagree.confidence < after_origin_failures.confidence
+    assert "oracle:disagree" in with_cell_disagree.reason_codes
+
+    release_policy = cr.FamilyPolicy(
+        family="listing_identity",
+        semantic_type="listing-identity",
+        value_keys=("ticker",),
+        reconciliation=None,
+    )
+    release_obs = OriginValue("origin:release:v1", "release-derived:v1", "release-derived", "AAPL")
+    definitional_cell = classify_cell(release_policy, "listing:xnas:aapl", (release_obs,), CUTOFF)
+    assert definitional_cell.confidence == Decimal("1")
+    assert definitional_cell.reason_codes == ("confidence.definitional",)
+
+
 # -- the families are the registry's semantics -----------------------------------------------
 
 

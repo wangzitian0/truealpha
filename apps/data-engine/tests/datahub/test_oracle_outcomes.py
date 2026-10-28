@@ -983,3 +983,214 @@ def test_ten_outcomes_roll_up_with_deduplication_and_wilson_bound() -> None:
     assert 0.1 < rollup["wilson_95_upper_bound"] < 0.5
     assert rollup["by_field"]["revenue"]["compared"] == 9
     assert rollup["comparators"]["filing"]["compared"] == 9
+
+
+def test_oracle_outcome_mass_by_origin_distinguishes_filing_independent_parse_and_operator() -> None:
+    """#1517 B1, #1523 S4: filing agree/disagree add +1 success/fail; independent_parse agree adds 0
+    success while disagree adds +1 fail; operator/gppe adds 0 to input origin mass."""
+    from data_engine.datahub.oracle_outcomes import oracle_outcome_mass_by_origin
+
+    t_before = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+    t_after = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+    rows = [
+        # Filing agree -> +1 success
+        {
+            "observation_id": "obs:1",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "agree",
+            "compared_at": t_before,
+        },
+        # Duplicate older row for same (oracle_kind, observation_id, subject_id, field) -> deduplicated
+        {
+            "observation_id": "obs:1",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "disagree",
+            "compared_at": datetime(2026, 10, 26, 12, 0, tzinfo=UTC),
+        },
+        # Filing disagree -> +1 fail
+        {
+            "observation_id": "obs:2",
+            "subject_id": "issuer:cik:0000789019",
+            "field": "gross_profit",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "disagree",
+            "compared_at": t_before,
+        },
+        # Independent parse agree -> +0 success
+        {
+            "observation_id": "obs:1",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "revenue",
+            "oracle_kind": "independent_parse",
+            "source": "sec-company-facts",
+            "result": "agree",
+            "compared_at": t_before,
+        },
+        # Independent parse disagree -> +1 fail
+        {
+            "observation_id": "obs:3",
+            "subject_id": "issuer:cik:0001045810",
+            "field": "revenue",
+            "oracle_kind": "independent_parse",
+            "source": "sec-company-facts",
+            "result": "disagree",
+            "compared_at": t_before,
+        },
+        # Operator row -> +0 to input origins
+        {
+            "observation_id": "etf-constituent-fact:1",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "shares_outstanding",
+            "oracle_kind": "operator",
+            "source": "nasdaq_index",
+            "result": "disagree",
+            "compared_at": t_before,
+        },
+        # GPPE operator tree rebuild -> +0 to input origins
+        {
+            "observation_id": "res:1",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "gross_profit_per_employee",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "disagree",
+            "compared_at": t_before,
+        },
+        # Future row after cutoff -> excluded
+        {
+            "observation_id": "obs:future",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "total_assets",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
+            "result": "disagree",
+            "compared_at": t_after,
+        },
+    ]
+    mass = oracle_outcome_mass_by_origin(rows, cutoff=datetime(2026, 10, 28, 0, 0, tzinfo=UTC))
+    assert mass["origin:sec-company-facts:v1"] == (Decimal("1"), Decimal("2"))
+    assert mass["origin:sec-company-facts:v1:revenue"] == (Decimal("1"), Decimal("1"))
+    assert mass["origin:sec-company-facts:v1:gross_profit"] == (Decimal("0"), Decimal("1"))
+
+
+def test_oracle_cell_agreement_applies_delta_curve_and_reports_oracle_none() -> None:
+    """#1523 S4: comparable rows map relative error onto {1, 0.90, 0.65, 0.25}; missing/not_comparable -> (1, ('oracle:none',))."""
+    from data_engine.datahub.oracle_outcomes import oracle_cell_agreement
+
+    t_cmp = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+    rows = [
+        {
+            "observation_id": "obs:exact",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "served_value": Decimal("1000"),
+            "oracle_value": Decimal("1000.5"),
+            "ratio": Decimal("0.9995"),
+            "result": "agree",
+            "compared_at": t_cmp,
+        },
+        {
+            "observation_id": "obs:1pct",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "gross_profit",
+            "oracle_kind": "filing",
+            "served_value": Decimal("1005"),
+            "oracle_value": Decimal("1000"),
+            "ratio": Decimal("1.005"),
+            "result": "agree",
+            "compared_at": t_cmp,
+        },
+        {
+            "observation_id": "obs:3pct",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "total_assets",
+            "oracle_kind": "filing",
+            "served_value": Decimal("1030"),
+            "oracle_value": Decimal("1000"),
+            "ratio": Decimal("1.03"),
+            "result": "disagree",
+            "compared_at": t_cmp,
+        },
+        {
+            "observation_id": "obs:10pct",
+            "subject_id": "issuer:cik:0000320193",
+            "field": "employees_total",
+            "oracle_kind": "filing",
+            "served_value": Decimal("1200"),
+            "oracle_value": Decimal("1000"),
+            "ratio": Decimal("1.20"),
+            "result": "disagree",
+            "compared_at": t_cmp,
+        },
+        {
+            "observation_id": None,
+            "subject_id": "issuer:cik:0000320193",
+            "field": "shares_outstanding",
+            "oracle_kind": "filing",
+            "result": "not_comparable",
+            "reason": "no_served_value",
+            "compared_at": t_cmp,
+        },
+    ]
+
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:0000320193", field="revenue") == (
+        Decimal("1"),
+        ("oracle:agree",),
+    )
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:0000320193", field="gross_profit") == (
+        Decimal("0.90"),
+        ("oracle:agree",),
+    )
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:0000320193", field="total_assets") == (
+        Decimal("0.65"),
+        ("oracle:disagree",),
+    )
+    # Alias headcount -> employees_total
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:0000320193", field="headcount") == (
+        Decimal("0.25"),
+        ("oracle:disagree",),
+    )
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:0000320193", field="shares_outstanding") == (
+        Decimal("1"),
+        ("oracle:none",),
+    )
+    assert oracle_cell_agreement(rows, subject_ids="issuer:cik:9999999999", field="revenue") == (
+        Decimal("1"),
+        ("oracle:none",),
+    )
+
+
+class _FakeFinanceConnection:
+    """Returns the financial-fact rows in observation-id order, as the SQL does."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        self._rows = rows
+
+    def execute(self, _sql: str, _params: tuple) -> _FakeFinanceConnection:
+        return self
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+def test_the_newest_knowable_financial_fact_of_an_issuer_wins_not_the_last_observation_id() -> None:
+    older = datetime(2026, 3, 1, tzinfo=UTC)
+    newer = datetime(2026, 6, 1, tzinfo=UTC)
+    # The id of the older observation sorts last, so an id-ordered overwrite would keep the stale one.
+    rows = [
+        ("issuer:cik:0000000001", "aaa-newer", newer, {"vintage": "new"}),
+        ("issuer:cik:0000000001", "zzz-older", older, {"vintage": "old"}),
+    ]
+
+    held = oracle_outcomes._query_fin_by_issuer(_FakeFinanceConnection(rows), "run-1")
+
+    assert held["issuer:cik:0000000001"] == ("aaa-newer", newer, {"vintage": "new"})
+    assert held["0000000001"] == ("aaa-newer", newer, {"vintage": "new"})

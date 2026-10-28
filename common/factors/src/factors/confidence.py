@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOperation, Overflow, localcontext
 
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.confidence import (
     ConfidenceCalibrationReport,
     ContinuousConfidenceEvaluation,
@@ -14,6 +17,21 @@ from truealpha_contracts.confidence import (
     SourceConfidenceEvidence,
     SourceConfidenceScore,
 )
+
+DEFAULT_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
+
+
+@dataclass(frozen=True)
+class CellConfidence:
+    """Single-entry cell confidence result with policy, input, and reason-code audit."""
+
+    confidence: Decimal
+    policy_id: str
+    policy_hash: str
+    input_id: str
+    input_hash: str
+    reason_codes: tuple[str, ...]
+    evaluation: ContinuousConfidenceEvaluation | None = None
 
 
 def _quantize(value: Decimal, decimal_places: int) -> Decimal:
@@ -51,10 +69,13 @@ def evaluate_continuous_confidence(
         grouped: dict[str, list[tuple[SourceConfidenceEvidence, Decimal]]] = defaultdict(list)
         for source in evidence.sources:
             observed_mass = source.successful_outcome_mass + source.failed_outcome_mass
-            reliability = (source.successful_outcome_mass + policy.reliability_prior_success) / (
-                observed_mass + prior_total
+            prior_success = (
+                source.reliability_prior * prior_total
+                if source.reliability_prior is not None
+                else policy.reliability_prior_success
             )
-            if observed_mass == 0:
+            reliability = (source.successful_outcome_mass + prior_success) / (observed_mass + prior_total)
+            if observed_mass == 0 and source.reliability_prior is None:
                 reliability = min(reliability, policy.unobserved_reliability_ceiling)
             source_quality = reliability * source.freshness * source.sample_conformance * source.transport_integrity
             source_scores.append(
@@ -132,6 +153,79 @@ def evaluate_continuous_confidence(
         required_component_completeness=evidence.required_component_completeness,
         confidence=confidence,
         reason_codes=tuple(reason_codes),
+    )
+
+
+def evaluate_cell_confidence(
+    *,
+    case_id: str,
+    sources: Sequence[SourceConfidenceEvidence] = (),
+    agreement: Decimal = Decimal("1"),
+    semantic_mapping_quality: Decimal = Decimal("1"),
+    lineage_completeness: Decimal = Decimal("1"),
+    required_component_completeness: Decimal = Decimal("1"),
+    definitional: bool = False,
+    has_value: bool = True,
+    extra_reason_codes: Sequence[str] = (),
+    policy: ContinuousConfidencePolicy = DEFAULT_CONFIDENCE_POLICY,
+) -> CellConfidence:
+    """Evaluate cell confidence from source evidence, definitional status, or missing value."""
+
+    if definitional:
+        reasons = tuple(sorted({"confidence.definitional", *extra_reason_codes}))
+        input_hash = canonical_sha256(
+            {
+                "case_id": case_id,
+                "definitional": True,
+                "reason_codes": list(reasons),
+            }
+        )
+        return CellConfidence(
+            confidence=Decimal("1"),
+            policy_id=policy.policy_id,
+            policy_hash=policy.content_sha256,
+            input_id=f"confidence-input:{input_hash}",
+            input_hash=input_hash,
+            reason_codes=reasons,
+            evaluation=None,
+        )
+    if not has_value or not sources:
+        reasons = tuple(sorted({"confidence.no-origin-value", *extra_reason_codes}))
+        input_hash = canonical_sha256(
+            {
+                "case_id": case_id,
+                "definitional": False,
+                "has_value": False,
+                "reason_codes": list(reasons),
+            }
+        )
+        return CellConfidence(
+            confidence=Decimal("0"),
+            policy_id=policy.policy_id,
+            policy_hash=policy.content_sha256,
+            input_id=f"confidence-input:{input_hash}",
+            input_hash=input_hash,
+            reason_codes=reasons,
+            evaluation=None,
+        )
+    evidence = ContinuousConfidenceInput(
+        case_id=case_id,
+        sources=tuple(sources),
+        agreement=agreement,
+        semantic_mapping_quality=semantic_mapping_quality,
+        lineage_completeness=lineage_completeness,
+        required_component_completeness=required_component_completeness,
+    )
+    evaluation = evaluate_continuous_confidence(policy, evidence)
+    reasons = tuple(sorted({*evaluation.reason_codes, *extra_reason_codes}))
+    return CellConfidence(
+        confidence=evaluation.confidence,
+        policy_id=evaluation.policy_id,
+        policy_hash=evaluation.policy_sha256,
+        input_id=evaluation.input_id,
+        input_hash=evaluation.input_sha256,
+        reason_codes=reasons,
+        evaluation=evaluation,
     )
 
 
