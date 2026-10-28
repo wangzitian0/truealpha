@@ -262,6 +262,24 @@ const confidenceRows = [
   },
 ];
 
+// A report written after #1523 holds no `sec_oracle` section: the outside comparisons are rows of
+// `mart.oracle_outcomes`. The page must not claim that the oracle re-derived 0 issuers.
+const reportWithoutOracleSection = {
+  universe_id: "universe:topt-us-2026-09-30",
+  run_id: "capture-run:" + "8".repeat(64),
+  cutoff: "2026-10-27 22:15:00+00",
+  created_at: "2026-10-28 00:45:00+00",
+  payload: {
+    generated_at: "2026-10-28T00:45:00+00:00",
+    sources_connected: ["sec-company-facts"],
+    families: {},
+    accuracy: {
+      close: { matches_quality_report: true, quality_report_mismatches: [] },
+    },
+    metadata: { stored_confidence: { used_for_bands: false } },
+  },
+};
+
 const nightlyVerdictRows = [
   {
     check_name: "output_invariants",
@@ -287,7 +305,7 @@ const nightlyVerdictRows = [
       if (typeof sql === "string" && sql.includes("nightly_verdicts"))
         return { rows: nightlyVerdictRows } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
-        return { rows: confidenceRows } as never;
+        return { rows: [...confidenceRows, reportWithoutOracleSection] } as never;
       if (typeof sql === "string" && sql.includes("question_coverage_report"))
         return { rows: coverageRows } as never;
       if (typeof sql === "string" && sql.includes("served_head"))
@@ -347,8 +365,14 @@ const nightlyVerdictRows = [
     "the newest coverage report per universe is surfaced",
   );
   assert(
-    stats.confidence.length === 1 && stats.confidence[0].families.length === 2,
+    stats.confidence.length === 2 && stats.confidence[0].families.length === 2,
     "the newest confidence report per universe is surfaced with its families",
+  );
+  assert(
+    stats.confidence[0].oracle_issuers_compared === 5 &&
+      stats.confidence[1].oracle_issuers_compared === null &&
+      stats.confidence[1].oracle_fields.length === 0,
+    "a report with no sec_oracle section reads null, not 0 issuers re-derived",
   );
   const close = stats.confidence[0].families.find((f) => f.family === "close");
   assert(

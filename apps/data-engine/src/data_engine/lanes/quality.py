@@ -11,9 +11,9 @@ log and in `dagster.runs`, is the verdict.
 The second job here is the datahub CONFIDENCE & ACCURACY report (owner standard,
 2026-09-15): after the invariants have judged the day's heads, grade every (metric family,
 subject) cell of each governed head into high / medium / low / missing from what its
-origins asserted, sample ten well-known subjects across every origin, re-derive a sample
-of fundamentals from SEC through the independent oracle, and append one content-addressed
-`mart.datahub_confidence_report` row per universe.
+origins asserted, sample the subjects of the universe record across every origin, and append
+one content-addressed `mart.datahub_confidence_report` row per universe. The op also records the
+outside comparisons of the head's run in `mart.oracle_outcomes` (#1523).
 
 The third is the model-provider key probe (#876 W2): one minimal ask a day through the
 source gateway, so a revoked key is a red verdict by 07:00 instead of a human reading the
@@ -95,9 +95,8 @@ SURFACE_SETTLE_POLL_SECONDS = 60.0
 HEAD_REPORTS_GRACE = timedelta(minutes=10)
 
 CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
-# 00:45 UTC: after the invariants (00:15) have had their say on the same heads, and the
-# SEC oracle's handful of company-facts reads land in a quiet window for the shared
-# 10 req/s seat. Manual runs launch the same job by name with an explicit `executed_at`.
+# 00:45 UTC: after the invariants (00:15) have had their say on the same heads.
+# Manual runs launch the same job by name with an explicit `executed_at`.
 # The report waits for a settled universe first, like the surface proof: a slow QQQ tick
 # can still commit after 00:20, and the pointer sensor then rewrites that head's reports.
 CONFIDENCE_REPORT_CRON = "45 0 * * *"
@@ -410,24 +409,18 @@ def output_invariants_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunR
 
 
 class ConfidenceReportConfig(dg.Config):
-    """`executed_at` is the schedule's tick time (ISO 8601), never the wall clock. An empty
-    `sample_subjects` takes the module's default (five QQQ names, five TOPT issuers);
-    `oracle_issuers` bounds the live SEC re-derivation."""
+    """`executed_at` is the schedule's tick time (ISO 8601), never the wall clock. The report samples the
+    subjects that the universe record names (`report_sample`)."""
 
     executed_at: str
     universe: str = lane_name(universe_with_role("fund_consolidation"))
-    sample_subjects: list[str] = []
-    oracle_issuers: int = 5
 
 
 @external_op
 def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceReportConfig) -> str:
-    from data_engine.datahub.confidence_report import SecOracle, compile_report, persist, summary_line
+    from data_engine.datahub.confidence_report import compile_report, persist, summary_line
 
     executed_at = datetime.fromisoformat(config.executed_at)
-    # The oracle needs the SEC user agent; without one it reports "not compared" rather
-    # than failing the report that carries every other section.
-    oracle = SecOracle(settings.sec_user_agent) if settings.sec_user_agent else None
     with verdict(
         check_name(CONFIDENCE_REPORT_VERDICT, config.universe),
         registered=NIGHTLY_VERDICTS,
@@ -438,26 +431,15 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         # out before the report reads it (2026-09-17: QQQ may commit around 00:20 and its
         # head reports follow a minute later).
         _await_settled(context)
-        # Every SEC read is attributed to this Dagster run in the external call ledger (#729)
-        # and admitted by the rule-6 gate first.
-        with (
-            gateway.capacity_scope(),
-            psycopg.connect(settings.database_url) as connection,
-        ):
+        # The op makes no vendor call: the report and the outside comparisons read stored rows and bytes.
+        with psycopg.connect(settings.database_url) as connection:
             stale_heads = stale_served_heads(connection, universe_prefix=record(key_of_lane(config.universe)).id_prefix)
             if stale_heads:
                 outcome.summary = f"stale served_head: {', '.join(stale_heads)}"
                 raise dg.Failure(
                     f"datahub confidence report: mart.served_head is not fresh ({', '.join(stale_heads)}) (#1299, #54)"
                 )
-            report = compile_report(
-                connection,
-                universe=config.universe,
-                executed_at=executed_at,
-                sample_subjects=config.sample_subjects or None,
-                oracle_issuers=config.oracle_issuers,
-                oracle=oracle,
-            )
+            report = compile_report(connection, universe=config.universe, executed_at=executed_at)
             if report is None:
                 context.log.warning("no governed head for %s; no confidence report", config.universe)
                 outcome.pending = True
@@ -483,7 +465,6 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             "sources_connected": ", ".join(report["sources_connected"]),
             **{f"{name}_mean_confidence": family["mean_confidence"] for name, family in report["families"].items()},
             "close_agreement_rate": str(report["accuracy"]["close"]["agreement_rate"]),
-            "sec_oracle_issuers_compared": report["accuracy"]["sec_oracle"]["issuers_compared"],
             "oracle_outcomes_written": oracle_rows is not None,
             "oracle_outcomes_rows": oracle_rows or 0,
         }

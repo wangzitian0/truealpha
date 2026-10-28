@@ -601,7 +601,11 @@ export default async function AdminDatahubPage({
                   {match.mismatches > 0 ? ` (${match.mismatches} cells)` : ""}
                 </span>
               ))}
-              {" · "}SEC oracle: {report.oracle_issuers_compared} issuers re-derived
+              {report.oracle_issuers_compared !== null && (
+                <>
+                  {" · "}SEC oracle: {report.oracle_issuers_compared} issuers re-derived
+                </>
+              )}
               {report.oracle_fields.map((field) => (
                 <span key={field.field}>
                   {" · "}

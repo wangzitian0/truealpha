@@ -747,7 +747,8 @@ def test_confidence_report_grades_the_captured_run_from_its_origins(connection) 
     assert sample["in_universe"] and "verdict" not in sample["close"]
     assert sample["close"]["reason"] == sample["volume"]["reason"] == "independent_origins_agree"
     assert set(sample["close"]["values"]) == {"origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"}
-    assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
+    # The outside comparisons are rows of `mart.oracle_outcomes` (#1523), not a section of the report.
+    assert "sec_oracle" not in report["accuracy"] and "oracle_issuers_requested" not in report["metadata"]
     report_id = confidence_report.persist(connection, report)
     assert report_id.startswith("datahub-confidence-report:")
     # #885: the next night's compile over the same head grades the same content — the same

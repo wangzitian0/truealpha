@@ -1,11 +1,15 @@
 {
   "schema_version": 1,
-  "policy_version": "1.0.0",
+  "policy_version": "1.1.0",
   "description": "The tolerances of the outside comparisons that mart.oracle_outcomes records (#1523). A comparator names one comparison. A row stores the tolerance it was judged by, so a changed tolerance never rewrites an old row.",
   "comparators": {
     "operator_listed_units": {
       "relative_tolerance": "0.05",
       "explanation": "The index operator quotes a market value and a last sale price per listing. Their quotient is the listed unit count at the operator's own price. The tolerance of 5% passes the drift of a filed share count against a live quote (buybacks, an issue since the filing) and fails a unit error: an ADS ratio of 4 or a class counted twice (ratio 2)."
+    },
+    "independent_parse_annual_figures": {
+      "relative_tolerance": "0.0001",
+      "explanation": "A second parser reads the stored SEC company-facts document of the issuer and finds the latest annual revenue and gross profit that were filed by the cutoff. The served figure came from the same bytes, so a correct served figure equals the second figure. The tolerance of 0.01% leaves room for the precision of the quotient only. It fails any other concept, any other period and any unit error."
     }
   }
 }

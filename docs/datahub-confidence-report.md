@@ -11,8 +11,8 @@ keeps its band words.
 
 `apps/data-engine/src/data_engine/datahub/confidence_report.py` grades every
 (metric family, subject) cell of the run a governed pointer heads, aggregates per family and
-per universe, samples ten subjects across every origin, runs the accuracy oracle, and
-appends one content-addressed row to `mart.datahub_confidence_report`. The Dagster job
+per universe, samples the subjects of the universe record across every origin, cross-checks the
+accuracy, and appends one content-addressed row to `mart.datahub_confidence_report`. The Dagster job
 `datahub_confidence_report` (`lanes/quality.py`) runs it nightly at 00:45 UTC — after
 `output_invariants_check` (00:15) — once per lane universe (`universe-list:qqq`, `topt`),
 and can be launched by name with an explicit `executed_at`. `/admin/datahub` renders the
@@ -23,8 +23,7 @@ the canonical payload *without* `generated_at` (`confidence_report.COMPILE_STAMP
 nightly compile over an unchanged head that grades exactly what the last one graded
 resolves to the existing row (`on conflict do nothing`), so the table grows by one row
 per changed report, not one per night; the stored `generated_at` names the compile that
-first produced that content. Anything that changes a grade, a sample value or the SEC
-oracle's answer is a new row.
+first produced that content. Anything that changes a grade or a sample value is a new row.
 
 ## Cell reasons
 
@@ -149,7 +148,6 @@ accuracy.<field>: origins, compared, agreed, agreement_rate, tolerance_policy,
                   quality_report_id, quality_report_cells, matches_quality_report,
                   quality_report_mismatches
                   (open, high, low, close, volume; revenue, gross_profit, net_income, total_assets)
-accuracy.sec_oracle: fields, issuers_requested, issuers_compared, rows[], per_field, skipped
 metadata.stored_confidence: used_for_bands=false, values_by_semantic, constant_per_semantic
 ```
 
@@ -157,9 +155,9 @@ metadata.stored_confidence: used_for_bands=false, values_by_semantic, constant_p
 actually compared (two independent origins under a policy). `mean_confidence` uses the
 family's cell count as denominator; a cell with no origin value stays in it with confidence 0.
 
-The default sample is five QQQ names (AAPL, MSFT, NVDA, AMZN, GOOGL) and five TOPT issuers
-spanning every operating branch (JPM, BRK.B, XOM, V, COST); the job's `sample_subjects`
-config overrides it.
+The sample of each universe is its `report_sample` in the universe record: five QQQ names
+(AAPL, MSFT, NVDA, AMZN, GOOGL) and five TOPT issuers spanning every operating branch (JPM,
+BRK.B, XOM, V, COST). The job takes no override.
 
 ## Accuracy
 
@@ -167,13 +165,14 @@ config overrides it.
   (`revenue`, `gross_profit`, `net_income`, `total_assets`): the origin agreement the engine
   computed per field, with the field's policy and the per-field cross-check against the
   persisted quality report.
-- **fundamentals**: `quality.vendor_oracle`'s deliberately independent SEC re-derivation
-  (wider concept lists, latest period across variants — it does not import the adapter)
-  for a sample of issuers (default 5: the sample subjects first, then the universe in
-  order), fetched live through the source gateway. Agreement is reported per field
-  (`revenue`, `gross_profit`) over issuers where the vendor asserts a value, with the
-  period mart's figure came from and its staleness in years. Without an SEC user agent the
-  section says `no_sec_user_agent` and compares nothing.
+- **outside comparisons**: not a section of the report. `mart.oracle_outcomes` holds one row per
+  comparison (#1523). For revenue and gross profit the writer re-parses the stored SEC
+  company-facts bytes of every issuer of the head with `quality.vendor_oracle`'s deliberately
+  independent parser (wider concept lists, latest annual period across variants, it does not
+  import the adapter). The row kind is `independent_parse`. The writer reads our stored bytes and
+  makes no vendor call. A tick and the nightly report op both call it, and a replay writes each
+  row once. A universe with no stored document reads `not_comparable: no_document`, never red.
+  The tolerance of each comparator is data in `oracle_policy.v1.json`, and each row stores it.
 
 ## What it shows today, honestly
 

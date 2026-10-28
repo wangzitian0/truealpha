@@ -1,9 +1,9 @@
-"""The operator comparator of `mart.oracle_outcomes` (#1523 S2a).
+"""The comparators of `mart.oracle_outcomes` (#1523 S2): the operator listed units and the independent parse.
 
-The first half drives the pure comparison with hand-built snapshot inputs. The second half drives
-`record_oracle_outcomes` on a real schema over a frozen snapshot, with operator lists of the test's
-own. The third half checks that the report op calls the writer. The deployed tick is in
-`production_topt/test_oracle_outcomes_tick.py`.
+The first part drives the pure comparisons with hand-built snapshot inputs and stored documents. The second
+part drives `record_oracle_outcomes` on a real schema over a frozen snapshot, with operator lists and stored
+SEC documents of the test's own. The third part checks that the report op calls the writer. The deployed tick
+is in `production_topt/test_oracle_outcomes_tick.py`.
 """
 
 from __future__ import annotations
@@ -25,14 +25,18 @@ from data_engine.datahub import confidence_report, oracle_outcomes
 from data_engine.datahub.oracle_outcomes import (
     AGREE,
     DISAGREE,
+    INDEPENDENT_COMPARATOR,
     NOT_COMPARABLE,
+    OPERATOR_COMPARATOR,
     OperatorFigure,
+    compare_independent_parse,
     compare_listed_units,
     served_listed_units,
 )
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.lanes import quality
-from data_engine.quality import nightly_verdicts
+from data_engine.quality import nightly_verdicts, vendor_oracle
+from data_engine.sources import gateway
 from factors.production_topt import (
     MetricAvailability,
     MetricFreshness,
@@ -43,6 +47,7 @@ from factors.production_topt import (
     ToptMetricInput,
 )
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.testing import InMemoryRawObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -66,6 +71,14 @@ def connection():
         active.close()
 
 
+@pytest.fixture(autouse=True)
+def stored_bytes(monkeypatch: pytest.MonkeyPatch) -> InMemoryRawObjectStore:
+    """The object store of the test. A seeded raw fetch holds bytes only where the test puts them."""
+    store = InMemoryRawObjectStore()
+    monkeypatch.setattr(raw_store, "object_store", lambda: store)
+    return store
+
+
 TOLERANCE = Decimal("0.05")
 KNOWN = datetime(2026, 3, 30, tzinfo=UTC)
 AS_OF = date(2026, 3, 30)
@@ -74,12 +87,13 @@ AS_OF = date(2026, 3, 30)
 # -- the pure comparison ---------------------------------------------------------------
 
 
-def _metric(metric: str, value: Decimal | None, input_id: str) -> ToptMetricInput:
+def _metric(metric: str, value: Decimal | None, input_id: str, unit: str | None = None) -> ToptMetricInput:
+    default_unit = {"shares_outstanding": "shares", "market_price": "USD_per_share"}
     return ToptMetricInput(
         input_id=input_id,
         metric=metric,
         value=value,
-        unit="shares" if metric == "shares_outstanding" else "USD_per_share",
+        unit=unit or default_unit.get(metric, "USD"),
         confidence=Decimal("0.85"),
         knowable_at=KNOWN,
         freshness=MetricFreshness.FRESH,
@@ -87,7 +101,12 @@ def _metric(metric: str, value: Decimal | None, input_id: str) -> ToptMetricInpu
     )
 
 
-def _factor_input(*listings: tuple[str, Decimal | None]) -> ToptCoreSnapshotInput:
+def _factor_input(
+    *listings: tuple[str, Decimal | None],
+    revenue: Decimal | None = None,
+    gross_profit: Decimal | None = None,
+    unit: str | None = None,
+) -> ToptCoreSnapshotInput:
     observation_ids = tuple(f"normalized-observation:{index:064x}" for index in range(1, 4 * len(listings) + 1))
     return ToptCoreSnapshotInput(
         snapshot_id="topt-core-snapshot:" + "b" * 64,
@@ -108,10 +127,10 @@ def _factor_input(*listings: tuple[str, Decimal | None]) -> ToptCoreSnapshotInpu
             )
             for observation_id in observation_ids
         ),
-        gross_profit=None,
+        gross_profit=_metric("gross_profit", gross_profit, observation_ids[0], unit),
         total_assets=None,
         headcount=None,
-        revenue=None,
+        revenue=_metric("revenue", revenue, observation_ids[0], unit),
         pre_provision_profit=None,
         market_value_components=tuple(
             ToptMarketValueComponent(
@@ -210,6 +229,172 @@ def test_a_comparison_that_cannot_be_made_says_why(
     assert outcome.ratio is None and outcome.tolerance is None
 
 
+# -- the independent parse, pure ---------------------------------------------------------
+
+INDEPENDENT_TOLERANCE = load_oracle_policy().relative_tolerance(INDEPENDENT_COMPARATOR)
+CUTOFF_DAY = date(2026, 4, 1)
+
+
+def _annual(end: str, value: str, filed: str, *, start: str) -> dict:
+    return {"start": start, "end": end, "val": int(value), "filed": filed}
+
+
+def _document(**concepts: list[dict]) -> dict:
+    """A company-facts document that holds the given us-gaap concepts in US dollars."""
+    return {"facts": {"us-gaap": {name: {"units": {"USD": rows}} for name, rows in concepts.items()}}}
+
+
+#: Two annual revenues under the modern tag: FY2024 (filed 2025-02-10) and FY2025 (filed 2026-02-20).
+REVENUE_DOCUMENT = _document(
+    RevenueFromContractWithCustomerExcludingAssessedTax=[
+        _annual("2024-12-31", "800", "2025-02-10", start="2024-01-01"),
+        _annual("2025-12-31", "1000", "2026-02-20", start="2025-01-01"),
+    ]
+)
+
+
+def _independent(
+    field: str, served: str | None, facts: dict | None, *, unit: str | None = None, cutoff: date = CUTOFF_DAY
+):
+    value = None if served is None else Decimal(served)
+    factor_input = _factor_input(("listing:a", Decimal("1")), **{field: value}, unit=unit)
+    return compare_independent_parse(factor_input, field, facts, cutoff=cutoff, tolerance=INDEPENDENT_TOLERANCE)
+
+
+def test_a_served_revenue_that_the_stored_filing_repeats_agrees_and_the_row_carries_its_numbers() -> None:
+    outcome = _independent("revenue", "1000", REVENUE_DOCUMENT)
+    assert (outcome.result, outcome.reason, outcome.ratio) == (AGREE, None, Decimal(1))
+    assert (outcome.served_value, outcome.oracle_value) == (Decimal(1000), Decimal(1000))
+    assert (outcome.oracle_kind, outcome.field, outcome.source) == ("independent_parse", "revenue", "sec")
+    assert outcome.period == "2025-12-31"
+    assert outcome.knowable_at == datetime(2026, 2, 20, tzinfo=UTC)
+    assert outcome.observation_id == "normalized-observation:" + "0" * 63 + "1"
+    assert outcome.tolerance == INDEPENDENT_TOLERANCE
+
+
+def test_a_revenue_ten_times_the_stored_filing_is_a_disagree_row_with_the_ratio_of_ten() -> None:
+    outcome = _independent("revenue", "10000", REVENUE_DOCUMENT)
+    assert (outcome.result, outcome.ratio, outcome.period) == (DISAGREE, Decimal(10), "2025-12-31")
+
+
+def test_a_served_revenue_of_an_older_period_than_the_stored_filing_is_a_disagree_row() -> None:
+    """The stale-period case: the issuer filed FY2025, and the served figure is the FY2024 one."""
+    outcome = _independent("revenue", "800", REVENUE_DOCUMENT)
+    assert (outcome.result, outcome.ratio, outcome.period) == (DISAGREE, Decimal("0.8"), "2025-12-31")
+
+
+def test_a_filing_after_the_cutoff_is_no_witness() -> None:
+    """The cutoff is 2026-02-01, before the FY2025 filing: the newest knowable annual figure is FY2024."""
+    outcome = _independent("revenue", "800", REVENUE_DOCUMENT, cutoff=date(2026, 2, 1))
+    assert (outcome.result, outcome.ratio, outcome.period) == (AGREE, Decimal(1), "2024-12-31")
+    assert outcome.knowable_at == datetime(2025, 2, 10, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("factor", "result"),
+    [
+        (Decimal(1), AGREE),
+        (1 + INDEPENDENT_TOLERANCE, AGREE),  # exactly at the tolerance
+        (1 - INDEPENDENT_TOLERANCE, AGREE),
+        (1 + 2 * INDEPENDENT_TOLERANCE, DISAGREE),
+        (1 - 2 * INDEPENDENT_TOLERANCE, DISAGREE),
+    ],
+)
+def test_the_ratio_is_judged_against_the_tolerance_of_the_policy(factor: Decimal, result: str) -> None:
+    outcome = _independent("revenue", str(Decimal(1000) * factor), REVENUE_DOCUMENT)
+    assert outcome.result == result and outcome.tolerance == INDEPENDENT_TOLERANCE
+
+
+def test_gross_profit_is_the_difference_that_the_stored_filing_implies_when_it_reports_none() -> None:
+    """No `GrossProfit` tag: revenue 1000 minus cost 400, knowable from the later filing of the two."""
+    document = _document(
+        Revenues=[_annual("2025-12-31", "1000", "2026-02-20", start="2025-01-01")],
+        CostOfRevenue=[_annual("2025-12-31", "400", "2026-03-05", start="2025-01-01")],
+    )
+    outcome = _independent("gross_profit", "600", document)
+    assert (outcome.result, outcome.oracle_value, outcome.field) == (AGREE, Decimal(600), "gross_profit")
+    assert outcome.knowable_at == datetime(2026, 3, 5, tzinfo=UTC)
+
+
+def test_the_two_fields_of_one_issuer_are_two_comparisons() -> None:
+    factor_input = _factor_input(("listing:a", Decimal("1")), revenue=Decimal(1000), gross_profit=Decimal(1))
+    document = _document(
+        Revenues=[_annual("2025-12-31", "1000", "2026-02-20", start="2025-01-01")],
+        GrossProfit=[_annual("2025-12-31", "500", "2026-02-20", start="2025-01-01")],
+    )
+    results = {
+        field: compare_independent_parse(
+            factor_input, field, document, cutoff=CUTOFF_DAY, tolerance=INDEPENDENT_TOLERANCE
+        ).result
+        for field in oracle_outcomes.INDEPENDENT_PARSERS
+    }
+    assert results == {"revenue": AGREE, "gross_profit": DISAGREE}
+
+
+@pytest.mark.parametrize(
+    ("served", "facts", "unit", "reason"),
+    [
+        ("1000", None, None, "no_document"),
+        ("1000", {"facts": {}}, None, "no_oracle_value"),
+        (
+            "1000",
+            _document(Revenues=[_annual("2025-12-31", "1000", "2026-02-20", start="2025-12-01")]),
+            None,
+            "no_oracle_value",
+        ),
+        (None, REVENUE_DOCUMENT, None, "no_served_value"),
+        ("1000", REVENUE_DOCUMENT, "EUR", "unit_not_usd"),
+        (
+            "1000",
+            _document(Revenues=[_annual("2025-12-31", "0", "2026-02-20", start="2025-01-01")]),
+            None,
+            "zero_oracle_value",
+        ),
+    ],
+)
+def test_a_comparison_that_cannot_be_made_says_why_and_stores_no_ratio(
+    served: str | None, facts: dict | None, unit: str | None, reason: str
+) -> None:
+    """The third document holds a one-month figure only: no annual period, so no witness."""
+    outcome = _independent("revenue", served, facts, unit=unit)
+    assert (outcome.result, outcome.reason) == (NOT_COMPARABLE, reason)
+    assert outcome.ratio is None and outcome.tolerance is None
+
+
+def test_a_comparison_without_a_document_holds_the_cutoff_day_as_its_period() -> None:
+    assert _independent("revenue", "1000", None).period == CUTOFF_DAY.isoformat()
+
+
+def test_a_served_value_without_a_witness_keeps_the_witness_it_could_not_judge() -> None:
+    outcome = _independent("revenue", None, REVENUE_DOCUMENT)
+    assert (outcome.served_value, outcome.oracle_value) == (None, Decimal(1000))
+    assert outcome.knowable_at == datetime(2026, 2, 20, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("served", "witness", "result", "reason", "ratio"),
+    [
+        ("-5", "5", DISAGREE, "sign_differs", Decimal(1)),  # the table holds no negative ratio
+        ("5", "-5", DISAGREE, "sign_differs", Decimal(1)),
+        ("-5", "-5", AGREE, None, Decimal(1)),  # a gross loss that the filing repeats
+        ("0", "5", DISAGREE, None, Decimal(0)),
+    ],
+)
+def test_a_figure_of_the_other_sign_is_a_disagree_row_with_a_ratio_the_table_can_hold(
+    served: str, witness: str, result: str, reason: str | None, ratio: Decimal
+) -> None:
+    document = _document(Revenues=[_annual("2025-12-31", witness, "2026-02-20", start="2025-01-01")])
+    outcome = _independent("revenue", served, document)
+    assert (outcome.result, outcome.reason, outcome.ratio) == (result, reason, ratio)
+    assert (outcome.served_value, outcome.oracle_value) == (Decimal(served), Decimal(witness))
+
+
+def test_every_comparator_of_the_writer_has_a_tolerance_in_the_policy() -> None:
+    policy = load_oracle_policy()
+    assert {OPERATOR_COMPARATOR, INDEPENDENT_COMPARATOR} <= set(policy.comparators)
+    assert policy.relative_tolerance(INDEPENDENT_COMPARATOR) == Decimal("0.0001")
+
+
 # -- the writer on a real schema -------------------------------------------------------
 
 
@@ -283,17 +468,19 @@ def _operator_list(connection, figures: dict[str, tuple[str | None, str | None]]
 
 
 def _rows(connection, run_id: str) -> dict[str, tuple]:
+    """The operator rows of the run by issuer."""
     found = connection.execute(
         "select subject_id, result, reason, ratio, tolerance, period, compared_at from mart.oracle_outcomes "
-        "where run_id = %s",
+        "where run_id = %s and oracle_kind = 'operator'",
         (run_id,),
     ).fetchall()
     return {row[0]: row for row in found}
 
 
-def test_a_run_with_no_operator_list_writes_nothing(connection) -> None:
+def test_a_run_with_no_operator_list_writes_no_operator_row(connection) -> None:
+    """The independent parse still compares the whole head: 20 issuers, 2 fields, no stored document."""
     run, _served = _frozen(connection)
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 0
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
     assert _rows(connection, run.run_id) == {}
 
 
@@ -302,7 +489,8 @@ def test_an_operator_list_after_the_cutoff_is_no_witness(connection) -> None:
     _operator_list(
         connection, {"AAPL": ("400000000", "40")}, knowable_at=_cutoff(connection, run.run_id) + timedelta(days=1)
     )
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 0
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
+    assert _rows(connection, run.run_id) == {}
 
 
 def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(connection) -> None:
@@ -327,7 +515,7 @@ def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(c
     written = oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN)
     rows = _rows(connection, run.run_id)
 
-    assert written == 20 == len(rows)
+    assert written == 60 and len(rows) == 20, "20 operator rows and 40 independent parse rows"
     subject = {ticker: rows[_issuer_of(connection, run.run_id, by_ticker[ticker])] for ticker in by_ticker}
     assert subject["AAPL"][1] == AGREE and subject["AAPL"][3] == Decimal(1)
     assert subject["NVDA"][1] == DISAGREE and subject["NVDA"][3] == Decimal(4)
@@ -353,6 +541,151 @@ def _issuer_of(connection, run_id: str, listing_id: str) -> str:
         """,
         (run_id, listing_id),
     ).fetchone()[0]
+
+
+# -- the independent parse on a real schema ---------------------------------------------
+
+#: What the seeded financial-fact observations serve: revenue for every issuer, gross profit for all but the bank.
+SEEDED_REVENUE = "100000000"
+SEEDED_GROSS_PROFIT = "210000000"
+
+
+def _filing(revenue: str, gross_profit: str | None = SEEDED_GROSS_PROFIT, *, refiled_later: str | None = None) -> dict:
+    """A company-facts document with one annual figure of each field, filed before the seeded cutoff.
+
+    `refiled_later` adds the next year's revenue, filed after the seeded cutoff of 2026-04-02.
+    """
+    revenues = [_annual("2025-12-31", revenue, "2026-02-20", start="2025-01-01")]
+    if refiled_later is not None:
+        revenues.append(_annual("2026-12-31", refiled_later, "2027-02-20", start="2026-01-01"))
+    concepts = {"Revenues": revenues}
+    if gross_profit is not None:
+        concepts["GrossProfit"] = [_annual("2025-12-31", gross_profit, "2026-02-20", start="2025-01-01")]
+    return _document(**concepts)
+
+
+def _financial_fetches(connection, run_id: str) -> dict[str, tuple[int, str]]:
+    """Listing id -> (raw fetch id, object key) of the bytes behind its financial-fact observation."""
+    rows = connection.execute(
+        """
+        select p.normalized_payload ->> 'listing_id', stored.id, stored.object_uri
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        join raw.fetches stored on stored.id = v.raw_fetch_id
+        where ob.run_id = %s and o.semantic_type = 'financial-fact'
+        """,
+        (run_id,),
+    ).fetchall()
+    return {listing: (fetch_id, uri.removeprefix("s3://").partition("/")[2]) for listing, fetch_id, uri in rows}
+
+
+def _store_filings(connection, run_id: str, store: InMemoryRawObjectStore, filings: dict[str, bytes]) -> None:
+    """Put the bytes of each ticker's filing where its financial-fact observation cites them."""
+    fetches = _financial_fetches(connection, run_id)
+    for listing, ticker in oracle_outcomes.run_tickers(connection, run_id).items():
+        if ticker in filings and listing in fetches:
+            store.objects[fetches[listing][1]] = filings[ticker]
+
+
+def _independent_rows(connection, run_id: str, served: dict[str, Decimal]) -> dict[tuple[str, str], tuple]:
+    """(ticker, field) -> (result, reason, ratio, tolerance, period, served value, oracle value)."""
+    ticker_of = {
+        _issuer_of(connection, run_id, listing): ticker
+        for listing, ticker in oracle_outcomes.run_tickers(connection, run_id).items()
+        if listing in served
+    }
+    rows = connection.execute(
+        "select subject_id, field, result, reason, ratio, tolerance, period, served_value, oracle_value "
+        "from mart.oracle_outcomes where run_id = %s and oracle_kind = 'independent_parse'",
+        (run_id,),
+    ).fetchall()
+    return {(ticker_of[row[0]], row[1]): row[2:] for row in rows}
+
+
+def test_the_whole_head_is_reparsed_from_its_stored_bytes_and_a_replay_writes_nothing(
+    connection, stored_bytes: InMemoryRawObjectStore
+) -> None:
+    run, served = _frozen(connection)
+    filings = {
+        "AAPL": _filing("1000000000"),  # the served revenue is a tenth of the filing
+        "NVDA": _filing(SEEDED_REVENUE, refiled_later="999"),  # the later filing is after the cutoff: no witness
+        "JPM": _filing(SEEDED_REVENUE, "5"),  # the bank serves no gross profit
+    }
+    _store_filings(connection, run.run_id, stored_bytes, {t: json.dumps(f).encode() for t, f in filings.items()})
+
+    written = oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN)
+    rows = _independent_rows(connection, run.run_id, served)
+    tolerance = load_oracle_policy().relative_tolerance(INDEPENDENT_COMPARATOR)
+
+    assert written == len(rows) == 40, "twenty issuers, two fields each; no operator list, so no operator row"
+    assert rows[("AAPL", "revenue")] == (
+        DISAGREE,
+        None,
+        Decimal("0.1"),
+        tolerance,
+        "2025-12-31",
+        Decimal(SEEDED_REVENUE),
+        Decimal("1000000000"),
+    )
+    for ticker, field in [("AAPL", "gross_profit"), ("NVDA", "revenue"), ("NVDA", "gross_profit"), ("JPM", "revenue")]:
+        assert rows[(ticker, field)][:3] == (AGREE, None, Decimal(1)), (ticker, field)
+    assert rows[("JPM", "gross_profit")][:2] == (NOT_COMPARABLE, "no_served_value")
+    cutoff_day = _cutoff(connection, run.run_id).date().isoformat()
+    missing = {key: row for key, row in rows.items() if key[0] not in filings}
+    assert len(missing) == 34 and {(row[0], row[1], row[4]) for row in missing.values()} == {
+        (NOT_COMPARABLE, "no_document", cutoff_day)
+    }
+    # A replay of the same run, even with another clock, writes nothing.
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN + timedelta(days=1)) == 0
+
+
+def test_both_comparators_write_through_the_one_function(connection, stored_bytes: InMemoryRawObjectStore) -> None:
+    run, served = _frozen(connection)
+    cutoff = _cutoff(connection, run.run_id)
+    by_ticker = {t: listing for listing, t in oracle_outcomes.run_tickers(connection, run.run_id).items()}
+    _operator_list(
+        connection,
+        {"AAPL": (str(served[by_ticker["AAPL"]] * 40), "40")},
+        knowable_at=cutoff - timedelta(days=1),
+    )
+    _store_filings(connection, run.run_id, stored_bytes, {"AAPL": json.dumps(_filing(SEEDED_REVENUE)).encode()})
+
+    written = oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN)
+
+    kinds = connection.execute(
+        "select oracle_kind, count(*) from mart.oracle_outcomes where run_id = %s group by 1 order by 1",
+        (run.run_id,),
+    ).fetchall()
+    assert kinds == [("independent_parse", 40), ("operator", 20)] and written == 60
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 0
+
+
+def test_a_document_that_cannot_be_read_is_no_witness(connection, stored_bytes: InMemoryRawObjectStore) -> None:
+    run, _served = _frozen(connection)
+    fetch_id, key = next(iter(_financial_fetches(connection, run.run_id).values()))
+    assert oracle_outcomes.stored_document(connection, fetch_id) is None, "the store holds no object under the key"
+    for body in (b"not json", b"[1, 2]"):
+        stored_bytes.objects[key] = body
+        assert oracle_outcomes.stored_document(connection, fetch_id) is None, body
+    stored_bytes.objects[key] = b'{"facts": {}}'
+    assert oracle_outcomes.stored_document(connection, fetch_id) == {"facts": {}}
+
+
+def test_the_writer_makes_no_vendor_call(connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every external request goes through the gateway or the oracle's own fetchers. The writer calls none."""
+
+    def refused(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the writer made a vendor call")
+
+    for name in ("fetch_once", "urlopen", "http_get"):
+        monkeypatch.setattr(gateway, name, refused)
+    for name in ("_http_json", "ticker_cik_index", "company_facts"):
+        monkeypatch.setattr(vendor_oracle, name, refused)
+    run, _served = _frozen(connection)
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
 
 
 class _Log:
@@ -388,7 +721,7 @@ def test_the_report_op_records_the_outcomes_of_the_head_it_reported(monkeypatch)
         "run_id": "capture-run:" + "9" * 64,
         "sources_connected": [],
         "families": {},
-        "accuracy": {"close": {"agreement_rate": "1"}, "sec_oracle": {"issuers_compared": 0}},
+        "accuracy": {"close": {"agreement_rate": "1"}},
     }
 
     class Connection:
@@ -419,4 +752,6 @@ def test_the_report_op_records_the_outcomes_of_the_head_it_reported(monkeypatch)
     quality.run_confidence_report(context, quality.ConfidenceReportConfig(executed_at=executed_at, universe="topt"))
 
     assert calls == [(report["run_id"], datetime.fromisoformat(executed_at))]
-    assert context.get_output_metadata("result")["oracle_outcomes_rows"] == 3
+    metadata = context.get_output_metadata("result")
+    assert metadata["oracle_outcomes_rows"] == 3
+    assert "sec_oracle_issuers_compared" not in metadata

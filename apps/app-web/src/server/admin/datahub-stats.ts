@@ -327,7 +327,9 @@ export interface ConfidenceReportRow {
    *  fields per field in bar order (#865), any other family after them alphabetically.
    *  `matches` is null when the quality report graded nothing for the family. */
   quality_report_matches: ConfidenceQualityMatch[];
-  oracle_issuers_compared: number;
+  /** The issuers that a stored report's `sec_oracle` section re-derived. Null when the report has
+   *  no such section: a report written after #1523 holds none (`mart.oracle_outcomes` does). */
+  oracle_issuers_compared: number | null;
   oracle_fields: ConfidenceOracleField[];
   stored_confidence_used_for_bands: boolean;
 }
@@ -436,7 +438,8 @@ function confidenceReportRows(
           ? (close.matches_quality_report ?? null)
           : null,
       quality_report_matches: qualityMatches,
-      oracle_issuers_compared: oracle.issuers_compared ?? 0,
+      oracle_issuers_compared:
+        accuracy.sec_oracle === undefined ? null : (oracle.issuers_compared ?? 0),
       oracle_fields: Object.entries(oracle.per_field ?? {}).map(
         ([field, entry]) => ({
           field,
