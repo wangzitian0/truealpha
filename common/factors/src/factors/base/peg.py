@@ -49,6 +49,7 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from truealpha_contracts.ast import Div, Feature, Mul, Numeric
 from truealpha_contracts.fiscal_period import parse_annual
 
+from factors.measure import UnitMismatchError, times
 from factors.registry import factor
 from factors.types import Fact, FactorResult, GrowthConvention, UnitFamily
 
@@ -253,8 +254,12 @@ def _peg_analyst_consensus(
     if consensus_rate_pct <= 0:
         return _unavailable_peg(entity_id, as_of, ["non_positive_growth", *conv_flags])
     assert price.value is not None and shares.value is not None
+    try:
+        market_cap = times(price.to_measure(), shares.to_measure()).value
+    except UnitMismatchError as exc:
+        return _unavailable_peg(entity_id, as_of, [exc.reason, *conv_flags])
     with localcontext(_DECIMAL_CONTEXT):
-        multiple = (price.value * shares.value) / latest_earnings
+        multiple = market_cap / latest_earnings
         value = multiple / consensus_rate_pct
     consumed = [price.confidence, shares.confidence, *(f.confidence for f in consensus_facts)]
     consumed += [
@@ -369,8 +374,12 @@ def peg(
     if growth <= 0:
         return _unavailable_peg(entity_id, as_of, ["non_positive_growth", *window])
 
+    try:
+        market_cap = times(price.to_measure(), shares.to_measure()).value
+    except UnitMismatchError as exc:
+        return _unavailable_peg(entity_id, as_of, [exc.reason, *window])
     with localcontext(_DECIMAL_CONTEXT):
-        multiple = (price.value * shares.value) / latest_earnings
+        multiple = market_cap / latest_earnings
         # Growth enters as percentage points, the convention PEG is quoted in: a 20% grower
         # on a 20x multiple is 1.0, not 100.
         value = multiple / (growth * Decimal(100))

@@ -190,6 +190,7 @@ def _moomoo_statements(ticker: str) -> FinancialFactAssertion:
         values=values,
         by_period_end={period_end: values},
         knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+        currency="USD",
     )
 
 

@@ -42,6 +42,7 @@ from pydantic import (
     model_validator,
 )
 from truealpha_contracts.common import identify as _identify
+from truealpha_contracts.measure import Measure, PerUnit, Units
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValueV0Definition, ValuationBasis
 
@@ -57,6 +58,7 @@ from factors.forest import (
     operating_numerator_node,
     required_inputs,
 )
+from factors.measure import DEFAULT_REPORTING_CURRENCY, times
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -156,6 +158,8 @@ class ToptCoreReasonCode(StrEnum):
     SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
     CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
     MISSING_LISTING_UNIT_RATIO = "missing_listing_unit_ratio"
+    MISSING_CLASS_RATIO = "missing_class_ratio"
+    CURRENCY_MISMATCH = "currency_mismatch"
     #: #1518: the issuer has several listings and no `primary_listing` row names one. The snapshot
     #: builder cannot say which listing values the issuer, so the issuer is unavailable.
     PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
@@ -174,6 +178,7 @@ SHARE_BASIS_REASON_CODES = frozenset(
         ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
         ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
         ToptCoreReasonCode.MISSING_LISTING_UNIT_RATIO,
+        ToptCoreReasonCode.MISSING_CLASS_RATIO,
     }
 )
 
@@ -203,7 +208,6 @@ class ToptMetricInput(_FrozenModel):
     input_id: str = Field(pattern=r"^normalized-observation:[0-9a-f]{64}$")
     metric: str = Field(min_length=1)
     value: Decimal | None = None
-    unit: str = Field(min_length=1)
     confidence: Decimal = Field(ge=0, le=1)
     knowable_at: datetime
     freshness: MetricFreshness
@@ -904,6 +908,43 @@ def _share_count_reasons(snapshot: ToptCoreSnapshotInput) -> list[ToptCoreReason
     return []
 
 
+def _market_price_reasons(snapshot: ToptCoreSnapshotInput) -> list[ToptCoreReasonCode]:
+    """The reasons that the market prices of the issuer's listings give no market value."""
+    prices = [component.market_price for component in snapshot.market_value_components]
+    dropped = [metric for metric in prices if metric.value is None]
+    if dropped:
+        causes = {metric.unavailable_reason for metric in dropped}
+        reasons = [cause for cause in causes if cause is not None]
+        if None in causes:
+            reasons.append(ToptCoreReasonCode.MISSING_MARKET_PRICE)
+        return reasons
+    if any(metric.value is not None and metric.value <= 0 for metric in prices):
+        return [ToptCoreReasonCode.NONPOSITIVE_MARKET_PRICE]
+    return []
+
+
+def _component_market_value(
+    component: ToptMarketValueComponent,
+    *,
+    currency: str = DEFAULT_REPORTING_CURRENCY,
+) -> Decimal:
+    """Compute the market value of one listing component via dimensional Measure multiplication."""
+    assert component.market_price.value is not None and component.shares_outstanding.value is not None
+    price_measure = Measure(
+        value=component.market_price.value,
+        unit=PerUnit(currency=currency, instrument_id=component.instrument_id),
+        knowable_at=component.market_price.knowable_at,
+        subject=component.listing_id,
+    )
+    shares_measure = Measure(
+        value=component.shares_outstanding.value,
+        unit=Units(instrument_id=component.instrument_id),
+        knowable_at=component.shares_outstanding.knowable_at,
+        subject=component.instrument_id,
+    )
+    return times(price_measure, shares_measure).value
+
+
 def compute_topt_core(
     snapshot: ToptCoreSnapshotInput,
     gppe_result: ToptGppeResult,
@@ -949,11 +990,7 @@ def compute_topt_core(
     elif numerator.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT)
     reasons.extend(_share_count_reasons(snapshot))
-    price_values = tuple(component.market_price.value for component in snapshot.market_value_components)
-    if any(value is None for value in price_values):
-        reasons.append(ToptCoreReasonCode.MISSING_MARKET_PRICE)
-    elif any(value <= 0 for value in price_values if value is not None):
-        reasons.append(ToptCoreReasonCode.NONPOSITIVE_MARKET_PRICE)
+    reasons.extend(_market_price_reasons(snapshot))
     if reasons:
         return _unavailable_core(
             snapshot,
@@ -985,11 +1022,11 @@ def compute_topt_core(
             )
             # The reasons gate above already refused any None price/share.
             assert execution.market_price.value is not None and execution.shares_outstanding.value is not None
-            market_cap = execution.market_price.value * execution.shares_outstanding.value
+            market_cap = _component_market_value(execution)
         else:
             market_cap = sum(
                 (
-                    component.market_price.value * component.shares_outstanding.value
+                    _component_market_value(component)
                     for component in snapshot.market_value_components
                     if component.market_price.value is not None and component.shares_outstanding.value is not None
                 ),

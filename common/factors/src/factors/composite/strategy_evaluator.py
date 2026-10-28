@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from types import MappingProxyType
 
+from truealpha_contracts.measure import Measure
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, input_key_for_metric
 from truealpha_contracts.strategy import (
     DecimalQuantization,
@@ -64,6 +65,7 @@ from factors.forest import (
     input_key_of,
     required_inputs,
 )
+from factors.measure import UNIT_MISMATCH_REASON, measure_for_input_key
 from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
 
@@ -138,6 +140,7 @@ _BANKING_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
 _MULTIPLE_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     (NONPOSITIVE_EMPLOYEES_FLAG, ExclusionReason.NONPOSITIVE_HEADCOUNT),
     ("nonpositive_gross_profit", ExclusionReason.NONPOSITIVE_GROSS_PROFIT),
+    (UNIT_MISMATCH_REASON, ExclusionReason.MISSING_MARKET_VALUE_INPUT),
 )
 #: The feeder that computes each valuation basis. The basis is the factor's registered name.
 _MULTIPLE_FACTOR = {
@@ -216,7 +219,7 @@ def deciding_input_keys(
 class IssuerInput:
     """One issuer's provenance-neutral factor inputs at a single cutoff.
 
-    ``records`` maps input key -> (value, confidence); a missing key means the
+    ``records`` maps input key -> (Measure, confidence); a missing key means the
     input was unavailable at the cutoff.
 
     ``knowable_at`` maps input key -> the instant when the winning observation of that key
@@ -224,7 +227,7 @@ class IssuerInput:
     in ``records``: the latest period. The field has no default. A default would let a
     producer skip the input-age limit without an error.
 
-    ``periodic_records`` maps input key -> fiscal period -> (value, confidence) for the
+    ``periodic_records`` maps input key -> fiscal period -> (Measure, confidence) for the
     inputs that describe a PERIOD rather than an instant. Additive and defaulted: the six
     point-in-time inputs never had periods and still do not. It exists so a multi-period
     factor can be expressed in ``common/factors`` at all — before migration 0043 the
@@ -233,11 +236,46 @@ class IssuerInput:
     """
 
     issuer_id: str
-    records: Mapping[str, tuple[Decimal, Decimal]]
+    records: Mapping[str, tuple[Measure | Decimal, Decimal]]
     knowable_at: Mapping[str, datetime]
-    periodic_records: Mapping[str, Mapping[str, tuple[Decimal, Decimal]]] = field(default_factory=dict)
+    periodic_records: Mapping[str, Mapping[str, tuple[Measure | Decimal, Decimal]]] = field(default_factory=dict)
     #: The issuer's operating class. It selects the labor-efficiency metric. None means no class.
     issuer_class: IssuerClass | None = None
+
+    def __post_init__(self) -> None:
+        normalized_records: dict[str, tuple[Measure, Decimal]] = {}
+        for key, (val_or_measure, confidence) in self.records.items():
+            measure = (
+                val_or_measure
+                if isinstance(val_or_measure, Measure)
+                else measure_for_input_key(
+                    key,
+                    val_or_measure,
+                    subject=self.issuer_id,
+                    knowable_at=self.knowable_at.get(key),
+                )
+            )
+            normalized_records[key] = (measure, confidence)
+        object.__setattr__(self, "records", MappingProxyType(normalized_records))
+
+        normalized_periodic: dict[str, Mapping[str, tuple[Measure, Decimal]]] = {}
+        for key, by_period in self.periodic_records.items():
+            period_map: dict[str, tuple[Measure, Decimal]] = {}
+            for period, (val_or_measure, confidence) in by_period.items():
+                measure = (
+                    val_or_measure
+                    if isinstance(val_or_measure, Measure)
+                    else measure_for_input_key(
+                        key,
+                        val_or_measure,
+                        subject=self.issuer_id,
+                        period=period,
+                        knowable_at=self.knowable_at.get(key),
+                    )
+                )
+                period_map[period] = (measure, confidence)
+            normalized_periodic[key] = MappingProxyType(period_map)
+        object.__setattr__(self, "periodic_records", MappingProxyType(normalized_periodic))
 
 
 @dataclass(frozen=True)
@@ -304,14 +342,20 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
         # factor parses. The scalar branch below still answers for the same key (the
         # latest period), which is what keeps the coverage check and the multiple working
         # off one vocabulary.
-        for period, (value, confidence) in sorted(issuer.periodic_records.get(key, {}).items()):
+        for period, (raw_measure, confidence) in sorted(issuer.periodic_records.get(key, {}).items()):
             metric = _METRIC_FOR_KEY.get(key, key)
+            measure = (
+                raw_measure
+                if isinstance(raw_measure, Measure)
+                else measure_for_input_key(key, raw_measure, subject=issuer.issuer_id, period=period, knowable_at=as_of)
+            )
             facts.append(
                 Fact(
                     entity_id=issuer.issuer_id,
                     metric=metric,
-                    value=value,
+                    value=measure.value,
                     unit_family=METRICS[metric].unit_family,
+                    unit=measure.unit,
                     confidence=confidence,
                     as_of=as_of,
                     fiscal_period=period,
@@ -323,13 +367,19 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
         if record is None:
             continue
         metric = _METRIC_FOR_KEY.get(key, key)
-        value, confidence = record
+        raw_measure, confidence = record
+        measure = (
+            raw_measure
+            if isinstance(raw_measure, Measure)
+            else measure_for_input_key(key, raw_measure, subject=issuer.issuer_id, knowable_at=as_of)
+        )
         facts.append(
             Fact(
                 entity_id=issuer.issuer_id,
                 metric=metric,
-                value=value,
+                value=measure.value,
                 unit_family=METRICS[metric].unit_family,
+                unit=measure.unit,
                 confidence=confidence,
                 as_of=as_of,
             )

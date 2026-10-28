@@ -113,42 +113,6 @@ class RawIngestionEnvelope(BaseModel):
         return None if value is None else _require_aware(value, info.field_name)
 
 
-class FinancialFact(BaseModel):
-    """Normalized SEC/moomoo fact; source tags remain evidence, not factor logic."""
-
-    entity_id: str
-    metric: str
-    value: Decimal | None
-    unit: str
-    fiscal_period: str
-    valid_from: date
-    valid_to: date
-    knowable_at: datetime
-    recorded_at: datetime
-    confidence: Decimal = Field(ge=0, le=1)
-    raw_ref: str
-    source_metric: str
-    # "<parser-id>:<schema-version>" (see truealpha_contracts.metrics) — keeps a
-    # reparse under revised mapping logic distinguishable from a restatement.
-    mapping_version: str = Field(min_length=1)
-    accession: str | None = None
-    form: str | None = None
-    is_restatement: bool = False
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
-
-    @model_validator(mode="after")
-    def validate_time_order(self) -> FinancialFact:
-        if self.valid_to < self.valid_from:
-            raise ValueError("valid_to must not precede valid_from")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
-        return self
-
-
 class AnalystRatingEvent(BaseModel):
     """A rating event with recommendation time separated from knowability.
 
@@ -285,7 +249,6 @@ class BacktestDataset(BaseModel):
     """One immutable dataset resolved at a single transaction-time cutoff."""
 
     query: AsOfQuery
-    financial_facts: tuple[FinancialFact, ...] = ()
     graph_edges: tuple[GraphEdge, ...] = ()
     analyst_ratings: tuple[AnalystRatingEvent, ...] = ()
     fund_holdings: tuple[FundHolding, ...] = ()
@@ -294,7 +257,6 @@ class BacktestDataset(BaseModel):
     @model_validator(mode="after")
     def reject_lookahead(self) -> BacktestDataset:
         collections = (
-            self.financial_facts,
             self.graph_edges,
             self.analyst_ratings,
             self.fund_holdings,

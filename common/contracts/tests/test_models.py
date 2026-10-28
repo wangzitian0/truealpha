@@ -8,33 +8,27 @@ from truealpha_contracts.models import (
     AsOfQuery,
     BacktestDataset,
     DataSource,
-    FinancialFact,
     FundHolding,
+    GraphEdge,
 )
 
 NOW = datetime(2026, 7, 10, tzinfo=UTC)
 
 
-def test_sec_fact_preserves_vintage_and_decimal_value():
-    fact = FinancialFact(
-        entity_id="company:ddog",
-        metric="revenue",
-        value=Decimal("100761000"),
-        unit="USD",
-        fiscal_period="2017FY",
+def test_graph_edge_preserves_vintage_and_confidence():
+    edge = GraphEdge(
+        from_id="company:ddog",
+        to_id="company:aws",
+        relation_type="supplier_of",
         valid_from=date(2017, 1, 1),
         valid_to=date(2017, 12, 31),
         knowable_at=datetime(2020, 2, 25, tzinfo=UTC),
         recorded_at=NOW,
         confidence=Decimal("1"),
         raw_ref="raw.fetches:1",
-        source_metric="RevenueFromContractWithCustomerExcludingAssessedTax",
-        mapping_version="sec-companyfacts:1",
-        accession="0001564590-20-006422",
-        form="10-K",
     )
-    assert fact.value == Decimal("100761000")
-    assert fact.knowable_at < fact.recorded_at
+    assert edge.confidence == Decimal("1")
+    assert edge.knowable_at < edge.recorded_at
 
 
 def test_rating_backfill_cannot_be_known_before_recommendation():
@@ -85,22 +79,18 @@ def test_backtest_dataset_keeps_one_as_of_boundary():
     assert dataset.query.as_of == NOW
 
 
-def test_backtest_dataset_rejects_lookahead_fact():
+def test_backtest_dataset_rejects_lookahead_record():
     query = AsOfQuery(entity_ids=("company:ddog",), as_of=datetime(2020, 2, 24, tzinfo=UTC))
-    fact = FinancialFact(
-        entity_id="company:ddog",
-        metric="revenue",
-        value=Decimal("100761000"),
-        unit="USD",
-        fiscal_period="2017FY",
+    edge = GraphEdge(
+        from_id="company:ddog",
+        to_id="company:aws",
+        relation_type="supplier_of",
         valid_from=date(2017, 1, 1),
         valid_to=date(2017, 12, 31),
         knowable_at=datetime(2020, 2, 25, tzinfo=UTC),
         recorded_at=NOW,
         confidence=Decimal("1"),
         raw_ref="raw.fetches:1",
-        source_metric="RevenueFromContractWithCustomerExcludingAssessedTax",
-        mapping_version="sec-companyfacts:1",
     )
     with pytest.raises(ValidationError, match="not knowable"):
-        BacktestDataset(query=query, financial_facts=(fact,))
+        BacktestDataset(query=query, graph_edges=(edge,))

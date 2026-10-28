@@ -947,6 +947,26 @@ def _newest_per_origin[ObservedT: _Observed](observations: Sequence[ObservedT]) 
     return [newest[origin_id] for origin_id in sorted(newest)]
 
 
+def _corroborating_fused_value(
+    payload: Mapping[str, Any],
+    name: str,
+    *,
+    primary_payload: Mapping[str, Any],
+    anchors: Mapping[str, tuple[Decimal, date]],
+    unit: str | None,
+) -> tuple[str | None, date | None]:
+    if unit is None or financial_fact_unit(payload) != unit:
+        return None, None
+    if name in anchors:
+        aligned = corroborating_financial_value(payload, name, anchors[name][1])
+        if aligned is not None:
+            return str(aligned), anchors[name][1]
+        return _newest_period_value(payload, name)
+    if primary_payload.get(name) is not None:
+        return None, None
+    return _text(payload.get(name)), None
+
+
 def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str, list[OriginValue]]:
     """What each financial-fact origin asserts per family, aligned the way the quality
     report's fusion aligns them (#866, `reconcile_financial_fact_entries`). Each origin
@@ -997,16 +1017,13 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
             if name in FINANCIAL_FACT_FUSION_FIELDS and observation.primary:
                 period = anchors[name][1] if name in anchors else None
             elif name in FINANCIAL_FACT_FUSION_FIELDS and primary is not None:
-                if financial_fact_unit(payload) != unit:
-                    value = None
-                elif name in anchors:
-                    aligned = corroborating_financial_value(payload, name, anchors[name][1])
-                    if aligned is not None:
-                        value, period = str(aligned), anchors[name][1]
-                    else:
-                        value, period = _newest_period_value(payload, name)
-                elif primary.payload.get(name) is not None:
-                    value = None
+                value, period = _corroborating_fused_value(
+                    payload,
+                    name,
+                    primary_payload=primary.payload,
+                    anchors=anchors,
+                    unit=unit,
+                )
             origins.setdefault(name, []).append(
                 OriginValue(
                     origin_id=observation.origin_id,

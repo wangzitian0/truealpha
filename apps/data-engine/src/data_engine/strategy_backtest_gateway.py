@@ -25,6 +25,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
 )
 from factors.forest import IssuerClass, uniform_tree_pins
+from factors.measure import measure_for_input_key
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual
@@ -228,10 +229,33 @@ def issuer_inputs_from_rows(
     return [
         IssuerInput(
             issuer_id=issuer_id,
-            records={key: (seen.value, seen.confidence) for key, seen in answers.items()},
+            records={
+                key: (
+                    measure_for_input_key(
+                        key,
+                        seen.value,
+                        subject=issuer_id,
+                        knowable_at=seen.knowable_at,
+                    ),
+                    seen.confidence,
+                )
+                for key, seen in answers.items()
+            },
             knowable_at={key: seen.knowable_at for key, seen in answers.items()},
             periodic_records={
-                key: {period: (seen.value, seen.confidence) for period, seen in by_period.items()}
+                key: {
+                    period: (
+                        measure_for_input_key(
+                            key,
+                            seen.value,
+                            subject=issuer_id,
+                            period=period,
+                            knowable_at=seen.knowable_at,
+                        ),
+                        seen.confidence,
+                    )
+                    for period, seen in by_period.items()
+                }
                 for key, by_period in periods.get(issuer_id, {}).items()
             },
         )

@@ -709,3 +709,283 @@ def test_the_report_of_the_route_before_this_change_says_not_measured_for_every_
     block = ticks.before.report["listing_ratio"]
 
     assert block["counts"] == {"parsed": 0, "ordinary": 0, "unparsed": 0, "not_measured": 21}
+
+
+# --- Step 3: class ratio 1.5 (`A + 1.5 * B`) and refusal on missing class ratio (`missing_class_ratio`) ------
+
+
+def _multi_class_filing_html(*, conversion_rate_b: str | None) -> bytes:
+    rate_tag = (
+        ""
+        if conversion_rate_b is None
+        else f'<ix:nonFraction contextRef="c_b" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">{conversion_rate_b}</ix:nonFraction>'
+    )
+    return f"""
+    <html><body>
+      <ix:header><ix:resources>
+        <xbrli:context id="c_entity">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate><xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_a">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>{PERIOD}</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassBMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>{PERIOD}</xbrli:instant></xbrli:period>
+        </xbrli:context>
+      </ix:resources></ix:header>
+      <ix:nonNumeric contextRef="c_entity" name="dei:Security12bTitle">{PLAIN_TITLE}</ix:nonNumeric>
+      <ix:nonNumeric contextRef="c_entity" name="dei:TradingSymbol">V</ix:nonNumeric>
+      <ix:nonFraction contextRef="c_a" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">10,000,000</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">2,000,000</ix:nonFraction>
+      <ix:nonFraction contextRef="c_a" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      {rate_tag}
+    </body></html>
+    """.encode()
+
+
+def test_multi_class_shares_convert_by_tagged_ratio_and_refuse_missing_class_ratio_through_live_tick() -> None:
+    """Step 3 (`#1519`): when an issuer's periodic filing tags Class A (`10,000,000`) and Class B (`2,000,000`)
+    with `CommonStockConversionRate = 1.5`, `sec_financial_fetcher` converts shares to `10,000,000 + 1.5 * 2,000,000 = 13,000,000`
+    (`shares_basis="point_in_time"`). When a multi-class issuer (`MA`) reports segmented shares without a conversion rate,
+    `shares_outstanding` is `None` (`shares_basis="missing_class_ratio"`), its factor input and core result are
+    `unavailable` with `missing_class_ratio`, and its strategy decision is excluded."""
+    from contextlib import nullcontext
+
+    from data_engine.datahub.production_topt.sec_financial_adapter import (
+        MISSING_CLASS_RATIO,
+        SHARES_POINT_IN_TIME,
+        build_bundle,
+        sec_financial_fetcher,
+    )
+    from data_engine.datahub.standards import filing_extraction
+    from data_engine.datahub.standards.filing_extraction import FilingDocument
+    from factors.production_topt import OperatingBranch
+
+    def _base_facts(*, segmented: bool) -> dict[str, Any]:
+        dei_shares: list[dict[str, Any]] = [
+            {
+                "end": "2010-01-27",
+                "val": 469_280_842,
+                "accn": "0001193125-10-020952",
+                "fy": 2010,
+                "fp": "Q1",
+                "form": "10-Q",
+                "filed": "2010-02-03",
+            }
+        ]
+        if segmented:
+            dei_shares.extend(
+                [
+                    {
+                        "end": PERIOD,
+                        "val": 10_000_000,
+                        "accn": "0001403161-26-000001",
+                        "fy": 2025,
+                        "fp": "FY",
+                        "form": "10-K",
+                        "filed": FILED,
+                        "segment": {
+                            "dimension": "us-gaap:StatementClassOfStockAxis",
+                            "value": "us-gaap:CommonClassAMember",
+                        },
+                    },
+                    {
+                        "end": PERIOD,
+                        "val": 2_000_000,
+                        "accn": "0001403161-26-000001",
+                        "fy": 2025,
+                        "fp": "FY",
+                        "form": "10-K",
+                        "filed": FILED,
+                        "segment": {
+                            "dimension": "us-gaap:StatementClassOfStockAxis",
+                            "value": "us-gaap:CommonClassBMember",
+                        },
+                    },
+                ]
+            )
+        return {
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": PERIOD,
+                                    "start": "2025-01-01",
+                                    "val": 100_000_000,
+                                    "filed": FILED,
+                                    "form": "10-K",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "accn": "0001403161-26-000001",
+                                }
+                            ]
+                        }
+                    },
+                    "GrossProfit": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": PERIOD,
+                                    "start": "2025-01-01",
+                                    "val": 210_000_000,
+                                    "filed": FILED,
+                                    "form": "10-K",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "accn": "0001403161-26-000001",
+                                }
+                            ]
+                        }
+                    },
+                    "Assets": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": PERIOD,
+                                    "val": 200_000_000,
+                                    "filed": FILED,
+                                    "form": "10-K",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "accn": "0001403161-26-000001",
+                                }
+                            ]
+                        }
+                    },
+                },
+                "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": dei_shares}}},
+            }
+        }
+
+    with isolated_test_database("class_ratio") as url, pytest.MonkeyPatch.context() as mp:
+        store_topt_series(url)
+        store_risk_free_series(url)
+
+        doc_with_rate = FilingDocument(
+            cik=1403161,
+            accession="000140316126000001",
+            form="10-K",
+            filing_date=date.fromisoformat(FILED),
+            primary_document="v-20251231.htm",
+            url="https://www.sec.gov/Archives/edgar/data/1403161/000140316126000001/v-20251231.htm",
+            body=_multi_class_filing_html(conversion_rate_b="1.5"),
+        )
+        doc_without_rate = FilingDocument(
+            cik=1141391,
+            accession="000114139126000001",
+            form="10-K",
+            filing_date=date.fromisoformat(FILED),
+            primary_document="ma-20251231.htm",
+            url="https://www.sec.gov/Archives/edgar/data/1141391/000114139126000001/ma-20251231.htm",
+            body=_multi_class_filing_html(conversion_rate_b=None),
+        )
+
+        mp.setattr(sec, "fetch_company_facts_response", lambda _cik: (b"{}", _base_facts(segmented=False)))
+        mp.setattr(sec, "client", lambda: nullcontext(object()))
+        mp.setattr(filing_extraction, "latest_periodic_filing", lambda *_a, **_kw: doc_with_rate)
+        v_bundle = sec_financial_fetcher(1403161, SESSION, OperatingBranch.NON_FINANCIAL)
+
+        mp.setattr(sec, "fetch_company_facts_response", lambda _cik: (b"{}", _base_facts(segmented=True)))
+        mp.setattr(filing_extraction, "latest_periodic_filing", lambda *_a, **_kw: doc_without_rate)
+        ma_bundle = sec_financial_fetcher(1141391, SESSION, OperatingBranch.NON_FINANCIAL)
+
+        assert v_bundle.shares_outstanding == Decimal("13000000")
+        assert v_bundle.shares_basis == SHARES_POINT_IN_TIME
+        assert ma_bundle.shares_outstanding is None
+        assert ma_bundle.shares_basis == MISSING_CLASS_RATIO
+        assert build_bundle(_base_facts(segmented=True), SESSION, OperatingBranch.NON_FINANCIAL).shares_basis == (
+            MISSING_CLASS_RATIO
+        )
+
+        def bundle_for_ticker(ticker: str, branch: OperatingBranch) -> Any:
+            if ticker == "NVDA":
+                return v_bundle
+            if ticker == "AMZN":
+                return ma_bundle
+            return _bundle(branch)
+
+        _arm(
+            mp,
+            quote=lambda: _quote(SESSION, Decimal("40")),
+            price_cutoff=SESSION,
+            bundle=bundle_for_ticker,
+        )
+        executed_at = datetime.combine(SESSION, time(22, 15), tzinfo=UTC)
+        metadata = _live_topt_tick(url, mp, executed_at=executed_at, accept=True)
+        run_id = metadata["capture_run_id"]
+        with psycopg.connect(url) as reader:
+            listing_of = {
+                ticker: listing
+                for ticker, listing in reader.execute(
+                    """
+                    select p.normalized_payload->>'ticker', p.normalized_payload->>'listing_id'
+                    from raw.capture_obligations ob
+                    join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+                    join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+                    where ob.run_id = %s and ob.capture_requirement_id = 'listing-identity:v1'
+                    """,
+                    (run_id,),
+                ).fetchall()
+            }
+            factor_inputs = dict(
+                reader.execute(
+                    """
+                    select m.issuer_id, m.factor_input
+                    from staging.topt_core_snapshot_members m
+                    join staging.topt_core_snapshots s on s.snapshot_id = m.snapshot_id
+                    where s.run_id = %s
+                    """,
+                    (run_id,),
+                ).fetchall()
+            )
+            core = {
+                row[0]: (row[1], row[2], row[3])
+                for row in reader.execute(
+                    "select issuer_id, availability, reason_codes, current_ps from mart.topt_core_results where run_id = %s",
+                    (run_id,),
+                ).fetchall()
+            }
+            decisions = dict(
+                reader.execute(
+                    "select issuer_id, exclusion_reason from mart.strategy_decisions where strategy_run_id = %s",
+                    (metadata["strategy_run_id"],),
+                ).fetchall()
+            )
+
+        v_issuer = next(
+            issuer_id
+            for issuer_id, payload in factor_inputs.items()
+            if any(comp["listing_id"] == listing_of["NVDA"] for comp in payload["market_value_components"])
+        )
+        ma_issuer = next(
+            issuer_id
+            for issuer_id, payload in factor_inputs.items()
+            if any(comp["listing_id"] == listing_of["AMZN"] for comp in payload["market_value_components"])
+        )
+        (v_comp,) = factor_inputs[v_issuer]["market_value_components"]
+        (ma_comp,) = factor_inputs[ma_issuer]["market_value_components"]
+
+        assert Decimal(v_comp["shares_outstanding"]["value"]) == Decimal("13000000")
+        assert v_comp["shares_outstanding"]["availability"] == "available"
+        assert core[v_issuer][0] == "available"
+        assert core[v_issuer][2] == (Decimal("13000000") * Decimal("40")) / Decimal("100000000")
+        assert decisions[v_issuer] is None
+
+        assert ma_comp["shares_outstanding"]["availability"] == "unavailable"
+        assert ma_comp["shares_outstanding"]["value"] is None
+        assert ma_comp["shares_outstanding"]["unavailable_reason"] == "missing_class_ratio"
+        assert core[ma_issuer][0] == "unavailable"
+        assert core[ma_issuer][1] == ["missing_class_ratio"]
+        assert decisions[ma_issuer] == "missing_market_value_input"

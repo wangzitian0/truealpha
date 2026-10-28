@@ -4,6 +4,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
@@ -1659,12 +1660,11 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
     cutoff = datetime(2026, 4, 2, tzinfo=UTC)
     observation_ids = tuple(f"normalized-observation:{character * 64}" for character in "1234")
 
-    def metric(name: str, value: Decimal | None, unit: str) -> ToptMetricInput:
+    def metric(name: str, value: Decimal | None) -> ToptMetricInput:
         return ToptMetricInput(
             input_id=observation_ids[0],
             metric=name,
             value=value,
-            unit=unit,
             confidence=result.confidence,
             knowable_at=cutoff - timedelta(days=1),
             freshness=MetricFreshness.FRESH,
@@ -1693,11 +1693,11 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
             )
             for input_id in observation_ids
         ),
-        gross_profit=metric("gross_profit", financial.gross_profit, "USD"),
-        total_assets=metric("total_assets", financial.total_assets, "USD"),
-        headcount=metric("headcount", financial.headcount, "employees"),
-        revenue=metric("revenue", financial.revenue, "USD"),
-        pre_provision_profit=metric("pre_provision_profit", financial.pre_provision_profit, "USD"),
+        gross_profit=metric("gross_profit", financial.gross_profit),
+        total_assets=metric("total_assets", financial.total_assets),
+        headcount=metric("headcount", financial.headcount),
+        revenue=metric("revenue", financial.revenue),
+        pre_provision_profit=metric("pre_provision_profit", financial.pre_provision_profit),
         market_value_components=(
             ToptMarketValueComponent(
                 instrument_id=financial.instrument_id,
@@ -1706,13 +1706,12 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
                     input_id=observation_ids[1],
                     metric="market_price",
                     value=Decimal("5000"),
-                    unit="USD_per_share",
                     confidence=Decimal("0.9"),
                     knowable_at=cutoff - timedelta(days=1),
                     freshness=MetricFreshness.FRESH,
                     availability=MetricAvailability.AVAILABLE,
                 ),
-                shares_outstanding=metric("shares_outstanding", financial.shares_outstanding, "shares"),
+                shares_outstanding=metric("shares_outstanding", financial.shares_outstanding),
             ),
         ),
     )
@@ -2025,13 +2024,15 @@ def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_rev
     assert payload["vintage"]["total_assets"]["document"] == "companyfacts:CIK0002115436"
 
 
-def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_exists() -> None:
-    """#1265: when an issuer reports CommonStockSharesOutstanding or EntityCommonStockSharesOutstanding
-    only with per-class `segment` dimensions and no unsegmented total for that period, the per-class
-    figures in the same filing are summed into `shares_outstanding` with `shares_basis="multi_class_sum"`.
+def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_unless_unsegmented_total_exists() -> (
+    None
+):
+    """#1519 Step 3: when an issuer reports CommonStockSharesOutstanding or EntityCommonStockSharesOutstanding
+    only with per-class `segment` dimensions and no class conversion rate or unsegmented total for that period,
+    `shares_outstanding` is `None` with `shares_basis="missing_class_ratio"`.
     When an unsegmented total is also present, the unsegmented total wins (`shares_basis="point_in_time"`)."""
     from data_engine.datahub.production_topt.sec_financial_adapter import (
-        SHARES_MULTI_CLASS_SUM,
+        MISSING_CLASS_RATIO,
         SHARES_POINT_IN_TIME,
     )
 
@@ -2097,8 +2098,8 @@ def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_e
     }
     cutoff = date(2026, 8, 17)
     bundle = build_bundle(facts, cutoff, OperatingBranch.NON_FINANCIAL)
-    assert bundle.shares_outstanding == Decimal("1784428534")
-    assert bundle.shares_basis == SHARES_MULTI_CLASS_SUM
+    assert bundle.shares_outstanding is None
+    assert bundle.shares_basis == MISSING_CLASS_RATIO
     assert bundle.shares_period_end == date(2026, 7, 16)
 
     item = _work_item("f" * 64)
@@ -2116,8 +2117,8 @@ def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_e
     ).fetch(item)
     assert isinstance(outcome, FetchSuccess)
     validated = FinancialFactPayload.model_validate(outcome.record.payload)
-    assert validated.shares_outstanding == Decimal("1784428534")
-    assert validated.shares_basis == SHARES_MULTI_CLASS_SUM
+    assert validated.shares_outstanding is None
+    assert validated.shares_basis == MISSING_CLASS_RATIO
 
     facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"].append(
         {
@@ -2135,21 +2136,33 @@ def test_per_class_segmented_share_counts_are_summed_when_no_unsegmented_total_e
     assert bundle_with_total.shares_basis == SHARES_POINT_IN_TIME
 
 
-def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_refuses_dual_par_brk() -> None:
-    """#1265: SEC companyfacts strips dimensional segments from Visa's cover-page share facts,
-    leaving only a stale 2010 `dei` entry. `sec_financial_fetcher` enriches companyfacts from the
-    latest periodic iXBRL filing when all share classes share a single par value ($0.0001 for Visa),
-    while refusing Berkshire Hathaway's dual-par Class A ($5) + Class B ($0.0033) shares (#529)."""
+def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_conversion_rates_and_refuses_unconverted_classes() -> (
+    None
+):
+    """#1519 Step 3: `sec_financial_fetcher` converts non-base share classes by their tagged
+    `CommonStockConversionRate` (`A + r_B1 * B1 + r_B2 * B2 + r_C * C`) into an unsegmented
+    `SHARES_POINT_IN_TIME` share count when all non-base classes have conversion rates and share a single
+    par value, while refusing multi-class shares without conversion rates (`MISSING_CLASS_RATIO`) and
+    refusing Berkshire Hathaway's dual-par Class A ($5) + Class B ($0.0033) shares (#529)."""
     from contextlib import nullcontext
 
-    from data_engine.datahub.production_topt.sec_financial_adapter import SHARES_MULTI_CLASS_SUM
+    from data_engine.datahub.production_topt.sec_financial_adapter import (
+        MISSING_CLASS_RATIO,
+        SHARES_POINT_IN_TIME,
+    )
     from data_engine.datahub.standards import filing_extraction
     from data_engine.datahub.standards.filing_extraction import FilingDocument, multi_class_share_entries
     from data_engine.sources import sec
 
-    visa_html = b"""
+    visa_html_with_rates = b"""
     <html><body>
       <ix:header><ix:resources>
+        <xbrli:context id="c_entity">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:startDate>2024-10-01</xbrli:startDate><xbrli:endDate>2025-09-30</xbrli:endDate></xbrli:period>
+        </xbrli:context>
         <xbrli:context id="c_a">
           <xbrli:entity><xbrli:segment>
             <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
@@ -2175,6 +2188,7 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_r
           <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
         </xbrli:context>
       </ix:resources></ix:header>
+      <ix:nonNumeric contextRef="c_entity" name="dei:TradingSymbol">V</ix:nonNumeric>
       <ix:nonFraction contextRef="c_a" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">1,691,833,241</ix:nonFraction>
       <ix:nonFraction contextRef="c_b1" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">4,830,173</ix:nonFraction>
       <ix:nonFraction contextRef="c_b2" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">120,257,385</ix:nonFraction>
@@ -2183,26 +2197,32 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_r
       <ix:nonFraction contextRef="c_b1" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
       <ix:nonFraction contextRef="c_b2" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
       <ix:nonFraction contextRef="c_c" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">1.5875</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">1.5875</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">4.0000</ix:nonFraction>
     </body></html>
     """
 
-    visa_facts = _facts()
-    visa_facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
-    visa_facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
-        "units": {
-            "shares": [
-                {
-                    "end": "2010-01-27",
-                    "val": 469280842,
-                    "accn": "0001193125-10-020952",
-                    "fy": 2010,
-                    "fp": "Q1",
-                    "form": "10-Q",
-                    "filed": "2010-02-03",
-                }
-            ]
+    def _stale_visa_facts() -> dict[str, Any]:
+        facts = _facts()
+        facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
+        facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
+            "units": {
+                "shares": [
+                    {
+                        "end": "2010-01-27",
+                        "val": 469280842,
+                        "accn": "0001193125-10-020952",
+                        "fy": 2010,
+                        "fp": "Q1",
+                        "form": "10-Q",
+                        "filed": "2010-02-03",
+                    }
+                ]
+            }
         }
-    }
+        return facts
+
     visa_doc = FilingDocument(
         cik=1403161,
         accession="000140316125000089",
@@ -2210,13 +2230,13 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_r
         filing_date=date(2025, 11, 6),
         primary_document="v-20250930.htm",
         url="https://www.sec.gov/Archives/edgar/data/1403161/000140316125000089/v-20250930.htm",
-        body=visa_html,
+        body=visa_html_with_rates,
     )
 
     orig_facts = sec.fetch_company_facts_response
     orig_client = sec.client
     orig_periodic = filing_extraction.latest_periodic_filing
-    sec.fetch_company_facts_response = lambda _cik: (b"{}", visa_facts)  # type: ignore[assignment]
+    sec.fetch_company_facts_response = lambda _cik: (b"{}", _stale_visa_facts())  # type: ignore[assignment]
     sec.client = lambda: nullcontext(object())  # type: ignore[assignment]
     filing_extraction.latest_periodic_filing = lambda *_a, **_kw: visa_doc  # type: ignore[assignment]
     try:
@@ -2226,9 +2246,41 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_and_r
         sec.client = orig_client  # type: ignore[assignment]
         filing_extraction.latest_periodic_filing = orig_periodic  # type: ignore[assignment]
 
-    assert bundle.shares_outstanding == Decimal("1821742809")
-    assert bundle.shares_basis == SHARES_MULTI_CLASS_SUM
+    expected_converted = (
+        Decimal("1691833241")
+        + Decimal("4830173") * Decimal("1.5875")
+        + Decimal("120257385") * Decimal("1.5875")
+        + Decimal("4822010") * Decimal("4.0000")
+    )
+    assert bundle.shares_outstanding == expected_converted
+    assert bundle.shares_basis == SHARES_POINT_IN_TIME
     assert bundle.shares_period_end == date(2025, 10, 29)
+
+    visa_html_without_rates = b"\n".join(
+        line for line in visa_html_with_rates.splitlines() if b"CommonStockConversionRate" not in line
+    )
+    visa_doc_no_rates = FilingDocument(
+        cik=1403161,
+        accession="000140316125000089",
+        form="10-K",
+        filing_date=date(2025, 11, 6),
+        primary_document="v-20250930.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1403161/000140316125000089/v-20250930.htm",
+        body=visa_html_without_rates,
+    )
+    sec.fetch_company_facts_response = lambda _cik: (b"{}", _stale_visa_facts())  # type: ignore[assignment]
+    sec.client = lambda: nullcontext(object())  # type: ignore[assignment]
+    filing_extraction.latest_periodic_filing = lambda *_a, **_kw: visa_doc_no_rates  # type: ignore[assignment]
+    try:
+        bundle_no_rates = sec_financial_fetcher(1403161, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = orig_facts  # type: ignore[assignment]
+        sec.client = orig_client  # type: ignore[assignment]
+        filing_extraction.latest_periodic_filing = orig_periodic  # type: ignore[assignment]
+
+    assert bundle_no_rates.shares_outstanding is None
+    assert bundle_no_rates.shares_basis == MISSING_CLASS_RATIO
+    assert bundle_no_rates.shares_period_end == date(2025, 10, 29)
 
     brk_html = b"""
     <html><body>
@@ -2338,3 +2390,133 @@ def test_revenue_proxy_sets_is_revenue_proxy_on_gross_profit_vintage_only_when_u
     ).fetch(item_direct)
     assert isinstance(outcome_direct, FetchSuccess)
     assert "is_revenue_proxy" not in outcome_direct.record.payload["vintage"]["gross_profit"]
+
+
+def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_in_live_tick() -> None:
+    """Step 4 (`#1519`): when one listing (`MSFT`) has a `GBP` price quote against a `USD` filing,
+    `run_topt_live_tick` marks only that listing's `market_price` unavailable with `currency_mismatch`,
+    its core result has `reason_codes == ['currency_mismatch']`, its strategy decision is excluded
+    (`missing_market_value_input`), and all other listings materialize and rank."""
+    import sys
+    from datetime import time
+    from pathlib import Path
+
+    import psycopg
+    import pytest
+    from data_engine.datahub.production_topt import composition
+    from data_engine.datahub.production_topt.market_price_adapter import (
+        MarketPriceAdapter,
+        MarketPriceQuote,
+        MarketPriceTarget,
+    )
+    from truealpha_runtime.testing import isolated_test_database
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+    from macro_seed import store_risk_free_series  # noqa: E402
+    from production_topt.test_degraded_capture_forced import (  # noqa: E402
+        _arm,
+        _live_topt_tick,
+        _offline_routes,
+    )
+    from split_series_seed import store_topt_series  # noqa: E402
+
+    session = date(2026, 4, 8)
+    with isolated_test_database("currency_mismatch") as url, pytest.MonkeyPatch.context() as mp:
+        store_topt_series(url)
+        store_risk_free_series(url)
+        _arm(mp, price_cutoff=session)
+
+        def build(plan: Any, connection: Any = None) -> dict[str, Any]:
+            routes = _offline_routes(plan, connection, price_cutoff=session)
+            price_targets: dict[str, MarketPriceTarget] = {}
+            for work_item_id, binding in plan.bindings.items():
+                if binding.obligation.capture_requirement_id == "market-price:v1":
+                    issuer_id, instrument_id, listing_id, ticker = plan.coordinates[binding.obligation.subject.id]
+                    price_targets[work_item_id] = MarketPriceTarget(
+                        symbol=ticker,
+                        cutoff=session,
+                        issuer_id=issuer_id,
+                        instrument_id=instrument_id,
+                        listing_id=listing_id,
+                    )
+            price_port = MarketPriceAdapter(
+                price_targets,
+                lambda symbol, cutoff: MarketPriceQuote(
+                    raw_bytes=f"bar:{cutoff.isoformat()}:40:{symbol}".encode(),
+                    close=Decimal("40"),
+                    as_of=cutoff,
+                    knowable_at=datetime.combine(cutoff, datetime.min.time(), tzinfo=UTC),
+                    currency="GBP" if symbol == "MSFT" else "USD",
+                ),
+            )
+            routes.update(dict.fromkeys(price_targets, price_port))
+            return routes
+
+        mp.setattr(composition, "build_routes", build)
+        executed_at = datetime.combine(session, time(22, 15), tzinfo=UTC)
+        metadata = _live_topt_tick(url, mp, executed_at=executed_at, accept=True)
+        run_id = metadata["capture_run_id"]
+
+        with psycopg.connect(url) as reader:
+            listing_of = {
+                ticker: listing
+                for ticker, listing in reader.execute(
+                    """
+                    select p.normalized_payload->>'ticker', p.normalized_payload->>'listing_id'
+                    from raw.capture_obligations ob
+                    join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+                    join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+                    where ob.run_id = %s and ob.capture_requirement_id = 'listing-identity:v1'
+                    """,
+                    (run_id,),
+                ).fetchall()
+            }
+            factor_inputs = dict(
+                reader.execute(
+                    """
+                    select m.issuer_id, m.factor_input
+                    from staging.topt_core_snapshot_members m
+                    join staging.topt_core_snapshots s on s.snapshot_id = m.snapshot_id
+                    where s.run_id = %s
+                    """,
+                    (run_id,),
+                ).fetchall()
+            )
+            core = {
+                row[0]: (row[1], row[2])
+                for row in reader.execute(
+                    "select issuer_id, availability, reason_codes from mart.topt_core_results where run_id = %s",
+                    (run_id,),
+                ).fetchall()
+            }
+            decisions = dict(
+                reader.execute(
+                    "select issuer_id, exclusion_reason from mart.strategy_decisions where strategy_run_id = %s",
+                    (metadata["strategy_run_id"],),
+                ).fetchall()
+            )
+
+        msft_listing = listing_of["MSFT"]
+        msft_issuer = next(
+            issuer_id
+            for issuer_id, payload in factor_inputs.items()
+            if any(comp["listing_id"] == msft_listing for comp in payload["market_value_components"])
+        )
+        (msft_comp,) = factor_inputs[msft_issuer]["market_value_components"]
+        assert msft_comp["market_price"]["availability"] == "unavailable"
+        assert msft_comp["market_price"]["value"] is None
+        assert msft_comp["market_price"]["unavailable_reason"] == "currency_mismatch"
+        assert msft_comp["shares_outstanding"]["availability"] == "available"
+        assert core[msft_issuer] == ("unavailable", ["currency_mismatch"])
+        assert decisions[msft_issuer] == "missing_market_value_input"
+
+        other_available = [
+            issuer_id
+            for issuer_id, (avail, _reasons) in core.items()
+            if issuer_id != msft_issuer and avail == "available"
+        ]
+        assert len(other_available) == 19
+        ranked = [issuer_id for issuer_id, reason in decisions.items() if reason is None]
+        assert len(ranked) == 19
+        assert msft_issuer not in ranked

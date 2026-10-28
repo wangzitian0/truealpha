@@ -21,6 +21,7 @@ from decimal import Decimal
 
 from truealpha_contracts.ast import Div, Feature, Mul
 
+from factors.measure import UnitMismatchError, times
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
@@ -93,7 +94,10 @@ def price_to_gross_profit(
     if gross_profit_fact.value <= 0:
         return _refused(entity_id, as_of, ["nonpositive_gross_profit"])
 
-    market_value = price_fact.value * shares_fact.value
+    try:
+        market_value = times(price_fact.to_measure(), shares_fact.to_measure()).value
+    except UnitMismatchError as exc:
+        return _refused(entity_id, as_of, [exc.reason])
     return FactorResult(
         factor="price_to_gross_profit",
         entity_id=entity_id,

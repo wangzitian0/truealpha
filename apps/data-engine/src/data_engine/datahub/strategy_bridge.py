@@ -169,7 +169,11 @@ def seed_strategy_inputs_from_capture(
             )
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]
-            if (close_cell := last_close_cell(payload, confidence, observed_at)) is not None:
+            fin_currency = financial[issuer_id][1].get("currency") if issuer_id in financial else None
+            price_currency = payload.get("currency")
+            if (fin_currency is None or price_currency == fin_currency) and (
+                close_cell := last_close_cell(payload, confidence, observed_at)
+            ) is not None:
                 inputs.append(close_cell)
         for input_key, value, _unit, confidence, knowable_at, fiscal_period in inputs:
             # Registry-backed, not a CHECK: migration 0032's enumerated `input_key`
@@ -300,6 +304,7 @@ def _counts_on_close_basis(
             close_knowable_at=knowable,
             splits=(),
             listing_units_per_share=listing_units_per_share_of(payload),
+            shares_basis=payload.get("shares_basis"),
         )
     if not meeting:
         return outcomes
@@ -327,6 +332,7 @@ def _counts_on_close_basis(
             ),
             [histories[symbol] for symbol in names],
             listing_units_per_share=listing_units_per_share_of(payload),
+            shares_basis=payload.get("shares_basis"),
             documents=partial(_company_facts_documents, connection, run_id, issuer_id, parser_version),
             ruleset=ruleset,
         )

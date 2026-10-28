@@ -866,16 +866,13 @@ FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
     "net_income": ("net_income", "vintage.net_income.period_end"),
     "total_assets": ("total_assets", "vintage.total_assets.period_end"),
 }
-# The unit of a primary payload that names no currency (vintages before the adapter wrote one).
-_FINANCIAL_FACT_UNIT = "USD"
 _ISO_CURRENCY = re.compile(r"[A-Z]{3}")
 
 
-def financial_fact_unit(payload: Mapping[str, Any]) -> str:
-    """The currency a financial-fact payload reports in: `sec_financial_adapter` and every
-    corroborating origin write `currency` per payload; a payload without one is USD."""
+def financial_fact_unit(payload: Mapping[str, Any]) -> str | None:
+    """The currency a financial-fact payload reports in, or None when absent."""
     currency = payload.get("currency")
-    return currency if isinstance(currency, str) and _ISO_CURRENCY.fullmatch(currency) else _FINANCIAL_FACT_UNIT
+    return currency if isinstance(currency, str) and _ISO_CURRENCY.fullmatch(currency) else None
 
 
 def _payload_path(payload: Mapping[str, Any], path: str) -> Any:
@@ -976,6 +973,8 @@ def reconcile_financial_fact_entries(
         return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
     primary = max(primaries, key=lambda entry: (entry.knowable_at, entry.observation_id))
     unit = financial_fact_unit(primary.payload)
+    if unit is None:
+        return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
     fields: dict[str, dict[str, Any]] = {}
     outcomes: list[str] = []
     # The subject's origin groups are the ones that took part in at least one field's

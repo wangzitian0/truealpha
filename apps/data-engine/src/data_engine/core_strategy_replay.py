@@ -43,6 +43,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
 )
 from factors.forest import IssuerClass, uniform_tree_pins
+from factors.measure import measure_for_input_key
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 # CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
@@ -194,7 +195,15 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
             IssuerInput(
                 issuer_id=item["issuer"]["id"],
                 records={
-                    record["input_key"]: (Decimal(str(record["value"])), Decimal(str(record["confidence"])))
+                    record["input_key"]: (
+                        measure_for_input_key(
+                            record["input_key"],
+                            Decimal(str(record["value"])),
+                            subject=item["issuer"]["id"],
+                            knowable_at=_instant(record["knowable_at"]),
+                        ),
+                        Decimal(str(record["confidence"])),
+                    )
                     for record in item["inputs"]
                 },
                 knowable_at={record["input_key"]: _instant(record["knowable_at"]) for record in item["inputs"]},

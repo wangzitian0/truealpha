@@ -148,6 +148,7 @@ def on_close_basis(
     close_knowable_at: datetime,
     splits: Sequence[SplitEvent],
     listing_units_per_share: Decimal | int | None,
+    shares_basis: str | None = None,
 ) -> OnCloseBasis | Unavailable:
     """The count on the share basis of the close of ``close_session``.
 
@@ -161,6 +162,11 @@ def on_close_basis(
     knowable once both the count and the close are. Without such a split, the converted count and
     its knowable time are returned unchanged.
     """
+    if shares_basis == MISSING_CLASS_RATIO:
+        return Unavailable(
+            MISSING_CLASS_RATIO,
+            "the multi-class share count has no proven class conversion ratio",
+        )
     if listing_units_per_share is None or isinstance(listing_units_per_share, bool):
         return Unavailable(
             MISSING_LISTING_UNIT_RATIO,
@@ -204,6 +210,7 @@ SHARE_COUNT_UNDATED = "share_count_undated"
 SHARE_BASIS_AMBIGUOUS = "share_basis_ambiguous"
 CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
 MISSING_LISTING_UNIT_RATIO = "missing_listing_unit_ratio"
+MISSING_CLASS_RATIO = "missing_class_ratio"
 
 #: The smallest common split, 3-for-2, moves a close by the factor 1.5. When the stored series end
 #: before the close's session, a close at x1.5 or more, or at x0.667 or less, of the last stored
@@ -323,6 +330,7 @@ def live_on_close_basis(
     histories: Sequence[SplitHistory | Unavailable | None],
     *,
     listing_units_per_share: Decimal | int | None,
+    shares_basis: str | None = None,
     documents: Callable[[], Sequence[Mapping[str, Any]]],
     ruleset: Callable[[], ConceptMappingRuleset],
 ) -> OnCloseBasis | Unavailable:
@@ -338,6 +346,11 @@ def live_on_close_basis(
     two dates makes the class matter. Then the stored document classes the count
     (``share_count_as_of``); ``documents`` and ``ruleset`` are read only in that case.
     """
+    if shares_basis == MISSING_CLASS_RATIO:
+        return Unavailable(
+            MISSING_CLASS_RATIO,
+            "the multi-class share count has no proven class conversion ratio",
+        )
     if (
         listing_units_per_share is None
         or isinstance(listing_units_per_share, bool)
@@ -408,6 +421,7 @@ def live_on_close_basis(
         close_knowable_at=count.close_knowable_at,
         splits=known[0].events,
         listing_units_per_share=listing_units_per_share,
+        shares_basis=shares_basis,
     )
 
 
@@ -416,6 +430,7 @@ __all__ = [
     "CLOSE_JUMP_LIMIT",
     "COVER",
     "LISTINGS_DISAGREE",
+    "MISSING_CLASS_RATIO",
     "MISSING_LISTING_UNIT_RATIO",
     "NO_SPLIT_ADJUSTED_SERIES",
     "NO_UNADJUSTED_SERIES",

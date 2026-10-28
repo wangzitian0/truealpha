@@ -1009,6 +1009,7 @@ def _financial_entry(source: str, payload: dict, *, knowable: str = "2026-02-18"
 
 
 _PRIMARY_FACT = {
+    "currency": "USD",
     "revenue": "100000000",
     "revenue_period_end": "2025-12-31",
     "gross_profit": "40000000",
@@ -1018,6 +1019,7 @@ _PRIMARY_FACT = {
     "vintage": {"net_income": {"period_end": "2025-12-31"}, "total_assets": {"period_end": "2025-12-31"}},
 }
 _MOOMOO_FACT = {
+    "currency": "USD",
     "origin": "moomoo-financials",
     "by_period_end": {
         "2024-12-31": {"revenue": "80000000", "gross_profit": "30000000", "net_income": "5000000"},
@@ -1126,7 +1128,7 @@ def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ig
 def test_the_cell_unit_is_the_primarys_currency_and_another_currency_never_corroborates() -> None:
     """The primary names its reporting currency per payload and the cell carries it; a
     second origin's figure in another currency is absent for the field, never compared,
-    and a payload from before the currency column reads as USD."""
+    and a payload without a currency never reconciles."""
     from datetime import UTC, datetime
 
     from data_engine.datahub.quality_report import reconcile_financial_fact_entries
@@ -1147,12 +1149,15 @@ def test_the_cell_unit_is_the_primarys_currency_and_another_currency_never_corro
     )
     assert mismatched["outcome"] == "insufficient_independent_origins" and mismatched["origin_groups"] == 1
     assert all(f["origin_groups"] == 1 and f["unit"] == "EUR" for f in mismatched["fields"].values())
-    legacy = reconcile_financial_fact_entries(
+    no_currency = reconcile_financial_fact_entries(
         "listing:xnas:t",
-        [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", _MOOMOO_FACT)],
+        [
+            _financial_entry("sec", {k: v for k, v in _PRIMARY_FACT.items() if k != "currency"}),
+            _financial_entry("moomoo", _MOOMOO_FACT),
+        ],
         cutoff=cutoff,
     )
-    assert legacy["outcome"] == "agreed" and {f["unit"] for f in legacy["fields"].values()} == {"USD"}
+    assert no_currency == {"outcome": "unavailable", "fields": {}, "origin_groups": 0}
 
 
 def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the_third_origin() -> None:

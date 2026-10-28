@@ -56,6 +56,7 @@ class PriceBar:
         close: Decimal,
         adj_close: Decimal | None,
         volume: int | None,
+        currency: str | None = None,
     ):
         self.date = day
         self.open = open_
@@ -64,6 +65,7 @@ class PriceBar:
         self.close = close
         self.adj_close = adj_close
         self.volume = volume
+        self.currency = currency
 
 
 def recover_quoted_price(value: Decimal | None) -> Decimal | None:
@@ -157,11 +159,19 @@ def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int =
     return fetch_daily_chart(symbol, end=end, period_days=period_days)[1]
 
 
+def _chart_currency(meta: Any) -> str | None:
+    if not isinstance(meta, dict):
+        return None
+    raw_currency = meta.get("currency")
+    return raw_currency.strip() if isinstance(raw_currency, str) and raw_currency.strip() else None
+
+
 def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
     result = payload.get("chart", {}).get("result")
     if not result:
         return []
     r = result[0]
+    currency = _chart_currency(r.get("meta"))
     timestamps = r.get("timestamp") or []
     if not timestamps:
         return []
@@ -197,6 +207,7 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
                 close=close,
                 adj_close=recover_quoted_price(ac),
                 volume=v,
+                currency=currency,
             )
         )
     return bars

@@ -357,7 +357,12 @@ def latest_annual_filing(
 
 _CLASS_OF_STOCK_AXIS = "us-gaap:StatementClassOfStockAxis"
 _DEI_SHARES_CONCEPT = "dei:EntityCommonStockSharesOutstanding"
+_DEI_TRADING_SYMBOL_CONCEPT = "dei:TradingSymbol"
 _PAR_VALUE_CONCEPT = "us-gaap:CommonStockParOrStatedValuePerShare"
+_CONVERSION_RATE_CONCEPT = re.compile(
+    r"name\s*=\s*[\"']([a-z0-9_-]+:CommonStockConversionRate)[\"']",
+    re.IGNORECASE,
+)
 
 
 def latest_periodic_filing(
@@ -386,14 +391,66 @@ def _uniform_class_par_values(ix: Any, members: Sequence[str]) -> bool:
     return len(set(par_by_member.values())) <= 1
 
 
-def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
-    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265).
+def _listed_stock_members(ix: Any, members: Sequence[str]) -> set[str]:
+    listed: set[str] = set()
+    for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40):
+        context = ix.contexts.get(text_fact.context_id)
+        if context is None:
+            continue
+        member = dict(context.dimensions).get(_CLASS_OF_STOCK_AXIS)
+        if isinstance(member, str) and member in members:
+            listed.add(member)
+    return listed
 
-    Multi-class issuers such as Visa tag cover-page `dei:EntityCommonStockSharesOutstanding`
-    on `us-gaap:StatementClassOfStockAxis`, which SEC's `companyfacts` aggregation strips.
-    Returns segmented `companyfacts`-compatible entries when at least two share classes are
-    tagged at the same instant date and no non-uniform per-class par values exist (refusing
-    1500:1 dual-par structures such as Berkshire Hathaway Class A vs Class B).
+
+def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_of: date) -> dict[str, Decimal] | None:
+    """Per-class conversion rates to the listed common class from tagged note facts (#1519).
+
+    Returns ``member -> rate`` when the listed base class (ratio 1) is identified and every
+    other share class in ``members`` carries a positive ``*:CommonStockConversionRate`` tag
+    at or before ``as_of``. Returns ``None`` when any class lacks a proven conversion ratio.
+    """
+    concepts = set(_CONVERSION_RATE_CONCEPT.findall(body.decode("utf-8", "ignore")))
+    latest_by_member: dict[str, tuple[date, Decimal]] = {}
+    for fact in ix.facts(concepts) if concepts else ():
+        if fact.value is None or fact.context.start is not None or fact.context.end > as_of:
+            continue
+        dims = dict(fact.context.dimensions)
+        member = dims.get(_CLASS_OF_STOCK_AXIS) if len(dims) == 1 else None
+        if (
+            isinstance(member, str)
+            and member in members
+            and (member not in latest_by_member or fact.context.end >= latest_by_member[member][0])
+        ):
+            latest_by_member[member] = (fact.context.end, fact.value)
+    base_candidates = sorted(_listed_stock_members(ix, members)) or [
+        member
+        for member in members
+        if latest_by_member.get(member, (as_of, Decimal(-1)))[1] in (Decimal(0), Decimal(1))
+    ]
+    if len(base_candidates) != 1:
+        return None
+    base_member = base_candidates[0]
+    rates: dict[str, Decimal] = {base_member: Decimal(1)}
+    for member in members:
+        if member == base_member:
+            continue
+        tagged = latest_by_member.get(member)
+        if tagged is None or tagged[1] <= 0:
+            return None
+        rates[member] = tagged[1]
+    return rates
+
+
+def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
+    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265, #1519).
+
+    Multi-class issuers such as Visa tag cover-page ``dei:EntityCommonStockSharesOutstanding``
+    on ``us-gaap:StatementClassOfStockAxis``, which SEC's ``companyfacts`` aggregation strips.
+    When every non-listed class tags its conversion rate (``*:CommonStockConversionRate``) and
+    par values are uniform, returns one unsegmented entry carrying the as-converted share total
+    ``sum(count * rate)``. When any class lacks a tagged conversion rate, returns the segmented
+    entries so ``build_bundle`` marks the share count unavailable with ``missing_class_ratio``.
     """
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
@@ -415,13 +472,28 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
     formatted_accn = format_accession(document.accession)
     filed_iso = document.filing_date.isoformat()
     end_iso = latest_end.isoformat()
+    fp = "FY" if document.form in ANNUAL_STATEMENT_FORMS else "Q"
+    rates = _class_conversion_rates(ix, document.body, tuple(by_member), as_of=latest_end)
+    if rates is not None:
+        total = sum((count * rates[member] for member, count in by_member.items()), Decimal(0))
+        return [
+            {
+                "end": end_iso,
+                "val": int(total) if total == int(total) else str(total),
+                "accn": formatted_accn,
+                "fy": latest_end.year,
+                "fp": fp,
+                "form": document.form,
+                "filed": filed_iso,
+            }
+        ]
     return [
         {
             "end": end_iso,
             "val": int(val) if val == int(val) else str(val),
             "accn": formatted_accn,
             "fy": latest_end.year,
-            "fp": "FY" if document.form in ANNUAL_STATEMENT_FORMS else "Q",
+            "fp": fp,
             "form": document.form,
             "filed": filed_iso,
             "segment": member,
