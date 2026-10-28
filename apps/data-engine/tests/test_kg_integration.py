@@ -184,7 +184,6 @@ def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch)
     monkeypatch.setattr(gateway, "_pg_conn", conn)
     monkeypatch.setattr(gateway, "_writer", gateway.postgres_writer)
     monkeypatch.setattr(gateway.settings, "external_call_ledger", "postgres")
-    monkeypatch.setattr(mm, "throttle", lambda: None)
 
     # Assertions are delta-based: the database may carry real prior calls on a dev machine.
     before = ledger.calls_this_month()
@@ -207,6 +206,6 @@ def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch)
         )
     assert ledger.calls_this_month() == before + 2
 
-    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", len(ledger.kline_distinct_stocks_30d()))
+    monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: len(ledger.kline_distinct_stocks_7d()))
     with pytest.raises(ledger.BudgetExceededError):
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.NEW_STOCK_OVER_QUOTA")

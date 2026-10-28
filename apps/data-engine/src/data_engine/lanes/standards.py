@@ -59,6 +59,7 @@ from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
+from data_engine.sources import gateway
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -232,7 +233,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
         raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
     names = standards_to_run(config.standard)
     summaries = []
-    with psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         for name in names:
             report = _run_standard_backfill(
                 connection,
@@ -501,7 +502,7 @@ def run_supply_chain_exposure(
     if current is not None:
         return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
-    with psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
             context.log.warning("no governed head for %s; no supply chain exposure rows", config.universe)
@@ -592,7 +593,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     if current is not None:
         return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
 
-    with psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
             context.log.warning("no governed head for %s; no analyst ratings rows", config.universe)
@@ -827,7 +828,7 @@ def run_standard_history(context: dg.OpExecutionContext, config: StandardHistory
     tick = datetime.fromisoformat(config.executed_at)
     names = history_standards(config.standard)
     reports = []
-    with psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         for name in names:
             reports.append(
                 _run_standard_history(

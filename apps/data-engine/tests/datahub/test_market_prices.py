@@ -525,7 +525,7 @@ def test_both_twelve_data_paths_send_the_same_vendor_symbol(symbol: str, monkeyp
         return 400, b'{"code": 400, "message": "No data is available on the specified dates.", "status": "error"}'
 
     monkeypatch.setattr(gateway, "urlopen", capture_urlopen)
-    TwelveDataQuoteFetcher("test", throttle_seconds=0)(symbol, date(2026, 10, 5))
+    TwelveDataQuoteFetcher("test")(symbol, date(2026, 10, 5))
 
     def symbol_of(url: str) -> str:
         return dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))["symbol"]

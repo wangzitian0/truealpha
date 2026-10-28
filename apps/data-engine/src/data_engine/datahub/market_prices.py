@@ -30,7 +30,6 @@ from __future__ import annotations
 import calendar
 import json
 import logging
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -321,57 +320,6 @@ def xnys_session_close_utc(trading_date: date) -> datetime:
 
 
 # -----------------------------------------------------------------------------
-# Rate Limiter: Token Bucket
-# -----------------------------------------------------------------------------
-
-
-class TokenBucketRateLimiter:
-    """Thread-safe Token Bucket rate limiter compliant with vendor quotas.
-
-    Default: 8 calls per minute (0.1333 tokens/sec) with capacity 8.
-    """
-
-    def __init__(
-        self,
-        rate_per_minute: float = 8.0,
-        capacity: float = 8.0,
-        time_fn: Callable[[], float] = time.monotonic,
-        sleep_fn: Callable[[float], None] = time.sleep,
-    ) -> None:
-        if rate_per_minute <= 0:
-            raise ValueError("rate_per_minute must be positive")
-        self.rate_per_second = rate_per_minute / 60.0
-        self.capacity = capacity
-        self.tokens = capacity
-        self.time_fn = time_fn
-        self.sleep_fn = sleep_fn
-        self.last_update = time_fn()
-        self._lock = threading.Lock()
-
-    def acquire(self, tokens: float = 1.0) -> float:
-        """Acquire `tokens`. Blocks/sleeps if insufficient tokens are available.
-
-        Returns the number of seconds waited.
-        """
-        with self._lock:
-            now = self.time_fn()
-            elapsed = max(0.0, now - self.last_update)
-            self.last_update = now
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate_per_second)
-
-            if self.tokens < tokens:
-                deficit = tokens - self.tokens
-                wait_time = deficit / self.rate_per_second
-                self.tokens = 0.0
-                self.last_update = now + wait_time
-                self.sleep_fn(wait_time)
-                return wait_time
-
-            self.tokens -= tokens
-            return 0.0
-
-
-# -----------------------------------------------------------------------------
 # Twelve Data Client
 # -----------------------------------------------------------------------------
 
@@ -417,7 +365,6 @@ class TwelveDataClient:
         self,
         api_key: str | None = None,
         base_url: str = TWELVE_DATA_BASE_URL,
-        rate_limiter: TokenBucketRateLimiter | None = None,
         transport_fn: Callable[[str], tuple[int, bytes]] | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         max_retries: int = 5,
@@ -426,7 +373,6 @@ class TwelveDataClient:
     ) -> None:
         self.api_key: str = api_key or str(getattr(settings, "twelve_data_api_key", ""))
         self.base_url = base_url.rstrip("/")
-        self.rate_limiter = rate_limiter or TokenBucketRateLimiter(sleep_fn=sleep_fn)
         self.transport_fn = transport_fn or self._default_transport
         self.sleep_fn = sleep_fn
         self.max_retries = max_retries
@@ -488,8 +434,6 @@ class TwelveDataClient:
         url = f"{self.base_url}/time_series?{query}"
 
         for attempt in range(self.max_retries + 1):
-            # Token bucket wait
-            self.rate_limiter.acquire(1.0)
             self.call_count += 1
 
             status, body = self.transport_fn(url)

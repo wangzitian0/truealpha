@@ -33,6 +33,7 @@ from data_engine.datahub.analyst_ratings import (
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, CanonicalUniverse
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.question_coverage import stored_report_run as _STORED_REPORT_RUN
+from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from factors.base.analyst_track_record import (
     AnalystRatingItem,
@@ -67,7 +68,7 @@ def _isolated_moomoo_ledger(idle_moomoo_gate, monkeypatch):
     """Run the real `_call` wrapper over the in-memory ledger (`call_ledger`), never the staging table."""
     # The real pacing sleeps for the rest of a 30 s window once the burst cap is spent. A test
     # over 25 tickers would run for a minute; the pacing is not what these tests assert.
-    monkeypatch.setattr(mm, "throttle", lambda: None)
+    monkeypatch.setattr(gateway.CapacityGate, "_queue", lambda self, *a, **k: 0.0)
 
 
 @pytest.fixture(autouse=True)

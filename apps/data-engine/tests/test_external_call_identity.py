@@ -78,7 +78,6 @@ def analyst_world(moomoo_ledger_db: str, monkeypatch: pytest.MonkeyPatch) -> Ite
         yield opend
 
     monkeypatch.setattr(mm, "connect", connect)
-    monkeypatch.setattr(mm, "throttle", lambda: None)
     world._capture_head(connection, monkeypatch)
     try:
         yield opend

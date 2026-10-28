@@ -38,7 +38,6 @@ writes one `mart.oracle_outcomes` row per comparison (#1523). That path makes no
 from __future__ import annotations
 
 import json
-import time
 import urllib.request
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -53,8 +52,6 @@ from data_engine.datahub.fetch_key import FetchKey
 
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-# SEC fair use is ~10 req/s; a check run is small and has no reason to approach it.
-_PACE_SECONDS = 0.25
 # An annual period. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
@@ -311,7 +308,6 @@ def compare(connection: Connection[Any], *, cutoff: date, user_agent: str) -> tu
     if not facts_rows:
         return ()
     index = ticker_cik_index(user_agent)
-    time.sleep(_PACE_SECONDS)
     drifts: list[Drift] = []
     seen: dict[int, dict[str, Any]] = {}
     for ticker, mart_revenue, mart_gross_profit in facts_rows:
@@ -320,7 +316,6 @@ def compare(connection: Connection[Any], *, cutoff: date, user_agent: str) -> tu
             continue
         if cik not in seen:  # dual-class listings share one CIK; one fetch covers both
             seen[cik] = company_facts(cik, user_agent)
-            time.sleep(_PACE_SECONDS)
         facts = seen[cik]
         drifts.append(
             Drift(

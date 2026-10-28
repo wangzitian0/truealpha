@@ -107,11 +107,6 @@ class Settings(RuntimeSettings):
         default="", json_schema_extra={"source": "code", "empty_ok": True, "group": "moomoo"}
     )
     moomoo_opend_port: int = Field(default=0, json_schema_extra={"source": "code", "group": "moomoo"})
-    # Process-local burst throttle matching moomoo's real limit shape
-    # (bursts per 30s). Global across endpoints, deliberately conservative.
-    # ge=1: 0 would make throttle() index an empty deque instead of meaning
-    # "no throttle" — misconfiguration must fail at startup, not mid-sweep.
-    moomoo_calls_per_30s: int = Field(default=8, ge=1, json_schema_extra={"source": "code", "group": "moomoo"})
     # The two governed moomoo origins (`datahub.production_topt.moomoo_origin`): a third
     # market-price origin from the daily K-line and a second financial-fact origin from
     # the annual statements. Off by default so an environment opts in deliberately —

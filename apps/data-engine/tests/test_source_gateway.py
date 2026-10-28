@@ -259,7 +259,7 @@ def test_twelve_data_no_end_of_day_is_a_failed_twelvedata_row_with_the_key_redac
         raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(body))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    fetcher = origin.TwelveDataQuoteFetcher("s3cret-key", throttle_seconds=0)
+    fetcher = origin.TwelveDataQuoteFetcher("s3cret-key")
     assert fetcher._get(origin._EOD_URL, {"symbol": "AAPL", "date": "2026-08-29"}) == body
 
     (row,) = call_ledger

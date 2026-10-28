@@ -621,10 +621,10 @@ def test_the_financials_request_is_two_gated_calls(opend) -> None:
     assert ledger.calls_this_month() == 2
 
 
-def test_the_30d_kline_quota_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:
-    monkeypatch.setattr(ledger, "MOOMOO_KLINE_30D_STOCK_QUOTA", 1)
+def test_the_7d_kline_quota_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:
+    monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: 1)
     fetcher = MoomooKlineFetcher(OpenDClient())
-    assert fetcher("AAPL", _PARTITION) is not None, "the first stock fits the 30-day quota"
+    assert fetcher("AAPL", _PARTITION) is not None, "the first stock fits the 7-day quota"
     assert fetcher("MSFT", _PARTITION) is None, "the second distinct stock is refused BEFORE it is spent"
     assert ledger.calls_this_month() == 1
     assert len(opend.kline_kwargs) == 1, "a refused call never reached OpenD"

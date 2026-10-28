@@ -124,7 +124,7 @@ def test_a_revoked_key_is_raised_and_counted_not_read_as_no_end_of_day(vendor, c
     answers, asked = vendor
     answers.extend([(401, _bytes(_AUTH)), (401, _bytes(_AUTH))])
     with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
-        assert TwelveDataQuoteFetcher("revoked", throttle_seconds=0)("AAPL", _PARTITION) is None
+        assert TwelveDataQuoteFetcher("revoked")("AAPL", _PARTITION) is None
 
     assert len(asked) == 1, "a key the vendor refused is not asked a second question"
     assert tally.summary() == "corroborations refused 1 (twelve-data fetch 1)"
@@ -138,7 +138,7 @@ def test_a_spent_minute_is_raised_as_rate_limited(vendor, caplog) -> None:
     answers, asked = vendor
     answers.append((429, _bytes(_MINUTE)))
     with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
-        assert TwelveDataQuoteFetcher("k", throttle_seconds=0)("MSFT", _PARTITION) is None
+        assert TwelveDataQuoteFetcher("k")("MSFT", _PARTITION) is None
     assert len(asked) == 1 and tally.total == 1
     [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert "TwelveDataRateLimited" in warning and "current minute" in warning
@@ -150,7 +150,7 @@ def test_the_vendors_no_data_answer_still_falls_back_to_the_settled_session(vend
     answers, asked = vendor
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
     with corroboration_tally() as tally:
-        quote = TwelveDataQuoteFetcher("k", throttle_seconds=0)("AAPL", _PARTITION)
+        quote = TwelveDataQuoteFetcher("k")("AAPL", _PARTITION)
     assert quote is not None and quote.as_of == date(2026, 9, 11) and quote.close == Decimal("332.26999")
     assert len(asked) == 2 and tally.total == 0
 
@@ -159,7 +159,7 @@ def test_a_series_with_no_data_either_is_absent_and_not_a_loss(vendor) -> None:
     answers, _asked = vendor
     answers.extend([(400, _bytes(_NO_EOD)), (400, _bytes(_NO_SERIES))])
     with corroboration_tally() as tally:
-        assert TwelveDataQuoteFetcher("k", throttle_seconds=0)("AAPL", _PARTITION) is None
+        assert TwelveDataQuoteFetcher("k")("AAPL", _PARTITION) is None
     assert tally.total == 0
 
 
@@ -169,7 +169,7 @@ def test_a_bar_request_that_errors_keeps_the_settled_close_and_says_so(vendor, c
     answers, _asked = vendor
     answers.extend([(200, _SETTLED_EOD), (429, _bytes(_MINUTE))])
     with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
-        quote = TwelveDataQuoteFetcher("k", throttle_seconds=0)("AAPL", date(2026, 9, 11))
+        quote = TwelveDataQuoteFetcher("k")("AAPL", date(2026, 9, 11))
     assert quote is not None and quote.close == Decimal("332.26999") and quote.open is None
     assert quote.raw_bytes == _SETTLED_EOD and tally.total == 0
     assert any("bar for AAPL not attached (TwelveDataRateLimited" in r.getMessage() for r in caplog.records)
@@ -251,14 +251,14 @@ def test_a_request_the_gate_refused_costs_no_throttle_wait(monkeypatch) -> None:
             raise gateway.CapacityExceeded("twelvedata", "daily budget 480 spent (480 calls today)")
 
     with corroboration_tally() as tally:
-        assert Refused("k", throttle_seconds=8)("AAPL", _PARTITION) is None
+        assert Refused("k")("AAPL", _PARTITION) is None
     assert slept == [] and tally.total == 1
 
 
 def test_a_refused_bar_request_keeps_the_settled_close(vendor, monkeypatch) -> None:
     answers, asked = vendor
     answers.append((200, _SETTLED_EOD))
-    fetcher = TwelveDataQuoteFetcher("k", throttle_seconds=0)
+    fetcher = TwelveDataQuoteFetcher("k")
     real_get = fetcher._get
 
     def gated_get(url: str, params: dict[str, str], **kwargs: bool) -> bytes:
@@ -282,8 +282,8 @@ def test_a_settled_session_lands_both_answers_and_the_next_fetcher_asks_nothing(
     answers, asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES)])
 
-    first = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
-    second = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    first = TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
+    second = TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
 
     assert first is not None and second == first
     assert len(asked) == 2, "the second fetcher reached the vendor for landed keys"
@@ -298,8 +298,8 @@ def test_a_window_whose_newest_row_is_still_forming_is_asked_again_and_never_lan
     answers, asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES), (200, _SETTLED_SERIES)])
 
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", today=_SETTLED_DAY)("AAPL", _SETTLED_DAY)
 
     assert [url.split("/")[-1].split("?")[0] for url in asked] == ["eod", "time_series", "time_series"]
     assert len(landed_keys.bodies) == 1, "only the end of day landed"
@@ -312,7 +312,7 @@ def test_the_no_data_answer_is_returned_to_the_parser_and_stays_out_of_the_index
     answers.extend([(400, _bytes(_NO_EOD)), (400, _bytes(_NO_SERIES))] * 2)
 
     for _ in range(2):
-        assert TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _PARTITION) is None
+        assert TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _PARTITION) is None
 
     assert len(asked) == 4, "a session without data is asked again by the next fetcher"
     assert landed_keys.bodies == {}
@@ -324,10 +324,10 @@ def test_an_answer_served_from_the_index_costs_no_throttle_wait(vendor, monkeypa
     answers, _asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, _SETTLED_SERIES)])
 
-    TwelveDataQuoteFetcher("k", throttle_seconds=8, today=_AFTER)("AAPL", _SETTLED_DAY)
-    assert waits == [8, 8], "two requests, two waits"
+    TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
+    assert waits == [], "zero sleeps outside the gate (#1520)"
     waits.clear()
-    TwelveDataQuoteFetcher("k", throttle_seconds=8, today=_AFTER)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
     assert waits == [], "no request was sent, so there is no minute to wait out"
 
 
@@ -340,14 +340,14 @@ def test_the_series_of_a_session_with_no_end_of_day_is_never_kept_and_says_why(
     settled fetch. Red when this branch lands: the next day then read the stale body and attached no bar."""
     answers, asked = vendor
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_PARTITION)("AAPL", _PARTITION)
+    TwelveDataQuoteFetcher("k", today=_PARTITION)("AAPL", _PARTITION)
     assert landed_keys.bodies == {}, "a series without an end of day landed"
     assert all(row.fetch_key is not None for row in call_ledger)
     assert [row.repeat_reason for row in call_ledger] == [None, "window_not_final"], "the series is not final"
 
     next_day = date(2026, 9, 14)
     answers.extend([(400, _bytes(_NO_EOD)), (200, _SETTLED_SERIES)])
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=next_day)("AAPL", _PARTITION)
+    TwelveDataQuoteFetcher("k", today=next_day)("AAPL", _PARTITION)
     assert len(asked) == 4, "the next day asked for the series again"
     assert landed_keys.bodies == {}
     assert [row.repeat_reason for row in call_ledger] == [None, "window_not_final"] * 2
@@ -359,7 +359,7 @@ def test_a_series_answer_without_a_list_of_rows_keeps_the_settled_close_and_is_n
     """`{"values": null}` is an answer that holds no row. The settled close of `/eod` survives it."""
     answers, _asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, json.dumps({"values": None, "status": "ok"}).encode())])
-    quote = TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    quote = TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
     assert quote is not None and quote.close == Decimal("332.26999")
     assert len(landed_keys.bodies) == 1, "only the end of day landed"
     assert [row.repeat_reason for row in call_ledger] == [None, "answer_refused"]
@@ -376,9 +376,9 @@ def test_a_series_that_lacks_the_row_of_its_session_is_asked_again_and_its_row_s
     answers, asked = vendor
     answers.extend([(200, _SETTLED_EOD), (200, lagging), (200, _SETTLED_SERIES)])
 
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
     assert len(landed_keys.bodies) == 1, "only the end of day landed"
-    TwelveDataQuoteFetcher("k", throttle_seconds=0, today=_AFTER)("AAPL", _SETTLED_DAY)
+    TwelveDataQuoteFetcher("k", today=_AFTER)("AAPL", _SETTLED_DAY)
 
     assert len(asked) == 3 and len(landed_keys.bodies) == 2, "the series was asked again and then landed"
     assert [row.repeat_reason for row in call_ledger] == [None, "answer_refused", None]
