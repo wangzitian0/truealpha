@@ -1,7 +1,7 @@
 """Record the outside comparisons of one capture run (#1523 S2).
 
 A comparison of a served value with a witness value that this repository did not write is one
-row of `mart.oracle_outcomes`. This module writes the rows of two comparators. Each reads stored
+row of `mart.oracle_outcomes`. This module writes the rows of three comparators. Each reads stored
 rows and stored bytes only and makes no vendor call.
 
 Operator listed units, per issuer (`operator`):
@@ -25,7 +25,18 @@ Independent parse of revenue and gross profit, per issuer and field (`independen
   quotient of their magnitudes, because the table holds no negative ratio, and the row says
   `sign_differs`.
 
-Both comparators judge `agree` when the ratio lies within the policy tolerance of 1
+Sentinel known answers, per sentinel issuer and registered metric (`filing`):
+
+* Witness: independent filing-derived known answers from `sentinel_known_answers.v1.json`.
+* Served: the served core factor results (`mart.topt_core_results` for `gross_profit_per_employee`)
+  or captured financial-fact observation payloads (`revenue`, `gross_profit`, `total_assets`,
+  `shares_outstanding`, `employees_total`).
+* When the served period end is newer than the answer's period end, the row is `not_comparable` with
+  reason `superseded`.
+* When comparable, ratio is served divided by oracle expectation (or band midpoint), judged against
+  the policy tolerance or the answer's relative tolerance.
+
+All three comparators judge `agree` when the ratio lies within the policy tolerance of 1
 (`oracle_policy.v1.json`). The row stores the tolerance it was judged by. A run with no operator
 list writes no operator row: a universe without a comparator is "no comparator", not a
 disagreement. Nothing here is a gate. A `disagree` row is data. `record_oracle_outcomes_safely`
@@ -43,6 +54,11 @@ from typing import Any, Protocol
 
 import psycopg
 from factors.production_topt import MetricAvailability, ToptCoreSnapshotInput
+from truealpha_contracts.environment_contract import (
+    SentinelKnownAnswer,
+    load_sentinel_known_answers,
+)
+from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.storage import StorageError
@@ -65,6 +81,10 @@ INDEPENDENT_PARSERS: dict[str, Callable[[dict[str, Any], date], vendor_oracle.Ve
 #: The unit of the figures that the independent parse reads.
 INDEPENDENT_UNIT = "USD"
 
+KNOWN_ANSWERS_COMPARATOR = "sentinel_known_answers"
+FILING_KIND = "filing"
+FILING_SOURCE = "sec-edgar-filing"
+
 AGREE = "agree"
 DISAGREE = "disagree"
 NOT_COMPARABLE = "not_comparable"
@@ -78,6 +98,9 @@ NO_DOCUMENT = "no_document"
 NO_ORACLE_VALUE = "no_oracle_value"
 ZERO_ORACLE_VALUE = "zero_oracle_value"
 UNIT_NOT_USD = "unit_not_usd"
+SUPERSEDED = "superseded"
+PRIOR_PERIOD = "prior_period"
+NO_OBSERVATION = "no_observation"
 #: The reason of a `disagree` row whose served and witness values have opposite signs.
 SIGN_DIFFERS = "sign_differs"
 
@@ -414,6 +437,371 @@ def independent_parse_outcomes(
     return outcomes
 
 
+def canonical_metric(metric: str) -> str:
+    """The canonical registered metric name, resolving aliases like gppe -> gross_profit_per_employee."""
+    return INPUT_KEY_ALIASES.get(metric, metric)
+
+
+def _compare_band_answer(
+    answer: SentinelKnownAnswer,
+    served_value: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, str, str | None]:
+    lower = Decimal(str(answer.lower_bound))
+    upper = Decimal(str(answer.upper_bound))
+    midpoint = (lower + upper) / Decimal(2)
+    tolerance = Decimal(str(answer.relative_tolerance)) if answer.relative_tolerance else (upper - midpoint) / midpoint
+    result = AGREE if lower <= served_value <= upper else DISAGREE
+    if midpoint == 0:
+        ratio = Decimal(1) if served_value == 0 else Decimal(0)
+        return midpoint, ratio, tolerance, result, None
+    if served_value * midpoint < 0:
+        ratio = abs(served_value) / abs(midpoint)
+        return midpoint, ratio, tolerance, DISAGREE, SIGN_DIFFERS
+    ratio = served_value / midpoint
+    return midpoint, ratio, tolerance, result, None
+
+
+def _compare_scalar_answer(
+    answer: SentinelKnownAnswer,
+    served_value: Decimal,
+    policy_tolerance: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, str, str | None]:
+    oracle_value = Decimal(str(answer.expected_value))
+    tolerance = Decimal(str(answer.relative_tolerance)) if answer.relative_tolerance else policy_tolerance
+    if oracle_value == 0:
+        if served_value == 0:
+            return oracle_value, Decimal(1), tolerance, AGREE, None
+        return oracle_value, Decimal(0), tolerance, DISAGREE, None
+    if served_value * oracle_value < 0:
+        ratio = abs(served_value) / abs(oracle_value)
+        return oracle_value, ratio, tolerance, DISAGREE, SIGN_DIFFERS
+    ratio = served_value / oracle_value
+    result = AGREE if abs(ratio - 1) <= tolerance else DISAGREE
+    return oracle_value, ratio, tolerance, result, None
+
+
+def compare_known_answer(
+    answer: SentinelKnownAnswer,
+    served_value: Decimal | None,
+    *,
+    subject_id: str | None = None,
+    actual_period_end: str | None,
+    observation_id: str | None,
+    knowable_at: datetime | None,
+    policy_tolerance: Decimal,
+) -> Outcome:
+    """Compare one sentinel known answer with the served value of the run (#1523 S2c)."""
+    canonical_field = canonical_metric(answer.metric)
+    source = answer.accession or FILING_SOURCE
+    resolved_subject = subject_id or answer.issuer_id
+
+    def outcome(
+        result: str,
+        *,
+        reason: str | None = None,
+        oracle_value: Decimal | None = None,
+        ratio: Decimal | None = None,
+        tolerance: Decimal | None = None,
+        obs_id: str | None = observation_id,
+        know_at: datetime | None = knowable_at,
+    ) -> Outcome:
+        return Outcome(
+            subject_id=resolved_subject,
+            field=canonical_field,
+            oracle_kind=FILING_KIND,
+            period=answer.period_end,
+            served_value=served_value,
+            oracle_value=oracle_value,
+            source=source,
+            observation_id=obs_id,
+            knowable_at=know_at,
+            ratio=ratio,
+            tolerance=tolerance,
+            result=result,
+            reason=reason,
+        )
+
+    if actual_period_end is not None and str(actual_period_end) > answer.period_end:
+        return outcome(NOT_COMPARABLE, reason=SUPERSEDED)
+
+    if actual_period_end is not None and str(actual_period_end) < answer.period_end:
+        return outcome(NOT_COMPARABLE, reason=PRIOR_PERIOD)
+
+    if served_value is None:
+        return outcome(NOT_COMPARABLE, reason=NO_SERVED_VALUE)
+
+    if observation_id is None or knowable_at is None:
+        return outcome(NOT_COMPARABLE, reason=NO_OBSERVATION, obs_id=None, know_at=None)
+
+    if answer.kind == "band":
+        oracle_val, ratio, tolerance, res, reason = _compare_band_answer(answer, served_value)
+    else:
+        oracle_val, ratio, tolerance, res, reason = _compare_scalar_answer(answer, served_value, policy_tolerance)
+
+    return outcome(res, reason=reason, oracle_value=oracle_val, ratio=ratio, tolerance=tolerance)
+
+
+def _query_gppe_by_issuer(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    cutoff: datetime,
+) -> dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]]:
+    gppe_rows = connection.execute(
+        """
+        select issuer_id, gppe, operating_period_end, input_observation_ids, cutoff, result_id
+        from mart.topt_core_results
+        where run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+    gppe_by_issuer: dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]] = {}
+    for iss_id, gppe, op_period, obs_ids, cut, res_id in gppe_rows:
+        obs_id = obs_ids[0] if obs_ids else res_id
+        period_str = (
+            op_period.isoformat()
+            if isinstance(op_period, (date, datetime))
+            else (str(op_period) if op_period else None)
+        )
+        entry = (gppe, period_str, obs_id, cut or cutoff)
+        gppe_by_issuer[iss_id] = entry
+        if str(iss_id).startswith("issuer:cik:"):
+            gppe_by_issuer[str(iss_id).removeprefix("issuer:cik:")] = entry
+    return gppe_by_issuer
+
+
+def _query_fin_by_issuer(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+) -> dict[str, tuple[str, datetime, dict[str, Any]]]:
+    fin_rows = connection.execute(
+        """
+        select
+            coalesce(p.normalized_payload ->> 'issuer_id', ''),
+            o.observation_id,
+            o.knowable_at,
+            p.normalized_payload
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        where ob.run_id = %s and o.semantic_type = 'financial-fact'
+        order by o.observation_id
+        """,
+        (run_id,),
+    ).fetchall()
+    fin_by_issuer: dict[str, tuple[str, datetime, dict[str, Any]]] = {}
+    for iss_id, obs_id, know_at, payload in fin_rows:
+        fin_by_issuer[iss_id] = (obs_id, know_at, payload)
+        if str(iss_id).startswith("issuer:cik:"):
+            fin_by_issuer[str(iss_id).removeprefix("issuer:cik:")] = (obs_id, know_at, payload)
+    return fin_by_issuer
+
+
+def _extract_metric_from_payload(
+    payload: dict[str, Any],
+    canonical_field: str,
+) -> tuple[Decimal | None, str | None, datetime | None]:
+    if canonical_field == "revenue":
+        raw = payload.get("revenue")
+        return (None if raw is None else Decimal(str(raw)), payload.get("revenue_period_end"), None)
+    if canonical_field == "gross_profit":
+        raw = payload.get("gross_profit")
+        return (None if raw is None else Decimal(str(raw)), payload.get("operating_period_end"), None)
+    if canonical_field == "shares_outstanding":
+        raw = payload.get("shares_outstanding")
+        return (None if raw is None else Decimal(str(raw)), payload.get("shares_period_end"), None)
+    if canonical_field == "total_assets":
+        raw = payload.get("total_assets")
+        period = payload.get("operating_period_end") or payload.get("tangible_equity_period_end")
+        return (None if raw is None else Decimal(str(raw)), period, None)
+    if canonical_field == "employees_total":
+        raw = payload.get("employees_total") or payload.get("headcount")
+        val = None if raw is None else Decimal(str(raw))
+        vintage = payload.get("vintage") or {}
+        hc_vintage = vintage.get("headcount") or {}
+        period = (
+            hc_vintage.get("period_end") or payload.get("revenue_period_end") or payload.get("operating_period_end")
+        )
+        know_at = None
+        if hc_vintage.get("knowable_at"):
+            try:
+                know_at = datetime.fromisoformat(hc_vintage["knowable_at"])
+            except Exception:
+                pass
+        return (val, period, know_at)
+    return (None, None, None)
+
+
+def _extract_metric_from_factor_input(
+    fi: ToptCoreSnapshotInput,
+    canonical_field: str,
+) -> tuple[Decimal | None, str | None, datetime | None]:
+    metric_map = {
+        "revenue": fi.revenue,
+        "gross_profit": fi.gross_profit,
+        "employees_total": fi.headcount,
+        "total_assets": fi.total_assets,
+    }
+    metric = metric_map.get(canonical_field)
+    if metric is not None:
+        return (metric.value, str(metric.input_id), metric.knowable_at)
+    return (None, None, None)
+
+
+def run_issuer_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
+    """The issuer_id of every ticker of the run, as the run's observations state it."""
+    rows = connection.execute(
+        """
+        select distinct upper(p.normalized_payload ->> 'ticker'), p.normalized_payload ->> 'issuer_id'
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+        where ob.run_id = %s
+          and p.normalized_payload ->> 'issuer_id' is not null
+          and p.normalized_payload ->> 'ticker' is not null
+        """,
+        (run_id,),
+    ).fetchall()
+    issuers: dict[str, str] = {str(ticker): str(issuer_id) for ticker, issuer_id in rows if ticker and issuer_id}
+    listing_tickers = run_tickers(connection, run_id)
+    if listing_tickers:
+        fi_rows = connection.execute(
+            """
+            select member.factor_input
+            from staging.topt_core_snapshots s
+            join staging.topt_core_snapshot_members member on member.snapshot_id = s.snapshot_id
+            where s.run_id = %s
+            """,
+            (run_id,),
+        ).fetchall()
+        for fi_row in fi_rows:
+            fi = fi_row[0]
+            if isinstance(fi, dict):
+                lid = fi.get("listing_id")
+                iid = fi.get("issuer_id")
+                if lid and iid and lid in listing_tickers:
+                    issuers.setdefault(listing_tickers[lid], str(iid))
+    return issuers
+
+
+def _resolve_answer_context(
+    answer: SentinelKnownAnswer,
+    canonical_field: str,
+    *,
+    issuer_id: str,
+    gppe_by_issuer: dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]],
+    fin_by_issuer: dict[str, tuple[str, datetime, dict[str, Any]]],
+    by_issuer_input: dict[str, ToptCoreSnapshotInput],
+    cutoff: datetime,
+) -> tuple[Decimal | None, str | None, str | None, datetime | None]:
+    if canonical_field == "gross_profit_per_employee":
+        gppe_entry = (
+            gppe_by_issuer.get(issuer_id) or gppe_by_issuer.get(answer.issuer_id) or gppe_by_issuer.get(answer.cik)
+        )
+        if gppe_entry is not None:
+            return gppe_entry
+        fi = (
+            by_issuer_input.get(issuer_id)
+            or by_issuer_input.get(answer.issuer_id)
+            or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        )
+        if fi is not None:
+            obs = fi.observation_ids[0] if fi.observation_ids else None
+            return (None, None, obs, cutoff)
+        return (None, None, None, None)
+
+    fin_entry = fin_by_issuer.get(issuer_id) or fin_by_issuer.get(answer.issuer_id) or fin_by_issuer.get(answer.cik)
+    observation_id: str | None = None
+    knowable_at: datetime | None = None
+    actual_period_end: str | None = None
+    served_value: Decimal | None = None
+
+    if fin_entry is not None:
+        observation_id, knowable_at, payload = fin_entry
+        val, period, custom_know = _extract_metric_from_payload(payload, canonical_field)
+        served_value = val
+        actual_period_end = period
+        if custom_know is not None:
+            knowable_at = custom_know
+
+    if served_value is None:
+        fi = (
+            by_issuer_input.get(issuer_id)
+            or by_issuer_input.get(answer.issuer_id)
+            or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        )
+        if fi is not None:
+            val, obs_id, know = _extract_metric_from_factor_input(fi, canonical_field)
+            if val is not None:
+                served_value = val
+                observation_id = observation_id or obs_id
+                knowable_at = knowable_at or know
+
+    return (served_value, actual_period_end, observation_id, knowable_at)
+
+
+def known_answer_outcomes(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    cutoff: datetime,
+    factor_inputs: Sequence[ToptCoreSnapshotInput],
+) -> list[Outcome]:
+    """The known-answer comparisons of the sentinel issuers present in the run (#1523 S2c)."""
+    catalog = load_sentinel_known_answers()
+    try:
+        policy_tolerance = load_oracle_policy().relative_tolerance(KNOWN_ANSWERS_COMPARATOR)
+    except (KeyError, ValueError):
+        policy_tolerance = Decimal("0.01")
+
+    issuers_by_ticker = run_issuer_tickers(connection, run_id)
+    by_issuer_input = {fi.issuer_id: fi for fi in factor_inputs}
+    run_issuers = set(by_issuer_input) | set(issuers_by_ticker.values())
+    run_ciks = {iss.removeprefix("issuer:cik:") for iss in run_issuers if iss.startswith("issuer:cik:")}
+
+    gppe_by_issuer = _query_gppe_by_issuer(connection, run_id, cutoff)
+    fin_by_issuer = _query_fin_by_issuer(connection, run_id)
+
+    all_run_issuers = run_issuers | set(fin_by_issuer) | set(gppe_by_issuer)
+    all_run_ciks = run_ciks | {k for k in all_run_issuers if not k.startswith("issuer:")}
+
+    outcomes: list[Outcome] = []
+    for answer in catalog.answers:
+        canonical_field = canonical_metric(answer.metric)
+        if canonical_field not in METRICS:
+            continue
+        issuer_id = (
+            issuers_by_ticker.get(answer.ticker.upper())
+            or (answer.issuer_id if answer.issuer_id in all_run_issuers else None)
+            or (f"issuer:cik:{answer.cik}" if f"issuer:cik:{answer.cik}" in all_run_issuers else None)
+        )
+        if issuer_id is None and answer.cik not in all_run_ciks:
+            continue
+
+        target_subject_id = issuer_id or answer.issuer_id
+
+        served_val, period, obs_id, know_at = _resolve_answer_context(
+            answer,
+            canonical_field,
+            issuer_id=target_subject_id,
+            gppe_by_issuer=gppe_by_issuer,
+            fin_by_issuer=fin_by_issuer,
+            by_issuer_input=by_issuer_input,
+            cutoff=cutoff,
+        )
+        outcomes.append(
+            compare_known_answer(
+                answer,
+                served_val,
+                subject_id=target_subject_id,
+                actual_period_end=period,
+                observation_id=obs_id,
+                knowable_at=know_at,
+                policy_tolerance=policy_tolerance,
+            )
+        )
+    return outcomes
+
+
 def record_oracle_outcomes(connection: psycopg.Connection[Any], run_id: str, *, compared_at: datetime) -> int:
     """Append the comparisons of run `run_id`; returns the number of rows written.
 
@@ -430,6 +818,7 @@ def record_oracle_outcomes(connection: psycopg.Connection[Any], run_id: str, *, 
     outcomes = [
         *operator_outcomes(connection, run_id, cutoff, factor_inputs),
         *independent_parse_outcomes(connection, cutoff, factor_inputs),
+        *known_answer_outcomes(connection, run_id, cutoff, factor_inputs),
     ]
     # The writer waits at most five seconds for a lock on the table it appends to.
     connection.execute("set local lock_timeout = '5s'")

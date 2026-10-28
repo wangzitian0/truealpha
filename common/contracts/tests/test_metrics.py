@@ -33,10 +33,17 @@ def test_input_key_aliases_round_trip_through_the_registry():
     assert is_registered_input_key("headcount")
     assert is_registered_input_key("last_close")
     assert is_registered_input_key("revenue")
+    assert is_registered_input_key("gppe")
     assert not is_registered_input_key("not_a_real_metric")
     assert input_key_for_metric("employees_total") == "headcount"
     assert input_key_for_metric("price") == "last_close"
     assert input_key_for_metric("revenue") == "revenue"
+    assert input_key_for_metric("gross_profit_per_employee") == "gppe"
+
+
+def test_gross_profit_per_employee_is_registered_with_per_employee_unit():
+    assert "gross_profit_per_employee" in METRICS
+    assert METRICS["gross_profit_per_employee"].unit_family == UnitFamily.PER_EMPLOYEE
 
 
 def test_registering_a_synthetic_metric_needs_no_second_enumeration():
