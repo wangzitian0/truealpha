@@ -23,6 +23,11 @@ Audit runs **at most 3 Swarm rounds** via `subagent_batch`. Each round dispatche
 5. **A score must come from executed checks.** Run the command, record the exit code, and cite it. A score without a command is not reported.
 6. **Disclose.** Name the inputs you did not verify, the sample size, the data age, and the oracles you did not use.
    Ask "Sufficient?" (could an unverified input overturn the conclusion?) and "MECE?" (overlap or orphan?). A troubling answer is a finding.
+7. **Facts block.** At the start of an audit, run a read-only command that prints:
+   - Per repository touched by the audit: `HEAD` commit SHA, `origin/main` commit SHA, and dirty status flag.
+   - Skill copy integrity: `tree_hash` digest of each installed or `.ws-agy-managed` skill copy next to its `dev_env` source.
+   - Settings: Effective value and configuration source of each setting the audit depends on.
+   The audit report must include this block before any scout findings.
 
 ## Four gates
 
@@ -51,9 +56,24 @@ The 10 parallel Interns in Round 1 are allocated across non-overlapping audit di
 
 This skill is the one source for the audit round count and the Intern count. Rounds run in sequence:
 
-1. **Round 1 (Discovery Swarm: M=10)**: Dispatch 10 Interns across the Scout Matrix (M1-M4, G1-G3, T1-T2, S1). Output dense defect hypotheses with exact `file#Lxx-Lyy` anchors.
-2. **Round 2 (Adversarial Confrontation Swarm: M=10)**: Pair Interns as opponents (Red Team vs Blue Team) to disprove Round 1 hypotheses with code counterexamples. Classify each finding strictly as `[DISPROVEN]` or `[CONFIRMED]`.
-3. **Round 3 (Independent Verdict Swarm: M=10 + Director Touch Reality)**: 10 fresh Interns blind-verify surviving `[CONFIRMED]` findings. The Director executes read-only Touch Reality probes to reject false positives.
+### Control claims
+
+Each round includes at least one claim known true (`holds`) and one claim known false (`breaks`). The Director records expected verdicts before dispatch. The batch header prints the control result (`calibrated` when all controls match expected verdicts, `uncalibrated` otherwise). A round with an `uncalibrated` result carries no evidentiary weight.
+
+### Rounds
+
+1. **Round 1 (Discovery Swarm: M=10)**: Dispatch 10 Interns across the Scout Matrix (M1-M4, G1-G3, T1-T2, S1). Output dense defect hypotheses with exact `file#Lxx-Lyy` anchors and line-1 JSON verdict contract.
+2. **Round 2 (Adversarial Confrontation Swarm: M=10)**: Pair Interns as opponents (Red Team vs Blue Team) answering the same question about the same claim using the single `holds` / `breaks` / `unknown` verdict contract. A disagreement inside a pair is the signal. Surviving broken claims advance to Round 3.
+3. **Round 3 (Independent Blind Check: M=10 + Director Touch Reality)**: 10 fresh Interns blind-verify surviving broken claims. The Director executes read-only Touch Reality probes to confirm or reject findings.
+
+### Findings and Probe column
+
+The findings table must report:
+
+| claim | worker verdicts | probe (command, exit code) | status |
+|---|---|---|---|
+
+Every finding must cite an executed physical probe (`command`, `exit code`). Findings without an executed probe show `unprobed` and are not counted as confirmed in the summary line.
 
 ## Exit rule
 

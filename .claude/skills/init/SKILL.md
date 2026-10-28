@@ -42,10 +42,7 @@ git worktree list | grep -F "_issue<N>_"
 
 A substring match is wrong: `issue12` would match `issue123`.
 
-- **Scan open production decisions**: Check open issues labelled `prod-pending`:
-```bash
-gh issue list --search "label:prod-pending" --json repository,number,title
-```
+- **Scan open production decisions**: in a checkout of wangzitian0/infra2, run `uv run python -m tools.harness status --fetch --online`. A release tag that the production marker has not reached waits for a production decision. A `hold` in the handover notes (`recall` skill) answers it.
 
 - **Scan stale leftovers**:
 Run these in bash or zsh, in the repository you work in. The three counts are: branches whose upstream is gone, stashes older than 30 days, and local branches whose name is the head of a merged PR. Put each count above zero in the "facts you recalled" line. A count above zero shows a cleanup that nothing triggered. Do not delete what another session owns. A `gh` error is a failed scan, not a zero.

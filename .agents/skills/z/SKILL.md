@@ -19,14 +19,14 @@ ws-delivery-status --json
 | Physical state | Condition | Mandatory action | Next transition |
 |---|---|---|---|
 | (Not in worktree) | Primary checkout | Run `init` to claim issue and create isolated worktree | Enter worktree, sense state |
-| `PRE_DRAFT` | Clean on `main` for new task | Claim issue, branch, and begin implementation | Transition to `DRAFT` |
+| `UNKNOWN` | `ws-delivery-status` exited 4: git or GitHub could not be read | Fix the cause in `reasons[]`; re-run. Never read it as a pass | Sense state |
 | `DRAFT` | Working tree dirty | Implement minimal logic; verify focused tests pass | Run `git commit`, sense state |
 | `LOCAL_VERIFIED` | Committed, unmerged | Invoke `auto` to push branch and open pull request | PR opened, sense state |
 | `IN_REVIEW` | PR open | Wait for CI events, resolve review feedback, merge PR | PR merged, sense state |
 | `CODE_LANDED_STAGE1` | Merged on `main` | Run `ws-delivery-status --assert-complete --reality-probe "<CMD>"` | Probe passes (exit 0) |
 | `VERIFIED_COMPLETE` | Merged + reality verified | Run `close` cleanup; advance to next phase or conclude | Next phase or done |
 
-Clean baseline on `main` reports `CODE_LANDED_STAGE1` for prior tasks. Do not probe unbuilt work; treat as `PRE_DRAFT`.
+A clean checkout of `main` reports `CODE_LANDED_STAGE1` for prior tasks. The tool has no state for a task that is not begun. Do not probe unbuilt work; run `init` to claim an issue and begin the task.
 
 ## 2. State branches
 

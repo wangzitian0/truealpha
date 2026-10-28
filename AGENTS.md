@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=7314da707e285783724230dbfd88146b507264ea08030965e75dc60cf002ed04 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=1eca6e609e96ee9ca0309a80f41ae01475f1fd55e43ab1baf0fa5185c9594a41 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -58,8 +58,10 @@ The single definition of the production reservation. Other tiers, skills and gat
 
 ## How work happens
 
-1. **One issue, one PR.** Every PR references its issue (`Closes #N` when it completes
-   the issue, a plain `#N` reference otherwise). Keep PRs small and reviewable.
+1. **One issue, one PR.** Every PR binds exactly one issue. The issue can be an umbrella issue.
+   Use `Closes #N` when the merge completes the issue. Use `Refs #N` when staging evidence or
+   other PRs remain. An automatic rule-render PR (`ws-render-pr`) binds to the dev_env commit
+   that its body names. Keep PRs small and reviewable.
 2. **Issues are the shared coordination surface.** Record verified findings, decisions, and
    next actions on the issue as you learn them.
 3. **Parallel agents** work on disjoint files. Prefix issue and PR titles with your workspace
@@ -68,15 +70,20 @@ The single definition of the production reservation. Other tiers, skills and gat
    lockfiles) deserve a heads-up comment first. File a finding outside your lane with its evidence
    and hand it to the owning lane: recording it is in scope, adopting it is not.
 4. **Before starting**: `git status --short --branch`, sync `main`, check open issues and
-   PRs for the same work. **Strong dashboards, weak gates**: Merge gates enforce baseline
-   correctness (compilation, type checks, backward-compatible migrations, secrets scanning,
-   focused tests, deployable `main`). Third-party and AI reviewer feedback is advisory: reviewer
-   platform errors, timeouts, and unparseable reviews warn and never block. Actionable review
-   findings are tracked, with unresolved blockers budgeted (High = 0, Medium <= 2, Low <= 4). Live dashboards (`/admin/datahub`,
-   `/research/backtest`, Postgres `mart` health tables) govern observability, not regexes on
-   PR descriptions or issue comments. Once a PR is merge-ready, the agent that owns it merges
-   it. That covers gate code, workflows and release code once the review that the Root section
-   `Production reservation` requires is on the PR. Production here (`docs/release-protocol.md`):
+   PRs for the same work. **Strong dashboards, weak gates**: three classes of
+   gate exist. Class 1, the merge gate, covers compilation, type check, backward-compatible
+   migration, secrets scan, focused tests, and the review-finding budget below. Class 2, the
+   post-deploy effect probe, shows that a deployed change takes effect and that `main` still
+   deploys. Class 3 requires the staging evidence of a release before its production deploy.
+   Everything else is a dashboard.
+   Third-party and AI reviewer feedback is advisory: reviewer platform errors, timeouts, and
+   unparseable reviews warn and never block. Actionable review findings are tracked, with
+   unresolved blockers budgeted (High = 0, Medium <= 2, Low <= 4). Live dashboards
+   (`/admin/datahub`, `/research/backtest`, Postgres `mart` health tables) govern
+   observability, not regexes on PR descriptions or issue comments. Once a PR is merge-ready,
+   the agent that owns it merges it. That covers gate code, workflows and release code once
+   the review that the Root section `Production reservation` requires is on the PR. That review
+   is part of class 1. Production here (`docs/release-protocol.md`):
    `tools/cut_release.sh <tag> --prod` and `deploy-release.yml` with `deploy_type=prod`. The
    checks of `--owner-approved-sha` and `owner_approved_sha` in those paths are part of the
    reservation itself.
@@ -84,31 +91,15 @@ The single definition of the production reservation. Other tiers, skills and gat
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
    never a merge gate.
-6. **Closed means deployed, real, and evidenced.** A product issue closes only when a deployed
-   path invokes its capability on real captured data. A deployed path is reachable from the
-   Dagster composition root (`dagster_defs.py`) or a deployed service/App entrypoint. Post
-   evidence on the issue: the deployed call site plus real-data output (SQL rows or an HTTP
-   response). Reaching a read model is not reaching the reader: where a capability has an
-   owner-facing surface, name the page or response field that renders it (#284). Fixture data lives
-   in tests only; fixture assets are named `*_fixture` and are never scheduled or reachable
-   from a deployed route. Code that merely exists is not done: wire it into the deployed path
-   or explicitly demote it on the issue.
-   (`init.md` section 0; drift audit #429, invariants I1–I4; root #434.) Landing on main via PR merge gate is a prerequisite before deployment. Do not trigger deployment from an unmerged branch.
-   Honest partial scope stays open with a scope note instead of closing.
-7. **Acceptance criteria are standing checks, and they cover the whole scope.** See
-   `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md` (#371, #494, #495):
-   - **Every scope item has a matching acceptance criterion.** If the issue body names a
-     deliverable, exactly one criterion must assert it. Delete deliverables without a check,
-     or write the check. Judge closure against scope item by item.
-   - **A criterion is a check that runs again, not a run that happened.** Pasted output is
-     evidence. Acceptance is a named CI step, test, or gate that turns red on the next
-     regression. A one-time manual walk or script satisfies rule 6 and still fails this rule.
-     State where the check lives.
-   - **A criterion must be able to fail where production calls.** A test that supplies an
-     argument the deployed caller omits proves the parameter, not the wiring. Assert through
-     the deployed entry point. Confirm the check fails on unfixed code first.
-   `Closes #N` asserts all three rules. When a merge cannot prove a criterion (such as deployed
-   state), use a plain `#N` and close by hand with a comment walking the criteria.
+6. **Closed means verified on staging with real data.** A product issue closes only when staging
+   runs its capability on real captured data. The issue holds the evidence: the deployed call site
+   plus real-data output (SQL rows or an HTTP response). Code that merely exists is not done.
+   Where a capability has an owner-facing surface, name the page or response field that renders
+   it (#284). Fixture data lives in tests only; fixture assets are named `*_fixture` and are never
+   scheduled or reachable from a deployed route. An acceptance criterion is a check that runs
+   again. The skills `smoke` and `close` run acceptance; issue and PR text do not.
+   Production state is not an issue state.
+   (`init.md` section 0; drift audit #429, invariants I1–I4; root #434.)
 
 Before editing or after compaction, re-read the prompt, run rule 4 checks, and note the issue,
 branch, and target files. On handoff, post done, verified, next, and failed items on the issue.

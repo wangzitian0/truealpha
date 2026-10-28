@@ -18,7 +18,7 @@ Swarm does not define multi-round state machines. Caller skills (`audit`, `init`
   - Dense, structured ASD-STE100 technical findings.
   - Length: 500 to 1200 tokens per Intern.
   - Anchors required: Every finding must cite exact file anchors (`file#Lxx-Lyy`) and reproducible counterexamples.
-  - Zero conversational filler. Start line 1 with `VERDICT: PASS` or `VERDICT: FAIL: <summary>`.
+  - Zero conversational filler. Start line 1 with the single line-1 JSON verdict contract defined in `workspace-iac/bin/subagent-worker` (`{"subject": "claim" | "code", "verdict": "holds" | "breaks" | "unknown", "anchors": [...], "unverified": [...]}`). Do not restate or invent a secondary format.
 
 ## Atomic invocation protocol
 
@@ -27,10 +27,10 @@ To execute 1 Swarm, the orchestrator invokes `subagent_batch` with M tasks:
 1. Prepare task array with M distinct task objects: `[{"id": "...", "prompt": "..."}]`.
 2. Pass target files via `context_files: [{"path": "...", "start_line": 1, "end_line": 120}]` (and optional `cwd`) so the worker reads disk once without duplicating code in tool-call JSON.
 3. Call `subagent_batch`.
-4. Reduce outputs: Full output persists to `~/.local/state/subagent-worker/runs/<call_id>.md`; inline return folds multi-line `PASS` tasks and expands `FAIL`, `PARTIAL`, or `FAILED` tasks into `SwarmResult`.
+4. Reduce outputs: Full output persists to `~/.local/state/subagent-worker/runs/<call_id>.md`; inline return folds evidence-free `holds` tasks (`unverified: []`) and expands `breaks`, `unknown`, non-empty `unverified`, `unparsed`, `PARTIAL`, or `FAILED` tasks into `SwarmResult`.
 5. Return `SwarmResult` to the calling skill for the next state transition.
 
 ## Execution discipline
 
 - **Physical exit codes required**: Cite actual commands and exit codes. A score or claim without a physical command is invalid.
-- **Call deadline**: A call ends within 110 s. A batch with more tasks than the concurrency limit gets that time once per wave, up to 600 s. A task cut by the deadline is FAILED (no text) or PARTIAL (text so far). A provider filter or a provider fault inside the answer is PARTIAL too. The first output line gives the counts. Worker log: `~/.local/state/subagent-worker/worker.log`.
+- **Call deadline**: A call ends within 110 s. A batch with more tasks than the concurrency limit gets that time once per wave, up to 600 s. A task may use the time left in its batch, less one wave per wave of queued tasks; 50 s of silence still ends it. A task cut by the deadline is FAILED (no text) or PARTIAL (text so far). A provider filter or a provider fault inside the answer is PARTIAL too. The first output line gives the counts. Worker log: `~/.local/state/subagent-worker/worker.log`.

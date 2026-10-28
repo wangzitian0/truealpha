@@ -10,8 +10,7 @@ description: PR review mechanics. Weigh unresolved review findings by severity, 
 ## Blocking threshold
 
 Each repository's gate tool (`ws-pr-gate` or `tools.pr_merge_gate`) computes the unresolved review threshold from literal `severity:` tags (`high`, `medium`/`middle`, `low`; unlabelled counts as `middle`):
-- **Weighted repositories (`infra2`, `dev_env`)**: `high = 1.0`, `middle = 0.5`, `low = 0.25`; a total score `>= 1.0` blocks merge (`AGENTS.md`).
-- **Conjunctive-budget repositories (`ws-pr-gate` default)**: `High == 0` AND `Medium <= 2` AND `Low <= 4`.
+- **Weighted score** (`ws-pr-gate` and `tools.pr_merge_gate`): `high = 1.0`, `middle = 0.5`, `low = 0.25`. A total of `1.0` or more blocks the merge (`AGENTS.md`). Two middles or four lows block like one high.
 
 Read the literal `severity:` tag; do not infer severity from tone. Let the repository's gate tool compute the verdict rather than estimating manually. Reviewer platform errors, timeouts, or unparseable reviews warn and do not block.
 

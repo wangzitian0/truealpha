@@ -31,7 +31,7 @@ description: TrueAlpha Factor Acceptance Protocol. Enforces the strict quantitat
 - [ ] **Availability & Score Propagation**: Every computed value is served (`available`) alongside its continuous `0-100` confidence score (`High` $\ge 80$, `Medium` $60\text{–}79$, `Low` $< 60$). Low confidence lowers the composite score; it never silently drops or blocks the row.
 - [ ] **Materialized Inputs Only**: Composite factors reload materialized upstream factor results from `mart`; they never branch on raw source vendors or bypass the mart layer.
 
-### 4. Standing Checks (Rule 7)
+### 4. Standing Checks (skills `smoke` and `close`)
 - [ ] **Whole Scope Covered**: Every deliverable in the issue scope has a standing check.
 - [ ] **Reproducible Red**: Confirm the check goes RED against the unfixed code before declaring victory.
 - [ ] **Fail Where Production Calls**: Test passes data through the exact deployed call signature.
