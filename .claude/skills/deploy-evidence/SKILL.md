@@ -1,12 +1,12 @@
 ---
 name: deploy-evidence
-description: TrueAlpha Deploy Evidence & Issue Closure Guard. Automates AGENTS.md Rule 6 ("Closed means deployed, real, and evidenced") verification before any product issue can be closed.
+description: TrueAlpha Deploy Evidence & Issue Closure Guard. Automates AGENTS.md Rule 6 ("Closed means verified on staging with real data") verification before any product issue can be closed.
 ---
 
 # TrueAlpha Deploy Evidence & Closure Guard
 
 > **Core Axiom (AGENTS.md Rule 6)**:
-> *"Closed means deployed, real, and evidenced. A product issue closes only when its capability is invoked by a deployed path — reachable from the Dagster composition root (`dagster_defs.py`) or a deployed service/App entrypoint — on real captured data, with evidence posted on the issue: the deployed call site plus real-data output (SQL rows or an HTTP response)."*
+> *"A product issue closes only when staging runs its capability on real captured data. The issue holds the evidence: the deployed call site plus real-data output (SQL rows or an HTTP response)."*
 
 ## 1. When to Activate This Skill
 - Before marking any TrueAlpha product issue as `Closed`.
@@ -33,7 +33,7 @@ docker inspect -f '{{.Config.Image}}' truealpha-llm-staging
 Confirm live service health (`git_sha` and `governed_pointers` in `/api/health`) and daemon heartbeat (on VPS host: `docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check`).
 
 ### Step 3: Deployed Execution Proof (Reachable Path)
-Verify that the capability was invoked via the deployed entrypoint:
+Verify that the capability was invoked via a deployed path. A deployed path is reachable from the Dagster composition root (`dagster_defs.py`) or a deployed service/App entrypoint:
 - **For DataHub/Ingestion**: The Dagster job ticked under daemon or sensor, writing to `mart.served_head`.
 - **For Web/API**: An HTTP 200 response with typed data from the live service domain (`truealpha.club` or staging subdomain).
 - **For Factors**: Factor outputs materialized into `mart` tables and readable via `mart_readonly`.
