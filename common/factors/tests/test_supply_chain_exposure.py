@@ -54,5 +54,5 @@ def test_supply_chain_exposure_computes_with_shares() -> None:
     assert res.exposure_score == Decimal("0.25")
     assert res.direct_partners == 2
     assert res.suppliers_count == 2
-    assert res.result.data_availability == "verified"
+    assert res.result.data_availability == "unverified"
     assert res.result.value == Decimal("0.25")

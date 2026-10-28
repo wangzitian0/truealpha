@@ -910,3 +910,20 @@ def test_the_refresh_schedule_runs_where_the_backtest_runs(
     finally:
         monkeypatch.undo()
         importlib.reload(market_data)
+
+
+def test_judge_bar_freshness_is_red_when_one_symbol_is_stale_or_missing(connection) -> None:
+    """#1523 S3: one fresh symbol does not vouch for a stale or missing symbol."""
+    fresh_sym = "T1523FRESH"
+    stale_sym = "T1523STALE"
+    missing_sym = "T1523MISSING"
+    _write_newest_bars(connection, fresh_sym, {"none": date(2026, 10, 5), "splits": date(2026, 10, 5)})
+    _write_newest_bars(connection, stale_sym, {"none": date(2026, 9, 25), "splits": date(2026, 10, 5)})
+
+    stale_verdict = market_data.judge_bar_freshness(connection, [fresh_sym, stale_sym], now=MONDAY_RUN)
+    assert stale_verdict.ok is False
+    assert "none: newest bar 2026-09-25" in stale_verdict.summary
+
+    missing_verdict = market_data.judge_bar_freshness(connection, [fresh_sym, missing_sym], now=MONDAY_RUN)
+    assert missing_verdict.ok is False
+    assert "no bar" in missing_verdict.summary

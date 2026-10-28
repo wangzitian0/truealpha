@@ -36,4 +36,4 @@ def test_analyst_track_record_computes_consensus() -> None:
     assert res.buy_count == 2
     assert res.hold_count == 1
     assert res.sell_count == 0
-    assert res.result.data_availability == "verified"
+    assert res.result.data_availability == "unverified"

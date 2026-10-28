@@ -32,6 +32,7 @@ class _FakeHealthReport:
         verdicts: list[Any],
         release: str | None = "v0.1.2",
         governed_pointers: list[dict[str, Any]] | str | None = None,
+        oracle_outcomes: list[dict[str, Any]] | dict[str, Any] | None = None,
     ) -> None:
         self.verdicts = verdicts
         self.release = release
@@ -43,6 +44,7 @@ class _FakeHealthReport:
             if governed_pointers is None
             else governed_pointers
         )
+        self.oracle_outcomes = [{"result": "agree"}] if oracle_outcomes is None else oracle_outcomes
 
 
 def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
@@ -229,3 +231,25 @@ def test_gate_2_stays_open_when_the_topt_coverage_is_missing_in_staging(monkeypa
     gate_2 = next(g for g in report.gates if g.gate_id == "#30")
     assert gate_2.verified is False
     assert "topt coverage: missing" in gate_2.evidence
+
+
+def test_with_no_agree_row_gate_1_reads_open_no_comparator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1523 S6 (G19): With no agree row Gate 1 reads OPEN, 'no comparator', and Gate 4 stays OPEN."""
+    verdicts = _verdicts_without()
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2", oracle_outcomes=[]),
+    )
+
+    report: VisionAuditReport = audit_vision(env="production")
+
+    gate_1 = next(g for g in report.gates if g.gate_id == "#29")
+    assert gate_1.status == "OPEN"
+    assert gate_1.verified is False
+    assert "no comparator" in gate_1.evidence
+
+    gate_4 = next(g for g in report.gates if g.gate_id == "#54")
+    assert gate_4.status == "OPEN"
+    assert gate_4.verified is False
+    assert report.all_passed is False

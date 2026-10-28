@@ -340,6 +340,97 @@ def test_a_crashing_confidence_report_is_a_red_verdict(monkeypatch, written) -> 
     assert [(row["check"], row["ok"]) for row in written] == [("datahub_confidence_report@topt", False)]
 
 
+def test_confidence_report_verdict_is_pending_without_comparator_and_red_when_zero_compared(
+    monkeypatch, written
+) -> None:
+    """#1523 S3: Comparator registered, 0 compared: red. No comparator: pending. Never red for a rate."""
+    from data_engine.datahub import confidence_report
+
+    base_report = {
+        "universe_id": "universe:topt-us-2026-06-30",
+        "cutoff": "2026-06-30T00:00:00+00:00",
+        "run_id": "capture-run:" + "9" * 64,
+        "sources_connected": [],
+        "families": {},
+        "accuracy": {"close": {"agreement_rate": "1"}},
+    }
+
+    class _CommitSink(_Sink):
+        def commit(self) -> None:
+            return None
+
+    monkeypatch.setattr(psycopg, "connect", _CommitSink())
+    monkeypatch.setattr(quality, "_await_settled", lambda _context: None)
+    monkeypatch.setattr(quality, "stale_served_heads", lambda *_a, **_k: [])
+    monkeypatch.setattr(confidence_report, "persist", lambda *_a, **_k: "datahub-confidence-report:" + "1" * 64)
+    monkeypatch.setattr(quality, "record_oracle_outcomes_safely", lambda *_a, **_k: 0)
+    config = quality.ConfidenceReportConfig(executed_at="2026-09-16T00:45:00+00:00", universe="topt")
+
+    # 1. No comparator -> pending (ok=None)
+    monkeypatch.setattr(confidence_report, "compile_report", lambda *_a, **_k: {**base_report, "comparators": {}})
+    quality.run_confidence_report(dg.build_op_context(), config)
+    assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
+        ("datahub_confidence_report@topt", None, "no comparator for universe:topt-us-2026-06-30")
+    ]
+
+    # 2. Comparator registered, 0 compared -> red (ok=False)
+    written.clear()
+    monkeypatch.setattr(
+        confidence_report,
+        "compile_report",
+        lambda *_a, **_k: {**base_report, "comparators": {"filing": {"compared": 0, "disagree": 0}}},
+    )
+    with pytest.raises(dg.Failure, match="compared 0 rows"):
+        quality.run_confidence_report(dg.build_op_context(), config)
+    assert [(row["check"], row["ok"]) for row in written] == [("datahub_confidence_report@topt", False)]
+
+    # 3. Comparator registered, >0 compared with 100% disagree rate -> green (never red for a rate)
+    written.clear()
+    monkeypatch.setattr(
+        confidence_report,
+        "compile_report",
+        lambda *_a, **_k: {**base_report, "comparators": {"filing": {"compared": 5, "disagree": 5}}},
+    )
+    quality.run_confidence_report(dg.build_op_context(), config)
+    assert [(row["check"], row["ok"]) for row in written] == [("datahub_confidence_report@topt", True)]
+
+
+def test_market_data_freshness_is_red_when_one_symbol_is_stale() -> None:
+    """#1523 S3: market_data_freshness reads the oldest symbol's newest trading date (one stale symbol -> red)."""
+    from data_engine.lanes import market_data
+
+    class _BarCursor:
+        def __init__(self, rows: list[tuple[str, Any]]) -> None:
+            self._rows = rows
+
+        def __enter__(self) -> _BarCursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _query: str, _params: Any = None) -> None:
+            return None
+
+        def fetchall(self) -> list[tuple[str, Any]]:
+            return list(self._rows)
+
+    class _BarConn:
+        def __init__(self, rows: list[tuple[str, Any]]) -> None:
+            self._rows = rows
+
+        def cursor(self) -> _BarCursor:
+            return _BarCursor(self._rows)
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)  # latest closed session is 2026-10-05
+    conn = _BarConn(
+        [("AAPL", datetime(2026, 10, 5, tzinfo=UTC).date()), ("MSFT", datetime(2026, 9, 25, tzinfo=UTC).date())]
+    )
+    verdict_result = market_data.judge_bar_freshness(conn, ["AAPL", "MSFT"], now=now)  # type: ignore[arg-type]
+    assert verdict_result.ok is False
+    assert "2026-09-25" in verdict_result.summary
+
+
 # --- the surface proof judges a settled head (2026-09-17) --------------------------------
 
 

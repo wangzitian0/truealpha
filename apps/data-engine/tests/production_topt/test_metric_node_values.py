@@ -239,6 +239,19 @@ def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit
     assert raw_row[2] == UUID("11111111-2222-5333-8444-555555555555")
     assert raw_row[6] == Decimal("10000000")  # 10B / 1000
     assert raw_row[8] == "available"
+    assert raw_row[10] == "verified"
+
+    unverified_conn = _FakeNodeConnection()
+    materialize_metric_node_values(
+        unverified_conn,  # type: ignore[arg-type]
+        factor_inputs=(factor_input,),
+        gppe_definition=gppe_def,
+        tier_definition_id="strategy-definition:" + "e" * 64,
+        periods_by_listing={"listing:xnas:nvda": (date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31))},
+        evidence_by_listing={},
+        forest=extended_forest,
+    )
+    assert all(row[10] == "degraded" and row[11] == "not_evaluated" for row in unverified_conn.inserted_rows)
 
 
 def test_f3_strategy_definition_evaluates_trees_by_key_and_allows_omitting_universe() -> None:

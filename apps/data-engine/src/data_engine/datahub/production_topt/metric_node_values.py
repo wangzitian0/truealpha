@@ -168,7 +168,7 @@ def materialize_metric_node_values(
         base_confidence = min(cell.confidence for cell in factor_input.cell_inputs)
         financial_payload = financial_by_listing.get(factor_input.listing_id, {})
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
-        source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.VERIFIED)
+        source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
 
         for tree in forest.trees:
             if issuer_class not in tree.applicability:

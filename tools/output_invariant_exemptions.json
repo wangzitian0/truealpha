@@ -1,4 +1,0 @@
-{
-  "_comment": "#581. An exemption defers an invariant; it never disables one. Each carries the issue that will resolve it and a date after which the check fails anyway, because invariant suites die by accumulating permanent waivers. An exemption for an invariant that is no longer violated also fails: a standing waiver for a fixed defect hides the next occurrence.",
-  "exemptions": []
-}

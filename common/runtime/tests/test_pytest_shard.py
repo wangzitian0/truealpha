@@ -281,6 +281,22 @@ def test_a_harvest_at_or_above_the_floor_does_not_block(known: int, total: int) 
     pytest_shard.require_coverage_floor([_coverage_of(known, total)])
 
 
+def test_a_harvest_of_80_percent_still_partitions_every_file_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1523 S6 (G8): an 80% harvest passes the coverage floor and partitions every file once across shards."""
+    files = pytest_shard.collect(SHARDED_ROOT)[:10]
+    weights = {str(path.relative_to(REPO_ROOT)): float(idx + 1) for idx, path in enumerate(files[:8])}
+    coverage = pytest_shard.weight_coverage("sharded", files, weights, REPO_ROOT)
+    assert (coverage.known, coverage.total) == (8, 10)
+    pytest_shard.require_coverage_floor([coverage])
+
+    monkeypatch.setattr(pytest_shard, "load_weights", lambda *_a, **_k: weights)
+    partitioned = [path for shard_idx in range(3) for path in pytest_shard.shard(files, shard_idx, 3)]
+    assert sorted(partitioned) == sorted(files)
+    assert len(partitioned) == len(set(partitioned)) == 10
+
+
 @pytest.mark.parametrize(("known", "total"), [(76, 154), (1, 4), (0, 10), (0, 0)])
 def test_a_harvest_below_the_floor_blocks_and_names_the_root(known: int, total: int) -> None:
     with pytest.raises(ValueError, match=r"less than 50% of the test files: root "):
