@@ -41,7 +41,6 @@ Its service objective is:
 - daily refresh and a two-day freshness maximum age, exactly matching the embedded
   `DataRequirement`;
 - 100% denominator coverage and at least 95% availability;
-- continuous confidence of at least 0.70 on the 0 to 1 scale;
 - at least two canonical original-source groups; mirrors or resellers of the same
   origin do not increase this count;
 - a corroborated share of at least 95% of graded reconciliation cells reaching the

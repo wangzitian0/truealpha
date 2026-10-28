@@ -122,7 +122,6 @@ class UniverseTick:
 DATA_UNIVERSE_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
     minimum_availability=Decimal("0.70"),
-    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
     minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
     # 0.90 for a 102-listing universe with one primary+one corroborating vendor:
     # per-symbol publication-tail stragglers (#622's same-day narrowing grades them
@@ -140,7 +139,6 @@ DATA_UNIVERSE_OBJECTIVES = ServiceObjectives(
 SENTINEL_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
     minimum_availability=Decimal("0.70"),
-    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
     minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
     minimum_corroborated_share=Decimal("0"),
 )

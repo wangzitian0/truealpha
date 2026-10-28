@@ -410,7 +410,10 @@ def _evaluate_issuer(
         )
 
     consumed_confidence = min(issuer.records[key][1] for key, _reason in required)
-    if consumed_confidence < definition.eligibility.minimum_confidence:
+    if (
+        definition.eligibility.minimum_confidence is not None
+        and consumed_confidence < definition.eligibility.minimum_confidence
+    ):
         return (
             _excluded(
                 issuer.issuer_id,

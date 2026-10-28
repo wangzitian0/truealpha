@@ -334,6 +334,15 @@ _FORMULA_FIELDS = {
 }
 
 
+#: The confidence-floor fields that definition 1.0.0 holds and definition 1.1.0 leaves out (#1517).
+_CONFIDENCE_FLOOR_FIELDS = {
+    "rule_id": "minimum_consumed_confidence_floor",
+    "minimum_confidence": "0.70",
+    "confidence_semantics": "minimum_consumed_input_confidence",
+    "below_floor_reason": "below_confidence_floor",
+}
+
+
 def _live_payload() -> dict[str, Any]:
     return copy.deepcopy(load_strategy_definition_corpus(LIVE_STRATEGY_DEFINITION_RESOURCE)["strategy_definition"])
 
@@ -345,6 +354,13 @@ def test_the_live_definition_is_1_1_0_and_changes_only_the_owner_of_labor_effici
     assert (frozen.labor_efficiency.factor_version, live.labor_efficiency.factor_version) == ("0.1.0", "0.2.0")
     for name in ("factor_key", "risk_free", "unit", "quantization"):
         assert getattr(live.labor_efficiency, name) == getattr(frozen.labor_efficiency, name), name
+    for name in ("maximum_input_age_days", "stale_input_reason"):
+        assert getattr(live.eligibility, name) == getattr(frozen.eligibility, name), name
+    assert [getattr(live.eligibility, name) for name in _CONFIDENCE_FLOOR_FIELDS] == [None] * len(
+        _CONFIDENCE_FLOOR_FIELDS
+    )
+    assert not set(_CONFIDENCE_FLOOR_FIELDS) & set(json.loads(live.eligibility.model_dump_json()))
+    assert set(_CONFIDENCE_FLOOR_FIELDS) <= set(json.loads(frozen.eligibility.model_dump_json()))
     assert live.definition_version == "1.1.0"
     assert live.provisional_semantics is False
     assert live.content_sha256 != frozen.content_sha256
@@ -354,7 +370,6 @@ def test_the_live_definition_is_1_1_0_and_changes_only_the_owner_of_labor_effici
         "price_to_gross_profit",
         "tier_valuation",
         "valuation_gap",
-        "eligibility",
         "selection",
         "sizing",
         "execution",
@@ -362,6 +377,13 @@ def test_the_live_definition_is_1_1_0_and_changes_only_the_owner_of_labor_effici
         "total_return",
     ):
         assert getattr(live, name) == getattr(frozen, name), f"definition 1.1.0 changed {name}"
+
+
+def test_the_confidence_floor_fields_are_all_present_or_all_absent() -> None:
+    payload = _live_payload()
+    payload["eligibility"]["minimum_confidence"] = "0.70"
+    with pytest.raises(ValidationError, match="all present or all absent"):
+        _validate(payload)
 
 
 def test_the_live_definition_states_no_formula_and_pins_one_tree_per_class() -> None:

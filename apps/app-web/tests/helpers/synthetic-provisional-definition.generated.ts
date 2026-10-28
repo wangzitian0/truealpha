@@ -11,4 +11,4 @@
 
 import type { RegisteredStrategyDefinition } from "../../src/contracts/strategyDefinitions.generated";
 
-export const SYNTHETIC_PROVISIONAL_DEFINITION: RegisteredStrategyDefinition = { version: "0.0.1-synthetic-provisional", content_sha256: "873e0209b388712877b468096191b46a3ab63ffa8415bbb3ae80acd3f1812d2c", provisional_semantics: true };
+export const SYNTHETIC_PROVISIONAL_DEFINITION: RegisteredStrategyDefinition = { version: "0.0.1-synthetic-provisional", content_sha256: "c6ed3b469e022f5d8554eaa848c32e766292c20a7790f158c3268dcc503d76ff", provisional_semantics: true };

@@ -943,3 +943,58 @@ def test_the_decision_of_a_bank_with_a_zero_tangible_common_equity_is_charged_no
     )
     assert decision.exclusion_reason is None
     assert decision.capital_adjusted_labor_efficiency == Decimal("272539.18")
+
+
+# -- stage A4 (#1517): definition 1.1.0 removes the confidence floor and carries confidence on decisions ----
+
+
+def test_ddog_at_0_65_confidence_is_eligible_and_carries_its_confidence_under_1_1_0() -> None:
+    """In 1.0.0, DDOG (minimum confidence 0.65 on headcount) was excluded by the 0.70 floor.
+    Under 1.1.0 (#1517 stage A4), there is no confidence floor: DDOG is evaluated and carries
+    confidence 0.65, and an in-band issuer at 0.65 confidence is ranked and selected."""
+    corpus = json.loads(resources.files("truealpha_contracts.data").joinpath(_FROZEN_RESOURCE).read_bytes())
+    ddog_golden = next(d for d in corpus["golden_decision_set"]["decisions"] if d["decision_key"] == "ddog-2026-03-31")
+    ddog_records = {
+        record["input_key"]: (Decimal(record["value"]), Decimal(record["confidence"]))
+        for record in ddog_golden["inputs"]
+    }
+    ddog_knowable = {
+        record["input_key"]: datetime.fromisoformat(record["knowable_at"].replace("Z", "+00:00"))
+        for record in ddog_golden["inputs"]
+    }
+    ddog = IssuerInput(
+        issuer_id="issuer:ddog",
+        records=ddog_records,
+        knowable_at=ddog_knowable,
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    in_band_065_records = {
+        **ddog_records,
+        "last_close": (Decimal("40"), Decimal("0.98")),
+    }
+    in_band_065 = IssuerInput(
+        issuer_id="issuer:ddog-in-band",
+        records=in_band_065_records,
+        knowable_at=ddog_knowable,
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    cutoff = datetime.fromisoformat("2026-03-31T23:59:59+00:00")
+    evaluated = {
+        item.issuer_id: item
+        for item in evaluate_cutoff(
+            [ddog, in_band_065],
+            definition=_definition(),
+            cutoff_at=cutoff,
+            risk_free_rate=Decimal("0.0380"),
+        )
+    }
+    assert evaluated["issuer:ddog"].eligible is True
+    assert evaluated["issuer:ddog"].exclusion_reason is None
+    assert evaluated["issuer:ddog"].confidence == Decimal("0.65")
+    assert evaluated["issuer:ddog"].capital_adjusted_labor_efficiency == Decimal("307127.77")
+    assert evaluated["issuer:ddog-in-band"].eligible is True
+    assert evaluated["issuer:ddog-in-band"].exclusion_reason is None
+    assert evaluated["issuer:ddog-in-band"].confidence == Decimal("0.65")
+    assert evaluated["issuer:ddog-in-band"].rank == 1
+    assert evaluated["issuer:ddog-in-band"].outcome is GoldenDecisionOutcome.SELECTED
+    assert evaluated["issuer:ddog-in-band"].target_weight == Decimal("1.000000")

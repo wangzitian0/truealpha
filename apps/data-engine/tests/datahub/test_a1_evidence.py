@@ -93,10 +93,10 @@ def test_the_gate_thresholds_are_the_accepted_demands_own_numbers() -> None:
     objective = json.loads(DEMAND_FIXTURE.read_text())["quality_objective"]
     assert Decimal(objective["minimum_coverage"]) == ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage
     assert Decimal(objective["minimum_availability"]) == ACCEPTED_SERVICE_OBJECTIVES.minimum_availability
-    assert Decimal(objective["minimum_confidence_score"]) == ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score
     assert (
         objective["minimum_independent_origin_groups"] == ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups
     )
+    assert "minimum_confidence_score" not in objective
     assert "confidence_target_band" not in objective
 
 
@@ -109,8 +109,6 @@ def test_a_report_meeting_every_objective_raises_no_objection() -> None:
     [
         ("denominator_coverage", {"terminal_coverage": "0.9900"}),
         ("availability", {"availability": "0.9400"}),
-        # 0.6999 is just under the demanded 0.70.
-        ("continuous_confidence", {"denominator_mean_confidence": "0.6999"}),
         # One canonical origin: nothing corroborated it (#344's missing second origin).
         (
             "corroborated_share",
@@ -176,7 +174,6 @@ def test_a_malformed_report_fails_closed() -> None:
     assert {item.objective for item in unmet_objectives({})} == {
         "denominator_coverage",
         "availability",
-        "continuous_confidence",
         "corroborated_share",
     }
     assert any(item.objective == "availability" for item in unmet_objectives(_report(availability="n/a")))

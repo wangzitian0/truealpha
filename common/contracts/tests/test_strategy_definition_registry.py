@@ -41,9 +41,9 @@ from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 #: (governance/reviews/large_model_value_v0-definition-1.0.0.md). Written out here as an
 #: oracle; the registry under test does not supply it.
 _V1 = StrategyDefinitionIdentity("1.0.0", "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803", False)
-#: Definition 1.1.0 (#1518, owner decision D2): the live definition. It pins a labor-efficiency tree per
-#: class. Written out as an oracle, like `_V1`.
-_V11 = StrategyDefinitionIdentity("1.1.0", "8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0", False)
+#: Definition 1.1.0 (#1518, #1517): the live definition. It pins a labor-efficiency tree per
+#: class and removes the confidence floor. Written out as an oracle, like `_V1`.
+_V11 = StrategyDefinitionIdentity("1.1.0", "ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181", False)
 #: The frozen #21 file, named on purpose: the live resource is definition 1.1.0.
 _FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 #: Definition 0.1.0, whose file the owner deleted. Production and staging still hold its runs.

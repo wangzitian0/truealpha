@@ -1,17 +1,16 @@
 {
-  "content_sha256": "93c5d3284a7a9f00427c141a1a210d4ea9d9ac8aef32ffba5f859f96b3b9ae3f",
+  "content_sha256": "5bffa9d0f3f65722491681f148fb0daa1b46f308b439953b259ed709ff16c554",
   "effective_at": "2026-07-17T00:00:00Z",
   "quality_objective": {
     "confidence_policy_id": "confidence-policy:3333333333333333333333333333333333333333333333333333333333333333",
     "confidence_policy_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
     "conflict_behavior": "report_and_abstain",
-    "content_sha256": "ceba0db2d2200dd925ecb371086b659295cda850c905ddc54f74645f6190ffab",
+    "content_sha256": "a718cd5d5a12412b9fe5a6ada164521fd79178a2cb2812fcae0ce57ab279e462",
     "minimum_availability": "0.95",
-    "minimum_confidence_score": "0.70",
     "minimum_coverage": "1",
     "minimum_independent_origin_groups": 2,
     "origin_group_rule": "canonical_original_source",
-    "quality_objective_id": "quality-objective:ceba0db2d2200dd925ecb371086b659295cda850c905ddc54f74645f6190ffab",
+    "quality_objective_id": "quality-objective:a718cd5d5a12412b9fe5a6ada164521fd79178a2cb2812fcae0ce57ab279e462",
     "report_cadence": "P1D",
     "report_dimensions": [
       "availability",
@@ -122,7 +121,7 @@
       "service_requirement_id": "service-requirement:319fd29f52ede565accd58e3f8889e7e4c60bc9a759866a2ae24a81893becf59"
     }
   ],
-  "service_demand_id": "datahub-service-demand:93c5d3284a7a9f00427c141a1a210d4ea9d9ac8aef32ffba5f859f96b3b9ae3f",
+  "service_demand_id": "datahub-service-demand:5bffa9d0f3f65722491681f148fb0daa1b46f308b439953b259ed709ff16c554",
   "universe": {
     "content_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
     "universe_id": "universe:topt-candidate-v1",

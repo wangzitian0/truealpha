@@ -99,7 +99,6 @@ def _demand() -> DataHubServiceDemand:
         minimum_availability=Decimal("0.95"),
         confidence_policy_id=f"confidence-policy:{'3' * 64}",
         confidence_policy_sha256="3" * 64,
-        minimum_confidence_score=Decimal("0.70"),
         minimum_independent_origin_groups=2,
         report_cadence=timedelta(days=1),
         report_dimensions=frozenset(QualityReportDimension),
@@ -146,7 +145,6 @@ def test_topt_service_demand_is_content_addressed_source_neutral_and_round_trips
 
     assert repeated == demand
     assert demand.service_demand_id.endswith(demand.content_sha256)
-    assert demand.quality_objective.minimum_confidence_score == Decimal("0.70")
     assert demand.quality_objective.minimum_independent_origin_groups == 2
     forbidden_keys = {"provider", "source", "credential", "host", "bucket", "database", "latest"}
     assert forbidden_keys.isdisjoint(_nested_keys(payload))
@@ -342,13 +340,13 @@ def test_required_field_rejects_absent_sample_assertion() -> None:
 
 def test_decimal_quality_targets_reject_binary_float() -> None:
     payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
-    payload["minimum_confidence_score"] = 0.7
+    payload["minimum_availability"] = 0.95
 
     with pytest.raises(ValidationError, match="binary float"):
         DataQualityObjective.model_validate(payload)
 
 
-@pytest.mark.parametrize("field_name", ("minimum_coverage", "minimum_availability", "minimum_confidence_score"))
+@pytest.mark.parametrize("field_name", ("minimum_coverage", "minimum_availability"))
 def test_decimal_quality_targets_reject_booleans(field_name: str) -> None:
     payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
     payload[field_name] = True
