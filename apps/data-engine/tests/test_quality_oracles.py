@@ -19,7 +19,7 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.quality.invariants import INVARIANTS, check
-from data_engine.quality.vendor_oracle import Drift, gross_profit, latest_across_variants, period_reporting
+from data_engine.quality.vendor_oracle import Drift, gross_profit, latest_across_variants, period_reporting, revenue
 
 _CUTOFF = date(2026, 7, 27)
 
@@ -106,6 +106,22 @@ def test_facts_filed_after_the_cutoff_are_not_knowable() -> None:
     found = latest_across_variants(facts, ("Revenues",), "USD", _CUTOFF)
     assert found is not None
     assert found.value == Decimal("100")
+
+
+def test_a_figure_is_knowable_from_the_day_its_winning_fact_was_filed() -> None:
+    """`filed` is the filing day of the fact that won, and of the later fact when a difference is derived (#1523)."""
+    facts = _facts(
+        Revenues=[
+            _annual("2024-12-31", "2024-01-01", 100, "2025-02-01"),
+            _annual("2025-12-31", "2025-01-01", 200, "2026-02-05"),
+        ],
+        CostOfRevenue=[_annual("2025-12-31", "2025-01-01", 50, "2026-03-09")],
+    )
+    revenue_fact = revenue(facts, _CUTOFF)
+    derived = gross_profit(facts, _CUTOFF)
+    assert revenue_fact is not None and derived is not None
+    assert (revenue_fact.value, revenue_fact.filed) == (Decimal(200), date(2026, 2, 5))
+    assert (derived.value, derived.filed) == (Decimal(150), date(2026, 3, 9))
 
 
 def test_quarterly_spans_never_win_over_annual_ones() -> None:

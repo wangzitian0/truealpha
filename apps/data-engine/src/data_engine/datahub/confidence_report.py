@@ -43,19 +43,18 @@ origin that never published the primary's period `second_origin_other_period` (t
 analogue of #622). Headcount, pre-provision profit and shares outstanding have no policy and
 grade `no_agreement_policy` with two origins.
 
-The ACCURACY section is the half a self-consistent warehouse cannot supply: for every bar
-field and every fused fundamental, the agreement the engine already computed,
-cross-checked field by field against the persisted quality report; for revenue and gross
-profit, `quality.vendor_oracle`'s deliberately independent SEC re-derivation over a
-sample of issuers, fetched live at report time through the source gateway.
+The ACCURACY section holds the agreement the engine already computed for every bar field
+and every fused fundamental, cross-checked field by field against the persisted quality report.
+The outside comparisons are not in the report payload. `mart.oracle_outcomes` holds them, one
+row per comparison (`oracle_outcomes.py`, #1523): the independent parse of revenue and gross
+profit over the whole head, and the index operator's listed units.
 """
 
 from __future__ import annotations
 
 import re
-import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -113,7 +112,6 @@ from data_engine.datahub.question_coverage import (
     governed_head_of,
 )
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
-from data_engine.quality import vendor_oracle
 
 REPORT_VERSION = "datahub-confidence-report:v1"
 REPORT_ID_PREFIX = "datahub-confidence-report"
@@ -159,8 +157,6 @@ HEADCOUNT_LINEAGE: Mapping[str, str] = {"10k-extraction": "sec-10k", "manual-rev
 NASDAQ_INDEX_ORIGIN = "origin:nasdaq-index:v1"
 NPORT_ORIGIN = "origin:nport:v1"
 MEMBERSHIP_LINEAGE: Mapping[str, str] = {NASDAQ_INDEX_ORIGIN: "nasdaq-index", NPORT_ORIGIN: "sec-nport"}
-
-DEFAULT_ORACLE_ISSUERS = 5
 
 INDEPENDENCE_RULE = (
     "two origins are independent when their lineages differ; a mirror, reseller or second "
@@ -772,116 +768,6 @@ def stored_confidence_metadata(rows: Iterable[tuple[str, Decimal, int]]) -> dict
     }
 
 
-# -- accuracy: the SEC oracle --------------------------------------------------------------------
-
-ORACLE_FIELDS: tuple[str, ...] = ("revenue", "gross_profit")
-
-
-def sec_oracle_section(
-    issuers: Sequence[tuple[str, str, Decimal | None, Decimal | None]],
-    *,
-    cutoff: date,
-    ticker_index: Callable[[], Mapping[str, int]] | None = None,
-    facts_for: Callable[[int], Mapping[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Re-derive revenue and gross profit for each (subject, ticker, revenue, gross_profit)
-    through `quality.vendor_oracle`'s independent route and report agreement per field.
-
-    Pure given its two fetchers; without them (no SEC user agent configured) it reports
-    that nothing was compared rather than comparing against nothing.
-    """
-    section: dict[str, Any] = {
-        "oracle": "quality.vendor_oracle",
-        "fields": list(ORACLE_FIELDS),
-        "cutoff": cutoff.isoformat(),
-        "issuers_requested": len(issuers),
-        "issuers_compared": 0,
-        "rows": [],
-        "skipped": {},
-        "per_field": {},
-    }
-    if ticker_index is None or facts_for is None:
-        section["reason"] = "no_sec_user_agent"
-        return section
-    index = ticker_index()
-    facts_cache: dict[int, Mapping[str, Any]] = {}
-    per_field: dict[str, dict[str, int]] = {name: {"compared": 0, "agreed": 0} for name in ORACLE_FIELDS}
-    for subject_id, ticker, mart_revenue, mart_gross_profit in issuers:
-        cik = index.get(ticker.upper().replace(".", "-"))
-        if cik is None:
-            section["skipped"][subject_id] = "no_cik"
-            continue
-        if cik not in facts_cache:
-            facts_cache[cik] = facts_for(cik)
-        facts = dict(facts_cache[cik])
-        drifts = {
-            "revenue": vendor_oracle.Drift(
-                ticker=ticker,
-                field="revenue",
-                mart_value=mart_revenue,
-                vendor=vendor_oracle.latest_across_variants(facts, vendor_oracle._REVENUE_CONCEPTS, "USD", cutoff),
-                cutoff=cutoff,
-                mart_period_end=vendor_oracle.period_reporting(
-                    facts, vendor_oracle._REVENUE_CONCEPTS, mart_revenue, cutoff
-                ),
-            ),
-            "gross_profit": vendor_oracle.Drift(
-                ticker=ticker,
-                field="gross_profit",
-                mart_value=mart_gross_profit,
-                vendor=vendor_oracle.gross_profit(facts, cutoff),
-                cutoff=cutoff,
-                mart_period_end=vendor_oracle.period_reporting(facts, ("GrossProfit",), mart_gross_profit, cutoff),
-            ),
-        }
-        row: dict[str, Any] = {"subject_id": subject_id, "ticker": ticker, "cik": cik}
-        for name, drift in drifts.items():
-            compared = drift.vendor is not None
-            if compared:
-                per_field[name]["compared"] += 1
-                per_field[name]["agreed"] += int(drift.agrees)
-            delta = (
-                str(abs(drift.mart_value - drift.vendor.value))
-                if drift.vendor is not None and drift.mart_value is not None
-                else None
-            )
-            row[name] = {
-                "mart_value": None if drift.mart_value is None else str(drift.mart_value),
-                "vendor_value": None if drift.vendor is None else str(drift.vendor.value),
-                "vendor_period_end": None if drift.vendor is None else drift.vendor.period_end.isoformat(),
-                "vendor_concept": None if drift.vendor is None else drift.vendor.concept,
-                "mart_period_end": None if drift.mart_period_end is None else drift.mart_period_end.isoformat(),
-                "compared": compared,
-                "agrees": drift.agrees if compared else None,
-                "delta": delta,
-                "staleness_years": drift.staleness_years,
-            }
-        section["rows"].append(row)
-        section["issuers_compared"] += 1
-    section["per_field"] = {
-        name: {**counts, "agreement_rate": _ratio(counts["agreed"], counts["compared"])}
-        for name, counts in per_field.items()
-    }
-    return section
-
-
-@dataclass(frozen=True)
-class SecOracle:
-    """The live SEC fetchers behind the accuracy section, paced as `vendor_oracle` paces."""
-
-    user_agent: str
-
-    def ticker_index(self) -> Mapping[str, int]:
-        index = vendor_oracle.ticker_cik_index(self.user_agent)
-        time.sleep(vendor_oracle._PACE_SECONDS)
-        return index
-
-    def facts_for(self, cik: int) -> Mapping[str, Any]:
-        facts = vendor_oracle.company_facts(cik, self.user_agent)
-        time.sleep(vendor_oracle._PACE_SECONDS)
-        return facts
-
-
 # -- loaders: the persisted observations of one run --------------------------------------------
 
 
@@ -890,7 +776,6 @@ class _Subject:
     ticker: str | None = None
     issuer_id: str | None = None
     origins: dict[str, list[OriginValue]] = field(default_factory=dict)
-    financial: dict[str, Decimal | None] = field(default_factory=dict)
 
     def add(self, family: str, origin: OriginValue) -> None:
         self.origins.setdefault(family, []).append(origin)
@@ -1139,10 +1024,6 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
                 if coordinate is None:
                     continue
                 primary, origin_source, origin_id = False, coordinate[0], coordinate[1]
-            if primary:
-                # The served figures (and the factor inputs) are the primary's alone.
-                for name in FINANCIAL_FIELDS:
-                    subject.financial[name] = _decimal(_text(payload.get(name)))
             # Aligned once the subject's observations are all read: a corroborating origin
             # asserts at the primary's period, whichever row came first.
             financial.setdefault(str(subject_id), []).append(
@@ -1423,11 +1304,8 @@ def build_report(
     head: GovernedHead,
     executed_at: datetime,
     environment: str,
-    sample_subjects: Sequence[str] | None = None,
-    oracle_issuers: int = DEFAULT_ORACLE_ISSUERS,
-    oracle: SecOracle | None = None,
 ) -> dict[str, Any]:
-    """Grade the head's cells, sample them, and run the accuracy oracle."""
+    """Grade the head's cells, sample the subjects of the universe record, and cross-check the accuracy."""
     cutoff = head.cutoff
     subjects = load_run_subjects(connection, head.run_id, cutoff)
     source = _universe_source(universe)
@@ -1458,9 +1336,8 @@ def build_report(
         for family in PLANE_FAMILIES:
             families[family]["routes"] = membership_notes
 
-    samples = list(sample_subjects) if sample_subjects else list(record(key_of_lane(universe)).report_sample)
     sample: dict[str, Any] = {}
-    for subject_id in samples:
+    for subject_id in record(key_of_lane(universe)).report_sample:
         entry: dict[str, Any] = {"ticker": subjects[subject_id].ticker if subject_id in subjects else None}
         for name, family_cells in grades.items():
             if subject_id in family_cells:
@@ -1469,21 +1346,6 @@ def build_report(
         sample[subject_id] = entry
 
     quality_report_id, persisted_outcomes = load_quality_report_field_outcomes(connection, head.run_id)
-    # The oracle's sample: the configured sample subjects first, then the universe in
-    # order, each once, bounded by `oracle_issuers` — only issuers whose head carries a
-    # revenue figure, because a mart gap is availability's finding, not accuracy's.
-    oracle_issuers_selected: list[tuple[str, str, Decimal | None, Decimal | None]] = []
-    seen: set[str] = set()
-    for subject_id in [*samples, *sorted(subjects)]:
-        subject = subjects.get(subject_id)
-        if subject is None or subject_id in seen or not subject.ticker or subject.financial.get("revenue") is None:
-            continue
-        seen.add(subject_id)
-        oracle_issuers_selected.append(
-            (subject_id, subject.ticker, subject.financial.get("revenue"), subject.financial.get("gross_profit"))
-        )
-        if len(oracle_issuers_selected) >= max(0, oracle_issuers):
-            break
     # Every bar field and fused fundamental is cross-checked against the quality report's
     # grade of that field, so "how many metrics are HIGH" is answered by two reports that
     # agree, not one.
@@ -1497,12 +1359,6 @@ def build_report(
         )
         for name in CROSS_CHECKED_FAMILIES
     }
-    accuracy["sec_oracle"] = sec_oracle_section(
-        oracle_issuers_selected,
-        cutoff=utc_day(cutoff),
-        ticker_index=None if oracle is None else oracle.ticker_index,
-        facts_for=None if oracle is None else oracle.facts_for,
-    )
     lineages = sorted(
         {
             origin.lineage
@@ -1539,7 +1395,6 @@ def build_report(
         "metadata": {
             "stored_confidence": stored_confidence_metadata(load_stored_confidence(connection, head.run_id)),
             "quality_report_id": quality_report_id,
-            "oracle_issuers_requested": oracle_issuers,
         },
     }
 
@@ -1549,9 +1404,6 @@ def compile_report(
     *,
     universe: str,
     executed_at: datetime,
-    sample_subjects: Sequence[str] | None = None,
-    oracle_issuers: int = DEFAULT_ORACLE_ISSUERS,
-    oracle: SecOracle | None = None,
 ) -> dict[str, Any] | None:
     """The report for one lane universe's governed head, or None when it has no head yet."""
     head = governed_head_of(connection, key_of_lane(universe))
@@ -1563,9 +1415,6 @@ def compile_report(
         head=head,
         executed_at=executed_at,
         environment=declared_environment(connection),
-        sample_subjects=sample_subjects,
-        oracle_issuers=oracle_issuers,
-        oracle=oracle,
     )
 
 

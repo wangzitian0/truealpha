@@ -29,6 +29,10 @@ that the tick landed on the same UTC day is read from the index, and SEC is aske
 independence of the oracle is its parser. It cannot catch a defect of the fetch step, because
 it reads the same bytes. The sha256 of each landed document is in `raw.fetches` and in the
 ledger row of the call, so a wrong fetch is a lineage question (#1418 B7), not an oracle one.
+
+The parsers (`revenue`, `gross_profit`, `latest_across_variants`) are pure functions of a parsed
+document. `datahub.oracle_outcomes` runs them over the stored bytes that a capture run cited and
+writes one `mart.oracle_outcomes` row per comparison (#1523). That path makes no vendor call.
 """
 
 from __future__ import annotations
@@ -79,11 +83,16 @@ _COGS_CONCEPTS = (
 
 @dataclass(frozen=True)
 class VendorFact:
-    """One independently derived annual figure and the period it belongs to."""
+    """One independently derived annual figure, the period it belongs to and the day it was filed.
+
+    `filed` is the day from which the figure is knowable. A figure derived from two facts (revenue minus
+    cost) is knowable from the later of their two filing days.
+    """
 
     value: Decimal
     period_end: date
     concept: str
+    filed: date
 
 
 @dataclass(frozen=True)
@@ -159,8 +168,10 @@ def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
     return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, sec.company_facts_key(cik))
 
 
-def _annual_entries(facts: dict[str, Any], concept: str, unit: str, cutoff: date) -> Iterable[tuple[date, Decimal]]:
-    """Annual (period_end, value) pairs for one concept that were filed by `cutoff`."""
+def _annual_entries(
+    facts: dict[str, Any], concept: str, unit: str, cutoff: date
+) -> Iterable[tuple[date, Decimal, date]]:
+    """Annual (period_end, value, filed) triples for one concept that were filed by `cutoff`."""
     entries = facts.get("facts", {}).get("us-gaap", {}).get(concept, {}).get("units", {}).get(unit) or []
     for entry in entries:
         filed_raw, end_raw, start_raw, value_raw = (
@@ -180,7 +191,7 @@ def _annual_entries(facts: dict[str, Any], concept: str, unit: str, cutoff: date
             continue
         if filed > cutoff:
             continue  # not knowable at the cutoff
-        yield end, value
+        yield end, value, filed
 
 
 def latest_across_variants(
@@ -195,10 +206,15 @@ def latest_across_variants(
     """
     best: VendorFact | None = None
     for concept in concepts:
-        for period_end, value in _annual_entries(facts, concept, unit, cutoff):
+        for period_end, value, filed in _annual_entries(facts, concept, unit, cutoff):
             if best is None or period_end > best.period_end:
-                best = VendorFact(value=value, period_end=period_end, concept=concept)
+                best = VendorFact(value=value, period_end=period_end, concept=concept, filed=filed)
     return best
+
+
+def revenue(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
+    """Reported revenue of the most recent annual period across every revenue variant."""
+    return latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
 
 
 def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
@@ -209,16 +225,18 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
     present, so "reported wins" is not a safe rule; the later period wins here.
     """
     direct = latest_across_variants(facts, ("GrossProfit",), "USD", cutoff)
-    revenue_by_period = dict(_all_periods(facts, _REVENUE_CONCEPTS, cutoff))
-    cost_by_period = dict(_all_periods(facts, _COGS_CONCEPTS, cutoff))
+    revenue_by_period = _all_periods(facts, _REVENUE_CONCEPTS, cutoff)
+    cost_by_period = _all_periods(facts, _COGS_CONCEPTS, cutoff)
     shared = set(revenue_by_period) & set(cost_by_period)
     derived: VendorFact | None = None
     if shared:
         end = max(shared)
+        (revenue_value, revenue_filed), (cost_value, cost_filed) = revenue_by_period[end], cost_by_period[end]
         derived = VendorFact(
-            value=revenue_by_period[end] - cost_by_period[end],
+            value=revenue_value - cost_value,
             period_end=end,
             concept="Revenues-CostOfRevenue",
+            filed=max(revenue_filed, cost_filed),
         )
     candidates = [item for item in (direct, derived) if item is not None]
     return max(candidates, key=lambda item: item.period_end) if candidates else None
@@ -237,19 +255,19 @@ def period_reporting(
         return None
     found: date | None = None
     for concept in concepts:
-        for period_end, candidate in _annual_entries(facts, concept, "USD", cutoff):
+        for period_end, candidate, _filed in _annual_entries(facts, concept, "USD", cutoff):
             if candidate == value and (found is None or period_end > found):
                 found = period_end
     return found
 
 
-def _all_periods(facts: dict[str, Any], concepts: Sequence[str], cutoff: date) -> Iterable[tuple[date, Decimal]]:
-    """Every annual period any variant reports, latest variant winning a shared period."""
-    merged: dict[date, Decimal] = {}
+def _all_periods(facts: dict[str, Any], concepts: Sequence[str], cutoff: date) -> dict[date, tuple[Decimal, date]]:
+    """Every annual period any variant reports as (value, filed), the first variant winning a shared period."""
+    merged: dict[date, tuple[Decimal, date]] = {}
     for concept in concepts:
-        for period_end, value in _annual_entries(facts, concept, "USD", cutoff):
-            merged.setdefault(period_end, value)
-    return merged.items()
+        for period_end, value, filed in _annual_entries(facts, concept, "USD", cutoff):
+            merged.setdefault(period_end, (value, filed))
+    return merged
 
 
 def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decimal | None, Decimal | None], ...]:

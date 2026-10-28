@@ -37,7 +37,6 @@ from data_engine.datahub.confidence_report import (
     content_address,
     family_policy,
     persist,
-    sec_oracle_section,
     stored_confidence_metadata,
 )
 from data_engine.datahub.production_topt import source_registrations as registry
@@ -916,63 +915,6 @@ def test_stored_confidence_is_reported_as_measured_and_marked_unused() -> None:
     assert metadata["constant_per_semantic"] is True
     varied = stored_confidence_metadata(rows + [("market-price", Decimal("0.75"), 3)])
     assert varied["constant_per_semantic"] is False
-
-
-# -- accuracy: the SEC oracle's independent re-derivation -----------------------------------------
-
-
-def _facts(revenue: str, cogs: str, end: str = "2025-09-27") -> dict:
-    row = {"end": end, "start": "2024-09-29", "filed": "2025-10-31"}
-    return {
-        "facts": {
-            "us-gaap": {
-                "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [{**row, "val": revenue}]}},
-                "CostOfGoodsAndServicesSold": {"units": {"USD": [{**row, "val": cogs}]}},
-            }
-        }
-    }
-
-
-def test_sec_oracle_reports_agreement_per_field_over_compared_issuers() -> None:
-    issuers = [
-        ("listing:xnas:aapl", "AAPL", Decimal("416161000000"), Decimal("195201000000")),  # agrees
-        ("listing:xnas:stale", "STAL", Decimal("100"), Decimal("40")),  # revenue stale, GP agrees
-        ("listing:xnas:none", "NONE", None, None),  # mart has nothing
-        ("listing:xnas:unk", "UNKN", Decimal("1"), Decimal("1")),  # no CIK -> not compared
-    ]
-    facts = {
-        1: _facts("416161000000", "220960000000"),
-        2: _facts("120", "80"),
-        3: _facts("5", "1"),
-    }
-    section = sec_oracle_section(
-        issuers,
-        cutoff=CUTOFF.date(),
-        ticker_index=lambda: {"AAPL": 1, "STAL": 2, "NONE": 3},
-        facts_for=lambda cik: facts[cik],
-    )
-    assert section["oracle"] == "quality.vendor_oracle"
-    assert section["fields"] == ["revenue", "gross_profit"]
-    assert section["issuers_requested"] == 4 and section["issuers_compared"] == 3
-    assert section["skipped"] == {"listing:xnas:unk": "no_cik"}
-    by_subject = {row["subject_id"]: row for row in section["rows"]}
-    aapl = by_subject["listing:xnas:aapl"]
-    assert aapl["revenue"]["agrees"] is True and aapl["revenue"]["vendor_value"] == "416161000000"
-    assert aapl["gross_profit"]["agrees"] is True and aapl["gross_profit"]["vendor_concept"] == "Revenues-CostOfRevenue"
-    stale = by_subject["listing:xnas:stale"]
-    assert stale["revenue"]["agrees"] is False and stale["revenue"]["delta"] == "20"
-    none = by_subject["listing:xnas:none"]
-    assert none["revenue"]["agrees"] is False and none["revenue"]["mart_value"] is None
-    # Agreement per field counts only cells where the vendor asserts a value.
-    assert section["per_field"] == {
-        "revenue": {"compared": 3, "agreed": 1, "agreement_rate": "0.3333"},
-        "gross_profit": {"compared": 3, "agreed": 2, "agreement_rate": "0.6667"},
-    }
-
-
-def test_sec_oracle_without_a_fetcher_says_so_instead_of_guessing() -> None:
-    section = sec_oracle_section([("listing:xnas:aapl", "AAPL", Decimal("1"), Decimal("1"))], cutoff=CUTOFF.date())
-    assert section["issuers_compared"] == 0 and section["reason"] == "no_sec_user_agent"
 
 
 # -- the deployed wiring ---------------------------------------------------------------------------

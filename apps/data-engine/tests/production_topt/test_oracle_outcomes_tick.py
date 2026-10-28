@@ -1,4 +1,4 @@
-"""#1523 S2a through the deployed op: the QQQ tick records the operator comparison of its run.
+"""#1523 S2a and S2b through the deployed op: the QQQ tick records the outside comparisons of its run.
 
 The op is `run_qqq_live_tick`, as the schedule launches it. The vendor answers are offline and pass
 through the deployed adapters. The capture, freeze, materialization, plausibility gate, pointer
@@ -9,6 +9,10 @@ The head holds two names with the operator's own figures from the Nasdaq-100 cas
 quotes the American depositary shares: a market value of 120,689,786,013 at a last sale price of
 $86.60 makes 1,393,6xx,xxx units. The served count is about four times the witness. AAPL files a count
 within the tolerance of its operator figure.
+
+The stored SEC bytes of each name carry a revenue and a gross profit. The adapter serves 100,000,000 and
+210,000,000. The stored AAPL document says the same. The stored PDD document says revenue 1,000,000,000:
+the served revenue is a tenth of what an independent parse of the same bytes finds (S2b).
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
 from data_engine.datahub.production_topt.universe_plane import parse_nasdaq_index_rows
 from data_engine.lanes.capture import ToptLiveTickConfig, run_qqq_live_tick
 from factors.production_topt import OperatingBranch
+from psycopg.rows import dict_row
 from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
@@ -58,11 +63,17 @@ TICK = datetime(2026, 4, 1, 22, 15, tzinfo=UTC)
 CLOSE = Decimal("40")
 COVER_DATE = date(2026, 1, 20)
 FILED = date(2026, 2, 1)
+ANNUAL_END = date(2025, 12, 31)
+ANNUAL_FILED = date(2026, 2, 20)
+SERVED_REVENUE = Decimal("100000000")
+SERVED_GROSS_PROFIT = Decimal("210000000")
 SERIES_START = date(2025, 12, 1)
 _CASSETTE = Path(__file__).parent / "cassettes" / "nasdaq100_index.bcc3fb15.json"
 
 #: ticker -> (CIK, filed share count). PDD files the ordinary count; AAPL a count near its operator figure.
 MEMBERS = {"PDD": (1737806, Decimal("5693585848")), "AAPL": (320193, Decimal("14700000000"))}
+#: CIK -> the annual revenue that the stored document holds. PDD's is ten times the served revenue.
+DOCUMENT_REVENUE = {1737806: Decimal("1000000000"), 320193: SERVED_REVENUE}
 
 
 def _operator_figures() -> dict[str, tuple[str, str]]:
@@ -71,16 +82,28 @@ def _operator_figures() -> dict[str, tuple[str, str]]:
     return {ticker: (rows[ticker]["market_cap"] or "", rows[ticker]["last_sale_price"] or "") for ticker in MEMBERS}
 
 
+def _annual(value: Decimal) -> dict:
+    """One annual us-gaap figure of the stored document: the year ended 2025-12-31, filed 2026-02-20."""
+    annual = {"start": "2025-01-01", "end": ANNUAL_END.isoformat(), "val": int(value), "filed": str(ANNUAL_FILED)}
+    return {"units": {"USD": [annual]}}
+
+
 def _bundle(shares: Decimal, *, cik: int) -> FinancialFactsBundle:
     accession = f"0000{cik}-26-000001"
     entry = {"end": COVER_DATE.isoformat(), "val": int(shares), "accn": accession, "filed": FILED.isoformat()}
     entry |= {"form": "10-K", "fy": 2025, "fp": "FY"}
-    raw = json.dumps({"facts": {"dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [entry]}}}}})
+    document = {
+        "facts": {
+            "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [entry]}}},
+            "us-gaap": {"Revenues": _annual(DOCUMENT_REVENUE[cik]), "GrossProfit": _annual(SERVED_GROSS_PROFIT)},
+        }
+    }
+    raw = json.dumps(document)
     return FinancialFactsBundle(
-        gross_profit=Decimal("210000000"),
+        gross_profit=SERVED_GROSS_PROFIT,
         total_assets=Decimal("200000000"),
         shares_outstanding=shares,
-        revenue=Decimal("100000000"),
+        revenue=SERVED_REVENUE,
         pre_provision_profit=None,
         raw_bytes=raw.encode(),
         knowable_at=datetime.combine(FILED, datetime.min.time(), tzinfo=UTC),
@@ -220,19 +243,30 @@ def failing_tick() -> Iterator[Tick]:
     yield from _tick(prepare)
 
 
-def _rows(url: str, run_id: str) -> dict[str, tuple]:
-    with psycopg.connect(url) as reader:
+def _all_rows(url: str, run_id: str) -> dict[tuple[str, str, str], dict]:
+    """The rows of the run by (ticker, oracle kind, field), each a column dict."""
+    with psycopg.connect(url, row_factory=dict_row) as reader:
         found = reader.execute(
             """
-            select o.subject_id, p.normalized_payload ->> 'ticker', o.result, o.ratio, o.tolerance, o.oracle_kind,
-                   o.served_value, o.oracle_value, o.compared_at, o.reason
+            select distinct o.*, p.normalized_payload ->> 'ticker' as ticker
             from mart.oracle_outcomes o
             join staging.capture_observation_payloads p on p.normalized_payload ->> 'issuer_id' = o.subject_id
             where o.run_id = %s and p.normalized_payload ? 'ticker'
             """,
             (run_id,),
         ).fetchall()
-    return {str(row[1]): row for row in found}
+    return {(row["ticker"], row["oracle_kind"], row["field"]): row for row in found}
+
+
+def _rows(url: str, run_id: str) -> dict[str, tuple]:
+    """The operator rows of the run by ticker: (subject, ticker, result, ratio, tolerance, kind, served, witness, at, reason)."""
+    columns = ("subject_id", "ticker", "result", "ratio", "tolerance", "oracle_kind")
+    columns += ("served_value", "oracle_value", "compared_at", "reason")
+    return {
+        ticker: tuple(row[column] for column in columns)
+        for (ticker, kind, _field), row in _all_rows(url, run_id).items()
+        if kind == "operator"
+    }
 
 
 def test_the_pdd_case_is_one_disagree_row_with_a_ratio_of_about_four(tick: Tick) -> None:
@@ -253,10 +287,33 @@ def test_a_count_within_the_tolerance_is_an_agree_row(tick: Tick) -> None:
     assert len(rows) == 2
 
 
+def test_a_revenue_a_tenth_of_the_stored_filing_is_one_independent_parse_disagree_row(tick: Tick) -> None:
+    """The adapter serves 100,000,000 and the stored document of PDD says 1,000,000,000 (S2b)."""
+    row = _all_rows(tick.url, tick.metadata["capture_run_id"])[("PDD", "independent_parse", "revenue")]
+    assert (row["result"], row["reason"]) == ("disagree", None)
+    assert (row["served_value"], row["oracle_value"], row["ratio"]) == (
+        SERVED_REVENUE,
+        Decimal("1000000000"),
+        Decimal("0.1"),
+    )
+    assert row["tolerance"] == Decimal("0.0001")
+    assert (row["period"], row["compared_at"], row["source"]) == (str(ANNUAL_END), TICK, "sec")
+    assert row["knowable_at"] == datetime.combine(ANNUAL_FILED, datetime.min.time(), tzinfo=UTC)
+    assert row["observation_id"].startswith("normalized-observation:")
+
+
+def test_a_figure_that_the_stored_filing_repeats_is_an_independent_parse_agree_row(tick: Tick) -> None:
+    rows = _all_rows(tick.url, tick.metadata["capture_run_id"])
+    for ticker, field in [("AAPL", "revenue"), ("AAPL", "gross_profit"), ("PDD", "gross_profit")]:
+        row = rows[(ticker, "independent_parse", field)]
+        assert (row["result"], row["ratio"]) == ("agree", Decimal(1)), (ticker, field)
+    assert len([key for key in rows if key[1] == "independent_parse"]) == 4
+
+
 def test_the_pointer_advances_whatever_the_comparison_says(tick: Tick) -> None:
     """A `disagree` row is data. The run committed, and the governed pointer heads it."""
     assert tick.metadata["pointer_advanced"] is True
-    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 2
+    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 6
     with psycopg.connect(tick.url) as reader:
         head = reader.execute(
             "select count(*) from mart.current_pointer_head where target_run_id = %s",
@@ -274,7 +331,7 @@ def test_a_second_run_of_the_same_run_id_writes_no_second_row(tick: Tick) -> Non
         )
         connection.commit()
         after = connection.execute("select count(*) from mart.oracle_outcomes").fetchone()
-    assert again == 0 and before == after == (2,)
+    assert again == 0 and before == after == (6,)
 
 
 def test_a_writer_that_raises_does_not_stop_the_tick(failing_tick: Tick) -> None:
