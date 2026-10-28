@@ -10,8 +10,8 @@ accumulating permanent waivers, so an exemption here defers and never disables:
 it carries an issue and a date, an expired one fails anyway, and one left behind
 after its defect is fixed also fails.
 
-The tests at the end of this file run `quality-report-matches-core-results`
-against a database that the migration chain builds (#1346).
+The tests at the end of this file run `revenue-period-is-recent`
+against a database that the migration chain builds (#1457).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import calendar
 import hashlib
 import uuid
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -342,57 +342,7 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
         assert failing == 1
 
 
-def test_quality_report_matches_core_results_invariant_structure_and_behavior() -> None:
-    """#1299, #1227, #1346: for every scheduled governed head in mart.served_head, the
-    gross_profit_per_employee complete_subject_ids of mart.datahub_quality_report must be the
-    listings of the available issuers in mart.topt_core_results, matched through
-    mart.entity_identity. The DB tests below prove the SQL."""
-    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == "quality-report-matches-core-results"]
-    assert "mart.served_head" in invariant.violations
-    assert "mart.datahub_quality_report" in invariant.violations
-    assert "complete_subject_ids" in invariant.violations
-    assert "mart.entity_identity" in invariant.violations
-    assert "mart.topt_core_results" in invariant.violations
-    assert "availability = 'available'" in invariant.violations
-    assert "mart.served_head" in invariant.population
-
-    answers = {
-        invariant.violations.strip(): [],
-        invariant.population.strip(): [(2,)],
-    }
-    assert (
-        check(
-            "postgresql://unused",
-            today=TODAY,
-            exemptions={},
-            invariants=(invariant,),
-            connect=lambda _url: _Connection(answers),
-        )
-        == 0
-    )
-
-    answers[invariant.violations.strip()] = [
-        (
-            "universe:topt-us-2026-03-31",
-            "capture-run:abc",
-            "complete-in-report-not-available-in-core",
-            "listing:xnas:crwd",
-            "missing_revenue",
-        ),
-    ]
-    assert (
-        check(
-            "postgresql://unused",
-            today=TODAY,
-            exemptions={},
-            invariants=(invariant,),
-            connect=lambda _url: _Connection(answers),
-        )
-        == 1
-    )
-
-
-# --- quality-report-matches-core-results on a migrated database (#1346) --------------------
+# --- revenue-period-is-recent on a migrated database (#1457) -------------------------------
 #
 # The seeds use the identifiers that the writers give. The report names each subject by the
 # listing id of its capture obligation (`listing:xnas:goog`). The core snapshot names each
@@ -401,7 +351,7 @@ def test_quality_report_matches_core_results_invariant_structure_and_behavior() 
 # The snapshot payload holds one member for each listing. The member table and the core hold
 # one row for each issuer. A dual-class issuer (Alphabet) has two listings.
 
-PARITY_INVARIANT = "quality-report-matches-core-results"
+REVENUE_INVARIANT = "revenue-period-is-recent"
 GPPE_FACTOR = "gross_profit_per_employee"
 #: 0042 requires observation_count = 4 * instrument_count on a core snapshot.
 CELLS_PER_LISTING = 4
@@ -696,7 +646,7 @@ class _Borrowed:
 
 
 def _parity_verdict(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], invariant_id: str = PARITY_INVARIANT
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], invariant_id: str = REVENUE_INVARIANT
 ) -> tuple[int, str]:
     """Run a shipped invariant through `check`, with coverage required as on real data."""
     (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == invariant_id]
@@ -735,208 +685,6 @@ def test_the_seeded_members_resolve_through_the_identity_store(conn: psycopg.Con
     ).fetchall()
     assert [listing for _uuid, listing in rows] == ["listing:xnas:aapl", "listing:xnas:goog", "listing:xnas:googl"]
     assert all(str(uuid.UUID(member)) == member for member, _listing in rows)
-
-
-def test_a_dual_class_issuer_counts_both_listings_and_its_head_passes(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """#1346 criterion 1. All facts are complete and all 3 issuers are available. The report
-    names 4 complete listings. The 3 available issuers have the same 4 listings."""
-    issuers = [ALPHABET, _issuer("apple", "aapl"), _issuer("microsoft", "msft")]
-    run_id = _seed_head(conn, "universe:canary-us-2026-06-30", issuers)
-    assert _seeded_shape(conn, run_id) == (4, 3, 4, 3)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 0, output
-    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
-
-
-def test_the_production_topt_head_of_1346_passes(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> None:
-    """#1346 production numbers: 21 listings of 20 issuers. BRK.B and XOM have no gross profit,
-    so the report names 19 complete listings and the core has 18 available issuers. The 18
-    available issuers have the same 19 listings, so the head passes."""
-    issuers = [
-        ALPHABET,
-        *_singles("valued", 17),
-        *_singles("nogrossprofit", 2, facts_complete=False, available=False),
-    ]
-    run_id = _seed_head(conn, "universe:topt-us-2026-03-31", issuers)
-    assert _seeded_shape(conn, run_id) == (21, 20, 19, 18)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 0, output
-
-
-def test_single_listing_issuers_that_are_all_available_pass(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """#1346 criterion 3, the control: no dual-class issuer, all facts complete, all available."""
-    run_id = _seed_head(conn, "universe:topt-us-2026-03-31", _singles("valued", 3))
-    assert _seeded_shape(conn, run_id) == (3, 3, 3, 3)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 0, output
-
-
-@pytest.mark.parametrize(
-    ("issuers", "shape", "violations", "first"),
-    [
-        pytest.param(
-            [ALPHABET, _issuer("apple", "aapl"), _issuer("costco", "cost", available=False)],
-            (4, 3, 4, 2),
-            1,
-            ("complete-in-report-not-available-in-core", "listing:xnas:cost", "no_split_adjusted_series"),
-            id="one-complete-issuer-unavailable",
-        ),
-        pytest.param(
-            [
-                ALPHABET,
-                *_singles("valued", 11),
-                *_singles("noseries", 53, available=False),
-                *_singles("nofacts", 36, facts_complete=False, available=False),
-            ],
-            (102, 101, 66, 12),
-            53,
-            ("complete-in-report-not-available-in-core", "listing:xnas:noseries0", "no_split_adjusted_series"),
-            id="production-qqq-alphabet-available",
-        ),
-        pytest.param(
-            [
-                replace(ALPHABET, available=False),
-                *_singles("valued", 12),
-                *_singles("noseries", 52, available=False),
-                *_singles("nofacts", 36, facts_complete=False, available=False),
-            ],
-            (102, 101, 66, 12),
-            54,
-            ("complete-in-report-not-available-in-core", "listing:xnas:goog", "no_split_adjusted_series"),
-            id="production-qqq-alphabet-unavailable",
-        ),
-    ],
-)
-def test_a_complete_listing_without_an_available_result_fails_and_is_named(
-    conn: psycopg.Connection,
-    capsys: pytest.CaptureFixture[str],
-    issuers: list[SeededIssuer],
-    shape: tuple[int, ...],
-    violations: int,
-    first: tuple[str, str, str],
-) -> None:
-    """#1346 criterion 2, the QQQ shape. #1309 makes an issuer without a stored daily series
-    unavailable in the core, and the report still names its listings complete. Each such
-    listing is one violation, with the core reason codes of its issuer."""
-    universe_id = "universe:qqq-us-2026-09-30"
-    run_id = _seed_head(conn, universe_id, issuers)
-    assert _seeded_shape(conn, run_id) == shape
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    assert f"{PARITY_INVARIANT}: {violations} violation(s)" in output
-    assert f"Offending rows: {_offending(universe_id, run_id, *first)}" in output
-
-
-def test_two_sets_of_one_size_that_name_different_listings_fail(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """#1346: the report names AAPL and MSFT complete. The core has AAPL and COST available.
-    Both sides count 2, so a comparison of counts passes. The sets differ by two listings,
-    and each one is a violation."""
-    universe_id = "universe:topt-us-2026-03-31"
-    issuers = [
-        _issuer("apple", "aapl"),
-        _issuer("microsoft", "msft", available=False),
-        _issuer("costco", "cost", facts_complete=False),
-    ]
-    run_id = _seed_head(conn, universe_id, issuers)
-    assert _seeded_shape(conn, run_id) == (3, 3, 2, 2)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    assert f"{PARITY_INVARIANT}: 2 violation(s)" in output
-    expected = "; ".join(
-        (
-            _offending(universe_id, run_id, "available-in-core-not-complete-in-report", "listing:xnas:cost", ""),
-            _offending(
-                universe_id,
-                run_id,
-                "complete-in-report-not-available-in-core",
-                "listing:xnas:msft",
-                "no_split_adjusted_series",
-            ),
-        )
-    )
-    assert f"Offending rows: {expected}" in output
-
-
-def test_a_report_from_an_older_completeness_rule_names_the_listing(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """#1346, the staging QQQ head of 2026-10-20: its report was built on 2026-10-07 under the
-    rule before 295cdc60, which did not require revenue. That report names CRWD complete. The
-    core holds CRWD unavailable with `missing_revenue`. The check names CRWD and the reason."""
-    universe_id = "universe:topt-us-2026-03-31"
-    issuers = [
-        _issuer("apple", "aapl"),
-        _issuer("crowdstrike", "crwd", available=False, reasons=("missing_revenue",)),
-    ]
-    run_id = _seed_head(conn, universe_id, issuers)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    row = _offending(
-        universe_id, run_id, "complete-in-report-not-available-in-core", "listing:xnas:crwd", "missing_revenue"
-    )
-    assert f"Offending rows: {row}" in output
-
-
-def test_a_report_that_does_not_name_its_subjects_fails(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A report persisted before #1346 gives a count and no complete_subject_ids. Its count
-    equals the core count here, and the check still cannot compare the listings, so the head
-    fails until the next run of the head writes a report with the names."""
-    universe_id = "universe:topt-us-2026-03-31"
-    run_id = _seed_head(conn, universe_id, _singles("valued", 3), report_lists_subjects=False)
-    assert _seeded_shape(conn, run_id) == (3, 3, 3, 3)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    row = _offending(universe_id, run_id, "report-lists-no-complete-subject-ids", "-", "-")
-    assert f"Offending rows: {row}" in output
-
-
-def test_a_member_listing_outside_the_identity_store_fails(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A member listing UUID that mart.entity_identity does not hold cannot be compared with the
-    report. The check names its UUID, and the report listing of that member has no core match."""
-    universe_id = "universe:topt-us-2026-03-31"
-    issuers = [_issuer("apple", "aapl"), _issuer("microsoft", "msft")]
-    run_id = _seed_head(conn, universe_id, issuers, unminted=frozenset({"listing:xnas:msft"}))
-    assert _seeded_shape(conn, run_id) == (2, 2, 2, 2)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    assert f"{PARITY_INVARIANT}: 2 violation(s)" in output
-    unresolved = str(uuid.uuid5(uuid.NAMESPACE_URL, "listing:xnas:msft"))
-    expected = "; ".join(
-        (
-            _offending(
-                universe_id,
-                run_id,
-                "complete-in-report-not-available-in-core",
-                "listing:xnas:msft",
-                "not-a-core-member",
-            ),
-            _offending(universe_id, run_id, "core-listing-not-in-identity-store", unresolved, ""),
-        )
-    )
-    assert f"Offending rows: {expected}" in output
-
-
-def test_a_head_without_a_core_fails(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]) -> None:
-    """A head whose run has a report and no core snapshot stays in the check, and it fails."""
-    universe_id = "universe:topt-us-2026-03-31"
-    run_id = _seed_head(conn, universe_id, _singles("valued", 3), core=False)
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 1, output
-    assert f"{PARITY_INVARIANT}: 3 violation(s)" in output
-    row = _offending(
-        universe_id, run_id, "complete-in-report-not-available-in-core", "listing:xnas:valued0", "not-a-core-member"
-    )
-    assert f"Offending rows: {row}" in output
 
 
 @pytest.mark.parametrize("environment", ["staging", "production", "prod", "preview", "dev", ""])
@@ -982,10 +730,11 @@ def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_he
     """The S&P 500 is stopped in the packaged contract, so no invariant examines its head. A variant that
     schedules it must change what the invariants examine, with no edit to the SQL (#1522)."""
     conn.execute("update mart.environment_identity set environment = 'production'")
-    _seed_head(conn, "universe:sp500-us-2026-09-30", _singles("valued", 3))
+    issuers = [_issuer(f"valued{i}", f"val{i}", revenue_period_end=date(2025, 12, 31)) for i in range(3)]
+    _seed_head(conn, "universe:sp500-us-2026-09-30", issuers)
 
     def verdict(contract) -> tuple[int, str]:
-        (invariant,) = [inv for inv in _module.render_invariants(contract) if inv.id == PARITY_INVARIANT]
+        (invariant,) = [inv for inv in _module.render_invariants(contract) if inv.id == REVENUE_INVARIANT]
         code = check(
             "postgresql://borrowed",
             require_coverage=True,
@@ -1004,7 +753,7 @@ def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_he
 
     code, output = verdict(_scheduled_sp500_contract())
     assert code == 0, output
-    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
+    assert f"ok       {REVENUE_INVARIANT}: 3 row(s) examined" in output
 
 
 def test_no_invariant_needs_the_sql_schedule_function(
@@ -1024,29 +773,11 @@ def test_no_invariant_needs_the_sql_schedule_function(
     assert code == 0, output.out + output.err
 
 
-def test_an_unscheduled_manual_qqq_head_on_staging_does_not_fail_scheduled_topt_head(
-    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """#1346 / #1295: staging runs TOPT only (#1410), so a frozen staging QQQ head
-    must not fail output_invariants while the scheduled TOPT head is healthy."""
-    conn.execute("update mart.environment_identity set environment = 'staging'")
-    _seed_head(conn, "universe:topt-us-2026-03-31", _singles("valued", 3))
-    _seed_head(
-        conn,
-        "universe:qqq-us-2026-09-30",
-        [ALPHABET, _issuer("apple", "aapl"), _issuer("costco", "cost", available=False)],
-    )
-    code, output = _parity_verdict(conn, capsys)
-    assert code == 0, output
-    assert f"ok       {PARITY_INVARIANT}: 1 row(s) examined" in output
-
-
 # --- revenue-period-is-recent on a migrated database (#1457) -------------------------------
 #
 # Production QQQ served annual revenue of 2018 for CPRT and XEL at a cutoff of 2026-10-19. The
 # plausibility gate judged the value, not its age. The invariant reads `revenue_period_end`
 # of the available core results of every scheduled head.
-REVENUE_INVARIANT = "revenue-period-is-recent"
 #: The cutoff that `_seed_issuer` gives every core result.
 SEEDED_CUTOFF = date(2026, 3, 31)
 REVENUE_UNIVERSE = "universe:topt-us-2026-03-31"

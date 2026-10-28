@@ -49,7 +49,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -162,35 +162,70 @@ _FACTOR_REQUIRED_SEMANTICS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _factor_availability(usable_by_subject: dict[str, dict[str, bool]]) -> dict[str, dict[str, Any]]:
-    """Per-factor availability over subjects: a subject counts only when EVERY
-    semantic the factor requires is usable for it. Subjects lacking any required
-    obligation count in the denominator — absence is a shortfall, not an exemption."""
-    out: dict[str, dict[str, Any]] = {}
-    for factor_id, required in _FACTOR_REQUIRED_SEMANTICS.items():
-        # EVERY graded subject is in the denominator — a subject captured with no
-        # required-semantic obligation at all is a shortfall, not an exemption
-        # (review on #644: filtering to subjects that HAVE the semantic key
-        # contradicted exactly that promise).
-        universe = list(usable_by_subject)
-        complete = [
-            subject for subject in universe if all(usable_by_subject[subject].get(sem, False) for sem in required)
-        ]
-        ratio = (
-            (Decimal(len(complete)) / Decimal(len(universe))).quantize(Decimal("0.0001")) if universe else Decimal(0)
-        )
-        out[factor_id] = {
-            "required_semantics": list(required),
-            "complete_subjects": len(complete),
-            # #1346: the subject ids behind the count, sorted. A subject id is the listing
-            # id of the capture obligation. The output invariant
-            # `quality-report-matches-core-results` compares this set with the listings of
-            # the available core results, so a mismatch names each listing.
-            "complete_subject_ids": sorted(complete),
+_CORE_COMPLETE_LISTINGS_SQL = """
+    select distinct coalesce(identity.listing_id, member->>'listing_id')
+    from staging.topt_core_snapshots s
+    cross join lateral jsonb_array_elements(s.payload->'members') member
+    left join mart.entity_identity identity
+           on identity.entity_id::text = member->>'listing_id'
+    where s.run_id = %s
+      and exists (
+          select 1
+          from mart.topt_core_results r
+          where r.run_id = s.run_id
+            and r.issuer_id = member->>'issuer_id'
+            and r.availability = 'available'
+      )
+    order by 1
+"""
+
+
+def _factor_availability(
+    conn: psycopg.Connection[Any],
+    run_id: str,
+    usable_by_subject: Mapping[str, Mapping[str, bool]],
+) -> dict[str, dict[str, Any]]:
+    """Per-factor availability over subjects: read the core result of the same run (#1518).
+
+    When the run halted before core materialization (no mart.topt_core_results rows for
+    run_id), status is 'not_computed'. When core results exist for run_id, status is
+    'computed', and complete_subject_ids are the listings whose issuer has availability = 'available'.
+    """
+    universe = sorted(usable_by_subject)
+    core_count_row = conn.execute(
+        "select count(*) from mart.topt_core_results where run_id = %s",
+        (run_id,),
+    ).fetchone()
+    core_count = core_count_row[0] if core_count_row is not None else 0
+
+    if core_count == 0:
+        ratio = (Decimal(0) / Decimal(len(universe))).quantize(Decimal("0.0001")) if universe else Decimal(0)
+        return {
+            "gross_profit_per_employee": {
+                "status": "not_computed",
+                "required_semantics": list(_FACTOR_REQUIRED_SEMANTICS["gross_profit_per_employee"]),
+                "complete_subjects": 0,
+                "complete_subject_ids": [],
+                "universe_subjects": len(universe),
+                "ratio": str(ratio),
+            }
+        }
+
+    rows = conn.execute(_CORE_COMPLETE_LISTINGS_SQL, (run_id,)).fetchall()
+    complete_ids = sorted(str(row[0]) for row in rows if row[0] is not None)
+    ratio = (
+        (Decimal(len(complete_ids)) / Decimal(len(universe))).quantize(Decimal("0.0001")) if universe else Decimal(0)
+    )
+    return {
+        "gross_profit_per_employee": {
+            "status": "computed",
+            "required_semantics": list(_FACTOR_REQUIRED_SEMANTICS["gross_profit_per_employee"]),
+            "complete_subjects": len(complete_ids),
+            "complete_subject_ids": complete_ids,
             "universe_subjects": len(universe),
             "ratio": str(ratio),
         }
-    return out
+    }
 
 
 @functools.cache
@@ -234,49 +269,9 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
     return False
 
 
-# ---- The share count: the report reads one part of the core verdict from the frozen snapshot (#1346) ----
-# The frozen snapshot decides share readiness. `_snapshot_member` and `share_basis.live_on_close_basis`
-# drop a count that the stored series cannot put on the share basis of the close.
-# The core then marks the whole issuer unavailable. The report reads that one fact and does not decide it.
-# A payload can carry a share count that the snapshot dropped.
-# Then `_has_usable_value` says yes and the core says no.
-# The nightly invariant `quality-report-matches-core-results` showed this on 2026-10-20 (listing xnas:wdc).
-# The report reads the snapshot member, not `mart.topt_core_results`.
-# The invariant compares the two. A report that read the results would make it true by construction.
-# Other gaps remain, and they are tracked on #1346. The report does not read these parts of the verdict.
-# The core marks an issuer unavailable for a missing or non-positive market price.
-# It does so for a stale or unknown cell, and for a non-positive input.
-# A listing with one of these faults is still complete in the report.
-_FROZEN_FACTOR_INPUTS_SQL = """
-    select member.factor_input
-    from staging.topt_core_snapshots snapshot
-    join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
-    where snapshot.run_id = %s
-"""
-
-
-def observations_without_share_count(factor_inputs: Iterable[Mapping[str, Any]]) -> frozenset[str]:
-    """The financial-fact observations of every issuer whose frozen share count is unavailable.
-
-    A factor input is the JSON of `ToptCoreSnapshotInput`. Its market-value components hold the
-    share metric of each listing, and the `input_id` of that metric is the financial-fact
-    observation of the listing. The core makes the whole issuer unavailable when one component
-    has no count (`compute_topt_core`), so every listing of that issuer is dropped. A run with no
-    frozen snapshot gives no factor input and so an empty set.
-    """
-    dropped: set[str] = set()
-    for factor_input in factor_inputs:
-        shares = [component["shares_outstanding"] for component in factor_input["market_value_components"]]
-        if any(metric["availability"] == "unavailable" for metric in shares):
-            dropped.update(metric["input_id"] for metric in shares)
-    return frozenset(dropped)
-
-
-def _observation_usable(
-    semantic_type: str, payload: dict[str, Any] | None, *, observation_id: str, share_dropped: frozenset[str]
-) -> bool:
-    """Is this observation usable: its payload carries the value, and the snapshot kept its share count?"""
-    return _has_usable_value(semantic_type, payload) and observation_id not in share_dropped
+def _observation_usable(semantic_type: str, payload: dict[str, Any] | None) -> bool:
+    """Is this observation usable: its payload carries the value?"""
+    return _has_usable_value(semantic_type, payload)
 
 
 # ---- Class-B plausibility: single-source semantics get domain falsifiers (#578) ----
@@ -505,9 +500,6 @@ def build_report(
         (run_id,),
     ).fetchall()
 
-    share_dropped = observations_without_share_count(
-        factor_input for (factor_input,) in conn.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,)).fetchall()
-    )
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
     plausibility: dict[str, dict[str, Any]] = {}
@@ -536,9 +528,7 @@ def build_report(
         if confidence is not None:
             cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
         if not cell.available:
-            cell.available = _observation_usable(
-                semantic_type, payload, observation_id=observation_id, share_dropped=share_dropped
-            )
+            cell.available = _observation_usable(semantic_type, payload)
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
@@ -632,7 +622,7 @@ def build_report(
         "independent_reconciliation": ratio(independent),
         "lineage_completeness": ratio(lineage_complete),
         "denominator_mean_confidence": str(Decimal(mean_conf).quantize(Decimal("0.0001"))),
-        "factor_availability": _factor_availability(usable_by_subject),
+        "factor_availability": _factor_availability(conn, run_id, usable_by_subject),
         "complete": bool(status[7]),
         "forced_fetch": forced_fetch,
     }

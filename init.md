@@ -149,7 +149,7 @@ L1 Storage layer          ── S3-compatible object storage: immutable source-
                               → mart (clean point-in-time result tables, flattened 2D projections of the KG where applicable)
 L2 Factor computation     ── common/factors: native Decimal/graph factors (a test-time Polars AST oracle cross-checks the expressible ones), wrapped as Dagster assets with code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
                               - base factors consume provenance-neutral views projected from durable PIT snapshots
-                              - composite factors reload other factors' mart outputs; confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed
+                              - composite factors call base factors on typed inputs; a stored mart row is never a composite input. Their confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed.
 L3 Analytics modules      ── the 7 concrete tools (Section 7)
 L4 Backtest/portfolio validation ── factors.backtest.engine, a Decimal simulation: PIT decision snapshots + a separate monotonic future market-event stream (unadjusted bars and explicit split events)
 L5 Consumption layer      ── server-derived AccessContext + policy-before-read authorization
@@ -261,10 +261,10 @@ executable connectivity and negative-network proof.
 - `common/contracts` holds the cross-module DTOs and the storage, repository and backtest
   ports. It holds no computation logic.
 - `common/factors` is the one implementation of the seven modules. Its `base` factors read
-  provenance-neutral views of PIT snapshots. Its `composite` factors read other factors'
-  mart outputs, and their confidence cannot exceed the minimum consumed confidence. Its
-  `shared` package holds entity resolution and the LLM structured-extraction primitive. No
-  module reimplements them.
+  provenance-neutral views of PIT snapshots. Its `composite` factors call base factors on
+  typed inputs (a stored mart row is never a composite input), and their confidence cannot
+  exceed the minimum consumed confidence. Its `shared` package holds entity resolution and
+  the LLM structured-extraction primitive. No module reimplements them.
 - `common/runtime` holds the environment and dependency manifest, the Postgres/KG/S3 probes
   and the immutable raw-object adapter. Every environment gets the same `DATABASE_URL` and
   `S3_*` contract.
@@ -439,7 +439,7 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 
 **The module number is an identity, and `common/factors`' `@factor(..., module=N)` must match this list**, checked by `common/factors/tests/test_module_identity.py` against this exact section. A **feeder** (`@factor(..., kind="feeder")`) answers none of the seven questions on its own -- it is an input a composite reduces -- and registers the module it feeds rather than a number of its own, so it needs no item here and no question column (#855 B3). `price_to_sales` is one: the market-value input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per employee, so it registers `module=7` (#770). `price_to_gross_profit` is the second: market value / gross profit, the valuation basis of strategy definition 1.0.0, so it also registers `module=7` (#1235).
 
-Modules 1-6 are **base factors** (Section 4, `common/factors/src/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`common/factors/src/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
+Modules 1-6 are **base factors** (Section 4, `common/factors/src/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`common/factors/src/factors/composite`) — composite factors call base factors on typed inputs; a stored mart row is never a composite input. Their confidence cannot exceed the minimum consumed confidence; a declared versioned policy may be stricter.
 
 1. **PEG**: switchable growth-rate conventions. `factors.base.peg` computes the historical-CAGR convention. An issuer without a PEG carries its reason on the row (`mart.strategy_decisions.peg_reason_codes`, #837). The analyst-consensus convention reads moomoo `get_valuation_detail` `profit_growth_rate` (#1333). No plane carries company guidance yet.
 2. **Gross profit per employee**: named metrics of the metric forest (rule 17): `gppe_uniform_charge_v0` for non-financial issuers and insurers and `gppe_banking_tce_v1` for financial issuers, as the strategy definition pins them for each class. The published column holds the root of the pinned tree. Headcount gaps are explicitly flagged rather than silently dropped; a negative value is a fact, not a defect — the datahub refuses only what cannot exist or cannot be computed (e.g. division by zero), and distortions are the factor layer's declared, versioned adjustments (docs/metric-forest.md §6.1)

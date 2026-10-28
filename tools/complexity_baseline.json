@@ -5,7 +5,6 @@
   "apps/data-engine/scripts/capture_factor_matrix_samples.py:validate_capture": 28,
   "apps/data-engine/scripts/sweep_moomoo_fundamentals.py:main": 21,
   "apps/data-engine/src/data_engine/datahub/canary_oracles.py:failures_for_run": 22,
-  "apps/data-engine/src/data_engine/datahub/confidence_report.py:build_report": 21,
   "apps/data-engine/src/data_engine/datahub/production_topt/holdings_enrichment.py:enrich_holding_identities": 22,
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:SecFinancialFactAdapter.fetch": 23,
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 26,
@@ -27,8 +26,7 @@
   "common/contracts/src/truealpha_contracts/universe.py:IdentityLinkSet.validate_graph": 21,
   "common/contracts/src/truealpha_contracts/usage.py:StrategyUsageAudit.freeze_and_identify": 24,
   "common/contracts/src/truealpha_contracts/usage.py:UsageFrequencySlice.freeze_and_identify": 24,
-  "common/factors/src/factors/base/peg.py:peg": 21,
   "common/factors/src/factors/production_topt/core.py:compute_topt_core": 21,
   "common/runtime/src/truealpha_tools/check_factor_contract.py:main": 48,
-  "common/runtime/src/truealpha_tools/vision_audit.py:audit_vision": 27
+  "common/runtime/src/truealpha_tools/vision_audit.py:audit_vision": 26
 }
