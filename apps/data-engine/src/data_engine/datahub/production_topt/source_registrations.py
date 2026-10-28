@@ -93,26 +93,32 @@ class CapacityDeclaration:
     The figures are the WHOLE account figures. The share of one environment is `account_share` of the
     contract; `SourceCapacity.in_environment` applies it.
 
-    - ``calls_per_window`` / ``window_seconds``: the rate window of the account that the gateway queues calls to.
+    - ``calls_per_window`` / ``window_seconds``: the rate window of the account that the gateway queues calls to,
+      or None when the vendor states no request figure (`none_published`).
     - ``daily_budget``: calls per UTC day, checked against the environment's own
       ``staging.api_call_ledger`` before the call. None where the account has no daily limit: the seat is
       then paced, not budgeted. The unit is the request (a ledger row), not the row's ``cost``.
     - ``concurrency``: declared, not enforced: every lane calls its vendors sequentially.
-    - ``account``: the vendor account of the seat. None for a seat with no account figure.
+    - ``account``: the vendor account of the seat. None for a declaration built directly in a test.
     - ``documented``: the limits of the account with their evidence kind. Derived, so it is not part of
       the content-addressed payload.
     """
 
-    calls_per_window: int
-    window_seconds: int
+    calls_per_window: int | None
+    window_seconds: int | None
     daily_budget: int | None = None
     concurrency: int = 1
     account: str | None = None
     documented: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
+        if (self.calls_per_window is None) != (self.window_seconds is None):
+            raise ValueError("capacity window_seconds and calls_per_window go together")
+        if self.calls_per_window is None and self.account is None:
+            raise ValueError("capacity calls_per_window must be positive")
         for name in ("calls_per_window", "window_seconds", "concurrency"):
-            if getattr(self, name) <= 0:
+            value = getattr(self, name)
+            if value is not None and value <= 0:
                 raise ValueError(f"capacity {name} must be positive")
         if self.daily_budget is not None and self.daily_budget <= 0:
             raise ValueError("a daily budget must be positive; declare None for an unbudgeted seat")
@@ -361,11 +367,20 @@ def _declaration(seat: str) -> CapacityDeclaration:
     """The whole-account pace and budget of ``seat``, read from its vendor account row."""
     contract = load_environment_contract()
     name = contract.account_of_seat(seat)
+    row = contract.vendor_accounts.accounts[name]
+    requests = [limit for limit in row.limits if limit.unit == "request"]
     figures = [
         (limit, limit.amount, limit.window_seconds)
-        for limit in contract.vendor_accounts.accounts[name].limits
-        if limit.unit == "request" and limit.amount is not None and limit.window_seconds is not None
+        for limit in requests
+        if limit.amount is not None and limit.window_seconds is not None
     ]
+    if not figures and requests and all(limit.evidence.kind == "none_published" for limit in requests):
+        return CapacityDeclaration(
+            calls_per_window=None,
+            window_seconds=None,
+            account=name,
+            documented=f"vendor account {name}: none_published; per-environment pace in model_seat.environments (#1520)",
+        )
     rates = [figure for figure in figures if figure[2] != DAY_SECONDS]
     days = [figure for figure in figures if figure[2] == DAY_SECONDS]
     if len(rates) != 1 or len(days) > 1:
@@ -388,18 +403,7 @@ def _declaration(seat: str) -> CapacityDeclaration:
 
 def _ledger_capacities() -> Mapping[str, CapacityDeclaration]:
     contract = load_environment_contract()
-    model = contract.model_seat
-    declared = {seat: _declaration(seat) for seat in contract.vendor_seats if seat != model.seat}
-    # The model seat is the one seat with no account figure: the provider states none (`none_published`).
-    # Its pace stays the sum of the per-environment limits of `model_seat` until step 5 of #1520 removes it.
-    # The model call path paces each attempt with the limits of its own environment (`sources.model_policy`).
-    declared[model.seat] = CapacityDeclaration(
-        calls_per_window=sum(limits.calls_per_minute for limits in model.environments.values()),
-        window_seconds=60,
-        concurrency=sum(limits.max_concurrent_calls for limits in model.environments.values()),
-        documented="model_seat of environment_contract.v1.json (#1444): sum over environments; account limit unmeasured",
-    )
-    return MappingProxyType(declared)
+    return MappingProxyType({seat: _declaration(seat) for seat in contract.vendor_seats})
 
 
 LEDGER_CAPACITIES: Mapping[str, CapacityDeclaration] = _ledger_capacities()

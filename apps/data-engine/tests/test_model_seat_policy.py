@@ -807,3 +807,33 @@ def test_the_missing_key_message_names_the_variable_that_settings_reads(monkeypa
     monkeypatch.setattr(type(settings), "llm_api_key_env", property(lambda self: "LLM_API_KEY_PRODUCTION"))
     with pytest.raises(llm.ModelNotConfigured, match="LLM_API_KEY_PRODUCTION"):
         ask(Transport([(200, OK_BODY)]))
+
+
+# --- 7. the registry holds no summed limit (#1520 step 5) --------------------------------------
+
+
+def test_the_registry_holds_no_summed_model_limit_and_names_model_plan() -> None:
+    """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (13/min, 3 concurrent).
+    The whole-account figure is `none_published` (`None`), and per-environment pacing stays in `model_seat`."""
+    from data_engine.datahub.production_topt import source_registrations as registry
+
+    declared = registry.LEDGER_CAPACITIES[SEAT.seat]
+    view = gateway.CAPACITIES[SEAT.seat]
+    summed_rate = sum(limits.calls_per_minute for limits in SEAT.environments.values())
+    summed_concurrency = sum(limits.max_concurrent_calls for limits in SEAT.environments.values())
+
+    assert declared.account == "model_plan"
+    assert (declared.calls_per_window, declared.window_seconds, declared.daily_budget) == (None, None, None)
+    assert declared.calls_per_window != summed_rate
+    assert declared.concurrency == 1 and declared.concurrency != summed_concurrency
+    assert (view.calls_per_window, view.window_seconds, view.daily_budget, view.account) == (
+        None,
+        None,
+        None,
+        "model_plan",
+    )
+    assert view.pool == (SEAT.seat,)
+    assert not view.enforceable, "ModelPacer builds its own per-environment gate from model_seat.environments"
+    assert gateway.capacity_window_id(SEAT.seat, datetime(2026, 10, 27, 6, 0, 40, tzinfo=UTC)) == (
+        f"{SEAT.seat}:60s:{int(datetime(2026, 10, 27, 6, 0, 40, tzinfo=UTC).timestamp() // 60)}"
+    )

@@ -107,8 +107,7 @@ def test_every_seat_of_the_registry_belongs_to_exactly_one_account() -> None:
     assert all(len(names) == 1 for names in owners.values()), owners
     assert set(registry.LEDGER_CAPACITIES) == {seat for row in table.values() for seat in row["seats"]}
     for seat, declaration in registry.LEDGER_CAPACITIES.items():
-        if seat != load_environment_contract().model_seat.seat:
-            assert declaration.account == owners[seat][0], seat
+        assert declaration.account == owners[seat][0], seat
 
 
 def test_the_whole_account_figures_of_the_registry_are_the_figures_of_the_row() -> None:
@@ -120,14 +119,19 @@ def test_the_whole_account_figures_of_the_registry_are_the_figures_of_the_row() 
         ]
         rate = [limit for limit in figures if limit["window_seconds"] != DAY_SECONDS]
         day = [limit for limit in figures if limit["window_seconds"] == DAY_SECONDS]
+        assert gateway.CAPACITIES[seat].pool == tuple(table[owner]["seats"]), seat
         if not figures:
+            assert (declaration.calls_per_window, declaration.window_seconds, declaration.daily_budget) == (
+                None,
+                None,
+                None,
+            ), seat
             continue  # the model seat: the provider states no figure
         assert (declaration.calls_per_window, declaration.window_seconds) == (
             rate[0]["amount"],
             rate[0]["window_seconds"],
         ), seat
         assert declaration.daily_budget == (day[0]["amount"] if day else None), seat
-        assert gateway.CAPACITIES[seat].pool == tuple(table[owner]["seats"]), seat
 
 
 @pytest.mark.parametrize("name", ["environment_share", "derived_environment_shares", "TWELVE_DATA_ENVIRONMENT_SHARES"])
@@ -218,15 +222,12 @@ def test_a_seat_has_a_share_in_an_environment_exactly_when_the_oracle_gives_each
         if capacity.account is None:
             continue
         row = table["accounts"][capacity.account]
+        figures = [limit for limit in row["limits"] if limit["unit"] == "request" and limit.get("amount") is not None]
         if environment in ENVIRONMENTS:
-            shares = [
-                _share(table, capacity.account, environment, limit)
-                for limit in row["limits"]
-                if limit["unit"] == "request" and limit.get("amount") is not None
-            ]
+            shares = [_share(table, capacity.account, environment, limit) for limit in figures]
             admits = all(share >= 1 for share in shares)
         else:
-            admits = row["holder"] == "host_ip"
+            admits = not figures or row["holder"] == "host_ip"
         assert (capacity.in_environment(environment) is not None) == admits, (seat, environment)
 
 

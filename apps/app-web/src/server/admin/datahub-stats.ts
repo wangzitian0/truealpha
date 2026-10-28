@@ -12,6 +12,13 @@
  */
 
 import {
+  type EvidenceKindContract,
+  MODEL_SEAT,
+  UTILIZATION_CEILING,
+  VENDOR_ACCOUNTS,
+  accountShare,
+} from "../../contracts/environmentContract.generated";
+import {
   ACCEPTED_SERVICE_OBJECTIVES,
   type HeadFreshness,
   NON_CANARY_UNIVERSE_WHERE,
@@ -456,6 +463,85 @@ function confidenceReportRows(
   });
 }
 
+export interface VendorAccountLedgerDbRow {
+  source: string;
+  rows_today: number;
+  failed_today: number;
+  http_429_today: number;
+  code_1302_today: number;
+  peak_1s: number;
+  peak_30s: number;
+  peak_60s: number;
+}
+
+export interface VendorLimitDashboardSummary {
+  id: string;
+  unit: "request" | "distinct_stock";
+  amount: number | null;
+  window_seconds: number | null;
+  share: number | null;
+  divided: boolean;
+  evidence_kind: EvidenceKindContract;
+  checked_at: string | null;
+  method: string | null;
+  reason: string | null;
+  source: readonly string[];
+}
+
+export interface VendorAccountEnvironmentShareSummary {
+  environment: string;
+  percent: number;
+  admits_a_call: boolean;
+  daily_share: number | null;
+  rate_window_seconds: number | null;
+  rate_window_share: number | null;
+}
+
+export interface VendorAccountUsageRow {
+  account: string;
+  holder: "api_key" | "host_ip" | "account";
+  seats: readonly string[];
+  outside_consumers: boolean;
+  environment: string;
+  percent: number;
+  rows_today: number;
+  failed_today: number;
+  daily_share: number | null;
+  daily_ratio: number | null;
+  daily_ratio_text: string | null;
+  daily_usage_text: string;
+  peak_window_calls: number;
+  rate_window_seconds: number | null;
+  rate_window_share: number | null;
+  window_ratio: number | null;
+  window_usage_text: string;
+  http_429_today: number;
+  code_1302_today: number;
+  evidence_kinds: readonly EvidenceKindContract[];
+  not_known_limits: readonly VendorLimitDashboardSummary[];
+  limits: readonly VendorLimitDashboardSummary[];
+  shares_by_environment: Readonly<Record<string, VendorAccountEnvironmentShareSummary>>;
+  verdict: "ok" | "warn";
+  detail: string;
+}
+
+export interface Model1302DayDbRow {
+  day: string;
+  total_calls: number;
+  http_429: number;
+  code_1302: number;
+}
+
+export interface Model1302DayRow {
+  environment: string;
+  day: string;
+  total_calls: number;
+  http_429: number;
+  code_1302: number;
+  calls_per_minute_limit: number | null;
+  max_concurrent_calls: number | null;
+}
+
 export interface DatahubStats {
   confidence: ConfidenceReportRow[];
   questionCoverage: QuestionCoverageRow[];
@@ -465,6 +551,8 @@ export interface DatahubStats {
   runs: CaptureRunRow[];
   validation: ValidationRow[];
   capacity: ValidationRow[];
+  vendorAccounts: VendorAccountUsageRow[];
+  model1302ByDay: Model1302DayRow[];
   traffic: TrafficSourceRow[];
   recentCalls: RecentCallRow[];
   ledgerCoverage: LedgerCoverageRow[];
@@ -601,23 +689,258 @@ const CORROBORATION_SQL = `
   ) newest
 `;
 
-// #671: the SP500-era budget math, watched live. Twelve Data's shared free tier
-// (800/day) is the binding constraint; the reuse ratio is what keeps it flat as
-// universes multiply; DB size and capture-window duration are the growth and
-// runtime axes. Disk % needs a host exporter and stays on #671's ledger.
-//
-// #729: the credit count reads the external call ledger, not raw.fetches. Landed rows
-// only ever counted the successes — every weekend tick spent two credits per listing
-// on a 400 + a fallback and the old row showed 0 of 800. Failed calls spent quota too.
-const CAPACITY_TD_SQL = `
-  select 'twelvedata budget (this env, today utc)' as check,
-         case when coalesce(sum(cost), 0) > 560 then 'warn' else 'ok' end as verdict,
-         coalesce(sum(cost), 0)::int || ' of 800 shared daily credits ('
-           || (count(*) filter (where not ok))::int || ' failed requests)' as detail
-  from staging.api_call_ledger
-  where source = 'twelvedata'
-    and called_at >= ${UTC_DAY_START_SQL}
+// #1520 step 3 & step 5: per-seat ledger rows today (UTC), counting rows (`count(*)`),
+// never `sum(cost)`, plus peak calls in 1s, 30s and 60s windows, HTTP 429 answers and
+// provider code 1302 answers.
+export const VENDOR_LEDGER_TODAY_SQL = `
+  with today as (
+    select
+      source,
+      ok,
+      status_code,
+      provider_code,
+      floor(extract(epoch from called_at))::bigint as bucket_1s,
+      floor(extract(epoch from called_at) / 30)::bigint as bucket_30s,
+      floor(extract(epoch from called_at) / 60)::bigint as bucket_60s
+    from staging.api_call_ledger
+    where called_at >= ${UTC_DAY_START_SQL}
+  ),
+  peaks as (
+    select
+      s.source,
+      coalesce((select max(c) from (select count(*)::int as c from today t1 where t1.source = s.source group by bucket_1s) b1), 0)::int as peak_1s,
+      coalesce((select max(c) from (select count(*)::int as c from today t30 where t30.source = s.source group by bucket_30s) b30), 0)::int as peak_30s,
+      coalesce((select max(c) from (select count(*)::int as c from today t60 where t60.source = s.source group by bucket_60s) b60), 0)::int as peak_60s
+    from (select distinct source from today) s
+  )
+  select
+    t.source,
+    count(*)::int as rows_today,
+    (count(*) filter (where not t.ok))::int as failed_today,
+    (count(*) filter (where t.status_code = 429))::int as http_429_today,
+    (count(*) filter (where t.provider_code = '1302'))::int as code_1302_today,
+    p.peak_1s,
+    p.peak_30s,
+    p.peak_60s
+  from today t
+  join peaks p on p.source = t.source
+  group by t.source, p.peak_1s, p.peak_30s, p.peak_60s
+  order by t.source asc
 `;
+
+// #1520 step 5: model provider 1302 and HTTP 429 counts per UTC day in this environment's ledger.
+export const MODEL_1302_BY_DAY_SQL = `
+  select
+    ((called_at at time zone 'utc')::date)::text as day,
+    count(*)::int as total_calls,
+    (count(*) filter (where status_code = 429))::int as http_429,
+    (count(*) filter (where provider_code = '1302'))::int as code_1302
+  from staging.api_call_ledger
+  where source = $1
+    and called_at >= ${UTC_DAY_START_SQL} - ($2::int - 1) * interval '1 day'
+  group by 1
+  order by 1 desc
+`;
+
+const CONTRACT_ENVIRONMENTS = ["preview", "staging", "production"] as const;
+
+function normalizeDashboardEnvironment(environment?: string | null): string {
+  const raw = (environment || process.env.APP_ENV || "production").trim().toLowerCase() || "production";
+  return raw === "prod" ? "production" : raw;
+}
+
+/**
+ * #1520 step 3: build one dashboard row per vendor account from today's ledger rows and the
+ * generated vendor account shares. Verdict follows `UTILIZATION_CEILING` (0.70).
+ */
+export function vendorAccountRows(
+  dbRows: readonly Partial<VendorAccountLedgerDbRow>[],
+  environment?: string | null,
+): VendorAccountUsageRow[] {
+  const env = normalizeDashboardEnvironment(environment);
+  const bySource = new Map<string, Partial<VendorAccountLedgerDbRow>>();
+  for (const row of dbRows) {
+    if (typeof row.source === "string" && row.source.length > 0 && typeof row.rows_today === "number") {
+      bySource.set(row.source, row);
+    }
+  }
+
+  return VENDOR_ACCOUNTS.map((account) => {
+    const share = accountShare(account.name, env);
+    const sharesByEnvironment: Record<string, VendorAccountEnvironmentShareSummary> = {};
+    for (const envName of CONTRACT_ENVIRONMENTS) {
+      const envShare = accountShare(account.name, envName);
+      sharesByEnvironment[envName] = {
+        environment: envName,
+        percent: envShare.percent,
+        admits_a_call: envShare.admitsACall,
+        daily_share: envShare.dailyShare,
+        rate_window_seconds: envShare.rateWindowSeconds,
+        rate_window_share: envShare.rateWindowShare,
+      };
+    }
+
+    let rowsToday = 0;
+    let failedToday = 0;
+    let http429Today = 0;
+    let code1302Today = 0;
+    let peak1s = 0;
+    let peak30s = 0;
+    let peak60s = 0;
+    for (const seat of account.seats) {
+      const seatRow = bySource.get(seat);
+      if (!seatRow) continue;
+      rowsToday += Number(seatRow.rows_today ?? 0);
+      failedToday += Number(seatRow.failed_today ?? 0);
+      http429Today += Number(seatRow.http_429_today ?? 0);
+      code1302Today += Number(seatRow.code_1302_today ?? 0);
+      peak1s += Number(seatRow.peak_1s ?? 0);
+      peak30s += Number(seatRow.peak_30s ?? 0);
+      peak60s += Number(seatRow.peak_60s ?? 0);
+    }
+
+    const modelLimits =
+      account.name === "model_plan" && Object.prototype.hasOwnProperty.call(MODEL_SEAT.environments, env)
+        ? MODEL_SEAT.environments[env]
+        : null;
+    const rateWindowSeconds = share.rateWindowSeconds ?? (modelLimits ? 60 : null);
+    const rateWindowShare = share.rateWindowShare ?? (modelLimits ? modelLimits.calls_per_minute : null);
+    const peakWindowCalls =
+      rateWindowSeconds === 1
+        ? peak1s
+        : rateWindowSeconds === 30
+          ? peak30s
+          : rateWindowSeconds === 60
+            ? peak60s
+            : 0;
+
+    const dailyShare = share.dailyShare;
+    const dailyRatio =
+      dailyShare !== null && dailyShare > 0
+        ? rowsToday / dailyShare
+        : dailyShare === 0
+          ? rowsToday > 0
+            ? Number.POSITIVE_INFINITY
+            : 0
+          : null;
+    const dailyRatioText =
+      dailyRatio === null
+        ? null
+        : Number.isFinite(dailyRatio)
+          ? dailyRatio.toFixed(2)
+          : "inf";
+    const dailyUsageText =
+      dailyShare !== null ? `${rowsToday} of ${dailyShare}` : `${rowsToday} rows (no daily limit)`;
+
+    const windowRatio =
+      rateWindowShare !== null && rateWindowShare > 0
+        ? peakWindowCalls / rateWindowShare
+        : rateWindowShare === 0
+          ? peakWindowCalls > 0
+            ? Number.POSITIVE_INFINITY
+            : 0
+          : null;
+    const windowUsageText =
+      rateWindowShare !== null && rateWindowSeconds !== null
+        ? `${peakWindowCalls} of ${rateWindowShare} per ${rateWindowSeconds}s`
+        : `${peakWindowCalls} calls (no rate figure)`;
+
+    const limits: VendorLimitDashboardSummary[] = share.limits.map((limit) => ({
+      id: limit.limitId,
+      unit: limit.unit,
+      amount: limit.amount,
+      window_seconds: limit.windowSeconds,
+      share: limit.share,
+      divided: limit.divided,
+      evidence_kind: limit.evidence.kind,
+      checked_at: limit.evidence.checked_at,
+      method: limit.evidence.method,
+      reason: limit.evidence.reason,
+      source: limit.evidence.source,
+    }));
+    const evidenceKinds = Array.from(new Set(limits.map((limit) => limit.evidence_kind)));
+    const notKnownLimits = limits.filter(
+      (limit) => limit.evidence_kind === "not_known" || limit.evidence_kind === "none_published",
+    );
+
+    const overDailyCeiling =
+      dailyShare !== null &&
+      (dailyShare === 0 ? rowsToday > 0 : rowsToday / dailyShare > UTILIZATION_CEILING);
+    const overWindowShare =
+      rateWindowShare !== null &&
+      (rateWindowShare === 0 ? peakWindowCalls > 0 : peakWindowCalls > rateWindowShare);
+    const hadRateLimitAnswer = http429Today > 0 || code1302Today > 0;
+    const verdict: "ok" | "warn" =
+      overDailyCeiling || overWindowShare || hadRateLimitAnswer ? "warn" : "ok";
+
+    const dailyDetail =
+      dailyShare !== null
+        ? `${rowsToday} of ${dailyShare} daily share (ratio ${dailyRatioText}, ceiling ${UTILIZATION_CEILING.toFixed(2)}, ${failedToday} failed)`
+        : `${rowsToday} rows today (no daily limit, ${failedToday} failed)`;
+    const notKnownDetail =
+      notKnownLimits.length > 0
+        ? `; unmeasured=${notKnownLimits.map((l) => `${l.id}:${l.evidence_kind}`).join(",")}`
+        : "";
+    const detail = `${dailyDetail}; peak ${windowUsageText}; 429=${http429Today}, 1302=${code1302Today}; evidence=${evidenceKinds.join(",")}${notKnownDetail}`;
+
+    return {
+      account: account.name,
+      holder: account.holder,
+      seats: account.seats,
+      outside_consumers: account.outside_consumers,
+      environment: env,
+      percent: share.percent,
+      rows_today: rowsToday,
+      failed_today: failedToday,
+      daily_share: dailyShare,
+      daily_ratio: dailyRatio,
+      daily_ratio_text: dailyRatioText,
+      daily_usage_text: dailyUsageText,
+      peak_window_calls: peakWindowCalls,
+      rate_window_seconds: rateWindowSeconds,
+      rate_window_share: rateWindowShare,
+      window_ratio: windowRatio,
+      window_usage_text: windowUsageText,
+      http_429_today: http429Today,
+      code_1302_today: code1302Today,
+      evidence_kinds: evidenceKinds,
+      not_known_limits: notKnownLimits,
+      limits,
+      shares_by_environment: sharesByEnvironment,
+      verdict,
+      detail,
+    };
+  });
+}
+
+export function vendorAccountCapacityRows(rows: readonly VendorAccountUsageRow[]): ValidationRow[] {
+  return rows.map((row) => ({
+    check: `${row.account} (${row.seats.join(", ")}, ${row.environment}, today utc)`,
+    verdict: row.verdict,
+    detail: row.detail,
+  }));
+}
+
+export function model1302Rows(
+  dbRows: readonly Partial<Model1302DayDbRow>[],
+  environment?: string | null,
+): Model1302DayRow[] {
+  const env = normalizeDashboardEnvironment(environment);
+  const limits = Object.prototype.hasOwnProperty.call(MODEL_SEAT.environments, env)
+    ? MODEL_SEAT.environments[env]
+    : null;
+  return dbRows
+    .filter((row): row is Model1302DayDbRow => typeof row.day === "string" && row.day.length > 0)
+    .map((row) => ({
+      environment: env,
+      day: row.day,
+      total_calls: Number(row.total_calls ?? 0),
+      http_429: Number(row.http_429 ?? 0),
+      code_1302: Number(row.code_1302 ?? 0),
+      calls_per_minute_limit: limits ? limits.calls_per_minute : null,
+      max_concurrent_calls: limits ? limits.max_concurrent_calls : null,
+    }));
+}
 
 // #729: traffic, per source, today (UTC). Timestamps are rendered in UTC explicitly —
 // `timestamptz::text` follows the session TimeZone (review on #741). One row per vendor; a request is counted
@@ -830,7 +1153,8 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       reuse,
       plausibility,
       corroboration,
-      td,
+      vendorLedgerToday,
+      model1302Daily,
       reuseCap,
       dbSize,
       duration,
@@ -848,7 +1172,8 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<ValidationRow>(REUSE_SQL),
       client.query<ValidationRow>(PLAUSIBILITY_SQL, [sentinelLikes]),
       client.query<ValidationRow>(CORROBORATION_SQL, [sentinelLikes]),
-      client.query<ValidationRow>(CAPACITY_TD_SQL),
+      client.query<VendorAccountLedgerDbRow>(VENDOR_LEDGER_TODAY_SQL),
+      client.query<Model1302DayDbRow>(MODEL_1302_BY_DAY_SQL, [MODEL_SEAT.seat, LEDGER_COVERAGE_DAYS]),
       client.query<ValidationRow>(CAPACITY_REUSE_SQL),
       client.query<ValidationRow>(CAPACITY_DB_SQL),
       client.query<ValidationRow>(CAPACITY_DURATION_SQL),
@@ -859,6 +1184,12 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<ConfidenceReportDbRow>(CONFIDENCE_REPORT_SQL),
       client.query<NightlyVerdictRow>(NIGHTLY_VERDICTS_SQL),
     ]);
+    const activeEnv =
+      process.env.APP_ENV ||
+      heads.rows.find((row) => typeof row.environment === "string" && row.environment.length > 0)?.environment ||
+      "production";
+    const vendorAccounts = vendorAccountRows(vendorLedgerToday.rows, activeEnv);
+    const model1302ByDay = model1302Rows(model1302Daily.rows, activeEnv);
     return {
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
@@ -968,11 +1299,13 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         ...corroboration.rows,
       ],
       capacity: [
-        ...td.rows,
+        ...vendorAccountCapacityRows(vendorAccounts),
         ...reuseCap.rows,
         ...dbSize.rows,
         ...duration.rows,
       ],
+      vendorAccounts,
+      model1302ByDay,
       traffic: traffic.rows,
       recentCalls: recentCalls.rows,
       ledgerCoverage: ledgerCoverage.rows,
