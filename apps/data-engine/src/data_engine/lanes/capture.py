@@ -225,8 +225,8 @@ def _registry_unavailable(
 ) -> list[str]:
     """The issuers of the run whose registry read failed (#1323). The log names each one.
 
-    A tick with a strategy refuses a run that has no eligible issuer. A tick without a strategy has no such
-    rule. It refuses a run in which the registry classified no issuer. Every operating numerator of that run
+    A tick with a strategy excludes each failed issuer from strategy decisions. A tick without a strategy has no
+    such step. It refuses a run in which the registry classified no issuer. Every operating numerator of that run
     is null, and the run would publish it as a success.
     """
     flagged = registry_unavailable_issuers(connection, run_id=run_id)
@@ -312,9 +312,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 "snapshot_id": snapshot_id,
             }
         # #727/#36: the module-5 fund consolidation, in the same transaction as the core
-        # rows it weights. Before the pointer gate on purpose — a run whose plausibility
-        # is refused rolls this back with everything else, so mart.fund_virtual_company
-        # can never describe a run that was never served.
+        # rows it weights, before the pointer advances.
         fund_consolidation: dict[str, Any] = {}
         if tick.consolidate_funds:
             consolidations = materialize_fund_consolidation(connection, run_id=pipeline.run_id, cutoff=cutoff)
@@ -323,10 +321,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 "funds_consolidated": len(consolidations),
                 "funds_refused": sum(1 for item in consolidations if item.result.value is None),
             }
-        # #544: the run rule (an empty eligible set), before the pointer can advance. A refused
-        # run raises here; the `with` unwinds without a commit, so mart.current_pointer stays on
-        # the previous accepted run. Deferred violations (the nightly suite's exemption file,
-        # issue + expiry) are logged and let through.
+        # #1523: record and log the plausibility verdict for the run without refusing the tick.
+        # Excluded issuers carry their named exclusion reason in mart.strategy_decisions.
         verdict = judge_strategy(
             connection,
             issuers,
@@ -335,12 +331,6 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         )
         for line in verdict.lines():
             context.log.info(line)
-        if verdict.refused:
-            raise dg.Failure(
-                f"plausibility policy {verdict.policy_version} refused {pipeline.run_id}: "
-                + "; ".join(f"{v.rule} — {v.detail}" for v in verdict.run_refusals)
-                + " (#544; the tick rolls back and the pointer stays on the previous accepted run)"
-            )
         # #378: register the run on the A1 evidence plane and advance the governed
         # pointer inside the same transaction, so consumers resolve THIS run through
         # mart.current_pointer_head the moment the tick commits. #536: the advance is

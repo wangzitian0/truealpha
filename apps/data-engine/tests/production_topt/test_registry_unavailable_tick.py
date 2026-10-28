@@ -251,11 +251,11 @@ def test_the_next_unforced_tick_asks_the_registry_again(
         assert availability == "available"
 
 
-def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empty_eligible_set_refuses_the_run(
+def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_commits_excluded_decisions(
     tick_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every read times out. Three issuers spend three attempts each, the 18 others one attempt each, and the run
-    is refused: the empty eligible set is the only run refusal."""
+    commits with all 20 decisions excluded as registry_unavailable and advances the pointer (#1523 G14/G15)."""
     socket, _pauses = _arm_registry(monkeypatch, timing_out_tickers=None)
     monkeypatch.setattr(settings, "database_url", tick_database_url)
     with psycopg.connect(tick_database_url) as reader:
@@ -264,8 +264,7 @@ def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empt
     from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
 
     config = ToptLiveTickConfig(executed_at=_at(23, 0).isoformat(), force_fetch=True)
-    with pytest.raises(dg.Failure, match="all 20 decisions are excluded"):
-        run_topt_live_tick(dg.build_op_context(), config)
+    run_topt_live_tick(dg.build_op_context(), config)
 
     # `_offline_routes` gives each of the 21 listings its own fake CIK (GOOG and GOOGL are two listings of one
     # issuer, so 21 CIKs stand for 20 issuers). The three lowest CIKs spend three attempts. Each of the 18 others
@@ -275,7 +274,7 @@ def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_the_empt
     assert Counter(socket.submissions_reads) == {cik: 3 if cik in ciks[:3] else 1 for cik in ciks}
     assert len(socket.submissions_reads) == 3 * 3 + 18
     with psycopg.connect(tick_database_url) as reader:
-        assert reader.execute(_HEAD_SQL).fetchone() == head_before, "the pointer stays on the previous accepted run"
+        assert reader.execute(_HEAD_SQL).fetchone() != head_before, "the run commits and advances the pointer"
 
 
 def _at(hour: int, minute: int) -> datetime:

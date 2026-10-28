@@ -219,6 +219,7 @@ grant select on mart.question_coverage_report to app_ops_reader;
 grant select on mart.datahub_confidence_report to app_ops_reader;
 grant select on mart.topt_capture_status to app_ops_reader;
 grant select on mart.nightly_verdicts to app_ops_reader;
+grant select on mart.oracle_outcomes to app_ops_reader;
 -- The Capacity section (#671) derives capture-window durations from the
 -- obligation results — read-only, same posture.
 grant select on raw.capture_obligations to app_ops_reader;

@@ -601,21 +601,76 @@ export default async function AdminDatahubPage({
                   {match.mismatches > 0 ? ` (${match.mismatches} cells)` : ""}
                 </span>
               ))}
-              {report.oracle_issuers_compared !== null && (
-                <>
-                  {" · "}SEC oracle: {report.oracle_issuers_compared} issuers re-derived
-                </>
-              )}
-              {report.oracle_fields.map((field) => (
-                <span key={field.field}>
-                  {" · "}
-                  <span className="font-mono">{field.field}</span> {field.agreed}/{field.compared} agree
-                </span>
-              ))}
               {" · "}stored confidence used for bands: {String(report.stored_confidence_used_for_bands)}
             </p>
           </div>
         ))}
+      </div>
+
+      <div className="space-y-3" data-testid="oracle-outcomes-section">
+        <div>
+          <h2 className="text-lg font-semibold">Oracle outcomes (mart.oracle_outcomes)</h2>
+          <p className="text-sm text-gray-400">
+            Outside comparisons for each metric across active governed universes. Each cell shows{" "}
+            <span className="font-mono">compared</span>, <span className="font-mono">agree</span>,{" "}
+            <span className="font-mono">disagree</span>, <span className="font-mono">not_comparable</span>,{" "}
+            <span className="font-mono">newest_compared_at</span> and{" "}
+            <span className="font-mono">wilson_95_upper_bound</span>; a metric with no outcome rows shows{" "}
+            <span className="font-mono">no comparator</span>.
+          </p>
+        </div>
+        <div className="overflow-x-auto rounded-lg border border-border bg-card p-4">
+          <table className="w-full text-left text-sm" data-testid="oracle-outcomes-table">
+            <thead className="text-gray-400">
+              <tr>
+                <th className="py-1 pr-4">metric</th>
+                {stats.oracleOutcomes.universes.map((universeId) => (
+                  <th key={universeId} className="py-1 pr-4 font-mono">
+                    {universeId}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {stats.oracleOutcomes.rows.map((row) => (
+                <tr key={row.metric}>
+                  <td className="py-2 pr-4 font-mono align-top">{row.metric}</td>
+                  {stats.oracleOutcomes.universes.map((universeId) => {
+                    const outcomeCell = row.cells[universeId] ?? null;
+                    return (
+                      <td key={universeId} className="py-2 pr-4 align-top">
+                        {outcomeCell === null ? (
+                          <span className="font-mono text-gray-500">no comparator</span>
+                        ) : (
+                          <div className="space-y-0.5 text-xs">
+                            <div>
+                              compared <span className="font-mono">{outcomeCell.compared}</span> · agree{" "}
+                              <span className="font-mono text-emerald-400">{outcomeCell.agree}</span> · disagree{" "}
+                              <span
+                                className={
+                                  outcomeCell.disagree > 0 ? "font-mono text-rose-400 font-medium" : "font-mono"
+                                }
+                              >
+                                {outcomeCell.disagree}
+                              </span>{" "}
+                              · not_comparable <span className="font-mono">{outcomeCell.not_comparable}</span>
+                            </div>
+                            <div className="text-gray-400">
+                              wilson_95_upper_bound{" "}
+                              <span className="font-mono">{formatCell(outcomeCell.wilson_95_upper_bound)}</span> ·
+                              newest_compared_at{" "}
+                              <span className="font-mono">{formatCell(outcomeCell.newest_compared_at)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="space-y-3">

@@ -110,6 +110,7 @@ SERVED = (
     "mart.backtest_runs",
     "mart.backtest_trades",
     "mart.backtest_valuations",
+    "mart.oracle_outcomes",
 )
 
 #: Relations with a run key that no consumer-reachable file reads. The reason is checkable:
@@ -119,7 +120,6 @@ NOT_SERVED = {
     "mart.topt_core_invocations": "factor invocation records; no consumer reads them",
     "mart.topt_gppe_invocations": "factor invocation records; no consumer reads them",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
-    "mart.oracle_outcomes": "the comparisons of one run; no consumer reads them until the dashboard table (#1523 S3)",
 }
 
 

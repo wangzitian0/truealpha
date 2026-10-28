@@ -311,6 +311,7 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
   for (const requiredHeading of [
     /^Datahub$/i,
     /Question coverage matrix/i,
+    /Oracle outcomes \(mart\.oracle_outcomes\)/i,
     /Traffic \(external calls, today UTC\)/i,
     /Fetch key and run coverage/i,
     /^Sources$/i,
@@ -323,6 +324,35 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
   const mainText = await page.locator("main").innerText();
   const leak = mainText.match(/\bundefined\b|\[object Object\]|\bNaN\b/);
   if (leak) problems.push(`/admin/datahub shows "${leak[0]}"`);
+  if (/SEC oracle:/i.test(mainText)) {
+    problems.push("/admin/datahub still renders the retired SEC oracle summary line (#1523 S3)");
+  }
+
+  // #1523 S3 / U10: the oracle_outcomes table renders metrics by universes, with either outcome counts or "no comparator".
+  const oracleTable = page.locator('[data-testid="oracle-outcomes-table"]');
+  if ((await oracleTable.count()) === 0) {
+    problems.push('/admin/datahub has no [data-testid="oracle-outcomes-table"] (#1523 S3)');
+  } else {
+    const oracleShape = await oracleTable.first().evaluate((table) => {
+      const metrics = Array.from(table.querySelectorAll("tbody tr td:first-child")).map((td) => td.innerText.trim());
+      const cells = Array.from(table.querySelectorAll("tbody tr td:not(:first-child)")).map((td) => td.innerText.trim());
+      const invalidCells = cells.filter(
+        (text) => text !== "no comparator" && !(text.includes("compared") && text.includes("wilson_95_upper_bound")),
+      );
+      return { metrics, cellCount: cells.length, invalidCells };
+    });
+    for (const expectedMetric of ["listed_units", "revenue", "gross_profit", "total_assets", "shares_outstanding"]) {
+      if (!oracleShape.metrics.includes(expectedMetric)) {
+        problems.push(`/admin/datahub oracle_outcomes table is missing metric row "${expectedMetric}"`);
+      }
+    }
+    if (oracleShape.cellCount === 0) {
+      problems.push("/admin/datahub oracle_outcomes table has no universe cells");
+    }
+    if (oracleShape.invalidCells.length > 0) {
+      problems.push(`/admin/datahub oracle_outcomes table has malformed cell(s): ${oracleShape.invalidCells.slice(0, 2).join(" | ")}`);
+    }
+  }
 
   // #1466: the verdict table lists the CURRENT verdict of each check, so no check name appears twice.
   const verdictHeading = page.getByRole("heading", { name: /^Standing check verdicts/i });

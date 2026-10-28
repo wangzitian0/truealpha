@@ -14,6 +14,7 @@
 import {
   type EvidenceKindContract,
   MODEL_SEAT,
+  UNIVERSES,
   UTILIZATION_CEILING,
   VENDOR_ACCOUNTS,
   accountShare,
@@ -285,12 +286,175 @@ interface AccuracyEntryDb {
   quality_report_mismatches?: string[];
 }
 
-interface SecOracleDb {
-  issuers_compared?: number;
-  per_field?: Record<
-    string,
-    { compared?: number; agreed?: number; agreement_rate?: string | null }
-  >;
+/**
+ * #1523 S3: one `(metric, universe)` cell of the `mart.oracle_outcomes` rollup table on `/admin/datahub`.
+ * SQL computes the deduplicated counts, the newest comparison timestamp, and the 95% Wilson upper bound on
+ * the disagreement rate; the App only formats the cell or renders `no comparator` when null.
+ */
+export interface OracleOutcomeCell {
+  compared: number;
+  agree: number;
+  disagree: number;
+  not_comparable: number;
+  newest_compared_at: string | null;
+  wilson_95_upper_bound: string | null;
+}
+
+export interface OracleOutcomeMetricRow {
+  metric: string;
+  cells: Record<string, OracleOutcomeCell | null>;
+}
+
+export interface OracleOutcomesTable {
+  universes: string[];
+  rows: OracleOutcomeMetricRow[];
+}
+
+export interface OracleOutcomeDbRow {
+  universe_id: string;
+  field: string;
+  compared: number;
+  agree: number;
+  disagree: number;
+  not_comparable: number;
+  newest_compared_at: string | null;
+  wilson_95_upper_bound: string | null;
+}
+
+export const ORACLE_OUTCOME_METRICS = [
+  "listed_units",
+  "shares_outstanding",
+  "revenue",
+  "gross_profit",
+  "total_assets",
+  "employees_total",
+  "operating_branch",
+  "gross_profit_per_employee",
+  "last_close",
+] as const;
+
+/**
+ * #1523 S3: per-universe, per-metric rollup of `mart.oracle_outcomes` for the current governed heads in
+ * `mart.served_head`. Deduplicates by `(universe_id, observation_id, subject_id, field)` with newest outcome
+ * winning, matching `data_engine.datahub.oracle_outcomes.rollup_oracle_outcomes`.
+ */
+export const ORACLE_OUTCOMES_SQL = `
+  with deduped as (
+    select distinct on (h.universe_id, o.observation_id, o.subject_id, o.field)
+      h.universe_id,
+      o.field,
+      o.result,
+      o.compared_at
+    from mart.served_head h
+    join mart.oracle_outcomes o
+      on o.run_id = coalesce(h.run_id, h.head_run_id)
+    order by h.universe_id, o.observation_id, o.subject_id, o.field, o.compared_at desc, o.recorded_at desc, o.outcome_id desc
+  ),
+  rolled as (
+    select
+      universe_id,
+      field,
+      (count(*) filter (where result in ('agree', 'disagree')))::int as compared,
+      (count(*) filter (where result = 'agree'))::int as agree,
+      (count(*) filter (where result = 'disagree'))::int as disagree,
+      (count(*) filter (where result = 'not_comparable'))::int as not_comparable,
+      to_char(max(compared_at) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as newest_compared_at
+    from deduped
+    group by universe_id, field
+  )
+  select
+    universe_id,
+    field,
+    compared,
+    agree,
+    disagree,
+    not_comparable,
+    newest_compared_at,
+    case
+      when compared <= 0 then null
+      else least(
+        1.0::numeric,
+        greatest(
+          0.0::numeric,
+          round(
+            (
+              (
+                (disagree::numeric / compared::numeric)
+                + (1.959963984540054::numeric * 1.959963984540054::numeric) / (2.0::numeric * compared::numeric)
+                + 1.959963984540054::numeric * sqrt(
+                  (
+                    (disagree::numeric / compared::numeric) * (1.0::numeric - (disagree::numeric / compared::numeric))
+                    + (1.959963984540054::numeric * 1.959963984540054::numeric) / (4.0::numeric * compared::numeric)
+                  ) / compared::numeric
+                )
+              ) / (1.0::numeric + (1.959963984540054::numeric * 1.959963984540054::numeric) / compared::numeric)
+            )::numeric,
+            6
+          )
+        )
+      )::text
+    end as wilson_95_upper_bound
+  from rolled
+  order by universe_id, field
+`;
+
+export function oracleOutcomesTable(
+  outcomeRows: OracleOutcomeDbRow[],
+  headUniverses: string[],
+  confidenceUniverses: string[] = [],
+): OracleOutcomesTable {
+  const universeSet = new Set<string>();
+  for (const universeId of [...headUniverses, ...confidenceUniverses, ...outcomeRows.map((row) => row.universe_id)]) {
+    if (universeId && !isCanaryUniverse(universeId)) {
+      universeSet.add(universeId);
+    }
+  }
+  if (universeSet.size === 0) {
+    for (const universe of UNIVERSES) {
+      if (universe.scheduled_somewhere && !isCanaryUniverse(universe.id_prefix)) {
+        universeSet.add(universe.id_prefix);
+      }
+    }
+  }
+  const universes = Array.from(universeSet).sort((a, b) => a.localeCompare(b));
+
+  const extraMetrics = new Set<string>();
+  const byUniverseAndField = new Map<string, OracleOutcomeCell>();
+  for (const row of outcomeRows) {
+    if (!row.universe_id || isCanaryUniverse(row.universe_id) || !row.field) continue;
+    const compared = Number(row.compared ?? 0);
+    const agree = Number(row.agree ?? 0);
+    const disagree = Number(row.disagree ?? 0);
+    const notComparable = Number(row.not_comparable ?? 0);
+    if (compared + notComparable <= 0) continue;
+    if (!ORACLE_OUTCOME_METRICS.includes(row.field as (typeof ORACLE_OUTCOME_METRICS)[number])) {
+      extraMetrics.add(row.field);
+    }
+    byUniverseAndField.set(`${row.universe_id}\0${row.field}`, {
+      compared,
+      agree,
+      disagree,
+      not_comparable: notComparable,
+      newest_compared_at: row.newest_compared_at ?? null,
+      wilson_95_upper_bound: row.wilson_95_upper_bound ?? null,
+    });
+  }
+
+  const metrics = [
+    ...ORACLE_OUTCOME_METRICS,
+    ...Array.from(extraMetrics).sort((a, b) => a.localeCompare(b)),
+  ];
+
+  return {
+    universes,
+    rows: metrics.map((metric) => {
+      const cells: Record<string, OracleOutcomeCell | null> = {};
+      for (const universeId of universes) {
+        cells[universeId] = byUniverseAndField.get(`${universeId}\0${metric}`) ?? null;
+      }
+      return { metric, cells };
+    }),
+  };
 }
 
 /** Cells of one family by the number of independent origins that asserted a value. */
@@ -315,13 +479,6 @@ export interface ConfidenceFamilyRow {
   origins: string[];
 }
 
-export interface ConfidenceOracleField {
-  field: string;
-  compared: number;
-  agreed: number;
-  agreement_rate: string | null;
-}
-
 export interface ConfidenceReportRow {
   universe_id: string;
   run_id: string;
@@ -334,10 +491,6 @@ export interface ConfidenceReportRow {
    *  fields per field in bar order (#865), any other family after them alphabetically.
    *  `matches` is null when the quality report graded nothing for the family. */
   quality_report_matches: ConfidenceQualityMatch[];
-  /** The issuers that a stored report's `sec_oracle` section re-derived. Null when the report has
-   *  no such section: a report written after #1523 holds none (`mart.oracle_outcomes` does). */
-  oracle_issuers_compared: number | null;
-  oracle_fields: ConfidenceOracleField[];
   stored_confidence_used_for_bands: boolean;
 }
 
@@ -363,8 +516,7 @@ interface ConfidenceReportDbRow {
       }
     >;
     accuracy?: {
-      sec_oracle?: SecOracleDb;
-      [family: string]: AccuracyEntryDb | SecOracleDb | undefined;
+      [family: string]: AccuracyEntryDb | Record<string, unknown> | undefined;
     };
     metadata?: { stored_confidence?: { used_for_bands?: boolean } };
   };
@@ -404,15 +556,15 @@ function confidenceReportRows(
   return rows.map((row) => {
     const payload = row.payload ?? {};
     const accuracy = payload.accuracy ?? {};
-    const oracle: SecOracleDb = accuracy.sec_oracle ?? {};
     const qualityMatches: ConfidenceQualityMatch[] = [];
     for (const [family, entry] of Object.entries(accuracy)) {
       if (family === "sec_oracle" || !entry || !("matches_quality_report" in entry))
         continue;
+      const accuracyEntry = entry as AccuracyEntryDb;
       qualityMatches.push({
         family,
-        matches: entry.matches_quality_report ?? null,
-        mismatches: entry.quality_report_mismatches?.length ?? 0,
+        matches: accuracyEntry.matches_quality_report ?? null,
+        mismatches: accuracyEntry.quality_report_mismatches?.length ?? 0,
       });
     }
     qualityMatches.sort(
@@ -420,7 +572,7 @@ function confidenceReportRows(
         qualityMatchRank(a.family) - qualityMatchRank(b.family) ||
         a.family.localeCompare(b.family),
     );
-    const close = accuracy.close;
+    const close = accuracy.close as AccuracyEntryDb | undefined;
     return {
       universe_id: row.universe_id,
       run_id: row.run_id,
@@ -445,16 +597,6 @@ function confidenceReportRows(
           ? (close.matches_quality_report ?? null)
           : null,
       quality_report_matches: qualityMatches,
-      oracle_issuers_compared:
-        accuracy.sec_oracle === undefined ? null : (oracle.issuers_compared ?? 0),
-      oracle_fields: Object.entries(oracle.per_field ?? {}).map(
-        ([field, entry]) => ({
-          field,
-          compared: entry.compared ?? 0,
-          agreed: entry.agreed ?? 0,
-          agreement_rate: entry.agreement_rate ?? null,
-        }),
-      ),
       // Defaults to false on purpose: the column is a constant, and a report that does
       // not say otherwise must not be read as having used it.
       stored_confidence_used_for_bands:
@@ -543,6 +685,7 @@ export interface Model1302DayRow {
 }
 
 export interface DatahubStats {
+  oracleOutcomes: OracleOutcomesTable;
   confidence: ConfidenceReportRow[];
   questionCoverage: QuestionCoverageRow[];
   heads: HeadStatusRow[];
@@ -645,12 +788,11 @@ const SOURCES_SQL = `
   limit 12
 `;
 
-// #648/#635/#578 made the validation machinery real; this section makes it VISIBLE:
-// the latest canary run (the deploy verdict), yesterday's reuse savings (vendor
-// fetches avoided), the plausibility oracle's current violation count, and the
-// corroborated share of the newest graded run — the basic 校验能力, one glance.
+// #648/#635/#578/#1523: capture-obligation completeness of the newest sentinel run,
+// yesterday's reuse savings (vendor fetches avoided), the plausibility sign-check
+// violation count in the newest quality report, and the corroborated share of the newest graded run.
 const VALIDATION_SQL = `
-  select 'canary' as check,
+  select 'capture obligations complete' as check,
          case when s.complete and s.failed_count = 0 then 'pass' else 'fail' end as verdict,
          'latest ' || to_char(s.cutoff, 'MM-DD HH24:MI') || ' — ' || (s.success_count + s.unchanged_count)
            || '/' || s.obligation_count || ' resolved' as detail
@@ -666,7 +808,7 @@ const REUSE_SQL = `
   from mart.topt_capture_status where cutoff > now() - interval '24 hours'
 `;
 const PLAUSIBILITY_SQL = `
-  select 'plausibility oracle' as check,
+  select 'plausibility sign checks' as check,
          case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,
          coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail
   from mart.datahub_quality_report q
@@ -1163,6 +1305,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       ledgerCoverage,
       questionCoverage,
       confidence,
+      oracleOutcomes,
       nightlyVerdicts,
     ] = await Promise.all([
       client.query<HeadDbRow>(HEADS_SQL),
@@ -1182,6 +1325,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<LedgerCoverageRow>(LEDGER_COVERAGE_SQL, [LEDGER_COVERAGE_DAYS]),
       client.query<QuestionCoverageDbRow>(QUESTION_COVERAGE_SQL),
       client.query<ConfidenceReportDbRow>(CONFIDENCE_REPORT_SQL),
+      client.query<OracleOutcomeDbRow>(ORACLE_OUTCOMES_SQL),
       client.query<NightlyVerdictRow>(NIGHTLY_VERDICTS_SQL),
     ]);
     const activeEnv =
@@ -1191,6 +1335,11 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
     const vendorAccounts = vendorAccountRows(vendorLedgerToday.rows, activeEnv);
     const model1302ByDay = model1302Rows(model1302Daily.rows, activeEnv);
     return {
+      oracleOutcomes: oracleOutcomesTable(
+        oracleOutcomes.rows,
+        heads.rows.map((row) => row.universe_id),
+        confidence.rows.map((row) => row.universe_id),
+      ),
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
       nightlyVerdicts: nightlyVerdicts.rows.map(verdictRow),
