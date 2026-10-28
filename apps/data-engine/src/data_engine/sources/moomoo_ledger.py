@@ -132,11 +132,8 @@ def normalize_stock_uri(code_or_uri: str | None) -> str | None:
 def kline_distinct_stocks_7d() -> set[str]:
     """Return the set of distinct ``moomoo://<code>`` URIs requested on K-line endpoints
     within the rolling 7-day window (#1411 K2, #1520)."""
-    if (
-        getattr(gateway, "_writer", None) is not None
-        and not isinstance(gateway._writer, type(gateway.postgres_writer))
-        and hasattr(gateway._writer, "__iter__")
-    ):
+    writer = getattr(gateway, "_writer", None)
+    if writer is not gateway.postgres_writer and hasattr(writer, "__iter__"):
         cutoff = datetime.now(UTC) - timedelta(days=7)
         return {
             uri

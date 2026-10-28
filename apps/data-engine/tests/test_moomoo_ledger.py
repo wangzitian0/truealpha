@@ -166,3 +166,31 @@ def test_two_moomoo_calls_at_share_one_capture_then_run_analyst_ratings(call_led
     run_analyst_ratings(context, config, "{}")
     assert len(sleeps) == 1
     assert 29.0 <= sleeps[0] <= 31.0
+
+
+def test_get_history_kline_refreshes_reading_and_enforces_quota(call_ledger, monkeypatch):
+    """get_history_kline fetches and stores quota reading when none is stored (#1520)."""
+    ledger.reset_stored_history_kl_quota()
+    assert ledger.stored_history_kl_quota() is None
+
+    monkeypatch.setattr(gateway, "capacity_environment", lambda: "staging")
+
+    class _Ctx:
+        def get_history_kl_quota(self, get_detail=False):
+            return (mm.moomoo.RET_OK, (5, 95, []))  # total = 100
+
+        def request_history_kline(self, code, **kwargs):
+            return (mm.moomoo.RET_OK, [{"close": 100.5, "time_key": "2026-07-29 00:00:00"}], None)
+
+    ctx = _Ctx()
+    bars, _ = mm.get_history_kline(
+        ctx,
+        "US.STOCK1",
+        start="2026-07-15",
+        end="2026-07-29",
+        identity=FetchKey("moomoo", "history_kline", "symbol:STOCK1", "2026-07-29"),
+    )
+    assert bars is not None
+    assert ledger.stored_history_kl_quota() == 100
+    # Staging share is 20%, so quota is 20 distinct stocks
+    assert ledger.distinct_stock_quota() == 20

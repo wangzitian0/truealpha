@@ -16,6 +16,7 @@ ledger writer, `gateway.record_call` (#1521).
 """
 
 import json
+import logging
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,7 +26,9 @@ import moomoo
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources.gateway import record_call
-from data_engine.sources.moomoo_ledger import gate, normalize_stock_uri
+from data_engine.sources.moomoo_ledger import gate, normalize_stock_uri, stored_history_kl_quota
+
+logger = logging.getLogger(__name__)
 
 
 class MoomooConnectionError(Exception):
@@ -337,6 +340,16 @@ def get_history_kline(
             return (res[0], res[1])
         return res
 
+    if stored_history_kl_quota() is None and hasattr(ctx, "get_history_kl_quota"):
+        try:
+            get_history_kl_quota(
+                ctx,
+                caller=caller,
+                identity=FetchKey("moomoo", "get_history_kl_quota", f"kline_quota:{code}", identity.as_of),
+            )
+        except Exception:
+            logger.warning("Could not refresh moomoo historical kline quota reading", exc_info=True)
+
     bars = _call(ctx, "request_history_kline", caller, _invoke, request_uri=f"moomoo://{code}", identity=identity)
     return bars, page_req_key[0]
 
@@ -353,7 +366,7 @@ def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin", identity: FetchK
 
             store_history_kl_quota(int(res[0]) + int(res[1]))
         except Exception:
-            pass
+            logger.warning("Failed to store moomoo get_history_kl_quota reading", exc_info=True)
     return res
 
 

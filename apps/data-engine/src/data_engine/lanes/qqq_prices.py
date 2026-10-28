@@ -144,7 +144,7 @@ def need_credits(targets: int) -> int:
 def credit_budget(*, share: int | None, reserve: int, spent_today: int, targets: int) -> CreditBudget:
     """The credits one run may spend: its need, capped by what the other callers leave below the headroom."""
     granted = share or 0
-    ceiling = granted * int(UTILIZATION_CEILING * 100) // 100
+    ceiling = granted * int(round(UTILIZATION_CEILING * 100)) // 100
     need = need_credits(targets)
     credits = max(0, min(need, ceiling - reserve - spent_today))
     return CreditBudget(
