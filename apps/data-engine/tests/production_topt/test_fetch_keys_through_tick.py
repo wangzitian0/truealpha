@@ -53,6 +53,7 @@ from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from macro_seed import store_risk_free_series  # noqa: E402
 from split_series_seed import store_topt_series  # noqa: E402
 
@@ -163,6 +164,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=OperatingBranch.NON_FINANCIAL,
+                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -188,7 +190,10 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
         )
     price = MarketPriceAdapter(price_targets, yahoo_quote_fetcher)
     financial = SecFinancialFactAdapter(
-        sec_targets, sec_financial_fetcher, headcount_extractor=PostgresHeadcountExtractor(connection)
+        sec_targets,
+        sec_financial_fetcher,
+        headcount_extractor=PostgresHeadcountExtractor(connection),
+        listing_ratio_reader=plain_share_ratio,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
     routes: dict[str, SourceFetchPort] = {}

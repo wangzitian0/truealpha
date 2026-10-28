@@ -1,8 +1,7 @@
-"""Immutable universe and point-in-time identity-link contracts.
+"""Immutable universe and point-in-time membership contracts.
 
-Universe references identify exact manifest content. Identity links keep issuer,
-security, and listing identities distinct while preserving both valid time and
-the transaction-time evidence needed for replay.
+Universe references identify exact manifest content. Membership rows preserve both
+valid time and the transaction-time evidence needed for replay.
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,15 +32,6 @@ def _require_stable_reference(value: str, field_name: str) -> str:
     if mutable_markers:
         raise ValueError(f"{field_name} cannot use a mutable reference marker: {sorted(mutable_markers)}")
     return value
-
-
-def _intervals_overlap(
-    left_from: date,
-    left_to: date | None,
-    right_from: date,
-    right_to: date | None,
-) -> bool:
-    return (left_to is None or right_from <= left_to) and (right_to is None or left_from <= right_to)
 
 
 class SubjectKind(StrEnum):
@@ -282,226 +271,4 @@ class UniverseMembership(BaseModel):
             raise ValueError("valid_to must not precede valid_from")
         if self.recorded_at < self.knowable_at:
             raise ValueError("recorded_at must not precede knowable_at")
-        return self
-
-
-class SecurityKind(StrEnum):
-    COMMON_STOCK = "common_stock"
-    ADR = "adr"
-    ETF = "etf"
-    FUND = "fund"
-    DEBT = "debt"
-    OPTION = "option"
-    FUTURE = "future"
-    SWAP = "swap"
-    DERIVATIVE_OTHER = "derivative_other"
-    CASH = "cash"
-    CASH_EQUIVALENT = "cash_equivalent"
-    OTHER = "other"
-
-
-class ListingRole(StrEnum):
-    PRIMARY = "primary"
-    SECONDARY = "secondary"
-
-
-class IssuerSecurityLink(BaseModel):
-    """PIT evidence connecting one reporting issuer to one legal security."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_id: str
-    issuer_id: str
-    security_id: str
-    security_kind: SecurityKind
-    share_class: str | None = None
-    underlying_security_id: str | None = None
-    underlying_shares_per_security_unit: Decimal = Field(gt=0)
-    valid_from: date
-    valid_to: date | None = None
-    knowable_at: datetime
-    recorded_at: datetime
-    confidence: Decimal = Field(ge=0, le=1)
-    raw_ref: str = Field(min_length=1)
-
-    @field_validator("input_id", "issuer_id", "security_id", "underlying_security_id")
-    @classmethod
-    def validate_stable_identity(cls, value: str | None, info) -> str | None:
-        return None if value is None else _require_stable_reference(value, info.field_name)
-
-    @field_validator("share_class")
-    @classmethod
-    def validate_share_class(cls, value: str | None) -> str | None:
-        if value is not None and (not value or value != value.strip()):
-            raise ValueError("share_class must be non-empty and cannot have surrounding whitespace")
-        return value
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
-
-    @model_validator(mode="after")
-    def validate_link(self) -> IssuerSecurityLink:
-        if self.issuer_id == self.security_id:
-            raise ValueError("issuer_id and security_id are distinct identity namespaces")
-        if self.valid_to is not None and self.valid_to < self.valid_from:
-            raise ValueError("valid_to must not precede valid_from")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
-        if self.security_kind is SecurityKind.COMMON_STOCK:
-            if self.share_class is None:
-                raise ValueError("common-stock links require an explicit share_class")
-            if self.underlying_security_id is not None:
-                raise ValueError("common stock cannot declare an underlying security")
-            if self.underlying_shares_per_security_unit != Decimal("1"):
-                raise ValueError("common-stock security units must map one-to-one to their shares")
-        if self.security_kind is SecurityKind.ADR and self.underlying_security_id is None:
-            raise ValueError("ADR links require an underlying_security_id")
-        if self.underlying_security_id == self.security_id:
-            raise ValueError("a security cannot be its own underlying security")
-        if self.underlying_security_id is None and self.underlying_shares_per_security_unit != Decimal("1"):
-            raise ValueError("a non-unit conversion ratio requires an underlying security")
-        return self
-
-
-class SecurityListingLink(BaseModel):
-    """PIT evidence connecting one security to an explicit market line."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_id: str
-    security_id: str
-    listing_id: str
-    exchange_mic: str = Field(pattern=r"^[A-Z0-9]{4}$")
-    ticker: str = Field(min_length=1)
-    listing_role: ListingRole
-    currency: str = Field(pattern=r"^[A-Z]{3}$")
-    timezone: str = Field(min_length=1)
-    trading_calendar_id: str
-    trading_calendar_version: str
-    valid_from: date
-    valid_to: date | None = None
-    knowable_at: datetime
-    recorded_at: datetime
-    confidence: Decimal = Field(ge=0, le=1)
-    raw_ref: str = Field(min_length=1)
-
-    @field_validator(
-        "input_id",
-        "security_id",
-        "listing_id",
-        "trading_calendar_id",
-        "trading_calendar_version",
-    )
-    @classmethod
-    def validate_stable_identity(cls, value: str, info) -> str:
-        return _require_stable_reference(value, info.field_name)
-
-    @field_validator("ticker")
-    @classmethod
-    def validate_ticker(cls, value: str) -> str:
-        if value != value.strip() or any(character.isspace() for character in value):
-            raise ValueError("ticker must be non-empty and cannot contain whitespace")
-        return value
-
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone(cls, value: str) -> str:
-        try:
-            ZoneInfo(value)
-        except (ValueError, ZoneInfoNotFoundError) as error:
-            raise ValueError("timezone must be a valid IANA timezone") from error
-        return value
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
-
-    @model_validator(mode="after")
-    def validate_link(self) -> SecurityListingLink:
-        if self.security_id == self.listing_id:
-            raise ValueError("security_id and listing_id are distinct identity namespaces")
-        if self.valid_to is not None and self.valid_to < self.valid_from:
-            raise ValueError("valid_to must not precede valid_from")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
-        return self
-
-
-class IdentityLinkSet(BaseModel):
-    """Validated identity graph slice for one snapshot or capture partition."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    issuer_security_links: tuple[IssuerSecurityLink, ...] = Field(min_length=1)
-    security_listing_links: tuple[SecurityListingLink, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_graph(self) -> IdentityLinkSet:
-        issuer_links = tuple(
-            sorted(self.issuer_security_links, key=lambda link: (link.security_id, link.valid_from, link.input_id))
-        )
-        listing_links = tuple(
-            sorted(self.security_listing_links, key=lambda link: (link.listing_id, link.valid_from, link.input_id))
-        )
-        all_input_ids = [link.input_id for link in issuer_links]
-        all_input_ids.extend(link.input_id for link in listing_links)
-        if len(all_input_ids) != len(set(all_input_ids)):
-            raise ValueError("identity-link input_ids must be unique")
-
-        known_securities = {link.security_id for link in issuer_links}
-        unknown_securities = {link.security_id for link in listing_links} - known_securities
-        if unknown_securities:
-            raise ValueError(f"listing links reference unknown securities: {sorted(unknown_securities)}")
-
-        for index, issuer_left in enumerate(issuer_links):
-            for issuer_right in issuer_links[index + 1 :]:
-                if not _intervals_overlap(
-                    issuer_left.valid_from,
-                    issuer_left.valid_to,
-                    issuer_right.valid_from,
-                    issuer_right.valid_to,
-                ):
-                    continue
-                if (
-                    issuer_left.security_id == issuer_right.security_id
-                    and issuer_left.issuer_id != issuer_right.issuer_id
-                ):
-                    raise ValueError("one security cannot resolve to multiple issuers at the same valid time")
-                if (
-                    issuer_left.issuer_id == issuer_right.issuer_id
-                    and issuer_left.share_class is not None
-                    and issuer_left.share_class == issuer_right.share_class
-                    and issuer_left.security_id != issuer_right.security_id
-                ):
-                    raise ValueError(
-                        "one issuer share class cannot resolve to multiple securities at the same valid time"
-                    )
-
-        for index, listing_left in enumerate(listing_links):
-            for listing_right in listing_links[index + 1 :]:
-                if not _intervals_overlap(
-                    listing_left.valid_from,
-                    listing_left.valid_to,
-                    listing_right.valid_from,
-                    listing_right.valid_to,
-                ):
-                    continue
-                if (
-                    listing_left.listing_id == listing_right.listing_id
-                    and listing_left.security_id != listing_right.security_id
-                ):
-                    raise ValueError("one listing cannot resolve to multiple securities at the same valid time")
-                if (
-                    listing_left.security_id == listing_right.security_id
-                    and listing_left.listing_role is ListingRole.PRIMARY
-                    and listing_right.listing_role is ListingRole.PRIMARY
-                    and listing_left.listing_id != listing_right.listing_id
-                ):
-                    raise ValueError("one security cannot have multiple primary listings at the same valid time")
-
-        object.__setattr__(self, "issuer_security_links", issuer_links)
-        object.__setattr__(self, "security_listing_links", listing_links)
         return self

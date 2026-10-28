@@ -26,12 +26,14 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt import composition, issuer_registry, sec_financial_adapter
+from data_engine.datahub.standards import listing_unit_ratio
 from data_engine.sources import sec
 from truealpha_contracts.strategy import ExclusionReason
 from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from macro_seed import store_risk_free_series  # noqa: E402
 from production_topt.test_degraded_capture_forced import (  # noqa: E402
     _arm,
@@ -152,6 +154,7 @@ def _arm_registry(
         lambda cik, cutoff, branch, **_kwargs: _bundle_with_periods(branch),
     )
     monkeypatch.setattr(issuer_registry, "_pause", pauses.append, raising=False)
+    monkeypatch.setattr(listing_unit_ratio, "CoverRatioReader", lambda: plain_share_ratio)
     return socket, pauses
 
 

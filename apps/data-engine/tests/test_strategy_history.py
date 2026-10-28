@@ -30,6 +30,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
     build_bundle,
 )
+from data_engine.datahub.standards.listing_unit_ratio import PATTERN_PLAIN_SHARE, ListingUnitRatio
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
     DEFAULT_MONTHS,
@@ -145,6 +146,17 @@ def _no_splits(_symbol: str) -> tuple:
 
 def _no_headcount(_cik: int, _as_of: date) -> HeadcountFact | None:
     return None
+
+
+def _plain_share_ratio(_cik: int, _cutoff: date, _ticker: str | None) -> ListingUnitRatio:
+    return ListingUnitRatio(Decimal(1), PATTERN_PLAIN_SHARE, title="Common stock")
+
+
+@pytest.fixture(autouse=True)
+def _plain_share_cover_for_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    import data_engine.datahub.strategy_history as history
+
+    monkeypatch.setattr(history, "CoverRatioReader", lambda: _plain_share_ratio)
 
 
 def _rows(
@@ -451,6 +463,7 @@ def test_the_projector_rows_match_the_rows_the_live_bridge_writes_for_the_same_p
         {item.work_item_id: target},
         lambda cik, day, branch: build_bundle(document, day, branch),
         headcount_extractor=_no_headcount,
+        listing_ratio_reader=_plain_share_ratio,
     )
     outcome = adapter.fetch(item)
     assert isinstance(outcome, FetchSuccess)

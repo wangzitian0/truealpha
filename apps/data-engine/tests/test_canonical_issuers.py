@@ -21,6 +21,7 @@ import pytest
 from data_engine.datahub.strategy_history import project_deployed_history
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from financial_lineage_seed import (  # noqa: E402
     MemoryStore,
     Observed,
@@ -36,6 +37,13 @@ from financial_lineage_seed import (  # noqa: E402
 TICK = datetime(2026, 10, 9, 6, 15, tzinfo=UTC)
 MINTED_AT = at(2025, 1, 1)
 LIVE = at(2025, 9, 2)
+
+
+@pytest.fixture(autouse=True)
+def _plain_share_cover_for_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    import data_engine.datahub.strategy_history as history
+
+    monkeypatch.setattr(history, "CoverRatioReader", lambda: plain_share_ratio)
 
 
 @pytest.fixture

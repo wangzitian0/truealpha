@@ -42,6 +42,7 @@ from factors.production_topt import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,6 +146,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=OperatingBranch.FINANCIAL if ticker == "JPM" else OperatingBranch.NON_FINANCIAL,
+                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -183,6 +185,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
         sec_targets,
         lambda cik, cutoff, branch: age._bundle(branch, cik=cik, ticker=ticker_by_cik[cik]),
         headcount_extractor=PostgresHeadcountExtractor(connection),
+        listing_ratio_reader=plain_share_ratio,
     )
     routes: dict[str, SourceFetchPort] = {}
     routes.update(dict.fromkeys(price_targets, MarketPriceAdapter(price_targets, quote)))

@@ -48,6 +48,7 @@ from factors.production_topt import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from cover_fixture import plain_share_ratio  # noqa: E402
 from macro_seed import seed_rate_for_cutoff  # noqa: E402
 from split_series_seed import SeriesShape, share_count_vintage, store_daily_series  # noqa: E402
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
@@ -152,6 +153,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL,
+                ticker=ticker,
             )
         else:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -189,6 +191,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
         sec_targets,
         lambda cik, cutoff, branch: _bundle(branch, cik=cik, vintaged=cik != cik_by_ticker[NO_VINTAGE_TICKER]),
         headcount_extractor=PostgresHeadcountExtractor(connection),
+        listing_ratio_reader=plain_share_ratio,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
     routes: dict[str, SourceFetchPort] = {}

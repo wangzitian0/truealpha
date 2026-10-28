@@ -38,7 +38,6 @@ class Listing:
     exch_token: str  # leading token of the OpenFIGI exchCode
     ticker: str
     name: str | None
-    security_type: str | None
 
 
 def _exch_token(record: dict) -> str | None:
@@ -66,7 +65,6 @@ def pick_listing(records: list[dict], isin: str | None = None) -> Listing | None
                 exch_token=token,
                 ticker=record["ticker"],
                 name=record.get("name"),
-                security_type=record.get("securityType"),
             )
             best_rank = rank
     return best
