@@ -294,6 +294,19 @@ const reportWithoutOracleSection = {
   },
 };
 
+const oracleOutcomeRows = [
+  {
+    universe_id: "universe:qqq-us-2026-06-30",
+    field: "revenue",
+    compared: 5,
+    agree: 4,
+    disagree: 1,
+    not_comparable: 2,
+    newest_compared_at: "2026-10-28T00:30:00Z",
+    wilson_95_upper_bound: "0.624465",
+  },
+];
+
 const nightlyVerdictRows = [
   {
     check_name: "output_invariants",
@@ -318,6 +331,8 @@ const nightlyVerdictRows = [
     query: async (sql: string, params?: unknown[]) => {
       if (typeof sql === "string" && sql.includes("nightly_verdicts"))
         return { rows: nightlyVerdictRows } as never;
+      if (typeof sql === "string" && sql.includes("oracle_outcomes"))
+        return { rows: oracleOutcomeRows } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: [...confidenceRows, reportWithoutOracleSection] } as never;
       if (typeof sql === "string" && sql.includes("question_coverage_report"))
@@ -383,10 +398,23 @@ const nightlyVerdictRows = [
     "the newest confidence report per universe is surfaced with its families",
   );
   assert(
-    stats.confidence[0].oracle_issuers_compared === 5 &&
-      stats.confidence[1].oracle_issuers_compared === null &&
-      stats.confidence[1].oracle_fields.length === 0,
-    "a report with no sec_oracle section reads null, not 0 issuers re-derived",
+    !("oracle_fields" in stats.confidence[0]) &&
+      !("oracle_issuers_compared" in stats.confidence[0]),
+    "ConfidenceReportRow no longer carries legacy oracle_fields or oracle_issuers_compared (#1523 S3)",
+  );
+  const revenueOutcomeRow = stats.oracleOutcomes.rows.find((r) => r.metric === "revenue");
+  const grossProfitOutcomeRow = stats.oracleOutcomes.rows.find((r) => r.metric === "gross_profit");
+  const qqqRevenueCell = revenueOutcomeRow?.cells["universe:qqq-us-2026-06-30"] ?? null;
+  assert(
+    qqqRevenueCell !== null &&
+      qqqRevenueCell.compared === 5 &&
+      qqqRevenueCell.agree === 4 &&
+      qqqRevenueCell.disagree === 1 &&
+      qqqRevenueCell.not_comparable === 2 &&
+      qqqRevenueCell.newest_compared_at === "2026-10-28T00:30:00Z" &&
+      qqqRevenueCell.wilson_95_upper_bound === "0.624465" &&
+      grossProfitOutcomeRow?.cells["universe:qqq-us-2026-06-30"] === null,
+    "mart.oracle_outcomes rollup populates the metrics-by-universes table and leaves uncompared metrics null (#1523 S3)",
   );
   const close = stats.confidence[0].families.find((f) => f.family === "close");
   assert(
@@ -408,11 +436,9 @@ const nightlyVerdictRows = [
     "a report written before #1517 shows no origin counts instead of zeros",
   );
   assert(
-    stats.confidence[0].oracle_fields[0].field === "revenue" &&
-      stats.confidence[0].oracle_fields[0].agreed === 4 &&
-      stats.confidence[0].close_matches_quality_report === true &&
+    stats.confidence[0].close_matches_quality_report === true &&
       stats.confidence[0].stored_confidence_used_for_bands === false,
-    "the accuracy oracle and the stored-confidence disclaimer pass through",
+    "the quality-report match and the stored-confidence disclaimer pass through",
   );
   assert(
     JSON.stringify(stats.confidence[0].quality_report_matches) ===
@@ -642,6 +668,8 @@ const nightlyVerdictRows = [
       capturedParams.set(sql, params);
       if (typeof sql === "string" && sql.includes("nightly_verdicts"))
         return { rows: [] } as never;
+      if (typeof sql === "string" && sql.includes("oracle_outcomes"))
+        return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
         return { rows: [] } as never;
       if (typeof sql === "string" && sql.includes("question_coverage_report"))
@@ -690,11 +718,21 @@ const nightlyVerdictRows = [
     "unscheduled staging universe:qqq-% head is graded as manual and not false-degraded (#1359, #1362)",
   );
 
+  const validationSql = capturedSqls.find((s) =>
+    s.includes("'capture obligations complete' as check"),
+  );
   const plausibilitySql = capturedSqls.find((s) =>
-    s.includes("'plausibility oracle' as check"),
+    s.includes("'plausibility sign checks' as check"),
+  );
+  const oracleOutcomesSql = capturedSqls.find(
+    (s) => s.includes("from mart.served_head h") && s.includes("join mart.oracle_outcomes o"),
   );
   const corroborationSql = capturedSqls.find((s) =>
     s.includes("'price corroboration' as check"),
+  );
+  assert(
+    validationSql !== undefined && oracleOutcomesSql !== undefined,
+    "VALIDATION_SQL names capture-obligation completeness and ORACLE_OUTCOMES_SQL reads mart.oracle_outcomes through mart.served_head (#1523 S3)",
   );
   const coverageSql = capturedSqls.find((s) =>
     s.includes("from mart.question_coverage_report"),

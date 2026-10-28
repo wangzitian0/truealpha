@@ -121,3 +121,40 @@ def test_one_refused_issuer_does_not_roll_back_the_tick(tick_database_url, monke
     assert report.strategy_run_id == metadata["strategy_run_id"]
     (served,) = [decision for decision in report.decisions if decision.issuer_id == served_issuer]
     assert served.outcome == "excluded" and served.exclusion_reason == reason
+
+
+def test_an_empty_eligible_set_commits_and_advances_the_pointer(tick_database_url, monkeypatch) -> None:
+    """#1523 G14/G15: when every issuer is excluded by plausibility sign policy, the tick still
+    commits the run, records all twenty excluded decisions with their reason, and advances the pointer."""
+    node = published_node(plausibility_policy.JUDGED_TABLE, plausibility_policy.JUDGED_COLUMN)
+    strict = node.model_copy(
+        update={
+            "sign_policy": {issuer_class: SignPolicy.MUST_BE_NON_NEGATIVE for issuer_class in IssuerClass},
+        }
+    )
+    monkeypatch.setattr(plausibility_policy, "published_node", lambda table, column: strict)
+    _arm(
+        monkeypatch,
+        quote=lambda: _quote(SESSION, Decimal("40")),
+        price_cutoff=SESSION,
+        bundle=lambda _name, branch: replace(
+            _bundle(branch),
+            total_assets=Decimal("10000000000"),
+            stockholders_equity=Decimal("10000000000") if branch == OperatingBranch.FINANCIAL else None,
+        ),
+    )
+    cutoff = datetime.combine(SESSION, time(22, 30), tzinfo=UTC)
+    metadata = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=True)
+
+    reason = ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY.value
+    with psycopg.connect(tick_database_url) as reader:
+        decisions = dict(
+            reader.execute(
+                "select issuer_id, exclusion_reason from mart.strategy_decisions where strategy_run_id = %s",
+                (metadata["strategy_run_id"],),
+            ).fetchall()
+        )
+        assert len(decisions) == 20
+        assert set(decisions.values()) == {reason}
+        assert reader.execute(_HEAD_SQL).fetchone()[0] == metadata["capture_run_id"]
+    assert len(metadata["plausibility_excluded"]) >= 20
