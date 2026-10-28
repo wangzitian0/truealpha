@@ -1,79 +1,99 @@
-"""Every deployed Dagster job has a maximum runtime from measured run times (#1442).
+"""Every deployed Dagster job derives its maximum runtime bound from dagster.runs history (#1442, #1522).
 
-The environment contract (`run_time_bounds`) holds the measured run times. The run launcher
-writes the derived bound to each run (`data_engine.run_launcher`). These tests hold the catalog
-equal to the deployed jobs in both directions, so a new job or schedule without a basis fails
-here, and a retired job leaves no stale entry.
+The environment contract holds the policy parameters (margin, floor_minutes, window_days).
+The run launcher queries SUCCESS runs in dagster.runs over the window and sets margin x longest
+successful run (at least floor_minutes). When a job has no successful run in the window, no tag
+is written and the instance limit (3 h, dagster.yaml) applies. An operator's bound is preserved.
 """
 
 from __future__ import annotations
 
-import pytest
+import sys
+from pathlib import Path
+
+import dagster as dg
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
-from data_engine.dagster_defs import build_definitions
-from data_engine.run_launcher import CONTRACT_BOUND_TAG, max_runtime_tags
+from data_engine.run_launcher import CONTRACT_BOUND_TAG, MAX_RUNTIME_ALIAS_TAG, bound_tags_to_write, max_runtime_tags
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from run_seed import seed_success_run  # noqa: E402
 from truealpha_contracts.environment_contract import load_environment_contract
 
-#: The environments that run the deployed definitions. Their schedules differ in status only.
-DEPLOYED_ENVIRONMENTS = ("production", "staging")
+
+def test_job_with_no_success_run_writes_no_tag() -> None:
+    """A job without a SUCCESS run in the window writes no tag; the instance limit applies (#1522)."""
+    instance = dg.DagsterInstance.ephemeral()
+    job_name = "brand_new_pipeline"
+
+    assert max_runtime_tags(job_name, instance=instance) == {}
+    assert bound_tags_to_write(job_name, {}, instance=instance) == {}
 
 
-def _repositories():
-    return [build_definitions(environment).get_repository_def() for environment in DEPLOYED_ENVIRONMENTS]
+def test_tag_written_is_margin_times_longest_success_respecting_floor() -> None:
+    """Bound is margin x longest SUCCESS run, and never below floor_minutes (#1442, #1522)."""
+    instance = dg.DagsterInstance.ephemeral()
+    policy = load_environment_contract().job_runtime_bounds
+    job_name = "test_pipeline"
 
-
-def _deployed_job_names() -> set[str]:
-    return {job.name for repository in _repositories() for job in repository.get_all_jobs()}
-
-
-def test_every_schedule_runs_a_job_that_has_a_run_time_basis() -> None:
-    catalog = load_environment_contract().run_time_bounds.jobs
-    schedules = {(schedule.name, schedule.job_name) for repo in _repositories() for schedule in repo.schedule_defs}
-    assert schedules, "the deployed definitions declare no schedule"
-
-    missing = sorted(f"{name} -> {job}" for name, job in schedules if job not in catalog)
-
-    assert missing == [], (
-        "these schedules run a job without a run_time_bounds entry in environment_contract.v1.json; "
-        f"measure the job and add its entry: {missing}"
-    )
-
-
-def test_every_sensor_target_has_a_run_time_basis() -> None:
-    catalog = load_environment_contract().run_time_bounds.jobs
-    targets = {
-        (sensor.name, target.job_name)
-        for repository in _repositories()
-        for sensor in repository.sensor_defs
-        for target in sensor.targets
+    # Short run of 60s: 60 x margin (2) = 120s < floor (10 min = 600s) -> floor applies
+    seed_success_run(instance, job_name, 60.0)
+    floor_seconds = int(policy.floor_minutes * 60)
+    tags = max_runtime_tags(job_name, instance=instance)
+    assert tags == {
+        MAX_RUNTIME_SECONDS_TAG: str(floor_seconds),
+        CONTRACT_BOUND_TAG: str(floor_seconds),
     }
-    assert targets, "the deployed definitions declare no sensor target"
 
-    missing = sorted(f"{name} -> {job}" for name, job in targets if job not in catalog)
-
-    assert missing == [], f"these sensors launch a job without a run_time_bounds entry: {missing}"
-
-
-def test_the_catalog_names_exactly_the_deployed_jobs() -> None:
-    catalog = set(load_environment_contract().run_time_bounds.jobs)
-    deployed = _deployed_job_names()
-
-    assert sorted(deployed - catalog) == [], "add a run_time_bounds entry for each new job"
-    assert sorted(catalog - deployed) == [], "delete the run_time_bounds entry of each retired job"
+    # Longer run of 500s: 500 x 2 = 1000s > 600s -> margin x duration applies
+    seed_success_run(instance, job_name, 500.0)
+    expected_bound = int(policy.margin * 500.0)
+    tags = max_runtime_tags(job_name, instance=instance)
+    assert tags == {
+        MAX_RUNTIME_SECONDS_TAG: str(expected_bound),
+        CONTRACT_BOUND_TAG: str(expected_bound),
+    }
 
 
-@pytest.mark.parametrize("job_name", sorted(load_environment_contract().run_time_bounds.jobs))
-def test_no_measured_success_reaches_the_bound_of_its_job(job_name: str) -> None:
-    """A bound below a real success would end a healthy run. Each recorded success must fit."""
-    contract = load_environment_contract()
-    basis = contract.run_time_bounds.jobs[job_name]
-    bound = contract.max_runtime_seconds(job_name)
-    if basis.unmeasured is not None:
-        assert bound is None
-        assert max_runtime_tags(job_name) == {}
-        return
+def test_slower_success_run_raises_the_bound() -> None:
+    """A slower SUCCESS run raises the derived runtime bound (#1522)."""
+    instance = dg.DagsterInstance.ephemeral()
+    policy = load_environment_contract().job_runtime_bounds
+    job_name = "scaling_pipeline"
 
-    assert bound is not None
-    assert max_runtime_tags(job_name) == {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
-    for environment, times in (basis.measured or {}).items():
-        assert bound > times.longest_minutes * 60, f"{job_name}: a {environment} success reaches the bound"
+    seed_success_run(instance, job_name, 400.0)
+    bound_1 = int(max_runtime_tags(job_name, instance=instance)[MAX_RUNTIME_SECONDS_TAG])
+    assert bound_1 == int(policy.margin * 400.0)
+
+    # A faster subsequent run does not lower the bound
+    seed_success_run(instance, job_name, 200.0)
+    bound_2 = int(max_runtime_tags(job_name, instance=instance)[MAX_RUNTIME_SECONDS_TAG])
+    assert bound_2 == bound_1
+
+    # A slower subsequent run raises the bound
+    seed_success_run(instance, job_name, 700.0)
+    bound_3 = int(max_runtime_tags(job_name, instance=instance)[MAX_RUNTIME_SECONDS_TAG])
+    assert bound_3 == int(policy.margin * 700.0)
+    assert bound_3 > bound_1
+
+
+def test_operator_explicit_max_runtime_tag_is_preserved() -> None:
+    """An operator's explicit tag (or alias) is kept and never overwritten (#1442, #1522)."""
+    instance = dg.DagsterInstance.ephemeral()
+    job_name = "operator_pipeline"
+    seed_success_run(instance, job_name, 500.0)
+
+    # Standard explicit operator tag
+    operator_tags = {MAX_RUNTIME_SECONDS_TAG: "86400"}
+    assert bound_tags_to_write(job_name, operator_tags, instance=instance) == {}
+
+    # Alias operator tag
+    alias_tags = {MAX_RUNTIME_ALIAS_TAG: "86400"}
+    assert bound_tags_to_write(job_name, alias_tags, instance=instance) == {}
+
+    # Re-execution with previously generated contract bound gets renewed
+    contract_bound = max_runtime_tags(job_name, instance=instance)[MAX_RUNTIME_SECONDS_TAG]
+    re_exec_tags = {MAX_RUNTIME_SECONDS_TAG: contract_bound, CONTRACT_BOUND_TAG: contract_bound}
+    assert bound_tags_to_write(job_name, re_exec_tags, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: contract_bound,
+        CONTRACT_BOUND_TAG: contract_bound,
+    }

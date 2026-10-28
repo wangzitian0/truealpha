@@ -38,20 +38,17 @@ from dagster._core.workspace.context import WorkspaceProcessContext
 from dagster._core.workspace.load_target import EmptyWorkspaceTarget, GrpcServerTarget
 from dagster._daemon.monitoring.run_monitoring import execute_run_monitoring_iteration
 from dagster._grpc.client import DagsterGrpcClient
-from data_engine import run_launcher
 from data_engine.run_launcher import (
     CONTRACT_BOUND_TAG,
     MAX_RUNTIME_ALIAS_TAG,
     RUN_WORKER_LOST,
     MonitoredRunLauncher,
     bound_tags_to_write,
+    max_runtime_tags,
 )
-from truealpha_contracts.environment_contract import (
-    EnvironmentContract,
-    JobRunTimeBasis,
-    MeasuredRunTimes,
-    load_environment_contract,
-)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from run_seed import seed_success_run  # noqa: E402
 
 DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 LOCATION_FILE = Path(__file__).resolve().parent / "support" / "run_launcher_location.py"
@@ -147,15 +144,6 @@ def socket_path() -> Iterator[str]:
     shutil.rmtree(directory, ignore_errors=True)
 
 
-def _contract_with_a_bound_for(job_name: str, longest_minutes: float) -> EnvironmentContract:
-    """The real contract plus one measured entry for `job_name`."""
-    contract = load_environment_contract()
-    bounds = contract.run_time_bounds
-    basis = JobRunTimeBasis(measured={"staging": MeasuredRunTimes(successes=1, longest_minutes=longest_minutes)})
-    jobs = {**bounds.jobs, job_name: basis}
-    return contract.model_copy(update={"run_time_bounds": bounds.model_copy(update={"jobs": jobs})})
-
-
 def _launch(instance: DagsterInstance, workspace_context: WorkspaceProcessContext, tags: dict[str, str]) -> str:
     workspace = workspace_context.create_request_context()
     location = workspace.get_code_location(LOCATION_NAME)
@@ -212,11 +200,8 @@ def test_a_run_whose_code_server_restarted_fails_at_the_next_monitor_poll(
     instance: DagsterInstance, socket_path: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Kill the code server and its run processes, start a new one, and poll the monitor once."""
-    bound_minutes = 60.0
-    contract = _contract_with_a_bound_for(WAITING_JOB_NAME, bound_minutes)
-    monkeypatch.setattr(run_launcher, "load_environment_contract", lambda: contract)
-    expected_bound = contract.max_runtime_seconds(WAITING_JOB_NAME)
-    assert expected_bound is not None
+    seed_success_run(instance, WAITING_JOB_NAME, 1800.0)
+    expected_bound = 3600
 
     server = CodeServer(socket_path)
     server.start()
@@ -317,9 +302,8 @@ def test_a_run_with_an_unreadable_code_server_address_is_left_to_its_maximum_run
 BOUNDED_JOB = "head_reports_pipeline"
 
 
-def _contract_tags() -> dict[str, str]:
-    bound = load_environment_contract().max_runtime_seconds(BOUNDED_JOB)
-    assert bound is not None
+def _contract_tags(instance: DagsterInstance) -> dict[str, str]:
+    bound = max_runtime_tags(BOUNDED_JOB, instance=instance)[MAX_RUNTIME_SECONDS_TAG]
     return {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
 
 
@@ -342,9 +326,10 @@ def _contract_tags() -> dict[str, str]:
     ],
 )
 def test_the_launch_keeps_an_operator_bound_and_renews_a_copied_contract_bound(
-    run_tags: dict[str, str], written: str
+    instance: DagsterInstance, run_tags: dict[str, str], written: str
 ) -> None:
     """A re-execution copies its parent's tags (#1442 review). Only an operator's bound may stay."""
-    expected = _contract_tags() if written == "contract" else {}
+    seed_success_run(instance, BOUNDED_JOB, 1800.0)
+    expected = _contract_tags(instance) if written == "contract" else {}
 
-    assert bound_tags_to_write(BOUNDED_JOB, run_tags) == expected
+    assert bound_tags_to_write(BOUNDED_JOB, run_tags, instance=instance) == expected

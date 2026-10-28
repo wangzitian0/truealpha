@@ -46,7 +46,7 @@ def variant_text(*, key: str = NEW_KEY, lane: str = NEW_LANE, id_prefix: str = N
         {"key": "sp500", "status": "scheduled"},
         {"key": key, "status": "scheduled"},
     ]
-    production["ticks"][key] = {"estimated_listings": 30}
+    production["ticks"][key] = {}
     return json.dumps(raw)
 
 

@@ -117,9 +117,9 @@ def model_key_health_cron(environment: str) -> str:
 
 
 RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
-# 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
-# finished, and before the delivery report (07:00) reads the verdict. The verdict is pending
-# until the deployment's first scheduled or forced tick has finished.
+# 06:15 UTC: after every scheduled tick of the night has finished, and before the delivery
+# report (07:00) reads the verdict. The verdict is pending until the deployment's first scheduled
+# or forced tick has finished.
 RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 
 RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"

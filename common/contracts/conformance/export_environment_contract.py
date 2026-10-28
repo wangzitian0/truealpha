@@ -37,9 +37,8 @@ def render() -> str:
             tick_key: {
                 "scheduled": contract.is_universe_scheduled(tick_key, env_name),
                 "cron": contract.record(tick_key).cron[env_name],
-                "estimated_listings": tick.estimated_listings,
             }
-            for tick_key, tick in spec.ticks.items()
+            for tick_key in spec.ticks
         }
     universes = [
         {
@@ -79,7 +78,12 @@ def render() -> str:
 export interface EnvironmentTickRule {{
   readonly scheduled: boolean;
   readonly cron: string;
-  readonly estimated_listings: number;
+}}
+
+export interface RunTimeBoundsPolicy {{
+  readonly margin: number;
+  readonly floorMinutes: number;
+  readonly windowDays: number;
 }}
 
 export interface UniverseRecordContract {{
@@ -104,6 +108,12 @@ export const ENVIRONMENT_CONTRACT_VERSION = {json.dumps(contract.contract_versio
 export const ENVIRONMENT_CONTRACT_SHA256 = {json.dumps(contract.content_sha256)} as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = {sentinels_json} as const;
+
+export const RUN_TIME_BOUNDS: RunTimeBoundsPolicy = {{
+  margin: {contract.run_time_bounds.margin},
+  floorMinutes: {contract.run_time_bounds.floor_minutes},
+  windowDays: {contract.run_time_bounds.window_days},
+}} as const;
 
 export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, EnvironmentTickRule>>>> = {ticks_json} as const;
 

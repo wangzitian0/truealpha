@@ -789,10 +789,10 @@ def test_every_probe_slot_ends_before_the_release_fetch_proof_starts() -> None:
 
 
 def test_the_probe_deadline_fits_inside_the_run_time_bound_of_its_job() -> None:
-    bound = load_environment_contract().max_runtime_seconds(quality.MODEL_KEY_HEALTH_JOB_NAME)
-    assert bound is not None
+    floor_seconds = load_environment_contract().job_runtime_bounds.floor_minutes * 60
     assert (
-        RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds + SEAT.probe.launch_margin_seconds < bound
+        RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds + SEAT.probe.launch_margin_seconds
+        < floor_seconds
     )
 
 

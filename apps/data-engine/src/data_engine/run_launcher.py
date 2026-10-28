@@ -12,12 +12,13 @@ a worker health check, and `DefaultRunLauncher` has none. Before #1442 only the 
 `MonitoredRunLauncher` adds two things:
 
 1. `launch_run` writes the job's maximum runtime to the run tag `dagster/max_runtime`. The value
-   comes from the measured run times in the environment contract (`max_runtime_seconds`). The run
-   monitor fails a run that exceeds it. An operator can set `dagster/max_runtime` (or Dagster's
+   comes from successful runs of the job in `dagster.runs` over the policy window (#1522). The run
+   monitor fails a run that exceeds it. A job with no successful run in the window gets no tag, and
+   the instance limit (3 hours) applies. An operator can set `dagster/max_runtime` (or Dagster's
    alias `dagster/max_runtime_seconds`) at launch to run a job longer than its bound by intent.
    The launcher keeps that value. A re-execution copies every tag of its parent run, so the
    launcher also writes `truealpha/contract_max_runtime`. A copied bound that equals this record
-   came from the contract, and the launcher replaces it with the bound of the current contract.
+   came from the contract, and the launcher replaces it with the bound derived from history.
 2. `check_run_worker_health` asks the code server at the run's address whether it still executes
    the run (`GetCurrentRuns`). A code server that answers and does not list the run proves that the
    run worker is gone: the run monitor marks the run failed at its next poll. A code server that
@@ -29,7 +30,9 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 
+import dagster as dg
 from dagster._core.launcher import CheckRunHealthResult, LaunchRunContext, WorkerStatus
 from dagster._core.launcher.default_run_launcher import DefaultRunLauncher
 from dagster._core.storage.dagster_run import DagsterRun
@@ -49,30 +52,55 @@ CONTRACT_BOUND_TAG = "truealpha/contract_max_runtime"
 MAX_RUNTIME_ALIAS_TAG = "dagster/max_runtime_seconds"
 
 
-def max_runtime_tags(job_name: str) -> dict[str, str]:
-    """Return the run tags that bound a run of `job_name`, or no tag when the contract gives no bound."""
-    bound = load_environment_contract().max_runtime_seconds(job_name)
-    if bound is None:
+def max_runtime_tags(job_name: str, instance: dg.DagsterInstance | None = None) -> dict[str, str]:
+    """Return the run tags that bound a run of `job_name`, or no tag when no successful run is in the window (#1442, #1522)."""
+    if instance is None:
         return {}
-    return {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
+    try:
+        contract = load_environment_contract()
+        cutoff = datetime.now(UTC) - timedelta(days=contract.job_runtime_bounds.window_days)
+        records = instance.get_run_records(
+            filters=dg.RunsFilter(
+                job_name=job_name,
+                statuses=[dg.DagsterRunStatus.SUCCESS],
+                created_after=cutoff,
+            )
+        )
+        durations = [
+            record.end_time - record.start_time
+            for record in records
+            if record.start_time is not None and record.end_time is not None and record.end_time > record.start_time
+        ]
+        if not durations:
+            return {}
+        longest_seconds = max(durations)
+        bound = contract.derive_max_runtime_seconds(longest_seconds)
+        return {MAX_RUNTIME_SECONDS_TAG: str(bound), CONTRACT_BOUND_TAG: str(bound)}
+    except Exception as error:
+        logger.warning("could not derive max runtime for job %s: %r", job_name, error)
+        return {}
 
 
-def bound_tags_to_write(job_name: str, run_tags: Mapping[str, str]) -> dict[str, str]:
-    """Return the tags that `launch_run` writes. An operator's bound stays; any other bound is the contract's."""
+def bound_tags_to_write(
+    job_name: str,
+    run_tags: Mapping[str, str],
+    instance: dg.DagsterInstance | None = None,
+) -> dict[str, str]:
+    """Return the tags that `launch_run` writes. An operator's bound stays; any other bound is derived."""
     if MAX_RUNTIME_ALIAS_TAG in run_tags:
         return {}
     present = run_tags.get(MAX_RUNTIME_SECONDS_TAG)
     if present is not None and present != run_tags.get(CONTRACT_BOUND_TAG):
         return {}
-    return max_runtime_tags(job_name)
+    return max_runtime_tags(job_name, instance=instance)
 
 
 class MonitoredRunLauncher(DefaultRunLauncher):
-    """`DefaultRunLauncher` with a measured maximum runtime per job and a run worker health check."""
+    """`DefaultRunLauncher` with a derived maximum runtime per job and a run worker health check."""
 
     def launch_run(self, context: LaunchRunContext) -> None:
         run = context.dagster_run
-        tags = bound_tags_to_write(run.job_name, run.tags)
+        tags = bound_tags_to_write(run.job_name, run.tags, instance=self._instance)
         if tags:
             self._instance.add_run_tags(run.run_id, tags)
         super().launch_run(context)

@@ -671,6 +671,20 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     assert tick_cron("topt", "dev") == staging, "unrecognized envs share the lower-stakes slot"
 
 
+def test_changing_topt_cron_in_variant_changes_topt_schedule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changing TOPT cron in a variant record alters the generated schedule (#1522 step 4)."""
+    from truealpha_contracts import universes
+
+    real_record = universes.record
+    original = real_record("topt")
+    variant = original.model_copy(update={"cron": {"production": "42 11 * * *", "staging": "15 22 * * *"}})
+    monkeypatch.setattr(universes, "record", lambda k: variant if k == "topt" else real_record(k))
+    monkeypatch.setattr(capture, "record", lambda k: variant if k == "topt" else real_record(k))
+    defs_prod = capture.build_definitions("production")
+    schedule = defs_prod.get_schedule_def("topt_live_schedule")
+    assert schedule.cron_schedule == "42 11 * * *"
+
+
 # -- #72 scope 4: ticks are declarations; the factory builds what they say -------------------
 
 

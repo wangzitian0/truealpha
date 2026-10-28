@@ -15,6 +15,7 @@
  */
 
 import type { PoolClient } from "pg";
+import { RUN_TIME_BOUNDS } from "@/contracts/environmentContract.generated";
 import type { ReadState } from "@/server/read-state";
 import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, UNDEFINED_TABLE, withOpsReader } from "./ops";
 
@@ -40,6 +41,12 @@ export interface PipelineJobRow {
   successRate: number | null;
   lastSuccessAt: string | null;
   lastFailure: PipelineFailure | null;
+  /** Longest successful run duration in seconds in the window, or null if no SUCCESS run. */
+  longestSuccessSeconds: number | null;
+  /** Derived runtime bound in seconds (margin * longest, >= floor), or null if no SUCCESS run. */
+  derivedBoundSeconds: number | null;
+  /** Count of runs ended by runtime bound in the window. */
+  runsEndedByBound: number;
 }
 
 export interface PipelineVerdict {
@@ -89,13 +96,29 @@ export const JOBS_SQL = `
          max(r.create_timestamp) filter (where r.status = 'SUCCESS') as last_success,
          max(r.create_timestamp) filter (where r.status = 'FAILURE') as last_failure,
          (array_agg(r.run_id order by r.create_timestamp desc) filter (where r.status = 'FAILURE'))[1]
-           as last_failure_run_id
+           as last_failure_run_id,
+         max(case when r.status = 'SUCCESS' and r.end_time is not null and r.start_time is not null and r.end_time >= r.start_time then (r.end_time - r.start_time) else null end)
+           filter (where r.create_timestamp >= (now() at time zone 'utc') - make_interval(days => $3::int)) as longest_success_seconds
   from dagster.runs r
   cross join (select (now() at time zone 'utc') - make_interval(days => $1::int) as since) w
   where r.status in ('SUCCESS', 'FAILURE')
   group by r.pipeline_name
   having max(r.create_timestamp) >= (now() at time zone 'utc') - make_interval(days => $2::int)
   order by r.pipeline_name
+`;
+
+/**
+ * Runs ended by the runtime bound in the window. Dagster writes PIPELINE_FAILURE with timeout message.
+ */
+export const TIMEOUTS_SQL = `
+  select r.pipeline_name as job, count(*)::int as count
+  from dagster.runs r
+  join dagster.event_logs e on e.run_id = r.run_id
+  where r.status = 'FAILURE'
+    and r.create_timestamp >= (now() at time zone 'utc') - make_interval(days => $1::int)
+    and e.dagster_event_type = 'PIPELINE_FAILURE'
+    and e.event like '%Run timed out due to taking longer than%'
+  group by r.pipeline_name
 `;
 
 /**
@@ -245,13 +268,42 @@ async function readFailureLines(client: Pick<PoolClient, "query">, runIds: strin
   }
 }
 
-function jobRow(row: Record<string, unknown>, lines: Map<string, string | null>): PipelineJobRow {
+async function readTimeouts(client: Pick<PoolClient, "query">, windowDays: number): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  try {
+    const result = await client.query(TIMEOUTS_SQL, [windowDays]);
+    for (const row of result.rows) {
+      counts.set(String(row.job), Number(row.count));
+    }
+  } catch {
+    // If event_logs cannot be read, timeout counts default to 0.
+  }
+  return counts;
+}
+
+function jobRow(
+  row: Record<string, unknown>,
+  lines: Map<string, string | null>,
+  timeouts: Map<string, number>,
+): PipelineJobRow {
   const successes = Number(row.successes);
   const failures = Number(row.failures);
   const runs = successes + failures;
   const runId = row.last_failure_run_id === null || row.last_failure_run_id === undefined
     ? null
     : String(row.last_failure_run_id);
+  const longestSuccessSeconds =
+    row.longest_success_seconds === null || row.longest_success_seconds === undefined
+      ? null
+      : Math.round(Number(row.longest_success_seconds));
+  const derivedBoundSeconds =
+    longestSuccessSeconds === null
+      ? null
+      : Math.max(
+          Math.ceil(RUN_TIME_BOUNDS.margin * longestSuccessSeconds),
+          RUN_TIME_BOUNDS.floorMinutes * 60,
+        );
+  const runsEndedByBound = timeouts.get(String(row.job)) ?? 0;
   return {
     job: String(row.job),
     runs,
@@ -263,6 +315,9 @@ function jobRow(row: Record<string, unknown>, lines: Map<string, string | null>)
       runId === null || row.last_failure === null || row.last_failure === undefined
         ? null
         : { runId, at: iso(row.last_failure), firstError: lines.get(runId) ?? null },
+    longestSuccessSeconds,
+    derivedBoundSeconds,
+    runsEndedByBound,
   };
 }
 
@@ -274,7 +329,7 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
     return await withOpsReader(async (client): Promise<PipelineOutcome> => {
       let grouped;
       try {
-        grouped = await client.query(JOBS_SQL, [PIPELINE_WINDOW_DAYS, PIPELINE_LISTED_DAYS]);
+        grouped = await client.query(JOBS_SQL, [PIPELINE_WINDOW_DAYS, PIPELINE_LISTED_DAYS, RUN_TIME_BOUNDS.windowDays]);
       } catch (error) {
         // Dagster bootstraps its own tables at runtime; a database without them reports so.
         // Any other failure (a missing grant, a timeout) is an error, never "not bootstrapped".
@@ -288,6 +343,8 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
         .map((row) => row.last_failure_run_id)
         .filter((id): id is string => typeof id === "string");
       const failures = await readFailureLines(client, failedRunIds);
+      const totalFailures = grouped.rows.reduce((sum, r) => sum + Number(r.failures || 0), 0);
+      const timeouts = totalFailures > 0 ? await readTimeouts(client, PIPELINE_WINDOW_DAYS) : new Map<string, number>();
       const verdicts = await readVerdicts(client);
       const release = await readRelease(client, Date.now());
       return {
@@ -295,7 +352,7 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
         data: {
           windowDays: PIPELINE_WINDOW_DAYS,
           unreadable: { eventLog: failures.unreadable, verdicts: verdicts.unreadable, release: release.unreadable },
-          jobs: grouped.rows.map((row) => jobRow(row, failures.lines)),
+          jobs: grouped.rows.map((row) => jobRow(row, failures.lines, timeouts)),
           jobRunHealth: verdicts.jobRunHealth,
           runtimeShape: verdicts.runtimeShape,
           release: release.release,

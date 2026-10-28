@@ -37,7 +37,8 @@ def loader_sql(path: Path, name: str) -> str:
     """The text of `export const <name> = `...`;` in a loader, with its `$n` parameters as named ones."""
     match = re.search(rf"export const {name} = `(.*?)`;", path.read_text(), re.S)
     assert match is not None, f"{path} no longer exports {name} as a template literal"
-    return re.sub(r"\$(\d+)", r"%(p\1)s", match.group(1))
+    sql = match.group(1).replace("%", "%%")
+    return re.sub(r"\$(\d+)", r"%(p\1)s", sql)
 
 
 def loader_number(name: str) -> int:
@@ -126,18 +127,31 @@ def test_the_jobs_query_counts_the_window_names_the_newest_failure_and_drops_a_j
     """`failing_job` has a failure 10 days ago (outside the 7-day window) and one now. `ancient_job` ran 120 days
     ago, beyond the listed days. `healthy_job` ran 3 days ago."""
     url, ids = runs
-    parameters = {"p1": loader_number("PIPELINE_WINDOW_DAYS"), "p2": loader_number("PIPELINE_LISTED_DAYS")}
+    parameters = {
+        "p1": loader_number("PIPELINE_WINDOW_DAYS"),
+        "p2": loader_number("PIPELINE_LISTED_DAYS"),
+        "p3": 30,
+    }
 
     with psycopg.connect(url) as connection:
         rows = {row[0]: row[1:] for row in connection.execute(loader_sql(PIPELINE, "JOBS_SQL"), parameters)}
 
     assert set(rows) == {"failing_job", "healthy_job"}, "a job with no run for the listed days is not listed"
-    successes, failures, last_success, last_failure, last_failure_run_id = rows["failing_job"]
+    successes, failures, last_success, last_failure, last_failure_run_id, longest_success = rows["failing_job"]
     assert (successes, failures, last_success) == (0, 1, None), "only the failure inside the window counts"
     assert last_failure is not None
     assert last_failure_run_id == ids["op"], "the newest failure of all time, not the 10-day-old one"
+    assert longest_success is None, "failing_job has no SUCCESS run"
     assert rows["healthy_job"][:2] == (1, 0)
     assert rows["healthy_job"][2] is not None and rows["healthy_job"][3] is None and rows["healthy_job"][4] is None
+    assert rows["healthy_job"][5] is not None, "healthy_job has a SUCCESS run duration"
+
+
+def test_the_timeouts_query_counts_runs_killed_by_runtime_limit(runs) -> None:
+    url, _ = runs
+    with psycopg.connect(url) as connection:
+        rows = dict(connection.execute(loader_sql(PIPELINE, "TIMEOUTS_SQL"), {"p1": 14}).fetchall())
+    assert rows.get("failing_job") == 1
 
 
 def start_of(url: str, builds: list[tuple[str, int]], sha: str) -> tuple[datetime | None]:
