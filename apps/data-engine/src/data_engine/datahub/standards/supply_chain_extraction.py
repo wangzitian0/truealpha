@@ -785,11 +785,7 @@ def materialize_supply_chain_exposure(
             confidence = item.result.confidence
             reason_codes = list(item.result.flags)
             extractor = "graph:kg-edges:v1"
-            avail = (
-                "available"
-                if item.result.data_availability == "verified" and exposure_score is not None
-                else "unavailable"
-            )
+            avail = "available" if not item.result.flags and exposure_score is not None else "unavailable"
         else:
             issuer_id = str(item["issuer_id"])
             if "partners" in item:
@@ -806,11 +802,7 @@ def materialize_supply_chain_exposure(
                 max_partner_share = rec.max_partner_share
                 confidence = rec.result.confidence
                 reason_codes = list(rec.result.flags)
-                avail = (
-                    "available"
-                    if rec.result.data_availability == "verified" and exposure_score is not None
-                    else "unavailable"
-                )
+                avail = "available" if not rec.result.flags and exposure_score is not None else "unavailable"
             else:
                 raw_exp = item.get("exposure_score")
                 exposure_score = Decimal(str(raw_exp)) if raw_exp is not None else None
@@ -975,11 +967,7 @@ def materialize_universe_supply_chain_exposure(
         )
         extractor = diag.issuer_extractors.get(issuer.issuer_id, "graph:kg-edges:v1")
         if extractor != "graph:kg-edges:v1":
-            avail = (
-                "available"
-                if record.result.data_availability == "verified" and record.exposure_score is not None
-                else "unavailable"
-            )
+            avail = "available" if not record.result.flags and record.exposure_score is not None else "unavailable"
             count += materialize_supply_chain_exposure(
                 connection,
                 run_id=run_id,

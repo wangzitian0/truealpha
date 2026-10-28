@@ -125,7 +125,7 @@ def analyst_track_record(
             unit_family=UnitFamily.RATIO,
             confidence=avg_confidence,
             as_of=as_of,
-            data_availability="verified",
+            data_availability="unverified",
             flags=[],
         ),
         consensus_rating=mean_rating,

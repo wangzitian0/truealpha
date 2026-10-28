@@ -550,11 +550,7 @@ def materialize_analyst_ratings(
             confidence = item.result.confidence
             reason_codes = list(item.result.flags)
             extractor = "origin:moomoo:v1"
-            avail = (
-                "available"
-                if item.result.data_availability == "verified" and consensus_rating is not None
-                else "unavailable"
-            )
+            avail = "available" if not item.result.flags and consensus_rating is not None else "unavailable"
         else:
             issuer_id = str(item["issuer_id"])
             if "ratings" in item:
@@ -566,11 +562,7 @@ def materialize_analyst_ratings(
                 sell_count = rec.sell_count
                 confidence = rec.result.confidence
                 reason_codes = list(rec.result.flags)
-                avail = (
-                    "available"
-                    if rec.result.data_availability == "verified" and consensus_rating is not None
-                    else "unavailable"
-                )
+                avail = "available" if not rec.result.flags and consensus_rating is not None else "unavailable"
             else:
                 raw_c = item.get("consensus_rating")
                 consensus_rating = Decimal(str(raw_c)) if raw_c is not None else None

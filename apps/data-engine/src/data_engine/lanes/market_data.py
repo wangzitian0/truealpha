@@ -243,11 +243,20 @@ class BarFreshness:
 
 
 def _newest_trading_date(connection: psycopg.Connection, symbols: Sequence[str], *, adjust: str) -> date | None:
-    query = "select max(trading_date) from staging.market_prices_daily where symbol = any(%s) and adjust = %s;"
+    """Return the oldest symbol's newest trading date across `symbols`, or None if any symbol has no bar (#1523)."""
+    if not symbols:
+        return None
+    query = (
+        "select symbol, max(trading_date) from staging.market_prices_daily "
+        "where symbol = any(%s) and adjust = %s group by symbol;"
+    )
     with connection.cursor() as cur:
         cur.execute(query, (list(symbols), adjust))
-        row = cur.fetchone()
-    return row[0] if row else None
+        rows = cur.fetchall()
+    newest_by_symbol = {str(sym): dt for sym, dt in rows if dt is not None}
+    if any(sym not in newest_by_symbol for sym in symbols):
+        return None
+    return min(newest_by_symbol[sym] for sym in symbols)
 
 
 def judge_bar_freshness(connection: psycopg.Connection, symbols: Sequence[str], *, now: datetime) -> BarFreshness:

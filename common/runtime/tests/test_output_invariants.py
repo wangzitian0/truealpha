@@ -289,7 +289,9 @@ def test_no_exemption_defers_the_sign_policy() -> None:
 
 def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
     """The file is the mechanism; a malformed entry silently disables a guard."""
+    assert not _module.EXEMPTIONS_PATH.exists(), "tools/output_invariant_exemptions.json was deleted (#1523 G20)"
     exemptions = _module.load_exemptions()
+    assert exemptions == {}
     ids = {invariant.id for invariant in _module.INVARIANTS}
     for name, exemption in exemptions.items():
         assert name in ids, f"{name} exempts an invariant that does not exist"

@@ -922,3 +922,64 @@ def test_the_report_op_records_the_outcomes_of_the_head_it_reported(monkeypatch)
     metadata = context.get_output_metadata("result")
     assert metadata["oracle_outcomes_rows"] == 3
     assert "sec_oracle_issuers_compared" not in metadata
+
+
+def test_ten_outcomes_roll_up_with_deduplication_and_wilson_bound() -> None:
+    """#1523 S3: 10 outcomes (8 agree, 1 disagree, 1 not_comparable) roll up to compared=9,
+    disagree=1, not_comparable=1, deduplicated once per (observation_id, subject_id, field)."""
+    from data_engine.datahub.oracle_outcomes import rollup_oracle_outcomes, wilson_95_upper_bound
+
+    t1 = datetime(2026, 10, 27, 0, 0, tzinfo=UTC)
+    t2 = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
+    rows = [
+        # Duplicate older row for (obs:0, issuer:0, revenue) that must be replaced by newer t2 row
+        {
+            "observation_id": "obs:0",
+            "subject_id": "issuer:0",
+            "field": "revenue",
+            "result": "disagree",
+            "reason": "beyond_tolerance",
+            "oracle_kind": "filing",
+            "compared_at": t1,
+        },
+        *[
+            {
+                "observation_id": f"obs:{idx}",
+                "subject_id": f"issuer:{idx}",
+                "field": "revenue",
+                "result": "agree",
+                "reason": None,
+                "oracle_kind": "filing",
+                "compared_at": t2,
+            }
+            for idx in range(8)
+        ],
+        {
+            "observation_id": "obs:8",
+            "subject_id": "issuer:8",
+            "field": "revenue",
+            "result": "disagree",
+            "reason": "beyond_tolerance",
+            "oracle_kind": "filing",
+            "compared_at": t2,
+        },
+        {
+            "observation_id": None,
+            "subject_id": "issuer:9",
+            "field": "revenue",
+            "result": "not_comparable",
+            "reason": "unserved",
+            "oracle_kind": "filing",
+            "compared_at": t1,
+        },
+    ]
+    rollup = rollup_oracle_outcomes(rows)
+    assert rollup["compared"] == 9
+    assert rollup["agree"] == 8
+    assert rollup["disagree"] == 1
+    assert rollup["not_comparable"] == 1
+    assert rollup["newest_compared_at"] == "2026-10-28T00:00:00Z"
+    assert rollup["wilson_95_upper_bound"] == wilson_95_upper_bound(1, 9)
+    assert 0.1 < rollup["wilson_95_upper_bound"] < 0.5
+    assert rollup["by_field"]["revenue"]["compared"] == 9
+    assert rollup["comparators"]["filing"]["compared"] == 9

@@ -49,7 +49,7 @@ COPY apps/data-engine/dagster.yaml /opt/dagster/dagster.yaml
 # The output-invariant suite and its exemptions ride along so the quality lane can run
 # them inside the environment (#674 / #725 A): a GitHub runner cannot reach the
 # loopback Postgres, and a check that only ever examined the CI fixture proved nothing.
-COPY tools/output_invariants.py tools/output_invariant_exemptions.json /app/tools/
+COPY tools/output_invariants.py /app/tools/
 COPY common/runtime/src/truealpha_tools/output_invariants.py /app/common/runtime/src/truealpha_tools/output_invariants.py
 
 # The environment contract this image ships (#784, #759). Two readers, one file, at the

@@ -87,6 +87,15 @@ from truealpha_contracts.reconciliation_policies import (
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_contracts.universes import key_of_lane, record
 
+from data_engine.datahub.oracle_outcomes import (
+    load_oracle_outcomes_rollup as load_oracle_outcomes_rollup,
+)
+from data_engine.datahub.oracle_outcomes import (
+    rollup_oracle_outcomes as rollup_oracle_outcomes,
+)
+from data_engine.datahub.oracle_outcomes import (
+    wilson_95_upper_bound as wilson_95_upper_bound,
+)
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.source_registrations import (

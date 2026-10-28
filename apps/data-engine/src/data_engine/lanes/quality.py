@@ -44,8 +44,10 @@ import io
 import json
 import runpy
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import dagster as dg
 import psycopg
@@ -53,7 +55,7 @@ from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
 
 from data_engine.config import settings
-from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
+from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
@@ -416,6 +418,25 @@ class ConfidenceReportConfig(dg.Config):
     universe: str = lane_name(universe_with_role("fund_consolidation"))
 
 
+def _oracle_comparators_of(connection: Any, report: Mapping[str, Any]) -> dict[str, int]:
+    """Return comparator name -> compared count for `report` (#1523 S3)."""
+    raw_comparators = report.get("comparators")
+    if raw_comparators is None:
+        rollup = report.get("oracle_outcomes_rollup") or report.get("oracle_outcomes")
+        if isinstance(rollup, Mapping) and "comparators" in rollup:
+            raw_comparators = rollup["comparators"]
+    if raw_comparators is None:
+        raw_comparators = load_oracle_outcomes_rollup(connection, run_id=str(report["run_id"]))["comparators"]
+    out: dict[str, int] = {}
+    if isinstance(raw_comparators, Mapping):
+        for name, item in raw_comparators.items():
+            if isinstance(item, Mapping):
+                out[str(name)] = int(item.get("compared", 0))
+            else:
+                out[str(name)] = int(item)
+    return out
+
+
 @external_op
 def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceReportConfig) -> str:
     from data_engine.datahub.confidence_report import compile_report, persist, summary_line
@@ -452,7 +473,18 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
                 oracle_rows = record_oracle_outcomes_safely(
                     connection, report["run_id"], compared_at=executed_at, log=context.log
                 )
-                outcome.summary = f"report persisted for {report['universe_id']}"
+                comparators = _oracle_comparators_of(connection, report)
+                if not comparators:
+                    outcome.pending = True
+                    outcome.summary = f"no comparator for {report['universe_id']}"
+                else:
+                    zero_comparators = sorted(name for name, count in comparators.items() if count <= 0)
+                    if zero_comparators:
+                        outcome.summary = (
+                            f"comparator {', '.join(zero_comparators)} compared 0 rows for {report['universe_id']}"
+                        )
+                        raise dg.Failure(f"datahub confidence report: {outcome.summary} (#1523)")
+                    outcome.summary = f"report persisted for {report['universe_id']}"
     if report is None:
         return json.dumps({"universe": config.universe, "report": None})
     context.log.info("confidence report %s: %s", report_id, summary_line(report))

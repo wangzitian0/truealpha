@@ -30,7 +30,6 @@ function qualityHeadline(quality: unknown): { label: string; value: string }[] {
   const cards: { label: string; value: string | null }[] = [
     { label: "Availability (cells)", value: ratio("availability") },
     { label: "Freshness", value: ratio("freshness") },
-    { label: "Independent reconciliation", value: ratio("independent_reconciliation") },
     { label: "Lineage completeness", value: ratio("lineage_completeness") },
     { label: "Mean confidence", value: ratio("denominator_mean_confidence") },
     { label: "Complete", value: typeof q.complete === "boolean" ? String(q.complete) : null },

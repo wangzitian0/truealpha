@@ -46,7 +46,8 @@ swallows every error and logs it, so a writer defect never stops a tick or a rep
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -862,3 +863,158 @@ def record_oracle_outcomes_safely(
     except Exception as error:
         log.warning(f"oracle outcomes of {run_id} were not written: {type(error).__name__}: {error}")
         return None
+
+
+_WILSON_Z_95 = 1.959963984540054
+
+
+def wilson_95_upper_bound(disagrees: int, compared: int) -> float | None:
+    """Return the 95% Wilson score upper bound for `disagrees` over `compared`."""
+    if compared <= 0:
+        return None
+    z2 = _WILSON_Z_95 * _WILSON_Z_95
+    p = disagrees / compared
+    centre = p + z2 / (2.0 * compared)
+    half_width = _WILSON_Z_95 * math.sqrt((p * (1.0 - p) + z2 / (4.0 * compared)) / compared)
+    denom = 1.0 + z2 / compared
+    return min(1.0, round((centre + half_width) / denom, 6))
+
+
+def _iso_utc(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    text = str(value).strip()
+    return text or None
+
+
+def _row_attr(row: Mapping[str, Any] | Outcome, key: str, default: Any = None) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def _summarize_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    agree = sum(1 for item in rows if item["result"] == "agree")
+    disagree = sum(1 for item in rows if item["result"] == "disagree")
+    not_comparable = sum(1 for item in rows if item["result"] == "not_comparable")
+    compared = agree + disagree
+    timestamps = [item["compared_at_iso"] for item in rows if item["compared_at_iso"] is not None]
+    newest_compared_at = max(timestamps) if timestamps else None
+    return {
+        "compared": compared,
+        "agree": agree,
+        "disagree": disagree,
+        "not_comparable": not_comparable,
+        "newest_compared_at": newest_compared_at,
+        "wilson_95_upper_bound": wilson_95_upper_bound(disagree, compared),
+    }
+
+
+def rollup_oracle_outcomes(rows: Sequence[Mapping[str, Any] | Outcome]) -> dict[str, Any]:
+    """Deduplicate oracle outcomes per `(observation_id, subject_id, field)` and compute rollup counts."""
+    deduped: dict[tuple[str | None, str, str], dict[str, Any]] = {}
+    deduped_by_comparator: dict[tuple[str, str | None, str, str], dict[str, Any]] = {}
+
+    for row in rows:
+        obs_raw = _row_attr(row, "observation_id")
+        observation_id = str(obs_raw) if obs_raw is not None else None
+        subject_id = str(_row_attr(row, "subject_id", ""))
+        field = str(_row_attr(row, "field", ""))
+        result = str(_row_attr(row, "result", ""))
+        reason_raw = _row_attr(row, "reason")
+        reason = str(reason_raw) if reason_raw is not None else None
+        oracle_kind_raw = _row_attr(row, "oracle_kind")
+        oracle_kind = str(oracle_kind_raw) if oracle_kind_raw is not None else None
+        compared_at_iso = _iso_utc(_row_attr(row, "compared_at"))
+
+        normalized = {
+            "observation_id": observation_id,
+            "subject_id": subject_id,
+            "field": field,
+            "result": result,
+            "reason": reason,
+            "oracle_kind": oracle_kind,
+            "compared_at_iso": compared_at_iso,
+        }
+        if oracle_kind:
+            comp_key = (oracle_kind, observation_id, subject_id, field)
+            comp_existing = deduped_by_comparator.get(comp_key)
+            if comp_existing is None or (compared_at_iso or "") >= (comp_existing["compared_at_iso"] or ""):
+                deduped_by_comparator[comp_key] = normalized
+
+        key = (observation_id, subject_id, field)
+        existing = deduped.get(key)
+        if existing is None or (compared_at_iso or "") >= (existing["compared_at_iso"] or ""):
+            deduped[key] = normalized
+
+    deduped_rows = list(deduped.values())
+    totals = _summarize_counts(deduped_rows)
+
+    by_field_rows: dict[str, list[dict[str, Any]]] = {}
+    for item in deduped_rows:
+        by_field_rows.setdefault(item["field"], []).append(item)
+    by_field = {field: _summarize_counts(field_rows) for field, field_rows in sorted(by_field_rows.items())}
+
+    by_comparator_rows: dict[str, list[dict[str, Any]]] = {}
+    for item in deduped_by_comparator.values():
+        by_comparator_rows.setdefault(str(item["oracle_kind"]), []).append(item)
+
+    comparators: dict[str, dict[str, Any]] = {}
+    for kind, kind_rows in sorted(by_comparator_rows.items()):
+        if kind == "independent_parse" and all(r["reason"] == "no_document" for r in kind_rows):
+            continue
+        comparators[kind] = _summarize_counts(kind_rows)
+
+    return {
+        **totals,
+        "by_field": by_field,
+        "comparators": comparators,
+    }
+
+
+def load_oracle_outcomes_rollup(
+    connection: psycopg.Connection[Any],
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Query `mart.oracle_outcomes` and return its deduplicated rollup."""
+    if not hasattr(connection, "execute"):
+        return rollup_oracle_outcomes(())
+    try:
+        if run_id is not None:
+            cursor = connection.execute(
+                """
+                select observation_id, subject_id, field, result, reason, oracle_kind, compared_at
+                from mart.oracle_outcomes
+                where run_id = %s
+                order by compared_at asc, recorded_at asc, outcome_id asc
+                """,
+                (run_id,),
+            )
+        else:
+            cursor = connection.execute(
+                """
+                select observation_id, subject_id, field, result, reason, oracle_kind, compared_at
+                from mart.oracle_outcomes
+                order by compared_at asc, recorded_at asc, outcome_id asc
+                """
+            )
+        raw_rows = cursor.fetchall()
+    except Exception:
+        return rollup_oracle_outcomes(())
+
+    mapped = [
+        {
+            "observation_id": row[0],
+            "subject_id": row[1],
+            "field": row[2],
+            "result": row[3],
+            "reason": row[4],
+            "oracle_kind": row[5],
+            "compared_at": row[6],
+        }
+        for row in raw_rows
+    ]
+    return rollup_oracle_outcomes(mapped)

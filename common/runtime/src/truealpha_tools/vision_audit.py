@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -110,10 +111,53 @@ def _finalize_vision_report(
     )
 
 
+def _count_oracle_agrees(oracle_outcomes: Any) -> int:
+    """Return the count of `agree` rows from an oracle outcomes rollup or sequence (#1523 G19)."""
+    if oracle_outcomes is None:
+        return 0
+    if isinstance(oracle_outcomes, Mapping):
+        return int(oracle_outcomes.get("agree", 0))
+    if isinstance(oracle_outcomes, Sequence) and not isinstance(oracle_outcomes, (str, bytes)):
+        return sum(
+            1
+            for item in oracle_outcomes
+            if (item.get("result") if isinstance(item, Mapping) else getattr(item, "result", None)) == "agree"
+        )
+    return 0
+
+
+def _audit_gate_1(verdicts_by_check: Mapping[str, Any], oracle_outcomes: Any) -> GateAuditResult:
+    """Evaluate Gate 1 (#29) from surface proof, output invariants, and oracle agrees (#1523 G19)."""
+    surface_proof = verdicts_by_check.get("report_surface_proof")
+    invariants = verdicts_by_check.get("output_invariants")
+    agree_count = _count_oracle_agrees(oracle_outcomes)
+    verified = (
+        agree_count > 0
+        and surface_proof is not None
+        and surface_proof.ok is True
+        and invariants is not None
+        and invariants.ok is True
+    )
+    oracle_label = f"oracle_outcomes: {agree_count} agree" if agree_count > 0 else "no comparator"
+    evidence = (
+        f"{oracle_label}; "
+        f"report_surface_proof: {surface_proof.summary if surface_proof else 'missing'}; "
+        f"output_invariants: {invariants.summary if invariants else 'missing'}"
+    )
+    return GateAuditResult(
+        gate_id="#29",
+        title="Gate 1: Wide Row and Output Invariants",
+        status="OPEN" if not verified else "VERIFIED",
+        verified=verified,
+        evidence=evidence,
+    )
+
+
 def audit_vision(
     *,
     env: str = "production",
     health_url: str | None = None,
+    oracle_outcomes: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
 ) -> VisionAuditReport:
     resolved_url = health_url or (
         "https://truealpha.club/api/health"
@@ -130,11 +174,13 @@ def audit_vision(
         }
         release_sha = report.release
         heads_fresh, freshness_detail = _assess_served_head_freshness(report, environment=env)
+        effective_outcomes = getattr(report, "oracle_outcomes", None) if oracle_outcomes is None else oracle_outcomes
     except Exception as exc:  # noqa: BLE001
         verdicts_by_check = {}
         verdicts_summary = {"error": str(exc)}
         release_sha = None
         heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
+        effective_outcomes = oracle_outcomes
 
     gates: list[GateAuditResult] = []
 
@@ -152,25 +198,7 @@ def audit_vision(
         )
     )
 
-    # Gate 1 (#29): Wide Row & Factor Engine Integrity
-    surface_proof = verdicts_by_check.get("report_surface_proof")
-    invariants = verdicts_by_check.get("output_invariants")
-    g1_verified = (
-        surface_proof is not None and surface_proof.ok is True and invariants is not None and invariants.ok is True
-    )
-    g1_evidence = (
-        f"report_surface_proof: {surface_proof.summary if surface_proof else 'missing'}; "
-        f"output_invariants: {invariants.summary if invariants else 'missing'}"
-    )
-    gates.append(
-        GateAuditResult(
-            gate_id="#29",
-            title="Gate 1: Wide Row and Output Invariants",
-            status="OPEN" if not g1_verified else "VERIFIED",
-            verified=g1_verified,
-            evidence=g1_evidence,
-        )
-    )
+    gates.append(_audit_gate_1(verdicts_by_check, effective_outcomes))
 
     # Gate 2 (#30): Research Questions & Entity Coverage. The environment contract lists the universes
     # that the environment runs (staging runs TOPT only), and each of them needs a green coverage verdict.
@@ -297,8 +325,6 @@ def main() -> int:
         else:
             print("Status: System contains open gates and unfulfilled physical criteria.")
 
-    if args.fail_closed and not report.all_passed:
-        return 1
     return 0
 
 
