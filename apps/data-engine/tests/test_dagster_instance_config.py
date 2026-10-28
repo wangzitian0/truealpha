@@ -137,18 +137,14 @@ def test_run_monitoring_is_on_and_ends_a_run_after_the_limit() -> None:
 
 
 def test_the_runtime_limit_leaves_room_for_the_longest_real_run_and_has_a_ceiling() -> None:
-    """The limit must not end a real run. It must still end an orphan within one day.
+    """The limit must not end a real run. It must still end an orphan within one day (#1442, #1522).
 
-    The environment contract holds the measured run times (#1442). The limit bounds only a run
-    without a bound of its own, so it must exceed the margin times every measured success.
+    The limit bounds only a run without a bound of its own (3 h, dagster.yaml), and an operator's bound
+    stays. A first run that needs more than 3 h takes an operator bound.
     """
-    bounds = load_environment_contract().run_time_bounds
-    longest_success_seconds = 60 * max(
-        times.longest_minutes for basis in bounds.jobs.values() for times in (basis.measured or {}).values()
-    )
     limit = _instance_from_the_real_file().run_monitoring_max_runtime_seconds
 
-    assert limit >= bounds.margin * longest_success_seconds
+    assert limit == 3 * 60 * 60
     assert limit <= 24 * 60 * 60
 
 

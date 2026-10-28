@@ -8,7 +8,7 @@
  */
 
 import { RELEASE_START_SQL, __setTestOpsClient } from "../src/server/admin/ops";
-import { FAILURE_EVENTS_SQL, JOBS_SQL, firstErrorLine, loadPipelineOverview } from "../src/server/admin/pipeline";
+import { FAILURE_EVENTS_SQL, JOBS_SQL, TIMEOUTS_SQL, firstErrorLine, loadPipelineOverview } from "../src/server/admin/pipeline";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -94,6 +94,9 @@ type QueryCall = { sql: string; params?: unknown[] };
     query: async (sql: string, params?: unknown[]) => {
       if (sql.endsWith("role app_ops_reader") || sql === "reset role") return { rows: [] };
       calls.push({ sql, params });
+      if (sql === TIMEOUTS_SQL) {
+        return { rows: [{ job: "head_reports_pipeline", count: 1 }] };
+      }
       if (sql.includes("from dagster.runs")) {
         return {
           rows: [
@@ -104,6 +107,7 @@ type QueryCall = { sql: string; params?: unknown[] };
               last_success: older,
               last_failure: recent,
               last_failure_run_id: "run-failed-1",
+              longest_success_seconds: 400,
             },
             {
               job: "market_data_refresh_pipeline",
@@ -112,6 +116,7 @@ type QueryCall = { sql: string; params?: unknown[] };
               last_success: recent,
               last_failure: null,
               last_failure_run_id: null,
+              longest_success_seconds: 45,
             },
             // History shows the job, the window holds no finished run of it.
             {
@@ -121,6 +126,7 @@ type QueryCall = { sql: string; params?: unknown[] };
               last_success: older,
               last_failure: null,
               last_failure_run_id: null,
+              longest_success_seconds: null,
             },
           ],
         };
@@ -168,6 +174,7 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(calls[0].sql === JOBS_SQL, "the loader sends the exported text that the real-database test runs");
   assert(calls[0].params?.[0] === WINDOW_DAYS_FOR_TEST, "the runs query is bound to the window");
   assert(calls[0].params?.[1] === 100, "a job with no finished run for 100 days is not listed (a quarterly job stays)");
+  assert(calls[0].params?.[2] === 30, "the longest success query is bound to policy window days");
 
   const head = jobs.find((job) => job.job === "head_reports_pipeline");
   assert(head !== undefined, "a job with failures is listed");
@@ -186,12 +193,28 @@ type QueryCall = { sql: string; params?: unknown[] };
   const idle = jobs.find((job) => job.job === "standard_history_backfill_pipeline");
   assert(idle?.runs === 0 && idle.successRate === null, "no run in the window reads null, never 100%");
 
-  const eventCall = calls.find((call) => call.sql.includes("from dagster.event_logs"));
+  const eventCall = calls.find((call) => call.sql === FAILURE_EVENTS_SQL);
   assert(eventCall?.sql === FAILURE_EVENTS_SQL, "the loader sends the exported text that the real-database test runs");
   assert(
     JSON.stringify(eventCall?.params) === JSON.stringify([["run-failed-1"]]),
     "the event log is read only for the newest failed run of each job",
   );
+
+  const timeoutCall = calls.find((call) => call.sql === TIMEOUTS_SQL);
+  assert(timeoutCall?.sql === TIMEOUTS_SQL, "the loader sends the exported TIMEOUTS_SQL text");
+  assert(timeoutCall?.params?.[0] === WINDOW_DAYS_FOR_TEST, "the timeouts query is bound to the window");
+
+  assert(head.longestSuccessSeconds === 400, "longest success duration passes through");
+  assert(head.derivedBoundSeconds === 800, "derived bound is 2 * 400 = 800s");
+  assert(head.runsEndedByBound === 1, "runs ended by bound passes through");
+
+  assert(quiet?.longestSuccessSeconds === 45, "quiet job longest success is 45s");
+  assert(quiet?.derivedBoundSeconds === 600, "quiet job derived bound is clamped to floor 10m = 600s");
+  assert(quiet?.runsEndedByBound === 0, "quiet job has 0 runs ended by bound");
+
+  assert(idle?.longestSuccessSeconds === null, "idle job has no longest success");
+  assert(idle?.derivedBoundSeconds === null, "idle job has no derived bound");
+  assert(idle?.runsEndedByBound === 0, "idle job has 0 runs ended by bound");
 
   assert(jobRunHealth?.ok === false && jobRunHealth.summary.startsWith("red: head_reports_pipeline"), "the verdict is shown");
   assert(runtimeShape?.ok === null, "a pending verdict stays pending, not red");

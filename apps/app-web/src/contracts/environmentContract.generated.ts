@@ -9,7 +9,12 @@
 export interface EnvironmentTickRule {
   readonly scheduled: boolean;
   readonly cron: string;
-  readonly estimated_listings: number;
+}
+
+export interface RunTimeBoundsPolicy {
+  readonly margin: number;
+  readonly floorMinutes: number;
+  readonly windowDays: number;
 }
 
 export interface UniverseRecordContract {
@@ -31,7 +36,7 @@ export interface SentinelMemberContract {
 }
 
 export const ENVIRONMENT_CONTRACT_VERSION = "3.0.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "6d7ff994eb01c77e625b81ac08774267c9fda0e9d4a0cb667de55262f4d85e03" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "07f75576fe8d39e09ee1119d30ef72b08b0059550e47d37bbe872852557983e0" as const;
 
 export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   {
@@ -96,40 +101,40 @@ export const SENTINEL_MEMBERS: readonly SentinelMemberContract[] = [
   }
 ] as const;
 
+export const RUN_TIME_BOUNDS: RunTimeBoundsPolicy = {
+  margin: 2.0,
+  floorMinutes: 10.0,
+  windowDays: 30,
+} as const;
+
 export const ENVIRONMENT_TICKS: Readonly<Record<string, Readonly<Record<string, EnvironmentTickRule>>>> = {
   "preview": {},
   "staging": {
     "topt": {
       "scheduled": true,
-      "cron": "45 22 * * *",
-      "estimated_listings": 21
+      "cron": "45 22 * * *"
     },
     "canary": {
       "scheduled": true,
-      "cron": "47 23 * * *",
-      "estimated_listings": 6
+      "cron": "47 23 * * *"
     }
   },
   "production": {
     "topt": {
       "scheduled": true,
-      "cron": "15 22 * * *",
-      "estimated_listings": 21
+      "cron": "15 22 * * *"
     },
     "qqq": {
       "scheduled": true,
-      "cron": "20 23 * * *",
-      "estimated_listings": 102
+      "cron": "20 23 * * *"
     },
     "sp500": {
       "scheduled": false,
-      "cron": "15 1 * * *",
-      "estimated_listings": 503
+      "cron": "15 1 * * *"
     },
     "canary": {
       "scheduled": true,
-      "cron": "47 23 * * *",
-      "estimated_listings": 6
+      "cron": "47 23 * * *"
     }
   }
 } as const;

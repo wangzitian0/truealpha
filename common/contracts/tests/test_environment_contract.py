@@ -17,7 +17,6 @@ from truealpha_contracts.environment_contract import (
     CodeServerCapacity,
     EnvironmentContract,
     EnvironmentUniverse,
-    JobRunTimeBasis,
     ModelSeatContract,
     UnknownUniverse,
     load_environment_contract,
@@ -332,51 +331,15 @@ def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
     assert "owner's bound" not in release_text
 
 
-def _contract_with_jobs(jobs: dict[str, dict[str, object]]) -> EnvironmentContract:
-    """The real contract with margin 2, a 10-minute floor and the given `run_time_bounds.jobs` (#1442)."""
+def test_derive_max_runtime_seconds() -> None:
     contract = load_environment_contract()
-    parsed = {name: JobRunTimeBasis.model_validate(basis) for name, basis in jobs.items()}
-    bounds = contract.run_time_bounds.model_copy(update={"jobs": parsed, "margin": 2.0, "floor_minutes": 10.0})
-    return contract.model_copy(update={"run_time_bounds": bounds})
-
-
-def test_max_runtime_is_margin_times_the_longest_success_over_all_environments() -> None:
-    contract = _contract_with_jobs(
-        {
-            "both": {
-                "measured": {
-                    "production": {"successes": 90, "longest_minutes": 16.3},
-                    "staging": {"successes": 98, "longest_minutes": 22.5},
-                }
-            },
-            "short": {"measured": {"production": {"successes": 4, "longest_minutes": 0.5}}},
-            "never_ran": {"estimate_tick": "sp500"},
-            "new": {"unmeasured": "no run yet"},
-        }
-    )
-    assert contract.max_runtime_seconds("both") == 2 * 22.5 * 60
-    assert contract.max_runtime_seconds("short") == 10 * 60
-    # The largest declared sp500 listing count is 503: (2.1 + 0.434 x 503) x 2 minutes, rounded up.
-    assert contract.max_runtime_seconds("never_ran") == 26449
-    assert contract.max_runtime_seconds("new") is None
-    assert contract.max_runtime_seconds("absent") is None
-
-
-@pytest.mark.parametrize(
-    "basis",
-    [
-        {},
-        {"estimate_tick": "sp500", "unmeasured": "no run yet"},
-        {"measured": {"staging": {"successes": 1, "longest_minutes": 1.0}}, "estimate_tick": "sp500"},
-        {"measured": {"staging": {"successes": 0, "longest_minutes": 1.0}}},
-        {"measured": {"staging": {"successes": 1, "longest_minutes": 1.0}}, "unmeasured": ""},
-        {"measured": {}, "estimate_tick": "sp500"},
-        {"unmeasured": ""},
-    ],
-)
-def test_a_job_declares_exactly_one_valid_run_time_basis(basis: dict[str, object]) -> None:
-    with pytest.raises(ValidationError):
-        JobRunTimeBasis.model_validate(basis)
+    assert contract.job_runtime_bounds.margin == 2.0
+    assert contract.job_runtime_bounds.floor_minutes == 10.0
+    assert contract.job_runtime_bounds.window_days == 30
+    # 22.5 minutes longest success -> margin 2.0 -> 45 minutes
+    assert contract.derive_max_runtime_seconds(22.5 * 60) == 45 * 60
+    # 0.5 minutes longest success -> margin 2.0 -> 1 minute, but floor is 10 minutes (600s)
+    assert contract.derive_max_runtime_seconds(0.5 * 60) == 10 * 60
 
 
 #: A fixed capacity for the tests of the derivation. It does not read the contract, so a new

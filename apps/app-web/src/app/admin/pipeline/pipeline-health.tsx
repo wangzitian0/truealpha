@@ -17,6 +17,13 @@ function ago(iso: string, now: number): string {
   return `${formatAge((now - new Date(iso).getTime()) / 3_600_000)} ago`;
 }
 
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = seconds / 60;
+  return minutes < 60 ? `${minutes.toFixed(1)}m` : `${(minutes / 60).toFixed(1)}h`;
+}
+
 function rate(value: number | null): string {
   return value === null ? "no run" : `${Math.round(value * 100)}%`;
 }
@@ -141,6 +148,9 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
               <th scope="col" className="px-4 py-3">Job</th>
               <th scope="col" className="px-4 py-3">Success rate</th>
               <th scope="col" className="px-4 py-3">Runs</th>
+              <th scope="col" className="px-4 py-3">Derived bound</th>
+              <th scope="col" className="px-4 py-3">Longest success</th>
+              <th scope="col" className="px-4 py-3">Ended by bound</th>
               <th scope="col" className="px-4 py-3">Last success</th>
               <th scope="col" className="px-4 py-3">Last failure</th>
               <th scope="col" className="px-4 py-3">First error line of the last failure</th>
@@ -155,6 +165,15 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
                 </td>
                 <td className="px-4 py-2 tabular-nums">
                   {job.successes} ok · {job.failures} failed
+                </td>
+                <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
+                  {job.derivedBoundSeconds === null ? "instance limit (3h)" : formatDuration(job.derivedBoundSeconds)}
+                </td>
+                <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
+                  {formatDuration(job.longestSuccessSeconds)}
+                </td>
+                <td className={`px-4 py-2 tabular-nums ${job.runsEndedByBound > 0 ? "font-semibold text-rose-400" : "text-gray-400"}`}>
+                  {job.runsEndedByBound}
                 </td>
                 <td className="px-4 py-2 text-gray-400" title={job.lastSuccessAt ?? undefined}>
                   {job.lastSuccessAt === null ? "never" : ago(job.lastSuccessAt, now)}
