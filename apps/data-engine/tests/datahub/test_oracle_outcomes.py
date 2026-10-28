@@ -645,9 +645,9 @@ def _rows(connection, run_id: str) -> dict[str, tuple]:
 
 
 def test_a_run_with_no_operator_list_writes_no_operator_row(connection) -> None:
-    """The independent parse still compares the whole head: 20 issuers, 2 fields, no stored document."""
+    """The independent parse and filing comparisons still run: 20 issuers (40 independent parse, 6 filing)."""
     run, _served = _frozen(connection)
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
     assert _rows(connection, run.run_id) == {}
 
 
@@ -656,7 +656,7 @@ def test_an_operator_list_after_the_cutoff_is_no_witness(connection) -> None:
     _operator_list(
         connection, {"AAPL": ("400000000", "40")}, knowable_at=_cutoff(connection, run.run_id) + timedelta(days=1)
     )
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
     assert _rows(connection, run.run_id) == {}
 
 
@@ -682,7 +682,7 @@ def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(c
     written = oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN)
     rows = _rows(connection, run.run_id)
 
-    assert written == 60 and len(rows) == 20, "20 operator rows and 40 independent parse rows"
+    assert written == 66 and len(rows) == 20, "20 operator rows, 40 independent parse rows, and 6 filing rows"
     subject = {ticker: rows[_issuer_of(connection, run.run_id, by_ticker[ticker])] for ticker in by_ticker}
     assert subject["AAPL"][1] == AGREE and subject["AAPL"][3] == Decimal(1)
     assert subject["NVDA"][1] == DISAGREE and subject["NVDA"][3] == Decimal(4)
@@ -787,7 +787,7 @@ def test_the_whole_head_is_reparsed_from_its_stored_bytes_and_a_replay_writes_no
     rows = _independent_rows(connection, run.run_id, served)
     tolerance = load_oracle_policy().relative_tolerance(INDEPENDENT_COMPARATOR)
 
-    assert written == len(rows) == 40, "twenty issuers, two fields each; no operator list, so no operator row"
+    assert written == 46 and len(rows) == 40, "twenty issuers, two fields each plus six filing rows; no operator row"
     assert rows[("AAPL", "revenue")] == (
         DISAGREE,
         None,
@@ -826,7 +826,7 @@ def test_both_comparators_write_through_the_one_function(connection, stored_byte
         "select oracle_kind, count(*) from mart.oracle_outcomes where run_id = %s group by 1 order by 1",
         (run.run_id,),
     ).fetchall()
-    assert kinds == [("independent_parse", 40), ("operator", 20)] and written == 60
+    assert kinds == [("filing", 6), ("independent_parse", 40), ("operator", 20)] and written == 66
     assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 0
 
 
@@ -852,7 +852,7 @@ def test_the_writer_makes_no_vendor_call(connection, monkeypatch: pytest.MonkeyP
     for name in ("_http_json", "ticker_cik_index", "company_facts"):
         monkeypatch.setattr(vendor_oracle, name, refused)
     run, _served = _frozen(connection)
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 40
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
 
 
 class _Log:
