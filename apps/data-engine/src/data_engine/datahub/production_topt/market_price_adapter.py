@@ -28,6 +28,7 @@ the run's cutoff, cannot serve; when no origin can, the cell fails exactly as be
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -77,8 +78,10 @@ class MarketPriceTarget:
     issuer_id: str
     instrument_id: str
     listing_id: str
-    currency: str = "USD"
     run_cutoff: datetime | None = None
+
+
+_DEFAULT_QUOTE_CURRENCY = "USD"
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,7 @@ class MarketPriceQuote:
     low: Decimal | None = None
     volume: Decimal | None = None
     is_provisional: bool = False
+    currency: str | None = _DEFAULT_QUOTE_CURRENCY
 
 
 # The bar fields both origins assert besides the close. They travel in the payload
@@ -223,10 +227,7 @@ class MarketPriceAdapter:
             # A datum knowable only after the cutoff would be look-ahead; the run must stop.
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
         payload = {
-            "issuer_id": target.issuer_id,
-            "instrument_id": target.instrument_id,
-            "listing_id": target.listing_id,
-            "currency": target.currency,
+            **self._identity(target, quote),
             **bar_payload(quote, close_key="close"),
         }
         return FetchSuccess(
@@ -266,7 +267,7 @@ class MarketPriceAdapter:
             if quote is None or not _serves_session(quote, target):
                 continue
             payload = {
-                **self._identity(target),
+                **self._identity(target, quote),
                 **bar_payload(quote, close_key=origin.value_key),
                 SERVED_BY_FAILOVER: origin.origin,
             }
@@ -318,12 +319,12 @@ class MarketPriceAdapter:
             return None
 
     @staticmethod
-    def _identity(target: MarketPriceTarget) -> dict[str, Any]:
+    def _identity(target: MarketPriceTarget, quote: MarketPriceQuote) -> dict[str, Any]:
         return {
             "issuer_id": target.issuer_id,
             "instrument_id": target.instrument_id,
             "listing_id": target.listing_id,
-            "currency": target.currency,
+            "currency": quote.currency,
         }
 
     @staticmethod
@@ -341,7 +342,7 @@ class MarketPriceAdapter:
         if quote is None or quote.knowable_at.date() > target.cutoff:
             return None
         payload = {
-            **self._identity(target),
+            **self._identity(target, quote),
             **bar_payload(quote, close_key=origin.value_key),
             "origin": origin.origin,
         }
@@ -465,6 +466,16 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
         return None
     bar = max(eligible, key=lambda item: item.date)
     knowable_at = datetime.combine(bar.date, datetime.min.time(), tzinfo=UTC)
+    currency = getattr(bar, "currency", None)
+    if currency is None:
+        try:
+            parsed = json.loads(body.decode("utf-8", "ignore"))
+            result = parsed.get("chart", {}).get("result") if isinstance(parsed, dict) else None
+            meta = result[0].get("meta") if isinstance(result, list) and result and isinstance(result[0], dict) else None
+            raw_currency = meta.get("currency") if isinstance(meta, dict) else None
+            currency = raw_currency.strip() if isinstance(raw_currency, str) and raw_currency.strip() else None
+        except ValueError:
+            currency = None
     return MarketPriceQuote(
         # Yahoo's own response, verbatim. This used to be a summary string this function
         # composed ("AAPL:2026-07-24:333.02"), whose digest attested to our formatting
@@ -482,6 +493,7 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
         low=bar.low,
         # The chart sends volume as a JSON integer; Decimal(int) is exact.
         volume=None if bar.volume is None else Decimal(bar.volume),
+        currency=currency or _DEFAULT_QUOTE_CURRENCY,
     )
 
 

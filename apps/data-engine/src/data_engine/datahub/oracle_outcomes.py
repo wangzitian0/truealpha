@@ -113,11 +113,12 @@ _FROZEN_FACTOR_INPUTS_SQL = """
     order by member.snapshot_id, member.factor_input ->> 'issuer_id'
 """
 
-#: The stored bytes behind each observation: the raw fetch of the source vintage that the observation cites.
+#: The stored bytes and currency behind each observation: the raw fetch of the source vintage that the observation cites.
 _OBSERVATION_FETCH_SQL = """
-    select observation.observation_id, vintage.raw_fetch_id
+    select observation.observation_id, vintage.raw_fetch_id, payload.normalized_payload ->> 'currency'
     from staging.capture_normalized_observations observation
     join raw.capture_source_vintages vintage on vintage.source_vintage_id = observation.source_vintage_id
+    left join staging.capture_observation_payloads payload on payload.observation_id = observation.observation_id
     where observation.observation_id = any(%s) and vintage.raw_fetch_id is not null
 """
 
@@ -337,6 +338,7 @@ def compare_independent_parse(
     *,
     cutoff: date,
     tolerance: Decimal,
+    currency: str | None = INDEPENDENT_UNIT,
 ) -> Outcome:
     """Compare the served `field` of one issuer with the independent parse of its stored SEC document.
 
@@ -379,7 +381,7 @@ def compare_independent_parse(
     period = witness.period_end.isoformat()
     if served is None:
         return outcome(period, NOT_COMPARABLE, reason=NO_SERVED_VALUE, witness=witness)
-    if metric.unit != INDEPENDENT_UNIT:
+    if (currency or getattr(metric, "unit", INDEPENDENT_UNIT)) != INDEPENDENT_UNIT:
         return outcome(period, NOT_COMPARABLE, reason=UNIT_NOT_USD, witness=witness)
     if witness.value == 0:
         return outcome(period, NOT_COMPARABLE, reason=ZERO_ORACLE_VALUE, witness=witness)
@@ -423,16 +425,19 @@ def independent_parse_outcomes(
     """
     observations = {factor_input.issuer_id: _financial_observation(factor_input) for factor_input in factor_inputs}
     wanted = sorted({observation for observation in observations.values() if observation is not None})
-    fetch_of: dict[str, int] = dict(connection.execute(_OBSERVATION_FETCH_SQL, (wanted,)).fetchall())
+    fetch_rows = connection.execute(_OBSERVATION_FETCH_SQL, (wanted,)).fetchall()
+    fetch_of: dict[str, int] = {row[0]: row[1] for row in fetch_rows}
+    currency_of: dict[str, str | None] = {row[0]: row[2] for row in fetch_rows}
     tolerance = load_oracle_policy().relative_tolerance(INDEPENDENT_COMPARATOR)
     day = cutoff.astimezone(UTC).date()
     outcomes: list[Outcome] = []
     for factor_input in factor_inputs:
         observation = observations[factor_input.issuer_id]
         fetch_id = None if observation is None else fetch_of.get(observation)
+        currency = None if observation is None else currency_of.get(observation)
         facts = None if fetch_id is None else stored_document(connection, fetch_id)
         outcomes.extend(
-            compare_independent_parse(factor_input, field, facts, cutoff=day, tolerance=tolerance)
+            compare_independent_parse(factor_input, field, facts, cutoff=day, tolerance=tolerance, currency=currency)
             for field in INDEPENDENT_PARSERS
         )
     return outcomes

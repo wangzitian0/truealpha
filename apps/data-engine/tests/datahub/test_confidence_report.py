@@ -442,6 +442,7 @@ FILED = datetime(2026, 2, 18, tzinfo=UTC)
 # The fixture pair of test_quality_report's financial fusion: every dated field agrees at
 # 2025-12-31, net income by the measured 0.67% ProfitLoss-vs-NetIncomeLoss gap, inside 1%.
 _PRIMARY_FACT = {
+    "currency": "USD",
     "revenue": "100000000",
     "revenue_period_end": "2025-12-31",
     "gross_profit": "40000000",
@@ -451,6 +452,7 @@ _PRIMARY_FACT = {
     "vintage": {"net_income": {"period_end": "2025-12-31"}, "total_assets": {"period_end": "2025-12-31"}},
 }
 _MOOMOO_FACT = {
+    "currency": "USD",
     "origin": "moomoo-financials",
     "period_end": "2025-12-31",
     "revenue": "100000000",
@@ -569,7 +571,7 @@ def test_a_single_financial_origin_is_low_whichever_origin_it_is() -> None:
 def test_a_second_origin_in_another_currency_never_corroborates() -> None:
     """The cell's unit is the primary's reporting currency: a figure in another currency is
     not the same number, so the origin is present with no comparable value. The same
-    currency on both sides compares as usual; a payload without one reads as USD."""
+    currency on both sides compares as usual; a payload without a currency never corroborates."""
     eur_primary = {**_PRIMARY_FACT, "currency": "EUR"}
     mismatched = _financial_grades(
         _financial(_SEC, eur_primary), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "HKD"})
@@ -579,10 +581,11 @@ def test_a_second_origin_in_another_currency_never_corroborates() -> None:
         assert mismatched[name].values["origin:moomoo-financials:v1"] is None, name
     agreed = _financial_grades(_financial(_SEC, eur_primary), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "EUR"}))
     assert all(agreed[name].reason == "two_origins_agree" for name in FINANCIAL_FACT_FUSION_FIELDS)
-    legacy = _financial_grades(
-        _financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "USD"})
+    missing_currency = _financial_grades(
+        _financial(_SEC, {k: v for k, v in _PRIMARY_FACT.items() if k != "currency"}),
+        _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "USD"}),
     )
-    assert all(legacy[name].reason == "two_origins_agree" for name in FINANCIAL_FACT_FUSION_FIELDS)
+    assert all(missing_currency[name].reason == "single_origin" for name in FINANCIAL_FACT_FUSION_FIELDS)
 
 
 def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_the_second_alone() -> None:

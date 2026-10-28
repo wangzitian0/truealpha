@@ -97,12 +97,11 @@ AS_OF = date(2026, 3, 30)
 
 
 def _metric(metric: str, value: Decimal | None, input_id: str, unit: str | None = None) -> ToptMetricInput:
-    default_unit = {"shares_outstanding": "shares", "market_price": "USD_per_share"}
+    del unit
     return ToptMetricInput(
         input_id=input_id,
         metric=metric,
         value=value,
-        unit=unit or default_unit.get(metric, "USD"),
         confidence=Decimal("0.85"),
         knowable_at=KNOWN,
         freshness=MetricFreshness.FRESH,
@@ -267,7 +266,9 @@ def _independent(
 ):
     value = None if served is None else Decimal(served)
     factor_input = _factor_input(("listing:a", Decimal("1")), **{field: value}, unit=unit)
-    return compare_independent_parse(factor_input, field, facts, cutoff=cutoff, tolerance=INDEPENDENT_TOLERANCE)
+    return compare_independent_parse(
+        factor_input, field, facts, cutoff=cutoff, tolerance=INDEPENDENT_TOLERANCE, currency=unit
+    )
 
 
 def test_a_served_revenue_that_the_stored_filing_repeats_agrees_and_the_row_carries_its_numbers() -> None:

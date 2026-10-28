@@ -42,6 +42,7 @@ from decimal import Decimal
 
 from truealpha_contracts.ast import Div, Feature, Mul
 
+from factors.measure import UnitMismatchError, times
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
@@ -130,7 +131,19 @@ def price_to_sales(
             flags=["nonpositive_revenue"],
         )
 
-    market_cap = price_fact.value * shares_fact.value
+    try:
+        market_cap = times(price_fact.to_measure(), shares_fact.to_measure()).value
+    except UnitMismatchError as exc:
+        return FactorResult(
+            factor="price_to_sales",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal(0),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=[exc.reason],
+        )
     value = market_cap / revenue_fact.value
     confidence = min(price_fact.confidence, shares_fact.confidence, revenue_fact.confidence)
     return FactorResult(

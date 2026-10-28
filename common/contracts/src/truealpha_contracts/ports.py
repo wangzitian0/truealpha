@@ -10,7 +10,6 @@ from truealpha_contracts.models import (
     AnalystRatingEvent,
     AsOfQuery,
     BacktestDataset,
-    FinancialFact,
     FundHolding,
     GraphEdge,
     PriceBar,
@@ -30,8 +29,6 @@ class RawObjectStore(Protocol):
 @runtime_checkable
 class PointInTimeRepository(Protocol):
     """Repository reads must resolve transaction time before factors see data."""
-
-    def financial_facts(self, query: AsOfQuery) -> Sequence[FinancialFact]: ...
 
     def graph_edges(self, query: AsOfQuery) -> Sequence[GraphEdge]: ...
 

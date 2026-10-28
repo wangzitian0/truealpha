@@ -11,7 +11,10 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+from truealpha_contracts.measure import Measure, MeasureUnit
 from truealpha_contracts.metrics import METRICS, UnitFamily
+
+from factors.measure import default_unit_for_metric
 
 # Matches the data availability matrix (init.md Section 8): every factor return value
 # carries this field so the App and LLM answers can show whether the number behind
@@ -56,6 +59,7 @@ class Fact(BaseModel):
     confidence: Decimal = Field(ge=0, le=1)
     as_of: datetime
     fiscal_period: str | None = None
+    unit: MeasureUnit | None = None
 
     @model_validator(mode="after")
     def validate_registered_metric(self) -> "Fact":
@@ -67,6 +71,23 @@ class Fact(BaseModel):
                 f"metric {self.metric!r} is registered as unit_family={spec.unit_family!r}, got {self.unit_family!r}"
             )
         return self
+
+    def to_measure(self) -> Measure:
+        """Convert this Fact into a typed Measure with its dimensional unit."""
+        if self.value is None:
+            raise ValueError(f"cannot build Measure from Fact({self.metric!r}) with value=None")
+        resolved_unit = (
+            self.unit
+            if self.unit is not None
+            else default_unit_for_metric(self.metric, self.unit_family, self.entity_id)
+        )
+        return Measure(
+            value=self.value,
+            unit=resolved_unit,
+            period=self.fiscal_period,
+            knowable_at=self.as_of,
+            subject=self.entity_id,
+        )
 
 
 class FactorResult(BaseModel):

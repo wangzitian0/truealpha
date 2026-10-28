@@ -63,6 +63,7 @@ from data_engine.datahub.production_topt.issuer_registry import (
     StatementFiling,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+from data_engine.datahub.share_basis import MISSING_CLASS_RATIO
 from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
 if TYPE_CHECKING:
@@ -190,10 +191,10 @@ class FinancialFactsBundle:
     intangible_assets_net_excluding_goodwill: Decimal | None = None
     intangible_basis: str | None = None
     tangible_equity_period_end: date | None = None
+    currency: str | None = None
 
 
 SHARES_POINT_IN_TIME = "point_in_time"
-SHARES_MULTI_CLASS_SUM = "multi_class_sum"
 SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
 
 
@@ -219,7 +220,6 @@ class SecTarget:
     instrument_id: str
     listing_id: str
     operating_branch: OperatingBranch
-    currency: str = "USD"
     # #496: the issuer's most recent successfully-parsed CIK from OUR OWN
     # capture lineage (raw.capture_source_vintages), resolved at planning.
     # Used ONLY when the index-mapped CIK's payload yields no eligible fact at
@@ -283,7 +283,7 @@ class FinancialFactAssertion:
     values: Mapping[str, Decimal | None]
     by_period_end: Mapping[date, Mapping[str, Decimal | None]]
     knowable_at: datetime
-    currency: str = "USD"
+    currency: str | None = None
     accounting_standards: str | None = None
 
 
@@ -391,8 +391,6 @@ class _Datum:
     statement_form: bool | None = None
     # The company-facts document the figure was read from, when several were merged.
     document: str | None = None
-    # True when this figure is the sum of per-class segmented share facts (#1265).
-    multi_class_sum: bool = False
 
     @property
     def rank(self) -> int:
@@ -417,7 +415,7 @@ def _combined_document(datums: Sequence[_Datum]) -> str | None:
 
 
 def _segment_key(entry: Mapping[str, Any], unit: str) -> str | None:
-    """Normalize a dimensional segment on share facts so per-class share counts sum cleanly."""
+    """Return the dimensional segment key on a share entry when present."""
     if unit != "shares":
         return None
     segment = entry.get("segment")
@@ -432,29 +430,6 @@ def _record_better_datum(values: dict[date, _Datum], end: date, datum: _Datum) -
     existing = values.get(end)
     if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
         values[end] = datum
-
-
-def _fold_segmented_shares(
-    values: dict[date, _Datum],
-    segmented_shares: Mapping[tuple[date, date, str | None, str | None, str | None], dict[str, _Datum]],
-) -> None:
-    """Fold per-class segmented share counts per filing when no unsegmented total outranks them."""
-    for (end, _, _, _, _), by_segment in segmented_shares.items():
-        datums = list(by_segment.values())
-        first = datums[0]
-        summed = _Datum(
-            value=sum((d.value for d in datums), Decimal(0)),
-            filed=first.filed,
-            period_end=end,
-            accession=first.accession,
-            form=first.form,
-            fy=first.fy,
-            fp=first.fp,
-            statement_form=_combined_statement_form(datums),
-            document=_combined_document(datums),
-            multi_class_sum=True,
-        )
-        _record_better_datum(values, end, summed)
 
 
 def annual_values_by_period_end(
@@ -483,8 +458,9 @@ def annual_values_by_period_end(
     if not entries:
         return {}
     values: dict[date, _Datum] = {}
-    segmented_shares: dict[tuple[date, date, str | None, str | None, str | None], dict[str, _Datum]] = {}
     for entry in entries:
+        if _segment_key(entry, unit) is not None:
+            continue
         filed_raw, end_raw, start_raw, val = (
             entry.get("filed"),
             entry.get("end"),
@@ -517,13 +493,7 @@ def annual_values_by_period_end(
             statement_form=_statement_form(form),
             document=_text_or_none(entry.get(_DOCUMENT_KEY)),
         )
-        segment_key = _segment_key(entry, unit)
-        if segment_key is not None:
-            group_key = (end, filed, datum.accession, form, _text_or_none(start_raw))
-            segmented_shares.setdefault(group_key, {})[segment_key] = datum
-            continue
         _record_better_datum(values, end, datum)
-    _fold_segmented_shares(values, segmented_shares)
     return values
 
 
@@ -856,12 +826,66 @@ def financial_components(
     return FinancialComponents(assets, assets_basis, returns, returns_basis, proxy)
 
 
-def _shares_basis(shares_primary: _Datum | None, shares_fallback: _Datum | None) -> str | None:
+def _segmented_shares_datum(facts: dict[str, Any], ruleset: ConceptMappingRuleset, cutoff: date) -> _Datum | None:
+    """Newest fresh per-class segmented share entry on ``shares_outstanding`` (#1519).
+
+    Used only when no unsegmented share count resolves, so ``build_bundle`` can record
+    ``shares_basis = MISSING_CLASS_RATIO`` and ``shares_period_end`` instead of summing 1:1.
+    """
+    mapping = ruleset.mapping_for("shares_outstanding")
+    if mapping is None:
+        return None
+    candidates: dict[date, _Datum] = {}
+    for item in mapping.concepts:
+        entries = facts.get("facts", {}).get(item.taxonomy, {}).get(item.concept, {}).get("units", {}).get(mapping.unit)
+        for entry in entries or ():
+            if _segment_key(entry, mapping.unit) is None:
+                continue
+            filed_raw, end_raw, val = entry.get("filed"), entry.get("end"), entry.get("val")
+            if filed_raw is None or end_raw is None or val is None or entry.get("start") is not None:
+                continue
+            try:
+                filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
+                value = Decimal(str(val))
+            except (InvalidOperation, ValueError):
+                continue
+            if filed > cutoff:
+                continue
+            form = _text_or_none(entry.get("form"))
+            fy_raw = entry.get("fy")
+            datum = _Datum(
+                value=value,
+                filed=filed,
+                period_end=end,
+                accession=_text_or_none(entry.get("accn")),
+                form=form,
+                fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
+                fp=_text_or_none(entry.get("fp")),
+                statement_form=_statement_form(form),
+                document=_text_or_none(entry.get(_DOCUMENT_KEY)),
+            )
+            _record_better_datum(candidates, end, datum)
+    return _fresh_shares(_latest(candidates), cutoff)
+
+
+def _shares_basis(
+    shares_primary: _Datum | None,
+    shares_fallback: _Datum | None,
+    segmented_shares: _Datum | None = None,
+) -> str | None:
     if shares_primary is not None:
-        return SHARES_MULTI_CLASS_SUM if shares_primary.multi_class_sum else SHARES_POINT_IN_TIME
+        return SHARES_POINT_IN_TIME
     if shares_fallback is not None:
         return SHARES_WEIGHTED_AVERAGE_BASIC
+    if segmented_shares is not None:
+        return MISSING_CLASS_RATIO
     return None
+
+
+def _ruleset_currency(ruleset: ConceptMappingRuleset) -> str | None:
+    """The reporting currency read from the ruleset unit (`SEC#L476`; `USD` today)."""
+    mapping = ruleset.mapping_for("revenue") or ruleset.mapping_for("total_assets")
+    return None if mapping is None else mapping.unit
 
 
 def build_bundle(
@@ -894,8 +918,13 @@ def build_bundle(
     shares_fallback = _fresh_shares(
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
     )
+    segmented_shares = (
+        _segmented_shares_datum(facts, ruleset, cutoff)
+        if shares_primary is None and shares_fallback is None
+        else None
+    )
     shares = shares_primary or shares_fallback
-    shares_basis = _shares_basis(shares_primary, shares_fallback)
+    shares_basis = _shares_basis(shares_primary, shares_fallback, segmented_shares)
     # When every candidate is refused the newest measurement date is still recorded, so the
     # warehouse says HOW stale the best candidate was rather than leaving an
     # indistinguishable null. Fail-closed is deliberate: the factor then reports
@@ -903,6 +932,7 @@ def build_bundle(
     # honest gap outranks a market capitalisation wrong by three orders of magnitude.
     shares_period_end = _newest_period_end(
         shares,
+        segmented_shares,
         _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)),
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)),
     )
@@ -1004,6 +1034,7 @@ def build_bundle(
         intangible_assets_net_excluding_goodwill=_v(tangible.intangible_assets),
         intangible_basis=tangible.intangible_basis,
         tangible_equity_period_end=tangible.period_end,
+        currency=_ruleset_currency(ruleset),
     )
 
 
@@ -1257,24 +1288,10 @@ class SecFinancialFactAdapter:
             )
         return tuple(found)
 
-    def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
-        target = self._targets.get(work_item.work_item_id)
-        if target is None:
-            return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
+    def _resolve_bundle_with_predecessor(self, target: SecTarget) -> FinancialFactsBundle | FetchFailure | None:
         try:
             bundle = self._fetcher(target.cik, target.cutoff, target.operating_branch)
             if bundle is not None and target.predecessor_cik is not None and not _asserts_income(bundle):
-                # #496 predecessor-CIK fallback: the mapped CIK's document exists but
-                # asserts no income-statement fact — an empty taxonomy right after a
-                # corporate reorganization, or (XOM from 2026-09, #745's residual) a holdco
-                # whose first filings carry the balance sheet and share count but no
-                # revenue or profit. The issuer's own predecessor CIK (owner-signed
-                # registry, or the capture lineage) is the same company's filing history.
-                # When both documents are available and the predecessor is owner-signed,
-                # their declared concepts are merged (see `merge_company_facts`) so the latest
-                # balance-sheet and share counts from the holdco combine with the predecessor's
-                # income-statement figures. An unsigned lineage-resolved predecessor keeps the
-                # whole-document fallback.
                 fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
                 if fallback is not None and _asserts_income(fallback):
                     if target.predecessor_signed and bundle.document is not None and fallback.document is not None:
@@ -1285,23 +1302,29 @@ class SecFinancialFactAdapter:
                             ],
                             self._ruleset,
                         )
-                        bundle = build_bundle(
+                        return build_bundle(
                             merged,
                             target.cutoff,
                             target.operating_branch,
                             raw_bytes=bundle.raw_bytes,
                             ruleset=self._ruleset,
                         )
-                    else:
-                        bundle = fallback
+                    return fallback
+            return bundle
         except (BudgetExhausted, CapacityExceeded):
-            # SEC's daily call budget or rate window capacity is refused for this environment:
-            # deferred, named, not "the issuer files nothing" (rule 6, #729).
             return FetchFailure(ObligationReasonCode.DEFERRED_CAPACITY)
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)
         except TimeoutError:
             return FetchFailure(ObligationReasonCode.TIMEOUT)
+
+    def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
+        target = self._targets.get(work_item.work_item_id)
+        if target is None:
+            return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
+        bundle = self._resolve_bundle_with_predecessor(target)
+        if isinstance(bundle, FetchFailure):
+            return bundle
         if bundle is None:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at is not None and bundle.knowable_at.date() > target.cutoff:
@@ -1335,7 +1358,7 @@ class SecFinancialFactAdapter:
             "instrument_id": target.instrument_id,
             "listing_id": target.listing_id,
             "operating_branch": target.operating_branch.value,
-            "currency": target.currency,
+            "currency": bundle.currency if bundle.currency is not None else _ruleset_currency(self._ruleset),
             "gross_profit": _s(gross_profit_value),
             "total_assets": _s(bundle.total_assets),
             "headcount": _s(headcount),

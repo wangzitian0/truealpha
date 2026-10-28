@@ -248,6 +248,12 @@ def _bar(row: Mapping[str, Any]) -> dict[str, Decimal | None]:
     return {field: _decimal_or_absent(row.get(field), field=field) for field in ("open", "high", "low", "volume")}
 
 
+def _payload_currency(payload: Mapping[str, Any]) -> str | None:
+    meta = payload.get("meta")
+    raw = payload.get("currency") or (meta.get("currency") if isinstance(meta, Mapping) else None)
+    return raw.strip() if isinstance(raw, str) and raw.strip() else None
+
+
 def _quote(
     *,
     raw_bytes: bytes,
@@ -255,15 +261,19 @@ def _quote(
     close: Decimal,
     bar: Mapping[str, Decimal | None] | None = None,
     is_provisional: bool = False,
+    currency: str | None = None,
 ) -> MarketPriceQuote:
-    return MarketPriceQuote(
-        raw_bytes=raw_bytes,
-        close=close,
-        as_of=as_of,
-        knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
-        is_provisional=is_provisional,
+    kwargs: dict[str, Any] = {
+        "raw_bytes": raw_bytes,
+        "close": close,
+        "as_of": as_of,
+        "knowable_at": datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        "is_provisional": is_provisional,
         **(bar or {}),
-    )
+    }
+    if currency is not None:
+        kwargs["currency"] = currency
+    return MarketPriceQuote(**kwargs)
 
 
 def parse_session_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuote | None:
@@ -289,7 +299,12 @@ def parse_session_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
     if as_of > partition:
         # A close from after the partition date is look-ahead, not corroboration.
         raise NotASessionCloseError(f"Twelve Data returned session {as_of}, after the {partition} partition")
-    return _quote(raw_bytes=raw_bytes, as_of=as_of, close=_decimal_close(payload.get("close")))
+    return _quote(
+        raw_bytes=raw_bytes,
+        as_of=as_of,
+        close=_decimal_close(payload.get("close")),
+        currency=_payload_currency(payload),
+    )
 
 
 def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuote | None:
@@ -309,6 +324,7 @@ def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPric
     rows = payload.get("values")
     if not isinstance(rows, list):
         return None
+    currency = _payload_currency(payload)
     for row in rows:  # newest first
         if not isinstance(row, Mapping):
             continue
@@ -316,7 +332,13 @@ def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPric
         as_of = _session_date(row.get("datetime"))
         if as_of >= partition:
             continue
-        return _quote(raw_bytes=raw_bytes, as_of=as_of, close=_decimal_close(row.get("close")), bar=_bar(row))
+        return _quote(
+            raw_bytes=raw_bytes,
+            as_of=as_of,
+            close=_decimal_close(row.get("close")),
+            bar=_bar(row),
+            currency=currency,
+        )
     return None
 
 
@@ -345,6 +367,7 @@ def attach_settled_bar(
     rows = payload.get("values")
     if not isinstance(rows, list):
         return settled
+    currency = _payload_currency(payload) or settled.currency
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -363,6 +386,7 @@ def attach_settled_bar(
             close=settled.close,
             bar=bar,
             is_provisional=is_provisional,
+            currency=currency,
         )
     return settled
 

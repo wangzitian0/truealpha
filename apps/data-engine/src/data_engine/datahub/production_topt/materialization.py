@@ -48,7 +48,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
-from data_engine.datahub.input_cells import LAST_CLOSE_KEY, InputCell, financial_input_rows, last_close_cell, unit_of
+from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import choose_primary_listings
@@ -63,6 +63,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
     source_evidence_status_for,
 )
 from data_engine.datahub.share_basis import (
+    MISSING_CLASS_RATIO,
     SHARES_KEY,
     LiveShareCount,
     OnCloseBasis,
@@ -343,9 +344,7 @@ class ToptCoreSnapshot(_FrozenModel):
 
         def common_metric(field_name: str) -> ToptMetricInput | None:
             metrics = [getattr(member, field_name) for member in ordered]
-            signatures = {
-                None if metric is None else (metric.value, metric.unit, metric.availability) for metric in metrics
-            }
+            signatures = {None if metric is None else (metric.value, metric.availability) for metric in metrics}
             if len(signatures) != 1:
                 raise ValueError(f"issuer {execution.issuer_id} has inconsistent {field_name} facts")
             return metrics[0]
@@ -499,7 +498,6 @@ def _metric(
     *,
     name: str,
     value: Decimal | None,
-    unit: str,
     cell: InputCell | None = None,
     knowable_at: datetime | None = None,
     unavailable_reason: ToptCoreReasonCode | None = None,
@@ -514,13 +512,30 @@ def _metric(
         input_id=row.observation_id,
         metric=name,
         value=value,
-        unit=unit,
         confidence=row.confidence if cell is None else cell.confidence,
         knowable_at=knowable_at,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
         unavailable_reason=unavailable_reason,
     )
+
+
+def _price_in_financial_currency(
+    listing_id: str, financial_currency: str, price: Any
+) -> tuple[Decimal | None, ToptCoreReasonCode | None]:
+    """The close of a listing, or no value with `currency_mismatch` when its currency is not the filing's.
+
+    A mismatch makes that one price cell unavailable. It never aborts the snapshot of the other listings (#1519).
+    """
+    if financial_currency == price.currency:
+        return price.close, None
+    log.warning(
+        "currency mismatch: %s financial currency %s does not match market price currency %s",
+        listing_id,
+        financial_currency,
+        price.currency,
+    )
+    return None, ToptCoreReasonCode.CURRENCY_MISMATCH
 
 
 @dataclass(frozen=True)
@@ -818,6 +833,53 @@ class PostgresToptCoreRepository:
         )
 
     @staticmethod
+    def _resolve_shares_on_close_basis(
+        listing_id: str,
+        *,
+        financial: FinancialFactPayload,
+        financial_row: _ObservationRow,
+        market_row: _ObservationRow,
+        price: MarketPricePayload,
+        price_value: Decimal | None,
+        shares_cell: Any,
+        histories: Sequence[SplitHistory | Unavailable | None],
+        documents: Callable[[], Sequence[Mapping[str, Any]]] | None,
+        ruleset: Callable[[], ConceptMappingRuleset] | None,
+    ) -> tuple[Decimal | None, datetime, ToptCoreReasonCode | None]:
+        shares_value = financial.shares_outstanding
+        shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
+        if shares_value is None:
+            reason = ToptCoreReasonCode.MISSING_CLASS_RATIO if financial.shares_basis == MISSING_CLASS_RATIO else None
+            return None, shares_knowable_at, reason
+        outcome = live_on_close_basis(
+            LiveShareCount(
+                shares=shares_value,
+                knowable_at=shares_knowable_at,
+                entry=share_count_entry(financial.vintage, financial.shares_period_end, financial_row.knowable_at),
+                close_session=market_row.knowable_at.astimezone(UTC).date(),
+                close_knowable_at=market_row.knowable_at,
+                close=price_value if price_value is not None else (price.close or Decimal("1")),
+            ),
+            histories,
+            listing_units_per_share=financial.listing_units_per_share,
+            shares_basis=financial.shares_basis,
+            documents=documents if documents is not None else (lambda: ()),
+            ruleset=ruleset if ruleset is not None else (lambda: DEFAULT_RULESET),
+        )
+        if isinstance(outcome, OnCloseBasis):
+            return outcome.value, outcome.knowable_at, None
+        if price_value is None and financial.listing_units_per_share and financial.listing_units_per_share > 0:
+            return shares_value / financial.listing_units_per_share, shares_knowable_at, None
+        log.warning(
+            "share basis: %s gets no share count beside the close %s: %s: %s",
+            listing_id,
+            price.close,
+            outcome.reason,
+            outcome.detail,
+        )
+        return None, shares_knowable_at, ToptCoreReasonCode(outcome.reason)
+
+    @staticmethod
     def _snapshot_member(
         listing_id: str,
         by_type: dict[str, _ObservationRow],
@@ -842,11 +904,11 @@ class PostgresToptCoreRepository:
             or price.listing_id != listing.listing_id
         ):
             raise ValueError(f"listing {listing_id} normalized payload identities disagree")
-        if financial.currency != price.currency:
-            raise ValueError(f"listing {listing_id} financial and market currencies disagree")
         financial_row = by_type["financial-fact"]
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
+
+        price_value, price_reason = _price_in_financial_currency(listing_id, financial.currency, price)
 
         # #1518: the input cells of the payload. The strategy seed and the history projector build the same
         # cells with the same function, so the confidence cap, the units and the per-key `knowable_at` have
@@ -858,48 +920,19 @@ class PostgresToptCoreRepository:
         }
         price_cell = last_close_cell(market_row.payload, market_row.confidence, market_row.knowable_at)
 
-        # #1277: put the filed share count on the share basis of the captured close via
-        # `share_basis.live_on_close_basis` (read-only reuse of #1262's split logic). The count
-        # never stands beside a close of an unknown basis: when the stored series cannot prove
-        # the splits, or do not exist, the count is dropped and the cause is named.
-        shares_value = financial.shares_outstanding
         shares_cell = cells.get(SHARES_KEY)
-        shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
-        shares_reason: ToptCoreReasonCode | None = None
-        if shares_value is not None and price.close is not None:
-            outcome = live_on_close_basis(
-                LiveShareCount(
-                    shares=shares_value,
-                    knowable_at=shares_knowable_at,
-                    entry=share_count_entry(financial.vintage, financial.shares_period_end, financial_row.knowable_at),
-                    close_session=market_row.knowable_at.astimezone(UTC).date(),
-                    close_knowable_at=market_row.knowable_at,
-                    close=price.close,
-                ),
-                histories,
-                listing_units_per_share=financial.listing_units_per_share,
-                documents=documents if documents is not None else (lambda: ()),
-                ruleset=ruleset if ruleset is not None else (lambda: DEFAULT_RULESET),
-            )
-            if isinstance(outcome, OnCloseBasis):
-                shares_value = outcome.value
-                shares_knowable_at = outcome.knowable_at
-            else:
-                shares_value = None
-                shares_reason = ToptCoreReasonCode(outcome.reason)
-                log.warning(
-                    "share basis: %s gets no share count beside the close %s: %s: %s",
-                    listing_id,
-                    price.close,
-                    outcome.reason,
-                    outcome.detail,
-                )
-        elif shares_value is not None:
-            if financial.listing_units_per_share is None or financial.listing_units_per_share <= 0:
-                shares_value = None
-                shares_reason = ToptCoreReasonCode.MISSING_LISTING_UNIT_RATIO
-            elif financial.listing_units_per_share != 1:
-                shares_value = shares_value / financial.listing_units_per_share
+        shares_value, shares_knowable_at, shares_reason = PostgresToptCoreRepository._resolve_shares_on_close_basis(
+            listing_id,
+            financial=financial,
+            financial_row=financial_row,
+            market_row=market_row,
+            price=price,
+            price_value=price_value,
+            shares_cell=shares_cell,
+            histories=histories,
+            documents=documents,
+            ruleset=ruleset,
+        )
 
         # #1518: one age limit. A cell that the issuer's decision consumes and that became knowable more than
         # `maximum_input_age_days` before the cutoff makes the financial cell stale. The decision tests the same
@@ -940,42 +973,36 @@ class PostgresToptCoreRepository:
                 financial_row,
                 name="gross_profit",
                 value=financial.gross_profit,
-                unit=unit_of("gross_profit", financial.currency),
                 cell=profit_cell,
             ),
             total_assets=_metric(
                 financial_row,
                 name="total_assets",
                 value=financial.total_assets,
-                unit=unit_of("total_assets", financial.currency),
                 cell=cells.get("total_assets"),
             ),
             headcount=_metric(
                 financial_row,
                 name="headcount",
                 value=financial.headcount,
-                unit=unit_of("headcount", financial.currency),
                 cell=cells.get("headcount"),
             ),
             revenue=_metric(
                 financial_row,
                 name="revenue",
                 value=financial.revenue,
-                unit=unit_of("revenue", financial.currency),
                 cell=cells.get("revenue"),
             ),
             pre_provision_profit=_metric(
                 financial_row,
                 name="pre_provision_profit",
                 value=financial.pre_provision_profit,
-                unit=unit_of("gross_profit", financial.currency),
                 cell=None if financial.pre_provision_profit is None else profit_cell,
             ),
             shares_outstanding=_metric(
                 financial_row,
                 name="shares_outstanding",
                 value=shares_value,
-                unit=unit_of(SHARES_KEY, financial.currency),
                 cell=shares_cell,
                 knowable_at=shares_knowable_at,
                 unavailable_reason=shares_reason,
@@ -983,9 +1010,9 @@ class PostgresToptCoreRepository:
             market_price=_metric(
                 market_row,
                 name="market_price",
-                value=price.close,
-                unit=unit_of(LAST_CLOSE_KEY, price.currency),
+                value=price_value,
                 cell=price_cell,
+                unavailable_reason=price_reason,
             ),
             is_primary=is_primary,
             # A leaf that the capture holds no value for stays None: the core names it `missing_<field>`.
@@ -994,7 +1021,6 @@ class PostgresToptCoreRepository:
                     financial_row,
                     name=name,
                     value=getattr(financial, name),
-                    unit=unit_of(name, financial.currency),
                     cell=cells.get(name),
                 )
                 for name in TCE_SNAPSHOT_FIELDS

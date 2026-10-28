@@ -156,7 +156,6 @@ def _metric(name: str, value: str | None, input_id: str = IDS[0]) -> ToptMetricI
         input_id=input_id,
         metric=name,
         value=value,
-        unit="USD",
         confidence="0.9",
         knowable_at=CUTOFF - timedelta(days=1),
         freshness=MetricFreshness.FRESH,

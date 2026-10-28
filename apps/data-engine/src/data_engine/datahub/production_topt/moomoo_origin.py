@@ -261,7 +261,15 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
         high=_optional_decimal(bar.get("high"), "high"),
         low=_optional_decimal(bar.get("low"), "low"),
         volume=_optional_decimal(bar.get("volume"), "volume"),
+        currency=_bar_currency(bar),
     )
+
+
+def _bar_currency(bar: Mapping[str, Any]) -> str:
+    raw = bar.get("currency")
+    if isinstance(raw, str) and len(raw.strip()) == 3:
+        return raw.strip()
+    return "USD"
 
 
 def _optional_decimal(value: object, what: str) -> Decimal | None:
@@ -438,7 +446,7 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         end for end, values in by_period.items() if any(values.get(name) is not None for name in INCOME_FIELDS)
     ]
     newest = max(fiscal_years) if fiscal_years else max(by_period)
-    currency, standards = _statement_meta(income) or _statement_meta(balance) or ("USD", None)
+    currency, standards = _statement_meta(income) or _statement_meta(balance) or (None, None)
     headline_values = {name: by_period[newest].get(name) for name in (*INCOME_FIELDS, *BALANCE_SHEET_FIELDS)}
     if "consensus_profit_growth" in by_period[newest]:
         headline_values["consensus_profit_growth"] = by_period[newest]["consensus_profit_growth"]
@@ -454,7 +462,7 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
     )
 
 
-def _statement_meta(statement: Mapping[str, Any]) -> tuple[str, str | None] | None:
+def _statement_meta(statement: Mapping[str, Any]) -> tuple[str | None, str | None] | None:
     reports = statement.get("report_list")
     if not isinstance(reports, list):
         return None
@@ -463,7 +471,7 @@ def _statement_meta(statement: Mapping[str, Any]) -> tuple[str, str | None] | No
             currency = report.get("currency_code")
             standards = report.get("accounting_standards")
             return (
-                currency if isinstance(currency, str) and len(currency) == 3 else "USD",
+                currency if isinstance(currency, str) and len(currency) == 3 else None,
                 standards if isinstance(standards, str) and standards else None,
             )
     return None
