@@ -138,13 +138,13 @@
       "id": "R2.B3",
       "root": "#1418",
       "tier": "M1",
-      "statement": "Every seat's daily spend stays within its derived share, and no core-path key ends deferred_capacity.",
+      "statement": "Every seat's daily spend stays within its share of its vendor account, and no core-path key ends deferred_capacity.",
       "threshold": "0 days over the share; 0 core-path keys deferred",
       "window": "30 days",
       "oracle": "repository",
       "status": "pending",
       "verdict_keys": [],
-      "pending_on": "#1416 E3, #1418"
+      "pending_on": "#1520, #1418"
     },
     {
       "id": "R2.B4",
@@ -212,7 +212,7 @@
       "id": "R2.B9",
       "root": "#1418",
       "tier": "M1",
-      "statement": "For every seat, the p99 busy-season daily demand stays within UTILIZATION_CEILING (environment_contract.py) of its derived share, and rate-limited lanes finish inside their windows.",
+      "statement": "For every seat, the p99 busy-season daily demand stays within UTILIZATION_CEILING (environment_contract.py) of its share of its vendor account, and rate-limited lanes finish inside their windows.",
       "threshold": "p99 utilization within UTILIZATION_CEILING",
       "window": "busy season (10-K season and earnings weeks)",
       "oracle": "repository",
@@ -224,13 +224,13 @@
       "id": "R2.B10",
       "root": "#1418",
       "tier": "M1",
-      "statement": "The real limits of Yahoo and the LLM plan, the VPS disk headroom and the per-issuer tick compute time are recorded with date and method, and the plan uses them.",
-      "threshold": "4 measured limits",
+      "statement": "The limits of Yahoo and the LLM plan carry measured evidence rows (with checked_at and method), the VPS disk headroom and the per-issuer tick compute time are recorded with date and method, and the plan uses them.",
+      "threshold": "4 measured evidence rows",
       "window": null,
       "oracle": "platform",
       "status": "pending",
       "verdict_keys": [],
-      "pending_on": "#1418"
+      "pending_on": "#1520, #1418"
     },
     {
       "id": "R2.B11",

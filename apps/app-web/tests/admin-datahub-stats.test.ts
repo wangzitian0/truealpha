@@ -6,8 +6,22 @@
  * Run standalone: `bun run tests/admin-datahub-stats.test.ts`.
  */
 
+import {
+  MODEL_SEAT,
+  UTILIZATION_CEILING,
+  VENDOR_ACCOUNTS,
+  accountShare,
+} from "../src/contracts/environmentContract.generated";
 import { idPrefixLikesOfRole } from "../src/contracts/universes";
-import { LEDGER_COVERAGE_DAYS, listingRatioReport, loadDatahubStats } from "../src/server/admin/datahub-stats";
+import {
+  LEDGER_COVERAGE_DAYS,
+  MODEL_1302_BY_DAY_SQL,
+  VENDOR_LEDGER_TODAY_SQL,
+  listingRatioReport,
+  loadDatahubStats,
+  model1302Rows,
+  vendorAccountRows,
+} from "../src/server/admin/datahub-stats";
 import { __setTestOpsClient } from "../src/server/admin/ops";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -517,13 +531,19 @@ const nightlyVerdictRows = [
   assert(stats.sources[0].fetches_total === 728, "source stats pass through");
   assert(stats.runs[0].resolved === 408, "run stats pass through");
   assert(stats.validation.length === 4, "four validation checks, one row each");
-  assert(stats.capacity.length === 4, "four capacity limits, one row each");
+  assert(
+    stats.vendorAccounts.length === VENDOR_ACCOUNTS.length &&
+      stats.capacity.length === VENDOR_ACCOUNTS.length + 3,
+    "one row per vendor account plus the three runtime/storage capacity rows (#1520)",
+  );
   assert(
     stats.capacity.every(
       (row) =>
-        typeof row.verdict === "string" && typeof row.detail === "string",
+        typeof row.verdict === "string" &&
+        typeof row.detail === "string" &&
+        !row.detail.includes("of 800"),
     ),
-    "capacity rows carry the validation shape, not a mis-stubbed one",
+    "capacity rows carry the validation shape and never read 'of 800' (#1520)",
   );
   assert(
     stats.validation[0].verdict === "pass",
@@ -718,8 +738,11 @@ const nightlyVerdictRows = [
   const trafficSql = capturedSqls.find(
     (s) => s.includes("from staging.api_call_ledger l") && s.includes("group by l.source"),
   );
-  const capacityTdSql = capturedSqls.find((s) =>
-    s.includes("'twelvedata budget (this env, today utc)' as check"),
+  const vendorLedgerSql = capturedSqls.find(
+    (s) => s.includes("with today as") && s.includes("rows_today"),
+  );
+  const model1302Sql = capturedSqls.find(
+    (s) => s.includes("provider_code = '1302'") && s.includes("where source = $1"),
   );
   const recentCallsSql = capturedSqls.find(
     (s) => s.includes("from staging.api_call_ledger l") && s.includes("limit 40"),
@@ -731,8 +754,24 @@ const nightlyVerdictRows = [
     "TRAFFIC_SQL uses explicit UTC day boundary and joins raw.fetches by payload_sha256 and source (#1363)",
   );
   assert(
-    capacityTdSql !== undefined && capacityTdSql.includes("at time zone 'utc'"),
-    "CAPACITY_TD_SQL uses explicit UTC day boundary (#1363)",
+    vendorLedgerSql !== undefined &&
+      vendorLedgerSql.includes("at time zone 'utc'") &&
+      vendorLedgerSql.includes("count(*)::int as rows_today") &&
+      !vendorLedgerSql.toLowerCase().includes("sum(cost)") &&
+      !vendorLedgerSql.includes("800") &&
+      !vendorLedgerSql.includes("560"),
+    "VENDOR_LEDGER_TODAY_SQL uses explicit UTC day boundary, counts rows rather than sum(cost), and holds no literal 800 or 560 (#1520)",
+  );
+  assert(
+    !capturedSqls.some((s) => s.includes("of 800") || s.includes("> 560")),
+    "CAPACITY_TD_SQL and its literals 800 and 560 are deleted (#1520)",
+  );
+  assert(
+    model1302Sql !== undefined &&
+      model1302Sql.includes("at time zone 'utc'") &&
+      JSON.stringify(capturedParams.get(model1302Sql)) ===
+        JSON.stringify([MODEL_SEAT.seat, LEDGER_COVERAGE_DAYS]),
+    "MODEL_1302_BY_DAY_SQL scopes to MODEL_SEAT.seat and LEDGER_COVERAGE_DAYS (#1520 step 5)",
   );
   assert(
     recentCallsSql !== undefined &&
@@ -742,6 +781,163 @@ const nightlyVerdictRows = [
   );
 
   __setTestOpsClient(null);
+}
+
+// #1520 step 3 & step 5: vendor account share dashboard and model seat 1302 counts per environment and day.
+{
+  const prodTdShare = accountShare("twelvedata", "production");
+  const stagingTdShare = accountShare("twelvedata", "staging");
+  const previewTdShare = accountShare("twelvedata", "preview");
+  assert(
+    prodTdShare.dailyShare === 480 &&
+      prodTdShare.rateWindowShare === 4 &&
+      stagingTdShare.dailyShare === 320 &&
+      stagingTdShare.rateWindowShare === 3 &&
+      previewTdShare.dailyShare === 0 &&
+      previewTdShare.admitsACall === false,
+    "accountShare exports Twelve Data environment shares 0 / 320 / 480 and 0 / 3 / 4 (#1520)",
+  );
+
+  // Completeness table row 3: 382 rows, share 480 -> ratio 0.80; verdict follows UTILIZATION_CEILING (0.70); a row per account.
+  const rowsAt382 = vendorAccountRows(
+    [
+      {
+        source: "twelvedata",
+        rows_today: 382,
+        failed_today: 4,
+        http_429_today: 0,
+        code_1302_today: 0,
+        peak_1s: 1,
+        peak_30s: 2,
+        peak_60s: 3,
+      },
+      {
+        source: "sec",
+        rows_today: 120,
+        failed_today: 0,
+        http_429_today: 0,
+        code_1302_today: 0,
+        peak_1s: 4,
+        peak_30s: 12,
+        peak_60s: 20,
+      },
+      {
+        source: "nport",
+        rows_today: 15,
+        failed_today: 0,
+        http_429_today: 0,
+        code_1302_today: 0,
+        peak_1s: 1,
+        peak_30s: 3,
+        peak_60s: 5,
+      },
+    ],
+    "production",
+  );
+  assert(
+    rowsAt382.length === VENDOR_ACCOUNTS.length &&
+      rowsAt382.map((r) => r.account).join(",") ===
+        VENDOR_ACCOUNTS.map((a) => a.name).join(","),
+    "one row per vendor account in contract order, including sec_edgar (#1520)",
+  );
+  const tdRow = rowsAt382.find((r) => r.account === "twelvedata");
+  assert(
+    tdRow !== undefined &&
+      tdRow.rows_today === 382 &&
+      tdRow.daily_share === 480 &&
+      tdRow.daily_ratio_text === "0.80" &&
+      tdRow.daily_usage_text === "382 of 480" &&
+      tdRow.verdict === "warn" &&
+      tdRow.detail.includes("382 of 480") &&
+      !tdRow.detail.includes("of 800"),
+    "382 rows, share 480 gives ratio 0.80, reads '382 of 480' (never 'of 800'), and warns above UTILIZATION_CEILING 0.70 (#1520)",
+  );
+
+  // Verdict follows the ceiling: at 336 of 480 (ratio 0.70 === UTILIZATION_CEILING), verdict is ok.
+  const rowsAtCeiling = vendorAccountRows(
+    [
+      {
+        source: "twelvedata",
+        rows_today: Math.floor(480 * UTILIZATION_CEILING),
+        failed_today: 0,
+        http_429_today: 0,
+        code_1302_today: 0,
+        peak_1s: 1,
+        peak_30s: 1,
+        peak_60s: 2,
+      },
+    ],
+    "production",
+  );
+  const tdAtCeiling = rowsAtCeiling.find((r) => r.account === "twelvedata");
+  assert(
+    tdAtCeiling !== undefined &&
+      tdAtCeiling.rows_today === 336 &&
+      tdAtCeiling.daily_ratio_text === "0.70" &&
+      tdAtCeiling.verdict === "ok",
+    "at 336 of 480 (ratio 0.70 <= UTILIZATION_CEILING), verdict is ok (#1520)",
+  );
+
+  // SEC and N-PORT pool into sec_edgar (120 + 15 = 135 rows today, peak 4 + 1 = 5 of 6 per 1s in production).
+  const secRow = rowsAt382.find((r) => r.account === "sec_edgar");
+  assert(
+    secRow !== undefined &&
+      secRow.seats.includes("sec") &&
+      secRow.seats.includes("nport") &&
+      secRow.rows_today === 135 &&
+      secRow.daily_share === null &&
+      secRow.rate_window_seconds === 1 &&
+      secRow.rate_window_share === 6 &&
+      secRow.peak_window_calls === 5 &&
+      secRow.verdict === "ok",
+    "sec and nport pool under sec_edgar with production share 6 per 1s (#1520)",
+  );
+
+  // Evidence kinds and unmeasured (not_known / none_published) limits are surfaced on the account rows.
+  const yahooRow = rowsAt382.find((r) => r.account === "yahoo");
+  const modelAccountRow = rowsAt382.find((r) => r.account === "model_plan");
+  assert(
+    yahooRow !== undefined &&
+      yahooRow.evidence_kinds.includes("self_imposed") &&
+      yahooRow.evidence_kinds.includes("none_published") &&
+      yahooRow.not_known_limits.some((l) => l.id === "vendor_figure" && l.evidence_kind === "none_published"),
+    "yahoo surfaces self_imposed and none_published vendor_figure limit (#1520)",
+  );
+  assert(
+    modelAccountRow !== undefined &&
+      modelAccountRow.evidence_kinds.includes("none_published") &&
+      modelAccountRow.not_known_limits.some((l) => l.id === "rate" && l.evidence_kind === "none_published") &&
+      modelAccountRow.rate_window_share !== 13,
+    "model_plan surfaces none_published whole-account rate and per-environment pace (#1520)",
+  );
+
+  // Completeness table row 5: the dashboard counts 1302 answers per environment and UTC day.
+  const prod1302 = model1302Rows(
+    [{ day: "2026-10-21", total_calls: 7, http_429: 3, code_1302: 3 }],
+    "production",
+  );
+  const staging1302 = model1302Rows(
+    [{ day: "2026-10-21", total_calls: 71, http_429: 0, code_1302: 0 }],
+    "staging",
+  );
+  assert(
+    prod1302.length === 1 &&
+      prod1302[0].environment === "production" &&
+      prod1302[0].day === "2026-10-21" &&
+      prod1302[0].code_1302 === 3 &&
+      prod1302[0].http_429 === 3 &&
+      prod1302[0].total_calls === 7 &&
+      prod1302[0].calls_per_minute_limit === MODEL_SEAT.environments.production.calls_per_minute &&
+      staging1302[0].environment === "staging" &&
+      staging1302[0].code_1302 === 0 &&
+      staging1302[0].calls_per_minute_limit === MODEL_SEAT.environments.staging.calls_per_minute,
+    "model1302Rows counts 1302 answers per environment and UTC day with each environment's sampled pace (#1520 step 5)",
+  );
+  assert(
+    VENDOR_LEDGER_TODAY_SQL.includes("provider_code = '1302'") &&
+      MODEL_1302_BY_DAY_SQL.includes("provider_code = '1302'"),
+    "both ledger queries count provider_code = '1302' (#1520 step 5)",
+  );
 }
 
 console.log("#641 admin datahub stats loader passed");

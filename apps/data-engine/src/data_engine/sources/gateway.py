@@ -144,7 +144,7 @@ class SourceCapacity:
         )
         return cls(
             source,
-            float(declaration.window_seconds),
+            None if declaration.window_seconds is None else float(declaration.window_seconds),
             declaration.calls_per_window,
             declaration.daily_budget,
             declaration.documented,
@@ -194,8 +194,8 @@ def capacity_window_id(source: str, at: datetime) -> str | None:
         return None
     if capacity.daily_budget is not None:
         return f"{source}:day:{at.astimezone(UTC).date().isoformat()}"
-    if capacity.window_seconds:
-        window = capacity.window_seconds
+    window = capacity.window_seconds or (60.0 if source == _model_seat() else None)
+    if window:
         label = int(window) if float(window).is_integer() else window
         return f"{source}:{label}s:{int(at.timestamp() // window)}"
     return None

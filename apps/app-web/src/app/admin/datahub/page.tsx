@@ -828,6 +828,111 @@ export default async function AdminDatahubPage({
         </table>
       </div>
 
+      <div className="space-y-3" id="vendor-account-shares">
+        <h2 className="text-lg font-semibold">Vendor account shares (#1520)</h2>
+        <p className="text-sm text-gray-500">
+          One row per vendor account in <span className="font-mono">environment_contract.v1.json</span>. Counts ledger
+          rows today (UTC), never <span className="font-mono">sum(cost)</span>. Verdict follows{" "}
+          <span className="font-mono">UTILIZATION_CEILING</span> (0.70).
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="pr-4 font-normal">account / seats</th>
+                <th className="pr-4 font-normal">env share (%)</th>
+                <th className="pr-4 font-normal">rows today / daily share</th>
+                <th className="pr-4 font-normal">peak window / share</th>
+                <th className="pr-4 font-normal">429 / 1302</th>
+                <th className="pr-4 font-normal">evidence.kind &amp; unmeasured</th>
+                <th className="font-normal">verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.vendorAccounts.map((row) => (
+                <tr key={row.account} className="border-t border-border">
+                  <td className="pr-4 font-mono">
+                    {row.account}{" "}
+                    <span className="text-xs text-gray-500">
+                      ({row.seats.join(", ")}; {row.holder})
+                    </span>
+                  </td>
+                  <td className="pr-4 font-mono text-gray-300">
+                    {row.environment} {row.percent}%{" "}
+                    <span className="text-xs text-gray-500">
+                      (
+                      {Object.values(row.shares_by_environment)
+                        .map((s) => `${s.environment}:${s.percent}%`)
+                        .join(" / ")}
+                      )
+                    </span>
+                  </td>
+                  <td className="pr-4 font-mono">
+                    {row.daily_usage_text}
+                    {row.daily_ratio_text !== null ? ` (ratio ${row.daily_ratio_text})` : ""}
+                  </td>
+                  <td className="pr-4 font-mono">{row.window_usage_text}</td>
+                  <td className={`pr-4 font-mono ${row.http_429_today > 0 || row.code_1302_today > 0 ? "text-amber-400" : ""}`}>
+                    429={row.http_429_today} / 1302={row.code_1302_today}
+                  </td>
+                  <td className="pr-4 font-mono text-gray-400">
+                    {row.evidence_kinds.join(", ")}
+                    {row.not_known_limits.length > 0
+                      ? ` (${row.not_known_limits.map((l) => `${l.id}:${l.evidence_kind}`).join(", ")})`
+                      : ""}
+                  </td>
+                  <td className={row.verdict === "ok" ? "" : "text-amber-400"}>{row.verdict}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="space-y-3" id="model-seat-1302">
+        <h2 className="text-lg font-semibold">Model seat 1302 answers per environment and day (#1520)</h2>
+        <p className="text-sm text-gray-500">
+          Provider code <span className="font-mono">1302</span> and HTTP <span className="font-mono">429</span> answers
+          for <span className="font-mono">filing-extraction-model</span> per environment and UTC day. Whole-account rate
+          is <span className="font-mono">none_published</span>; per-environment pace stays in{" "}
+          <span className="font-mono">model_seat.environments</span>.
+        </p>
+        {stats.model1302ByDay.length === 0 ? (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+            No model seat calls recorded in the window.
+          </p>
+        ) : (
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="pr-4 font-normal">environment</th>
+                <th className="pr-4 font-normal">UTC day</th>
+                <th className="pr-4 font-normal">1302 answers</th>
+                <th className="pr-4 font-normal">HTTP 429</th>
+                <th className="pr-4 font-normal">total calls</th>
+                <th className="font-normal">sampled pace</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.model1302ByDay.map((row) => (
+                <tr key={`${row.environment}:${row.day}`} className="border-t border-border">
+                  <td className="pr-4 font-mono">{row.environment}</td>
+                  <td className="pr-4 font-mono">{row.day}</td>
+                  <td className={`pr-4 font-mono ${row.code_1302 > 0 ? "text-amber-400" : ""}`}>{row.code_1302}</td>
+                  <td className={`pr-4 font-mono ${row.http_429 > 0 ? "text-amber-400" : ""}`}>{row.http_429}</td>
+                  <td className="pr-4 font-mono">{row.total_calls}</td>
+                  <td className="font-mono text-gray-400">
+                    {row.calls_per_minute_limit !== null
+                      ? `${row.calls_per_minute_limit}/min, ${row.max_concurrent_calls} concurrent`
+                      : "unpaced"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Capacity</h2>
         <table className="w-full text-left text-sm">
