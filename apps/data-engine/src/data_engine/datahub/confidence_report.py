@@ -60,12 +60,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
-from factors.confidence import evaluate_continuous_confidence
+from factors.confidence import evaluate_cell_confidence
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.confidence import (
-    ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
 )
@@ -88,6 +87,11 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub.oracle_outcomes import (
+    load_oracle_confidence_inputs,
+    oracle_cell_agreement,
+    oracle_outcome_mass_by_origin,
+)
+from data_engine.datahub.oracle_outcomes import (
     load_oracle_outcomes_rollup as load_oracle_outcomes_rollup,
 )
 from data_engine.datahub.oracle_outcomes import (
@@ -103,6 +107,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     SOURCE_BY_PARSER,
     registered_semantic_types,
     registration_for,
+    source_reliability_prior,
 )
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
 from data_engine.datahub.quality_report import (
@@ -222,15 +227,6 @@ class FamilyPolicy:
 
 
 CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
-LINEAGE_OUTCOME_MASS: Mapping[str, tuple[Decimal, Decimal]] = {
-    "sec-company-facts": (Decimal("90"), Decimal("0")),
-    "sec-nport": (Decimal("90"), Decimal("0")),
-    "sec-10k": (Decimal("70"), Decimal("0")),
-    "nasdaq-index": (Decimal("90"), Decimal("0")),
-    "twelve-data": (Decimal("40"), Decimal("0")),
-    "moomoo": (Decimal("40"), Decimal("0")),
-    "yahoo": (Decimal("12"), Decimal("0")),
-}
 
 
 @dataclass(frozen=True)
@@ -248,6 +244,10 @@ class CellGrade:
     excluded: tuple[str, ...] = ()
     values: Mapping[str, str | None] = field(default_factory=dict)
     confidence: Decimal = Decimal("0")
+    policy_hash: str = ""
+    input_hash: str = ""
+    reason_codes: tuple[str, ...] = ()
+    observation_id: str | None = None
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -260,6 +260,10 @@ class CellGrade:
             "comparison": self.comparison,
             "excluded": list(self.excluded),
             "confidence": str(self.confidence),
+            "policy_hash": self.policy_hash,
+            "input_hash": self.input_hash,
+            "reason_codes": list(self.reason_codes),
+            "observation_id": self.observation_id,
         }
 
 
@@ -474,66 +478,28 @@ def _deltas(
 UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_eligible_origin"})
 
 
-def _continuous_confidence_for_cell(
+def _lookup_outcome_mass(
+    outcome_mass_by_origin: Mapping[str, tuple[Decimal, Decimal]] | None,
+    origin: OriginValue,
+) -> tuple[Decimal, Decimal]:
+    if not outcome_mass_by_origin:
+        return Decimal("0"), Decimal("0")
+    for candidate in (origin.origin_id, f"origin:{origin.lineage}:v1", origin.source_id, origin.lineage):
+        if candidate in outcome_mass_by_origin:
+            return outcome_mass_by_origin[candidate]
+    return Decimal("0"), Decimal("0")
+
+
+def classify_cell(
     policy: FamilyPolicy,
     subject_id: str,
-    valued: Sequence[OriginValue],
-    *,
-    reason: str,
-    relative_delta: str | None,
+    origins: Sequence[OriginValue],
     cutoff: datetime,
-) -> Decimal:
-    """Evaluate the continuous 0-1 confidence of one cell via factors.confidence."""
-    if not valued or reason in UNSERVED_REASONS:
-        return Decimal("0")
-    sources: list[SourceConfidenceEvidence] = []
-    for origin in valued:
-        succ, fail = LINEAGE_OUTCOME_MASS.get(origin.lineage, (Decimal("12"), Decimal("0")))
-        conformance = Decimal("0.90") if origin.served_by_failover else Decimal("1")
-        freshness = Decimal("1")
-        if policy.session_bound and origin.knowable_at is not None:
-            lag_days = max(0, (utc_day(cutoff) - utc_day(origin.knowable_at)).days)
-            if lag_days > 4:
-                freshness = max(Decimal("0.20"), Decimal("1") - Decimal("0.05") * Decimal(lag_days - 4))
-        evidence_id = origin.observation_id or _synthetic_observation_id(policy.family, subject_id, origin)
-        sources.append(
-            SourceConfidenceEvidence(
-                provider_id=origin.origin_id,
-                origin_group_id=f"lineage:{origin.lineage}",
-                independence_weight=Decimal("1"),
-                successful_outcome_mass=succ,
-                failed_outcome_mass=fail,
-                freshness=freshness,
-                sample_conformance=conformance,
-                transport_integrity=Decimal("1"),
-                evidence_ids=(evidence_id,),
-                reason_codes=(f"reason:{reason}",),
-            )
-        )
-    if len(valued) == 1:
-        agreement = Decimal("1")
-    elif reason in ("cross_origin_conflict", "not_agreed_within_tolerance"):
-        rel = _decimal(relative_delta) or Decimal("0")
-        agreement = max(Decimal("0.05"), Decimal("0.20") * (Decimal("1") - min(Decimal("0.90"), rel)))
-    else:
-        rel = _decimal(relative_delta) or Decimal("0")
-        agreement = max(Decimal("0.50"), Decimal("1") - min(Decimal("0.50"), rel))
-    semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
-    evaluation = evaluate_continuous_confidence(
-        CONTINUOUS_CONFIDENCE_POLICY,
-        ContinuousConfidenceInput(
-            case_id=f"cell:{policy.family}:{subject_id}",
-            sources=tuple(sources),
-            agreement=agreement,
-            semantic_mapping_quality=semantic_quality,
-            lineage_completeness=Decimal("1"),
-            required_component_completeness=Decimal("1"),
-        ),
-    )
-    return evaluation.confidence
-
-
-def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
+    *,
+    outcome_mass_by_origin: Mapping[str, tuple[Decimal, Decimal]] | None = None,
+    oracle_outcomes: Sequence[Mapping[str, Any]] = (),
+    subject_aliases: Sequence[str] = (),
+) -> CellGrade:
     """Grade one cell from what its origins asserted. Pure: no clock, no database.
 
     An origin asserts once (#885 item 9): two rows of one origin — a retried capture and
@@ -566,14 +532,78 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
         relative: str | None = None,
         comparison: str | None = None,
     ) -> CellGrade:
-        confidence = _continuous_confidence_for_cell(
-            policy,
-            subject_id,
-            valued,
-            reason=reason,
-            relative_delta=relative,
-            cutoff=cutoff,
-        )
+        case_id = f"cell:{policy.family}:{subject_id}"
+        observation_id = next((origin.observation_id for origin in valued if origin.observation_id), None)
+        if policy.semantic_type in RELEASE_SEMANTICS and valued and reason not in UNSERVED_REASONS:
+            cell_eval = evaluate_cell_confidence(
+                case_id=case_id,
+                definitional=True,
+                policy=CONTINUOUS_CONFIDENCE_POLICY,
+            )
+        elif not valued or reason in UNSERVED_REASONS:
+            cell_eval = evaluate_cell_confidence(
+                case_id=case_id,
+                has_value=False,
+                extra_reason_codes=(f"reason:{reason}",),
+                policy=CONTINUOUS_CONFIDENCE_POLICY,
+            )
+        else:
+            sources: list[SourceConfidenceEvidence] = []
+            for origin in valued:
+                succ, fail = _lookup_outcome_mass(outcome_mass_by_origin, origin)
+                prior = (
+                    source_reliability_prior(origin.origin_id)
+                    or source_reliability_prior(origin.source_id)
+                    or source_reliability_prior(origin.lineage)
+                )
+                conformance = Decimal("0.90") if origin.served_by_failover else Decimal("1")
+                freshness = Decimal("1")
+                if policy.session_bound and origin.knowable_at is not None:
+                    lag_days = max(0, (utc_day(cutoff) - utc_day(origin.knowable_at)).days)
+                    if lag_days > 4:
+                        freshness = max(Decimal("0.20"), Decimal("1") - Decimal("0.05") * Decimal(lag_days - 4))
+                evidence_id = origin.observation_id or _synthetic_observation_id(policy.family, subject_id, origin)
+                sources.append(
+                    SourceConfidenceEvidence(
+                        provider_id=origin.origin_id,
+                        origin_group_id=f"lineage:{origin.lineage}",
+                        independence_weight=Decimal("1"),
+                        reliability_prior=prior,
+                        successful_outcome_mass=succ,
+                        failed_outcome_mass=fail,
+                        freshness=freshness,
+                        sample_conformance=conformance,
+                        transport_integrity=Decimal("1"),
+                        evidence_ids=(evidence_id,),
+                        reason_codes=(f"reason:{reason}",),
+                    )
+                )
+            if len(valued) == 1:
+                multi_agreement = Decimal("1")
+            elif reason in ("cross_origin_conflict", "not_agreed_within_tolerance"):
+                rel = _decimal(relative) or Decimal("0")
+                multi_agreement = max(Decimal("0.05"), Decimal("0.20") * (Decimal("1") - min(Decimal("0.90"), rel)))
+            else:
+                rel = _decimal(relative) or Decimal("0")
+                multi_agreement = max(Decimal("0.50"), Decimal("1") - min(Decimal("0.50"), rel))
+            oracle_agreement, oracle_reasons = oracle_cell_agreement(
+                oracle_outcomes,
+                subject_ids=(subject_id, *subject_aliases),
+                field=policy.family,
+                cutoff=cutoff,
+            )
+            agreement = min(multi_agreement, oracle_agreement)
+            semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
+            cell_eval = evaluate_cell_confidence(
+                case_id=case_id,
+                sources=tuple(sources),
+                agreement=agreement,
+                semantic_mapping_quality=semantic_quality,
+                lineage_completeness=Decimal("1"),
+                required_component_completeness=Decimal("1"),
+                extra_reason_codes=(f"reason:{reason}", *oracle_reasons),
+                policy=CONTINUOUS_CONFIDENCE_POLICY,
+            )
         return CellGrade(
             family=policy.family,
             subject_id=subject_id,
@@ -587,7 +617,11 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             comparison=comparison,
             excluded=excluded_ids,
             values=values,
-            confidence=confidence,
+            confidence=cell_eval.confidence,
+            policy_hash=cell_eval.policy_hash,
+            input_hash=cell_eval.input_hash,
+            reason_codes=cell_eval.reason_codes,
+            observation_id=observation_id,
         )
 
     if not valued:
@@ -1323,6 +1357,9 @@ def build_report(
     if source is not None and source.nport_ticker is not None:
         plane_origins, membership_notes = load_index_membership(connection, source, cutoff)
 
+    oracle_rows = load_oracle_confidence_inputs(connection, run_id=head.run_id, cutoff=cutoff)
+    outcome_mass_by_origin = oracle_outcome_mass_by_origin(oracle_rows, cutoff=cutoff)
+
     grades: dict[str, dict[str, CellGrade]] = {}
     for policy in FAMILIES:
         origins_by_subject: dict[str, list[OriginValue]]
@@ -1336,7 +1373,19 @@ def build_report(
                 subject_id: subject.origins.get(policy.family, []) for subject_id, subject in sorted(subjects.items())
             }
         grades[policy.family] = {
-            subject_id: classify_cell(policy, subject_id, origins, cutoff)
+            subject_id: classify_cell(
+                policy,
+                subject_id,
+                origins,
+                cutoff,
+                outcome_mass_by_origin=outcome_mass_by_origin,
+                oracle_outcomes=oracle_rows,
+                subject_aliases=tuple(
+                    alias
+                    for alias in (subjects[subject_id].issuer_id if subject_id in subjects else None,)
+                    if alias is not None
+                ),
+            )
             for subject_id, origins in origins_by_subject.items()
         }
 
@@ -1438,6 +1487,51 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
         """,
         (report_id, content_sha256, report["universe_id"], report["run_id"], report["cutoff"], Jsonb(dict(report))),
     )
+    cells_by_family = report.get("cells")
+    if isinstance(cells_by_family, Mapping) and cells_by_family:
+        families_meta = report.get("families") if isinstance(report.get("families"), Mapping) else {}
+        run_id = str(report["run_id"])
+        for family_name, family_cells in sorted(cells_by_family.items()):
+            if not isinstance(family_cells, Mapping):
+                continue
+            fam_info = families_meta.get(family_name) if isinstance(families_meta, Mapping) else None
+            semantic_type = (
+                str(fam_info["semantic_type"])
+                if isinstance(fam_info, Mapping) and fam_info.get("semantic_type")
+                else (_FAMILY_BY_NAME[family_name].semantic_type if family_name in _FAMILY_BY_NAME else "unknown")
+            )
+            for subject_id, cell in sorted(family_cells.items()):
+                if not isinstance(cell, Mapping):
+                    continue
+                conf_val = Decimal(str(cell.get("confidence", "0")))
+                policy_hash = str(cell.get("policy_hash") or CONTINUOUS_CONFIDENCE_POLICY.content_sha256)
+                input_hash = str(
+                    cell.get("input_hash")
+                    or canonical_sha256({"family": family_name, "subject_id": subject_id, "confidence": str(conf_val)})
+                )
+                reason_codes = [
+                    str(code) for code in (cell.get("reason_codes") or [f"reason:{cell.get('reason', 'unknown')}"])
+                ]
+                obs_id = cell.get("observation_id")
+                connection.execute(
+                    """
+                    insert into mart.cell_confidence
+                        (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
+                    """,
+                    (
+                        run_id,
+                        str(subject_id),
+                        semantic_type,
+                        str(family_name),
+                        str(obs_id) if obs_id else None,
+                        conf_val,
+                        policy_hash,
+                        input_hash,
+                        reason_codes,
+                    ),
+                )
     return report_id
 
 

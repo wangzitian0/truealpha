@@ -1018,3 +1018,318 @@ def load_oracle_outcomes_rollup(
         for row in raw_rows
     ]
     return rollup_oracle_outcomes(mapped)
+
+
+def _outcome_to_dict(row: Mapping[str, Any] | Outcome) -> dict[str, Any]:
+    if isinstance(row, Outcome):
+        return {
+            "subject_id": row.subject_id,
+            "field": row.field,
+            "oracle_kind": row.oracle_kind,
+            "period": row.period,
+            "served_value": row.served_value,
+            "oracle_value": row.oracle_value,
+            "source": row.source,
+            "observation_id": row.observation_id,
+            "knowable_at": row.knowable_at,
+            "ratio": row.ratio,
+            "tolerance": row.tolerance,
+            "result": row.result,
+            "reason": row.reason,
+            "compared_at": None,
+        }
+    return dict(row)
+
+
+def _resolve_row_origin_id(row: Mapping[str, Any]) -> str | None:
+    oracle_kind = str(row.get("oracle_kind") or "")
+    field = canonical_metric(str(row.get("field") or ""))
+    if oracle_kind == OPERATOR_KIND or field == "gross_profit_per_employee":
+        return None
+    for key in ("origin_id", "lineage", "origin"):
+        explicit = row.get(key)
+        if isinstance(explicit, str) and explicit.startswith("origin:"):
+            return explicit
+    source = str(row.get("source") or "")
+    if source.startswith("origin:"):
+        return source
+    lowered = source.lower()
+    if "moomoo" in lowered:
+        return "origin:moomoo-financials:v1"
+    if "twelve" in lowered:
+        return "origin:twelve-data:v1"
+    if "yahoo" in lowered:
+        return "origin:yahoo:v1"
+    if "nport" in lowered:
+        return "origin:sec-nport:v1"
+    if "nasdaq" in lowered:
+        return "origin:nasdaq-index:v1"
+    if oracle_kind in (FILING_KIND, INDEPENDENT_KIND):
+        return "origin:sec-company-facts:v1"
+    return None
+
+
+def _is_at_or_before_cutoff(row: Mapping[str, Any], cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return True
+    cutoff_iso = _iso_utc(cutoff) or ""
+    compared_iso = _iso_utc(row.get("compared_at"))
+    if compared_iso is not None:
+        return compared_iso <= cutoff_iso
+    knowable_iso = _iso_utc(row.get("knowable_at"))
+    if knowable_iso is not None:
+        return knowable_iso <= cutoff_iso
+    return True
+
+
+def _row_compared_iso(item: Mapping[str, Any]) -> str:
+    return _iso_utc(item.get("compared_at")) or _iso_utc(item.get("knowable_at")) or ""
+
+
+def _dedupe_origin_mass_rows(
+    rows: Sequence[Mapping[str, Any] | Outcome],
+    cutoff: datetime | None,
+) -> list[dict[str, Any]]:
+    deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw in rows:
+        item = _outcome_to_dict(raw)
+        if not _is_at_or_before_cutoff(item, cutoff):
+            continue
+        oracle_kind = str(item.get("oracle_kind") or "")
+        observation_id = str(item.get("observation_id") or "")
+        subject_id = str(item.get("subject_id") or "")
+        field = canonical_metric(str(item.get("field") or ""))
+        if not (oracle_kind and subject_id and field):
+            continue
+        compared_iso = _row_compared_iso(item)
+        item["_compared_iso"] = compared_iso
+        key = (oracle_kind, observation_id, subject_id, field)
+        existing = deduped.get(key)
+        if existing is None or compared_iso >= existing["_compared_iso"]:
+            deduped[key] = item
+    return list(deduped.values())
+
+
+_OUTCOME_MASS_DELTAS: dict[tuple[str, str], tuple[Decimal, Decimal]] = {
+    (FILING_KIND, AGREE): (Decimal("1"), Decimal("0")),
+    (FILING_KIND, DISAGREE): (Decimal("0"), Decimal("1")),
+    (INDEPENDENT_KIND, DISAGREE): (Decimal("0"), Decimal("1")),
+}
+
+
+def _accumulate_origin_mass(
+    totals: dict[str, tuple[Decimal, Decimal]],
+    origin_id: str,
+    field: str,
+    success_delta: Decimal,
+    fail_delta: Decimal,
+) -> None:
+    if success_delta == 0 and fail_delta == 0:
+        totals.setdefault(origin_id, (Decimal("0"), Decimal("0")))
+        return
+    keys = (
+        (origin_id, f"{origin_id}:{field}", f"{origin_id}:headcount")
+        if field == "employees_total"
+        else (origin_id, f"{origin_id}:{field}")
+    )
+    for key in keys:
+        succ, fail = totals.get(key, (Decimal("0"), Decimal("0")))
+        totals[key] = (succ + success_delta, fail + fail_delta)
+
+
+def oracle_outcome_mass_by_origin(
+    rows: Sequence[Mapping[str, Any] | Outcome],
+    *,
+    cutoff: datetime | None = None,
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """Compute (successful_outcome_mass, failed_outcome_mass) per origin from mart.oracle_outcomes (#1517, #1523).
+
+    Deduplicates per (oracle_kind, observation_id, subject_id, field) at or before `cutoff`:
+    - `filing` `agree` -> +1 success; `filing` `disagree` -> +1 fail.
+    - `independent_parse` `disagree` -> +1 fail; `independent_parse` `agree` -> +0 success (init.md p.342).
+    - `operator` / `gross_profit_per_employee` -> 0 to input origin mass.
+    """
+    totals: dict[str, tuple[Decimal, Decimal]] = {}
+    for item in _dedupe_origin_mass_rows(rows, cutoff):
+        origin_id = _resolve_row_origin_id(item)
+        if origin_id is None:
+            continue
+        oracle_kind = str(item.get("oracle_kind") or "")
+        result = str(item.get("result") or "")
+        field = canonical_metric(str(item.get("field") or ""))
+        success_delta, fail_delta = _OUTCOME_MASS_DELTAS.get(
+            (oracle_kind, result),
+            (Decimal("0"), Decimal("0")),
+        )
+        _accumulate_origin_mass(totals, origin_id, field, success_delta, fail_delta)
+    return totals
+
+
+def _relative_delta_from_row(row: Mapping[str, Any], result: str) -> Decimal | None:
+    served_raw = row.get("served_value")
+    oracle_raw = row.get("oracle_value")
+    if served_raw is not None and oracle_raw is not None:
+        served_val = Decimal(str(served_raw))
+        oracle_val = Decimal(str(oracle_raw))
+        if served_val * oracle_val < 0:
+            return Decimal("1")
+        denom = max(abs(served_val), abs(oracle_val))
+        return Decimal("0") if denom == 0 else abs(served_val - oracle_val) / denom
+    ratio_raw = row.get("ratio")
+    if ratio_raw is None:
+        return None
+    ratio_val = Decimal(str(ratio_raw))
+    if result == AGREE and Decimal("0") <= ratio_val < Decimal("0.5"):
+        return ratio_val
+    return abs(ratio_val - Decimal("1"))
+
+
+def _score_from_delta(delta: Decimal, result: str) -> Decimal:
+    if delta <= Decimal("0.001"):
+        return Decimal("1") if result == AGREE else Decimal("0.90")
+    if delta <= Decimal("0.01"):
+        return Decimal("0.90")
+    if delta <= Decimal("0.05"):
+        return Decimal("0.65")
+    return Decimal("0.25")
+
+
+def _agreement_from_outcome_row(row: Mapping[str, Any]) -> Decimal:
+    result = str(row.get("result") or "")
+    if str(row.get("reason") or "") == SIGN_DIFFERS:
+        return Decimal("0.25")
+    delta = _relative_delta_from_row(row, result)
+    if delta is None:
+        return Decimal("1") if result == AGREE else Decimal("0.25")
+    tolerance_raw = row.get("tolerance")
+    if result == AGREE and tolerance_raw is not None:
+        tol_val = Decimal(str(tolerance_raw))
+        if tol_val > Decimal("0.01") and delta <= tol_val:
+            return Decimal("1")
+    return _score_from_delta(delta, result)
+
+
+def _expand_subject_targets(subject_ids: Sequence[str] | str) -> set[str]:
+    targets = {subject_ids} if isinstance(subject_ids, str) else {s for s in subject_ids if s}
+    for s in list(targets):
+        if s.startswith("issuer:cik:"):
+            targets.add(s.removeprefix("issuer:cik:"))
+        elif s.isdigit():
+            targets.add(f"issuer:cik:{s.zfill(10)}")
+    return targets
+
+
+def _candidate_field_names(canonical_field: str, field: str) -> set[str]:
+    candidates = {canonical_field, field}
+    if canonical_field == "employees_total":
+        candidates.add("headcount")
+    return candidates
+
+
+def _matches_cell_target(item: Mapping[str, Any], targets: set[str], candidate_fields: set[str]) -> bool:
+    subj = str(item.get("subject_id") or "")
+    if subj not in targets:
+        return False
+    row_field = str(item.get("field") or "")
+    return row_field in candidate_fields or canonical_metric(row_field) in candidate_fields
+
+
+def oracle_cell_agreement(
+    rows: Sequence[Mapping[str, Any] | Outcome],
+    *,
+    subject_ids: Sequence[str] | str,
+    field: str,
+    cutoff: datetime | None = None,
+) -> tuple[Decimal, tuple[str, ...]]:
+    """Compute cell agreement and reason codes from comparable mart.oracle_outcomes rows (#1523 S4)."""
+    targets = _expand_subject_targets(subject_ids)
+    canonical_field = canonical_metric(field)
+    candidate_fields = _candidate_field_names(canonical_field, field)
+
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for raw in rows:
+        item = _outcome_to_dict(raw)
+        if not _is_at_or_before_cutoff(item, cutoff) or not _matches_cell_target(item, targets, candidate_fields):
+            continue
+        subj = str(item.get("subject_id") or "")
+        oracle_kind = str(item.get("oracle_kind") or "oracle")
+        compared_iso = _row_compared_iso(item)
+        item["_compared_iso"] = compared_iso
+        key = (oracle_kind, subj, canonical_field)
+        existing = deduped.get(key)
+        if existing is None or compared_iso >= existing["_compared_iso"]:
+            deduped[key] = item
+
+    comparable = [item for item in deduped.values() if str(item.get("result") or "") in (AGREE, DISAGREE)]
+    if not comparable:
+        return Decimal("1"), ("oracle:none",)
+
+    scores = [_agreement_from_outcome_row(item) for item in comparable]
+    reasons = {"oracle:agree" if str(item.get("result") or "") == AGREE else "oracle:disagree" for item in comparable}
+    return min(scores), tuple(sorted(reasons))
+
+
+def load_oracle_confidence_inputs(
+    connection: psycopg.Connection[Any],
+    *,
+    run_id: str | None = None,
+    cutoff: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Load mart.oracle_outcomes rows at or before `cutoff` for confidence evaluation (#1517, #1523)."""
+    if not hasattr(connection, "execute"):
+        return []
+    clauses: list[str] = []
+    params: list[Any] = []
+    if cutoff is not None:
+        clauses.append("compared_at <= %s")
+        params.append(cutoff)
+    elif run_id is not None:
+        clauses.append("run_id = %s")
+        params.append(run_id)
+    where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+    try:
+        cursor = connection.execute(
+            f"""
+            select
+                observation_id,
+                subject_id,
+                field,
+                period,
+                served_value,
+                oracle_value,
+                oracle_kind,
+                source,
+                knowable_at,
+                ratio,
+                tolerance,
+                result,
+                reason,
+                compared_at
+            from mart.oracle_outcomes
+            {where_sql}
+            order by compared_at asc, recorded_at asc, outcome_id asc
+            """,
+            tuple(params),
+        )
+        raw_rows = cursor.fetchall()
+    except Exception:
+        return []
+    return [
+        {
+            "observation_id": row[0],
+            "subject_id": row[1],
+            "field": row[2],
+            "period": row[3],
+            "served_value": row[4],
+            "oracle_value": row[5],
+            "oracle_kind": row[6],
+            "source": row[7],
+            "knowable_at": row[8],
+            "ratio": row[9],
+            "tolerance": row[10],
+            "result": row[11],
+            "reason": row[12],
+            "compared_at": row[13],
+        }
+        for row in raw_rows
+    ]

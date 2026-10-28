@@ -24,16 +24,16 @@ from factors.base.supply_chain_exposure import (
     SupplyChainPartner,
     supply_chain_exposure,
 )
-from factors.confidence import evaluate_continuous_confidence
+from factors.confidence import evaluate_cell_confidence
 from factors.shared.entity_resolution import add_edge, ensure_entity
 from psycopg import Connection
 from truealpha_contracts.confidence import (
-    ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
 )
 
 from data_engine.datahub.canonical_issuer import CanonicalIssuer, require_canonical_issuer_id
+from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 from data_engine.datahub.resolve_coordinates import is_uuid, lookup_minted_entity, ontology_kind_namespace
 from data_engine.sources import llm
@@ -150,29 +150,28 @@ def _edge_confidence(issuer_id: str, accession: str, target_name: str, rel: str,
     safe_issuer = _safe_case_id_part(issuer_id, "issuer")
     safe_acc = _safe_case_id_part(accession, "acc")
     safe_target = _safe_case_id_part(target_name, "partner")
-    return evaluate_continuous_confidence(
-        _CONFIDENCE_POLICY,
-        ContinuousConfidenceInput(
-            case_id=f"supply-chain:{safe_issuer}:{safe_acc}:{safe_target}",
-            sources=(
-                SourceConfidenceEvidence(
-                    provider_id="origin:sec-10k:v1",
-                    origin_group_id="lineage:sec-10k",
-                    independence_weight=Decimal("1"),
-                    successful_outcome_mass=Decimal("70"),
-                    failed_outcome_mass=Decimal("0"),
-                    freshness=Decimal("1"),
-                    sample_conformance=sample_conf,
-                    transport_integrity=Decimal("1"),
-                    evidence_ids=(f"accession:{safe_acc}",),
-                    reason_codes=(f"relation:{rel}",),
-                ),
+    return evaluate_cell_confidence(
+        case_id=f"supply-chain:{safe_issuer}:{safe_acc}:{safe_target}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:sec-10k:v1",
+                origin_group_id="lineage:sec-10k",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:sec-10k:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=sample_conf,
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"accession:{safe_acc}",),
+                reason_codes=(f"relation:{rel}",),
             ),
-            agreement=Decimal("1"),
-            semantic_mapping_quality=Decimal("0.95"),
-            lineage_completeness=Decimal("1"),
-            required_component_completeness=Decimal("1"),
         ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("0.95"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
     ).confidence
 
 

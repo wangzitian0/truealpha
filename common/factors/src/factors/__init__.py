@@ -13,6 +13,9 @@ Hard constraints (init.md Section 1):
 """
 
 from factors.confidence import (
+    DEFAULT_CONFIDENCE_POLICY,
+    CellConfidence,
+    evaluate_cell_confidence,
     evaluate_continuous_confidence,
     verify_confidence_calibration_report,
 )
@@ -28,6 +31,8 @@ from factors.types import (
 )
 
 __all__ = [
+    "CellConfidence",
+    "DEFAULT_CONFIDENCE_POLICY",
     "FACTOR_REGISTRY",
     "factor",
     "DataAvailability",
@@ -37,6 +42,7 @@ __all__ = [
     "GrowthConvention",
     "InsufficientDataError",
     "UnitFamily",
+    "evaluate_cell_confidence",
     "evaluate_continuous_confidence",
     "verify_confidence_calibration_report",
 ]

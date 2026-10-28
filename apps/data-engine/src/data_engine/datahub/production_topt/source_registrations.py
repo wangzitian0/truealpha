@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from importlib import import_module
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
@@ -124,6 +125,70 @@ class CapacityDeclaration:
             raise ValueError("a daily budget must be positive; declare None for an unbudgeted seat")
 
 
+#: One reliability prior per source in the registry (init.md rule 3, #1517).
+#: Order: release-derived (1) > SEC filings / Treasury / index (0.98) > moomoo (0.96)
+#: > Twelve Data (0.95) > yfinance (0.90) > single-source prose extraction (0.88).
+SOURCE_RELIABILITY_PRIORS: Mapping[str, Decimal] = MappingProxyType(
+    {
+        "release-derived": Decimal("1"),
+        "sec": Decimal("0.98"),
+        "sec-company-facts": Decimal("0.98"),
+        "origin:sec-company-facts:v1": Decimal("0.98"),
+        "sec-nport": Decimal("0.98"),
+        "origin:sec-nport:v1": Decimal("0.98"),
+        "nasdaq-index": Decimal("0.98"),
+        "origin:nasdaq-index:v1": Decimal("0.98"),
+        "us-treasury": Decimal("0.98"),
+        "us-treasury-par-yield": Decimal("0.98"),
+        "moomoo": Decimal("0.96"),
+        "moomoo-kline:v1": Decimal("0.96"),
+        "origin:moomoo-kline:v1": Decimal("0.96"),
+        "moomoo-financials:v1": Decimal("0.96"),
+        "origin:moomoo-financials:v1": Decimal("0.96"),
+        "origin:moomoo-ratings:v1": Decimal("0.96"),
+        "twelvedata": Decimal("0.95"),
+        "twelve-data": Decimal("0.95"),
+        "twelve-data:v1": Decimal("0.95"),
+        "origin:twelve-data:v1": Decimal("0.95"),
+        "yahoo": Decimal("0.90"),
+        "yahoo-chart": Decimal("0.90"),
+        "yahoo-chart:v1": Decimal("0.90"),
+        "origin:yahoo:v1": Decimal("0.90"),
+        "sec-10k": Decimal("0.88"),
+        "origin:sec-10k:v1": Decimal("0.88"),
+        "10k-extraction": Decimal("0.88"),
+        "manual-review": Decimal("0.88"),
+    }
+)
+
+
+def source_reliability_prior(identifier: str) -> Decimal | None:
+    """Return the declared reliability prior for a registered source, origin, or seat (#1517)."""
+    return SOURCE_RELIABILITY_PRIORS.get(identifier)
+
+
+def _assign_reliability_prior(
+    owner: OriginRegistration | SourceRegistration | MacroSourceRegistration,
+    *candidates: str | None,
+) -> None:
+    declared: Decimal | None = None
+    matched_key: str | None = None
+    for key in candidates:
+        if key is not None and key in SOURCE_RELIABILITY_PRIORS:
+            declared = SOURCE_RELIABILITY_PRIORS[key]
+            matched_key = key
+            break
+    supplied = owner.reliability_prior
+    if supplied is not None and (supplied < Decimal("0") or supplied > Decimal("1")):
+        raise ValueError(f"{candidates[0]}: reliability_prior must be in [0, 1], got {supplied}")
+    if declared is not None:
+        if supplied is not None and supplied != declared:
+            raise ValueError(
+                f"{candidates[0]}: reliability_prior {supplied} contradicts {matched_key!r} declaration {declared}"
+            )
+        object.__setattr__(owner, "reliability_prior", declared)
+
+
 @dataclass(frozen=True)
 class OriginRegistration:
     """One vendor origin behind a semantic: how its observations are recognised in the
@@ -140,9 +205,11 @@ class OriginRegistration:
     ledger_seat: str | None = None
     per_key_cost: int | None = None
     as_of_axis: str | None = None
+    reliability_prior: Decimal | None = None
 
     def __post_init__(self) -> None:
         _seat_capacity(self, self.origin_source)
+        _assign_reliability_prior(self, self.origin_id, self.origin_source, self.ledger_seat)
         if self.per_key_cost is not None and self.per_key_cost <= 0:
             raise ValueError(f"{self.origin_source}: per_key_cost must be positive, got {self.per_key_cost}")
 
@@ -204,10 +271,12 @@ class SourceRegistration:
     #: settled, so a mid-session bar is not a close (#637) and a reused observation must
     #: be THE settled session's (#635). Declared by the source, applied by generic code.
     session_bound: bool = False
+    reliability_prior: Decimal | None = None
     notes: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
         _seat_capacity(self, self.source_id)
+        _assign_reliability_prior(self, self.source_id, self.ledger_seat)
         if self.ledger_seat is not None and self.per_key_cost <= 0:
             raise ValueError(f"{self.source_id}: vendor registration must declare positive per_key_cost (#1411 K1)")
         if not self.as_of_axis:
@@ -231,6 +300,7 @@ class SourceRegistration:
                     "ledger_seat": o.ledger_seat,
                     "per_key_cost": o.per_key_cost,
                     "as_of_axis": o.as_of_axis,
+                    "reliability_prior": str(o.reliability_prior) if o.reliability_prior is not None else None,
                 }
                 for o in self.origins
             ],
@@ -240,6 +310,7 @@ class SourceRegistration:
             "per_key_cost": self.per_key_cost,
             "as_of_axis": self.as_of_axis,
             "session_bound": self.session_bound,
+            "reliability_prior": str(self.reliability_prior) if self.reliability_prior is not None else None,
         }
 
     @property
@@ -308,10 +379,12 @@ class MacroSourceRegistration:
     #: The first calendar year that the first run loads. The ideal backtest window is 20 years.
     first_year: int
     capacity: CapacityDeclaration | None = None
+    reliability_prior: Decimal | None = None
     notes: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
         _seat_capacity(self, self.source_id)  # type: ignore[arg-type]
+        _assign_reliability_prior(self, self.source_id, self.ledger_seat)
         if self.ledger_seat not in LEDGER_CAPACITIES:
             raise ValueError(f"{self.source_id}: ledger seat {self.ledger_seat!r} has no capacity declaration")
         if self.per_key_cost <= 0:

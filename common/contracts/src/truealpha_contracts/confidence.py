@@ -97,6 +97,7 @@ class SourceConfidenceEvidence(BaseModel):
     provider_id: str = Field(pattern=STABLE_ID_PATTERN)
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     independence_weight: Decimal = Field(ge=0, le=1)
+    reliability_prior: Decimal | None = Field(default=None, ge=0, le=1)
     successful_outcome_mass: Decimal = Field(ge=0)
     failed_outcome_mass: Decimal = Field(ge=0)
     freshness: Decimal = Field(ge=0, le=1)
@@ -107,6 +108,7 @@ class SourceConfidenceEvidence(BaseModel):
 
     @field_validator(
         "independence_weight",
+        "reliability_prior",
         "successful_outcome_mass",
         "failed_outcome_mass",
         "freshness",

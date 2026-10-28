@@ -105,3 +105,25 @@ def test_input_is_order_independent_and_one_origin_has_one_weight() -> None:
     )
     with pytest.raises(ValidationError, match="one independence weight"):
         ContinuousConfidenceInput(sources=(primary, wrong_weight), **fields)
+
+
+def test_source_confidence_evidence_validates_and_addresses_reliability_prior() -> None:
+    without_prior = _source()
+    with_prior = SourceConfidenceEvidence(
+        **{
+            **without_prior.model_dump(mode="python", exclude={"source_evidence_id", "content_sha256"}),
+            "reliability_prior": Decimal("0.96"),
+        }
+    )
+    assert without_prior.reliability_prior is None
+    assert with_prior.reliability_prior == Decimal("0.96")
+    assert with_prior.source_evidence_id != without_prior.source_evidence_id
+
+    for invalid_prior in (-Decimal("0.01"), Decimal("1.01"), 0.96):
+        with pytest.raises(ValidationError):
+            SourceConfidenceEvidence(
+                **{
+                    **without_prior.model_dump(mode="python", exclude={"source_evidence_id", "content_sha256"}),
+                    "reliability_prior": invalid_prior,
+                }
+            )

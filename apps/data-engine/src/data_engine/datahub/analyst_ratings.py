@@ -21,16 +21,16 @@ from factors.base.analyst_track_record import (
     AnalystTrackRecord,
     analyst_track_record,
 )
-from factors.confidence import evaluate_continuous_confidence
+from factors.confidence import evaluate_cell_confidence
 from psycopg import Connection
 from truealpha_contracts.confidence import (
-    ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
 )
 
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
 from data_engine.datahub.fetch_key import FetchKey
+from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
 from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
 
 _CONFIDENCE_POLICY = ContinuousConfidencePolicy()
@@ -218,29 +218,28 @@ def _analyst_confidence(analyst_id: str, raw_sr: object) -> Decimal:
         clamped = max(0.0, min(100.0, float(raw_sr)))
         sr_factor = Decimal(str(round(0.70 + 0.30 * (clamped / 100.0), 4)))
     safe_analyst = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in analyst_id).strip("-") or "analyst"
-    return evaluate_continuous_confidence(
-        _CONFIDENCE_POLICY,
-        ContinuousConfidenceInput(
-            case_id=f"analyst:{safe_analyst}",
-            sources=(
-                SourceConfidenceEvidence(
-                    provider_id="origin:moomoo-ratings:v1",
-                    origin_group_id="lineage:moomoo",
-                    independence_weight=Decimal("1"),
-                    successful_outcome_mass=Decimal("40"),
-                    failed_outcome_mass=Decimal("0"),
-                    freshness=Decimal("1"),
-                    sample_conformance=Decimal("0.90"),
-                    transport_integrity=Decimal("1"),
-                    evidence_ids=(f"analyst:{safe_analyst}",),
-                    reason_codes=("vendor_timestamp",),
-                ),
+    return evaluate_cell_confidence(
+        case_id=f"analyst:{safe_analyst}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:moomoo-ratings:v1",
+                origin_group_id="lineage:moomoo",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:moomoo-ratings:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("0.90"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"analyst:{safe_analyst}",),
+                reason_codes=("vendor_timestamp",),
             ),
-            agreement=sr_factor,
-            semantic_mapping_quality=Decimal("1"),
-            lineage_completeness=Decimal("1"),
-            required_component_completeness=Decimal("1"),
         ),
+        agreement=sr_factor,
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
     ).confidence
 
 
@@ -382,29 +381,28 @@ def _enrich_consensus_row(
     if not (summary_items or has_valuation):
         return
     agreement = min(item.confidence for item in summary_items) if summary_items else Decimal("0.90")
-    cont = evaluate_continuous_confidence(
-        _CONFIDENCE_POLICY,
-        ContinuousConfidenceInput(
-            case_id=f"consensus:{company_id}",
-            sources=(
-                SourceConfidenceEvidence(
-                    provider_id="origin:moomoo-ratings:v1",
-                    origin_group_id="lineage:moomoo",
-                    independence_weight=Decimal("1"),
-                    successful_outcome_mass=Decimal("40"),
-                    failed_outcome_mass=Decimal("0"),
-                    freshness=Decimal("1"),
-                    sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
-                    transport_integrity=Decimal("1"),
-                    evidence_ids=(f"consensus:{company_id}",),
-                    reason_codes=("vendor_timestamp",),
-                ),
+    cont = evaluate_cell_confidence(
+        case_id=f"consensus:{company_id}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:moomoo-ratings:v1",
+                origin_group_id="lineage:moomoo",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:moomoo-ratings:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"consensus:{company_id}",),
+                reason_codes=("vendor_timestamp",),
             ),
-            agreement=agreement,
-            semantic_mapping_quality=Decimal("1"),
-            lineage_completeness=Decimal("1"),
-            required_component_completeness=Decimal("1"),
         ),
+        agreement=agreement,
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
     )
     consensus_row["confidence"] = cont.confidence
     if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
