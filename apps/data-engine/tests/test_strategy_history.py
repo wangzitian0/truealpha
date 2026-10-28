@@ -21,6 +21,7 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
+from data_engine.datahub.input_cells import end_of_day, vintage_knowable_at
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.sec_financial_adapter import (
@@ -40,7 +41,6 @@ from data_engine.datahub.strategy_history import (
     LookAheadError,
     admit_input,
     canonical_history_issuers,
-    end_of_day,
     history_cutoffs,
     is_schedule_cutoff,
     issuer_from_observation,
@@ -387,7 +387,6 @@ def test_each_key_carries_its_own_filed_date() -> None:
 
 
 def test_a_key_without_a_filing_date_is_not_projected() -> None:
-    from data_engine.datahub.strategy_history import vintage_knowable_at
 
     payload = {"vintage": {"revenue": {"filed": "2025-02-20"}, "total_assets": {"filed": None}, "headcount": {}}}
     knowable_at_of = vintage_knowable_at(payload)

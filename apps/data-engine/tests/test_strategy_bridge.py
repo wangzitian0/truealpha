@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -89,6 +90,7 @@ def test_seed_strategy_inputs_rejects_an_unregistered_input_key(monkeypatch) -> 
     (#770 finding 1) -- it must refuse an input key nothing in
     `truealpha_contracts.metrics.METRICS` recognizes, the same way the CHECK used to,
     before it ever reaches the database."""
+    import data_engine.datahub.input_cells as input_cells
     import data_engine.datahub.strategy_bridge as strategy_bridge
 
     cutoff = datetime(2026, 1, 1, tzinfo=UTC)
@@ -98,8 +100,8 @@ def test_seed_strategy_inputs_rejects_an_unregistered_input_key(monkeypatch) -> 
         "not_a_registered_metric": "1.0",
     }
     fake = _FakeConnection([("financial-fact", "0.9", payload, cutoff)])
-    monkeypatch.setattr(strategy_bridge, "_STRATEGY_FINANCIAL_KEYS", ("not_a_registered_metric",))
-    monkeypatch.setattr(strategy_bridge, "_STRATEGY_PERIODIC_KEYS", {})
+    monkeypatch.setattr(input_cells, "_STRATEGY_FINANCIAL_KEYS", ("not_a_registered_metric",))
+    monkeypatch.setattr(input_cells, "_STRATEGY_PERIODIC_KEYS", {})
 
     with pytest.raises(ValueError, match="not_a_registered_metric"):
         strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:does-not-exist", cutoff=cutoff)
@@ -136,10 +138,10 @@ def test_a_newly_registered_metric_needs_no_migration_to_be_admitted(connection)
         del METRICS[synthetic_name]
 
 
-def test_seed_strategy_inputs_zeroes_confidence_on_period_mismatch() -> None:
-    """AC #3 / #1108: if operating_period_end and revenue_period_end mismatch,
-    seed_strategy_inputs_from_capture sets confidence to 0.00 so the evaluator
-    excludes the issuer as below_confidence_floor."""
+def test_the_seed_carries_the_confidence_of_the_observation_and_derives_none_of_its_own() -> None:
+    """#1518: the period gate of #1108 lives in the adapter. It withholds an operating metric of another period
+    and gives the observation confidence 0 (`test_period_mismatch_yields_zero_confidence`). The seed has no second
+    period rule: it writes the confidence that the observation carries, whatever the two period ends say."""
     from decimal import Decimal
 
     import data_engine.datahub.strategy_bridge as strategy_bridge
@@ -156,9 +158,8 @@ def test_seed_strategy_inputs_zeroes_confidence_on_period_mismatch() -> None:
     fake = _FakeConnection([("financial-fact", "0.92", payload, cutoff)])
     written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test", cutoff=cutoff)
     assert written == 2
-    for insert_params in fake.inserts:
-        # (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period)
-        assert insert_params[4] == Decimal("0.00"), f"Expected 0.00 confidence on mismatch, got {insert_params[4]}"
+    # (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period)
+    assert {insert_params[4] for insert_params in fake.inserts} == {Decimal("0.92")}
 
 
 class _RunConnection(_FakeConnection):
@@ -221,7 +222,9 @@ def test_the_seed_takes_the_close_of_the_declared_listing_whatever_the_listing_i
 
         assert written == 1, "Alphabet is seeded, and Fox has no declared listing"
         ((issuer_id, _cutoff, input_key, value, *_rest),) = fake.inserts
-        assert (issuer_id, input_key, value) == (alphabet, "last_close", "101.00"), "the GOOGL close, never GOOG's"
+        assert (issuer_id, input_key, value) == (alphabet, "last_close", Decimal("101.00")), (
+            "the GOOGL close, never GOOG's"
+        )
 
 
 def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> None:
@@ -265,5 +268,5 @@ def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> No
     assert set(by_key) == {"revenue", "last_close"}
     assert by_key["revenue"][0] == "issuer:cik:0000320193"
     assert by_key["last_close"][0] == "issuer:cik:0000320193"
-    assert by_key["last_close"][3] == "225.50"
+    assert by_key["last_close"][3] == Decimal("225.50")
     assert by_key["last_close"][4] == Decimal("0.90")

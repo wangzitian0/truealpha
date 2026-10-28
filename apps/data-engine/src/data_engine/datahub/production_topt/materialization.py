@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import cache, partial
 from typing import Any, Self
 
+from factors.composite.strategy_evaluator import deciding_input_keys
+from factors.forest import IssuerClass, definition_pins
 from factors.production_topt import (
     TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
@@ -46,6 +48,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
+from data_engine.datahub.input_cells import LAST_CLOSE_KEY, InputCell, financial_input_rows, last_close_cell, unit_of
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import choose_primary_listings
@@ -60,6 +63,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
     source_evidence_status_for,
 )
 from data_engine.datahub.share_basis import (
+    SHARES_KEY,
     LiveShareCount,
     OnCloseBasis,
     SplitHistory,
@@ -80,7 +84,6 @@ log = logging.getLogger(__name__)
 # edit, and an unregistered one cannot be demanded.
 _REQUIRED_TYPES = frozenset(SEMANTIC_TYPES)
 _SEMANTICS_PER_LISTING = len(_REQUIRED_TYPES)
-_REVENUE_PROXY_CONFIDENCE_CAP = Decimal("0.85")
 
 
 class _FrozenModel(BaseModel):
@@ -497,21 +500,50 @@ def _metric(
     name: str,
     value: Decimal | None,
     unit: str,
-    confidence: Decimal | None = None,
+    cell: InputCell | None = None,
     knowable_at: datetime | None = None,
     unavailable_reason: ToptCoreReasonCode | None = None,
 ) -> ToptMetricInput:
+    """One snapshot metric. The confidence and the `knowable_at` come from the input cell of the metric (#1518).
+
+    A metric without a cell has no value. It keeps the confidence and the time of its observation.
+    """
+    if knowable_at is None:
+        knowable_at = row.knowable_at if cell is None else cell.knowable_at
     return ToptMetricInput(
         input_id=row.observation_id,
         metric=name,
         value=value,
         unit=unit,
-        confidence=row.confidence if confidence is None else confidence,
-        knowable_at=row.knowable_at if knowable_at is None else knowable_at,
+        confidence=row.confidence if cell is None else cell.confidence,
+        knowable_at=knowable_at,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
         unavailable_reason=unavailable_reason,
     )
+
+
+@dataclass(frozen=True)
+class InputAgeLimit:
+    """The one input age limit of the core snapshot (#1518): `eligibility.maximum_input_age_days` at one cutoff.
+
+    ``deciding`` maps an issuer class to the input keys that the decision of that class consumes
+    (`strategy_evaluator.deciding_input_keys`). A cell of those keys that is older than the limit at the
+    cutoff makes the financial cell of the member stale.
+    """
+
+    cutoff: datetime
+    maximum_age: timedelta
+    deciding: Mapping[str, frozenset[str]]
+
+    def is_stale(self, issuer_class: str, cells: Mapping[str, InputCell]) -> bool:
+        keys = self.deciding.get(issuer_class, frozenset())
+        return any(self.cutoff - cell.knowable_at > self.maximum_age for key, cell in cells.items() if key in keys)
+
+
+def _shares_cell_at(cell: InputCell | None, knowable_at: datetime) -> dict[str, InputCell]:
+    """The share cell with its final `knowable_at`: the share-basis rule can move it (`OnCloseBasis`)."""
+    return {} if cell is None else {SHARES_KEY: cell._replace(knowable_at=knowable_at)}
 
 
 def _cell(row: _ObservationRow) -> ToptCellQualityInput:
@@ -598,6 +630,12 @@ class PostgresToptCoreRepository:
         histories_by_issuer = self._issuer_split_histories(grouped)
         ruleset = cache(partial(resolve_ruleset, self._connection))
         primary_by_listing = self._primary_listings(grouped, cutoff=cutoff)
+        definition = load_live_strategy_definition()
+        input_age = InputAgeLimit(
+            cutoff=cutoff,
+            maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
+            deciding={name: deciding_input_keys(definition, IssuerClass(name)) for name in definition_pins(definition)},
+        )
         members = tuple(
             self._snapshot_member(
                 listing_id,
@@ -614,6 +652,7 @@ class PostgresToptCoreRepository:
                 ),
                 ruleset=ruleset,
                 is_primary=primary_by_listing.get(listing_id, False),
+                input_age=input_age,
             )
             for listing_id, by_type in grouped.items()
         )
@@ -787,6 +826,7 @@ class PostgresToptCoreRepository:
         documents: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
         ruleset: Callable[[], ConceptMappingRuleset] | None = None,
         is_primary: bool = False,
+        input_age: InputAgeLimit | None = None,
     ) -> SnapshotMember:
         if set(by_type) != _REQUIRED_TYPES:
             raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
@@ -808,36 +848,29 @@ class PostgresToptCoreRepository:
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
 
-        # #1255: when gross_profit is derived from a revenue-proxy tier, cap its confidence at 0.85.
-        gp_vintage = (financial.vintage or {}).get("gross_profit")
-        is_revenue_proxy = bool(isinstance(gp_vintage, Mapping) and gp_vintage.get("is_revenue_proxy", False))
-        gross_profit_confidence = (
-            min(financial_row.confidence, _REVENUE_PROXY_CONFIDENCE_CAP)
-            if is_revenue_proxy
-            else financial_row.confidence
-        )
-        financial_cell_confidence = (
-            min(financial_row.confidence, _REVENUE_PROXY_CONFIDENCE_CAP)
-            if (
-                is_revenue_proxy
-                and financial.operating_branch == OperatingBranch.NON_FINANCIAL
-                and financial.gross_profit is not None
-            )
-            else financial_row.confidence
-        )
+        # #1518: the input cells of the payload. The strategy seed and the history projector build the same
+        # cells with the same function, so the confidence cap, the units and the per-key `knowable_at` have
+        # one definition. A periodic series is a decision input only. The snapshot reads the scalar cells.
+        cells = {
+            cell.input_key: cell
+            for cell in financial_input_rows(financial_row.payload, financial_row.confidence, financial_row.knowable_at)
+            if cell.fiscal_period is None
+        }
+        price_cell = last_close_cell(market_row.payload, market_row.confidence, market_row.knowable_at)
 
         # #1277: put the filed share count on the share basis of the captured close via
         # `share_basis.live_on_close_basis` (read-only reuse of #1262's split logic). The count
         # never stands beside a close of an unknown basis: when the stored series cannot prove
         # the splits, or do not exist, the count is dropped and the cause is named.
         shares_value = financial.shares_outstanding
-        shares_knowable_at = financial_row.knowable_at
+        shares_cell = cells.get(SHARES_KEY)
+        shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
         shares_reason: ToptCoreReasonCode | None = None
         if shares_value is not None and price.close is not None:
             outcome = live_on_close_basis(
                 LiveShareCount(
                     shares=shares_value,
-                    knowable_at=financial_row.knowable_at,
+                    knowable_at=shares_knowable_at,
                     entry=share_count_entry(financial.vintage, financial.shares_period_end, financial_row.knowable_at),
                     close_session=market_row.knowable_at.astimezone(UTC).date(),
                     close_knowable_at=market_row.knowable_at,
@@ -860,6 +893,19 @@ class PostgresToptCoreRepository:
                     outcome.reason,
                     outcome.detail,
                 )
+
+        # #1518: one age limit. A cell that the issuer's decision consumes and that became knowable more than
+        # `maximum_input_age_days` before the cutoff makes the financial cell stale. The decision tests the same
+        # cells with the same limit (`strategy_evaluator._has_stale_required_input`).
+        if input_age is not None and input_age.is_stale(
+            financial.operating_branch.value, {**cells, **_shares_cell_at(shares_cell, shares_knowable_at)}
+        ):
+            financial_row = replace(financial_row, freshness=MetricFreshness.STALE)
+        # The cell confidence is the lowest of the payload's cells: the cap of a revenue-proxy gross profit
+        # applies in the cells, so the core and the decision read one confidence.
+        financial_cell_confidence = min((financial_row.confidence, *(cell.confidence for cell in cells.values())))
+        # A bank's pre-provision profit is the figure of its gross-profit cell: the adapter fills both from one filing.
+        profit_cell = cells.get("gross_profit")
 
         return SnapshotMember(
             issuer_id=listing.issuer_id,
@@ -887,28 +933,43 @@ class PostgresToptCoreRepository:
                 financial_row,
                 name="gross_profit",
                 value=financial.gross_profit,
-                unit=financial.currency,
-                confidence=gross_profit_confidence,
+                unit=unit_of("gross_profit", financial.currency),
+                cell=profit_cell,
             ),
             total_assets=_metric(
                 financial_row,
                 name="total_assets",
                 value=financial.total_assets,
-                unit=financial.currency,
+                unit=unit_of("total_assets", financial.currency),
+                cell=cells.get("total_assets"),
             ),
-            headcount=_metric(financial_row, name="headcount", value=financial.headcount, unit="employees"),
-            revenue=_metric(financial_row, name="revenue", value=financial.revenue, unit=financial.currency),
+            headcount=_metric(
+                financial_row,
+                name="headcount",
+                value=financial.headcount,
+                unit=unit_of("headcount", financial.currency),
+                cell=cells.get("headcount"),
+            ),
+            revenue=_metric(
+                financial_row,
+                name="revenue",
+                value=financial.revenue,
+                unit=unit_of("revenue", financial.currency),
+                cell=cells.get("revenue"),
+            ),
             pre_provision_profit=_metric(
                 financial_row,
                 name="pre_provision_profit",
                 value=financial.pre_provision_profit,
-                unit=financial.currency,
+                unit=unit_of("gross_profit", financial.currency),
+                cell=None if financial.pre_provision_profit is None else profit_cell,
             ),
             shares_outstanding=_metric(
                 financial_row,
                 name="shares_outstanding",
                 value=shares_value,
-                unit="shares",
+                unit=unit_of(SHARES_KEY, financial.currency),
+                cell=shares_cell,
                 knowable_at=shares_knowable_at,
                 unavailable_reason=shares_reason,
             ),
@@ -916,12 +977,19 @@ class PostgresToptCoreRepository:
                 market_row,
                 name="market_price",
                 value=price.close,
-                unit=f"{price.currency}_per_share",
+                unit=unit_of(LAST_CLOSE_KEY, price.currency),
+                cell=price_cell,
             ),
             is_primary=is_primary,
             # A leaf that the capture holds no value for stays None: the core names it `missing_<field>`.
             **{
-                name: _metric(financial_row, name=name, value=getattr(financial, name), unit=financial.currency)
+                name: _metric(
+                    financial_row,
+                    name=name,
+                    value=getattr(financial, name),
+                    unit=unit_of(name, financial.currency),
+                    cell=cells.get(name),
+                )
                 for name in TCE_SNAPSHOT_FIELDS
                 if getattr(financial, name) is not None
             },

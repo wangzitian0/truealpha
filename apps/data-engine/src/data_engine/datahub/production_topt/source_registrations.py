@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
-from truealpha_contracts.strategy import RiskFreeInstrument
+from truealpha_contracts.strategy import RiskFreeInstrument, load_live_strategy_definition
 
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 
@@ -486,9 +486,11 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         source_id="sec-company-facts",
         version="v1",
         semantic_types=("financial-fact",),
-        # knowable_at is the filed date, months old by nature; 730 days aligns with the
-        # factor's own period_end staleness bound (#534).
-        freshness_max_age={"financial-fact": timedelta(days=730)},
+        # knowable_at is the filed date, months old by nature. The window is the input age limit of the live
+        # strategy definition (#1518): the capture, the TOPT core and the decision grade age with one number.
+        freshness_max_age={
+            "financial-fact": timedelta(days=load_live_strategy_definition().eligibility.maximum_input_age_days)
+        },
         route_builder="data_engine.datahub.production_topt.sec_financial_adapter:build_route",
         origins=(
             # Second origin: moomoo's vendor-normalized annual income statement and balance

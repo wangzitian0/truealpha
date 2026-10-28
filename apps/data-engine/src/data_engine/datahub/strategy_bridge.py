@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import cache, partial
 from typing import Any
@@ -33,13 +33,13 @@ from typing import Any
 import psycopg
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff, required_input_keys
 from factors.forest import IssuerClass
-from truealpha_contracts.fiscal_period import encode_annual
-from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
+from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
+from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import choose_primary_listings
@@ -61,25 +61,6 @@ from data_engine.strategy_replay_repository import bind_strategy_run_to_capture,
 
 log = logging.getLogger(__name__)
 
-# Every registered metric except `price` surfaces here as the scalar half of its
-# financial-fact input -- one row with `fiscal_period` NULL, via the registry's own
-# spelling of the metric (init.md rule 22, #770 finding 2) -- adding metric N+1 to
-# `truealpha_contracts.metrics.METRICS` needs no edit here. A PERIODIC metric such as
-# `net_income` still belongs in this tuple too: this is what lands its latest value as a
-# point-in-time scalar (mirroring pre-0043 behavior), while `_STRATEGY_PERIODIC_KEYS`
-# below separately lands its whole annual series. `price` is excluded because it never
-# travels through the financial-fact payload this loop reads: it has its own bucket
-# keyed by `close` below, seeded as `last_close` for the strategy vocabulary. A metric
-# with no field on `FinancialFactPayload` yet (`cost_of_revenue`, `operating_income`,
-# `eps_diluted`) simply reads back `None` from `payload.get(...)` and is skipped, same as
-# any other missing field -- registering it here needs a payload field, not a change to
-# this tuple.
-_STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))
-
-# Which metrics are period-shaped comes from the registry, never from a list here:
-# init.md rule 22 forbids generic transport branching on record type.
-_STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.items() if spec.periodic}
-
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
     """The live large_model_value_v0 strategy definition (1.0.0, #1235). Versioned strategy
@@ -87,53 +68,6 @@ def load_strategy_definition() -> LargeModelValueV0Definition:
     golden inputs, decisions, or rates (#429 invariant I2). One reader serves both engines:
     the TOPT core materialization takes its bands from the same function."""
     return load_live_strategy_definition()
-
-
-def financial_input_rows(
-    payload: Mapping[str, Any],
-    confidence: Decimal,
-    observed_at: datetime,
-    *,
-    knowable_at_of: Callable[[str, str | None], datetime | None] | None = None,
-) -> list[tuple[str, str, Decimal, datetime, str | None]]:
-    """The strategy input rows one financial-fact payload yields.
-
-    Each row is ``(input_key, value, confidence, knowable_at, fiscal_period)``. The live writer
-    and the historical projector (``datahub.strategy_history``) share this function, so both
-    write the same keys, the same period tags and the same confidence gate.
-
-    The live writer stamps every row with the observation's own ``observed_at``. The projector
-    passes ``knowable_at_of(input_key, period_end)``, which returns the filing time of one
-    input. ``period_end`` is None for a scalar input. A None result drops the row: an input
-    without a filing time has no knowable time, and nothing may invent one.
-    """
-    rows: list[tuple[str, str, Decimal, datetime, str | None]] = []
-
-    def knowable_at(input_key: str, period_end: str | None) -> datetime | None:
-        return observed_at if knowable_at_of is None else knowable_at_of(input_key, period_end)
-
-    op_end = payload.get("operating_period_end")
-    rev_end = payload.get("revenue_period_end")
-    if op_end is not None and rev_end is not None and op_end != rev_end:
-        confidence = Decimal("0.00")
-    for key in _STRATEGY_FINANCIAL_KEYS:
-        value = payload.get(key)
-        if value is not None and (stamp := knowable_at(key, None)) is not None:
-            rows.append((key, value, confidence, stamp, None))
-    for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
-        # The period tag mirrors staging's own encoding so `factors.base.peg`
-        # parses one shape wherever the series came from. Only the end date is
-        # known here, and an annual period's start is its end less a year; the
-        # factor re-checks the duration floor rather than trusting the tag.
-        for period_end, value in sorted((payload.get(payload_key) or {}).items()):
-            if (stamp := knowable_at(key, period_end)) is None:
-                continue
-            # One encoder, shared with the factor that parses it (init.md Section 6).
-            # Building the tag here and matching it with a regex there is how a
-            # format drifts into an empty series instead of an error.
-            tag = encode_annual(date.fromisoformat(period_end))
-            rows.append((key, value, confidence, stamp, tag))
-    return rows
 
 
 def seed_strategy_inputs_from_capture(
@@ -225,7 +159,7 @@ def seed_strategy_inputs_from_capture(
         # consume a figure that was not knowable then and no constraint would object. That
         # matters most for a derived multi-period input like `earnings_cagr_3y`, whose
         # basis spans several filings (#284).
-        inputs: list[tuple[str, str, Decimal, datetime, str | None]] = []
+        inputs: list[InputCell] = []
         if issuer_id in financial:
             _listing, payload, confidence, observed_at = financial[issuer_id]
             inputs.extend(
@@ -233,10 +167,9 @@ def seed_strategy_inputs_from_capture(
             )
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]
-            close = payload.get("close")
-            if close is not None:
-                inputs.append(("last_close", close, confidence, observed_at, None))
-        for input_key, value, confidence, knowable_at, fiscal_period in inputs:
+            if (close_cell := last_close_cell(payload, confidence, observed_at)) is not None:
+                inputs.append(close_cell)
+        for input_key, value, _unit, confidence, knowable_at, fiscal_period in inputs:
             # Registry-backed, not a CHECK: migration 0032's enumerated `input_key`
             # CHECK was dropped (#770 finding 1, init.md rule 22) because it forced a
             # migration onto every new metric. This is the replacement guarantee --
@@ -368,7 +301,8 @@ def _counts_on_close_basis(
         outcome = live_on_close_basis(
             LiveShareCount(
                 shares=Decimal(str(payload[SHARES_KEY])),
-                knowable_at=observed_at,
+                # The filing of the count itself, as the cell of the share row carries it.
+                knowable_at=live_knowable_at(payload, observed_at)(SHARES_KEY, None),
                 entry=share_count_entry(payload.get("vintage"), payload.get("shares_period_end"), observed_at),
                 close_session=close_observed_at.astimezone(UTC).date(),
                 close_knowable_at=close_observed_at,
@@ -416,24 +350,21 @@ def _company_facts_documents(
     return documents
 
 
-def _on_close_basis_rows(
-    rows: Sequence[tuple[str, str, Decimal, datetime, str | None]], outcome: OnCloseBasis | Unavailable | None
-) -> list[tuple[str, str, Decimal, datetime, str | None]]:
-    """The financial input rows with the scalar share count on the share basis of the close.
+def _on_close_basis_rows(rows: Sequence[InputCell], outcome: OnCloseBasis | Unavailable | None) -> list[InputCell]:
+    """The financial input cells with the scalar share count on the share basis of the close.
 
-    ``None`` means the count meets no close: the rows stay as they are. An ``Unavailable`` drops
-    the share row. A factor of 1 keeps the row unchanged, so a run without a split seeds the
+    ``None`` means the count meets no close: the cells stay as they are. An ``Unavailable`` drops
+    the share cell. A factor of 1 keeps the cell unchanged, so a run without a split seeds the
     same bytes as before.
     """
     if outcome is None or (isinstance(outcome, OnCloseBasis) and outcome.factor == 1):
         return list(rows)
-    kept: list[tuple[str, str, Decimal, datetime, str | None]] = []
-    for row in rows:
-        input_key, _value, confidence, _knowable_at, fiscal_period = row
-        if input_key != SHARES_KEY or fiscal_period is not None:
-            kept.append(row)
+    kept: list[InputCell] = []
+    for cell in rows:
+        if cell.input_key != SHARES_KEY or cell.fiscal_period is not None:
+            kept.append(cell)
         elif isinstance(outcome, OnCloseBasis):
-            kept.append((input_key, str(outcome.value), confidence, outcome.knowable_at, fiscal_period))
+            kept.append(cell._replace(value=outcome.value, knowable_at=outcome.knowable_at))
     return kept
 
 

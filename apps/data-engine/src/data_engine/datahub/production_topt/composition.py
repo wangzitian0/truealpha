@@ -381,8 +381,8 @@ def plan_and_persist(
         #   holiday is ~4.9 days); 5 days admits that and still fails a vendor
         #   serving week-old bars.
         # - financial-fact: knowable_at is the filed date, months old by nature;
-        #   730 days aligns with the factor's own period_end staleness bound
-        #   (#534) so capture freshness and factor vintage agree on the axis.
+        #   the window is the input age limit of the strategy definition (#1518),
+        #   so capture freshness, the core and the decision agree on the axis.
         # - identity/universe: release-frozen configuration; a year covers the
         #   universe's own refresh cadence (#67), and the release manifest is the
         #   staleness authority, not the capture.
