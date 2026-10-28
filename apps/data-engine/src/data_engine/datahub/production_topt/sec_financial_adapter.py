@@ -919,9 +919,7 @@ def build_bundle(
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
     )
     segmented_shares = (
-        _segmented_shares_datum(facts, ruleset, cutoff)
-        if shares_primary is None and shares_fallback is None
-        else None
+        _segmented_shares_datum(facts, ruleset, cutoff) if shares_primary is None and shares_fallback is None else None
     )
     shares = shares_primary or shares_fallback
     shares_basis = _shares_basis(shares_primary, shares_fallback, segmented_shares)

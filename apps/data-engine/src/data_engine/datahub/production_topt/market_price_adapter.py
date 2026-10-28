@@ -471,7 +471,9 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
         try:
             parsed = json.loads(body.decode("utf-8", "ignore"))
             result = parsed.get("chart", {}).get("result") if isinstance(parsed, dict) else None
-            meta = result[0].get("meta") if isinstance(result, list) and result and isinstance(result[0], dict) else None
+            meta = (
+                result[0].get("meta") if isinstance(result, list) and result and isinstance(result[0], dict) else None
+            )
             raw_currency = meta.get("currency") if isinstance(meta, dict) else None
             currency = raw_currency.strip() if isinstance(raw_currency, str) and raw_currency.strip() else None
         except ValueError:

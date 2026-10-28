@@ -417,10 +417,16 @@ def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_
             continue
         dims = dict(fact.context.dimensions)
         member = dims.get(_CLASS_OF_STOCK_AXIS) if len(dims) == 1 else None
-        if member in members and (member not in latest_by_member or fact.context.end >= latest_by_member[member][0]):
+        if (
+            isinstance(member, str)
+            and member in members
+            and (member not in latest_by_member or fact.context.end >= latest_by_member[member][0])
+        ):
             latest_by_member[member] = (fact.context.end, fact.value)
     base_candidates = sorted(_listed_stock_members(ix, members)) or [
-        member for member in members if latest_by_member.get(member, (as_of, Decimal(-1)))[1] in (Decimal(0), Decimal(1))
+        member
+        for member in members
+        if latest_by_member.get(member, (as_of, Decimal(-1)))[1] in (Decimal(0), Decimal(1))
     ]
     if len(base_candidates) != 1:
         return None

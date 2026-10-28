@@ -28,7 +28,7 @@ def test_strategy_backtest_gateway_scalar_recency_latest_period() -> None:
     records = inputs[0].records
 
     # Scalars must reflect the latest period (FY2023 -> 300), not locked to FY2021 (100)
-    assert records["net_income"][0] == Decimal("300")
+    assert records["net_income"][0].value == Decimal("300")
     # The scalar and its instant come from the same row (#1255).
     assert inputs[0].knowable_at["net_income"] == _at(2024, 2, 1)
 
@@ -47,7 +47,7 @@ def test_strategy_backtest_gateway_scalar_recency_with_restatement_tag() -> None
     assert len(inputs) == 1
     records = inputs[0].records
 
-    assert records["net_income"][0] == Decimal("400")
+    assert records["net_income"][0].value == Decimal("400")
     assert inputs[0].knowable_at["net_income"] == _at(2025, 2, 1)
 
 
@@ -67,5 +67,5 @@ def test_strategy_backtest_gateway_scalar_recency_with_mixed_and_malformed_tags(
     assert len(inputs) == 1
     records = inputs[0].records
 
-    assert records["net_income"][0] == Decimal("500")
+    assert records["net_income"][0].value == Decimal("500")
     assert inputs[0].knowable_at["net_income"] == _at(2025, 2, 1)

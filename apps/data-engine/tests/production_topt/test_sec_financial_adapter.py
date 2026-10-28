@@ -2024,7 +2024,9 @@ def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_rev
     assert payload["vintage"]["total_assets"]["document"] == "companyfacts:CIK0002115436"
 
 
-def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_unless_unsegmented_total_exists() -> None:
+def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_unless_unsegmented_total_exists() -> (
+    None
+):
     """#1519 Step 3: when an issuer reports CommonStockSharesOutstanding or EntityCommonStockSharesOutstanding
     only with per-class `segment` dimensions and no class conversion rate or unsegmented total for that period,
     `shares_outstanding` is `None` with `shares_basis="missing_class_ratio"`.
@@ -2134,7 +2136,9 @@ def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_u
     assert bundle_with_total.shares_basis == SHARES_POINT_IN_TIME
 
 
-def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_conversion_rates_and_refuses_unconverted_classes() -> None:
+def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_conversion_rates_and_refuses_unconverted_classes() -> (
+    None
+):
     """#1519 Step 3: `sec_financial_fetcher` converts non-base share classes by their tagged
     `CommonStockConversionRate` (`A + r_B1 * B1 + r_B2 * B2 + r_C * C`) into an unsegmented
     `SHARES_POINT_IN_TIME` share count when all non-base classes have conversion rates and share a single
@@ -2253,9 +2257,7 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_
     assert bundle.shares_period_end == date(2025, 10, 29)
 
     visa_html_without_rates = b"\n".join(
-        line
-        for line in visa_html_with_rates.splitlines()
-        if b"CommonStockConversionRate" not in line
+        line for line in visa_html_with_rates.splitlines() if b"CommonStockConversionRate" not in line
     )
     visa_doc_no_rates = FilingDocument(
         cik=1403161,
@@ -2509,9 +2511,12 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
         assert core[msft_issuer] == ("unavailable", ["currency_mismatch"])
         assert decisions[msft_issuer] == "missing_market_value_input"
 
-        other_available = [issuer_id for issuer_id, (avail, _reasons) in core.items() if issuer_id != msft_issuer and avail == "available"]
+        other_available = [
+            issuer_id
+            for issuer_id, (avail, _reasons) in core.items()
+            if issuer_id != msft_issuer and avail == "available"
+        ]
         assert len(other_available) == 19
         ranked = [issuer_id for issuer_id, reason in decisions.items() if reason is None]
         assert len(ranked) == 19
         assert msft_issuer not in ranked
-

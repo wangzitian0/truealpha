@@ -364,7 +364,6 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
             input_id=oid(member, k),
             metric=name,
             value=_D("100"),
-            unit="USD",
             confidence=_D("0.9"),
             knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
             freshness=MetricFreshness.FRESH,

@@ -93,7 +93,7 @@ def test_a_periodic_key_takes_the_instant_of_the_latest_period_not_the_latest_in
         ]
     )
 
-    assert issuer.records["net_income"][0] == Decimal(300)
+    assert issuer.records["net_income"][0].value == Decimal(300)
     assert issuer.knowable_at["net_income"] == _at(2024, 2, 1)
     assert set(issuer.periodic_records["net_income"]) == {"FY2021", "FY2022", "FY2023"}
 
@@ -116,7 +116,7 @@ def test_the_instant_always_belongs_to_the_value_that_answers_for_the_key() -> N
     ):
         [issuer] = issuer_inputs_from_rows(rows)
 
-        assert issuer.knowable_at["net_income"] == answers[issuer.records["net_income"][0]]
+        assert issuer.knowable_at["net_income"] == answers[issuer.records["net_income"][0].value]
 
 
 def test_an_issuer_with_one_periodic_key_and_nothing_else_still_gets_an_instant() -> None:

@@ -726,7 +726,7 @@ def test_a_restated_value_lands_as_a_new_row_only_for_the_cutoffs_after_its_fili
     assert {row[1] for row in new_rows} == {"revenue"}
     assert second.inserted == len(expected_cutoffs)
     seen = StrategyBacktestGateway(connection).issuer_inputs(_utc(2025, 10, 1))
-    assert {item.issuer_id: item.records["revenue"][0] for item in seen}[issuer.issuer_id] == Decimal(777)
+    assert {item.issuer_id: item.records["revenue"][0].value for item in seen}[issuer.issuer_id] == Decimal(777)
 
 
 def test_the_price_reader_takes_unadjusted_bars_of_sessions_before_the_cutoff_date(connection) -> None:
