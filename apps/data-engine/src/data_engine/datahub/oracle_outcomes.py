@@ -484,6 +484,7 @@ def compare_known_answer(
     answer: SentinelKnownAnswer,
     served_value: Decimal | None,
     *,
+    subject_id: str | None = None,
     actual_period_end: str | None,
     observation_id: str | None,
     knowable_at: datetime | None,
@@ -492,6 +493,7 @@ def compare_known_answer(
     """Compare one sentinel known answer with the served value of the run (#1523 S2c)."""
     canonical_field = canonical_metric(answer.metric)
     source = answer.accession or FILING_SOURCE
+    resolved_subject = subject_id or answer.issuer_id
 
     def outcome(
         result: str,
@@ -504,7 +506,7 @@ def compare_known_answer(
         know_at: datetime | None = knowable_at,
     ) -> Outcome:
         return Outcome(
-            subject_id=answer.issuer_id,
+            subject_id=resolved_subject,
             field=canonical_field,
             oracle_kind=FILING_KIND,
             period=answer.period_end,
@@ -644,26 +646,69 @@ def _extract_metric_from_factor_input(
     return (None, None, None)
 
 
+def run_issuer_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, str]:
+    """The issuer_id of every ticker of the run, as the run's observations state it."""
+    rows = connection.execute(
+        """
+        select distinct upper(p.normalized_payload ->> 'ticker'), p.normalized_payload ->> 'issuer_id'
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+        where ob.run_id = %s
+          and p.normalized_payload ->> 'issuer_id' is not null
+          and p.normalized_payload ->> 'ticker' is not null
+        """,
+        (run_id,),
+    ).fetchall()
+    issuers: dict[str, str] = {str(ticker): str(issuer_id) for ticker, issuer_id in rows if ticker and issuer_id}
+    listing_tickers = run_tickers(connection, run_id)
+    if listing_tickers:
+        fi_rows = connection.execute(
+            """
+            select member.factor_input
+            from staging.topt_core_snapshots s
+            join staging.topt_core_snapshot_members member on member.snapshot_id = s.snapshot_id
+            where s.run_id = %s
+            """,
+            (run_id,),
+        ).fetchall()
+        for fi_row in fi_rows:
+            fi = fi_row[0]
+            if isinstance(fi, dict):
+                lid = fi.get("listing_id")
+                iid = fi.get("issuer_id")
+                if lid and iid and lid in listing_tickers:
+                    issuers.setdefault(listing_tickers[lid], str(iid))
+    return issuers
+
+
 def _resolve_answer_context(
     answer: SentinelKnownAnswer,
     canonical_field: str,
     *,
+    issuer_id: str,
     gppe_by_issuer: dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]],
     fin_by_issuer: dict[str, tuple[str, datetime, dict[str, Any]]],
     by_issuer_input: dict[str, ToptCoreSnapshotInput],
     cutoff: datetime,
 ) -> tuple[Decimal | None, str | None, str | None, datetime | None]:
     if canonical_field == "gross_profit_per_employee":
-        gppe_entry = gppe_by_issuer.get(answer.issuer_id) or gppe_by_issuer.get(answer.cik)
+        gppe_entry = (
+            gppe_by_issuer.get(issuer_id) or gppe_by_issuer.get(answer.issuer_id) or gppe_by_issuer.get(answer.cik)
+        )
         if gppe_entry is not None:
             return gppe_entry
-        fi = by_issuer_input.get(answer.issuer_id) or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        fi = (
+            by_issuer_input.get(issuer_id)
+            or by_issuer_input.get(answer.issuer_id)
+            or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        )
         if fi is not None:
             obs = fi.observation_ids[0] if fi.observation_ids else None
             return (None, None, obs, cutoff)
         return (None, None, None, None)
 
-    fin_entry = fin_by_issuer.get(answer.issuer_id) or fin_by_issuer.get(answer.cik)
+    fin_entry = fin_by_issuer.get(issuer_id) or fin_by_issuer.get(answer.issuer_id) or fin_by_issuer.get(answer.cik)
     observation_id: str | None = None
     knowable_at: datetime | None = None
     actual_period_end: str | None = None
@@ -678,7 +723,11 @@ def _resolve_answer_context(
             knowable_at = custom_know
 
     if served_value is None:
-        fi = by_issuer_input.get(answer.issuer_id) or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        fi = (
+            by_issuer_input.get(issuer_id)
+            or by_issuer_input.get(answer.issuer_id)
+            or by_issuer_input.get(f"issuer:cik:{answer.cik}")
+        )
         if fi is not None:
             val, obs_id, know = _extract_metric_from_factor_input(fi, canonical_field)
             if val is not None:
@@ -702,8 +751,9 @@ def known_answer_outcomes(
     except (KeyError, ValueError):
         policy_tolerance = Decimal("0.01")
 
+    issuers_by_ticker = run_issuer_tickers(connection, run_id)
     by_issuer_input = {fi.issuer_id: fi for fi in factor_inputs}
-    run_issuers = set(by_issuer_input)
+    run_issuers = set(by_issuer_input) | set(issuers_by_ticker.values())
     run_ciks = {iss.removeprefix("issuer:cik:") for iss in run_issuers if iss.startswith("issuer:cik:")}
 
     gppe_by_issuer = _query_gppe_by_issuer(connection, run_id, cutoff)
@@ -717,17 +767,20 @@ def known_answer_outcomes(
         canonical_field = canonical_metric(answer.metric)
         if canonical_field not in METRICS:
             continue
-        is_present = (
-            answer.issuer_id in all_run_issuers
-            or answer.cik in all_run_ciks
-            or f"issuer:cik:{answer.cik}" in all_run_issuers
+        issuer_id = (
+            issuers_by_ticker.get(answer.ticker.upper())
+            or (answer.issuer_id if answer.issuer_id in all_run_issuers else None)
+            or (f"issuer:cik:{answer.cik}" if f"issuer:cik:{answer.cik}" in all_run_issuers else None)
         )
-        if not is_present:
+        if issuer_id is None and answer.cik not in all_run_ciks:
             continue
+
+        target_subject_id = issuer_id or answer.issuer_id
 
         served_val, period, obs_id, know_at = _resolve_answer_context(
             answer,
             canonical_field,
+            issuer_id=target_subject_id,
             gppe_by_issuer=gppe_by_issuer,
             fin_by_issuer=fin_by_issuer,
             by_issuer_input=by_issuer_input,
@@ -737,6 +790,7 @@ def known_answer_outcomes(
             compare_known_answer(
                 answer,
                 served_val,
+                subject_id=target_subject_id,
                 actual_period_end=period,
                 observation_id=obs_id,
                 knowable_at=know_at,
