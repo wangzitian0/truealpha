@@ -9,16 +9,16 @@ A record, not a gate (see `governance/README.md`). It is an authoring record. It
 | Strategy | `large_model_value_v0` |
 | Definition version | `1.1.0` (`provisional_semantics: false`, the value of 1.0.0) |
 | Definition file | `common/contracts/src/truealpha_contracts/data/large_model_value_v0_definition_1_1_0.json` |
-| Definition content sha256 | `8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0` |
-| Strategy definition id | `strategy-definition:8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0` |
+| Definition content sha256 | `ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181` |
+| Strategy definition id | `strategy-definition:ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181` |
 | Replaces | definition `1.0.0`, sha256 `a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803`. The file of 1.0.0 stays: the frozen #21 replay and the stored runs use it. |
-| Issue | wangzitian0/truealpha#1518 (step 3) |
+| Issue | wangzitian0/truealpha#1518 (step 3), wangzitian0/truealpha#1517 (stage A4) |
 
 ## Decision that the file implements
 
-Owner decision D2 of 2026-10-26, recorded on #1518: the bank tangible-common-equity rule goes into the next strategy definition. The decision names the bank capital base. It does not name the file. The file is the implementation of the delivery session.
+Owner decision D2 of 2026-10-26, recorded on #1518: the bank tangible-common-equity rule goes into the next strategy definition. The decision names the bank capital base. It does not name the file. The file is the implementation of the delivery session. Under #1517 stage A4, the confidence floor is removed so decisions carry their continuous confidence score without excluding issuers below 0.70.
 
-The tier cuts, the P/GP bands, the eligibility rule, the selection, the sizing and the costs are the values that the owner confirmed for 1.0.0 on 2026-10-12 (see `large_model_value_v0-definition-1.0.0.md`). The file does not change them.
+The tier cuts, the P/GP bands, the input-age rule, the selection, the sizing and the costs are the values that the owner confirmed for 1.0.0 on 2026-10-12 (see `large_model_value_v0-definition-1.0.0.md`). The file does not change them.
 
 ## What the file holds
 
@@ -38,6 +38,7 @@ The definition states no labor-efficiency formula. It pins one tree of the metri
 - `labor_efficiency.factor_version`: `0.1.0` to `0.2.0`.
 - `labor_efficiency` states no `numerator`, `capital_charge_base`, `denominator` or `formula`, and no reason code of those inputs (`missing_numerator_reason`, `missing_capital_base_reason`, `missing_denominator_reason`, `nonpositive_denominator_reason`). No code reads any of the four reason codes for any class. They were validated against the formula and hashed.
 - `labor_efficiency_tree_keys` is new.
+- `eligibility` states no `rule_id`, `minimum_confidence`, `confidence_semantics` or `below_floor_reason` (#1517). Input-age limits (`maximum_input_age_days`, `stale_input_reason`) remain equal to 1.0.0.
 - The file holds no `golden_decision_set`. The golden decisions of the frozen #21 replay stay in the file of 1.0.0.
 
 ## Working choices of the delivery session

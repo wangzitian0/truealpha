@@ -64,7 +64,6 @@ SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "fi
 _CORPUS_OBJECTIVES = ServiceObjectives(
     minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
     minimum_availability=ACCEPTED_SERVICE_OBJECTIVES.minimum_availability,
-    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
     minimum_independent_origin_groups=0,
     minimum_corroborated_share=Decimal("0"),
 )

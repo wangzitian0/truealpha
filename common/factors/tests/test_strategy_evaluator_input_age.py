@@ -219,8 +219,8 @@ def test_a_missing_input_is_excluded_for_its_absence_before_the_age_is_read() ->
     assert decision.exclusion_reason is ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE
 
 
-def test_the_age_limit_comes_before_the_confidence_floor() -> None:
-    """A stale issuer with low confidence is stale. The same issuer, fresh, is below the floor."""
+def test_the_age_limit_excludes_a_stale_issuer_while_a_fresh_low_confidence_issuer_is_eligible() -> None:
+    """A stale issuer with low confidence is excluded as stale. The same issuer, fresh, is eligible and carries its confidence (#1517)."""
     low = _records(confidence="0.10")
 
     stale = _decide(_issuer({"gross_profit": timedelta(days=600)}, records=low))
@@ -228,7 +228,9 @@ def test_the_age_limit_comes_before_the_confidence_floor() -> None:
 
     assert stale.exclusion_reason is ExclusionReason.STALE_REQUIRED_INPUT
     assert stale.confidence is None
-    assert fresh.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR
+    assert fresh.exclusion_reason is None
+    assert fresh.eligible is True
+    assert fresh.confidence == Decimal("0.10")
 
 
 def test_a_stale_issuer_does_not_take_a_rank_from_a_fresh_one() -> None:

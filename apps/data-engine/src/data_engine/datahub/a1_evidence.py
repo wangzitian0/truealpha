@@ -53,8 +53,6 @@ class ServiceObjectives:
 
     minimum_coverage: Decimal
     minimum_availability: Decimal
-    # On the 0 to 1 scale of the stored confidence, like every report ratio.
-    minimum_confidence_score: Decimal
     minimum_independent_origin_groups: int
     # Share of graded reconciliation cells that must be corroborated (agreed
     # with at least `minimum_independent_origin_groups` origin groups) for the
@@ -65,14 +63,12 @@ class ServiceObjectives:
 
 
 # The accepted demand, `docs/datahub-service-demand.md` ("Its service objective is"):
-# 100% denominator coverage and at least 95% availability; continuous confidence of at
-# least 0.70 on the 0 to 1 scale; at least two canonical original-source groups,
-# mirrors and resellers of one origin not counting. Every number here is quoted from that
-# document; none is invented here.
+# 100% denominator coverage and at least 95% availability; at least two canonical
+# original-source groups, mirrors and resellers of one origin not counting. Every number
+# here is quoted from that document; none is invented here.
 ACCEPTED_SERVICE_OBJECTIVES = ServiceObjectives(
     minimum_coverage=Decimal("1"),
     minimum_availability=Decimal("0.95"),
-    minimum_confidence_score=Decimal("0.70"),
     minimum_independent_origin_groups=2,
     minimum_corroborated_share=Decimal("0.95"),
 )
@@ -133,10 +129,6 @@ def unmet_objectives(
     measured = {
         "denominator_coverage": (_ratio(report.get("terminal_coverage")), objectives.minimum_coverage),
         "availability": (_ratio(report.get("availability")), objectives.minimum_availability),
-        "continuous_confidence": (
-            _ratio(report.get("denominator_mean_confidence")),
-            objectives.minimum_confidence_score,
-        ),
         "corroborated_share": (
             _corroborated_share(
                 report.get("reconciliation_cells"),

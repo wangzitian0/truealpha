@@ -259,7 +259,7 @@ def test_f3_strategy_definition_evaluates_trees_by_key_and_allows_omitting_unive
 
     # The live definition 1.1.0 hash stays untouched
     live = load_live_strategy_definition()
-    assert live.content_sha256 == "8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0"
+    assert live.content_sha256 == "ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181"
 
     issuer = IssuerInput(
         issuer_id="issuer:nvda",
@@ -355,14 +355,14 @@ def test_b1_b2_backtest_overrides_and_parameter_sweep(monkeypatch: pytest.Monkey
     live = load_live_strategy_definition()
     overridden_1 = backtest_mod.apply_definition_overrides(
         live,
-        {"selection.selection_count": 1, "eligibility.minimum_confidence": "0.80"},
+        {"selection.selection_count": 1, "eligibility.maximum_input_age_days": 365},
     )
     overridden_2 = backtest_mod.apply_definition_overrides(
         live,
-        {"selection.selection_count": 3, "eligibility.minimum_confidence": "0.70"},
+        {"selection.selection_count": 3, "eligibility.maximum_input_age_days": 400},
     )
     assert overridden_1.selection.selection_count == 1
-    assert overridden_1.eligibility.minimum_confidence == Decimal("0.80")
+    assert overridden_1.eligibility.maximum_input_age_days == 365
     assert overridden_2.selection.selection_count == 3
     assert len({live.content_sha256, overridden_1.content_sha256, overridden_2.content_sha256}) == 3
 
@@ -397,7 +397,7 @@ def test_b1_b2_backtest_overrides_and_parameter_sweep(monkeypatch: pytest.Monkey
         overrides_list=[
             {"selection.selection_count": 1},
             {"selection.selection_count": 3},
-            {"eligibility.minimum_confidence": "0.85"},
+            {"eligibility.maximum_input_age_days": 500},
         ],
     )
     assert len(outcomes) == 3

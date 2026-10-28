@@ -420,7 +420,7 @@ def apply_definition_overrides(
 ) -> LargeModelValueV0Definition:
     """Return a validated `LargeModelValueV0Definition` with `overrides` merged into its payload (#1413 B1).
 
-    Supports nested dicts or dotted keys (e.g. `selection.selection_count`, `eligibility.minimum_confidence`).
+    Supports nested dicts or dotted keys (e.g. `selection.selection_count`, `eligibility.maximum_input_age_days`).
     Recomputes `strategy_definition_id` and `content_sha256` from the overridden semantics.
     """
     if not overrides:

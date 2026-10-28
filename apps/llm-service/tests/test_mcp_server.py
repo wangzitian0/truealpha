@@ -362,6 +362,8 @@ async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
                 "valuation_gap": "1.6388",
                 "current_price_to_sales": "10.5",
                 "target_price_to_sales": "17.2",
+                "confidence": "0.65",
+                "reason_codes": [],
                 "peg": "1.25",
                 "peg_rank": 3,
                 "peg_reason_codes": [],
@@ -370,6 +372,7 @@ async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
                     "gppe": "1153614.48",
                     "operating_branch": "tech",
                     "capital_adjusted_gross_profit": "5000000.00",
+                    "confidence": "0.65",
                     "availability_status": "available",
                     "reason_codes": [],
                 },
@@ -380,6 +383,8 @@ async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
                     "valuation_gap": "1.6388",
                     "current_price_to_sales": "10.5",
                     "target_price_to_sales": "17.2",
+                    "confidence": "0.65",
+                    "reason_codes": [],
                     "peg": "1.25",
                     "peg_rank": 3,
                     "peg_reason_codes": [],
@@ -411,6 +416,10 @@ async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
     assert structured["issuer_id"] == "issuer:adm"
     assert structured["tier"] == "Tier 1: Core Value"
     assert structured["valuation_gap"] == "1.6388"
+    assert structured["confidence"] == "0.65"
+    assert structured["reason_codes"] == []
+    assert structured["strategy_decision"]["confidence"] == "0.65"
+    assert structured["strategy_decision"]["reason_codes"] == []
     assert structured["peg"] == "1.25"
     assert structured["gppe"] == "1153614.48"
     assert structured["theme_purity"][0]["theme_id"] == "ai-infrastructure"
@@ -798,6 +807,51 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
     assert profile["current_price_to_sales"] == "1.2420"
     assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"
     assert profile["strategy_decision"]["valuation_gap"] == "0.7056"
+    assert profile["confidence"] is None
+    assert profile["reason_codes"] == []
+    assert profile["strategy_decision"]["confidence"] is None
+    assert profile["strategy_decision"]["reason_codes"] == []
+
+
+def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() -> None:
+    """#1517 stage A4: company_360_profile surfaces decision confidence and reason_codes from mart rows."""
+    from llm_service.mcp_server import _format_company_profile
+
+    profile = _format_company_profile(
+        issuer_id="issuer:ddog",
+        decision_row={
+            "issuer_id": "issuer:ddog",
+            "cutoff_at": "2026-03-31T23:59:59Z",
+            "tier": "traditional",
+            "valuation_gap": "0.1000",
+            "current_price_to_sales": "2.0000",
+            "target_price_to_sales": None,
+            "current_price_to_gross_profit": "7.9545",
+            "target_price_to_gross_profit": "8.7500",
+            "outcome": "selected",
+            "exclusion_reason": None,
+            "rank": 1,
+            "peg": None,
+            "peg_rank": None,
+            "peg_reason_codes": ["missing_net_income"],
+            "confidence": "0.6500",
+            "reason_codes": [],
+        },
+        gppe_row={
+            "gppe": "307127.77",
+            "operating_branch": "non_financial",
+            "capital_adjusted_gross_profit": "2487734928.00",
+            "confidence": "0.6500",
+            "availability_status": "available",
+            "reason_codes": [],
+        },
+        themes=[],
+    )
+    assert profile["confidence"] == "0.6500"
+    assert profile["reason_codes"] == []
+    assert profile["strategy_decision"]["confidence"] == "0.6500"
+    assert profile["strategy_decision"]["reason_codes"] == []
+    assert profile["gppe_detail"]["confidence"] == "0.6500"
 
 
 def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None:

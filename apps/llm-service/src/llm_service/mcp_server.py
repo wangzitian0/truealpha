@@ -22,7 +22,7 @@ argument. Each tool call writes one content-free audit log line (`_AuditedFastMC
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -304,11 +304,20 @@ class PostgresCompanyProfileReader:
                                d.current_price_to_gross_profit::text as current_price_to_gross_profit,
                                d.target_price_to_gross_profit::text as target_price_to_gross_profit,
                                d.outcome,
+                               d.exclusion_reason,
                                d.rank,
                                d.peg::text as peg,
                                d.peg_rank,
-                               d.peg_reason_codes
+                               d.peg_reason_codes,
+                               t.confidence::text as confidence,
+                               t.reason_codes as reason_codes
                         from mart.strategy_decisions d
+                        left join mart.strategy_run_capture scope
+                          on scope.strategy_run_id = d.strategy_run_id
+                        left join mart.topt_core_results t
+                          on t.run_id = scope.capture_run_id
+                         and t.issuer_id = d.issuer_id
+                         and t.cutoff = d.cutoff_at
                         left join lateral (
                             select ei.legacy_id
                             from mart.entity_identity ei
@@ -328,6 +337,7 @@ class PostgresCompanyProfileReader:
                         select gppe::text as gppe,
                                operating_branch,
                                capital_adjusted_gross_profit::text as capital_adjusted_gross_profit,
+                               confidence::text as confidence,
                                coalesce(availability_status, availability, 'unavailable') as availability_status,
                                reason_codes
                         from mart.topt_gppe_results g
@@ -389,73 +399,102 @@ class PostgresCompanyProfileReader:
         except psycopg.Error as exc:
             logger.warning("get_company_profile failed to query database: %s", exc)
 
-        tier = str(decision_row["tier"]) if decision_row and decision_row.get("tier") is not None else None
-        valuation_gap = (
-            str(decision_row["valuation_gap"])
-            if decision_row and decision_row.get("valuation_gap") is not None
-            else None
-        )
-        current_ps = (
-            str(decision_row["current_price_to_sales"])
-            if decision_row and decision_row.get("current_price_to_sales") is not None
-            else None
-        )
-        target_ps = (
-            str(decision_row["target_price_to_sales"])
-            if decision_row and decision_row.get("target_price_to_sales") is not None
-            else None
-        )
-        # #1235: definition 1.0.0 values by P/GP. The gap divides the multiple named by
-        # `valuation_basis`; a reader must not read a P/GP gap against a P/S figure.
-        current_pgp = (
-            str(decision_row["current_price_to_gross_profit"])
-            if decision_row and decision_row.get("current_price_to_gross_profit") is not None
-            else None
-        )
-        target_pgp = (
-            str(decision_row["target_price_to_gross_profit"])
-            if decision_row and decision_row.get("target_price_to_gross_profit") is not None
-            else None
-        )
-        valuation_basis = (
-            "price_to_gross_profit" if target_pgp is not None else "price_to_sales" if target_ps is not None else None
-        )
-        peg = str(decision_row["peg"]) if decision_row and decision_row.get("peg") is not None else None
-        peg_rank = int(decision_row["peg_rank"]) if decision_row and decision_row.get("peg_rank") is not None else None
-        peg_reason_codes = (
-            list(decision_row["peg_reason_codes"])
-            if decision_row and decision_row.get("peg_reason_codes") is not None
-            else []
-        )
-        outcome = str(decision_row["outcome"]) if decision_row and decision_row.get("outcome") is not None else None
-        cutoff_at = (
-            str(decision_row["cutoff_at"]) if decision_row and decision_row.get("cutoff_at") is not None else None
+        return _format_company_profile(
+            issuer_id=issuer_id,
+            decision_row=decision_row,
+            gppe_row=gppe_row,
+            themes=themes,
         )
 
-        resolved_issuer_id = (
-            str(decision_row["issuer_id"]) if decision_row and decision_row.get("issuer_id") is not None else issuer_id
-        )
 
-        gppe_val = str(gppe_row["gppe"]) if gppe_row and gppe_row.get("gppe") is not None else None
-        operating_branch = (
-            str(gppe_row["operating_branch"]) if gppe_row and gppe_row.get("operating_branch") is not None else None
-        )
-        capital_adjusted_gross_profit = (
-            str(gppe_row["capital_adjusted_gross_profit"])
-            if gppe_row and gppe_row.get("capital_adjusted_gross_profit") is not None
-            else None
-        )
-        gppe_availability = (
-            str(gppe_row["availability_status"])
-            if gppe_row and gppe_row.get("availability_status") is not None
-            else "unavailable"
-        )
-        gppe_reason_codes = (
-            list(gppe_row["reason_codes"]) if gppe_row and gppe_row.get("reason_codes") is not None else []
-        )
+def _opt_str(row: Mapping[str, Any] | None, key: str) -> str | None:
+    return str(row[key]) if row and row.get(key) is not None else None
 
-        return {
-            "issuer_id": resolved_issuer_id,
+
+def _opt_int(row: Mapping[str, Any] | None, key: str) -> int | None:
+    return int(row[key]) if row and row.get(key) is not None else None
+
+
+def _opt_list(row: Mapping[str, Any] | None, key: str) -> list[Any]:
+    return list(row[key]) if row and row.get(key) is not None else []
+
+
+def _decision_reason_codes(decision_row: Mapping[str, Any] | None) -> list[str]:
+    if not decision_row:
+        return []
+    if decision_row.get("reason_codes") is not None:
+        return [str(code) for code in decision_row["reason_codes"]]
+    exclusion = _opt_str(decision_row, "exclusion_reason")
+    return [exclusion] if exclusion is not None else []
+
+
+def _valuation_basis_name(target_pgp: str | None, target_ps: str | None) -> str | None:
+    if target_pgp is not None:
+        return "price_to_gross_profit"
+    return "price_to_sales" if target_ps is not None else None
+
+
+def _format_company_profile(
+    *,
+    issuer_id: str,
+    decision_row: Mapping[str, Any] | None,
+    gppe_row: Mapping[str, Any] | None,
+    themes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    tier = _opt_str(decision_row, "tier")
+    valuation_gap = _opt_str(decision_row, "valuation_gap")
+    current_ps = _opt_str(decision_row, "current_price_to_sales")
+    target_ps = _opt_str(decision_row, "target_price_to_sales")
+    # #1235: definition 1.0.0 values by P/GP. The gap divides the multiple named by
+    # `valuation_basis`; a reader must not read a P/GP gap against a P/S figure.
+    current_pgp = _opt_str(decision_row, "current_price_to_gross_profit")
+    target_pgp = _opt_str(decision_row, "target_price_to_gross_profit")
+    valuation_basis = _valuation_basis_name(target_pgp, target_ps)
+    peg = _opt_str(decision_row, "peg")
+    peg_rank = _opt_int(decision_row, "peg_rank")
+    peg_reason_codes = _opt_list(decision_row, "peg_reason_codes")
+    outcome = _opt_str(decision_row, "outcome")
+    cutoff_at = _opt_str(decision_row, "cutoff_at")
+    resolved_issuer_id = _opt_str(decision_row, "issuer_id") or issuer_id
+
+    gppe_val = _opt_str(gppe_row, "gppe")
+    operating_branch = _opt_str(gppe_row, "operating_branch")
+    capital_adjusted_gross_profit = _opt_str(gppe_row, "capital_adjusted_gross_profit")
+    gppe_confidence = _opt_str(gppe_row, "confidence")
+    gppe_availability = _opt_str(gppe_row, "availability_status") or "unavailable"
+    gppe_reason_codes = _opt_list(gppe_row, "reason_codes")
+
+    decision_confidence = _opt_str(decision_row, "confidence") or gppe_confidence
+    decision_reason_codes = _decision_reason_codes(decision_row)
+
+    return {
+        "issuer_id": resolved_issuer_id,
+        "tier": tier,
+        "valuation_gap": valuation_gap,
+        "valuation_basis": valuation_basis,
+        "current_price_to_sales": current_ps,
+        "target_price_to_sales": target_ps,
+        "current_price_to_gross_profit": current_pgp,
+        "target_price_to_gross_profit": target_pgp,
+        "confidence": decision_confidence,
+        "reason_codes": decision_reason_codes if decision_row else gppe_reason_codes,
+        "peg": peg,
+        "peg_rank": peg_rank,
+        "peg_reason_codes": peg_reason_codes,
+        "gppe": gppe_val,
+        "gppe_detail": {
+            "gppe": gppe_val,
+            "operating_branch": operating_branch,
+            "capital_adjusted_gross_profit": capital_adjusted_gross_profit,
+            "confidence": gppe_confidence,
+            "availability_status": gppe_availability,
+            "reason_codes": gppe_reason_codes,
+        }
+        if gppe_row
+        else None,
+        "strategy_decision": {
+            "cutoff_at": cutoff_at,
+            "outcome": outcome,
             "tier": tier,
             "valuation_gap": valuation_gap,
             "valuation_basis": valuation_basis,
@@ -463,38 +502,17 @@ class PostgresCompanyProfileReader:
             "target_price_to_sales": target_ps,
             "current_price_to_gross_profit": current_pgp,
             "target_price_to_gross_profit": target_pgp,
+            "confidence": decision_confidence,
+            "reason_codes": decision_reason_codes,
             "peg": peg,
             "peg_rank": peg_rank,
             "peg_reason_codes": peg_reason_codes,
-            "gppe": gppe_val,
-            "gppe_detail": {
-                "gppe": gppe_val,
-                "operating_branch": operating_branch,
-                "capital_adjusted_gross_profit": capital_adjusted_gross_profit,
-                "availability_status": gppe_availability,
-                "reason_codes": gppe_reason_codes,
-            }
-            if gppe_row
-            else None,
-            "strategy_decision": {
-                "cutoff_at": cutoff_at,
-                "outcome": outcome,
-                "tier": tier,
-                "valuation_gap": valuation_gap,
-                "valuation_basis": valuation_basis,
-                "current_price_to_sales": current_ps,
-                "target_price_to_sales": target_ps,
-                "current_price_to_gross_profit": current_pgp,
-                "target_price_to_gross_profit": target_pgp,
-                "peg": peg,
-                "peg_rank": peg_rank,
-                "peg_reason_codes": peg_reason_codes,
-            }
-            if decision_row
-            else None,
-            "theme_purity": themes,
-            "availability_status": "available" if (decision_row or gppe_row or bool(themes)) else "unavailable",
         }
+        if decision_row
+        else None,
+        "theme_purity": themes,
+        "availability_status": "available" if (decision_row or gppe_row or bool(themes)) else "unavailable",
+    }
 
 
 def normalize_theme_slug(theme_id: str) -> str:

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Definition 1.1.0 of the large_model_value_v0 strategy (#1518). Owner decision D2 of 2026-10-26: the bank capital base, measured tangible common equity, goes into the next strategy definition. Labor efficiency is not a formula of this file. It is a tree of the metric forest, pinned for each issuer class by key, version and content hash. FINANCIAL issuers use the tree gppe_banking_tce, which charges the risk-free rate on tangible common equity. A negative tangible common equity gives no value (working choice of the delivery session, not an owner approval). Every other class uses the tree gppe, which charges the rate on total assets. The core and the composite evaluate the same pinned tree (factors.forest.bound_tree). The exact difference from definition 1.0.0: definition_version; labor_efficiency.factor_version (0.1.0 to 0.2.0); labor_efficiency states no numerator, capital_charge_base, denominator, formula or reason code of those inputs (no code reads them); labor_efficiency_tree_keys is new. Every other field is equal: the tier cuts, the P/GP bands, the eligibility rule, the selection, the sizing and the costs. The golden decisions of the frozen #21 replay stay in the file of definition 1.0.0.",
+  "notes": "Definition 1.1.0 of the large_model_value_v0 strategy (#1518, #1517). Owner decision D2 of 2026-10-26: the bank capital base, measured tangible common equity, goes into the next strategy definition. Labor efficiency is not a formula of this file. It is a tree of the metric forest, pinned for each issuer class by key, version and content hash. FINANCIAL issuers use the tree gppe_banking_tce, which charges the risk-free rate on tangible common equity. A negative tangible common equity gives no value (working choice of the delivery session, not an owner approval). Every other class uses the tree gppe, which charges the rate on total assets. The core and the composite evaluate the same pinned tree (factors.forest.bound_tree). Confidence is carried on each decision rather than enforced as an exclusion floor (#1517), so eligibility retains only input-age limits. The exact difference from definition 1.0.0: definition_version; labor_efficiency.factor_version (0.1.0 to 0.2.0); labor_efficiency states no numerator, capital_charge_base, denominator, formula or reason code of those inputs (no code reads them); labor_efficiency_tree_keys is new; eligibility states no rule_id, minimum_confidence, confidence_semantics or below_floor_reason. Every other field is equal: the tier cuts, the P/GP bands, the input-age rule, the selection, the sizing and the costs. The golden decisions of the frozen #21 replay stay in the file of definition 1.0.0.",
   "strategy_definition": {
     "strategy_id": "large_model_value_v0",
     "definition_version": "1.1.0",
@@ -139,11 +139,7 @@
       "tie_break": "ascending_issuer_id"
     },
     "eligibility": {
-      "rule_id": "minimum_consumed_confidence_floor",
-      "minimum_confidence": "0.70",
-      "confidence_semantics": "minimum_consumed_input_confidence",
       "maximum_input_age_days": 455,
-      "below_floor_reason": "below_confidence_floor",
       "stale_input_reason": "stale_required_input"
     },
     "selection": {
@@ -177,7 +173,7 @@
     }
   },
   "expected": {
-    "strategy_definition_id": "strategy-definition:8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0",
-    "strategy_definition_sha256": "8d1462dfaa27516ab29cdc262dbe54eabe6e6a068d95985ef4462e3d8a78fbb0"
+    "strategy_definition_id": "strategy-definition:ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181",
+    "strategy_definition_sha256": "ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181"
   }
 }

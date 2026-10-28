@@ -634,30 +634,52 @@ class ValuationGapRule(_StrictFrozenModel):
     tie_break: Literal["ascending_issuer_id"]
 
 
-class ConfidenceEligibilityRule(_StrictFrozenModel):
-    """Confidence is a first-class input: the floor is a versioned parameter.
+#: The fields of ``ConfidenceEligibilityRule`` that state the versioned confidence floor (#1517).
+#: Definition 1.0.0 holds all four so the frozen #21 replay and stored runs keep their content hash.
+#: Definition 1.1.0 omits all four: confidence is a score that the decision carries, not a floor.
+_CONFIDENCE_FLOOR_FIELDS = ("rule_id", "minimum_confidence", "confidence_semantics", "below_floor_reason")
 
-    Evaluation order is fixed: a missing required input excludes the issuer
-    with the factor definition's missing-input reason before the floor is
-    evaluated; the floor then applies to the minimum confidence across all
-    consumed inputs.
+
+class ConfidenceEligibilityRule(_StrictFrozenModel):
+    """Input-age eligibility and, for definition 1.0.0, the versioned confidence floor (#1517).
+
+    In definition 1.1.0, confidence is carried on each decision rather than used as an
+    exclusion floor, so only the input-age fields are present. In definition 1.0.0, all
+    four confidence-floor fields are present and hashed.
     """
 
-    rule_id: Literal["minimum_consumed_confidence_floor"]
-    minimum_confidence: Decimal = Field(ge=0, le=1)
-    confidence_semantics: Literal["minimum_consumed_input_confidence"]
+    rule_id: Literal["minimum_consumed_confidence_floor"] | None = None
+    minimum_confidence: Decimal | None = Field(default=None, ge=0, le=1)
+    confidence_semantics: Literal["minimum_consumed_input_confidence"] | None = None
     maximum_input_age_days: int = Field(ge=1, le=730)
-    below_floor_reason: ExclusionReason
+    below_floor_reason: ExclusionReason | None = None
     stale_input_reason: ExclusionReason
 
     @field_validator("minimum_confidence", mode="before")
     @classmethod
     def reject_float_confidence(cls, value: object) -> object:
-        return _reject_binary_float(value)
+        return None if value is None else _reject_binary_float(value)
+
+    @model_serializer(mode="wrap")
+    def omit_absent_confidence_floor(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A definition with no confidence floor states none, so its content hash covers none."""
+        data: dict[str, Any] = handler(self)
+        for name in _CONFIDENCE_FLOOR_FIELDS:
+            if getattr(self, name) is None:
+                data.pop(name, None)
+        return data
 
     @model_validator(mode="after")
     def validate_reasons(self) -> Self:
-        if self.below_floor_reason is not ExclusionReason.BELOW_CONFIDENCE_FLOOR:
+        stated = {name: getattr(self, name) is not None for name in _CONFIDENCE_FLOOR_FIELDS}
+        if len(set(stated.values())) != 1:
+            raise ValueError(
+                f"the confidence-floor fields {sorted(_CONFIDENCE_FLOOR_FIELDS)} must be all present or all absent, got {stated}"
+            )
+        if (
+            self.below_floor_reason is not None
+            and self.below_floor_reason is not ExclusionReason.BELOW_CONFIDENCE_FLOOR
+        ):
             raise ValueError("the confidence floor must use its exact reason code")
         if self.stale_input_reason is not ExclusionReason.STALE_REQUIRED_INPUT:
             raise ValueError("stale inputs must use their exact reason code")

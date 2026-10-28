@@ -325,7 +325,6 @@ class DataQualityObjective(_FrozenModel):
     minimum_availability: Decimal = Field(ge=0, le=1)
     confidence_policy_id: str = Field(pattern=r"^confidence-policy:[0-9a-f]{64}$")
     confidence_policy_sha256: str = Field(pattern=_SHA256)
-    minimum_confidence_score: Decimal = Field(ge=0, le=1)
     minimum_independent_origin_groups: int = Field(ge=1)
     origin_group_rule: Literal["canonical_original_source"] = "canonical_original_source"
     conflict_behavior: Literal["report_and_abstain"] = "report_and_abstain"
@@ -333,7 +332,7 @@ class DataQualityObjective(_FrozenModel):
     report_cadence: timedelta
     report_dimensions: frozenset[QualityReportDimension]
 
-    @field_validator("minimum_coverage", "minimum_availability", "minimum_confidence_score", mode="before")
+    @field_validator("minimum_coverage", "minimum_availability", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
         value = _reject_float(value)

@@ -127,39 +127,33 @@ def test_a_leaf_exactly_at_the_limit_does_not_exclude_a_bank(leaf: str) -> None:
     assert _decide(_issuer(_BANK, IssuerClass.FINANCIAL, age={leaf: limit})).exclusion_reason is None
 
 
-def test_a_low_confidence_total_assets_value_does_not_floor_a_bank() -> None:
-    """The floor reads the consumed inputs only. Red on main: the minimum ran over every record."""
-    floor = load_live_strategy_definition().eligibility.minimum_confidence
-    below = str(floor - Decimal("0.1"))
-
-    decision = _decide(_issuer(_BANK, IssuerClass.FINANCIAL, confidence={"total_assets": below}))
+def test_a_low_confidence_total_assets_value_does_not_lower_a_banks_confidence() -> None:
+    """Consumed confidence reads the consumed inputs only (#1518, #1517)."""
+    decision = _decide(_issuer(_BANK, IssuerClass.FINANCIAL, confidence={"total_assets": "0.1"}))
 
     assert decision.exclusion_reason is None, decision
     assert decision.confidence == Decimal("0.9")
 
 
 @pytest.mark.parametrize("leaf", _TCE_LEAVES)
-def test_a_low_confidence_leaf_floors_a_bank(leaf: str) -> None:
-    floor = load_live_strategy_definition().eligibility.minimum_confidence
-    below = str(floor - Decimal("0.1"))
+def test_a_low_confidence_leaf_sets_a_banks_confidence_without_excluding_it(leaf: str) -> None:
+    decision = _decide(_issuer(_BANK, IssuerClass.FINANCIAL, confidence={leaf: "0.6"}))
 
-    decision = _decide(_issuer(_BANK, IssuerClass.FINANCIAL, confidence={leaf: below}))
-
-    assert decision.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR, decision
-    assert decision.confidence == Decimal(below)
+    assert decision.exclusion_reason is None, decision
+    assert decision.eligible is True
+    assert decision.confidence == Decimal("0.6")
 
 
-def test_a_low_confidence_record_that_no_tree_consumes_does_not_floor_an_issuer() -> None:
+def test_a_low_confidence_record_that_no_tree_consumes_does_not_lower_an_issuers_confidence() -> None:
     """A bank leaf on a non-financial issuer, and the series of a recorded-only factor, decide nothing."""
-    floor = load_live_strategy_definition().eligibility.minimum_confidence
-    below = str(floor - Decimal("0.1"))
     stray = _issuer(
-        _OTHER, IssuerClass.NON_FINANCIAL, confidence={"goodwill": below, "revenue": below}, goodwill="1000"
+        _OTHER, IssuerClass.NON_FINANCIAL, confidence={"goodwill": "0.1", "revenue": "0.1"}, goodwill="1000"
     )
 
     decision = _decide(stray)
 
     assert decision.exclusion_reason is None, decision
+    assert decision.confidence == Decimal("0.9")
 
 
 def test_a_zero_headcount_gives_the_reason_that_the_core_gives() -> None:
@@ -193,9 +187,7 @@ def test_an_exclusion_by_an_input_rule_names_the_metric_of_the_pinned_tree(
     limit = timedelta(days=load_live_strategy_definition().eligibility.maximum_input_age_days)
     missing = _decide(_issuer(values, issuer_class, drop=("headcount",)))
     stale = _decide(_issuer(values, issuer_class, age={"headcount": limit + timedelta(days=1)}))
-    floored = _decide(_issuer(values, issuer_class, confidence={"headcount": "0.1"}))
 
     assert missing.exclusion_reason is ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE
     assert stale.exclusion_reason is ExclusionReason.STALE_REQUIRED_INPUT
-    assert floored.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR
-    assert {missing.labor_efficiency_metric, stale.labor_efficiency_metric, floored.labor_efficiency_metric} == {metric}
+    assert {missing.labor_efficiency_metric, stale.labor_efficiency_metric} == {metric}
