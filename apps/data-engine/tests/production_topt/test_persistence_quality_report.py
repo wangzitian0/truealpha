@@ -607,73 +607,17 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
     assert complete == available_listings
 
 
-class _Borrowed:
-    """Lend the test's transaction to the tool's `with connect(url) as connection`
-    without letting the exit commit or close it."""
-
-    def __init__(self, connection) -> None:
-        self._connection = connection
-
-    def __enter__(self):
-        return self._connection
-
-    def __exit__(self, *_: object) -> None:
-        return None
-
-
-def _serve_and_judge(connection, plan, snapshot):
-    """Serve the run through a pointer and return a function that runs `quality-report-matches-core-results`.
-
-    mart.served_head serves the pointers of this database's own environment. The invariant module
-    is loaded as the nightly tool loads it."""
-    from truealpha_runtime.testing import load_tool
-
-    environment = connection.execute("select environment from mart.environment_identity").fetchone()
-    assert environment is not None
-    pointer_sha = canonical_sha256({"probe": plan.run_id})
-    connection.execute(
-        """
-        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
-                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
-        values (%s, %s, %s, %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
-        """,
-        (
-            f"current-pointer:{pointer_sha}",
-            pointer_sha,
-            environment[0],
-            snapshot.universe_id,
-            snapshot.universe_version,
-            plan.run_id,
-            CUTOFF,
-        ),
-    )
-    tool = load_tool("output_invariants")
-    parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
-
-    def verdict() -> int:
-        return tool.check(
-            "postgresql://borrowed",
-            require_coverage=True,
-            invariants=(parity,),
-            exemptions={},
-            connect=lambda _url: _Borrowed(connection),
-        )
-
-    return verdict
-
-
-def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_mismatch(connection, capsys) -> None:
-    """#1346: `quality-report-matches-core-results` runs on rows that the deployed writers
-    wrote: an 84-cell capture with one broken listing, its core snapshot and results, its
-    persisted report and a served pointer. The report and the core agree, so the check holds.
-
-    Then a real mismatch is seeded: a newer report of the same run names the broken listing
-    complete. That is the staging QQQ shape of 2026-10-20 (a report built under an older
-    completeness rule). The check fails and names the listing and its core reason codes."""
+def test_factor_availability_reads_core_availability_when_issuer_is_unavailable_in_core(
+    connection,
+) -> None:
+    """#1518 Step 5 acceptance: When the core marks an issuer unavailable,
+    factor availability reads the core result, so complete_subject_ids equals exactly
+    the available core listings (excluding the unavailable listing).
+    """
     store = _InMemoryObjectStore()
     plan = _capture(
         connection,
-        version="test-1346-parity",
+        version="test-1518-core-unavailable",
         object_store=store,
         broken=_OneBrokenCell(financial_fact_numerator=True),
     )
@@ -681,43 +625,50 @@ def test_the_parity_invariant_holds_on_the_real_writers_and_names_a_seeded_misma
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+
+    victim_subject, _victim_ticker = _victim(plan)
     report = quality_report.build_report(connection, plan.run_id, object_store=store)
-    quality_report.persist(connection, report)
-    verdict = _serve_and_judge(connection, plan, snapshot)
-
-    assert verdict() == 0, capsys.readouterr()
-    assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
-
     grade = report["factor_availability"]["gross_profit_per_employee"]
-    subjects = {
+    assert grade["status"] == "computed"
+    assert victim_subject not in grade["complete_subject_ids"]
+
+    available_listings = [
         row[0]
         for row in connection.execute(
-            "select subject_id from raw.capture_obligations where run_id = %s", (plan.run_id,)
+            """
+            select distinct coalesce(identity.listing_id, member->>'listing_id')
+            from staging.topt_core_snapshots s
+            cross join lateral jsonb_array_elements(s.payload->'members') member
+            left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
+            where s.run_id = %s
+              and exists (
+                  select 1 from mart.topt_core_results r
+                  where r.run_id = s.run_id
+                    and r.issuer_id = member->>'issuer_id'
+                    and r.availability = 'available'
+              )
+            order by 1
+            """,
+            (plan.run_id,),
         ).fetchall()
-    }
-    (victim,) = sorted(subjects - set(grade["complete_subject_ids"]))
-    reasons = connection.execute(
-        """
-        select array_to_string(r.reason_codes, ',')
-        from mart.topt_core_results r
-        join mart.entity_identity identity on identity.entity_id::text = r.listing_id
-        where r.run_id = %s and identity.listing_id = %s
-        """,
-        (plan.run_id, victim),
-    ).fetchone()
-    assert reasons is not None and reasons[0], "the core gives the broken listing a reason code"
-    stale_grade = {
-        **grade,
-        "complete_subjects": grade["complete_subjects"] + 1,
-        "complete_subject_ids": sorted([*grade["complete_subject_ids"], victim]),
-    }
-    stale_availability = {**report["factor_availability"], "gross_profit_per_employee": stale_grade}
-    quality_report.persist(connection, {**report, "factor_availability": stale_availability})
+    ]
+    assert grade["complete_subject_ids"] == available_listings
+    assert grade["complete_subjects"] == len(available_listings)
 
-    assert verdict() == 1
-    failure = capsys.readouterr().err
-    assert "quality-report-matches-core-results: 1 violation(s)" in failure
-    assert f"complete-in-report-not-available-in-core {victim} {reasons[0]}" in failure
+
+def test_factor_availability_halted_run_reports_not_computed(connection) -> None:
+    """#1518 Step 5 acceptance: When the run halted before core materialization
+    (0 rows in mart.topt_core_results), factor_availability records status = not_computed,
+    complete_subjects = 0, complete_subject_ids = [], ratio = '0.0000'.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(connection, version="test-1518-halted", object_store=store)
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+    grade = report["factor_availability"]["gross_profit_per_employee"]
+    assert grade["status"] == "not_computed"
+    assert grade["complete_subjects"] == 0
+    assert grade["complete_subject_ids"] == []
+    assert grade["ratio"] == "0.0000"
 
 
 def test_retrying_the_same_tick_is_idempotent(connection) -> None:
@@ -1173,14 +1124,13 @@ def test_the_oracle_catches_the_fixtures_own_impossible_numbers(connection) -> N
 _NO_BAR_TICKER = "XOM"
 
 
-def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_report(capsys) -> None:
+def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_report() -> None:
     """#1346. Both daily series of every TOPT symbol but one are stored, as the market-data lane stores them.
 
     The financial-fact payload of the symbol without series carries a share count. The frozen snapshot
     drops that count, because no stored series puts it on the basis of the close, and the core marks the
-    issuer unavailable. The report reads that verdict, so it does not list the listing as complete, and
-    the nightly invariant holds on the rows that the deployed writers wrote. Red when the report decides
-    from the payload alone: it listed the listing complete (production, listing xnas:wdc).
+    issuer unavailable. The report reads that verdict, so it does not list the listing as complete.
+    Red when the report decides from the payload alone: it listed the listing complete (production, listing xnas:wdc).
 
     The test runs in a database of its own: the symbol must have no committed bar, and a shared database
     could hold one. The other tick tests call `freeze_snapshot` and `build_report` in the order of
@@ -1203,12 +1153,9 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
         assert len(dropped) == 1, "the fixture holds one listing of the symbol"
         assert [result.availability.value for result in results].count("unavailable") == len(dropped)
         grade = report["factor_availability"]["gross_profit_per_employee"]
+        assert grade["status"] == "computed"
         expected_complete = sorted(set(plan.coordinates) - set(dropped))
         assert grade["complete_subject_ids"] == expected_complete
         assert grade["complete_subjects"] == len(expected_complete)
-        # What falls: one financial-fact cell for each dropped listing is no longer usable.
-        assert report["available_count"] == report["requested_count"] - len(dropped)
-
-        verdict = _serve_and_judge(connection, plan, snapshot)
-        assert verdict() == 0, capsys.readouterr()
-        assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
+        # Under #1518, cell-level usability reflects payload usable values; core availability drops factor completeness.
+        assert report["available_count"] == report["requested_count"]

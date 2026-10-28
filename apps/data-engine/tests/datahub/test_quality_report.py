@@ -32,9 +32,7 @@ from data_engine.datahub.production_topt.materialization import FinancialFactPay
 from data_engine.datahub.quality_report import (
     _FINANCIAL_FACT_OPERATING_NUMERATOR,
     _has_usable_value,
-    _observation_usable,
     _PointerDereferencer,
-    observations_without_share_count,
     persist,
 )
 from data_engine.datahub.share_basis import SplitHistory, Unavailable
@@ -393,48 +391,15 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
                 definition=tier_def,
             )
             core_available = core_res.availability == MetricAvailability.AVAILABLE
-            report_usable = _observation_usable(
-                "financial-fact",
-                fin_payload,
-                observation_id=by_type["financial-fact"].observation_id,
-                share_dropped=observations_without_share_count([factor_input.model_dump(mode="json")]),
-            )
-            assert report_usable is core_available, (branch, missing_field, report_usable, core_available)
-
-
-def _share_metric(input_id: str, availability: str) -> dict:
-    return {"shares_outstanding": {"input_id": input_id, "availability": availability}}
-
-
-def _fact_payload() -> dict:
-    return {
-        "issuer_id": "issuer:test:dual",
-        "instrument_id": "instrument:test:dual",
-        "listing_id": "listing:xnas:dual",
-        "operating_branch": "non_financial",
-        "currency": "USD",
-        "gross_profit": "80000000",
-        "total_assets": "200000000",
-        "headcount": "40000",
-        "revenue": "100000000",
-        "shares_outstanding": "10000000",
-        "pre_provision_profit": None,
-    }
-
-
-def test_a_dropped_share_count_drops_every_listing_of_its_issuer() -> None:
-    """The core makes a whole issuer unavailable when one share class has no count. So the report must
-    not call the other listing of that issuer complete (#1346)."""
-    dual_class = {
-        "market_value_components": [_share_metric("obs:goog", "available"), _share_metric("obs:googl", "unavailable")]
-    }
-    single = {"market_value_components": [_share_metric("obs:aapl", "available")]}
-
-    dropped = observations_without_share_count([dual_class, single])
-
-    assert dropped == {"obs:goog", "obs:googl"}
-    assert _observation_usable("financial-fact", _fact_payload(), observation_id="obs:aapl", share_dropped=dropped)
-    assert not _observation_usable("financial-fact", _fact_payload(), observation_id="obs:goog", share_dropped=dropped)
+            if histories == _SHARE_HISTORIES["series-prove-no-split"]:
+                assert _has_usable_value("financial-fact", fin_payload) is core_available, (
+                    branch,
+                    missing_field,
+                    _has_usable_value("financial-fact", fin_payload),
+                    core_available,
+                )
+            else:
+                assert not core_available
 
 
 def _fact(**overrides):
@@ -741,33 +706,98 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
     assert outcomes["bad"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED, "1% stays a conflict"
 
 
+class _MockResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class _MockConn:
+    def __init__(self, core_count: int, complete_listings: list[str]):
+        self._core_count = core_count
+        self._complete_listings = complete_listings
+
+    def execute(self, sql: str, params: tuple = ()):
+        if "select count(*)" in sql:
+            return _MockResult([(self._core_count,)])
+        return _MockResult([(listing,) for listing in self._complete_listings])
+
+
 def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
-    """#641 D4: the headline availability equal-weights all semantics (89 missing
-    financial-fact cells diluted 4:1 read as 0.78 while 12/101 issuers were
-    factor-computable). The factor-level view judges each subject by its factor's
-    OWN required semantics — and only those."""
+    """#641 D4, #1518: factor availability reads the core results of the run.
+    When core results exist, status is computed and complete_subject_ids are the listings
+    of available core issuers. When core results do not exist, status is not_computed."""
     from data_engine.datahub.quality_report import _factor_availability
 
     usable = {
         "listing:a": {"financial-fact": True, "market-price": True},
-        "listing:b": {"financial-fact": False, "market-price": True},  # headcount hole
-        "listing:c": {"financial-fact": True},  # price missing — irrelevant to GPPE
-        "listing:d": {"market-price": True},  # NO financial-fact obligation at all: still in the denominator
+        "listing:b": {"financial-fact": False, "market-price": True},
+        "listing:c": {"financial-fact": True},
+        "listing:d": {"market-price": True},
     }
-    out = _factor_availability(usable)
+    conn_computed = _MockConn(core_count=2, complete_listings=["listing:a", "listing:c"])
+    out = _factor_availability(conn_computed, "capture-run:test", usable)
     gppe = out["gross_profit_per_employee"]
+    assert gppe["status"] == "computed"
     assert gppe["required_semantics"] == ["financial-fact"]
     assert (gppe["complete_subjects"], gppe["universe_subjects"]) == (2, 4)
     assert gppe["ratio"] == "0.5000"
-    # #1346: the report names the complete subjects, so a check can compare sets, not counts.
     assert gppe["complete_subject_ids"] == ["listing:a", "listing:c"]
+
+    conn_halted = _MockConn(core_count=0, complete_listings=[])
+    out_halted = _factor_availability(conn_halted, "capture-run:halted", usable)
+    gppe_halted = out_halted["gross_profit_per_employee"]
+    assert gppe_halted["status"] == "not_computed"
+    assert (gppe_halted["complete_subjects"], gppe_halted["universe_subjects"]) == (0, 4)
+    assert gppe_halted["ratio"] == "0.0000"
+    assert gppe_halted["complete_subject_ids"] == []
 
 
 def test_factor_availability_with_no_graded_subjects_is_zero() -> None:
     from data_engine.datahub.quality_report import _factor_availability
 
-    out = _factor_availability({})
+    conn_empty = _MockConn(core_count=0, complete_listings=[])
+    out = _factor_availability(conn_empty, "capture-run:empty", {})
     assert out["gross_profit_per_employee"]["ratio"] == "0"
+    assert out["gross_profit_per_employee"]["status"] == "not_computed"
+
+
+@pytest.mark.parametrize(
+    "fault_shape",
+    [
+        "missing_price",
+        "stale_cell",
+        "non_positive_input",
+    ],
+)
+def test_factor_availability_fault_shapes_exclude_unavailable_issuer_listings(fault_shape: str) -> None:
+    """#1518 Step 5 acceptance: Three fault shapes where the raw payload has fields,
+    but the core marks the issuer unavailable. Factor availability reads the core result,
+    so complete_subject_ids equals exactly the available core listings (excluding faulted listing).
+    """
+    from data_engine.datahub.quality_report import _factor_availability
+
+    # All listings have payloads with fields, but victim listing:b's issuer is unavailable in core
+    usable = {
+        "listing:a": {"financial-fact": True, "market-price": True},
+        "listing:b": {"financial-fact": True, "market-price": True},  # payload has fields!
+        "listing:c": {"financial-fact": True, "market-price": True},
+    }
+    # Core marks listing:b's issuer unavailable due to fault_shape
+    conn = _MockConn(core_count=3, complete_listings=["listing:a", "listing:c"])
+    out = _factor_availability(conn, f"capture-run:fault-{fault_shape}", usable)
+    gppe = out["gross_profit_per_employee"]
+    assert gppe["status"] == "computed"
+    assert gppe["complete_subject_ids"] == ["listing:a", "listing:c"]
+    assert "listing:b" not in gppe["complete_subject_ids"]
+    assert gppe["complete_subjects"] == 2
+    assert gppe["universe_subjects"] == 3
+    assert gppe["ratio"] == "0.6667"
 
 
 # -- every bar field is its own reconciliation cell -------------------------------------

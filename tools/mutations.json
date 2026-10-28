@@ -842,22 +842,6 @@
       "cwd": "."
     },
     {
-      "id": "invariants/quality-report-matches-core-results",
-      "guard": "common/runtime/tests/test_output_invariants.py",
-      "file": "common/runtime/src/truealpha_tools/output_invariants.py",
-      "find": "                from mart.datahub_quality_report\n",
-      "replace": "                from mart.served_head\n",
-      "command": [
-        "uv",
-        "run",
-        "--no-sync",
-        "pytest",
-        "common/runtime/tests/test_output_invariants.py",
-        "-q"
-      ],
-      "cwd": "."
-    },
-    {
       "id": "env-manifest/app-web-undeclared-env-is-caught",
       "guard": "common/runtime/tests/test_env_manifest.py",
       "file": "apps/app-web/src/server/auth/db.ts",

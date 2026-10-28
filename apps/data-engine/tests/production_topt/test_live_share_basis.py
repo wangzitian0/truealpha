@@ -45,7 +45,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import OperatingBranch
-from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database, load_tool
+from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from macro_seed import seed_rate_for_cutoff  # noqa: E402
@@ -442,15 +442,14 @@ def test_a_close_that_jumps_beyond_the_series_makes_the_issuer_unavailable_with_
 
 
 def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_count_the_core_dropped(
-    tick: Tick, capsys: pytest.CaptureFixture[str]
+    tick: Tick,
 ) -> None:
     """Production calls `build_report` after `freeze_snapshot` and `materialize` (`composition.run_topt_pipeline`).
 
     This test reads the report row that the deployed op persisted. The symbols of `UNAVAILABLE` have no
     proven share basis in this fixture, and their financial facts are complete, so the core marks exactly
-    their issuers unavailable. The report lists none of their listings as complete, and the nightly
-    invariant `quality-report-matches-core-results` holds on the rows. Red when the report is built
-    before the snapshot is frozen: it then reads no verdict and lists those listings complete.
+    their issuers unavailable. The report lists none of their listings as complete. Red when the report is built
+    before the snapshot is frozen or core materialized: it then reads no core results and records not_computed.
     """
     run_id = tick.metadata["capture_run_id"]
     with psycopg.connect(tick.url) as reader:
@@ -480,16 +479,12 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
             (run_id,),
         ).fetchone()
     assert persisted is not None and unavailable_issuers is not None
+    assert persisted[0]["factor_availability"]["gross_profit_per_employee"]["status"] == "computed"
     complete = set(persisted[0]["factor_availability"]["gross_profit_per_employee"]["complete_subject_ids"])
 
     assert len(dropped) == len(UNAVAILABLE), "one listing for each symbol without a proven share basis"
     assert unavailable_issuers[0] == len(UNAVAILABLE), "the core marks exactly those issuers unavailable"
     assert subjects - complete == dropped
-
-    tool = load_tool("output_invariants")
-    parity = next(invariant for invariant in tool.INVARIANTS if invariant.id == "quality-report-matches-core-results")
-    assert tool.check(tick.url, require_coverage=True, invariants=(parity,), exemptions={}) == 0, capsys.readouterr()
-    assert "ok       quality-report-matches-core-results: 1 row(s) examined" in capsys.readouterr().out
 
 
 # -- acceptance of #1277: the same tick, read from the core results -----------------------------

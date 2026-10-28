@@ -286,6 +286,14 @@ There are two ways to launch a forced run by hand:
    `apps/data-engine/tests/test_dagster_defs.py` validates the payload above against the
    deployed job's config schema.
 
+## Factor Availability
+
+The quality report records `factor_availability` for downstream factor computations (#1518).
+`factor_availability.gross_profit_per_employee` reads `mart.topt_core_results` of the same run:
+
+- When a run halts before core materialization, the report records status `not_computed` with zero complete subjects.
+- When core results exist, the report records status `computed` with listings whose issuer is available.
+
 ## Ownership Boundaries
 
 - #60 supplies source coverage, canonical-origin, knowability, and usage evidence.
