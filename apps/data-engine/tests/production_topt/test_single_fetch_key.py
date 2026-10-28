@@ -140,7 +140,9 @@ def test_k2_moomoo_monthly_call_budget_deleted_and_30d_stock_quota_enforced(moom
             identity=FetchKey("moomoo", endpoint, "symbol:TEST", "2026-10-27"),
         )
 
-    assert not hasattr(ledger.settings, "moomoo_monthly_call_budget")
+    from data_engine.config import settings
+
+    assert not hasattr(settings, "moomoo_monthly_call_budget")
     monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: 2)
 
     spend("request_history_kline", "US.AAPL")

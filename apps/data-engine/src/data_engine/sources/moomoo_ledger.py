@@ -17,6 +17,7 @@ same shape, the same failure handling and the same table as every other source's
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 from truealpha_contracts.environment_contract import load_environment_contract
@@ -133,16 +134,16 @@ def kline_distinct_stocks_7d() -> set[str]:
     """Return the set of distinct ``moomoo://<code>`` URIs requested on K-line endpoints
     within the rolling 7-day window (#1411 K2, #1520)."""
     writer = getattr(gateway, "_writer", None)
-    if writer is not gateway.postgres_writer and hasattr(writer, "__iter__"):
+    if writer is not gateway.postgres_writer and isinstance(writer, Iterable):
         cutoff = datetime.now(UTC) - timedelta(days=7)
         return {
             uri
-            for row in gateway._writer
-            if row.source == "moomoo"
-            and row.endpoint in KLINE_ENDPOINTS
-            and row.request_uri is not None
-            and row.called_at >= cutoff
-            and (uri := normalize_stock_uri(row.request_uri)) is not None
+            for row in writer
+            if getattr(row, "source", None) == "moomoo"
+            and getattr(row, "endpoint", None) in KLINE_ENDPOINTS
+            and getattr(row, "request_uri", None) is not None
+            and getattr(row, "called_at", cutoff) >= cutoff
+            and (uri := normalize_stock_uri(getattr(row, "request_uri", None))) is not None
         }
     rows = _pg_execute(
         """
