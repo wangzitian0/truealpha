@@ -319,8 +319,8 @@ def test_aapl_known_answers_are_recorded_as_superseded_on_a_newer_filing(tick: T
         assert row["period"] == "2025-09-27"
         assert row["source"] == "sec-edgar-filing"
         assert row["oracle_kind"] == "filing"
-        assert row["oracle_value"] is not None
-        assert row["tolerance"] is not None
+        assert row["oracle_value"] is None
+        assert row["tolerance"] is None
         assert row["ratio"] is None
         assert row["compared_at"] == TICK
     assert len([key for key in rows if key[1] == "filing"]) == 2

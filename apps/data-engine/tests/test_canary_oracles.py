@@ -180,3 +180,8 @@ def test_sentinel_known_answers_pass_on_grounded_values_and_fail_when_mutated_by
     )
     assert len(neg_failures) == 1
     assert "sbux-zero-semiconductor" in neg_failures[0]
+
+
+def test_derived_expected_canary_snapshot_counts() -> None:
+    """Canary snapshot counts are derived from static universe members and contract sentinels (#1523 S2c)."""
+    assert canary_oracles.expected_canary_snapshot() == (5, 6, 24)

@@ -31,6 +31,7 @@ import psycopg
 from truealpha_contracts.environment_contract import (
     SentinelKnownAnswer,
     SentinelKnownAnswersCatalog,
+    load_environment_contract,
     load_sentinel_known_answers,
 )
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
@@ -178,6 +179,20 @@ def pinned_infra2_sdk() -> str:
     raise ValueError("truealpha-runtime declares no infra2-sdk requirement")
 
 
+def expected_canary_snapshot() -> tuple[int, int, int]:
+    """The expected (issuer_count, instrument_count, observation_count) of a canary run (#1523 S2c).
+
+    Dual-class listings (GOOGL and GOOG) share one issuer, yielding 5 issuers across 6 instruments.
+    """
+    static_members = UNIVERSE_SOURCES["canary"].static_members
+    expected_instruments = len(static_members)
+    expected_observations = expected_instruments * len(registered_semantic_types())
+    contract = load_environment_contract()
+    issuers_by_ticker = {member.ticker: member.issuer_id for member in contract.sentinels}
+    expected_issuers = len({issuers_by_ticker.get(t, t) for t in static_members})
+    return (expected_issuers, expected_instruments, expected_observations)
+
+
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     bad: list[str] = []
 
@@ -202,13 +217,8 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         "select issuer_count, instrument_count, observation_count from staging.topt_core_snapshots where run_id = %s",
         (run_id,),
     ).fetchone()
-    static_members = UNIVERSE_SOURCES["canary"].static_members
-    expected_instruments = len(static_members)
-    expected_observations = expected_instruments * len(registered_semantic_types())
-    catalog = load_sentinel_known_answers()
-    ciks = {a.ticker: a.cik for a in catalog.answers}
-    expected_issuers = len({ciks.get(t, t) for t in static_members})
-    expected_snapshot = (expected_issuers, expected_instruments, expected_observations)
+    expected_snapshot = expected_canary_snapshot()
+    expected_instruments = expected_snapshot[1]
     if snapshot is None:
         bad.append("no frozen snapshot")
     elif snapshot != expected_snapshot:
