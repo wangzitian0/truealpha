@@ -470,7 +470,13 @@ class _Selector:
         code = {p: _code_text(p, t, self.graph.strings) for p, t in self.texts.items()}
         self.corpus = _Corpus(code, self.texts, test_side)
         layout = self.layout
-        self.package_roots = set(layout.members) | set(layout.src_roots) | set(layout.test_roots) | {WEB_ROOT}
+        self.package_roots = (
+            set(layout.members)
+            | set(layout.src_roots)
+            | set(layout.test_roots)
+            | {WEB_ROOT}
+            | {f"{src}/{pkg}" for src in layout.src_roots for pkg in layout.prefixes if (root / src / pkg).is_dir()}
+        )
         self.py_seeds: set[str] = set()
         self.py_changed_names: set[str] = set()
         self.web_seeds: set[str] = set()
@@ -538,9 +544,15 @@ class _Selector:
         """Rules 3 and 4: files that name the change or its directory."""
         tests_only = _no_test(path) or bool(path.endswith(".py") and _under(path, self.layout.src_roots))
         named = self.corpus.names(path, self.basename_count, tests_only)
-        named |= self.corpus.directory(_dir_pattern(path, self.package_roots))
+        if not (path.endswith(".py") and _under(path, self.layout.src_roots)):
+            named |= self.corpus.directory(_dir_pattern(path, self.package_roots))
         for other in named:
-            (self.py_seeds if other.endswith(".py") else self.web_seeds).add(other)
+            if other in self.selection.pytest_all:
+                self.py_tests.add(other)
+            elif other.endswith(".py"):
+                self.py_seeds.add(other)
+            else:
+                self.web_seeds.add(other)
         return bool(named)
 
     def fallback(self, path: str) -> None:

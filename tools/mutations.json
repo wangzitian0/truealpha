@@ -1448,6 +1448,38 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "doc-drift/missing-path-citation-is-ignored",
+      "guard": "common/runtime/tests/test_doc_drift.py",
+      "file": "common/runtime/src/truealpha_tools/doc_drift.py",
+      "find": "    def resolves(self, citation: str) -> bool:\n        citation = citation.rstrip(\"/\")\n        return citation in self._entries or citation in self._tails",
+      "replace": "    def resolves(self, citation: str) -> bool:\n        return True",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_doc_drift.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "release-replays/undeclared-version-change-is-ignored",
+      "guard": "common/runtime/tests/test_release_replays.py",
+      "file": "common/runtime/src/truealpha_tools/release_replays.py",
+      "find": "        if identity_value(base, spec, read) != now and not any(entry[\"identity\"] == key for entry in new):",
+      "replace": "        if False:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_release_replays.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

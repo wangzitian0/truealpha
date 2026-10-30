@@ -2,11 +2,10 @@
 
 This module holds one rule for "module A depends on module B". The diff scope
 (`diff_scope.py`) walks the edges backwards from a change to the tests that can see
-it. The reachability ratchet walks the same kind of edge forwards from the deployed
-roots. The ratchet still holds a private copy of this rule until its owner-held
-switch lands (#1412).
+it. The reachability ratchet (`reachability_ratchet.py`) walks the same kind of edge
+forwards from the deployed roots.
 
-An edge is one of three things:
+An edge is one of four things:
 
 - an `import x.y` or `from x.y import z` statement that names a first-party package;
 - a registry string "x.y:function", which a deployed loop resolves at run time (#72, #800);
