@@ -176,6 +176,28 @@ def test_every_exclusion_matches_a_tracked_file_of_this_repository() -> None:
     assert not dead, f"exclusions that match no tracked file: {dead}"
 
 
+def test_every_covered_document_in_this_repository_has_zero_drift_findings() -> None:
+    """#1410 W1: check the working-tree documents of this repository so deleting a cited path
+    or mart object fails at PR time before merging to main."""
+    repository = Path(__file__).resolve().parents[3]
+    listing = subprocess.run(
+        ["git", "-C", str(repository), "ls-files", "-z"], capture_output=True, text=True, check=True
+    ).stdout
+    tracked = [entry for entry in listing.split("\0") if entry and (repository / entry).is_file()]
+    assert len(tracked) > 100, f"git reports only {len(tracked)} tracked files (GREEN-WHILE-EMPTY)"
+    documents = {name: (repository / name).read_text(encoding="utf-8") for name in covered_documents(tracked)}
+    migrations = [
+        (path.rsplit("/", 1)[1], (repository / path).read_text(encoding="utf-8"))
+        for path in tracked
+        if path.startswith(f"{doc_drift.MIGRATIONS_DIR}/") and path.endswith(".sql") and path.count("/") == 2
+    ]
+    report = check(documents, tracked, migrations)
+    assert report.paths_checked > 50 and report.mart_checked > 10, (
+        f"checked only {report.paths_checked} paths and {report.mart_checked} mart objects (GREEN-WHILE-EMPTY)"
+    )
+    assert not report.findings, "doc-drift findings in repository:\n" + "\n".join(str(f) for f in report.findings)
+
+
 def test_a_missing_path_on_a_history_line_is_skipped_and_counted() -> None:
     text = f"The shim `tools/gone.py` was deleted. {HISTORY_MARKER}"
     report = check({"docs/a.md": text}, FILES, MIGRATIONS)

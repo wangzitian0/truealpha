@@ -97,6 +97,7 @@ done
 
 if [ "${#PY[@]}" -gt 0 ]; then
   run "cyclomatic complexity gate" python3 tools/complexity_gate.py --check
+  run "reachability ratchet" python3 tools/reachability_ratchet.py --check
 fi
 for path in "${YML[@]}"; do
   # uv's interpreter, not the system one: PyYAML is a workspace dependency and
