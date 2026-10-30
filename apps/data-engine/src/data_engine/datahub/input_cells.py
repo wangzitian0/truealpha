@@ -2,18 +2,17 @@
 
 A cell is one input of one issuer: key, value, unit, confidence, the time it became knowable and
 its fiscal period. The strategy seed, the history projector and the TOPT core snapshot build their
-inputs from these cells. So the three engines share the confidence cap, the unit and the per-key
-`knowable_at`. No engine keeps its own copy of these rules.
+inputs from these cells. So the three engines share the unit and the per-key `knowable_at`. No
+engine keeps its own copy of these rules.
 
-The confidence cap of a revenue-proxy gross profit lives here, and nowhere else, until Cause 1 of
-#1517 removes it. The input age limit is `eligibility.maximum_input_age_days` of the strategy
-definition. It applies to the `knowable_at` of each cell.
+The input age limit is `eligibility.maximum_input_age_days` of the strategy definition. It applies
+to the `knowable_at` of each cell.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
@@ -22,7 +21,11 @@ from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceCon
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, UnitFamily, input_key_for_metric
 
-from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
+from data_engine.datahub.production_topt.source_registrations import (
+    AsOfAxis,
+    knowable_instant,
+    source_reliability_prior,
+)
 
 #: The input key of the captured close. It travels in the market-price payload, not in the financial one.
 LAST_CLOSE_KEY = "last_close"
@@ -44,7 +47,11 @@ _STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.i
 _PERIOD_SERIES_SUFFIX = "_periods"
 
 #: The unit of a count metric. A count has two meanings here, so the family alone cannot name it.
-_COUNT_UNITS = {"employees_total": "employees", "shares_outstanding": "shares"}
+_COUNT_UNITS = {
+    "employees_total": "employees",
+    "shares_outstanding": "shares",
+    "shares_weighted_average_basic": "shares",
+}
 
 
 class InputCell(NamedTuple):
@@ -84,11 +91,6 @@ def unit_of(input_key: str, currency: str) -> str:
     return family.value
 
 
-def end_of_day(day: date) -> datetime:
-    """The last instant of a filed day: 23:59:59.999999Z."""
-    return datetime.combine(day, time.max, tzinfo=UTC)
-
-
 def _entry_knowable_at(entry: object) -> datetime | None:
     """The instant one vintage entry became known, or None when it names none.
 
@@ -104,7 +106,7 @@ def _entry_knowable_at(entry: object) -> datetime | None:
             raise ValueError(f"vintage knowable_at {stamp!r} carries no time zone")
         return parsed
     filed = entry.get("filed")
-    return end_of_day(date.fromisoformat(str(filed))) if filed else None
+    return knowable_instant(AsOfAxis.ACCESSION, date.fromisoformat(str(filed))) if filed else None
 
 
 def vintage_knowable_at(payload: Mapping[str, Any]) -> KnowableAtOf:
@@ -135,15 +137,8 @@ def live_knowable_at(payload: Mapping[str, Any], observed_at: datetime) -> Calla
     return knowable_at_of
 
 
-def _is_revenue_proxy(payload: Mapping[str, Any]) -> bool:
-    """True when the vintage names the gross profit as derived from revenue (#1255, #533)."""
-    entry = (payload.get("vintage") or {}).get("gross_profit")
-    return bool(isinstance(entry, Mapping) and entry.get("is_revenue_proxy", False))
-
-
 def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
     """Evaluate single-source SEC field confidence via `evaluate_cell_confidence` (#1517 B3)."""
-    is_proxy = key == "gross_profit" and _is_revenue_proxy(payload)
     if key == "headcount":
         vintage = payload.get("vintage") or {}
         producer = str((vintage.get("headcount") or {}).get("source") or "10k-extraction")
@@ -153,7 +148,6 @@ def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Deci
         provider_id = "origin:sec-company-facts:v1"
         lineage = "sec-company-facts"
     prior = source_reliability_prior(provider_id) or source_reliability_prior("origin:sec-company-facts:v1")
-    extra_codes = ("reason:single_origin", "confidence.revenue_proxy") if is_proxy else ("reason:single_origin",)
     return evaluate_cell_confidence(
         case_id=f"cell:{key}:{payload.get('listing_id') or payload.get('issuer_id') or 'sec'}",
         sources=(
@@ -172,10 +166,10 @@ def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Deci
             ),
         ),
         agreement=Decimal("1"),
-        semantic_mapping_quality=Decimal("0.85") if is_proxy else Decimal("1"),
+        semantic_mapping_quality=Decimal("1"),
         lineage_completeness=Decimal("1"),
         required_component_completeness=Decimal("1"),
-        extra_reason_codes=extra_codes,
+        extra_reason_codes=("reason:single_origin",),
         policy=_CONFIDENCE_POLICY,
     ).confidence
 
@@ -233,14 +227,11 @@ def financial_input_rows(
     )
     assert stamp_of is not None
     currency = str(payload.get("currency", ""))
-    is_proxy = _is_revenue_proxy(payload)
 
     def _conf_for(key: str) -> Decimal:
         if confidence_by_key is not None and key in confidence_by_key:
             return confidence_by_key[key]
         if confidence is not None:
-            if key == "gross_profit" and is_proxy:
-                return (confidence * Decimal("0.85")).quantize(Decimal("0.0001"))
             return confidence
         return _evaluate_sec_field_confidence(key, payload)
 

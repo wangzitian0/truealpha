@@ -105,8 +105,7 @@ def _bundle(branch: OperatingBranch, *, cik: int, ticker: str) -> FinancialFacts
             "period_end": cover.isoformat(),
         }
     return FinancialFactsBundle(
-        gross_profit=Decimal("100000000") if proxy else Decimal("80000000") if financial else Decimal("210000000"),
-        gross_profit_is_revenue_proxy=proxy,
+        gross_profit=None if financial else (Decimal("100000000") if proxy else Decimal("210000000")),
         total_assets=None if ticker in NO_TOTAL_ASSETS_TICKERS else Decimal("200000000"),
         shares_outstanding=FILED_SHARES,
         revenue=Decimal("100000000"),

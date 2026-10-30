@@ -349,10 +349,12 @@ def test_every_landed_row_carries_the_identity_it_was_accepted_under(monkeypatch
 def test_knowable_at_is_the_filing_date_and_never_an_insertion_clock(monkeypatch) -> None:
     """AGENTS.md's most-repeated defect shape: a fact stamped at insert time is look-ahead for
     every historical cutoff, and it passes every test built on the founding assumption."""
+    from datetime import time
+
     connection = _RecordingConnection()
     _run(monkeypatch, connection, write=True)
     rows = [_row(p) for p in connection.inserts()]
-    assert {r["knowable_at"] for r in rows} == {datetime(2025, 12, 12, tzinfo=UTC)}
+    assert {r["knowable_at"] for r in rows} == {datetime.combine(date(2025, 12, 12), time.max, tzinfo=UTC)}
     assert all(r["knowable_at"] < datetime.now(UTC) for r in rows)
 
 

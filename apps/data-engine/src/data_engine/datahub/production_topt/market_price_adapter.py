@@ -32,7 +32,7 @@ import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -418,11 +418,13 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
     Separated from the HTTP call so the cassette suite drives exactly this selection
     over the bytes production captured (`tests/production_topt/test_real_vendor_bytes.py`).
     """
+    from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
+
     eligible = [bar for bar in bars if bar.date <= cutoff]
     if not eligible:
         return None
     bar = max(eligible, key=lambda item: item.date)
-    knowable_at = datetime.combine(bar.date, datetime.min.time(), tzinfo=UTC)
+    knowable_at = knowable_instant(AsOfAxis.SETTLED_SESSION, bar.date)
     currency = getattr(bar, "currency", None)
     if currency is None:
         try:

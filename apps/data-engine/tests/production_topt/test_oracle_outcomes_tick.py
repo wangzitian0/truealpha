@@ -303,7 +303,9 @@ def test_a_revenue_a_tenth_of_the_stored_filing_is_one_independent_parse_disagre
     )
     assert row["tolerance"] == Decimal("0.0001")
     assert (row["period"], row["compared_at"], row["source"]) == (str(ANNUAL_END), TICK, "sec")
-    assert row["knowable_at"] == datetime.combine(ANNUAL_FILED, datetime.min.time(), tzinfo=UTC)
+    from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
+
+    assert row["knowable_at"] == knowable_instant(AsOfAxis.ACCESSION, ANNUAL_FILED)
     assert row["observation_id"].startswith("normalized-observation:")
 
 

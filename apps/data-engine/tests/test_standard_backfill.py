@@ -388,12 +388,15 @@ def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at(call_
     (row,) = connection.headcount_rows
     cik, headcount, knowable_at, period_end, source, evidence_ref, confidence = row
     assert (cik, headcount, source) == (1730168, Decimal(33000), EXTRACTION_SOURCE)
-    assert knowable_at == datetime(2025, 12, 18, tzinfo=UTC)  # the filing date, not the fetch clock
+    from datetime import time
+
+    end_of_filing_day = datetime.combine(date(2025, 12, 18), time.max, tzinfo=UTC)
+    assert knowable_at == end_of_filing_day  # the end of the filing date (#1519), not the fetch clock
     assert period_end == date(2025, 11, 2)
     assert confidence == Decimal("0.85")
     assert "accession=000173016825000121" in evidence_ref and RULE_SINGLE_CANDIDATE in evidence_ref
     assert "raw=raw.fetches:1" in evidence_ref and "33,000 employees" in evidence_ref
-    assert len(store.stored) == 1 and store.stored[0].source_published_at == datetime(2025, 12, 18, tzinfo=UTC)
+    assert len(store.stored) == 1 and store.stored[0].source_published_at == end_of_filing_day
     assert [r.source for r in call_ledger] == ["sec", "sec"]  # submissions + archive, both recorded
 
 

@@ -49,7 +49,7 @@ import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -65,6 +65,7 @@ from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 from data_engine.quality import vendor_oracle
 
@@ -366,7 +367,7 @@ def compare_independent_parse(
             oracle_value=None if witness is None else witness.value,
             source=DataSource.SEC.value,
             observation_id=observation_id,
-            knowable_at=None if witness is None else datetime.combine(witness.filed, time.min, tzinfo=UTC),
+            knowable_at=None if witness is None else knowable_instant(AsOfAxis.ACCESSION, witness.filed),
             ratio=ratio,
             tolerance=None if ratio is None else tolerance,
             result=result,

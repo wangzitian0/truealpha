@@ -86,6 +86,8 @@ from data_engine.datahub.production_topt.source_registrations import (
     TWELVE_DATA_ORIGIN,
     TWELVE_DATA_PARSER_VERSION,
     TWELVE_DATA_VALUE_KEY,
+    AsOfAxis,
+    knowable_instant,
 )
 from data_engine.sources import gateway
 from data_engine.sources.accept_rules import accept_rule
@@ -267,7 +269,7 @@ def _quote(
         "raw_bytes": raw_bytes,
         "close": close,
         "as_of": as_of,
-        "knowable_at": datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        "knowable_at": knowable_instant(AsOfAxis.SETTLED_SESSION, as_of),
         "is_provisional": is_provisional,
         **(bar or {}),
     }
@@ -462,7 +464,7 @@ class TwelveDataQuoteFetcher:
         knowable = (
             transaction_time
             if isinstance(transaction_time, datetime)
-            else datetime.combine(trading_date, datetime.min.time(), tzinfo=UTC)
+            else knowable_instant(AsOfAxis.SETTLED_SESSION, trading_date)
         )
         return MarketPriceQuote(
             raw_bytes=raw_bytes,

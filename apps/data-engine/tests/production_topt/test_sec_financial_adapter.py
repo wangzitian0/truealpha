@@ -160,7 +160,9 @@ def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() 
     assert "revenue" in result.record.payload["vintage"]
 
 
-def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:
+def test_no_cogs_issuer_without_gross_profit_resolves_none_even_when_revenue_proxy_allowed() -> None:
+    """#1519 step 6: `gross_profit` is never filled from `revenue` when neither `GrossProfit`
+    nor a COGS concept is reported, regardless of `revenue_proxy_allowed`."""
     item = _work_item("f" * 64)
     target = SecTarget(
         cik=1403161,
@@ -176,13 +178,14 @@ def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:
     )
     result = adapter.fetch(item)
     assert isinstance(result, FetchSuccess)
-    assert result.record.payload["gross_profit"] == "332238000000"
+    assert result.record.payload["gross_profit"] is None
+    assert result.record.payload["revenue"] == "332238000000"
+    assert "gross_profit" not in result.record.payload["vintage"]
 
 
-def test_the_bundle_reports_whether_gross_profit_is_the_proxy() -> None:
-    assert build_bundle(_no_cogs_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
-    # A real reported figure is never flagged, so the adapter cannot refuse it.
-    assert not build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
+def test_the_bundle_leaves_gross_profit_none_when_no_cogs_or_gross_profit_is_reported() -> None:
+    assert build_bundle(_no_cogs_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit is None
+    assert build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit == Decimal("120")
 
 
 def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -> dict:
@@ -231,8 +234,8 @@ _UNIVERSE_SHAPES = [
     # Ordinary issuers: real gross profit, current share count. Stands for the sixteen
     # whose values this change must leave untouched.
     ("AAPL-like non_financial", "3571", None, True, True, True),
-    # SIC 7389, tags neither GrossProfit nor COGS: the proxy is owner-approved here.
-    ("V-like payment network", "7389", None, False, True, True),
+    # SIC 7389, tags neither GrossProfit nor COGS: #1519 step 6 removed the revenue proxy so gross_profit is None.
+    ("V-like payment network", "7389", None, False, False, True),
     # Petroleum Refining with the same untagged shape: the proxy must NOT apply (#533).
     ("XOM-like oil major", "2911", None, False, False, True),
     # Multi-class issuer whose only surviving cover-page fact is from 2010 (#529).
@@ -369,8 +372,8 @@ def test_depository_branch_uses_pre_provision_profit_as_the_operating_numerator(
     assert datum.value == Decimal("85")
 
     bundle = build_bundle(_bank_facts(), _CUTOFF, OperatingBranch.FINANCIAL)
-    # A bank files no GrossProfit; without the branch it would be missing_gross_profit.
-    assert bundle.gross_profit == Decimal("85")
+    # #1519 step 6: a bank records pre_provision_profit under its own metric and leaves gross_profit None.
+    assert bundle.gross_profit is None
     assert bundle.pre_provision_profit == Decimal("85")
 
 
@@ -777,8 +780,8 @@ def _units(entries: list[dict], unit: str = "USD") -> dict:
     return {"units": {unit: entries}}
 
 
-def test_no_cogs_filer_uses_revenue_as_gross_profit_proxy() -> None:
-    """V/MA/XOM: no GrossProfit and no COGS-family concept AT ALL -> revenue proxy."""
+def test_no_cogs_filer_resolves_gross_profit_none() -> None:
+    """#1519 step 6: no GrossProfit and no COGS-family concept resolves gross_profit as None."""
     facts = {
         "facts": {
             "us-gaap": {
@@ -786,8 +789,7 @@ def test_no_cogs_filer_uses_revenue_as_gross_profit_proxy() -> None:
             }
         }
     }
-    datum = gross_profit(facts, _CUTOFF)
-    assert datum is not None and datum.value == Decimal("300")
+    assert gross_profit(facts, _CUTOFF) is None
 
 
 def test_cogs_filer_with_period_mismatch_still_resolves_none() -> None:
@@ -1886,7 +1888,7 @@ def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_v
         GPPE_BANKING_TCE_TREE,
         issuer_class=IssuerClass.FINANCIAL,
         inputs={
-            "pre_provision_profit": bundle.gross_profit,
+            "pre_provision_profit": bundle.pre_provision_profit,
             "stockholders_equity": bundle.stockholders_equity,
             "preferred_stock_value": bundle.preferred_stock_value,
             "goodwill": bundle.goodwill,
@@ -2303,37 +2305,34 @@ def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_
     assert multi_class_share_entries(brk_doc) == []
 
 
-def test_revenue_proxy_sets_is_revenue_proxy_on_gross_profit_vintage_only_when_used() -> None:
-    """#1255: when an approved no-COGS issuer (Visa) resolves `gross_profit` from the revenue proxy,
-    `payload["vintage"]["gross_profit"]["is_revenue_proxy"]` is True while `FinancialFactPayload`
-    (`extra="forbid"`) validates cleanly. Direct or derived `gross_profit` never sets `is_revenue_proxy`."""
-    no_cogs_facts = {
+def test_financial_branch_separates_pre_provision_profit_and_never_populates_gross_profit() -> None:
+    """#1519 step 6: a FINANCIAL issuer populates `pre_provision_profit` and its vintage entry
+    while leaving `gross_profit` None, and `valid_from` reflects the reported period start
+    rather than the filing date (#1519 step 7)."""
+    bank_facts = {
         "facts": {
             "us-gaap": {
-                "Revenues": {
-                    "units": {
-                        "USD": [
-                            _annual(
-                                "2025-09-30",
-                                "2024-10-01",
-                                40000000000,
-                                "2025-11-06",
-                                accn="0001403161-25-000089",
-                            )
-                        ]
-                    }
+                "InterestIncomeExpenseNet": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 95000000000, "2026-02-13")]}
                 },
+                "NoninterestIncome": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 87000000000, "2026-02-13")]}
+                },
+                "NoninterestExpense": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 96000000000, "2026-02-13")]}
+                },
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 182000000000, "2026-02-13")]}},
                 "Assets": {
                     "units": {
                         "USD": [
                             {
-                                "end": "2025-09-30",
-                                "val": 99627000000,
-                                "accn": "0001403161-25-000089",
+                                "end": "2025-12-31",
+                                "val": 4000000000000,
+                                "accn": "0000019617-26-000001",
                                 "fy": 2025,
                                 "fp": "FY",
                                 "form": "10-K",
-                                "filed": "2025-11-06",
+                                "filed": "2026-02-13",
                             }
                         ]
                     }
@@ -2343,40 +2342,35 @@ def test_revenue_proxy_sets_is_revenue_proxy_on_gross_profit_vintage_only_when_u
         }
     }
     cutoff = date(2026, 3, 31)
-    proxy_bundle = build_bundle(no_cogs_facts, cutoff, OperatingBranch.NON_FINANCIAL)
-    assert proxy_bundle.gross_profit_is_revenue_proxy is True
+    bundle = build_bundle(bank_facts, cutoff, OperatingBranch.FINANCIAL)
+    assert bundle.gross_profit is None
+    assert bundle.pre_provision_profit == Decimal("86000000000")
+    assert bundle.period_start == date(2025, 1, 1)
+    assert "pre_provision_profit" in bundle.vintages
+    assert "gross_profit" not in bundle.vintages
 
     item = _work_item("1" * 64)
     target = SecTarget(
-        cik=1403161,
+        cik=19617,
         cutoff=cutoff,
-        issuer_id="issuer:lei:V",
-        instrument_id="security:cusip:V",
-        listing_id="listing:xnys:v",
-        operating_branch=OperatingBranch.NON_FINANCIAL,
-        revenue_proxy_allowed=True,
+        issuer_id="issuer:lei:JPM",
+        instrument_id="security:cusip:JPM",
+        listing_id="listing:xnys:jpm",
+        operating_branch=OperatingBranch.FINANCIAL,
     )
     outcome = SecFinancialFactAdapter(
         {item.work_item_id: target},
-        lambda _cik, _cutoff, _branch: proxy_bundle,
+        lambda _cik, _cutoff, _branch: bundle,
     ).fetch(item)
     assert isinstance(outcome, FetchSuccess)
+    assert outcome.valid_from == date(2025, 1, 1)
     payload = outcome.record.payload
-    assert payload["gross_profit"] == "40000000000"
-    assert payload["vintage"]["gross_profit"]["is_revenue_proxy"] is True
+    assert payload["gross_profit"] is None
+    assert payload["pre_provision_profit"] == "86000000000"
     validated = FinancialFactPayload.model_validate(payload)
     assert validated.vintage is not None
-    assert validated.vintage["gross_profit"]["is_revenue_proxy"] is True
-
-    direct_bundle = build_bundle(_facts(), cutoff, OperatingBranch.NON_FINANCIAL)
-    assert direct_bundle.gross_profit_is_revenue_proxy is False
-    item_direct = _work_item("2" * 64)
-    outcome_direct = SecFinancialFactAdapter(
-        {item_direct.work_item_id: target},
-        lambda _cik, _cutoff, _branch: direct_bundle,
-    ).fetch(item_direct)
-    assert isinstance(outcome_direct, FetchSuccess)
-    assert "is_revenue_proxy" not in outcome_direct.record.payload["vintage"]["gross_profit"]
+    assert "pre_provision_profit" in validated.vintage
+    assert "gross_profit" not in validated.vintage
 
 
 def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_in_live_tick() -> None:

@@ -131,10 +131,13 @@ PRE_PROVISION_PROFIT = MetricNode(
     sign_policy=_policy(SignPolicy.MAY_BE_NEGATIVE, frozenset({IssuerClass.FINANCIAL})),
     provenance=Provenance(
         kind=ProvenanceKind.METRIC_REGISTRY,
-        reference="gross_profit",
-        note="financial-issuer split: a bank's gross-profit proxy (METRICS gross_profit.financial_issuer_split)",
+        reference="pre_provision_profit",
     ),
-    aliases=(NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="pre_provision_profit"),),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="pre_provision_profit"),
+        NodeAlias(kind=AliasKind.INPUT_KEY, value="pre_provision_profit"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="pre_provision_profit"),
+    ),
 )
 
 TOTAL_ASSETS = MetricNode(

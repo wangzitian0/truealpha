@@ -29,7 +29,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from functools import partial
 from typing import Any
@@ -45,6 +45,7 @@ from factors.shared.extraction import (
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
     fetch_annual_filing,
@@ -658,7 +659,7 @@ def _land_partition(
         partition_residual=residual,
         # WHEN the breakdown became knowable: the filing's own date, never now(). An insertion
         # clock here is look-ahead for every historical cutoff.
-        knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
+        knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
         evidence_ref=evidence_ref,
         extractor=extractor,
         confidence=confidence_for(standard.confidence_policy_id, extractor),

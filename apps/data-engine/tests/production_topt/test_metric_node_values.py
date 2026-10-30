@@ -265,7 +265,7 @@ def test_f3_strategy_definition_evaluates_trees_by_key_and_allows_omitting_unive
 
     # The live definition 1.1.0 hash stays untouched
     live = load_live_strategy_definition()
-    assert live.content_sha256 == "e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604"
+    assert live.content_sha256 == "b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3"
 
     issuer = IssuerInput(
         issuer_id="issuer:nvda",

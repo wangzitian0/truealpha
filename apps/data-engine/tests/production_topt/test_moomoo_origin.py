@@ -313,7 +313,9 @@ def test_the_assertion_carries_the_newest_period_at_or_before_the_cutoff() -> No
     assert assertion.values["eps_diluted"] == Decimal("0.31")
     assert assertion.values["total_assets"] == Decimal("6643844000")
     assert assertion.currency == "USD" and assertion.accounting_standards == "US_GAAP"
-    assert assertion.knowable_at == datetime(2026, 7, 10, tzinfo=UTC)
+    from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
+
+    assert assertion.knowable_at == knowable_instant(AsOfAxis.SETTLED_SESSION, date(2026, 7, 10))
     # A cutoff before FY2025's period end must not see FY2025 at all.
     earlier = parse_annual_financials(raw, cutoff=date(2025, 6, 30))
     assert earlier is not None and earlier.period_end == date(2024, 12, 31)

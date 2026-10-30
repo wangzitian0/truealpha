@@ -370,9 +370,9 @@ def test_a_split_after_the_filing_gives_the_live_market_value_on_the_post_split_
         "an adjusted count is knowable once the close is"
     )
     assert control.market_value == CLOSE * FILED_SHARES, "an issuer without a split keeps its filed count"
-    from data_engine.datahub.input_cells import end_of_day
+    from data_engine.datahub.input_cells import AsOfAxis, knowable_instant
 
-    assert control.shares_knowable_at == end_of_day(FILED)
+    assert control.shares_knowable_at == knowable_instant(AsOfAxis.ACCESSION, FILED)
 
 
 # -- acceptance b: no split-adjusted series, no fallback to the filed count ---------------

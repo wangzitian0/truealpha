@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 
 import psycopg
@@ -22,6 +22,7 @@ from data_engine.datahub.production_topt.headcount import (
     record_headcount,
     validate_cited_headcount_fact,
 )
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.sources import gateway, sec
 
 _SOURCE = "manual-review"
@@ -41,7 +42,7 @@ class ReviewedHeadcountFact:
 
     @property
     def knowable_at(self) -> datetime:
-        return datetime.combine(self.filing_date, time.min, tzinfo=UTC)
+        return knowable_instant(AsOfAxis.ACCESSION, self.filing_date)
 
     @property
     def evidence_ref(self) -> str:

@@ -37,17 +37,17 @@
       "financial": {
         "tree_key": "gppe_banking_tce",
         "tree_version": "v2",
-        "tree_sha256": "85b35b68c57dd7d8c0b55d9ef70175b395d97a75257f26aabe69bdbc551400bb"
+        "tree_sha256": "a6d6ca21a0a92144e46a95054b111ad4e5cd0455dcb7741991e6660e7fc8153b"
       },
       "non_financial": {
         "tree_key": "gppe",
         "tree_version": "production-topt-v0.2.0",
-        "tree_sha256": "a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb"
+        "tree_sha256": "9015a3713fd159cf5ba9014eb6ecbb14551da177c14bbd5d7acc17b1e2177906"
       },
       "insurance": {
         "tree_key": "gppe",
         "tree_version": "production-topt-v0.2.0",
-        "tree_sha256": "a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb"
+        "tree_sha256": "9015a3713fd159cf5ba9014eb6ecbb14551da177c14bbd5d7acc17b1e2177906"
       }
     },
     "price_to_sales": {
@@ -173,7 +173,7 @@
     }
   },
   "expected": {
-    "strategy_definition_id": "strategy-definition:e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604",
-    "strategy_definition_sha256": "e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604"
+    "strategy_definition_id": "strategy-definition:b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3",
+    "strategy_definition_sha256": "b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3"
   }
 }

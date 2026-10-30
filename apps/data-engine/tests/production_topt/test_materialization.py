@@ -1598,9 +1598,9 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     written = seed_strategy_inputs_from_capture(
         connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
     )
-    # 19 non-financial issuers × 5 financial keys + JPM's 4 (no gross_profit on corpus shape)
+    # 19 non-financial issuers × 5 financial keys + JPM's 5 (with pre_provision_profit under its own metric, #1519 step 6)
     # + JPM's 4 banking leaves (#1518) + 20 last_close rows.
-    assert written == 19 * 5 + 4 + 4 + 20
+    assert written == 19 * 5 + 5 + 4 + 20
 
     executed_at = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
     run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
@@ -1636,8 +1636,8 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
     assert len(by_issuer) == 20
 
     jpm = by_issuer["issuer:lei:8I5DZWZKVSZI1NUHU748"]
-    assert jpm.outcome == "excluded" and jpm.eligible is False
-    assert jpm.exclusion_reason == "missing_gross_profit_fact"
+    assert jpm.eligible is True and jpm.exclusion_reason is None
+    assert jpm.labor_efficiency_metric == "gppe_banking_tce_v1"
     assert any(decision.outcome == "selected" for decision in report.decisions), (
         "the corpus capture must select at least one issuer"
     )
@@ -1903,13 +1903,13 @@ def _member_rows_for_probe(
     return rows
 
 
-def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() -> None:
-    """#1255 / #1517 B3: when `(financial.vintage or {}).get("gross_profit", {}).get("is_revenue_proxy", False)`
-    is True, `_snapshot_member` applies the `0.85` `semantic_mapping_quality` penalty to `gross_profit`
-    confidence and the financial cell confidence while leaving non-proxy rows untouched."""
+def test_snapshot_member_preserves_financial_confidence_without_revenue_proxy_penalty() -> None:
+    """#1519 step 6: the revenue proxy on `gross_profit` is removed, so `_snapshot_member`
+    passes through the observation's continuous confidence and `FinancialFactPayload` rejects
+    undeclared keys via `extra="forbid"`."""
     control_rows = _member_rows_for_probe(
         confidence=Decimal("0.92"),
-        financial_vintage={"gross_profit": {"is_revenue_proxy": False}},
+        financial_vintage={"gross_profit": None},
     )
     control_member = PostgresToptCoreRepository._snapshot_member(
         "listing:xnas:nvda", control_rows, histories=(flat_history(),)
@@ -1918,51 +1918,49 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
     assert control_member.gross_profit.confidence == Decimal("0.92")
     assert {cell.confidence for cell in control_member.cell_inputs} == {Decimal("0.92")}
 
-    proxy_rows = _member_rows_for_probe(
-        confidence=Decimal("0.92"),
-        financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
-    )
-    proxy_member = PostgresToptCoreRepository._snapshot_member(
-        "listing:xnas:nvda", proxy_rows, histories=(flat_history(),)
-    )
-    expected_proxy = (Decimal("0.92") * Decimal("0.85")).quantize(Decimal("0.0001"))
-    assert proxy_member.gross_profit is not None
-    assert proxy_member.gross_profit.confidence == expected_proxy
-    fin_cell = next(
-        cell for cell in proxy_member.cell_inputs if cell.input_id == proxy_rows["financial-fact"].observation_id
-    )
-    assert fin_cell.confidence == expected_proxy
-
-    # Lower observation confidence also gets the 0.85 semantic_mapping_quality factor.
-    low_rows = _member_rows_for_probe(
-        confidence=Decimal("0.70"),
-        financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
-    )
-    low_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", low_rows, histories=(flat_history(),))
-    assert low_member.gross_profit is not None
-    assert low_member.gross_profit.confidence == (Decimal("0.70") * Decimal("0.85")).quantize(Decimal("0.0001"))
-
-    # Null vintage entry ({"gross_profit": None}) does not raise AttributeError and leaves confidence uncapped.
-    null_vintage_rows = _member_rows_for_probe(
-        confidence=Decimal("0.92"),
-        financial_vintage={"gross_profit": None},
-    )
-    null_vintage_member = PostgresToptCoreRepository._snapshot_member(
-        "listing:xnas:nvda", null_vintage_rows, histories=(flat_history(),)
-    )
-    assert null_vintage_member.gross_profit is not None
-    assert null_vintage_member.gross_profit.confidence == Decimal("0.92")
-
-    # SSOT guard: top-level `gross_profit_is_revenue_proxy` is rejected by `extra="forbid"`;
-    # `vintage["gross_profit"]["is_revenue_proxy"]` is the single source of truth (#1255).
     from pydantic import ValidationError
 
     duplicate_key_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
-    duplicate_key_rows["financial-fact"].payload["gross_profit_is_revenue_proxy"] = True
+    duplicate_key_rows["financial-fact"].payload["undeclared_extra_key"] = True
     with pytest.raises(ValidationError):
         PostgresToptCoreRepository._snapshot_member(
             "listing:xnas:nvda", duplicate_key_rows, histories=(flat_history(),)
         )
+
+
+def test_snapshot_member_drops_stale_operating_or_revenue_period_with_stale_period_reason() -> None:
+    """#1519 step 7: a restated 2018 period filed in 2026 has a fresh `knowable_at` but a
+    `period.end` older than `maximum_input_age_days`, so `_snapshot_member` drops the metric
+    to `None` and records `ToptCoreReasonCode.STALE_PERIOD`."""
+    from data_engine.datahub.production_topt.materialization import InputAgeLimit
+
+    input_age = InputAgeLimit(
+        cutoff=CUTOFF,
+        maximum_age=timedelta(days=455),
+        deciding={"general": frozenset({"gross_profit", "total_assets", "headcount", "revenue"})},
+    )
+    stale_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
+    stale_rows["financial-fact"].payload["operating_period_end"] = "2018-12-31"
+    stale_rows["financial-fact"].payload["revenue_period_end"] = "2025-12-31"
+    stale_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", stale_rows, histories=(flat_history(),), input_age=input_age
+    )
+    assert stale_member.gross_profit is not None
+    assert stale_member.gross_profit.value is None
+    assert stale_member.gross_profit.unavailable_reason is ToptCoreReasonCode.STALE_PERIOD
+    assert stale_member.revenue is not None
+    assert stale_member.revenue.value is not None
+    assert stale_member.revenue.unavailable_reason is None
+
+    fresh_rows = _member_rows_for_probe(confidence=Decimal("0.92"))
+    fresh_rows["financial-fact"].payload["operating_period_end"] = "2025-12-31"
+    fresh_rows["financial-fact"].payload["revenue_period_end"] = "2025-12-31"
+    fresh_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:nvda", fresh_rows, histories=(flat_history(),), input_age=input_age
+    )
+    assert fresh_member.gross_profit is not None
+    assert fresh_member.gross_profit.value is not None
+    assert fresh_member.gross_profit.unavailable_reason is None
 
 
 def test_snapshot_member_accepts_listing_reused_price_with_foreign_issuer_id() -> None:
@@ -2105,20 +2103,18 @@ def test_a_member_with_an_empty_history_drops_its_count_by_name() -> None:
     assert member.shares_outstanding.unavailable_reason is ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
 
 
-def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_confidence(
+def test_freeze_and_materialize_aligns_post_split_shares(
     connection,
 ) -> None:
-    """#1277 + #1255: end-to-end `freeze_snapshot` -> `materialize` adjusts NVDA's
+    """#1277: end-to-end `freeze_snapshot` -> `materialize` adjusts NVDA's
     pre-split share count by 10x when `staging.market_prices_daily` records a 10:1 split
-    between the filing date (`2026-03-02`) and the close session (`2026-04-01`), and caps
-    revenue-proxy gross profit confidence at `0.85`."""
+    between the filing date (`2026-03-02`) and the close session (`2026-04-01`)."""
     from split_series_seed import store_daily_series
 
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
         connection,
         financial_vintage={
             "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20)),
-            "gross_profit": {"is_revenue_proxy": True},
         },
     )
     close_session = (CUTOFF - timedelta(minutes=58)).astimezone(UTC).date()
@@ -2143,9 +2139,7 @@ def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_
     aapl_member = next(m for m in snapshot.members if m.listing_id == "listing:xnas:aapl")
     assert nvda_member.shares_outstanding.value == Decimal("100000000")
     assert aapl_member.shares_outstanding.value == Decimal("10000000")
-    assert nvda_member.gross_profit is not None and Decimal("0.5") < nvda_member.gross_profit.confidence < Decimal(
-        "0.85"
-    )
+    assert nvda_member.gross_profit is not None and nvda_member.gross_profit.confidence > Decimal("0.5")
 
     nvda_result = by_listing["listing:xnas:nvda"]
     aapl_result = by_listing["listing:xnas:aapl"]

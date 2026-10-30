@@ -9,10 +9,10 @@ A record, not a gate (see `governance/README.md`). It is an authoring record. It
 | Strategy | `large_model_value_v0` |
 | Definition version | `1.1.0` (`provisional_semantics: false`, the value of 1.0.0) |
 | Definition file | `common/contracts/src/truealpha_contracts/data/large_model_value_v0_definition_1_1_0.json` |
-| Definition content sha256 | `e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604` |
-| Strategy definition id | `strategy-definition:e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604` |
+| Definition content sha256 | `b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3` |
+| Strategy definition id | `strategy-definition:b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3` |
 | Replaces | definition `1.0.0`, sha256 `a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803`. The file of 1.0.0 stays: the frozen #21 replay and the stored runs use it. |
-| Issue | wangzitian0/truealpha#1518 (step 3), wangzitian0/truealpha#1517 (stage A4) |
+| Issue | wangzitian0/truealpha#1518 (step 3), wangzitian0/truealpha#1517 (stage A4), wangzitian0/truealpha#1519 (step 6) |
 
 ## Decision that the file implements
 
@@ -26,9 +26,9 @@ The definition states no labor-efficiency formula. It pins one tree of the metri
 
 | Class | Tree key | Tree version | Tree sha256 |
 |---|---|---|---|
-| `financial` | `gppe_banking_tce` | `v2` | `85b35b68c57dd7d8c0b55d9ef70175b395d97a75257f26aabe69bdbc551400bb` |
-| `non_financial` | `gppe` | `production-topt-v0.2.0` | `a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb` |
-| `insurance` | `gppe` | `production-topt-v0.2.0` | `a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb` |
+| `financial` | `gppe_banking_tce` | `v2` | `a6d6ca21a0a92144e46a95054b111ad4e5cd0455dcb7741991e6660e7fc8153b` |
+| `non_financial` | `gppe` | `production-topt-v0.2.0` | `9015a3713fd159cf5ba9014eb6ecbb14551da177c14bbd5d7acc17b1e2177906` |
+| `insurance` | `gppe` | `production-topt-v0.2.0` | `9015a3713fd159cf5ba9014eb6ecbb14551da177c14bbd5d7acc17b1e2177906` |
 
 `factors.forest.bound_tree` raises when a pin differs from the registered tree. The core and the composite evaluate the same pinned tree.
 

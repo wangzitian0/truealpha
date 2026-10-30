@@ -142,6 +142,7 @@ class ToptCoreReasonCode(StrEnum):
     NONPOSITIVE_SHARES_OUTSTANDING = "nonpositive_shares_outstanding"
     NONPOSITIVE_MARKET_PRICE = "nonpositive_market_price"
     STALE_INPUT = "stale_input"
+    STALE_PERIOD = "stale_period"
     UNKNOWN_FRESHNESS = "unknown_freshness"
     #: #1235: P/GP divides by the operating numerator; zero or negative gives no multiple.
     NONPOSITIVE_GROSS_PROFIT = "nonpositive_gross_profit"
@@ -658,6 +659,12 @@ def _snapshot_freshness(snapshot: ToptCoreSnapshotInput) -> MetricFreshness:
     return MetricFreshness.FRESH
 
 
+def _missing_metric_reason(metric: ToptMetricInput | None, default_field: str) -> ToptCoreReasonCode:
+    if metric is not None and metric.unavailable_reason is not None:
+        return metric.unavailable_reason
+    return ToptCoreReasonCode(f"missing_{default_field}")
+
+
 def _unavailable_gppe(
     snapshot: ToptCoreSnapshotInput,
     *,
@@ -744,7 +751,7 @@ def compute_topt_gppe(
             raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
         metric: ToptMetricInput | None = getattr(snapshot, field)
         if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
-            reasons_list.append(ToptCoreReasonCode(f"missing_{field}"))
+            reasons_list.append(_missing_metric_reason(metric, field))
             continue
         inputs[node.key] = metric.value
     reasons = tuple(reasons_list)
@@ -981,12 +988,12 @@ def compute_topt_core(
         )
     reasons: list[ToptCoreReasonCode] = []
     if snapshot.revenue is None or snapshot.revenue.value is None:
-        reasons.append(ToptCoreReasonCode.MISSING_REVENUE)
+        reasons.append(_missing_metric_reason(snapshot.revenue, "revenue"))
     elif snapshot.revenue.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_REVENUE)
     numerator_field, numerator = _operating_numerator(snapshot, definition)
     if numerator is None or numerator.value is None:
-        reasons.append(ToptCoreReasonCode(f"missing_{numerator_field}"))
+        reasons.append(_missing_metric_reason(numerator, numerator_field))
     elif numerator.value <= 0:
         reasons.append(ToptCoreReasonCode.NONPOSITIVE_GROSS_PROFIT)
     reasons.extend(_share_count_reasons(snapshot))

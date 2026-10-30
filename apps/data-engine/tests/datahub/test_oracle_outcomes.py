@@ -272,12 +272,14 @@ def _independent(
 
 
 def test_a_served_revenue_that_the_stored_filing_repeats_agrees_and_the_row_carries_its_numbers() -> None:
+    from datetime import time
+
     outcome = _independent("revenue", "1000", REVENUE_DOCUMENT)
     assert (outcome.result, outcome.reason, outcome.ratio) == (AGREE, None, Decimal(1))
     assert (outcome.served_value, outcome.oracle_value) == (Decimal(1000), Decimal(1000))
     assert (outcome.oracle_kind, outcome.field, outcome.source) == ("independent_parse", "revenue", "sec")
     assert outcome.period == "2025-12-31"
-    assert outcome.knowable_at == datetime(2026, 2, 20, tzinfo=UTC)
+    assert outcome.knowable_at == datetime.combine(date(2026, 2, 20), time.max, tzinfo=UTC)
     assert outcome.observation_id == "normalized-observation:" + "0" * 63 + "1"
     assert outcome.tolerance == INDEPENDENT_TOLERANCE
 
@@ -295,9 +297,11 @@ def test_a_served_revenue_of_an_older_period_than_the_stored_filing_is_a_disagre
 
 def test_a_filing_after_the_cutoff_is_no_witness() -> None:
     """The cutoff is 2026-02-01, before the FY2025 filing: the newest knowable annual figure is FY2024."""
+    from datetime import time
+
     outcome = _independent("revenue", "800", REVENUE_DOCUMENT, cutoff=date(2026, 2, 1))
     assert (outcome.result, outcome.ratio, outcome.period) == (AGREE, Decimal(1), "2024-12-31")
-    assert outcome.knowable_at == datetime(2025, 2, 10, tzinfo=UTC)
+    assert outcome.knowable_at == datetime.combine(date(2025, 2, 10), time.max, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -317,13 +321,15 @@ def test_the_ratio_is_judged_against_the_tolerance_of_the_policy(factor: Decimal
 
 def test_gross_profit_is_the_difference_that_the_stored_filing_implies_when_it_reports_none() -> None:
     """No `GrossProfit` tag: revenue 1000 minus cost 400, knowable from the later filing of the two."""
+    from datetime import time
+
     document = _document(
         Revenues=[_annual("2025-12-31", "1000", "2026-02-20", start="2025-01-01")],
         CostOfRevenue=[_annual("2025-12-31", "400", "2026-03-05", start="2025-01-01")],
     )
     outcome = _independent("gross_profit", "600", document)
     assert (outcome.result, outcome.oracle_value, outcome.field) == (AGREE, Decimal(600), "gross_profit")
-    assert outcome.knowable_at == datetime(2026, 3, 5, tzinfo=UTC)
+    assert outcome.knowable_at == datetime.combine(date(2026, 3, 5), time.max, tzinfo=UTC)
 
 
 def test_the_two_fields_of_one_issuer_are_two_comparisons() -> None:
@@ -376,9 +382,11 @@ def test_a_comparison_without_a_document_holds_the_cutoff_day_as_its_period() ->
 
 
 def test_a_served_value_without_a_witness_keeps_the_witness_it_could_not_judge() -> None:
+    from datetime import time
+
     outcome = _independent("revenue", None, REVENUE_DOCUMENT)
     assert (outcome.served_value, outcome.oracle_value) == (None, Decimal(1000))
-    assert outcome.knowable_at == datetime(2026, 2, 20, tzinfo=UTC)
+    assert outcome.knowable_at == datetime.combine(date(2026, 2, 20), time.max, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(

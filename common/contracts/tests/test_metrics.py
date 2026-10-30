@@ -23,8 +23,15 @@ def test_every_module_core_metric_is_registered():
         assert metric in METRICS
 
 
-def test_gross_profit_declares_the_financial_issuer_branch():
-    assert METRICS["gross_profit"].financial_issuer_split is True
+def test_separate_operating_and_share_quantities_are_registered_under_their_own_names():
+    for metric, expected_unit in (
+        ("pre_provision_profit", UnitFamily.CURRENCY),
+        ("insurance_pre_claims_profit", UnitFamily.CURRENCY),
+        ("shares_weighted_average_basic", UnitFamily.COUNT),
+    ):
+        assert metric in METRICS
+        assert METRICS[metric].unit_family is expected_unit
+    assert not hasattr(METRICS["gross_profit"], "financial_issuer_split")
 
 
 def test_input_key_aliases_round_trip_through_the_registry():

@@ -43,7 +43,7 @@ from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 _V1 = StrategyDefinitionIdentity("1.0.0", "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803", False)
 #: Definition 1.1.0 (#1518, #1517): the live definition. It pins a labor-efficiency tree per
 #: class and removes the confidence floor. Written out as an oracle, like `_V1`.
-_V11 = StrategyDefinitionIdentity("1.1.0", "e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604", False)
+_V11 = StrategyDefinitionIdentity("1.1.0", "b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3", False)
 #: The frozen #21 file, named on purpose: the live resource is definition 1.1.0.
 _FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
 #: Definition 0.1.0, whose file the owner deleted. Production and staging still hold its runs.

@@ -293,12 +293,14 @@ def test_the_tree_is_the_definition_version_it_claims() -> None:
 # The tree's arithmetic is unchanged: the GOLDEN result identities above still pass, and a node
 # diff against main@e465d3d shows only `key` and `definition` changed on the node itself.
 FROZEN_TREES = {
-    ("gppe", "production-topt-v0.2.0"): "a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb",
+    ("gppe", "production-topt-v0.2.0"): "9015a3713fd159cf5ba9014eb6ecbb14551da177c14bbd5d7acc17b1e2177906",
     # #1176 follow-up: the banking tree deducts preferred stock, so its pin moved with the edit.
     # #1518: v1 (pin 6b2d2cce...) had no snapshot-field alias on its four captured leaves. v2 names
     # one for each leaf, so the TOPT core snapshot carries the tree. v2 also refuses a negative tangible
     # common equity (`charged_tangible_common_equity`). A positive equity gives the arithmetic of v1.
-    ("gppe_banking_tce", "v2"): "85b35b68c57dd7d8c0b55d9ef70175b395d97a75257f26aabe69bdbc551400bb",
+    # #1519 step 6: PRE_PROVISION_PROFIT declares METRIC_REGISTRY("pre_provision_profit") with METRIC
+    # and INPUT_KEY aliases, removing the financial_issuer_split overload on gross_profit.
+    ("gppe_banking_tce", "v2"): "a6d6ca21a0a92144e46a95054b111ad4e5cd0455dcb7741991e6660e7fc8153b",
 }
 
 
