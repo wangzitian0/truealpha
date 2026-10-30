@@ -6,7 +6,7 @@ description: Step 2 of the five-step flow. Runs at most 3 Swarm rounds (10 Inter
 # audit: try to prove it wrong
 
 A system's own tests, CI, and issue states are claims written by the system. A test cannot catch its author's premise.
-Audit runs **at most 3 Swarm rounds** via `subagent_batch`. Each round dispatches 1 Swarm of 10 Interns (`M=10`).
+Audit runs **at most 3 Swarm rounds** (`swarm` skill). Each round dispatches 1 Swarm of 10 Interns (`M=10`).
 
 ## Phase 0: Touch Reality (run before any scout)
 
@@ -31,7 +31,7 @@ Audit runs **at most 3 Swarm rounds** via `subagent_batch`. Each round dispatche
 
 ## Four gates
 
-1. **The auditor must read code.** Use a read-only native agent, or pass target files via `context_files` (with diffs and contracts) to `subagent_batch` workers so the worker injects code from disk without prompt duplication. Never ask an auditor to judge code that the auditor cannot see.
+1. **The auditor must read code.** Use a read-only native agent or Pi `intern` (`pi/agents/intern.md`) with direct disk read access to target files, diffs, and contracts. Never ask an auditor to judge code that the auditor cannot see.
 2. **See each new test fail first.** Run only the target test case on unfixed code and confirm RED (`pytest <file>::<test> -x`).
 3. **Re-review every fix independently.** The reviewer gets only the new code, not the defect story.
    For a security fix, ask for "the second chain from the same entry".
