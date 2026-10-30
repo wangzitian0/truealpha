@@ -72,7 +72,7 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # shares as a versioned fallback for issuers whose per-class cover-page facts the
 # company-facts API omits.
 #
-# v3 -> v4 (#529): a share count measured more than `_MAX_SHARES_STALENESS_DAYS` before the
+# v3 -> v4 (#529): a share count measured more than the staleness bound before the
 # cutoff is refused instead of used, and the payload gained `shares_period_end` so the
 # refusal is auditable in SQL rather than only reproducible by re-deriving from the vendor.
 # This changes a resolved value (V's shares go from a 2010 figure to absent), which is why

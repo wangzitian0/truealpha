@@ -31,8 +31,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from importlib import import_module
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
@@ -189,6 +190,46 @@ def _assign_reliability_prior(
         object.__setattr__(owner, "reliability_prior", declared)
 
 
+class AsOfAxis(StrEnum):
+    """The axis on which a registered source dates when its observation becomes knowable (#1519)."""
+
+    SETTLED_SESSION = "settled_session"
+    ACCESSION = "accession"
+    RELEASE = "release"
+    BUSINESS_DAY = "business_day"
+
+
+def knowable_instant(axis: AsOfAxis | str, day: date) -> datetime:
+    """The single knowable UTC instant of ``day`` on ``axis`` (#1519).
+
+    - ``settled_session``: the exchange close (`xnys_session_close_utc(day)`).
+    - ``accession``: the end of the filed UTC day (`23:59:59.999999Z`).
+    - ``business_day``: `00:00:00Z` of the next day (`day + 1d`).
+    - ``release``: `00:00:00Z` of `day`.
+    """
+    resolved = AsOfAxis(axis)
+    if resolved is AsOfAxis.SETTLED_SESSION:
+        from data_engine.datahub.market_prices import xnys_session_close_utc
+
+        return xnys_session_close_utc(day)
+    if resolved is AsOfAxis.ACCESSION:
+        return datetime.combine(day, time.max, tzinfo=UTC)
+    if resolved is AsOfAxis.BUSINESS_DAY:
+        return datetime.combine(day + timedelta(days=1), time.min, tzinfo=UTC)
+    return datetime.combine(day, time.min, tzinfo=UTC)
+
+
+def _validate_as_of_axis(raw: AsOfAxis | str | None, owner_name: str, *, allow_none: bool = False) -> AsOfAxis | None:
+    if raw is None and allow_none:
+        return None
+    if not raw:
+        raise ValueError(f"{owner_name}: registration must declare as_of_axis (#1411 K1)")
+    try:
+        return AsOfAxis(raw)
+    except ValueError as err:
+        raise ValueError(f"{owner_name}: invalid as_of_axis {raw!r}; expected one of {tuple(AsOfAxis)}") from err
+
+
 @dataclass(frozen=True)
 class OriginRegistration:
     """One vendor origin behind a semantic: how its observations are recognised in the
@@ -204,7 +245,7 @@ class OriginRegistration:
     capacity: CapacityDeclaration | None = None
     ledger_seat: str | None = None
     per_key_cost: int | None = None
-    as_of_axis: str | None = None
+    as_of_axis: AsOfAxis | str | None = None
     reliability_prior: Decimal | None = None
 
     def __post_init__(self) -> None:
@@ -212,6 +253,11 @@ class OriginRegistration:
         _assign_reliability_prior(self, self.origin_id, self.origin_source, self.ledger_seat)
         if self.per_key_cost is not None and self.per_key_cost <= 0:
             raise ValueError(f"{self.origin_source}: per_key_cost must be positive, got {self.per_key_cost}")
+        object.__setattr__(
+            self,
+            "as_of_axis",
+            _validate_as_of_axis(self.as_of_axis, self.origin_source, allow_none=True),
+        )
 
 
 def _seat_capacity(owner: OriginRegistration | SourceRegistration, name: str) -> None:
@@ -266,7 +312,7 @@ class SourceRegistration:
     capacity: CapacityDeclaration | None = None
     ledger_seat: str | None = None
     per_key_cost: int = 0
-    as_of_axis: str = "release"
+    as_of_axis: AsOfAxis | str = AsOfAxis.RELEASE
     #: The observation is a session close: it is knowable only once its session has
     #: settled, so a mid-session bar is not a close (#637) and a reused observation must
     #: be THE settled session's (#635). Declared by the source, applied by generic code.
@@ -279,8 +325,11 @@ class SourceRegistration:
         _assign_reliability_prior(self, self.source_id, self.ledger_seat)
         if self.ledger_seat is not None and self.per_key_cost <= 0:
             raise ValueError(f"{self.source_id}: vendor registration must declare positive per_key_cost (#1411 K1)")
-        if not self.as_of_axis:
-            raise ValueError(f"{self.source_id}: registration must declare as_of_axis (#1411 K1)")
+        object.__setattr__(
+            self,
+            "as_of_axis",
+            _validate_as_of_axis(self.as_of_axis, self.source_id),
+        )
 
     def entry_payload(self) -> dict[str, Any]:
         """The declared facts, in a canonical shape, so the registration is content-addressed."""
@@ -331,7 +380,7 @@ class SourceRegistration:
 
 
 #: The as-of axes that a macro source may declare. A macro observation is dated by a business day.
-MACRO_AS_OF_AXES = ("business_day",)
+MACRO_AS_OF_AXES: tuple[AsOfAxis, ...] = (AsOfAxis.BUSINESS_DAY,)
 
 
 @dataclass(frozen=True)
@@ -374,7 +423,7 @@ class MacroSourceRegistration:
     series: tuple[MacroSeries, ...]
     ledger_seat: str
     per_key_cost: int
-    as_of_axis: str
+    as_of_axis: AsOfAxis | str
     max_age_days: int
     #: The first calendar year that the first run loads. The ideal backtest window is 20 years.
     first_year: int
@@ -389,8 +438,10 @@ class MacroSourceRegistration:
             raise ValueError(f"{self.source_id}: ledger seat {self.ledger_seat!r} has no capacity declaration")
         if self.per_key_cost <= 0:
             raise ValueError(f"{self.source_id}: macro registration must declare positive per_key_cost (#1411 K1)")
-        if self.as_of_axis not in MACRO_AS_OF_AXES:
+        validated_axis = _validate_as_of_axis(self.as_of_axis, self.source_id)
+        if validated_axis not in MACRO_AS_OF_AXES:
             raise ValueError(f"{self.source_id}: as_of_axis {self.as_of_axis!r} is not one of {MACRO_AS_OF_AXES}")
+        object.__setattr__(self, "as_of_axis", validated_axis)
         if not self.series:
             raise ValueError(f"{self.source_id}: a macro registration must declare at least one series")
         ids = [item.series_id for item in self.series]
@@ -582,7 +633,7 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 parser_versions=(MOOMOO_FINANCIALS_PARSER_VERSION,),
                 ledger_seat="moomoo",
                 per_key_cost=2,
-                as_of_axis="accession",
+                as_of_axis="settled_session",
             ),
         ),
         # Stays B until a scheduled staging tick shows the moomoo origin reconciling; the

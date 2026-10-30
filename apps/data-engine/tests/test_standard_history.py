@@ -345,7 +345,7 @@ def test_each_cutoff_reads_the_newest_filing_filed_at_or_before_it(connection, m
         else:
             assert fact is not None, f"{cutoff.date()} has no headcount"
             assert fact.value == Decimal(expected.total)
-            assert fact.knowable_at == datetime.combine(expected.filed, datetime.min.time(), tzinfo=UTC)
+            assert fact.knowable_at == datetime.combine(expected.filed, datetime.max.time(), tzinfo=UTC)
     assert reader(CIK_B, visited[-1].date()) is None  # a declined filing lands no fact
 
 

@@ -46,9 +46,6 @@ class MetricSpec(BaseModel):
     #: carrying its own list. The payload key is `<name>_by_period`.
     periodic: bool = False
     description: str = Field(min_length=1)
-    # Gross profit is defined differently for financial vs non-financial
-    # issuers (init.md section 0) — the parser branches, the metric name does not.
-    financial_issuer_split: bool = False
 
 
 _SPECS = (
@@ -78,8 +75,22 @@ _SPECS = (
     MetricSpec(
         name="gross_profit",
         unit_family=UnitFamily.CURRENCY,
-        description="Gross profit; financial issuers use the industry-branch definition.",
-        financial_issuer_split=True,
+        description="Gross profit for non-financial issuers.",
+    ),
+    MetricSpec(
+        name="pre_provision_profit",
+        unit_family=UnitFamily.CURRENCY,
+        description="Bank pre-provision net revenue: net revenue minus noninterest expense (#59, #1519).",
+    ),
+    MetricSpec(
+        name="insurance_pre_claims_profit",
+        unit_family=UnitFamily.CURRENCY,
+        description="Insurance operating numerator: revenue minus policyholder benefits and claims (#496, #1519).",
+    ),
+    MetricSpec(
+        name="shares_weighted_average_basic",
+        unit_family=UnitFamily.COUNT,
+        description="Weighted-average basic common shares for the fiscal period (#496, #1519).",
     ),
     MetricSpec(
         name="cost_of_revenue",

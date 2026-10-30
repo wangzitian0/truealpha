@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
-FiscalPeriod = str | date | tuple[date, date]
+from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
+
+FiscalPeriod = str | date | tuple[date, date] | AnnualFiscalPeriod
 
 
 @dataclass(frozen=True)

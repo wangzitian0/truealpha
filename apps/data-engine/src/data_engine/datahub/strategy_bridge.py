@@ -25,14 +25,15 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import cache, partial
 from typing import Any
 
 import psycopg
-from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff, required_input_keys
+from factors.composite.strategy_evaluator import IssuerInput, Measure, evaluate_cutoff, required_input_keys
 from factors.forest import IssuerClass
+from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
@@ -440,8 +441,13 @@ def run_strategy_replay_for_cutoff(
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
     issuer_classes = _issuer_classes_for_run(connection, capture_run_id)
+    periods_by_issuer = _issuer_periods_for_run(connection, capture_run_id)
     issuer_inputs = [
-        replace(item, issuer_class=issuer_classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff)
+        _with_periods(
+            replace(item, issuer_class=issuer_classes.get(item.issuer_id)),
+            periods_by_issuer.get(item.issuer_id, {}),
+        )
+        for item in gateway.issuer_inputs(cutoff)
     ]
     # An issuer that the seed wrote no row for, such as one with no declared primary listing, has no
     # input here. Its refusal still gives it a decision with its reason.
@@ -474,6 +480,54 @@ def run_strategy_replay_for_cutoff(
     )
     bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
     return run_id, len(decision_ids), snapshot_id
+
+
+def _with_periods(issuer: IssuerInput, periods: Mapping[str, AnnualFiscalPeriod]) -> IssuerInput:
+    if not periods:
+        return issuer
+    records = dict(issuer.records)
+    for key, period in periods.items():
+        if key in records:
+            measure, conf = records[key]
+            if isinstance(measure, Measure):
+                records[key] = (replace(measure, period=period), conf)
+    return replace(issuer, records=records)
+
+
+def _issuer_periods_for_run(
+    connection: psycopg.Connection[Any], run_id: str
+) -> dict[str, dict[str, AnnualFiscalPeriod]]:
+    """The annual fiscal period of each issuer's operating numerator and revenue in one capture run (#1519)."""
+    rows = connection.execute(
+        """
+        select distinct p.normalized_payload ->> 'issuer_id',
+                        p.normalized_payload ->> 'operating_period_end',
+                        p.normalized_payload ->> 'revenue_period_end'
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        where ob.run_id = %s
+          and o.semantic_type = 'financial-fact'
+        """,
+        (run_id,),
+    ).fetchall()
+    result: dict[str, dict[str, AnnualFiscalPeriod]] = {}
+    for issuer_id, op_end_raw, rev_end_raw in rows:
+        if not issuer_id:
+            continue
+        periods = result.setdefault(str(issuer_id), {})
+        if op_end_raw:
+            end = date.fromisoformat(str(op_end_raw))
+            fp = AnnualFiscalPeriod(filing_fiscal_year=end.year, kind="FY", start=end - timedelta(days=364), end=end)
+            periods["gross_profit"] = fp
+            periods["pre_provision_profit"] = fp
+        if rev_end_raw:
+            end = date.fromisoformat(str(rev_end_raw))
+            periods["revenue"] = AnnualFiscalPeriod(
+                filing_fiscal_year=end.year, kind="FY", start=end - timedelta(days=364), end=end
+            )
+    return result
 
 
 def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) -> dict[str, IssuerClass]:

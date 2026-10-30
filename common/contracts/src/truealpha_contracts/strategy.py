@@ -154,6 +154,7 @@ class ExclusionReason(StrEnum):
     MISSING_RISK_FREE_RATE_PARAMETER = "missing_risk_free_rate_parameter"
     BELOW_CONFIDENCE_FLOOR = "below_confidence_floor"
     STALE_REQUIRED_INPUT = "stale_required_input"
+    STALE_PERIOD = "stale_period"
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_LABOR_COST = "nonpositive_labor_cost"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"

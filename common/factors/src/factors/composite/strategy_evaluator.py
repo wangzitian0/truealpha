@@ -30,10 +30,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from types import MappingProxyType
 
+from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
+from truealpha_contracts.fiscal_period import parse_annual
 from truealpha_contracts.measure import Measure
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, input_key_for_metric
 from truealpha_contracts.strategy import (
@@ -70,7 +72,7 @@ from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
 
 
-def _input_keys(factor_name: str) -> tuple[str, ...]:
+def _input_keys(factor_name: str, *, issuer_class: IssuerClass | None = None) -> tuple[str, ...]:
     """The strategy input keys a registered factor's declared metrics are spelled as here.
 
     The factor declares METRICS (`@factor(..., inputs=...)`, #855 B2); the golden corpus and
@@ -78,7 +80,10 @@ def _input_keys(factor_name: str) -> tuple[str, ...]:
     `input_key_for_metric` is the one inverse of that alias map. This module used to keep a
     key tuple per factor — the list that made every new factor an edit here.
     """
-    return tuple(input_key_for_metric(metric) for metric in FACTOR_REGISTRY[factor_name].inputs)
+    keys = tuple(input_key_for_metric(metric) for metric in FACTOR_REGISTRY[factor_name].inputs)
+    if factor_name == "price_to_gross_profit" and issuer_class is IssuerClass.FINANCIAL:
+        return tuple("pre_provision_profit" if k == "gross_profit" else k for k in keys)
+    return keys
 
 
 # Owner decision 2026-08-17 (#284): three years, recency-weighted. The factor takes it
@@ -94,6 +99,7 @@ _METRIC_FOR_KEY = INPUT_KEY_ALIASES
 # input that any pinned tree consumes. An issuer is tested on the inputs of its own class only (#1518).
 _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
+    ("pre_provision_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
     ("total_assets", ExclusionReason.MISSING_TOTAL_ASSETS_FACT),
     ("stockholders_equity", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
     ("goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
@@ -364,6 +370,8 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
         if key in issuer.periodic_records:
             continue
         record = issuer.records.get(key)
+        if record is None and key == "pre_provision_profit":
+            record = issuer.records.get("gross_profit")
         if record is None:
             continue
         metric = _METRIC_FOR_KEY.get(key, key)
@@ -387,6 +395,42 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
     return facts
 
 
+def _period_end_of(period: object) -> date | None:
+    if isinstance(period, AnnualFiscalPeriod):
+        return period.end
+    if isinstance(period, date):
+        return period
+    if isinstance(period, tuple) and len(period) == 2 and isinstance(period[1], date):
+        return period[1]
+    if isinstance(period, str):
+        parsed = parse_annual(period)
+        if parsed is not None:
+            return parsed.end
+        try:
+            return date.fromisoformat(period)
+        except ValueError:
+            return None
+    return None
+
+
+def _has_stale_period(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime, maximum_age: timedelta) -> bool:
+    """Whether any checked input carries a Measure whose period end is older than ``maximum_age`` (#1519)."""
+    cutoff_day = as_of.astimezone(UTC).date()
+    for key in keys:
+        record = issuer.records.get(key)
+        if record is None and key == "pre_provision_profit":
+            record = issuer.records.get("gross_profit")
+        if record is None:
+            continue
+        measure, _conf = record
+        if not isinstance(measure, Measure):
+            continue
+        end = _period_end_of(measure.period)
+        if end is not None and (cutoff_day - end) > maximum_age:
+            return True
+    return False
+
+
 class LookAheadError(ValueError):
     """Raised when an input's `knowable_at` is strictly after the evaluation `cutoff_at` (#1413 D6)."""
 
@@ -406,10 +450,55 @@ def _has_stale_required_input(
             raise LookAheadError(
                 f"{issuer.issuer_id}: input {key!r} has knowable_at {knowable_instant.isoformat()} > cutoff {as_of.isoformat()}"
             )
-    unknown = [key for key in keys if key not in issuer.knowable_at]
+    resolved_keys = [
+        (
+            "gross_profit"
+            if key == "pre_provision_profit" and key not in issuer.knowable_at and "gross_profit" in issuer.knowable_at
+            else key
+        )
+        for key in keys
+    ]
+    unknown = [key for key in resolved_keys if key not in issuer.knowable_at]
     if unknown:
         raise ValueError(f"{issuer.issuer_id}: knowable_at lacks the required inputs {unknown}")
-    return any(as_of - issuer.knowable_at[key] > maximum_age for key in keys)
+    return any(as_of - issuer.knowable_at[key] > maximum_age for key in resolved_keys)
+
+
+def _missing_required_reason(
+    issuer: IssuerInput,
+    required: Sequence[tuple[str, ExclusionReason]],
+) -> ExclusionReason | None:
+    return next(
+        (
+            reason
+            for key, reason in required
+            if key not in issuer.records and not (key == "pre_provision_profit" and "gross_profit" in issuer.records)
+        ),
+        None,
+    )
+
+
+def _consumed_confidence_for(
+    issuer: IssuerInput,
+    required: Sequence[tuple[str, ExclusionReason]],
+) -> Decimal:
+    return min(
+        (issuer.records[key][1] if key in issuer.records else issuer.records["gross_profit"][1])
+        for key, _reason in required
+    )
+
+
+def _multiple_facts_for(
+    issuer: IssuerInput,
+    basis: ValuationBasis,
+    as_of: datetime,
+) -> list[Fact]:
+    facts = _facts_for(issuer, _input_keys(basis.value, issuer_class=issuer.issuer_class), as_of=as_of)
+    if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and not any(f.metric == "gross_profit" for f in facts):
+        ppnr = next((f for f in facts if f.metric == "pre_provision_profit"), None)
+        if ppnr is not None:
+            return [*facts, ppnr.model_copy(update={"metric": "gross_profit"})]
+    return facts
 
 
 def _evaluate_issuer(
@@ -437,17 +526,19 @@ def _evaluate_issuer(
     if issuer.issuer_class is None or tree is None:
         return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=None), None
     metric = tree.root
-    required = _required_inputs(basis, _consumed_input_keys(forest, {issuer.issuer_class: tree}))
-    missing = next((reason for key, reason in required if key not in issuer.records), None)
+    consumed = _consumed_input_keys(forest, {issuer.issuer_class: tree})
+    required = _required_inputs(basis, consumed)
+    missing = _missing_required_reason(issuer, required)
     if missing is not None:
         return _excluded(issuer.issuer_id, missing, confidence=None, labor_efficiency_metric=metric), None
 
+    max_age = timedelta(days=definition.eligibility.maximum_input_age_days)
     # The age limit comes after the missing-input rule and before the confidence floor (#1255).
     if _has_stale_required_input(
         issuer,
         [key for key, _reason in required],
         as_of=as_of,
-        maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
+        maximum_age=max_age,
     ):
         return (
             _excluded(
@@ -459,7 +550,23 @@ def _evaluate_issuer(
             None,
         )
 
-    consumed_confidence = min(issuer.records[key][1] for key, _reason in required)
+    if _has_stale_period(
+        issuer,
+        sorted(consumed),
+        as_of=as_of,
+        maximum_age=max_age,
+    ):
+        return (
+            _excluded(
+                issuer.issuer_id,
+                ExclusionReason.STALE_PERIOD,
+                confidence=None,
+                labor_efficiency_metric=metric,
+            ),
+            None,
+        )
+
+    consumed_confidence = _consumed_confidence_for(issuer, required)
     if (
         definition.eligibility.minimum_confidence is not None
         and consumed_confidence < definition.eligibility.minimum_confidence
@@ -489,9 +596,7 @@ def _evaluate_issuer(
     multiple_result = (
         ps_result
         if basis is ValuationBasis.PRICE_TO_SALES
-        else _MULTIPLE_FACTOR[basis](
-            _facts_for(issuer, _input_keys(basis.value), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
-        )
+        else _MULTIPLE_FACTOR[basis](_multiple_facts_for(issuer, basis, as_of), entity_id=issuer.issuer_id, as_of=as_of)
     )
     # P/S gates only when it is the valuation basis (then it IS `multiple_result`). Under a P/GP
     # definition a P/S that cannot be computed is recorded as None and decides nothing.

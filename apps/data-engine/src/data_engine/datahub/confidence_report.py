@@ -199,8 +199,6 @@ class OriginValue:
     #: The observation served its cell because the primary could not (#862): the payload
     #: declared `served_by_failover`. A lone failover assertion grades LOW under that name.
     served_by_failover: bool = False
-    #: True when `gross_profit` was derived from revenue via the revenue proxy (#1255, #1517).
-    is_revenue_proxy: bool = False
 
 
 @dataclass(frozen=True)
@@ -550,13 +548,8 @@ def _evaluate_valued_cell(
         cutoff=cutoff,
     )
     agreement = min(multi_agreement, oracle_agreement)
-    is_proxy = any(origin.is_revenue_proxy for origin in valued)
-    semantic_quality = Decimal("0.85") if (reason == "no_agreement_policy" or is_proxy) else Decimal("1")
-    extra_codes = (
-        (f"reason:{reason}", "confidence.revenue_proxy", *oracle_reasons)
-        if is_proxy
-        else (f"reason:{reason}", *oracle_reasons)
-    )
+    semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
+    extra_codes = (f"reason:{reason}", *oracle_reasons)
     return evaluate_cell_confidence(
         case_id=case_id,
         sources=tuple(sources),
@@ -1050,13 +1043,6 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
                     knowable_at=observation.knowable_at,
                     observation_id=observation.observation_id,
                     period_end=period,
-                    is_revenue_proxy=(
-                        name == "gross_profit"
-                        and observation.primary
-                        and bool(
-                            ((payload.get("vintage") or {}).get("gross_profit") or {}).get("is_revenue_proxy", False)
-                        )
-                    ),
                 )
             )
     return origins

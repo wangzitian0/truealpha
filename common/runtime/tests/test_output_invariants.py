@@ -826,13 +826,13 @@ def test_a_revenue_period_from_2018_fails_and_names_the_issuer(
     assert f"Offending rows: {REVENUE_UNIVERSE} {run_id} issuer:xel 2018-12-31 2026-03-31" in output
 
 
-def test_the_limit_is_the_named_constant_and_it_is_18_months(
+def test_the_limit_is_the_maximum_input_age_days_of_the_live_definition(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A period that ends exactly on the limit passes. A period that ends one day before it fails."""
-    assert _module.REVENUE_MAX_AGE_MONTHS == 18
-    limit = _months_before(SEEDED_CUTOFF, _module.REVENUE_MAX_AGE_MONTHS)
-    assert limit == date(2024, 9, 30)
+    assert _module._MAX_INPUT_AGE_DAYS == 455
+    limit = SEEDED_CUTOFF - timedelta(days=_module._MAX_INPUT_AGE_DAYS)
+    assert limit == date(2024, 12, 31)
     _seed_head(conn, REVENUE_UNIVERSE, [_issuer("edge", "edge0", revenue_period_end=limit)])
     assert _parity_verdict(conn, capsys, REVENUE_INVARIANT)[0] == 0
 

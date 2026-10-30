@@ -563,6 +563,50 @@ class InputAgeLimit:
         keys = self.deciding.get(issuer_class, frozenset())
         return any(self.cutoff - cell.knowable_at > self.maximum_age for key, cell in cells.items() if key in keys)
 
+    def is_period_stale(self, period_end: date | None) -> bool:
+        if period_end is None:
+            return False
+        return (self.cutoff.astimezone(UTC).date() - period_end) > self.maximum_age
+
+
+def _period_checked_value(
+    value: Decimal | None,
+    period_end: date | None,
+    input_age: InputAgeLimit | None,
+) -> tuple[Decimal | None, ToptCoreReasonCode | None]:
+    if value is not None and input_age is not None and input_age.is_period_stale(period_end):
+        return None, ToptCoreReasonCode.STALE_PERIOD
+    return value, None
+
+
+def _override_confidence(
+    listing_confidences: Mapping[str, Decimal] | None,
+    key: str,
+    fallback: Decimal | None,
+) -> Decimal | None:
+    if listing_confidences is not None and key in listing_confidences:
+        return listing_confidences[key]
+    return fallback
+
+
+def _validate_member_rows(
+    listing_id: str,
+    by_type: dict[str, _ObservationRow],
+) -> tuple[IdentityPayload, FinancialFactPayload, MarketPricePayload]:
+    if set(by_type) != _REQUIRED_TYPES:
+        raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
+    listing = IdentityPayload.model_validate(by_type["listing-identity"].payload)
+    membership = IdentityPayload.model_validate(by_type["universe-membership"].payload)
+    financial = FinancialFactPayload.model_validate(by_type["financial-fact"].payload)
+    price = MarketPricePayload.model_validate(by_type["market-price"].payload)
+    coordinates = {(item.issuer_id, item.instrument_id, item.listing_id) for item in (listing, membership, financial)}
+    if (
+        coordinates != {(listing.issuer_id, listing.instrument_id, listing.listing_id)}
+        or price.listing_id != listing.listing_id
+    ):
+        raise ValueError(f"listing {listing_id} normalized payload identities disagree")
+    return listing, financial, price
+
 
 def _shares_cell_at(cell: InputCell | None, knowable_at: datetime) -> dict[str, InputCell]:
     """The share cell with its final `knowable_at`: the share-basis rule can move it (`OnCloseBasis`)."""
@@ -905,20 +949,7 @@ class PostgresToptCoreRepository:
         input_age: InputAgeLimit | None = None,
         listing_confidences: Mapping[str, Decimal] | None = None,
     ) -> SnapshotMember:
-        if set(by_type) != _REQUIRED_TYPES:
-            raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
-        listing = IdentityPayload.model_validate(by_type["listing-identity"].payload)
-        membership = IdentityPayload.model_validate(by_type["universe-membership"].payload)
-        financial = FinancialFactPayload.model_validate(by_type["financial-fact"].payload)
-        price = MarketPricePayload.model_validate(by_type["market-price"].payload)
-        coordinates = {
-            (item.issuer_id, item.instrument_id, item.listing_id) for item in (listing, membership, financial)
-        }
-        if (
-            coordinates != {(listing.issuer_id, listing.instrument_id, listing.listing_id)}
-            or price.listing_id != listing.listing_id
-        ):
-            raise ValueError(f"listing {listing_id} normalized payload identities disagree")
+        listing, financial, price = _validate_member_rows(listing_id, by_type)
         financial_row = by_type["financial-fact"]
         market_row = by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
@@ -938,11 +969,7 @@ class PostgresToptCoreRepository:
             )
             if cell.fiscal_period is None
         }
-        close_conf = (
-            listing_confidences.get("close")
-            if listing_confidences is not None and "close" in listing_confidences
-            else market_row.confidence
-        )
+        close_conf = _override_confidence(listing_confidences, "close", market_row.confidence)
         price_cell = last_close_cell(market_row.payload, close_conf, market_row.knowable_at)
 
         shares_cell = cells.get(SHARES_KEY)
@@ -959,31 +986,27 @@ class PostgresToptCoreRepository:
             ruleset=ruleset,
         )
 
-        # #1518: one age limit. A cell that the issuer's decision consumes and that became knowable more than
-        # `maximum_input_age_days` before the cutoff makes the financial cell stale. The decision tests the same
-        # cells with the same limit (`strategy_evaluator._has_stale_required_input`).
         if input_age is not None and input_age.is_stale(
             financial.operating_branch.value, {**cells, **_shares_cell_at(shares_cell, shares_knowable_at)}
         ):
             financial_row = replace(financial_row, freshness=MetricFreshness.STALE)
-        # The cell confidence is the lowest of the payload's cells: the cap of a revenue-proxy gross profit
-        # applies in the cells, so the core and the decision read one confidence.
-        cell_confs = [cell.confidence for cell in cells.values()]
-        if financial_row.confidence is not None:
-            cell_confs.append(financial_row.confidence)
+        cell_confs = [cell.confidence for cell in cells.values()] + (
+            [financial_row.confidence] if financial_row.confidence is not None else []
+        )
         financial_cell_confidence = min(cell_confs, default=Decimal("0"))
-        # A bank's pre-provision profit is the figure of its gross-profit cell: the adapter fills both from one filing.
         profit_cell = cells.get("gross_profit")
-        listing_id_conf = (
-            listing_confidences.get("listing-identity")
-            if listing_confidences is not None
-            else by_type["listing-identity"].confidence
+        ppnr_cell = cells.get("pre_provision_profit") or profit_cell
+        gp_value, gp_reason = _period_checked_value(financial.gross_profit, financial.operating_period_end, input_age)
+        ppnr_value, ppnr_reason = _period_checked_value(
+            financial.pre_provision_profit, financial.operating_period_end, input_age
+        )
+        rev_value, rev_reason = _period_checked_value(financial.revenue, financial.revenue_period_end, input_age)
+        listing_id_conf = _override_confidence(
+            listing_confidences, "listing-identity", by_type["listing-identity"].confidence
         )
         market_cell_conf = price_cell.confidence if price_cell is not None else (close_conf or Decimal("0"))
-        membership_conf = (
-            listing_confidences.get("universe-membership")
-            if listing_confidences is not None
-            else by_type["universe-membership"].confidence
+        membership_conf = _override_confidence(
+            listing_confidences, "universe-membership", by_type["universe-membership"].confidence
         )
 
         return SnapshotMember(
@@ -1011,9 +1034,10 @@ class PostgresToptCoreRepository:
             gross_profit=_metric(
                 financial_row,
                 name="gross_profit",
-                value=financial.gross_profit,
+                value=gp_value,
                 cell=profit_cell,
                 confidence=financial_cell_confidence,
+                unavailable_reason=gp_reason,
             ),
             total_assets=_metric(
                 financial_row,
@@ -1032,20 +1056,19 @@ class PostgresToptCoreRepository:
             revenue=_metric(
                 financial_row,
                 name="revenue",
-                value=financial.revenue,
+                value=rev_value,
                 cell=cells.get("revenue"),
                 confidence=financial_cell_confidence,
+                unavailable_reason=rev_reason,
             ),
             pre_provision_profit=_metric(
                 financial_row,
                 name="pre_provision_profit",
-                value=financial.pre_provision_profit,
-                cell=None if financial.pre_provision_profit is None else profit_cell,
-                confidence=(
-                    listing_confidences.get("pre_provision_profit", financial_cell_confidence)
-                    if listing_confidences is not None
-                    else financial_cell_confidence
-                ),
+                value=ppnr_value,
+                cell=None if financial.pre_provision_profit is None else ppnr_cell,
+                confidence=_override_confidence(listing_confidences, "pre_provision_profit", financial_cell_confidence)
+                or financial_cell_confidence,
+                unavailable_reason=ppnr_reason,
             ),
             shares_outstanding=_metric(
                 financial_row,
@@ -1072,11 +1095,8 @@ class PostgresToptCoreRepository:
                     name=name,
                     value=getattr(financial, name),
                     cell=cells.get(name),
-                    confidence=(
-                        listing_confidences.get(name, financial_cell_confidence)
-                        if listing_confidences is not None
-                        else financial_cell_confidence
-                    ),
+                    confidence=_override_confidence(listing_confidences, name, financial_cell_confidence)
+                    or financial_cell_confidence,
                 )
                 for name in TCE_SNAPSHOT_FIELDS
                 if getattr(financial, name) is not None

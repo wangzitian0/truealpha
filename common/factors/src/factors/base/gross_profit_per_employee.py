@@ -19,10 +19,8 @@ accordingly by the strategy, and not an exclusion. The banking tree charges the 
 measured tangible common equity (owner decision D2, 2026-10-26). A missing leaf gives an unavailable
 result with a flag that names it. No leaf is zero-filled and no capital base replaces another.
 
-`gross_profit` is still the parser's industry-branch definition per issuer
-(`truealpha_contracts.metrics.METRICS["gross_profit"]` is `financial_issuer_split=True`, so a bank's
-value is its pre-provision-profit proxy). The factor consumes whatever grounded `gross_profit` fact it is
-given, for the tree node `pre_provision_profit` too.
+Each operating branch consumes its own registered numerator (`gross_profit`, `pre_provision_profit`,
+or `insurance_pre_claims_profit` mapped into the tree's declared leaf).
 
 `risk_free_rate` is a versioned parameter (#59: "3-month US T-bill yield (v0 default; versioned
 parameter)"), not a live per-period market fact this factor looks up itself. The caller supplies it,
@@ -94,6 +92,7 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     module=2,
     inputs=(
         "gross_profit",
+        "pre_provision_profit",
         "total_assets",
         "employees_total",
         "stockholders_equity",
@@ -131,6 +130,8 @@ def gross_profit_per_employee(
             continue
         metric = metric_of(node)
         fact = _find(facts, entity_id, metric)
+        if fact is None and metric == "pre_provision_profit":
+            fact = _find(facts, entity_id, _GROSS_PROFIT)
         tree_inputs[node.key] = None
         if fact is None or fact.value is None:
             flag = _MISSING_LEAF_FLAGS.get(metric, f"missing_{metric}")

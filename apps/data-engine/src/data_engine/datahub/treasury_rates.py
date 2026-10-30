@@ -45,7 +45,7 @@ import logging
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -57,8 +57,10 @@ from data_engine import raw_store
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.source_registrations import (
     MACRO_REGISTRATIONS,
+    AsOfAxis,
     MacroSeries,
     MacroSourceRegistration,
+    knowable_instant,
 )
 from data_engine.sources import gateway
 
@@ -113,7 +115,7 @@ def year_url(year: int) -> str:
 
 def knowable_at_of(observation_date: date) -> datetime:
     """00:00 UTC of the day after the observation: a rate is never known on its own day."""
-    return datetime.combine(observation_date + timedelta(days=1), time.min, tzinfo=UTC)
+    return knowable_instant(AsOfAxis.BUSINESS_DAY, observation_date)
 
 
 def fetch_key_of(year: int, *, on: date) -> FetchKey:

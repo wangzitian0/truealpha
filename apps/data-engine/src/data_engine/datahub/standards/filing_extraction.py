@@ -28,7 +28,7 @@ import json
 import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -40,6 +40,7 @@ from truealpha_contracts.standards import MetricStandard, confidence_for
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.headcount import record_headcount
 from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.raw_store import insert_fetch
 from data_engine.sources import llm
 from data_engine.sources.gateway import CapacityExceeded, SourceGateway
@@ -641,7 +642,7 @@ def extract_headcount(
         body=document.body,
         content_type="text/html",
         fetched_at=landed_at,
-        source_published_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
+        source_published_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
         metadata={"form": document.form, "accession": document.accession, "cik": cik, "url": document.url},
         store=store,
         recorded_at=landed_at,
@@ -656,7 +657,7 @@ def extract_headcount(
         connection,
         cik=record_cik,
         headcount=Decimal(chosen.value),
-        knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
+        knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
         period_end=parse_as_of(chosen.as_of),
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,

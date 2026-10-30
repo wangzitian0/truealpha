@@ -44,6 +44,7 @@ from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRe
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+from truealpha_contracts.strategy import load_live_strategy_definition
 
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
@@ -63,6 +64,7 @@ from data_engine.datahub.production_topt.issuer_registry import (
     StatementFiling,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.share_basis import MISSING_CLASS_RATIO
 from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
@@ -90,22 +92,6 @@ _DOCUMENT_KEY = "_document"
 _INSTANT_INPUTS = frozenset({"total_assets", "shares_outstanding", "financial_assets"})
 _ANNUAL_INPUTS = frozenset({"gross_profit", "revenue", "net_income", "financial_returns"})
 
-# How far before the cutoff a share count may have been measured and still be used.
-#
-# For a multi-class issuer, company-facts drops the dimensional per-class share facts and
-# what survives is the pre-2011 cover-page figure from before dimensional tagging was
-# adopted. The concept is then PRESENT and parses cleanly, so nothing upstream refuses it:
-# V resolved 469,280,842 measured 2010-01-27 and BRK.B a Class-A-scale 941,481 measured
-# 2011-04-29, against fresh current-period revenue. V's market cap came out at $173.0B
-# against a real ~$712B and it ranked first at half the target weight; BRK.B's at $836.8M
-# against a real ~$1.1T, held back from the same outcome only by a missing numerator.
-#
-# Deliberately generous: a compliant filer restates this figure on every 10-Q cover page,
-# so two years cannot reject anyone legitimate, while the failures it must catch are off by
-# fifteen. A tighter, better-calibrated bound belongs with the vintage-carrying read path
-# (#530) — this one only has to make an order-of-magnitude error impossible to publish.
-_MAX_SHARES_STALENESS_DAYS = 730
-
 
 @dataclass(frozen=True)
 class FinancialFactsBundle:
@@ -129,14 +115,10 @@ class FinancialFactsBundle:
     revenue_period_end: date | None = None
     # The share count's own measurement date, carried for the same reason and additionally
     # enforced: `shares_outstanding` is None whenever this is staler than
-    # `_MAX_SHARES_STALENESS_DAYS`, so a market capitalisation can never be built from a
+    # `eligibility.maximum_input_age_days`, so a market capitalisation can never be built from a
     # figure the warehouse cannot date.
     shares_period_end: date | None = None
-    # True when `gross_profit` is the revenue proxy rather than a reported or derived
-    # figure. Reported rather than inferred, because "gross_profit happens to equal
-    # revenue" is a coincidence for some issuers and the substitution must be auditable
-    # (#533). The adapter refuses it for industries the proxy was not approved for.
-    gross_profit_is_revenue_proxy: bool = False
+    period_start: date | None = None
     # The latest annual net income, which module 1's multiple divides the market cap by.
     net_income: Decimal | None = None
     # Every annual net-income period knowable at the cutoff, period end -> value.
@@ -379,6 +361,7 @@ class _Datum:
     value: Decimal
     filed: date
     period_end: date
+    period_start: date | None = None
     # The filing that asserted this figure (company-facts `accn`/`form`/`fy`/`fp`): the
     # vintage #530 item 4 wants on the row, so `source_evidence_status` (#747) can name
     # the document instead of inferring it from a date. None only for synthetic fixtures.
@@ -472,9 +455,8 @@ def annual_values_by_period_end(
         form = _text_or_none(entry.get("form"))
         try:
             filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
-            if start_raw is not None and (
-                form in INTERIM_STATEMENT_FORMS or (end - date.fromisoformat(start_raw)).days < _ANNUAL_MINIMUM_DAYS
-            ):
+            start = date.fromisoformat(start_raw) if start_raw is not None else None
+            if start is not None and (form in INTERIM_STATEMENT_FORMS or (end - start).days < _ANNUAL_MINIMUM_DAYS):
                 continue
             value = Decimal(str(val))
         except (InvalidOperation, ValueError):
@@ -486,6 +468,7 @@ def annual_values_by_period_end(
             value=value,
             filed=filed,
             period_end=end,
+            period_start=start,
             accession=_text_or_none(entry.get("accn")),
             form=form,
             fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
@@ -571,6 +554,7 @@ def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date
         value=base[end].value - subtracted[end].value,
         filed=later.filed,
         period_end=end,
+        period_start=base[end].period_start or subtracted[end].period_start,
         accession=later.accession,
         form=later.form,
         fy=later.fy,
@@ -610,18 +594,6 @@ def gross_profit(
     two cover the *same* period — it is the issuer's own assertion rather than our
     arithmetic — but it cannot outrank a more recent one.
     """
-    return _gross_profit_resolved(facts, cutoff, ruleset)[0]
-
-
-def _gross_profit_resolved(
-    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset
-) -> tuple[_Datum | None, bool]:
-    """Gross profit, and whether it is the revenue proxy rather than a real figure.
-
-    The caller needs to know which, because the proxy is only valid for industries whose
-    cost of revenue really is ~zero (#533) — and that is a property of the issuer, which
-    this function cannot see.
-    """
     direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
     derived = _difference_at_shared_period(
         resolve_field(facts, ruleset, "revenue", cutoff),
@@ -631,42 +603,13 @@ def _gross_profit_resolved(
     if candidates:
         # The later period wins; for the same period a statement figure outranks another
         # form, and the reported figure outranks the derived one.
-        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank)), False
-    if _files_no_cogs_concepts(facts, ruleset):
-        # #496 owner decision (2026-07-28): an issuer whose company-facts carry NO
-        # GrossProfit and NO COGS-family concept AT ALL uses revenue as the gross-profit
-        # proxy — "payment networks carry ~zero COGS; the bias is small and its direction
-        # known". Concept-level absence only: a mere period mismatch on a real COGS filer
-        # still resolves to None.
-        #
-        # Absence of a tag is NOT evidence of absent cost, so the substitution is offered
-        # here and accepted only for an industry the registry says qualifies. Read as
-        # "~zero or structurally unreported" it also fired for XOM (Petroleum Refining),
-        # publishing $332B of revenue as gross profit — $5.36M per employee, above NVIDIA
-        # (#533).
-        return _latest(resolve_field(facts, ruleset, "revenue", cutoff)), True
-    return None, False
+        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank))
+    return None
 
 
 def _declared_concepts(ruleset: ConceptMappingRuleset, field: str) -> tuple[ConceptRef, ...]:
     mapping = ruleset.mapping_for(field)
     return () if mapping is None else mapping.concepts
-
-
-def _files_no_cogs_concepts(facts: dict[str, Any], ruleset: ConceptMappingRuleset) -> bool:
-    """True when the issuer tags NO gross-profit and NO cost concept the ruleset knows.
-
-    Concept-level absence, read off the ruleset rather than a second copy of the list —
-    two lists that must agree are two lists that eventually will not.
-    """
-    gaap = facts.get("facts", {}).get("us-gaap", {})
-    declared = [
-        item.concept
-        for field in ("gross_profit", "cost_of_revenue")
-        for item in _declared_concepts(ruleset, field)
-        if item.taxonomy == "us-gaap"
-    ]
-    return all(concept not in gaap for concept in declared)
 
 
 def insurance_pre_claims_profit(
@@ -943,14 +886,20 @@ def build_bundle(
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
-    # else reported/derived gross profit (with the no-COGS revenue proxy inside).
-    is_revenue_proxy = False
+    # else reported/derived gross profit.
+    pre_provision: _Datum | None = None
+    insurer_profit: _Datum | None = None
+    gp_datum: _Datum | None = None
     if branch is OperatingBranch.FINANCIAL:
-        profit = pre_provision_profit(facts, cutoff, ruleset)
+        pre_provision = pre_provision_profit(facts, cutoff, ruleset)
+        profit = pre_provision
     elif branch is OperatingBranch.INSURANCE:
-        profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
+        insurer_profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
+        profit = insurer_profit
+        gp_datum = insurer_profit
     else:
-        profit, is_revenue_proxy = _gross_profit_resolved(facts, cutoff, ruleset)
+        gp_datum = gross_profit(facts, cutoff, ruleset)
+        profit = gp_datum
     # EVERY earnings period the series carries, not just the window's two ends. The rate
     # downstream rests on all of them, so the payload is knowable only once the latest of
     # them was filed — the PIT obligation #284 named and could not satisfy while only the
@@ -978,9 +927,12 @@ def build_bundle(
     vintages: dict[str, Any] = {
         name: _vintage(datum)
         for name, datum in (
-            ("gross_profit", profit),
+            ("gross_profit", gp_datum),
+            ("pre_provision_profit", pre_provision),
+            ("insurance_pre_claims_profit", insurer_profit),
             ("total_assets", assets),
             ("shares_outstanding", shares),
+            ("shares_weighted_average_basic", shares_fallback if shares_primary is None else None),
             ("revenue", revenue),
             ("net_income", net_income),
             ("financial_assets", financial.assets),
@@ -997,23 +949,26 @@ def build_bundle(
             end.isoformat(): _vintage(datum) for end, datum in sorted(earnings_periods.items())
         }
     latest_statement, latest_annual = _statement_period_ends(facts, ruleset, cutoff)
+    period_start = (profit.period_start if profit is not None else None) or (
+        revenue.period_start if revenue is not None else None
+    )
     return FinancialFactsBundle(
-        gross_profit=_v(profit),
+        gross_profit=_v(gp_datum),
         total_assets=_v(assets),
         shares_outstanding=_v(shares),
         revenue=_v(revenue),
-        pre_provision_profit=_v(profit) if branch is OperatingBranch.FINANCIAL else None,
+        pre_provision_profit=_v(pre_provision),
         # The vendor's own document when the caller has it. The fallback re-serialization
         # is for callers that only ever hold a parsed dict (tests); its digest describes our
         # rendering, not SEC's, so it must never be what a live capture lands.
         raw_bytes=raw_bytes
         if raw_bytes is not None
         else json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
-        knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
+        knowable_at=None if knowable is None else knowable_instant(AsOfAxis.ACCESSION, knowable),
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
         shares_period_end=shares_period_end,
-        gross_profit_is_revenue_proxy=is_revenue_proxy,
+        period_start=period_start,
         net_income=_v(net_income),
         net_income_by_period={end: datum.value for end, datum in sorted(earnings_periods.items())},
         vintages=vintages,
@@ -1200,8 +1155,6 @@ def _payload_vintage(
         for key in sorted(bundle.vintages)
         if not (key == "gross_profit" and gross_profit_value is None)
     }
-    if bundle.gross_profit_is_revenue_proxy and gross_profit_value is not None and "gross_profit" in vintage:
-        vintage["gross_profit"] = {**vintage["gross_profit"], "is_revenue_proxy": True}
     if headcount_evidence is not None:
         # #747: the side-plane input names its evidence next to the XBRL inputs.
         vintage["headcount"] = headcount_evidence
@@ -1327,15 +1280,7 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at is not None and bundle.knowable_at.date() > target.cutoff:
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
-        # #533: the revenue-for-gross-profit substitution is valid only where cost of
-        # revenue really is ~zero, which is a property of the issuer's industry and so is
-        # only knowable here, on the target, rather than inside the parse. Refusing it
-        # leaves the honest gap the issuer had before the substitution existed: the factor
-        # reports `missing_gross_profit` and the issuer is excluded, which is strictly
-        # better than ranking an oil major above NVIDIA on labour efficiency.
         gross_profit_value = bundle.gross_profit
-        if bundle.gross_profit_is_revenue_proxy and not target.revenue_proxy_allowed:
-            gross_profit_value = None
         # #1114: an operating metric from another period than the revenue is dropped. BKNG's
         # last GrossProfit ends 2017-12-31, so GPPE paired it with 2025 assets and headcount.
         # The factor then reports `missing_gross_profit` instead of a number from mixed
@@ -1347,9 +1292,9 @@ class SecFinancialFactAdapter:
             gross_profit_value = None
             pre_provision_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
-        # A payload that resolved nothing is knowable exactly at the cutoff: what it
+        # A payload that resolved nothing is knowable at the end of the cutoff day: what it
         # asserts is "this source has no such fact yet", not a dated figure.
-        knowable_at = bundle.knowable_at or datetime.combine(target.cutoff, datetime.min.time(), tzinfo=UTC)
+        knowable_at = bundle.knowable_at or knowable_instant(AsOfAxis.ACCESSION, target.cutoff)
         headcount, headcount_evidence, knowable_at = self._resolve_headcount_fact(target, knowable_at)
         payload: dict[str, Any] = {
             "issuer_id": target.issuer_id,
@@ -1405,6 +1350,9 @@ class SecFinancialFactAdapter:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
             payload["stale_operating_period_end"] = _d(bundle.operating_period_end)
+        valid_from = (
+            bundle.period_start or bundle.revenue_period_end or bundle.operating_period_end or knowable_at.date()
+        )
         return FetchSuccess(
             raw=RawResponse(
                 body=bundle.raw_bytes,
@@ -1412,7 +1360,7 @@ class SecFinancialFactAdapter:
                 record_id=f"companyfacts:CIK{target.cik:010d}",
             ),
             normalized_sha256=canonical_sha256(payload),
-            valid_from=knowable_at.date(),
+            valid_from=valid_from,
             transaction_time=knowable_at,
             record=NormalizedRecord(
                 payload=payload, parser_version=PARSER_VERSION, mapping_version=self._mapping_version
@@ -1467,8 +1415,9 @@ def _periods_differ(operating_end: object | None, revenue_end: object | None) ->
 
 
 def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:
-    """The datum, or None when it was measured too long before the cutoff (#529)."""
-    if datum is None or (cutoff - datum.period_end).days > _MAX_SHARES_STALENESS_DAYS:
+    """The datum, or None when it was measured too long before the cutoff (#529, #1519)."""
+    max_age_days = load_live_strategy_definition().eligibility.maximum_input_age_days
+    if datum is None or (cutoff - datum.period_end).days > max_age_days:
         return None
     return datum
 

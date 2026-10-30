@@ -27,6 +27,7 @@ export const EXCLUSION_REASON_LABEL: Record<string, string> = {
   missing_issuer_class: "Issuer has no operating class, so no labor-efficiency metric applies",
   below_confidence_floor: "Input confidence below the strategy's floor",
   stale_required_input: "A required input is older than the strategy allows",
+  stale_period: "A required input's fiscal period ended earlier than the strategy allows",
   nonpositive_headcount: "Reported headcount is zero or negative",
   nonpositive_labor_cost: "Reported labor cost is zero or negative",
   nonpositive_revenue: "Reported revenue is zero or negative",

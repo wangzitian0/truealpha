@@ -998,3 +998,85 @@ def test_ddog_at_0_65_confidence_is_eligible_and_carries_its_confidence_under_1_
     assert evaluated["issuer:ddog-in-band"].rank == 1
     assert evaluated["issuer:ddog-in-band"].outcome is GoldenDecisionOutcome.SELECTED
     assert evaluated["issuer:ddog-in-band"].target_weight == Decimal("1.000000")
+
+
+def test_restated_2018_period_filed_in_2026_is_excluded_with_stale_period() -> None:
+    """#1519 step 7: a restated 2018 fiscal period (`2018-01-01..2018-12-31`) filed on `2026-02-01`
+    has a recent `knowable_at` (`2026-02-01T23:59:59.999999Z`) that passes `stale_required_input`,
+    but its reported period end (`2018-12-31`) exceeds `maximum_input_age_days` (`455`) at the
+    `2026-03-31` cutoff and is excluded with `stale_period`."""
+    from datetime import UTC, date
+
+    from truealpha_contracts.fiscal_period import FiscalPeriod
+    from truealpha_contracts.measure import Measure, Money, PerUnit, Units
+
+    filed = datetime(2026, 2, 1, 23, 59, 59, 999999, tzinfo=UTC)
+    stale_fy2018 = FiscalPeriod(filing_fiscal_year=2025, kind="FY", start=date(2018, 1, 1), end=date(2018, 12, 31))
+    fresh_fy2025 = FiscalPeriod(filing_fiscal_year=2025, kind="FY", start=date(2025, 1, 1), end=date(2025, 12, 31))
+    records = {
+        "gross_profit": (
+            Measure(
+                value=Decimal("10000000000"),
+                unit=Money("USD"),
+                knowable_at=filed,
+                period=stale_fy2018,
+            ),
+            Decimal("0.95"),
+        ),
+        "total_assets": (
+            Measure(
+                value=Decimal("20000000000"),
+                unit=Money("USD"),
+                knowable_at=filed,
+            ),
+            Decimal("0.95"),
+        ),
+        "headcount": (
+            Measure(
+                value=Decimal("10000"),
+                unit=Units("employees"),
+                knowable_at=filed,
+            ),
+            Decimal("0.95"),
+        ),
+        "revenue": (
+            Measure(
+                value=Decimal("25000000000"),
+                unit=Money("USD"),
+                knowable_at=filed,
+                period=fresh_fy2025,
+            ),
+            Decimal("0.95"),
+        ),
+        "shares_outstanding": (
+            Measure(
+                value=Decimal("100000000"),
+                unit=Units("shares"),
+                knowable_at=filed,
+            ),
+            Decimal("0.95"),
+        ),
+        "last_close": (
+            Measure(
+                value=Decimal("100"),
+                unit=PerUnit("USD", "shares"),
+                knowable_at=datetime(2026, 3, 31, 21, 0, tzinfo=UTC),
+            ),
+            Decimal("0.95"),
+        ),
+    }
+    issuer = IssuerInput(
+        issuer_id="issuer:restated-2018",
+        records=records,
+        knowable_at={key: val[0].knowable_at for key, val in records.items() if val[0].knowable_at is not None},
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    [decision] = evaluate_cutoff(
+        [issuer],
+        definition=_definition(),
+        cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+        risk_free_rate=Decimal("0.04"),
+    )
+    assert decision.eligible is False
+    assert decision.outcome is GoldenDecisionOutcome.EXCLUDED
+    assert decision.exclusion_reason == "stale_period"

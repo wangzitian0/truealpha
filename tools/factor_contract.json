@@ -60,6 +60,7 @@
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal, forest: Forest, tree: MetricTree, issuer_class: IssuerClass) -> FactorResult",
       "inputs": [
         "gross_profit",
+        "pre_provision_profit",
         "total_assets",
         "employees_total",
         "stockholders_equity",

@@ -58,6 +58,7 @@ import psycopg
 from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
 from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
@@ -78,18 +79,9 @@ EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invari
 # pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
 # every invariant below silently changed population.
 SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
-#: The oldest period that a served revenue may end, in months before the cutoff of its run (#1457).
-#: A 10-K is due 90 days after the fiscal year ends. A late filer gets 15 more days (Form 12b-25).
-#: Just before a filing, the newest annual period of a current filer is the year before.
-#: It ended 12 months and 105 days earlier, which is 15 months and 14 days.
-#: So 18 months leaves a margin of 2 months and 16 days.
-#: Production QQQ served periods of 94 and 98 months.
-#: The strategy gate `eligibility.maximum_input_age_days` is 455 days. It counts the days since an input became knowable.
-#: A revenue period ends at most 105 days before its filing. So 455 + 105 days is 560 days, which is 18.4 months.
-#: The two limits agree within half a month.
-#: The strategy gate does not stop a stale revenue.
-#: The knowable time of a financial fact is the latest filing among its inputs (parser identity v9).
-REVENUE_MAX_AGE_MONTHS = 18
+#: The oldest period that a served revenue may end, in days before the cutoff of its run (#1457, #1519):
+#: read from the live strategy definition's `eligibility.maximum_input_age_days`.
+_MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
@@ -583,9 +575,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
         id="revenue-period-is-recent",
         claim=(
             f"each available core result of a scheduled governed head has a revenue period that ends at most "
-            f"{REVENUE_MAX_AGE_MONTHS} months before the cutoff of its run, and each such head states a revenue "
+            f"{_MAX_INPUT_AGE_DAYS} days before the cutoff of its run, and each such head states a revenue "
             "period in at least one of its results — an older period is a stale figure that the head serves as "
-            "a current one, and a head with no stated period has an unknown age (#1457)"
+            "a current one, and a head with no stated period has an unknown age (#1457, #1519)"
         ),
         # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
         # divided by. Only an available result is served. A result with a named reason is
@@ -616,7 +608,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
             )
             select universe_id, run_id, issuer_id, revenue_period_end::text, cutoff::text
             from served
-            where revenue_period_end < (cutoff - interval '{REVENUE_MAX_AGE_MONTHS} months')::date
+            where revenue_period_end < (cutoff - interval '{_MAX_INPUT_AGE_DAYS} days')::date
             union all
             select distinct universe_id, run_id, 'no-result-states-a-revenue-period', '-', '-'
             from served head_rows

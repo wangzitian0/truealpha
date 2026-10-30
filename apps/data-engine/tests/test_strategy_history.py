@@ -21,7 +21,7 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.input_cells import end_of_day, vintage_knowable_at
+from data_engine.datahub.input_cells import AsOfAxis, knowable_instant, vintage_knowable_at
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.sec_financial_adapter import (
@@ -335,13 +335,17 @@ def test_a_fact_filed_on_the_cutoff_date_is_rejected_by_the_projector() -> None:
     )
     after = _at(rows, _utc(2026, 4, 1))
     assert after[("revenue", None)].value == Decimal(424242)
-    assert after[("revenue", None)].knowable_at == end_of_day(date(2026, 3, 1))
+    assert after[("revenue", None)].knowable_at == knowable_instant(AsOfAxis.ACCESSION, date(2026, 3, 1))
 
 
 def test_admit_input_rejects_a_row_knowable_on_the_cutoff_date() -> None:
     cutoff = _utc(2026, 3, 1)
-    admit_input(cutoff, end_of_day(date(2026, 2, 28)))
-    for knowable_at in (end_of_day(date(2026, 3, 1)), cutoff, cutoff + timedelta(days=3)):
+    admit_input(cutoff, knowable_instant(AsOfAxis.ACCESSION, date(2026, 2, 28)))
+    for knowable_at in (
+        knowable_instant(AsOfAxis.ACCESSION, date(2026, 3, 1)),
+        cutoff,
+        cutoff + timedelta(days=3),
+    ):
         with pytest.raises(LookAheadError, match="2026-03-01"):
             admit_input(cutoff, knowable_at)
 
@@ -378,7 +382,7 @@ def test_a_restated_fact_filed_before_the_cutoff_wins_over_the_original() -> Non
     assert _at(rows, _utc(2025, 9, 15))[("revenue", None)].value == Decimal(1000 + 2024), "filed on the cutoff date"
     winner = _at(rows, _utc(2025, 10, 1))[("revenue", None)]
     assert winner.value == Decimal(777)
-    assert winner.knowable_at == end_of_day(date(2025, 9, 15))
+    assert winner.knowable_at == knowable_instant(AsOfAxis.ACCESSION, date(2025, 9, 15))
 
 
 def test_each_key_carries_its_own_filed_date() -> None:
@@ -389,20 +393,22 @@ def test_each_key_carries_its_own_filed_date() -> None:
     )
     rows = _at(_rows(_issuer(1), document, [_utc(2025, 6, 1)]), _utc(2025, 6, 1))
 
-    assert rows[("revenue", None)].knowable_at == end_of_day(date(2025, 2, 20))
-    assert rows[("total_assets", None)].knowable_at == end_of_day(date(2025, 2, 20))
-    assert rows[("shares_outstanding", None)].knowable_at == end_of_day(date(2025, 5, 9))
+    assert rows[("revenue", None)].knowable_at == knowable_instant(AsOfAxis.ACCESSION, date(2025, 2, 20))
+    assert rows[("total_assets", None)].knowable_at == knowable_instant(AsOfAxis.ACCESSION, date(2025, 2, 20))
+    assert rows[("shares_outstanding", None)].knowable_at == knowable_instant(AsOfAxis.ACCESSION, date(2025, 5, 9))
     assert rows[("shares_outstanding", None)].value == Decimal(6_123_456), "shares are as filed (A6 decision 4)"
     assert len({row.knowable_at for row in rows.values()}) >= 2, "one blended knowable_at is the defect"
     series = [row for key, row in rows.items() if key[0] == "net_income" and key[1] is not None]
-    assert {row.knowable_at for row in series} == {end_of_day(date(year + 1, 2, 20)) for year in range(2018, 2025)}
+    assert {row.knowable_at for row in series} == {
+        knowable_instant(AsOfAxis.ACCESSION, date(year + 1, 2, 20)) for year in range(2018, 2025)
+    }
 
 
 def test_a_key_without_a_filing_date_is_not_projected() -> None:
 
     payload = {"vintage": {"revenue": {"filed": "2025-02-20"}, "total_assets": {"filed": None}, "headcount": {}}}
     knowable_at_of = vintage_knowable_at(payload)
-    assert knowable_at_of("revenue", None) == end_of_day(date(2025, 2, 20))
+    assert knowable_at_of("revenue", None) == knowable_instant(AsOfAxis.ACCESSION, date(2025, 2, 20))
     assert knowable_at_of("total_assets", None) is None
     assert knowable_at_of("headcount", None) is None
     assert knowable_at_of("gross_profit", None) is None
@@ -671,9 +677,9 @@ def test_the_check_rejects_a_row_filed_on_the_cutoff_date(connection) -> None:
         values ('issuer:h1139:check', %s, 'revenue', '1', '0.9', %s)
     """
     cutoff = _utc(2026, 3, 1)
-    connection.execute(insert, (cutoff, end_of_day(date(2026, 2, 28))))
+    connection.execute(insert, (cutoff, knowable_instant(AsOfAxis.ACCESSION, date(2026, 2, 28))))
     with pytest.raises(psycopg.errors.CheckViolation, match="strategy_backtest_inputs_pit"):
-        connection.execute(insert, (cutoff, end_of_day(date(2026, 3, 1))))
+        connection.execute(insert, (cutoff, knowable_instant(AsOfAxis.ACCESSION, date(2026, 3, 1))))
 
 
 def test_a_rerun_adds_zero_rows(connection) -> None:

@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -77,6 +77,8 @@ from data_engine.datahub.production_topt.source_registrations import (
     MOOMOO_KLINE_ORIGIN,
     MOOMOO_KLINE_PARSER_VERSION,
     MOOMOO_KLINE_VALUE_KEY,
+    AsOfAxis,
+    knowable_instant,
 )
 from data_engine.sources import gateway
 
@@ -252,7 +254,7 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
         raw_bytes=raw_bytes,
         close=_decimal(bar.get("close"), "close"),
         as_of=as_of,
-        knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        knowable_at=knowable_instant(AsOfAxis.SETTLED_SESSION, as_of),
         open=_optional_decimal(bar.get("open"), "open"),
         high=_optional_decimal(bar.get("high"), "high"),
         low=_optional_decimal(bar.get("low"), "low"),
@@ -450,8 +452,8 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         period_end=newest,
         values=headline_values,
         by_period_end=by_period,
-        # Served now, asserted for periods that have ended: knowable at the cutoff.
-        knowable_at=datetime.combine(cutoff, datetime.min.time(), tzinfo=UTC),
+        # Served now, asserted for periods that have ended: knowable at the cutoff session close.
+        knowable_at=knowable_instant(AsOfAxis.SETTLED_SESSION, cutoff),
         currency=currency,
         accounting_standards=standards,
     )
