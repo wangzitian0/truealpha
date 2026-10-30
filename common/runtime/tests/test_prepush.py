@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PREPUSH = REPO_ROOT / "tools" / "prepush.sh"
@@ -142,14 +143,16 @@ def test_it_names_its_own_preconditions_instead_of_failing_cryptically() -> None
 
 
 def test_it_runs_the_same_fast_stdlib_gates_as_ci_python_gates() -> None:
-    """Every fast stdlib gate in `ci-python.yml` (`gates` job) runs locally in `tools/prepush.sh`
-    when a Python file changes, so a static contract violation fails before `git push`."""
+    """Every fast stdlib gate (`python3 tools/*.py ...`) in `ci-python.yml` (`gates` job) runs
+    locally in `tools/prepush.sh` when a Python file changes, derived from `ci-python.yml`."""
     script = PREPUSH.read_text(encoding="utf-8")
-    for gate in (
-        "python3 tools/check_route_manifest.py",
-        "python3 tools/check_factor_contract.py",
-        "python3 tools/complexity_gate.py --check",
-        "python3 tools/reachability_ratchet.py --check",
-        "python3 tools/sql_literal_gate.py",
-    ):
-        assert gate in script, f"prepush.sh is missing fast stdlib gate {gate!r}"
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci-python.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["gates"]["steps"]
+    stdlib_gates = [
+        step["run"].strip()
+        for step in steps
+        if isinstance(step.get("run"), str) and step["run"].strip().startswith("python3 tools/")
+    ]
+    assert len(stdlib_gates) >= 5, f"expected >= 5 stdlib gates in ci-python.yml gates job, found {stdlib_gates}"
+    for gate in stdlib_gates:
+        assert gate in script, f"prepush.sh is missing fast stdlib gate {gate!r} from ci-python.yml"
